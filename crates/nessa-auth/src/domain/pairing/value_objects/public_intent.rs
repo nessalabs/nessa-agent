@@ -1,5 +1,5 @@
 //! Public correlation shared by the PAKE transcript and durable pending state.
-use super::{AttemptId, ConsentIntentId, InvitationId, PairingError};
+use super::{AttemptId, ConsentClass, ConsentIntentId, InvitationId, PairingError};
 use crate::domain::pairing::PairingRecord;
 
 /// Public opaque intent correlation, containing no private owner or grant selectors.
@@ -10,11 +10,13 @@ pub struct PublicIntent {
     consent: ConsentIntentId,
     generation: u64,
     expiry_ms: u64,
+    class: ConsentClass,
 }
 impl PublicIntent {
-    /// Fixed public class shared with the canonical full consent owner.
-    pub fn class(&self) -> &'static str {
-        super::values::READ_CLASS
+    /// Who the invitation enrolls, shared with the canonical full consent owner
+    /// and bound into the PAKE transcript.
+    pub fn class(&self) -> ConsentClass {
+        self.class
     }
 
     /// Preserve bounded public metadata; authenticity is established only by PAKE completion.
@@ -24,6 +26,7 @@ impl PublicIntent {
         consent: ConsentIntentId,
         generation: u64,
         expiry_ms: u64,
+        class: ConsentClass,
     ) -> Result<Self, PairingError> {
         if generation == 0 || expiry_ms == 0 {
             return Err(PairingError::Invalid);
@@ -34,6 +37,7 @@ impl PublicIntent {
             consent,
             generation,
             expiry_ms,
+            class,
         })
     }
     /// Derive the same public correlation from one canonical registry record.
@@ -45,6 +49,7 @@ impl PublicIntent {
             record.intent().id(),
             record.intent().generation(),
             record.expires_at_ms(),
+            record.intent().class(),
         )
     }
     /// Public invitation locator, never a credential.

@@ -556,8 +556,8 @@
     },
     "PrincipalKind": {
       "type": "string",
-      "enum": ["human", "integration", "agent"],
-      "description": "Supported categories of authenticated actors: human users, integrations, and agents."
+      "enum": ["human", "integration", "agent", "gateway"],
+      "description": "Supported categories of authenticated actors: human users, integrations, agents, and paired peer gateways. Only device pairing creates a gateway principal; credential.issue refuses one."
     },
     "MembershipRole": {
       "type": "string",
@@ -4418,6 +4418,23 @@
         "server_busy"
       ],
       "description": "Typed catalogue admission, source, capacity, and transport refusals."
+    },
+    "PairingEnrollee": {
+      "type": "string",
+      "enum": ["device", "gateway"],
+      "description": "Who an invitation enrolls. device: one of the owner's own devices; its credential acts as the owner. gateway: a peer gateway; its credential names a principal of kind gateway, identified by the key it pinned at pairing, and can hold only the conversation.read grant. Both use the same enrollment and listener; the choice is bound into the enrollment and cannot be changed by the enrolling side."
+    },
+    "PairingCreateParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enrollee": {
+          "$ref": "#/$defs/PairingEnrollee",
+          "description": "Who the invitation enrolls; absent means device."
+        }
+      },
+      "required": [],
+      "description": "Wire input for pairing.create. The owner, organization and gateway come from the session, never from the request."
     },
     "PairingInvitationParams": {
       "type": "object",

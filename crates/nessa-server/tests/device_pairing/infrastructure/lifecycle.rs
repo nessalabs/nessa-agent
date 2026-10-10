@@ -1,4 +1,5 @@
 use super::support::{pending, sockets, FaultyStore, Fixture, WAIT};
+use nessa_auth::domain::pairing::ConsentClass;
 use nessa_auth::{
     adapters::{
         local::LocalCredentialStore,
@@ -214,7 +215,11 @@ async fn native_create_observer_loss_keeps_original_owner_until_drain() {
     };
     let owner = fixture.gateway.clone();
     let session = fixture.session.clone();
-    let observer = tokio::spawn(async move { owner.create(session, entropy).await });
+    let observer = tokio::spawn(async move {
+        owner
+            .create(session, ConsentClass::DeviceRead, entropy)
+            .await
+    });
     tokio::task::spawn_blocking(move || received.recv_timeout(WAIT).unwrap())
         .await
         .unwrap();
@@ -223,7 +228,7 @@ async fn native_create_observer_loss_keeps_original_owner_until_drain() {
     assert!(matches!(
         fixture
             .gateway
-            .create(fixture.session.clone(), OsEntropy)
+            .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
             .await,
         Err(PairingRuntimeError::Busy)
     ));
@@ -260,7 +265,9 @@ async fn native_create_observer_loss_keeps_original_owner_until_drain() {
     }
     // After shutdown a create is refused as shutting down (design row S19).
     assert!(matches!(
-        owner.create(session, OsEntropy).await,
+        owner
+            .create(session, ConsentClass::DeviceRead, OsEntropy)
+            .await,
         Err(PairingRuntimeError::ShuttingDown)
     ));
     drop(owner);
@@ -272,7 +279,11 @@ async fn native_create_observer_loss_keeps_original_owner_until_drain() {
     let accepted = Fixture::new().await;
     assert!(accepted
         .gateway
-        .create(accepted.session.clone(), OsEntropy)
+        .create(
+            accepted.session.clone(),
+            ConsentClass::DeviceRead,
+            OsEntropy
+        )
         .await
         .is_ok());
     accepted.gateway.shutdown().await;
@@ -324,7 +335,7 @@ async fn native_client_observer_loss_keeps_pending_save_and_operation_owned() {
     let fixture = Fixture::new().await;
     let created = fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
         .await
         .unwrap();
     let (address, stop, listener, connections) = fixture.listener().await;
@@ -472,7 +483,11 @@ async fn native_worker_faults_preserve_type_and_allow_new_work() {
     assert!(matches!(
         fixture
             .gateway
-            .create(fixture.session.clone(), PanicEntropy)
+            .create(
+                fixture.session.clone(),
+                ConsentClass::DeviceRead,
+                PanicEntropy
+            )
             .await,
         Err(PairingRuntimeError::WorkerFault(PairingWorkerFault::Panic))
     ));
@@ -481,7 +496,11 @@ async fn native_worker_faults_preserve_type_and_allow_new_work() {
     assert!(matches!(
         fixture
             .gateway
-            .create(fixture.session.clone(), PanicAfterFirstFill(false))
+            .create(
+                fixture.session.clone(),
+                ConsentClass::DeviceRead,
+                PanicAfterFirstFill(false)
+            )
             .await,
         Err(PairingRuntimeError::WorkerFault(PairingWorkerFault::Panic))
     ));
@@ -500,7 +519,7 @@ async fn native_worker_faults_preserve_type_and_allow_new_work() {
     worker.shutdown().await;
     let created = fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
         .await
         .unwrap();
     let (address, stop, listener, connections) = fixture.listener().await;
@@ -555,7 +574,7 @@ async fn native_shutdown_waits_for_an_admitted_owner_command() {
     let store = store.get().unwrap().clone();
     let created = fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
         .await
         .unwrap();
     let id = created.record().id();

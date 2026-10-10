@@ -20,8 +20,8 @@ use nessa_auth::{
     },
     domain::{
         pairing::{
-            AttemptFailure, AttemptId, ConsentIntentId, DeviceKey, InvitationId, PairingPhase,
-            PairingPolicy, PairingRecord, PublicIntent,
+            AttemptFailure, AttemptId, ConsentClass, ConsentIntentId, DeviceKey, InvitationId,
+            PairingPhase, PairingPolicy, PairingRecord, PublicIntent,
         },
         CredentialId, Resource,
     },
@@ -237,6 +237,7 @@ impl GatewayPairing {
     pub async fn create<R: RngCore + CryptoRng + Send + 'static>(
         self: &Arc<Self>,
         session: AuthenticatedSession,
+        class: ConsentClass,
         entropy: R,
     ) -> Result<CreatedInvitation, PairingRuntimeError> {
         let owner_lease = self.admit_owner()?;
@@ -253,7 +254,7 @@ impl GatewayPairing {
             let _owner_lease = owner_lease;
             let _permit = permit;
             let runtime = owner;
-            runtime.create_blocking(&handle, &session, entropy)
+            runtime.create_blocking(&handle, &session, class, entropy)
         })
         .await
         .map_err(|error| PairingRuntimeError::WorkerFault(worker_fault(error)))?
@@ -265,6 +266,7 @@ impl GatewayPairing {
         &self,
         handle: &Handle,
         session: &AuthenticatedSession,
+        class: ConsentClass,
         mut entropy: R,
     ) -> Result<CreatedInvitation, PairingRuntimeError> {
         let mut bytes = [0; 32];
@@ -284,6 +286,7 @@ impl GatewayPairing {
                     session,
                     InvitationId::new(invite),
                     ConsentIntentId::new(consent),
+                    class,
                 ))
             },
         )

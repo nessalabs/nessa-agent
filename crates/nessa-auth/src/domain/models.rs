@@ -8,11 +8,37 @@ use super::{
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-/// Kind of actor. This classification conveys no permission or role.
+/// Kind of actor. This classification conveys no permission or role, with one
+/// exception stated by [`PrincipalKind::may_hold`]: the grants a kind can
+/// never be given.
 pub enum PrincipalKind {
     Human,
     Agent,
     Integration,
+    /// Another person's (or another of the owner's) Nessa gateway, paired with
+    /// this one. Only device pairing creates one; its id names the key it
+    /// pinned at pairing.
+    Gateway,
+}
+
+impl PrincipalKind {
+    /// Whether a credential of a principal of this kind may carry `action` at
+    /// all. Policy and the credential's own grants still decide whether it is
+    /// allowed; this answers only what the kind can express.
+    ///
+    /// A peer gateway holds surface grants only: it may read what it is
+    /// granted. It can never hold an action of the conversation authority:
+    /// `conversation.write` admits commands into a conversation and answers
+    /// its approvals, and `credential.manage` holds credentials and pairs
+    /// devices. The gateway that owns a conversation keeps those, so whatever
+    /// a peer is later allowed to run for it, the peer cannot hold both
+    /// authorities over one conversation.
+    pub fn may_hold(self, action: &Action) -> bool {
+        match self {
+            Self::Human | Self::Agent | Self::Integration => true,
+            Self::Gateway => action.as_str() == "conversation.read",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

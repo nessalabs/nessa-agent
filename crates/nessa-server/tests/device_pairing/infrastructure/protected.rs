@@ -4,6 +4,7 @@
 //! TLS and private storage; the device side is a raw probe that frames product
 //! messages itself, so each refusal is observed on the wire.
 use super::support::{pending, private_root, Fixture, WAIT};
+use nessa_auth::domain::pairing::{peer_principal, ConsentClass, DeviceKey};
 use nessa_auth::{
     adapters::{
         cedar::CedarPolicyEvaluator,
@@ -139,15 +140,31 @@ struct Paired {
     credential: String,
     receiver: String,
     epoch: u64,
+    /// The key the gateway pinned when it approved the claim.
+    key: DeviceKey,
 }
 async fn pair(fixture: &Fixture, address: SocketAddr, name: &str) -> Paired {
+    pair_as(fixture, address, name, ConsentClass::DeviceRead).await
+}
+/// One party of `class` paired to Active through the same listener and
+/// enrollment: a device, or a peer gateway.
+async fn pair_as(
+    fixture: &Fixture,
+    address: SocketAddr,
+    name: &str,
+    class: ConsentClass,
+) -> Paired {
     let created = fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), class, OsEntropy)
         .await
         .unwrap();
     let (_, store) = pending(fixture.directory.path(), name);
-    let client = NativeEnrollmentClient::new(store.clone(), RuntimeDependencies::default().clock);
+    let client = NativeEnrollmentClient::enrolling(
+        class,
+        store.clone(),
+        RuntimeDependencies::default().clock,
+    );
     let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
     tokio::time::timeout(
         WAIT,
@@ -195,6 +212,7 @@ async fn pair(fixture: &Fixture, address: SocketAddr, name: &str) -> Paired {
         store,
         receiver: receiver.as_str().to_owned(),
         epoch: access_epoch,
+        key,
     }
 }
 
@@ -422,6 +440,75 @@ async fn protected_session_refuses_after_revocation() {
     fixture.gateway.shutdown().await;
 }
 
+/// Rows H1, H3 (`docs/design/auth/peer-gateways.md`): a peer gateway pairs with
+/// the same enrollment, on the same listener, and its credential names a
+/// principal of kind `gateway` for the key it pinned, not the owner. Until it
+/// is granted a conversation (slice G), it reads nothing of the owner's: its
+/// catalogue read is refused as the owner's, and the socket's owner methods
+/// are forbidden to it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_peer_gateway_pairs_as_its_own_principal_and_reads_nothing_ungranted() {
+    let fixture = Fixture::new().await;
+    let (address, stop, listener, _) = fixture.listener_serving(Some(sessions(&fixture))).await;
+    let peer = pair_as(&fixture, address, "peer", ConsentClass::PeerRead).await;
+    let credential = peer.credential.clone();
+    let (receiver, epoch) = (peer.receiver.clone(), peer.epoch);
+    let saved = peer.store.clone();
+    let principal = peer_principal(&peer.key).unwrap();
+    let (ready, head, list) = blocking(move || {
+        let mut probe = Probe::open(address, &saved);
+        let nonce = probe.nonce.clone();
+        let ready = probe.authenticate(&credential, &nonce).unwrap();
+        let head = probe.catalogue_head(&receiver, epoch).unwrap();
+        let list = probe.call("conversation.list", json!({})).unwrap();
+        (ready, head, list)
+    })
+    .await;
+    assert_eq!(ready["ok"], true, "{ready}");
+    assert_eq!(ready["payload"]["principalId"], principal.as_str());
+    assert_ne!(ready["payload"]["principalId"], "owner");
+    assert_eq!(head["ok"], false, "{head}");
+    assert_eq!(code(&head), "wrong_owner");
+    assert_eq!(code(&list), "forbidden");
+    stop.send(()).unwrap();
+    listener.await.unwrap().unwrap();
+    fixture.gateway.shutdown().await;
+}
+
+/// Row H5: revoking a peer's credential refuses its next connection at
+/// `openProduct`, the same as a device's.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_revoked_peer_gateway_is_refused_its_next_connection() {
+    let fixture = Fixture::new().await;
+    let (address, stop, listener, _) = fixture.listener_serving(Some(sessions(&fixture))).await;
+    let peer = pair_as(&fixture, address, "peer", ConsentClass::PeerRead).await;
+    let registry = fixture.registry.clone();
+    let credential = peer.credential.clone();
+    let saved = peer.store.clone();
+    let after = blocking(move || {
+        // A paired peer is admitted: `openProduct` answers a challenge.
+        drop(Probe::open(address, &saved));
+        registry
+            .revoke_sync(RevokeCredentialRequest {
+                request_id: "revoke-peer".into(),
+                issuer_principal_id: "owner".into(),
+                credential_id: credential,
+                revoked_at: 111,
+            })
+            .unwrap();
+        let (key, pin) = device_key(&saved);
+        open_product(address, NativeIdentity::restore(key).unwrap(), pin)
+    })
+    .await;
+    assert!(
+        matches!(after, Some(NativePairingReply::Refused)),
+        "{after:?}"
+    );
+    stop.send(()).unwrap();
+    listener.await.unwrap().unwrap();
+    fixture.gateway.shutdown().await;
+}
+
 /// Row PR7: a read naming another receiver or a stale epoch is refused by
 /// admission with its own code.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -537,7 +624,7 @@ async fn open_product_is_only_a_first_envelope_and_needs_sessions() {
     // the one under test.
     fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
         .await
         .unwrap();
     let replies = blocking(move || {

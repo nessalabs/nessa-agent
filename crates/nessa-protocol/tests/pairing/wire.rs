@@ -15,9 +15,10 @@ use nessa_auth::{
     application::pairing::ClientPendingStore,
     domain::{
         pairing::{
-            AttemptFailure, AttemptId, AttemptOutcome, ConsentIntent, ConsentIntentId, DeviceKey,
-            DisclosedConsent, InvitationId, PairingError, PairingEvent, PairingInitiator,
-            PairingPhase, PairingPolicy, PairingRecord, PublicIntent, TerminalCause,
+            AttemptFailure, AttemptId, AttemptOutcome, ConsentClass, ConsentIntent,
+            ConsentIntentId, DeviceKey, DisclosedConsent, InvitationId, PairingError, PairingEvent,
+            PairingInitiator, PairingPhase, PairingPolicy, PairingRecord, PublicIntent,
+            TerminalCause,
         },
         AudienceId, CredentialId, MembershipId, OrganizationId, PrincipalId, Resource, ResourceId,
         MAX_IDENTIFIER_BYTES,
@@ -39,6 +40,7 @@ fn public() -> PublicIntent {
         ConsentIntentId::new([3; ConsentIntentId::LENGTH]),
         1,
         600_000,
+        ConsentClass::DeviceRead,
     )
     .unwrap()
 }
@@ -54,6 +56,7 @@ fn initial_record(audience: &str, organization: &str, resource: &str) -> Pairing
             OrganizationId::new(organization).unwrap(),
             ResourceId::new(resource).unwrap(),
         ),
+        ConsentClass::DeviceRead,
     )
     .unwrap();
     PairingRecord::new(public().invitation(), intent, 0, PairingPolicy::initial()).unwrap()
@@ -611,6 +614,7 @@ fn canonical_status_refuses_foreign_operation_before_encoding() {
                 original.consent(),
                 original.generation(),
                 original.expiry_ms(),
+                ConsentClass::DeviceRead,
             )
             .unwrap(),
             original.with_attempt(AttemptId::new([9; AttemptId::LENGTH])),
@@ -620,6 +624,7 @@ fn canonical_status_refuses_foreign_operation_before_encoding() {
                 ConsentIntentId::new([9; ConsentIntentId::LENGTH]),
                 original.generation(),
                 original.expiry_ms(),
+                ConsentClass::DeviceRead,
             )
             .unwrap(),
             PublicIntent::new(
@@ -628,6 +633,7 @@ fn canonical_status_refuses_foreign_operation_before_encoding() {
                 original.consent(),
                 original.generation() + 1,
                 original.expiry_ms(),
+                ConsentClass::DeviceRead,
             )
             .unwrap(),
             PublicIntent::new(
@@ -636,6 +642,7 @@ fn canonical_status_refuses_foreign_operation_before_encoding() {
                 original.consent(),
                 original.generation(),
                 original.expiry_ms() + 1,
+                ConsentClass::DeviceRead,
             )
             .unwrap(),
         ] {
@@ -739,6 +746,7 @@ fn selected_crypto_messages_fit_the_native_envelope() {
         ConsentIntentId::new([255; ConsentIntentId::LENGTH]),
         u64::MAX,
         u64::MAX,
+        ConsentClass::DeviceRead,
     )
     .unwrap();
     let gateway = NativeIdentity::generate(&mut OsEntropy).unwrap();
@@ -829,5 +837,33 @@ fn selected_crypto_messages_fit_the_native_envelope() {
     retained.finish(&decoded_finalization).unwrap();
     for bytes in [&begin, &challenge, &confirm] {
         assert!(bytes.len() <= MAX_ENROLLMENT_ENVELOPE_BYTES);
+    }
+}
+
+/// Row H2 (`docs/design/auth/peer-gateways.md`): who an invitation enrolls is
+/// public and carried as it is. A peer gateway's Hello names its class, and
+/// decodes to the same intent, never to a device's; the two classes are
+/// distinct spellings of one field.
+#[test]
+fn the_enrollment_class_is_carried_and_never_changes_in_transit() {
+    let peer = PublicIntent::new(
+        public().invitation(),
+        public().attempt(),
+        public().consent(),
+        public().generation(),
+        public().expiry_ms(),
+        ConsentClass::PeerRead,
+    )
+    .unwrap();
+    let bytes = encode_hello(peer).unwrap();
+    let value: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(value["public"]["class"], "peer-gateway-conversation-read");
+    assert!(
+        matches!(decode_reply(&bytes).unwrap(), NativePairingReply::Hello(decoded) if decoded == peer && decoded != public())
+    );
+    let device: Value = serde_json::from_slice(&encode_hello(public()).unwrap()).unwrap();
+    assert_eq!(device["public"]["class"], "gateway-conversation-read");
+    for class in [ConsentClass::DeviceRead, ConsentClass::PeerRead] {
+        assert_eq!(ConsentClass::parse(class.as_str()), Some(class));
     }
 }

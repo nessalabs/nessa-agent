@@ -14,8 +14,8 @@ pub use aggregates::{
     PairingRecord, PairingTransition, TerminalCause, MAX_LIVE_PAIRINGS,
 };
 pub use value_objects::{
-    AttemptId, ConsentIntent, ConsentIntentId, DeviceKey, DisclosedConsent, InvitationId,
-    PairingError, PairingInitiator, PairingPolicy, PublicIntent,
+    peer_principal, AttemptId, ConsentClass, ConsentIntent, ConsentIntentId, DeviceKey,
+    DisclosedConsent, InvitationId, PairingError, PairingInitiator, PairingPolicy, PublicIntent,
 };
 
 pub(crate) use aggregates::Event;

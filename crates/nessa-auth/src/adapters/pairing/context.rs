@@ -32,7 +32,7 @@ impl PairingContext {
             &public.expiry_ms().to_be_bytes(),
             public.consent().bytes(),
             &public.generation().to_be_bytes(),
-            public.class().as_bytes(),
+            public.class().as_str().as_bytes(),
             &exporter,
         ] {
             let length =

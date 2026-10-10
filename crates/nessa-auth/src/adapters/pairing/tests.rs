@@ -2,7 +2,7 @@ pub(crate) mod io;
 use super::*;
 use crate::{
     application::pairing::PrivateKeyMaterial,
-    domain::pairing::{AttemptId, ConsentIntentId, InvitationId, PublicIntent},
+    domain::pairing::{AttemptId, ConsentClass, ConsentIntentId, InvitationId, PublicIntent},
 };
 use io::native_channels;
 #[cfg(unix)]
@@ -45,6 +45,7 @@ fn public() -> PublicIntent {
         ConsentIntentId::new([3; 16]),
         1,
         600_000,
+        ConsentClass::DeviceRead,
     )
     .unwrap()
 }
@@ -115,6 +116,72 @@ fn native_mutual_key_proof_and_pake_confirm_the_same_channel() {
     transport.write_message(&finalization).unwrap();
     assert_eq!(transport.read_message().unwrap(), b"claimed");
     assert_eq!(server.join().unwrap(), context.as_bytes());
+}
+/// Row H2 (`docs/design/auth/peer-gateways.md`): the enrollment class is bound
+/// into the PAKE transcript. A client that relabels a device invitation as a
+/// peer gateway's (or the reverse) cannot complete it: its KE2 does not verify
+/// and nothing is saved.
+#[cfg(unix)]
+#[test]
+fn a_relabelled_enrollment_class_does_not_complete_the_pake() {
+    let server_key =
+        NativeIdentity::restore(PrivateKeyMaterial::new(Zeroizing::new([10; 32]))).unwrap();
+    let client_key =
+        NativeIdentity::restore(PrivateKeyMaterial::new(Zeroizing::new([11; 32]))).unwrap();
+    let code = ManualCode::parse(b"ABCD2345").unwrap();
+    let invitation = ServerInvitation::register(
+        &mut Entropy,
+        &code,
+        public().invitation(),
+        server_key.public_spki(),
+    )
+    .unwrap();
+    let relabelled = PublicIntent::new(
+        public().invitation(),
+        public().attempt(),
+        public().consent(),
+        public().generation(),
+        public().expiry_ms(),
+        ConsentClass::PeerRead,
+    )
+    .unwrap();
+    let (a, b) = streams();
+    let (server_lengths, client_lengths) = message_lengths();
+    let server = thread::spawn(move || {
+        let mut transport = CryptoFixtureTransport::new(
+            NativeTransport::accept(a, &server_key).unwrap(),
+            server_lengths,
+        );
+        let context = transport.pairing_context(public()).unwrap();
+        let request = transport.read_message().unwrap();
+        let (_attempt, response) = invitation.start(&mut Entropy, &request, context).unwrap();
+        transport.write_message(&response).unwrap();
+    });
+    let mut transport = CryptoFixtureTransport::new(
+        NativeTransport::connect(b, &client_key, GatewayTrust::ManualBootstrap).unwrap(),
+        client_lengths,
+    );
+    let context = transport.pairing_context(relabelled).unwrap();
+    assert_ne!(
+        context.as_bytes(),
+        transport.pairing_context(public()).unwrap().as_bytes()
+    );
+    let (attempt, request) = ClientAttempt::start(&mut Entropy, &code).unwrap();
+    transport.write_message(&request).unwrap();
+    let saved = AtomicBool::new(false);
+    let finished = attempt.finish(
+        &mut Entropy,
+        &code,
+        &transport.read_message().unwrap(),
+        &context,
+        |_| {
+            saved.store(true, Ordering::SeqCst);
+            Ok(())
+        },
+    );
+    assert!(finished.is_err());
+    assert!(!saved.load(Ordering::SeqCst));
+    server.join().unwrap();
 }
 #[cfg(unix)]
 #[test]
@@ -218,7 +285,7 @@ fn public_native_context_preserves_profile_and_same_channel_binding() {
     assert_eq!(parts[7], public().expiry_ms().to_be_bytes());
     assert_eq!(parts[8], public().consent().bytes());
     assert_eq!(parts[9], public().generation().to_be_bytes());
-    assert_eq!(parts[10], public().class().as_bytes());
+    assert_eq!(parts[10], public().class().as_str().as_bytes());
     assert_eq!(parts[11].len(), 32);
 }
 

@@ -3,6 +3,7 @@ import type { RpcRequester } from "../application/session-port.js"
 import { ProductMethod } from "../generated/product.js"
 import type {
   PairingApproveResult,
+  PairingCreateParams,
   PairingCreateResult,
   PairingOwnerStatus,
   PairingPendingResult,
@@ -25,8 +26,12 @@ import {
  * without the code. Nothing is retried for you.
  */
 export type PairingApi = {
-  /** Open one invitation. The code is in the answer and nowhere else. */
-  create(): Promise<PairingCreateResult>
+  /**
+   * Open one invitation. The code is in the answer and nowhere else.
+   * `enrollee: "gateway"` invites a peer gateway instead of one of the
+   * owner's devices; it pairs the same way and can only read.
+   */
+  create(params?: PairingCreateParams): Promise<PairingCreateResult>
   /** Unfinished enrollments for this owner, including ones still owed cleanup. No code. */
   pending(): Promise<PairingPendingResult>
   /** One enrollment, as it stands now. */
@@ -58,7 +63,8 @@ export function createPairingApi(session: RpcRequester): PairingApi {
   }
   const invitation = (invitationId: number[]) => ({ invitationId })
   return {
-    create: () => call(ProductMethod.PairingCreate, {}, pairingCreateResult),
+    create: (params = {}) =>
+      call(ProductMethod.PairingCreate, params, pairingCreateResult),
     pending: () => call(ProductMethod.PairingPending, {}, pairingPendingResult),
     status: (invitationId) =>
       call(ProductMethod.PairingStatus, invitation(invitationId), pairingOwnerStatus),

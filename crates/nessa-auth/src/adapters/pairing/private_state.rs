@@ -7,7 +7,7 @@ use crate::{
     },
     application::ports::Clock,
     domain::{
-        pairing::{AttemptId, ConsentIntentId, InvitationId, PublicIntent},
+        pairing::{AttemptId, ConsentClass, ConsentIntentId, InvitationId, PublicIntent},
         AudienceId, CredentialId, ResourceId, MAX_IDENTIFIER_BYTES,
     },
 };
@@ -35,6 +35,33 @@ const PENDING_BYTES: usize = 144;
 const KEY_MAGIC: &[u8; 4] = b"NSGK";
 const PENDING_MAGIC: &[u8; 4] = b"NSCP";
 const CREDENTIAL_MAGIC: &[u8; 4] = b"NSCA";
+/// A peer gateway's enrollment: the same layout, told apart by its magic, so
+/// a device's existing record reads as before and a record cannot change class.
+const PEER_PENDING_MAGIC: &[u8; 4] = b"NSPP";
+const PEER_CREDENTIAL_MAGIC: &[u8; 4] = b"NSPA";
+
+/// The pending and credential magics of one enrollment class.
+fn magics(class: ConsentClass) -> (&'static [u8; 4], &'static [u8; 4]) {
+    match class {
+        ConsentClass::DeviceRead => (PENDING_MAGIC, CREDENTIAL_MAGIC),
+        ConsentClass::PeerRead => (PEER_PENDING_MAGIC, PEER_CREDENTIAL_MAGIC),
+    }
+}
+/// The class and record kind a magic names; `None` for any other bytes.
+fn class_of(magic: &[u8]) -> Option<(ConsentClass, bool)> {
+    [ConsentClass::DeviceRead, ConsentClass::PeerRead]
+        .into_iter()
+        .find_map(|class| {
+            let (pending, credential) = magics(class);
+            if magic == pending {
+                Some((class, false))
+            } else if magic == credential {
+                Some((class, true))
+            } else {
+                None
+            }
+        })
+}
 /// A credential record: the pending layout, then two u16-prefixed identifiers,
 /// each bounded by the identifier owner's own limit.
 const CREDENTIAL_MAX_BYTES: usize = PENDING_BYTES + 2 * (2 + MAX_IDENTIFIER_BYTES);
@@ -397,7 +424,7 @@ fn encode_pending(
     intent: PublicIntent,
 ) -> Zeroizing<Vec<u8>> {
     let mut bytes = Zeroizing::new(Vec::with_capacity(PENDING_BYTES));
-    bytes.extend_from_slice(PENDING_MAGIC);
+    bytes.extend_from_slice(magics(intent.class()).0);
     bytes.extend_from_slice(key.expose_bytes());
     bytes.extend_from_slice(pin);
     bytes.extend_from_slice(intent.invitation().bytes());
@@ -413,7 +440,7 @@ fn encode_credential(credential: &DeviceCredential) -> Zeroizing<Vec<u8>> {
         credential.gateway_pin(),
         credential.intent(),
     );
-    bytes[..4].copy_from_slice(CREDENTIAL_MAGIC);
+    bytes[..4].copy_from_slice(magics(credential.intent().class()).1);
     for identifier in [
         credential.credential().as_str(),
         credential.receiver().as_str(),
@@ -428,10 +455,10 @@ fn decode_client(bytes: &[u8]) -> Result<ClientRecord, PrivateStateError> {
     if bytes.len() < PENDING_BYTES {
         return Err(PrivateStateError::Corrupt);
     }
-    match &bytes[..4] {
-        magic if magic == PENDING_MAGIC => decode_pending(bytes).map(ClientRecord::Pending),
-        magic if magic == CREDENTIAL_MAGIC => {
-            let pending = decode_pending_fields(&bytes[..PENDING_BYTES])?;
+    match class_of(&bytes[..4]) {
+        Some((_, false)) => decode_pending(bytes).map(ClientRecord::Pending),
+        Some((class, true)) => {
+            let pending = decode_pending_fields(&bytes[..PENDING_BYTES], class)?;
             let mut rest = &bytes[PENDING_BYTES..];
             let mut identifier = || -> Result<String, PrivateStateError> {
                 let (length, tail) = rest
@@ -456,17 +483,24 @@ fn decode_client(bytes: &[u8]) -> Result<ClientRecord, PrivateStateError> {
                 pending, credential, receiver,
             )))
         }
-        _ => Err(PrivateStateError::Corrupt),
+        None => Err(PrivateStateError::Corrupt),
     }
 }
 fn decode_pending(bytes: &[u8]) -> Result<PendingEnrollment, PrivateStateError> {
-    if bytes.len() != PENDING_BYTES || &bytes[..4] != PENDING_MAGIC {
+    let Some((class, false)) = class_of(&bytes[..bytes.len().min(4)]) else {
+        return Err(PrivateStateError::Corrupt);
+    };
+    if bytes.len() != PENDING_BYTES {
         return Err(PrivateStateError::Corrupt);
     }
-    decode_pending_fields(bytes)
+    decode_pending_fields(bytes, class)
 }
-/// The key, pin and correlation shared by both record kinds, after the magic.
-fn decode_pending_fields(bytes: &[u8]) -> Result<PendingEnrollment, PrivateStateError> {
+/// The key, pin and correlation shared by both record kinds, after the magic,
+/// for an enrollment of `class` (which the magic named).
+fn decode_pending_fields(
+    bytes: &[u8],
+    class: ConsentClass,
+) -> Result<PendingEnrollment, PrivateStateError> {
     let mut seed = Zeroizing::new([0; 32]);
     seed.copy_from_slice(&bytes[4..36]);
     let mut pin = [0; 44];
@@ -497,6 +531,7 @@ fn decode_pending_fields(bytes: &[u8]) -> Result<PendingEnrollment, PrivateState
                 .try_into()
                 .map_err(|_| PrivateStateError::Corrupt)?,
         ),
+        class,
     )
     .map_err(|_| PrivateStateError::Corrupt)?;
     Ok(PendingEnrollment::new(

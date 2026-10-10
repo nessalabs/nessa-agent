@@ -5,7 +5,7 @@ use nessa_auth::{
         PairingCryptoError, RngCore,
     },
     application::pairing::{ClientPendingStore, PairingWorkerFault, PrivateStateError},
-    domain::pairing::{AttemptId, DisclosedConsent, PublicIntent},
+    domain::pairing::{AttemptId, ConsentClass, DisclosedConsent, PublicIntent},
 };
 use nessa_protocol::clock::Clock;
 use nessa_protocol::pairing::{
@@ -44,6 +44,10 @@ pub enum NativeClientError {
     Wire(NativeWireError),
     /// Peer phase/operation was not the expected canonical enrollment exchange.
     Phase,
+    /// The invitation enrolls another kind of party than this client: a peer
+    /// gateway's code given to a device, or the reverse. Nothing was saved and
+    /// no PAKE attempt was begun.
+    OtherEnrollee,
     /// The gateway answered `Refused`: no open invitation, an expired or used
     /// code, no attempts left, or a status request it would not answer. The
     /// reply is redacted, so the reason is not known here.
@@ -97,16 +101,28 @@ pub struct NativeEnrollmentClient {
     capacity: Arc<Semaphore>,
     drained: Arc<Notify>,
     wake: Mutex<WakeEndpoints>,
+    class: ConsentClass,
 }
 impl NativeEnrollmentClient {
-    /// Inject the retained private state owner; no filesystem path or entropy ambient seam.
+    /// A device's client. Inject the retained private state owner; no
+    /// filesystem path or entropy ambient seam.
     pub fn new(pending: Arc<dyn ClientPendingStore>, clock: Arc<dyn Clock>) -> Self {
+        Self::enrolling(ConsentClass::DeviceRead, pending, clock)
+    }
+    /// A client that enrolls as `class` and refuses an invitation of any other
+    /// class before the PAKE begins (`NativeClientError::OtherEnrollee`).
+    pub fn enrolling(
+        class: ConsentClass,
+        pending: Arc<dyn ClientPendingStore>,
+        clock: Arc<dyn Clock>,
+    ) -> Self {
         Self {
             pending,
             clock,
             capacity: Arc::new(Semaphore::new(1)),
             drained: Arc::new(Notify::new()),
             wake: Mutex::new(WakeEndpoints::new()),
+            class,
         }
     }
     /// Enroll once using address+code, committing pending seed/pin/context before KE3.
@@ -120,6 +136,7 @@ impl NativeEnrollmentClient {
         let endpoint = client_endpoint(&stream)?;
         let (stream, deadline) = DeadlineStream::new(stream, self.clock.clone(), endpoint.clone())
             .map_err(physical_error)?;
+        let class = self.class;
         self.dispatch_owned(vec![endpoint], move |pending| {
             if pending
                 .load_pending()
@@ -151,7 +168,10 @@ impl NativeEnrollmentClient {
                 &identity,
                 &code,
                 &mut entropy,
-                None,
+                Expected {
+                    class,
+                    original: None,
+                },
             )
         })
         .await
@@ -169,6 +189,7 @@ impl NativeEnrollmentClient {
         let retry_endpoint = client_endpoint(&retry_stream)?;
         let endpoints = vec![original_endpoint.clone(), retry_endpoint.clone()];
         let clock = self.clock.clone();
+        let class = self.class;
         self.dispatch_owned(endpoints, move |pending| {
             let saved = pending
                 .load_pending()
@@ -207,7 +228,10 @@ impl NativeEnrollmentClient {
                 &identity,
                 &code,
                 &mut entropy,
-                Some(public),
+                Expected {
+                    class,
+                    original: Some(public),
+                },
             )?;
             Ok(NativeRetryOutcome { original, retried })
         })
@@ -363,6 +387,12 @@ impl Drop for ClientPermit {
         self.drained.notify_waiters();
     }
 }
+/// What an enrollment attempt must find in the gateway's first reply: the
+/// class this client enrolls as and, on a retry, the original enrollment.
+struct Expected {
+    class: ConsentClass,
+    original: Option<PublicIntent>,
+}
 fn complete_enrollment<R: RngCore + CryptoRng>(
     channel: &mut EnrollmentChannel<DeadlineStream>,
     deadline: &NativeDeadline,
@@ -370,8 +400,12 @@ fn complete_enrollment<R: RngCore + CryptoRng>(
     identity: &NativeIdentity,
     code: &ManualCode,
     entropy: &mut R,
-    expected: Option<PublicIntent>,
+    expected: Expected,
 ) -> Result<NativePairingStatus, NativeClientError> {
+    let Expected {
+        class,
+        original: expected,
+    } = expected;
     let mut attempt = [0; 16];
     entropy
         .try_fill_bytes(&mut attempt)
@@ -385,6 +419,9 @@ fn complete_enrollment<R: RngCore + CryptoRng>(
     };
     if public.attempt() != AttemptId::new(attempt) {
         return Err(NativeClientError::Phase);
+    }
+    if public.class() != class {
+        return Err(NativeClientError::OtherEnrollee);
     }
     if expected.is_some_and(|original: PublicIntent| {
         original.attempt() == AttemptId::new(attempt)

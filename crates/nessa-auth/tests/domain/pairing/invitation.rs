@@ -1,8 +1,9 @@
 use nessa_auth::domain::{
     pairing::{
-        validate_pairing_collection, AttemptFailure, AttemptId, AttemptOutcome, ConsentIntent,
-        ConsentIntentId, DeviceKey, InvitationId, PairingError, PairingEvent, PairingInitiator,
-        PairingPhase, PairingPolicy, PairingRecord, TerminalCause, MAX_LIVE_PAIRINGS,
+        validate_pairing_collection, AttemptFailure, AttemptId, AttemptOutcome, ConsentClass,
+        ConsentIntent, ConsentIntentId, DeviceKey, InvitationId, PairingError, PairingEvent,
+        PairingInitiator, PairingPhase, PairingPolicy, PairingRecord, TerminalCause,
+        MAX_LIVE_PAIRINGS,
     },
     AudienceId, Credential, CredentialId, CredentialLifecycle, CredentialTransition, Initiator,
     IssuanceCause, MembershipId, OrganizationId, PrincipalId, Resource, ResourceId, Supersession,
@@ -22,6 +23,7 @@ fn record() -> PairingRecord {
                 OrganizationId::new("org").unwrap(),
                 ResourceId::new("gateway").unwrap(),
             ),
+            ConsentClass::DeviceRead,
         )
         .unwrap(),
         1_000,

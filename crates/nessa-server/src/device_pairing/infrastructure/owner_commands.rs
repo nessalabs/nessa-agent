@@ -5,7 +5,7 @@ use crate::device_pairing::application::Approval;
 use nessa_auth::{
     adapters::pairing::{rand, CryptoRng, RngCore},
     application::{pairing::OwnerDecision, session::AuthenticatedSession},
-    domain::pairing::{DeviceKey, InvitationId, PairingRecord},
+    domain::pairing::{ConsentClass, DeviceKey, InvitationId, PairingRecord},
 };
 use std::sync::Arc;
 
@@ -32,14 +32,15 @@ impl PairingOwnerCommands {
     pub fn new(gateway: Arc<GatewayPairing>, entropy: InvitationEntropySource) -> Self {
         Self { gateway, entropy }
     }
-    /// Create one invitation; the code is returned only after the registry
-    /// commit (`GatewayPairing::create`).
+    /// Create one invitation enrolling `class`; the code is returned only
+    /// after the registry commit (`GatewayPairing::create`).
     pub async fn create(
         &self,
         session: &AuthenticatedSession,
+        class: ConsentClass,
     ) -> Result<CreatedInvitation, PairingRuntimeError> {
         self.gateway
-            .create(session.clone(), Entropy((self.entropy)()))
+            .create(session.clone(), class, Entropy((self.entropy)()))
             .await
     }
     /// The caller's unfinished enrollments (`GatewayPairing::pending`).

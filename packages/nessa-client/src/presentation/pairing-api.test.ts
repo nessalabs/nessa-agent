@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from "vitest"
 
 import { NessaPairingError, PairingRefusalCode } from "../application/pairing-error.js"
 import { NessaRpcError } from "../application/rpc-error.js"
-import { PairingActivationStop, PairingOwnerPhase } from "../generated/product.js"
+import {
+  PairingActivationStop,
+  PairingEnrollee,
+  PairingOwnerPhase,
+} from "../generated/product.js"
 import { createPairingApi } from "./pairing-api.js"
 
 const invitationId = Array.from({ length: 16 }, (_, index) => index)
@@ -40,6 +44,16 @@ describe("client.pairing", () => {
     expect(calls).toEqual([{ method: "pairing.create", params: {} }])
     expect(created.code).toBe("ABCD-2345")
     expect(created.status.phase).toBe("available")
+  })
+
+  it("names a peer gateway as the enrollee when asked", async () => {
+    const { api, calls } = session(() => ({
+      code: "ABCD-2345",
+      status: { ...status, class: "peer-gateway-conversation-read" },
+    }))
+    const created = await api.create({ enrollee: PairingEnrollee.Gateway })
+    expect(calls).toEqual([{ method: "pairing.create", params: { enrollee: "gateway" } }])
+    expect(created.status.class).toBe("peer-gateway-conversation-read")
   })
 
   it("lists pending enrollments and reads one by its invitation", async () => {

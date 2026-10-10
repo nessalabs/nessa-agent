@@ -1,7 +1,7 @@
 //! The purge-before-forgetting store and the recheck rule, against doubles
 //! that record the order of effects.
 use super::*;
-use nessa_auth::domain::pairing::{AttemptId, ConsentIntentId, InvitationId};
+use nessa_auth::domain::pairing::{AttemptId, ConsentClass, ConsentIntentId, InvitationId};
 use nessa_protocol::product_contract::generated::SessionCloseReason;
 
 #[derive(Default)]
@@ -86,6 +86,7 @@ fn intent() -> PublicIntent {
         ConsentIntentId::new([3; ConsentIntentId::LENGTH]),
         1,
         9,
+        ConsentClass::DeviceRead,
     )
     .unwrap()
 }

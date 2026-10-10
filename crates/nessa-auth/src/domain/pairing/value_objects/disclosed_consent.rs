@@ -37,6 +37,7 @@ impl DisclosedConsent {
     pub fn verify_intent(&self, intent: &ConsentIntent) -> Result<(), PairingError> {
         if self.public.consent() != intent.id()
             || self.public.generation() != intent.generation()
+            || self.public.class() != intent.class()
             || self.audience != *intent.audience()
             || self.grant != *intent.grant()
         {

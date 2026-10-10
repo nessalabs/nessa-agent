@@ -202,11 +202,12 @@ export const sessionClosePolicy = {
   server_shutdown: { webSocketCode: 1000, retryable: false },
   transport_interrupted: { webSocketCode: 1006, retryable: true },
 } as const
-/** Supported categories of authenticated actors: human users, integrations, and agents. */
+/** Supported categories of authenticated actors: human users, integrations, agents, and paired peer gateways. Only device pairing creates a gateway principal; credential.issue refuses one. */
 export const PrincipalKind = {
   Human: "human",
   Integration: "integration",
   Agent: "agent",
+  Gateway: "gateway",
 } as const
 export type PrincipalKind = (typeof PrincipalKind)[keyof typeof PrincipalKind]
 /** Organization roles understood by product authorization policy. */
@@ -1824,6 +1825,14 @@ export const CatalogueReadErrorCode = {
 } as const
 export type CatalogueReadErrorCode =
   (typeof CatalogueReadErrorCode)[keyof typeof CatalogueReadErrorCode]
+/** Who an invitation enrolls. device: one of the owner's own devices; its credential acts as the owner. gateway: a peer gateway; its credential names a principal of kind gateway, identified by the key it pinned at pairing, and can hold only the conversation.read grant. Both use the same enrollment and listener; the choice is bound into the enrollment and cannot be changed by the enrolling side. */
+export const PairingEnrollee = { Device: "device", Gateway: "gateway" } as const
+export type PairingEnrollee = (typeof PairingEnrollee)[keyof typeof PairingEnrollee]
+/** Wire input for pairing.create. The owner, organization and gateway come from the session, never from the request. */
+export interface PairingCreateParams {
+  /** Who the invitation enrolls; absent means device. */
+  enrollee?: PairingEnrollee
+}
 /** Wire input for pairing.status, pairing.deny and pairing.cancel: the invitation the owner names. The owner, organization and gateway come from the session, never from the request. */
 export interface PairingInvitationParams {
   /** Random identity of the invitation, as its bytes. */

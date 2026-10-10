@@ -424,7 +424,7 @@ a live session's tool/permission consistency boundary into independent aggregate
 
 ## Identity and access library
 
-The auth pairing producer keeps invitation/consent values in `domain/pairing/`, orchestration and receiver/private-state ports in `application/pairing/`, and OPAQUE/TLS/private storage in `adapters/pairing/`; the local registry pairing module owns persistence and device proof verification. Its owning tests remain beside the adapters and domain fixtures under `tests/domain/pairing/`. Design: [device pairing](design/auth/device-pairing.md).
+The auth pairing producer keeps invitation/consent values in `domain/pairing/`, orchestration and receiver/private-state ports in `application/pairing/`, and OPAQUE/TLS/private storage in `adapters/pairing/`; the local registry pairing module owns persistence and device proof verification. Its owning tests remain beside the adapters and domain fixtures under `tests/domain/pairing/`. Design: [device pairing](design/auth/device-pairing.md); a peer gateway enrolls through the same flow under its own consent class and principal kind ([peer gateways](design/auth/peer-gateways.md)).
 
 The native server consumer is `nessa-server/src/device_pairing/`. `application/`
 holds the owner use cases (`owner.rs`), approval through to an issued credential

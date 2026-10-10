@@ -34,8 +34,9 @@ use crate::{
     },
     domain::{
         pairing::{validate_pairing_collection, InvitationId, PairingError},
-        AudienceId, Credential, CredentialId, CredentialTransition, DomainError, Initiator,
-        IssuanceCause, Membership, PrincipalId, Supersession, TransitionCause,
+        Action, AudienceId, Credential, CredentialId, CredentialTransition, DomainError, Initiator,
+        IssuanceCause, Membership, Principal, PrincipalId, PrincipalKind, Supersession,
+        TransitionCause,
     },
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
@@ -1631,6 +1632,7 @@ fn validate_registry(
                 RegistryInvariant::CredentialVerifier,
             ));
         }
+        validate_principal_kind(registry, credential)?;
     }
     let issue_commands: HashSet<_> = registry
         .issue_receipts
@@ -1655,6 +1657,52 @@ fn validate_registry(
     {
         return Err(CredentialRegistryFault::InvalidState(
             RegistryInvariant::CommandReceipt,
+        ));
+    }
+    Ok(())
+}
+
+/// What a credential's principal kind allows, held for every credential the
+/// registry keeps. A gateway principal is a paired peer: its credential is
+/// bound to the key it pinned by pairing (never a bearer secret), its
+/// membership is a member's, and its grants are only those
+/// `PrincipalKind::may_hold` lets a peer hold, so it can never carry the
+/// conversation authority's actions.
+fn validate_principal_kind(
+    registry: &Registry,
+    credential: &StoredCredential,
+) -> Result<(), CredentialRegistryFault> {
+    let metadata = &credential.metadata;
+    let kind = registry
+        .principals
+        .iter()
+        .find(|principal| principal.id == metadata.principal_id)
+        .and_then(|principal| Principal::try_from(principal.clone()).ok())
+        .map(|principal| principal.kind())
+        .ok_or(CredentialRegistryFault::InvalidState(
+            RegistryInvariant::CredentialBinding,
+        ))?;
+    if kind != PrincipalKind::Gateway {
+        return Ok(());
+    }
+    if !matches!(credential.verifier, StoredProof::Device(_)) {
+        return Err(CredentialRegistryFault::InvalidState(
+            RegistryInvariant::CredentialVerifier,
+        ));
+    }
+    if registry.memberships.iter().any(|membership| {
+        membership.principal_id == metadata.principal_id
+            && membership.role != MembershipRoleDto::Member
+    }) {
+        return Err(CredentialRegistryFault::InvalidState(
+            RegistryInvariant::MembershipBinding,
+        ));
+    }
+    if metadata.grants.iter().any(|grant| {
+        Action::new(grant.action.clone()).map_or(true, |action| !kind.may_hold(&action))
+    }) {
+        return Err(CredentialRegistryFault::InvalidState(
+            RegistryInvariant::CredentialMetadata,
         ));
     }
     Ok(())
@@ -1692,7 +1740,10 @@ fn validate_issue(
     request: &IssueCredentialRequest,
     administrative_allowed: bool,
 ) -> Result<(), LocalStoreError> {
+    // A peer gateway is enrolled only by pairing, which binds its credential
+    // to the key it pinned; an issued bearer secret would be a second way in.
     if request.audience_id != registry.gateway_id
+        || request.principal.kind == PrincipalKindDto::Gateway
         || request.request_id.trim().is_empty()
         || request.request_id.len() > 200
         || request.issuer_principal_id.trim().is_empty()
@@ -1852,8 +1903,8 @@ mod tests {
         },
         domain::{
             pairing::{
-                ConsentIntent, ConsentIntentId, InvitationId, PairingPhase, PairingPolicy,
-                PairingRecord,
+                ConsentClass, ConsentIntent, ConsentIntentId, InvitationId, PairingPhase,
+                PairingPolicy, PairingRecord,
             },
             MembershipId, MembershipRole, OrganizationId, Resource, ResourceId,
         },
@@ -1983,6 +2034,7 @@ mod tests {
             PrincipalId::new("owner").unwrap(),
             MembershipId::new("owner-membership").unwrap(),
             gateway.clone(),
+            ConsentClass::DeviceRead,
         )
         .unwrap();
         let policy = CedarPolicyEvaluator::new().unwrap();

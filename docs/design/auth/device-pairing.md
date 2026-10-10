@@ -1773,7 +1773,7 @@ the route parses, asks, and maps the record it gets back.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| `pairing.create` | `{}` | `PairingCreateResult {code, status}`; `code` is the grouped display form, shown once |
+| `pairing.create` | `PairingCreateParams {enrollee?}` (`device`, the default, or `gateway` for a [peer gateway](peer-gateways.md)) | `PairingCreateResult {code, status}`; `code` is the grouped display form, shown once |
 | `pairing.pending` | `{}` | `PairingPendingResult {items: PairingOwnerStatus[]}` |
 | `pairing.status` | `PairingInvitationParams {invitationId}` | `PairingOwnerStatus` |
 | `pairing.approve` | `PairingApproveParams {invitationId, deviceKey}` | `PairingApproveResult {status: PairingOwnerStatus, activationStopped?}` (slice 2b; in 2a it was `PairingOwnerStatus`) |

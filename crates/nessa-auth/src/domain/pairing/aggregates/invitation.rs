@@ -3,7 +3,7 @@ use super::super::{
     PairingPolicy,
 };
 use crate::domain::{
-    CredentialId, CredentialTransition, ResourceId, RevocationCause, TransitionCause,
+    CredentialId, CredentialTransition, PrincipalId, ResourceId, RevocationCause, TransitionCause,
 };
 
 /// The registry publication stage; device possession never implies approval.
@@ -272,6 +272,16 @@ impl PairingRecord {
     /// Original terminal cause and attribution; late cleanup does not replace it.
     pub fn terminal(&self) -> Option<(TerminalCause, &PairingInitiator)> {
         self.terminal.as_ref().map(|(cause, actor)| (*cause, actor))
+    }
+    /// The principal the credential this enrollment issues names, once a key
+    /// has claimed it: the owner for a device, the peer's gateway principal
+    /// for a peer (`ConsentClass::credential_principal`). `None` before a claim.
+    pub fn credential_principal(&self) -> Option<PrincipalId> {
+        let (_, key) = self.claim?;
+        self.intent
+            .class()
+            .credential_principal(self.intent.owner(), &key)
+            .ok()
     }
     /// Reserved credential remains unusable until the Active phase.
     pub fn credential(&self) -> Option<&CredentialId> {

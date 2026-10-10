@@ -37,8 +37,9 @@ use crate::{
     },
     domain::{
         pairing::{
-            AttemptId, AttemptOutcome, ConsentIntent, ConsentIntentId, InvitationId, PairingError,
-            PairingPhase, PairingPolicy, PairingRecord, PublicIntent, TerminalCause,
+            peer_principal, AttemptId, AttemptOutcome, ConsentClass, ConsentIntent,
+            ConsentIntentId, InvitationId, PairingError, PairingPhase, PairingPolicy,
+            PairingRecord, PublicIntent, TerminalCause,
         },
         Action, AudienceId, AuthContext, CredentialId, MembershipId, MembershipRole,
         OrganizationId, PrincipalId, Resource, ResourceId,
@@ -82,6 +83,17 @@ fn claim_fixture(
     public_for: impl FnOnce(PublicIntent) -> PublicIntent,
     refusal: Option<PairingError>,
 ) -> Fixture {
+    claim_fixture_as(ConsentClass::DeviceRead, public_for, refusal)
+}
+/// A peer gateway's invitation, claimed by the fixture's key.
+fn peer_claim() -> Fixture {
+    claim_fixture_as(ConsentClass::PeerRead, |public| public, None)
+}
+fn claim_fixture_as(
+    class: ConsentClass,
+    public_for: impl FnOnce(PublicIntent) -> PublicIntent,
+    refusal: Option<PairingError>,
+) -> Fixture {
     let directory = tempfile::tempdir().unwrap();
     let store = Arc::new(open_store(directory.path().join("native/credentials.v1.json")).unwrap());
     let mut request = bootstrap();
@@ -108,6 +120,7 @@ fn claim_fixture(
         PrincipalId::new("owner").unwrap(),
         MembershipId::new("owner-membership").unwrap(),
         gateway.clone(),
+        class,
     )
     .unwrap();
     let admission = ready(
@@ -134,6 +147,7 @@ fn claim_fixture(
             record.intent().id(),
             1,
             record.expires_at_ms(),
+            class,
         )
         .unwrap(),
     );
@@ -286,6 +300,7 @@ fn confirmed_claim_requires_original_consent() {
             ConsentIntentId::new([4; 16]),
             public.generation(),
             public.expiry_ms(),
+            ConsentClass::DeviceRead,
         )
         .unwrap()
     });
@@ -299,6 +314,7 @@ fn confirmed_claim_requires_original_generation() {
             public.consent(),
             public.generation() + 1,
             public.expiry_ms(),
+            ConsentClass::DeviceRead,
         )
         .unwrap()
     });
@@ -312,6 +328,7 @@ fn confirmed_claim_requires_original_expiry() {
             public.consent(),
             public.generation(),
             public.expiry_ms() + 1,
+            ConsentClass::DeviceRead,
         )
         .unwrap()
     });
@@ -435,6 +452,7 @@ fn device_admission_reads_committed_snapshot_during_pairing_mutation() {
         PrincipalId::new("owner").unwrap(),
         MembershipId::new("owner-membership").unwrap(),
         fixture.gateway.clone(),
+        ConsentClass::DeviceRead,
     )
     .unwrap();
     let neighbor = PairingRecord::new(
@@ -708,6 +726,7 @@ fn runtime_restart_and_expiry_preserve_first_cause_and_active_credentials() {
         fixture.record.intent().owner().clone(),
         fixture.record.intent().membership().clone(),
         fixture.gateway.clone(),
+        ConsentClass::DeviceRead,
     )
     .unwrap();
     let policy = CedarPolicyEvaluator::new().unwrap();
@@ -768,6 +787,7 @@ fn runtime_restart_and_expiry_preserve_first_cause_and_active_credentials() {
         fixture.record.intent().owner().clone(),
         fixture.record.intent().membership().clone(),
         fixture.gateway.clone(),
+        ConsentClass::DeviceRead,
     )
     .unwrap();
     let admission = ready(
@@ -833,6 +853,7 @@ fn admission_requires_exact_gateway_resource_before_any_enrollment_effect() {
             fixture.gateway.organization_id().clone(),
             ResourceId::new("other-resource").unwrap(),
         ),
+        ConsentClass::DeviceRead,
     )
     .unwrap();
     let policy = CedarPolicyEvaluator::new().unwrap();
@@ -935,6 +956,7 @@ fn first_key_publication_holds_current_history_admission() {
         PrincipalId::new("owner").unwrap(),
         MembershipId::new("owner-membership").unwrap(),
         gateway.clone(),
+        ConsentClass::DeviceRead,
     )
     .unwrap();
     let admission = ready(
@@ -1955,6 +1977,7 @@ fn pairing_admission_current_access_policy_revision_and_deadline_neighbors() {
                 })
                 .unwrap(),
             ),
+            ConsentClass::DeviceRead,
         )
         .unwrap();
         assert!(
@@ -2004,6 +2027,7 @@ fn pairing_admission_current_access_policy_revision_and_deadline_neighbors() {
         fixture.record.intent().owner().clone(),
         fixture.record.intent().membership().clone(),
         fixture.gateway.clone(),
+        ConsentClass::DeviceRead,
     )
     .unwrap();
     let record = PairingRecord::new(
@@ -2309,6 +2333,7 @@ fn authorized_pairing_commands_refuse_otherwise_valid_foreign_intent() {
         original.owner().clone(),
         original.membership().clone(),
         original.resource().clone(),
+        ConsentClass::DeviceRead,
     )
     .unwrap();
     let admission_for = |intent: &ConsentIntent| {
@@ -2669,6 +2694,7 @@ fn equal_revision_alternate_gateway_admission_requires_current_issuer_audience()
         fixture.record.intent().owner().clone(),
         fixture.record.intent().membership().clone(),
         gateway.clone(),
+        ConsentClass::DeviceRead,
     )
     .unwrap();
     let session = ready(
@@ -2716,6 +2742,7 @@ fn equal_revision_alternate_gateway_admission_requires_current_issuer_audience()
         fixture.record.intent().owner().clone(),
         fixture.record.intent().membership().clone(),
         fixture.gateway.clone(),
+        ConsentClass::DeviceRead,
     )
     .unwrap();
     let original_record = PairingRecord::new(
@@ -2888,6 +2915,7 @@ fn admission_record(owner: &str, member: &str, organization: &str, identity: u8)
             OrganizationId::new(organization).unwrap(),
             ResourceId::new("gateway-1").unwrap(),
         ),
+        ConsentClass::DeviceRead,
     )
     .unwrap();
     PairingRecord::new(
@@ -3515,4 +3543,153 @@ fn public_reopen_requires_original_cancellation_cause() {
             "kind":"superseded", "by":"distinct-reader", "supersession":"owner_recovery"
         });
     }]);
+}
+
+/// Row H1 (`docs/design/auth/peer-gateways.md`): a peer gateway's enrollment is the
+/// same one-use pairing, and what it issues is bound to a principal of kind
+/// `gateway` named by the key the owner approved: a member, holding only the
+/// read grant, its credential bound to that key. A device's still names the
+/// owner (`public_reopen_refuses_conflicting_credential_metadata`).
+#[test]
+fn a_peer_enrollment_issues_a_gateway_principal_bound_to_its_key() {
+    let fixture = peer_claim();
+    let active = publish(&fixture);
+    let key = fixture.channel.device_proof().key();
+    let principal = peer_principal(&key).unwrap();
+    assert_eq!(active.credential_principal(), Some(principal.clone()));
+    assert!(principal.as_str().starts_with("gateway:"));
+    let path = fixture.directory.path().join("native/credentials.v1.json");
+    let registry: Registry = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let stored = registry
+        .principals
+        .iter()
+        .find(|entry| entry.id == principal.as_str())
+        .unwrap();
+    assert_eq!(stored.kind, PrincipalKindDto::Gateway);
+    let membership = registry
+        .memberships
+        .iter()
+        .find(|entry| entry.principal_id == principal.as_str())
+        .unwrap();
+    assert_eq!(membership.role, MembershipRoleDto::Member);
+    assert_eq!(membership.state, MembershipStateDto::Active);
+    let credential = registry
+        .credentials
+        .iter()
+        .find(|entry| entry.metadata.id == "native-device")
+        .unwrap();
+    assert_eq!(credential.metadata.principal_id, principal.as_str());
+    assert_eq!(
+        credential
+            .metadata
+            .grants
+            .iter()
+            .map(|grant| grant.action.as_str())
+            .collect::<Vec<_>>(),
+        ["conversation.read"]
+    );
+    assert!(matches!(credential.verifier, StoredProof::Device(_)));
+    // The registry reopens with it: every invariant below holds.
+    drop(fixture.store);
+    let reopened = open_store(&path).unwrap();
+    assert_eq!(
+        reopened.read_pairing(fixture.record.id()).unwrap().phase(),
+        PairingPhase::Active
+    );
+}
+
+/// Rows H4, H6: a gateway principal comes from pairing alone, and its kind
+/// cannot express the conversation authority's grants. `credential.issue`
+/// refuses one; a registry in which a peer is an admin, holds a bearer
+/// credential, holds `conversation.write` or `credential.manage`, names
+/// another principal than its key's, or lost the class that named it is
+/// refused on open, and is never written.
+#[test]
+fn a_gateway_principal_holds_only_what_pairing_issued_it() {
+    let fixture = peer_claim();
+    publish(&fixture);
+    let principal = peer_principal(&fixture.channel.device_proof().key()).unwrap();
+    let mut request = ordinary_issue("bearer-peer");
+    request.principal = PrincipalInputDto {
+        id: "gateway:another".into(),
+        kind: PrincipalKindDto::Gateway,
+    };
+    request.membership.principal_id = "gateway:another".into();
+    request.membership.id = "gateway:another".into();
+    let path = fixture.directory.path().join("native/credentials.v1.json");
+    let before = std::fs::read(&path).unwrap();
+    assert!(matches!(
+        fixture.store.issue_sync(request),
+        Err(LocalStoreError::Conflict)
+    ));
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    let original_bytes = std::fs::read(&path).unwrap();
+    let original: Registry = serde_json::from_slice(&original_bytes).unwrap();
+    drop(fixture.store);
+    for change in 0..5 {
+        let mut changed = original.clone();
+        match change {
+            0 => {
+                changed
+                    .memberships
+                    .iter_mut()
+                    .find(|entry| entry.principal_id == principal.as_str())
+                    .unwrap()
+                    .role = MembershipRoleDto::Admin;
+            }
+            1..=3 => {
+                let action = [
+                    "conversation.read",
+                    "conversation.write",
+                    "credential.manage",
+                ][change - 1];
+                let mut bearer = changed
+                    .credentials
+                    .iter()
+                    .find(|entry| matches!(entry.verifier, StoredProof::Bearer(_)))
+                    .unwrap()
+                    .clone();
+                bearer.metadata.id = format!("peer-bearer-{change}");
+                bearer.metadata.principal_id = principal.as_str().to_owned();
+                bearer.metadata.grants = vec![grant("org-1", action)];
+                bearer.metadata.grants[0].resource.id = "gateway-1".into();
+                if change > 1 {
+                    // The authority's grants are refused on a pairing-bound
+                    // credential too, not only on a bearer one.
+                    let peer = changed
+                        .credentials
+                        .iter_mut()
+                        .find(|entry| entry.metadata.id == "native-device")
+                        .unwrap();
+                    peer.metadata.grants.push(bearer.metadata.grants[0].clone());
+                }
+                changed.credentials.push(bearer);
+            }
+            4 => {
+                changed
+                    .credentials
+                    .iter_mut()
+                    .find(|entry| entry.metadata.id == "native-device")
+                    .unwrap()
+                    .metadata
+                    .principal_id = "owner".into();
+            }
+            _ => unreachable!(),
+        }
+        assert_public_registry_refusal(&path, &changed);
+    }
+    // The stored class is what names the credential's principal: without it,
+    // the enrollment reads as a device's, whose credential would name the
+    // owner, and the peer's no longer agrees.
+    let mut value: serde_json::Value = serde_json::from_slice(&original_bytes).unwrap();
+    let pairing = &mut value["pairings"][0];
+    assert_eq!(pairing["class"], "peer");
+    pairing.as_object_mut().unwrap().remove("class");
+    std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+    assert!(matches!(
+        open_store(&path),
+        Err(LocalStoreError::InvalidRegistry { .. })
+    ));
+    std::fs::write(&path, &original_bytes).unwrap();
+    assert!(open_store(&path).is_ok());
 }

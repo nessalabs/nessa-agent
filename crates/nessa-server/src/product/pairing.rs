@@ -21,15 +21,15 @@ use nessa_auth::{
         session::AuthenticatedSession,
     },
     domain::pairing::{
-        DeviceKey, InvitationId, PairingError, PairingInitiator, PairingPhase, PairingRecord,
-        TerminalCause,
+        ConsentClass, DeviceKey, InvitationId, PairingError, PairingInitiator, PairingPhase,
+        PairingRecord, TerminalCause,
     },
 };
 use nessa_protocol::product::generated::{
-    PairingActivationStop, PairingApproveParams, PairingApproveResult, PairingCreateResult,
-    PairingErrorCode, PairingInitiator as WireInitiator, PairingInitiatorKind,
-    PairingInvitationParams, PairingOwnerPhase, PairingOwnerStatus, PairingPendingResult,
-    PairingReceiver, PairingTerminal, PairingTerminalCause,
+    PairingActivationStop, PairingApproveParams, PairingApproveResult, PairingCreateParams,
+    PairingCreateResult, PairingEnrollee, PairingErrorCode, PairingInitiator as WireInitiator,
+    PairingInitiatorKind, PairingInvitationParams, PairingOwnerPhase, PairingOwnerStatus,
+    PairingPendingResult, PairingReceiver, PairingTerminal, PairingTerminalCause,
 };
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
 use serde_json::json;
@@ -45,10 +45,14 @@ pub(super) async fn dispatch(
     let id = frame.id;
     let result = match frame.method.as_str() {
         "pairing.create" => {
-            if frame.params != json!({}) {
+            let Ok(params) = serde_json::from_value::<PairingCreateParams>(frame.params) else {
                 return failure(&id, "invalid_request");
-            }
-            match pairing.create(session).await {
+            };
+            let class = match params.enrollee {
+                None | Some(PairingEnrollee::Device) => ConsentClass::DeviceRead,
+                Some(PairingEnrollee::Gateway) => ConsentClass::PeerRead,
+            };
+            match pairing.create(session, class).await {
                 Ok(created) => {
                     let display = created.code().display_bytes();
                     let Ok(code) = std::str::from_utf8(display.as_ref()) else {
@@ -147,7 +151,7 @@ fn owner_status(record: &PairingRecord) -> PairingOwnerStatus {
         invitation_id: *record.id().bytes(),
         consent_id: *intent.id().bytes(),
         generation: intent.generation(),
-        class: intent.class().to_owned(),
+        class: intent.class().as_str().to_owned(),
         grant: CredentialGrantDto {
             action: grant.action().as_str().to_owned(),
             resource: ResourceDto {
