@@ -1,8 +1,8 @@
 //! Lease frames: their wire shape, the hello another build is recognised by,
 //! and the bounds on a frame and the bytes it carries.
 use super::{
-    decode, encode, fingerprint, read_hello, Cleanup, Data, FromEnvironment, Hello, ToEnvironment,
-    MAX_DATA_BYTES, MAX_FRAME_BYTES,
+    decode, encode, fingerprint, read_hello, Cleanup, CommandEnd, Data, FromEnvironment, Hello,
+    ToEnvironment, MAX_DATA_BYTES, MAX_FRAME_BYTES,
 };
 use crate::pairing::FrameReader;
 use std::collections::BTreeMap;
@@ -47,6 +47,13 @@ fn every_frame_round_trips_and_names_its_lease() {
         },
         ToEnvironment::End { lease: "l".into() },
         ToEnvironment::Account { lease: "l".into() },
+        ToEnvironment::GrantCommand {
+            lease: "l".into(),
+            argv: vec!["cargo".into(), "test".into()],
+            cwd: Some("crates/a".into()),
+            timeout_ms: 120_000,
+        },
+        ToEnvironment::Run { lease: "l".into() },
     ];
     for frame in to {
         let decoded: ToEnvironment = decode(&body(&encode(&frame).unwrap())).unwrap();
@@ -75,6 +82,14 @@ fn every_frame_round_trips_and_names_its_lease() {
             lease: "l".into(),
             channel: 2,
             data: Data(b"{}\n".to_vec()),
+        },
+        FromEnvironment::Ran {
+            lease: "l".into(),
+            end: CommandEnd::Exited { code: 1 },
+            stdout: Data(b"out".to_vec()),
+            stderr: Data(Vec::new()),
+            dropped_bytes: 7,
+            cleanup: Cleanup::Confirmed { forced: false },
         },
     ];
     for frame in from {
@@ -112,6 +127,69 @@ fn the_wire_names_are_camel_case() {
         text,
         r#"{"type":"ended","lease":"l","cleanup":{"outcome":"confirmed","forced":false}}"#
     );
+    let text = String::from_utf8(
+        serde_json::to_vec(&FromEnvironment::Ran {
+            lease: "l".into(),
+            end: CommandEnd::Signalled { signal: 9 },
+            stdout: Data(b"a".to_vec()),
+            stderr: Data(Vec::new()),
+            dropped_bytes: 0,
+            cleanup: Cleanup::NotHeld,
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        text,
+        r#"{"type":"ran","lease":"l","end":{"outcome":"signalled","signal":9},"stdout":"YQ==","stderr":"","droppedBytes":0,"cleanup":{"outcome":"notHeld"}}"#
+    );
+    let text = String::from_utf8(
+        serde_json::to_vec(&ToEnvironment::GrantCommand {
+            lease: "l".into(),
+            argv: vec!["ls".into()],
+            cwd: None,
+            timeout_ms: 1,
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        text,
+        r#"{"type":"grantCommand","lease":"l","argv":["ls"],"cwd":null,"timeoutMs":1}"#
+    );
+}
+
+/// The largest answer a command lease can have fits in one frame: both
+/// streams' kept bytes are bounded together by one frame's data.
+#[test]
+fn a_commands_whole_capture_fits_in_one_frame() {
+    let half = MAX_DATA_BYTES / 2;
+    let frame = FromEnvironment::Ran {
+        lease: "l".repeat(64),
+        end: CommandEnd::Exited { code: i32::MIN },
+        stdout: Data(vec![0xff; half]),
+        stderr: Data(vec![0xff; MAX_DATA_BYTES - half]),
+        dropped_bytes: u64::MAX,
+        cleanup: Cleanup::Uncertain,
+    };
+    assert!(encode(&frame).is_ok());
+    for end in [
+        CommandEnd::TimedOut,
+        CommandEnd::Stopped,
+        CommandEnd::NotStarted,
+        CommandEnd::Unknown,
+    ] {
+        let frame = FromEnvironment::Ran {
+            lease: "l".into(),
+            end,
+            stdout: Data(Vec::new()),
+            stderr: Data(Vec::new()),
+            dropped_bytes: 0,
+            cleanup: Cleanup::NotHeld,
+        };
+        let decoded: FromEnvironment = decode(&body(&encode(&frame).unwrap())).unwrap();
+        assert_eq!(decoded, frame);
+    }
 }
 
 /// Gate 4: another protocol's hello is recognised by its type, build and
@@ -143,7 +221,7 @@ fn a_hello_is_read_by_its_protocol_whatever_else_it_carries() {
 #[test]
 fn unknown_fields_and_frames_are_refused() {
     assert!(decode::<ToEnvironment>(br#"{"type":"end","lease":"l","more":1}"#).is_err());
-    assert!(decode::<ToEnvironment>(br#"{"type":"run","lease":"l"}"#).is_err());
+    assert!(decode::<ToEnvironment>(br#"{"type":"exec","lease":"l"}"#).is_err());
     assert!(decode::<FromEnvironment>(br#"{"type":"output","channel":1,"data":""}"#).is_err());
 }
 

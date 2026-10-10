@@ -184,7 +184,13 @@ function LeaseFacts({ lease }: { lease: ConversationLease }) {
           />
           <Fact
             label="Sandbox"
-            value={lease.sandbox === "harness_default" ? "The agent's own" : "Not known"}
+            value={
+              lease.sandbox === "harness_default"
+                ? "The agent's own"
+                : lease.sandbox === "none"
+                  ? "None"
+                  : "Not known"
+            }
           />
         </>
       ) : null}

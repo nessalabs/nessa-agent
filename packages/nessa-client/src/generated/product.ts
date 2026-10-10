@@ -945,8 +945,8 @@ export interface ConversationLease {
   environment?: "here" | "ssh"
   /** The OpenSSH destination the agent runs on, as config.json names it; present exactly when environment is ssh. */
   host?: string
-  /** The sandbox granted, or for a refused lease the one asked for. harness_default: whatever the agent's harness encloses by default, configured by nothing Nessa sets, and nothing more. */
-  sandbox?: "harness_default"
+  /** The sandbox granted, or for a refused lease the one asked for. harness_default: whatever the agent's harness encloses by default, configured by nothing Nessa sets, and nothing more. none: nothing encloses what runs beyond the account the environment runs as. */
+  sandbox?: "harness_default" | "none"
   /** Why the lease is ending or ended: the first cause recorded. lost: the environment no longer held it, for example because the gateway started again or the connection to it was lost. */
   cause?: "stopped" | "closed" | "revoked" | "expired" | "lost"
   /** What the environment reported releasing, once it has: confirmed, released cooperatively; forced, released by forced termination; not_held, the environment holds nothing for the lease, though whether something started under it before the environment last started outlived it is not known. On an interrupted lease this is the evidence that arrived after its deadline. */
@@ -962,6 +962,8 @@ export interface ConversationLease {
     | "environment_install_failed"
   /** Events that arrived after the lease ended and were dropped rather than applied. */
   droppedEvents: number
+  /** Commands the agent started under this lease that have not yet ended; absent when none. Present only on a live or ending lease. */
+  commands?: number
 }
 /** Runtime configuration selected by the gateway composition for this conversation. */
 export interface ConversationRuntime {

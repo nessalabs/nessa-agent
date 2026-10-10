@@ -16,10 +16,13 @@ use crate::conversation::application::{Environment, LeaseRelease};
 use crate::env::{LEASE_PROTOCOL, VERSION};
 use crate::env_serve::application::FrameStream;
 use crate::env_serve::application::{
-    serve, HarnessLauncher, LeaseLedger, LedgerEntry, ServeTimings,
+    serve, CommandRan, CommandRunner, CommandStop, HarnessLauncher, LeaseLedger, LedgerEntry,
+    Runners, ServeTimings,
 };
 use crate::env_serve::install::Platform;
-use nessa_protocol::lease::{decode, encode, Cleanup, Data, FromEnvironment, ToEnvironment};
+use nessa_protocol::lease::{
+    decode, encode, Cleanup, CommandEnd, Data, FromEnvironment, ToEnvironment,
+};
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
     providers::{
@@ -32,6 +35,7 @@ use nessa_sdk::domain::{
         AgentWork, EnvironmentRef, LeaseCleanup, LeaseDeadline, LeaseEndCause, LeaseGrants,
         LeaseId, LeaseRefusal, LeaseTerms, LeaseWork, SandboxProfile, SshDestination,
     },
+    agent_execution::leases::{CommandExit, CommandRefusal, CommandWork},
     effective_capabilities::value_objects::EffectiveCapabilities,
 };
 use std::{
@@ -179,6 +183,8 @@ struct Connector {
     received: Arc<Mutex<Vec<u8>>>,
     /// What a stalling host read once its gate opened.
     frames: Arc<Mutex<Vec<ToEnvironment>>>,
+    /// How a serving host runs commands; `None` runs none.
+    runner: Mutex<Option<Arc<dyn CommandRunner>>>,
 }
 
 impl Connector {
@@ -207,6 +213,7 @@ impl Connector {
             relays: Mutex::new(Vec::new()),
             received: Arc::new(Mutex::new(Vec::new())),
             frames: Arc::new(Mutex::new(Vec::new())),
+            runner: Mutex::new(None),
         })
     }
     /// Cut every connection both ways, as a network that went away.
@@ -245,7 +252,10 @@ impl LeaseConnector for Connector {
                     host_out,
                     VERSION,
                     LEASE_PROTOCOL,
-                    self.launcher.clone(),
+                    Runners {
+                        harnesses: self.launcher.clone(),
+                        commands: self.runner.lock().unwrap().clone(),
+                    },
                     self.ledger.clone(),
                     ServeTimings {
                         grace: Duration::from_millis(10),
@@ -1382,6 +1392,193 @@ async fn a_loss_whose_audit_fails_leaves_the_lease_unanswered() {
         opened.hold.end(LeaseEndCause::Lost).await,
         LeaseRelease::Unanswered
     );
+}
+
+// ---- command leases (issue #700) ----
+
+/// Runs `echo` at once, and anything else until it is stopped.
+struct Commands;
+impl CommandRunner for Commands {
+    fn run(
+        &self,
+        command: CommandWork,
+        mut stop: tokio::sync::watch::Receiver<Option<CommandStop>>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = CommandRan> + Send + 'static>> {
+        Box::pin(async move {
+            if command.program() == "echo" {
+                let said: Vec<&str> = command.argv()[1..].iter().map(|a| &**a).collect();
+                return CommandRan {
+                    end: CommandEnd::Exited { code: 0 },
+                    stdout: said.join(" ").into_bytes(),
+                    stderr: b"warned".to_vec(),
+                    dropped_bytes: 2,
+                    cleanup: Cleanup::Confirmed { forced: false },
+                };
+            }
+            let _ = stop.wait_for(Option::is_some).await;
+            CommandRan {
+                end: CommandEnd::Stopped,
+                stdout: b"partial".to_vec(),
+                stderr: Vec::new(),
+                dropped_bytes: 0,
+                cleanup: Cleanup::Confirmed { forced: true },
+            }
+        })
+    }
+}
+
+fn serving_commands() -> Arc<Connector> {
+    let connector = Connector::new(Reach::Serving);
+    *connector.runner.lock().unwrap() = Some(Arc::new(Commands));
+    connector
+}
+
+fn work(argv: &[&str]) -> CommandWork {
+    CommandWork::new(argv.iter().map(|a| (*a).to_owned()).collect(), None, 10_000).unwrap()
+}
+
+#[tokio::test]
+async fn a_command_runs_on_the_host_and_answers_how_it_ended_and_what_it_printed() {
+    let connector = serving_commands();
+    let host = environment(connector.clone(), Arc::new(Audit::default()));
+    let commands = host.commands().expect("an SSH host runs commands");
+    // Not known reachable until a connection is open.
+    assert_eq!(commands.reachable(), None);
+    let hold = commands
+        .grant(&lease(), &work(&["echo", "hi", "there"]))
+        .await
+        .expect("granted");
+    assert_eq!(commands.reachable(), Some(true));
+    let (_stop, stopped) = tokio::sync::watch::channel(None);
+    let result = tokio::time::timeout(Duration::from_secs(5), hold.run(stopped))
+        .await
+        .expect("answered");
+    assert_eq!(result.exit, CommandExit::Exited { code: 0 });
+    assert_eq!(result.stdout, b"hi there");
+    assert_eq!(result.stderr, b"warned");
+    assert_eq!(result.dropped_bytes, 2);
+    assert_eq!(
+        result.cleanup,
+        Some(LeaseCleanup::Confirmed { forced: false })
+    );
+    // The host ended the lease itself, and recorded it.
+    let ledger = connector.ledger.0.lock().unwrap().clone();
+    assert!(
+        ledger
+            .iter()
+            .any(|entry| matches!(entry, LedgerEntry::Ended { .. })),
+        "{ledger:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_stopped_command_is_stopped_on_the_host_and_answers_the_stops_cause() {
+    let connector = serving_commands();
+    let host = environment(connector.clone(), Arc::new(Audit::default()));
+    let commands = host.commands().unwrap();
+    let hold = commands
+        .grant(&lease(), &work(&["sleep", "60"]))
+        .await
+        .unwrap();
+    let (stop, stopped) = tokio::sync::watch::channel(None);
+    let running = tokio::spawn(hold.run(stopped));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    stop.send_replace(Some(LeaseEndCause::Revoked));
+    let result = tokio::time::timeout(Duration::from_secs(5), running)
+        .await
+        .expect("a stop is answered")
+        .unwrap();
+    assert_eq!(
+        result.exit,
+        CommandExit::Stopped {
+            cause: LeaseEndCause::Revoked
+        }
+    );
+    assert_eq!(result.stdout, b"partial");
+    assert_eq!(
+        result.cleanup,
+        Some(LeaseCleanup::Confirmed { forced: true })
+    );
+}
+
+#[tokio::test]
+async fn a_command_is_refused_by_a_host_that_runs_none_or_cannot_be_reached() {
+    // Serving, but not configured to run commands.
+    let host = environment(Connector::new(Reach::Serving), Arc::new(Audit::default()));
+    let refused = host
+        .commands()
+        .unwrap()
+        .grant(&lease(), &work(&["ls"]))
+        .await
+        .err();
+    assert_eq!(refused, Some(CommandRefusal::CommandsUnavailable));
+    let host = environment(
+        Connector::new(Reach::Unreachable),
+        Arc::new(Audit::default()),
+    );
+    let refused = host
+        .commands()
+        .unwrap()
+        .grant(&lease(), &work(&["ls"]))
+        .await
+        .err();
+    assert_eq!(
+        refused,
+        Some(CommandRefusal::Environment(
+            LeaseRefusal::EnvironmentUnreachable
+        ))
+    );
+}
+
+#[tokio::test]
+async fn a_granted_command_never_run_is_ended_on_the_host() {
+    let connector = serving_commands();
+    let host = environment(connector.clone(), Arc::new(Audit::default()));
+    let hold = host
+        .commands()
+        .unwrap()
+        .grant(&lease(), &work(&["echo"]))
+        .await
+        .unwrap();
+    drop(hold);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let ended = connector
+                .ledger
+                .0
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|entry| matches!(entry, LedgerEntry::Ended { .. }));
+            if ended {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the host ends a lease whose hold was let go");
+}
+
+#[tokio::test]
+async fn a_command_whose_connection_is_lost_is_unanswered_with_what_the_host_recorded() {
+    let connector = serving_commands();
+    let host = environment(connector.clone(), Arc::new(Audit::default()));
+    let hold = host
+        .commands()
+        .unwrap()
+        .grant(&lease(), &work(&["sleep", "60"]))
+        .await
+        .unwrap();
+    let (_stop, stopped) = tokio::sync::watch::channel(None);
+    let running = tokio::spawn(hold.run(stopped));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    connector.cut();
+    let result = tokio::time::timeout(Duration::from_secs(10), running)
+        .await
+        .expect("a loss is answered")
+        .unwrap();
+    assert_eq!(result.exit, CommandExit::Unanswered);
 }
 
 // ---- first use: installing this build on a host (#703) ----

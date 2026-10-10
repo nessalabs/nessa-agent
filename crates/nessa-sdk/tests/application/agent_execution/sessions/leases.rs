@@ -3,7 +3,9 @@
 
 use super::*;
 use crate::domain::agent_execution::leases::{
-    AgentWork, EnvironmentRef, LeaseDeadline, LeaseGrants, LeasePhase, LeaseWork, SandboxProfile,
+    AgentWork, CommandExit, CommandOutput, CommandRefusal, CommandTerms, CommandWork,
+    EnvironmentRef, LeaseDeadline, LeaseGrants, LeasePhase, LeaseWork, SandboxProfile,
+    SshDestination,
 };
 
 fn id(value: &str) -> LeaseId {
@@ -311,4 +313,173 @@ fn a_saved_lease_resumes_with_its_revision() {
         CurrentLease::resume(None, &[issued("a", 1), unreadable()]),
         Err(StorageError::Corrupt(_))
     ));
+}
+
+fn command_terms() -> CommandTerms {
+    CommandTerms {
+        environment: EnvironmentRef::Ssh(SshDestination::new("devbox").unwrap()),
+        command: CommandWork::new(vec!["ls".into()], None, 1_000).unwrap(),
+        sandbox: SandboxProfile::None,
+    }
+}
+fn command_issued(command: &str, parent: &str) -> LeaseRecord {
+    LeaseRecord::CommandIssued {
+        lease: id(command),
+        parent: id(parent),
+        terms: command_terms(),
+        actor: actor("call-1"),
+    }
+}
+fn command_refused(command: &str, parent: &str) -> LeaseRecord {
+    LeaseRecord::CommandRefused {
+        lease: id(command),
+        parent: id(parent),
+        terms: command_terms(),
+        refusal: CommandRefusal::CommandDenied,
+        actor: actor("call-1"),
+    }
+}
+fn command_ended(command: &str, parent: &str) -> LeaseRecord {
+    LeaseRecord::CommandEnded {
+        lease: id(command),
+        parent: id(parent),
+        exit: CommandExit::Exited { code: 0 },
+        output: CommandOutput::new(3, 0, 0, "ok\n", ""),
+        cleanup: Some(LeaseCleanup::Confirmed { forced: false }),
+    }
+}
+fn live_commands(current: &CurrentLease) -> Vec<&str> {
+    current
+        .held()
+        .unwrap()
+        .commands()
+        .iter()
+        .map(LeaseId::as_str)
+        .collect()
+}
+
+#[test]
+fn l14_a_command_lease_lives_under_its_parent_and_is_kept_only_while_live() {
+    let current = fold(&[
+        issued("a", 1),
+        command_issued("c1", "a"),
+        command_refused("c2", "a"),
+        command_issued("c3", "a"),
+    ])
+    .unwrap();
+    assert_eq!(live_commands(&current), ["c1", "c3"]);
+    // A refusal is evidence in the stream and changes nothing saved.
+    assert_eq!(
+        current.records(),
+        [
+            issued("a", 1),
+            command_issued("c1", "a"),
+            command_issued("c3", "a")
+        ]
+    );
+    let current = CurrentLease::apply(Some(&current), &command_ended("c1", "a")).unwrap();
+    assert_eq!(live_commands(&current), ["c3"]);
+    assert_eq!(
+        current.records(),
+        [issued("a", 1), command_issued("c3", "a")]
+    );
+    // A saved lease with a command still live resumes with it live.
+    let resumed = CurrentLease::resume(Some(LeaseRevision::FIRST), current.records()).unwrap();
+    assert_eq!(resumed, current);
+    // Who issued the lease is still the agent lease's issuer.
+    assert_eq!(current.issued_by(), Some(&actor("send")));
+}
+
+#[test]
+fn l14_the_parent_end_ends_its_commands_and_a_later_command_end_is_late_evidence() {
+    let current = fold(&[
+        issued("a", 1),
+        command_issued("c1", "a"),
+        ending("a", LeaseEndCause::Stopped),
+    ])
+    .unwrap();
+    // While the parent ends its command still runs, and may still end.
+    assert_eq!(live_commands(&current), ["c1"]);
+    let ended_first = fold(&[
+        issued("a", 1),
+        command_issued("c1", "a"),
+        ending("a", LeaseEndCause::Stopped),
+        command_ended("c1", "a"),
+        ended("a"),
+    ])
+    .unwrap();
+    assert!(ended_first.held().unwrap().commands().is_empty());
+
+    let current = CurrentLease::apply(Some(&current), &ended("a")).unwrap();
+    assert!(current.held().unwrap().commands().is_empty());
+    // Its issuance is kept, so a saved lease still says its end is owed.
+    assert_eq!(
+        current.records(),
+        [
+            issued("a", 1),
+            command_issued("c1", "a"),
+            ending("a", LeaseEndCause::Stopped),
+            ended("a")
+        ]
+    );
+    let resumed = CurrentLease::resume(Some(LeaseRevision::FIRST), current.records()).unwrap();
+    assert_eq!(resumed, current);
+    // Its late end is accepted once, and settles what was owed.
+    let late = CurrentLease::apply(Some(&resumed), &command_ended("c1", "a")).unwrap();
+    assert_eq!(
+        late.records(),
+        [
+            issued("a", 1),
+            ending("a", LeaseEndCause::Stopped),
+            ended("a")
+        ]
+    );
+    assert!(CurrentLease::apply(Some(&late), &command_ended("c1", "a")).is_err());
+    // A command never issued under it has no end to arrive.
+    assert!(CurrentLease::apply(Some(&current), &command_ended("c9", "a")).is_err());
+
+    let interrupted = fold(&[
+        issued("a", 1),
+        command_issued("c1", "a"),
+        ending("a", LeaseEndCause::Closed),
+        LeaseRecord::Interrupted { lease: id("a") },
+    ])
+    .unwrap();
+    assert!(interrupted.held().unwrap().commands().is_empty());
+    assert!(CurrentLease::apply(Some(&interrupted), &command_ended("c1", "a")).is_ok());
+}
+
+#[test]
+fn l14_command_records_the_lease_rules_refuse_are_corrupt() {
+    let live = fold(&[issued("a", 1), command_issued("c1", "a")]).unwrap();
+    let ending_lease = fold(&[issued("a", 1), ending("a", LeaseEndCause::Closed)]).unwrap();
+    let refused_lease = fold(&[refused("a", 1)]).unwrap();
+    for (prior, record) in [
+        (&live, command_issued("c2", "other")),
+        (&live, command_refused("c2", "other")),
+        (&live, command_ended("c1", "other")),
+        (&live, command_issued("c1", "a")),
+        (&live, command_issued("a", "a")),
+        (&live, command_ended("c2", "a")),
+        (&ending_lease, command_issued("c2", "a")),
+        (&ending_lease, command_ended("c2", "a")),
+        (&refused_lease, command_issued("c2", "a")),
+    ] {
+        assert!(
+            is_corrupt(CurrentLease::apply(Some(prior), &record)),
+            "{record:?}"
+        );
+    }
+    assert!(is_corrupt(CurrentLease::apply(
+        None,
+        &command_issued("c", "a")
+    )));
+    let mut full = live;
+    for n in 2..=Lease::MAX_LIVE_COMMANDS {
+        full = CurrentLease::apply(Some(&full), &command_issued(&format!("c{n}"), "a")).unwrap();
+    }
+    assert!(is_corrupt(CurrentLease::apply(
+        Some(&full),
+        &command_issued("c9", "a")
+    )));
 }

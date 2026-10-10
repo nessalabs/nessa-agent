@@ -1,6 +1,7 @@
 //! File loading belongs to composition; consumers receive typed settings.
 use super::agent::AgentsConfig;
 use crate::{
+    conversation::domain::CommandPolicy,
     core::RunError,
     product::{ConfiguredLimits, OperationalLimits, SessionSettings},
 };
@@ -27,6 +28,43 @@ pub(super) struct RuntimeConfig {
     /// destination (a `~/.ssh/config` alias or `user@host`). Absent or empty
     /// names none, and no conversation reaches a host (issue #699).
     pub ssh_hosts: Vec<String>,
+    /// What `nessa env serve` on this host offers a gateway beyond agents.
+    /// Absent offers nothing more. Read only where `env serve` runs: Unix.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    pub env_serve: EnvServeConfig,
+    /// The agent's environment tools, `environments_list` and `run`
+    /// (issue #700). Absent or `null` grants neither: the agent sees no such
+    /// tools.
+    pub environment_tools: Option<EnvironmentToolsConfig>,
+}
+
+/// Where the agent may run commands, and which.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(super) struct EnvironmentToolsConfig {
+    /// The `sshHosts` entries commands are granted on. Every one must be
+    /// named there too.
+    pub command_hosts: Vec<String>,
+    /// When given, only these programs, each named by its file name.
+    #[serde(default)]
+    pub allow_programs: Option<Vec<String>>,
+    /// Never these programs, each named by its file name; a denial wins.
+    #[serde(default)]
+    pub deny_programs: Vec<String>,
+}
+
+/// Most programs `allowPrograms` or `denyPrograms` may name.
+pub(super) const MAX_POLICY_PROGRAMS: usize = 64;
+
+/// What this host serves a gateway beyond its agents' harnesses.
+#[derive(Default, Debug, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub(super) struct EnvServeConfig {
+    /// Whether a gateway may run commands here under command leases
+    /// (issue #700). Off unless set: a command runs as this account with
+    /// nothing enclosing it.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    pub commands: bool,
 }
 
 /// Most SSH hosts the configuration may name: what `agents.list` carries.
@@ -124,7 +162,50 @@ impl RuntimeConfig {
         config.session()?;
         config.limits()?;
         config.ssh_hosts()?;
+        config.command_policy()?;
         Ok(config)
+    }
+
+    /// The agent's command policy; `None` when its environment tools are not
+    /// configured. A host not in `sshHosts`, or a program named by more than
+    /// its file name, refuses the configuration.
+    pub fn command_policy(&self) -> Result<Option<CommandPolicy>, RunError> {
+        let Some(tools) = &self.environment_tools else {
+            return Ok(None);
+        };
+        let hosts = self.ssh_hosts()?;
+        for host in &tools.command_hosts {
+            if !hosts.iter().any(|named| named.as_str() == host) {
+                return Err(refused(format!(
+                    "environmentTools.commandHosts: {host:?} is not in sshHosts"
+                )));
+            }
+        }
+        let programs = |key: &str, names: &[String]| {
+            if names.len() > MAX_POLICY_PROGRAMS {
+                return Err(refused(format!(
+                    "environmentTools.{key} names more than {MAX_POLICY_PROGRAMS} programs"
+                )));
+            }
+            match names
+                .iter()
+                .find(|name| name.is_empty() || name.contains('/') || name.trim() != name.as_str())
+            {
+                Some(name) => Err(refused(format!(
+                    "environmentTools.{key}: {name:?} is not a program's file name"
+                ))),
+                None => Ok(()),
+            }
+        };
+        if let Some(allow) = &tools.allow_programs {
+            programs("allowPrograms", allow)?;
+        }
+        programs("denyPrograms", &tools.deny_programs)?;
+        Ok(Some(CommandPolicy::new(
+            tools.command_hosts.iter().cloned(),
+            tools.allow_programs.clone(),
+            tools.deny_programs.clone(),
+        )))
     }
 
     /// The configured SSH hosts, each read into its value object, which owns

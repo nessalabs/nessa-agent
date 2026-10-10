@@ -55,8 +55,9 @@ export type ConversationLease = {
   environment?: "here" | "ssh"
   /** The SSH destination, exactly when `environment` is `ssh`. */
   host?: string
-  /** `harness_default` is whatever the agent's harness encloses, and nothing more. */
-  sandbox?: "harness_default"
+  /** `harness_default` is whatever the agent's harness encloses, and nothing
+   * more; `none` is nothing beyond the account the environment runs as. */
+  sandbox?: "harness_default" | "none"
   /** Why it is ending or ended: the first cause recorded. */
   cause?: "stopped" | "closed" | "revoked" | "expired" | "lost"
   cleanup?: "confirmed" | "forced" | "not_held"
@@ -69,6 +70,8 @@ export type ConversationLease = {
     | "environment_install_failed"
     | "agent_unavailable"
   droppedEvents: number
+  /** Commands the agent started under a live or ending lease that are still running. */
+  commands?: number
 }
 
 /**

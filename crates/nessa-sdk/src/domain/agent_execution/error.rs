@@ -62,6 +62,11 @@ pub enum ExecutionError {
     InvalidLeaseRevision,
     /// An SSH destination outside the portable alphabet or its bound.
     InvalidSshDestination,
+    /// A command's timeout is zero or past the longest a command may run.
+    InvalidCommandTimeout,
+    /// A command argument holds a control character other than newline or
+    /// tab: no program needs one, and a record of it could not keep its bound.
+    InvalidCommandArgument,
     /// This live attachment ended; restoration requires a fresh aggregate.
     SessionClosed,
     /// The live attachment already owns an active execution.

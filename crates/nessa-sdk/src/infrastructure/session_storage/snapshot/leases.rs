@@ -16,9 +16,9 @@ use crate::{
     domain::agent_execution::{
         executions::ExecutionId,
         leases::{
-            AgentWork, EnvironmentRef, LeaseCleanup, LeaseDeadline, LeaseEndCause, LeaseGrants,
-            LeaseId, LeaseRefusal, LeaseRevision, LeaseTerms, LeaseWork, SandboxProfile,
-            SshDestination,
+            AgentWork, CommandExit, CommandOutput, CommandRefusal, CommandTerms, CommandWork,
+            EnvironmentRef, LeaseCleanup, LeaseDeadline, LeaseEndCause, LeaseGrants, LeaseId,
+            LeaseRefusal, LeaseRevision, LeaseTerms, LeaseWork, SandboxProfile, SshDestination,
         },
     },
 };
@@ -85,6 +85,9 @@ const ENDED: &str = "ended";
 const INTERRUPTED: &str = "interrupted";
 const CLEANUP_REPORTED: &str = "cleanup_reported";
 const EVENT_DROPPED: &str = "event_dropped";
+const COMMAND_ISSUED: &str = "command_issued";
+const COMMAND_REFUSED: &str = "command_refused";
+const COMMAND_ENDED: &str = "command_ended";
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -124,6 +127,53 @@ struct Dropped {
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct CommandIssuance {
+    lease: String,
+    parent: String,
+    terms: Command,
+    actor: Actor,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    refusal: Option<CommandRefused>,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Command {
+    environment: Environment,
+    argv: Vec<String>,
+    cwd: Option<String>,
+    timeout_ms: u64,
+    sandbox: Sandbox,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CommandEnd {
+    lease: String,
+    parent: String,
+    exit: Exit,
+    output: Output,
+    cleanup: Option<Cleanup>,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+enum Exit {
+    Exited { code: i32 },
+    Signalled { signal: i32 },
+    TimedOut,
+    Stopped { cause: Cause },
+    NotStarted,
+    Unanswered,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Output {
+    stdout_bytes: u64,
+    stderr_bytes: u64,
+    dropped_bytes: u64,
+    stdout_tail: String,
+    stderr_tail: String,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Terms {
     environment: Environment,
     work: Work,
@@ -144,6 +194,7 @@ enum Work {
 #[derive(Serialize, Deserialize)]
 enum Sandbox {
     HarnessDefault,
+    None,
 }
 #[derive(Serialize, Deserialize)]
 enum Grants {
@@ -178,23 +229,160 @@ enum Refusal {
     EnvironmentPlatformUnsupported,
     EnvironmentInstallFailed,
 }
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+enum CommandRefused {
+    Environment(Refusal),
+    EnvironmentNotGranted,
+    CommandDenied,
+    BudgetExceeded,
+    CommandsUnavailable,
+}
+impl From<CommandRefusal> for CommandRefused {
+    fn from(value: CommandRefusal) -> Self {
+        match value {
+            CommandRefusal::Environment(refusal) => Self::Environment(refusal.into()),
+            CommandRefusal::EnvironmentNotGranted => Self::EnvironmentNotGranted,
+            CommandRefusal::CommandDenied => Self::CommandDenied,
+            CommandRefusal::BudgetExceeded => Self::BudgetExceeded,
+            CommandRefusal::CommandsUnavailable => Self::CommandsUnavailable,
+        }
+    }
+}
+impl From<CommandRefused> for CommandRefusal {
+    fn from(value: CommandRefused) -> Self {
+        match value {
+            CommandRefused::Environment(refusal) => Self::Environment(refusal.into()),
+            CommandRefused::EnvironmentNotGranted => Self::EnvironmentNotGranted,
+            CommandRefused::CommandDenied => Self::CommandDenied,
+            CommandRefused::BudgetExceeded => Self::BudgetExceeded,
+            CommandRefused::CommandsUnavailable => Self::CommandsUnavailable,
+        }
+    }
+}
+
+impl From<SandboxProfile> for Sandbox {
+    fn from(value: SandboxProfile) -> Self {
+        match value {
+            SandboxProfile::HarnessDefault => Self::HarnessDefault,
+            SandboxProfile::None => Self::None,
+        }
+    }
+}
+impl From<Sandbox> for SandboxProfile {
+    fn from(value: Sandbox) -> Self {
+        match value {
+            Sandbox::HarnessDefault => Self::HarnessDefault,
+            Sandbox::None => Self::None,
+        }
+    }
+}
+impl From<&EnvironmentRef> for Environment {
+    fn from(value: &EnvironmentRef) -> Self {
+        match value {
+            EnvironmentRef::Here => Self::Here,
+            EnvironmentRef::Ssh(host) => Self::Ssh(host.as_str().into()),
+        }
+    }
+}
+impl Environment {
+    fn decode(self) -> Result<EnvironmentRef, StorageError> {
+        Ok(match self {
+            Self::Here => EnvironmentRef::Here,
+            Self::Ssh(host) => EnvironmentRef::Ssh(SshDestination::new(host).map_err(corrupt)?),
+        })
+    }
+}
+impl From<&CommandTerms> for Command {
+    fn from(value: &CommandTerms) -> Self {
+        Self {
+            environment: (&value.environment).into(),
+            argv: value.command.argv().iter().map(|a| a.to_string()).collect(),
+            cwd: value.command.cwd().map(str::to_owned),
+            timeout_ms: value.command.timeout_ms(),
+            sandbox: value.sandbox.into(),
+        }
+    }
+}
+impl Command {
+    fn decode(self) -> Result<CommandTerms, StorageError> {
+        Ok(CommandTerms {
+            environment: self.environment.decode()?,
+            command: CommandWork::new(self.argv, self.cwd, self.timeout_ms).map_err(corrupt)?,
+            sandbox: self.sandbox.into(),
+        })
+    }
+}
+impl From<CommandExit> for Exit {
+    fn from(value: CommandExit) -> Self {
+        match value {
+            CommandExit::Exited { code } => Self::Exited { code },
+            CommandExit::Signalled { signal } => Self::Signalled { signal },
+            CommandExit::TimedOut => Self::TimedOut,
+            CommandExit::Stopped { cause } => Self::Stopped {
+                cause: cause.into(),
+            },
+            CommandExit::NotStarted => Self::NotStarted,
+            CommandExit::Unanswered => Self::Unanswered,
+        }
+    }
+}
+impl From<Exit> for CommandExit {
+    fn from(value: Exit) -> Self {
+        match value {
+            Exit::Exited { code } => Self::Exited { code },
+            Exit::Signalled { signal } => Self::Signalled { signal },
+            Exit::TimedOut => Self::TimedOut,
+            Exit::Stopped { cause } => Self::Stopped {
+                cause: cause.into(),
+            },
+            Exit::NotStarted => Self::NotStarted,
+            Exit::Unanswered => Self::Unanswered,
+        }
+    }
+}
+impl From<&CommandOutput> for Output {
+    fn from(value: &CommandOutput) -> Self {
+        Self {
+            stdout_bytes: value.stdout_bytes(),
+            stderr_bytes: value.stderr_bytes(),
+            dropped_bytes: value.dropped_bytes(),
+            stdout_tail: value.stdout_tail().into(),
+            stderr_tail: value.stderr_tail().into(),
+        }
+    }
+}
+impl Output {
+    /// What was saved, or corrupt when a tail is not what [`CommandOutput`]
+    /// keeps: it would come back other than it was written.
+    fn decode(self) -> Result<CommandOutput, StorageError> {
+        let output = CommandOutput::new(
+            self.stdout_bytes,
+            self.stderr_bytes,
+            self.dropped_bytes,
+            &self.stdout_tail,
+            &self.stderr_tail,
+        );
+        if output.stdout_tail() != self.stdout_tail || output.stderr_tail() != self.stderr_tail {
+            return Err(corrupt(
+                "a command's kept output is not what a record keeps",
+            ));
+        }
+        Ok(output)
+    }
+}
 
 impl From<&LeaseTerms> for Terms {
     fn from(value: &LeaseTerms) -> Self {
         Self {
-            environment: match &value.environment {
-                EnvironmentRef::Here => Environment::Here,
-                EnvironmentRef::Ssh(host) => Environment::Ssh(host.as_str().into()),
-            },
+            environment: (&value.environment).into(),
             work: match &value.work {
                 LeaseWork::Agent(work) => Work::Agent {
                     agent: work.agent().into(),
                     model: work.model().into(),
                 },
             },
-            sandbox: match value.sandbox {
-                SandboxProfile::HarnessDefault => Sandbox::HarnessDefault,
-            },
+            sandbox: value.sandbox.into(),
             grants: match value.grants {
                 LeaseGrants::Opening => Grants::Opening,
             },
@@ -208,20 +396,13 @@ impl From<&LeaseTerms> for Terms {
 impl Terms {
     fn decode(self) -> Result<LeaseTerms, StorageError> {
         Ok(LeaseTerms {
-            environment: match self.environment {
-                Environment::Here => EnvironmentRef::Here,
-                Environment::Ssh(host) => {
-                    EnvironmentRef::Ssh(SshDestination::new(host).map_err(corrupt)?)
-                }
-            },
+            environment: self.environment.decode()?,
             work: match self.work {
                 Work::Agent { agent, model } => {
                     LeaseWork::Agent(AgentWork::new(agent, model).map_err(corrupt)?)
                 }
             },
-            sandbox: match self.sandbox {
-                Sandbox::HarnessDefault => SandboxProfile::HarnessDefault,
-            },
+            sandbox: self.sandbox.into(),
             grants: match self.grants {
                 Grants::Opening => LeaseGrants::Opening,
             },
@@ -308,6 +489,7 @@ fn issuance_kind(terms: &LeaseTerms, refusal: Option<LeaseRefusal>) -> &'static 
         return REFUSED_V3;
     }
     let first_shape = terms.environment == EnvironmentRef::Here
+        && terms.sandbox == SandboxProfile::HarnessDefault
         && matches!(refusal, None | Some(LeaseRefusal::SandboxUnavailable));
     match (first_shape, refusal) {
         (true, None) => ISSUED,
@@ -416,6 +598,53 @@ impl From<&LeaseRecord> for WireLease {
                     cursor: *cursor,
                 },
             ),
+            LeaseRecord::CommandIssued {
+                lease,
+                parent,
+                terms,
+                actor,
+            } => text(
+                COMMAND_ISSUED,
+                &CommandIssuance {
+                    lease: lease.as_str().into(),
+                    parent: parent.as_str().into(),
+                    terms: terms.into(),
+                    actor: actor.into(),
+                    refusal: None,
+                },
+            ),
+            LeaseRecord::CommandRefused {
+                lease,
+                parent,
+                terms,
+                refusal,
+                actor,
+            } => text(
+                COMMAND_REFUSED,
+                &CommandIssuance {
+                    lease: lease.as_str().into(),
+                    parent: parent.as_str().into(),
+                    terms: terms.into(),
+                    actor: actor.into(),
+                    refusal: Some((*refusal).into()),
+                },
+            ),
+            LeaseRecord::CommandEnded {
+                lease,
+                parent,
+                exit,
+                output,
+                cleanup,
+            } => text(
+                COMMAND_ENDED,
+                &CommandEnd {
+                    lease: lease.as_str().into(),
+                    parent: parent.as_str().into(),
+                    exit: (*exit).into(),
+                    output: output.into(),
+                    cleanup: cleanup.map(Cleanup::from),
+                },
+            ),
             LeaseRecord::Unreadable { kind, body } => Self {
                 kind: kind.clone(),
                 body: body.clone(),
@@ -489,6 +718,39 @@ impl WireLease {
                     lease: lease(saved.lease)?,
                     turn: ExecutionId::new(saved.turn).map_err(corrupt)?,
                     cursor: saved.cursor,
+                }
+            }
+            COMMAND_ISSUED | COMMAND_REFUSED => {
+                let saved: CommandIssuance = body(&self.body)?;
+                let lease = lease(saved.lease)?;
+                let parent = self::lease(saved.parent)?;
+                let terms = saved.terms.decode()?;
+                let actor = saved.actor.decode()?;
+                match (saved.refusal, self.kind.as_str()) {
+                    (None, COMMAND_ISSUED) => LeaseRecord::CommandIssued {
+                        lease,
+                        parent,
+                        terms,
+                        actor,
+                    },
+                    (Some(refusal), COMMAND_REFUSED) => LeaseRecord::CommandRefused {
+                        lease,
+                        parent,
+                        terms,
+                        refusal: refusal.into(),
+                        actor,
+                    },
+                    _ => return Err(corrupt("a command lease and its refusal disagree")),
+                }
+            }
+            COMMAND_ENDED => {
+                let saved: CommandEnd = body(&self.body)?;
+                LeaseRecord::CommandEnded {
+                    lease: lease(saved.lease)?,
+                    parent: lease(saved.parent)?,
+                    exit: saved.exit.into(),
+                    output: saved.output.decode()?,
+                    cleanup: saved.cleanup.map(LeaseCleanup::from),
                 }
             }
             _ => LeaseRecord::Unreadable {
@@ -581,7 +843,68 @@ mod tests {
                 actor: None,
             });
         }
+        let command = id("cmd-1");
+        records.push(LeaseRecord::CommandIssued {
+            lease: command.clone(),
+            parent: lease.clone(),
+            terms: command_terms(None),
+            actor: actor(),
+        });
+        for refusal in [
+            CommandRefusal::Environment(LeaseRefusal::EnvironmentBusy),
+            CommandRefusal::EnvironmentNotGranted,
+            CommandRefusal::CommandDenied,
+            CommandRefusal::BudgetExceeded,
+            CommandRefusal::CommandsUnavailable,
+        ] {
+            records.push(LeaseRecord::CommandRefused {
+                lease: command.clone(),
+                parent: lease.clone(),
+                terms: command_terms(Some("sub/dir")),
+                refusal,
+                actor: actor(),
+            });
+        }
+        for (exit, cleanup) in [
+            (CommandExit::Exited { code: -2 }, None),
+            (
+                CommandExit::Signalled { signal: 9 },
+                Some(LeaseCleanup::NotHeld),
+            ),
+            (
+                CommandExit::TimedOut,
+                Some(LeaseCleanup::Confirmed { forced: true }),
+            ),
+            (
+                CommandExit::Stopped {
+                    cause: LeaseEndCause::Closed,
+                },
+                None,
+            ),
+            (CommandExit::NotStarted, None),
+            (CommandExit::Unanswered, None),
+        ] {
+            records.push(LeaseRecord::CommandEnded {
+                lease: command.clone(),
+                parent: lease.clone(),
+                exit,
+                output: CommandOutput::new(3, 0, 7, "ok\n", "é\t"),
+                cleanup,
+            });
+        }
         records
+    }
+    fn command_terms(cwd: Option<&str>) -> CommandTerms {
+        CommandTerms {
+            environment: EnvironmentRef::Ssh(SshDestination::new("me@devbox").unwrap()),
+            command: CommandWork::new(
+                vec!["cargo".into(), "test".into(), "a\nb".into()],
+                cwd.map(Into::into),
+                CommandWork::DEFAULT_TIMEOUT_MS,
+            )
+            .unwrap(),
+            sandbox: SandboxProfile::None,
+        }
     }
     fn batch(kind: &str, body: &str) -> String {
         format!(r#"{{"changes":[{{"Lease":{{"kind":"{kind}","body":"{body}"}}}}]}}"#)
@@ -644,6 +967,74 @@ mod tests {
         ];
         for (kind, body) in cases {
             assert!(corrupt_batch(&batch(kind, body)), "{kind} {body}");
+        }
+    }
+
+    #[test]
+    fn a_command_record_that_contradicts_itself_or_its_bounds_is_corrupt() {
+        let encoded = |record: LeaseRecord| WireLease::from(&record);
+        let issued = encoded(LeaseRecord::CommandIssued {
+            lease: id("cmd"),
+            parent: id("lease"),
+            terms: command_terms(None),
+            actor: actor(),
+        });
+        let refused = encoded(LeaseRecord::CommandRefused {
+            lease: id("cmd"),
+            parent: id("lease"),
+            terms: command_terms(None),
+            refusal: CommandRefusal::CommandDenied,
+            actor: actor(),
+        });
+        let ended = encoded(LeaseRecord::CommandEnded {
+            lease: id("cmd"),
+            parent: id("lease"),
+            exit: CommandExit::TimedOut,
+            output: CommandOutput::new(0, 0, 0, "", ""),
+            cleanup: None,
+        });
+        let cases = [
+            // An issuance carrying a refusal, and a refusal carrying none.
+            WireLease {
+                kind: COMMAND_ISSUED.into(),
+                body: refused.body.clone(),
+            },
+            WireLease {
+                kind: COMMAND_REFUSED.into(),
+                body: issued.body.clone(),
+            },
+            WireLease {
+                kind: COMMAND_ISSUED.into(),
+                body: issued.body.replace(r#""argv":["cargo""#, r#""argv":["""#),
+            },
+            WireLease {
+                kind: COMMAND_ISSUED.into(),
+                body: issued
+                    .body
+                    .replace(r#""parent":"lease""#, r#""parent":"bad id""#),
+            },
+            WireLease {
+                kind: COMMAND_ENDED.into(),
+                body: ended.body.replace(r#""lease":"cmd""#, r#""lease":"""#),
+            },
+            WireLease {
+                kind: COMMAND_ENDED.into(),
+                body: ended.body.replace(r#""parent":"lease""#, r#""parent":"""#),
+            },
+            // A tail no record of this build could hold.
+            WireLease {
+                kind: COMMAND_ENDED.into(),
+                body: ended
+                    .body
+                    .replace(r#""stdout_tail":"""#, r#""stdout_tail":"\u001b""#),
+            },
+        ];
+        for wire in cases {
+            let body = wire.body.clone();
+            assert!(
+                matches!(wire.decode(), Err(StorageError::Corrupt(_))),
+                "{body}"
+            );
         }
     }
 

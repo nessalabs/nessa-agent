@@ -8,6 +8,7 @@
 //! becomes a launch), the inspector that starts one server once and looks at
 //! it, and the durable audit of each change and inspection.
 mod apps;
+mod built_in;
 mod config_store;
 mod grants;
 mod http_client;
@@ -30,6 +31,7 @@ pub(crate) mod settings_test_support;
 pub(crate) mod ticket_test_support;
 
 pub use apps::SessionApps;
+pub use built_in::{MAX_BUILT_IN_CALLS, MAX_BUILT_IN_LINE_BYTES};
 #[cfg(unix)]
 pub use config_store::OsConfigFiles;
 pub use config_store::{
@@ -42,8 +44,8 @@ pub use live_set::{sdk_server, LaunchSettings, LiveMcpServers};
 #[cfg(unix)]
 pub use relay::{bind, BoundRelay};
 pub use relay::{
-    launch_digest, read_line, write_line, Answer, Hello, Refusal, Relay, ANSWER_TIMEOUT,
-    HELLO_TIMEOUT, MAX_HELLO_BYTES,
+    built_in_digest, launch_digest, read_line, write_line, Answer, Hello, Refusal, Relay,
+    ANSWER_TIMEOUT, HELLO_TIMEOUT, MAX_HELLO_BYTES,
 };
 #[cfg(unix)]
 pub use relay_command::run;

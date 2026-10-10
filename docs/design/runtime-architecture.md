@@ -374,8 +374,8 @@ their rows; the fold's are named for what they show.
 | L11 | | | yes, at the next opening: a lease an earlier run left is accounted for before the next is issued (see below) |
 | L12 | yes | | yes, as L11: the in-process environment reports it holds nothing (`not_held`) |
 | L13 | yes | yes | yes: concurrent commands open one lease and one agent |
-| L14 | | | not in slice A: no command leases until C (#700) |
-| L15 | | | not in slice A, as L14 |
+| L14 | | | not in slice A: command leases are slice C's (#700), rows C1 and C2 |
+| L15 | | | not in slice A, as L14: row C3 |
 | L16 | yes | yes | yes, as L11: the replacement takes the next revision |
 | L17 | | | not in slice A: idle sleep is an environment limit from B (#699) |
 | L18 | | | not in slice A, as L17 |
@@ -566,6 +566,131 @@ the host when a conversation is deleted (the erase answers `no_handler` for
 a placed conversation, and the host keeps it); rotating the host ledger;
 a passphrase or second factor prompt (`BatchMode=yes` refuses instead).
 
+### Slice C: `environments_list` and `run` for the agent (#700)
+
+**What the agent gets.** Two tools, `environments_list` and `run`, on a
+server the gateway serves itself, `nessa-environments`. It is offered to a
+conversation's harness beside its configured MCP servers, as one more
+stand-in (`nessa mcp-relay`), and reached through the same relay socket,
+admitted by the conversation's grant and a digest of the server's
+configuration. The tools exist only when `config.json` names
+`environmentTools` and the agent's runtime has tools on; otherwise the
+harness is never told of them. A stand-in handed out under another tool
+policy, or by another gateway run, is refused `configuration-changed`, so
+an outdated tool list grants nothing. A `run` reaches the person's
+ordinary approval cards because the harness asks before an MCP tool call
+as before any other, and `run` is marked `destructiveHint`.
+
+**Deviations from "What the agent gets", and why.**
+
+- The tools are served in the gateway's own process, not by `nessa-mcp`.
+  A command lease is a record in the conversation's stream, written under
+  the agent lease it nests in, and only the conversation service holds
+  that stream and knows the turn running now; a separate process would
+  need a second authority for both. The relay already knows whose
+  conversation a stand-in belongs to (its grant), so it hands each call to
+  the service with that identity, and the service decides.
+- The names are `environments_list` and `run`, not `environments.list`: a
+  model API's tool names allow letters, digits, `_` and `-` only.
+- No product method stands behind them yet (`environment.list`,
+  `environment.run`). A surface's `run` would need a receipt for its
+  `requestId` across a gateway restart, which a command bounded by its
+  call does not keep; both methods come with the first surface that asks.
+
+**The contract settled here** (formerly an unresolved contract):
+
+| What | Settled as | Why |
+| --- | --- | --- |
+| Lifetime | Bounded by its tool call. A command is stopped when its timeout passes, when its call is cancelled or its stand-in goes, when its conversation's grant is revoked, or when its parent agent lease ends (L15); its end is recorded while that agent lease is still the conversation's latest, and only logged once a later one replaced it, whose predecessor's end already accounts for it. No receipt to poll | A command outliving its call needs a receipt and a store the person can read later; that is a later slice, if any. A long build fits a long timeout |
+| Timeout | 120 s when the call names none; at most 1 h. A host stops a command past it and answers `timed_out` | |
+| Output | The host keeps the newest 64 KiB of both streams together (one frame) and counts what it dropped; the record keeps the newest 2 KiB of each, as text, with both streams' sizes and the dropped count | output is evidence, bounded like every record; the agent's answer carries the 64 KiB |
+| Artifacts | None: a command publishes nothing. Naming and fetching files is the artifact channel's (`artifacts.publish`), not `run`'s | |
+| Concurrency | At most 4 commands at once under one agent lease; a fifth is refused `budget_exceeded` | each holds a process scope on the host |
+| What runs | `argv` exactly, no shell; at most 256 arguments and 4 KiB together; in the host's workspace, or a directory beneath it (at most 1 KiB) | |
+| Its environment | The host's account, with its variables cleared to `PATH`, `HOME`, `USER`, `LOGNAME`, `TMPDIR`, `LANG` and `LC_ALL`; nothing encloses it (sandbox `none`). A host serves commands only when its own `config.json` says `envServe.commands: true` | a command does not inherit what the host's harnesses are started with; a host owner opts in |
+| Who it runs for | The person whose turn is running, with the tool call as the request (`ActionContext`); a call with no turn running is not decided and nothing is recorded | the audit names the caller as initiator |
+| Where | An SSH host the gateway names in `environmentTools.commandHosts`, each also in `sshHosts`. `here` runs no commands: the agent's own shell tool is its way to run one here | the gateway's tool policy is per host |
+| Tool policy | `allowPrograms` (when given) and `denyPrograms`, each a program's file name; a denial wins, and with `allowPrograms` only a bare name (found on the host's `PATH`) is allowed, so a file the agent wrote under an allowed name is not run. It is a policy, not a sandbox: an allowed program can run another | |
+| Stopping | The gateway ends the command lease; the host stops the command (2 s grace, then forced, then the last of its output), answers `Ran`, then `Ended`. The gateway waits at most the command's timeout, 10 s for its stop (`COMMAND_STOP_WAIT`), and an answer's 15 s, then calls it unanswered and asks the host what it recorded | |
+
+```mermaid
+sequenceDiagram
+    participant M as Harness (model)
+    participant R as Stand-in and relay
+    participant T as nessa-environments (gateway)
+    participant C as Conversation service
+    participant A as SSH adapter
+    participant H as nessa env serve on the host
+    M->>R: tools/call run {environment, argv}
+    R->>T: call for the grant's conversation
+    T->>C: run_command(conversation, call)
+    C->>C: the running turn's person, its Live agent lease
+    C->>C: grant, tool policy, sandbox, budget
+    alt refused
+        C->>C: CommandRefused{refusal, actor}
+        C-->>M: refused, with its code
+    else admitted
+        C->>A: grant(lease, command)
+        A->>H: GrantCommand
+        H-->>A: Granted
+        C->>C: CommandIssued{actor} under the agent lease
+        A->>H: Run
+        H->>H: Shepherd runs argv in a process scope
+        H-->>A: Ran{end, stdout, stderr, droppedBytes, cleanup}
+        C->>C: CommandEnded{exit, output, cleanup}
+        C-->>M: exit and output
+    end
+    Note over M,H: a cancelled call, a revoked grant, or the parent's end: End, then Ran{stopped} and Ended
+```
+
+**Records.** Three lease records, each naming its parent agent lease:
+`command_issued` (terms and actor), `command_refused` (terms, refusal and
+actor) and `command_ended` (exit, output and cleanup). Only an issued,
+unended command is kept in the saved lease, so a reader sees what runs
+now and the view shows its count; the rest stay in the stream as evidence.
+A `command_ended` that arrives after its parent is final, while that
+parent is still the latest lease, is accepted as late evidence, once, and
+only for a command that was live when the parent ended: its `command_issued`
+stays in the saved lease until that end arrives, so a resumed lease still
+knows which ends are owed. A command
+refused before it reaches a host is still recorded, with who asked. A
+`command_issued` that could not be saved is kept with a `command_ended`
+(`not_started`) beside it, so a later save never shows a command that ran
+forever. A call cancelled before its grant asks nothing of the host; one
+cancelled during the grant is issued, never run, and ended. A
+`command_ended` that cannot be saved, even once more, stays retained for
+the next save, and the answer says `recorded: false` as an error with the
+command's output, so the agent knows it ran and the records do not hold
+it yet. Output is counted per stream as captured; what was dropped past
+the bound is one total for both, since the capture drops from both
+together.
+
+**Orderings slice C meets.**
+
+| Row | Input or order | Decision | Test |
+| --- | --- | --- | --- |
+| C1 (L14) | `run` during a turn, on a granted host, with an allowed program | `command_issued` naming the turn's person and the call, the command runs on the host, `command_ended` with its exit and output; the view counts it while it runs | service `l14_a_command_runs_for_the_persons_turn_under_its_agent_lease_and_its_end_is_recorded`, adapter `a_command_runs_on_the_host_and_answers_how_it_ended_and_what_it_printed`, host `tests/env_serve/serve.rs` command tests |
+| C2 | An environment not granted or not named, `here`, a denied program, a sandbox other than `none`, a fifth command, an unreachable host | Refused, typed, and recorded with who asked; nothing runs | service `l14_each_refusal_is_typed_recorded_for_the_turns_person_and_runs_nothing`, adapter `a_command_is_refused_by_a_host_that_runs_none_or_cannot_be_reached` |
+| C3 (L15) | The call cancelled, or its stand-in gone | The command is stopped on the host, and ends `stopped` with the parent's cause when the parent is ending, else `closed` | service `l15_a_command_whose_caller_went_away_is_stopped_and_its_end_recorded`, adapter `a_stopped_command_is_stopped_on_the_host_and_answers_the_stops_cause`, relay `a_cancelled_call_is_stopped_and_not_answered` |
+| C4 | The conversation's grant revoked while a call runs | Every call on that stand-in is stopped and its connection ends | relay `a_stand_in_gone_or_a_grant_revoked_stops_every_call_and_ends_the_connection` |
+| C5 | Tools not configured, or a stand-in from another policy or run | No tool offered; a stale stand-in refused `configuration-changed` | config `environment_tools_are_off_until_configured`, relay `a_stand_in_handed_out_for_another_configuration_or_line_too_long_is_turned_away`, composition `the_built_in_server_is_handed_over_beside_the_configured_and_takes_its_name` |
+| C6 | No turn running | Not decided; nothing recorded | service `a_command_with_no_turn_running_or_no_tools_configured_records_nothing` |
+| C7 | The connection lost while a command runs | The host stops it as lost and records it; the gateway answers `unanswered` | adapter `a_command_whose_connection_is_lost_is_unanswered_with_what_the_host_recorded` |
+| C8 | A granted command never run | Its End reaches the host, which ends it | adapter `a_granted_command_never_run_is_ended_on_the_host` |
+| C9 | A command's end, or its issue, cannot be saved | An unsaved issue never runs and never counts; an unsaved end is answered `recorded: false` and saved by the next save | service `a_command_whose_issue_cannot_be_saved_never_runs_and_never_counts`, `a_command_whose_end_cannot_be_saved_says_so_and_its_end_is_saved_later` |
+| C10 | A command ends after its agent lease ended | Recorded beside the final parent as late evidence; an end whose parent a later lease replaced is answered `recorded: false` and logged in full | service `a_command_that_ends_after_its_agent_lease_ended_is_recorded_as_late_evidence` |
+| C11 | A bare program name, with the workspace, `.` or an empty entry on the host's `PATH` | Looked up only in absolute `PATH` directories outside the workspace, and run by that path; not found is `not_started` | host `a_file_written_in_the_workspace_is_never_run_under_a_bare_name`, `a_bare_name_is_searched_for_only_outside_the_workspace_in_absolute_directories` |
+
+**First use.** A `run` on a host with no copy of this build installs one
+first, as an agent lease does (slice F), and its install records name the
+command's lease. A host that cannot take one refuses the call with
+`environment_platform_unsupported` or `environment_install_failed`.
+
+**Not in slice C.** Commands here, on a paired peer or a worker;
+receipts for a command that outlives its call; the `environment.list` and
+`environment.run` product methods; artifacts; a sandbox other than `none`;
+per-person tool policy (the policy is the gateway's).
+
 ### Slice F: first-use install over SSH (#703)
 
 **What is installed, and where.** Only `nessa` itself: this gateway's own
@@ -755,7 +880,9 @@ Once the mesh exists, the agent should not need to know how any of it
 works. It gets a few tools through `nessa-mcp`, the stdio MCP server that
 already carries every Nessa-provided tool ([ADR 0012](../adr/todo/0012-agent-harnesses-and-optional-tools.md)),
 and an environment is just a name it passes in. Every tool is a thin
-wrapper over a product method the gateway already authorizes; the tool
+wrapper over a product method the gateway already authorizes (slice C
+serves the first two in process, ahead of their product methods; see
+"Slice C" above for why); the tool
 adds no behavior, keeps `requestId` for retries, and returns typed
 refusals.
 
@@ -1380,9 +1507,6 @@ Named so they are not mistaken for settled:
 - **Artifact channel bounds and resumption.** Chunk size, per-lease
   budgets, and resuming a large transfer by digest after a dropped SSH
   connection.
-- **Command leases.** Output capture limits, how a command's artifacts
-  are named, and whether a long command may outlive the tool call that
-  started it (a receipt the agent polls) or must be bounded by it.
 - **Listener hardening for a tunnel.** What the native handshake must
   withstand before a public tunnel is recommended rather than merely
   possible: rate limits per source, invitation-closed behavior, and a

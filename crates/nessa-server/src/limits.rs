@@ -7,14 +7,17 @@
 //! test beside this module refuses a copy that has drifted.
 use crate::conversation::application::MAX_READ_GRANTS_PER_CONVERSATION;
 use crate::conversation::infrastructure::{DISCOVERY_STEPS_PER_READ, MAX_CATALOGUE_CHANGE_WATCHES};
+use crate::mcp_servers::infrastructure::{MAX_BUILT_IN_CALLS, MAX_BUILT_IN_LINE_BYTES};
 use crate::product::passive_read::deadlines::RECORD_SEND_TIMEOUT;
 use crate::product::{OperationalLimits, SessionSettings, RECORD_LANE, RECORD_SLOT, REFUSAL_LANE};
+use nessa_protocol::lease::{COMMAND_STOP_WAIT, MAX_DATA_BYTES};
 use nessa_protocol::product::generated::{
     MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS, MAX_CONNECTION_LIST_SUBSCRIPTIONS,
     MAX_PRODUCT_CLIENT_ID_CHARACTERS, MAX_PRODUCT_SURFACE_INSTANCE_CHARACTERS,
     MAX_RECORD_RESPONSE_BYTES, SUBSCRIPTION_DELIVERY_TIMEOUT_MS,
 };
 use nessa_protocol::protocol::MAX_PAYLOAD_BYTES;
+use nessa_sdk::domain::agent_execution::leases::{CommandOutput, CommandWork, Lease};
 use nessa_sdk::infrastructure::session_storage::MAX_RECORD_CHANGE_WATCHES;
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -207,6 +210,72 @@ fn catalogue() -> &'static [Limit] {
             meaning:
                 "a cold read that uses every discovery step answers that the source is preparing",
         },
+        Limit {
+            id: "command.default_timeout_ms",
+            tier: "fixed",
+            owner: "CommandWork::DEFAULT_TIMEOUT_MS",
+            meaning: "a `run` naming no timeout is stopped after this, as timed out",
+        },
+        Limit {
+            id: "command.max_timeout_ms",
+            tier: "fixed",
+            owner: "CommandWork::MAX_TIMEOUT_MS",
+            meaning: "a `run` asking a longer timeout is refused before anything is recorded",
+        },
+        Limit {
+            id: "command.stop_wait_ms",
+            tier: "fixed",
+            owner: "lease protocol COMMAND_STOP_WAIT",
+            meaning: "a host that has not answered a command this long past its timeout, or past its stop, leaves it unanswered",
+        },
+        Limit {
+            id: "command.capture_bytes",
+            tier: "fixed",
+            owner: "lease protocol MAX_DATA_BYTES",
+            meaning: "a command's output past this, both streams together, is dropped from its start and counted",
+        },
+        Limit {
+            id: "command.retained_tail_bytes",
+            tier: "fixed",
+            owner: "CommandOutput::MAX_TAIL_BYTES",
+            meaning: "of each stream, only the newest this many bytes are kept in the command's record",
+        },
+        Limit {
+            id: "command.live_per_lease",
+            tier: "fixed",
+            owner: "Lease::MAX_LIVE_COMMANDS",
+            meaning: "a `run` while this many run under the agent's lease is refused `budget_exceeded`",
+        },
+        Limit {
+            id: "command.max_args",
+            tier: "fixed",
+            owner: "CommandWork::MAX_ARGS",
+            meaning: "a `run` with more arguments is refused before anything is recorded",
+        },
+        Limit {
+            id: "command.max_argv_bytes",
+            tier: "fixed",
+            owner: "CommandWork::MAX_ARGV_BYTES",
+            meaning: "a `run` whose arguments together are longer is refused before anything is recorded",
+        },
+        Limit {
+            id: "command.max_cwd_bytes",
+            tier: "fixed",
+            owner: "CommandWork::MAX_CWD_BYTES",
+            meaning: "a `run` whose working directory is longer is refused before anything is recorded",
+        },
+        Limit {
+            id: "mcp.built_in_calls",
+            tier: "fixed",
+            owner: "built-in MCP server MAX_BUILT_IN_CALLS",
+            meaning: "a tool call past this many running on one stand-in's connection is answered with an error",
+        },
+        Limit {
+            id: "mcp.built_in_line_bytes",
+            tier: "fixed",
+            owner: "built-in MCP server MAX_BUILT_IN_LINE_BYTES",
+            meaning: "a message longer than this ends the stand-in's connection",
+        },
     ]
 }
 
@@ -286,6 +355,23 @@ pub(crate) fn effective_json(
     );
     put("record.read_work_budget", millis(limits.read_work_budget()));
     put("record.discovery_steps", count(DISCOVERY_STEPS_PER_READ));
+    put(
+        "command.default_timeout_ms",
+        CommandWork::DEFAULT_TIMEOUT_MS,
+    );
+    put("command.max_timeout_ms", CommandWork::MAX_TIMEOUT_MS);
+    put("command.stop_wait_ms", millis(COMMAND_STOP_WAIT));
+    put("command.capture_bytes", count(MAX_DATA_BYTES));
+    put(
+        "command.retained_tail_bytes",
+        count(CommandOutput::MAX_TAIL_BYTES),
+    );
+    put("command.live_per_lease", count(Lease::MAX_LIVE_COMMANDS));
+    put("command.max_args", count(CommandWork::MAX_ARGS));
+    put("command.max_argv_bytes", count(CommandWork::MAX_ARGV_BYTES));
+    put("command.max_cwd_bytes", count(CommandWork::MAX_CWD_BYTES));
+    put("mcp.built_in_calls", count(MAX_BUILT_IN_CALLS));
+    put("mcp.built_in_line_bytes", count(MAX_BUILT_IN_LINE_BYTES));
     serde_json::Value::Object(values.into_iter().collect())
 }
 
