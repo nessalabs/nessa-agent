@@ -3758,13 +3758,14 @@ fn a_pairing_bound_credential_names_a_gateway_exactly_when_its_class_is_a_peers(
     }
 }
 
-/// The grantor of every pairing is the registry's owner, whose membership the
-/// registry keeps an active admin: a registry where it is disabled or no
-/// longer an admin is refused on open. A peer reads under the owner's grants
-/// without signing in as the owner, so this is what keeps a grantor live; a
-/// change that lets a membership be disabled at runtime, or admits a second
-/// owner, must check the grantor at read admission in the same change
-/// (`docs/design/auth/peer-gateways.md`).
+/// The registry keeps its owner's membership an active admin: a registry
+/// where it is disabled or no longer an admin is refused on open. The owner
+/// is the usual pairing initiator, and a peer reads under the initiator's
+/// grants without signing in as them, so the initiator's membership staying
+/// active is what keeps a grantor live. A change that lets a membership be
+/// disabled or demoted at runtime, or gives another admin a way to pair, must
+/// check the pairing initiator's membership at read admission in the same
+/// change (`docs/design/auth/peer-gateways.md`).
 #[test]
 fn a_registry_whose_owner_is_not_an_active_admin_does_not_open() {
     let fixture = peer_claim();

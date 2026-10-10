@@ -32,7 +32,9 @@
 //! binding's owner: that is the grantor whose conversations it reads, and the
 //! binding is matched to the session by credential and organization. Every
 //! read path a paired party reaches asks the grant above, so a peer reads
-//! exactly what a device would.
+//! exactly what a device would. The grantor's liveness rests on the pairing
+//! initiator's membership staying active, which no runtime operation changes
+//! today; see `AdmitPassiveRead::binding` for the change that must check it.
 
 use super::{ConversationCaller, ConversationError, ConversationFuture, ConversationRepository};
 use crate::conversation::application::ReceiverAuthority;

@@ -93,11 +93,14 @@ peer's receiver, and every read the peer makes asks that receiver's grants:
   `AdmitPassiveRead::execute`, which asks `admit_read` for the receiver's
   grant on that conversation; an ungranted one is `wrong_owner`.
 - **Catalogue manifest and resolve** are narrowed in SQL to the receiver's
-  granted rows (`store::read_grants::granted`).
+  granted rows (`store::read_grants::granted`). A manifest pass may not reach
+  past the receiver's own head, so probing boundaries finds that head and not
+  the owner's; an ungranted id resolves as one that does not exist.
 - **Catalogue head** is the latest revision among the receiver's granted rows
   and its own grant changes. The owner's work on a conversation the peer was
   not granted does not move it; a grant, a revoke or a change to a granted row
-  does, and it never goes backwards. This applies to every paired reader,
+  does, and in steady state it never goes backwards. Its values are still the
+  owner's catalogue revisions (see Known limits). This applies to every paired reader,
   devices included: it is the head over granted rows that slice G left for
   when paired readers are more than the owner's own phones.
 - **Catalogue watch** is refused to a peer (`forbidden`). Its notices fire on
@@ -167,9 +170,9 @@ Each row has at least one test.
 | H5 | The owner revokes a paired peer's credential | Its next connection is refused at `openProduct` | `a_revoked_peer_gateway_is_refused_its_next_connection` |
 | H6 | `credential.issue` for a principal of kind `gateway` | Refused `Conflict`, nothing written: no second way to make a peer | `a_gateway_principal_holds_only_what_pairing_issued_it` |
 | H7 | A gateway that pairs no peer | Every device enrollment, registry and client file reads and writes as before | the existing device pairing suites |
-| H8 | The owner shares one of two conversations with a paired peer, then unshares it | The share applies (an access answer about another credential, or one that contradicts itself, is still refused); the peer's record head on the granted one reaches the source and on the other is `wrong_owner`, as is a records watch on it; its manifest lists the granted one alone; its catalogue watch is `forbidden`, while a device's is admitted; the owner's work on the other conversation does not move the peer's head; the unshare moves the head forward and takes the row away. On the socket, a binding whose owner is not the session principal reads only what it was granted, and its lists are refused | `a_peer_reads_only_what_it_was_granted`; `a_binding_owned_by_another_principal_reads_only_what_it_was_granted` |
+| H8 | The owner shares one of two conversations with a paired peer, then unshares it | The share applies (an access answer about another credential, or one that contradicts itself, is still refused); the peer's record head on the granted one reaches the source and on the other is `wrong_owner`, as are a records watch and a record page on it; resolving the other answers as an id that does not exist; a manifest boundary one past the peer's head is `invalid_request` though the owner's head is past it; its manifest lists the granted one alone; its catalogue watch is `forbidden`, while a device's is admitted; the owner's work on the other conversation does not move the peer's head; the unshare moves the head forward and takes the row away. On the socket, a binding whose owner is not the session principal reads only what it was granted, and its lists are refused | `a_peer_reads_only_what_it_was_granted`; `a_binding_owned_by_another_principal_reads_only_what_it_was_granted` |
 | H9 | A paired reader's catalogue head as the owner works, grants and revokes | An ungranted change and a grant to another receiver leave it; a grant, a change to a granted row and a revoke each move it; a revoke moves it forward, never back to an older granted row | `a_paired_readers_head_moves_only_with_what_it_was_granted` |
-| H10 | A registry whose owner membership is disabled or not an admin | Refused on open (`owner_membership`): the grantor of every pairing stays live | `a_registry_whose_owner_is_not_an_active_admin_does_not_open` |
+| H10 | A registry whose owner membership is disabled or not an admin | Refused on open (`owner_membership`). The pairing initiator's membership is what keeps a grantor live; the owner's is the one the registry pins | `a_registry_whose_owner_is_not_an_active_admin_does_not_open` |
 
 ## What this part does not do
 
@@ -195,14 +198,27 @@ parts of #705 and the slices it names:
 
 ## Known limits
 
-- **The grantor's liveness is the registry's invariant, not a read check.**
-  The grantor of every pairing is the registry's owner, the only one who can
-  pair, and the registry refuses to open or write a state where that owner is
-  not an active admin (row H10). A device stops with its owner because it
-  signs in as them; a peer signs in as itself, so admission does not see the
-  owner's state. A change that lets a membership be disabled at runtime, or
-  admits a second owner, must add the grantor's liveness to read admission in
-  the same change.
+- **The grantor's liveness is not a read check.** The grantor of a pairing
+  is its initiator: an active admin holding `credential.manage` when it
+  paired. No runtime operation disables a membership or takes that role away,
+  and the registry refuses a state where its owner is not an active admin
+  (row H10). A device stops with its owner because it signs in as them; a peer
+  signs in as itself, so admission does not see the initiator's state. A
+  change that lets a membership be disabled or demoted at runtime, or gives
+  another admin a way to pair, must add the pairing initiator's membership to
+  read admission in the same change.
+- **A paired reader's head values are the owner's catalogue revisions.** Its
+  head moves only with what it was granted, but each value is the owner-wide
+  revision of that change, so the gap between two values a peer sees counts
+  the owner's other changes in between. Per-reader revision numbering is not
+  built.
+- **A device paired before this change sees its head go back once.** Its
+  saved catalogue progress came from the owner's head, which was at or past
+  its granted head. Its next pass finds the head below what it completed, and
+  the sync engine answers `ResetRequired`; the client does not reset on that
+  by itself, so the device's catalogue cache needs an explicit reset once.
+  Changing the scope or incarnation such a reader sees would hit the same
+  refusal (a scope mismatch is also `ResetRequired`), so it is not done.
 - **A peer has no catalogue watch.** It polls its catalogue head. A watch
   that wakes only on changes to its own granted rows needs per-receiver
   notices, which nothing builds yet.

@@ -740,6 +740,77 @@ async fn a_peer_reads_only_what_it_was_granted() {
     assert_eq!(code(&answer(&calls, "recordsHead granted")), "wrong_owner");
     let (head, _, _) = reads(&peer).await;
     assert_eq!(head["payload"]["head"].as_str().unwrap(), peer_head);
+    // Now the owner's head is past the peer's. Probe it as a peer would.
+    let probes = {
+        let credential = peer.credential.clone();
+        let (receiver, epoch) = (peer.receiver.clone(), peer.epoch.to_string());
+        let saved = peer.store.clone();
+        let ungranted = ungranted.to_string();
+        blocking(move || {
+            let mut probe = Probe::open(address, &saved);
+            let nonce = probe.nonce.clone();
+            let ready = probe.authenticate(&credential, &nonce).unwrap();
+            assert_eq!(ready["ok"], true, "{ready}");
+            let head = probe
+                .call(
+                    "conversation.catalogueHead",
+                    json!({"receiverId": receiver, "accessEpoch": epoch}),
+                )
+                .unwrap();
+            let payload = &head["payload"];
+            let shown: u64 = payload["head"].as_str().unwrap().parse().unwrap();
+            let pass = |boundary: u64| {
+                json!({"scope": payload["scope"], "completed": "0",
+                       "boundary": boundary.to_string(), "generation": "1"})
+            };
+            let over = probe
+                .call(
+                    "conversation.catalogueManifest",
+                    json!({"accessEpoch": epoch, "request": {"pass": pass(shown + 1), "maxEntries": 16}}),
+                )
+                .unwrap();
+            let mut resolve = |id: &str| {
+                probe
+                    .call(
+                        "conversation.catalogueResolve",
+                        json!({"accessEpoch": epoch, "pass": pass(shown),
+                               "descriptor": {"key": {"creation": "2", "id": id},
+                                              "revision": "2", "deleted": false},
+                               "maxPayloadBytes": 65536}),
+                    )
+                    .unwrap()
+            };
+            let resolve = (
+                resolve(&ungranted),
+                resolve(&Uuid::new_v4().to_string()),
+            );
+            let mut scope = payload["scope"].clone();
+            scope["stream"] = json!(format!("conversation:{ungranted}"));
+            let page = probe
+                .call(
+                    "conversation.recordsPage",
+                    json!({"conversationId": ungranted, "accessEpoch": epoch,
+                           "request": {"scope": scope, "after": "0", "target": "1",
+                                       "maxRecords": 16, "maxPayloadBytes": 1024,
+                                       "maxRecordBytes": 1024}}),
+                )
+                .unwrap();
+            (over, resolve, page)
+        })
+        .await
+    };
+    let (over, (resolved, missing), page) = probes;
+    // A boundary past the peer's own head is refused, so probing boundaries
+    // finds that head and never the owner's.
+    assert_eq!(code(&over), "invalid_request", "{over}");
+    // An ungranted conversation resolves exactly as one that does not exist.
+    assert_eq!(resolved["ok"], false, "{resolved}");
+    assert_eq!(
+        resolved["error"], missing["error"],
+        "{resolved} / {missing}"
+    );
+    // Its record pages are refused before any source is read.
+    assert_eq!(code(&page), "wrong_owner", "{page}");
     // An unshare takes it away, and moves the peer's head forward.
     assert!(shares
         .unshare(caller("unshare-peer"), id.clone(), peer_credential, 110)

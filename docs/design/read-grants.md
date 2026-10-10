@@ -157,8 +157,10 @@ and cache, on the follower's side; this gateway only stops serving it.
   (shares to other devices included) without learning any row. Its catalogue
   head no longer moves with them: a paired reader's head is the latest
   revision among its granted rows and its own grant changes
-  ([peer gateways](auth/peer-gateways.md), row H9). A peer gateway, another
-  party, is refused the catalogue watch and polls that head.
+  ([peer gateways](auth/peer-gateways.md), row H9), still numbered by the
+  owner's catalogue. A device paired before that change needs one explicit
+  catalogue reset (see the peer gateways Known limits). A peer gateway,
+  another party, is refused the catalogue watch and polls that head.
 - **Unpairing is `credential.revoke`, which leaves the binding active.** Reads
   stop because the credential no longer authenticates, but `conversation.share`
   still accepts that credential and writes a grant no one can use.

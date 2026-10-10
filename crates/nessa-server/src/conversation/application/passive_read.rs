@@ -193,12 +193,14 @@ impl AdmitPassiveRead<'_> {
         // peer gateway as itself (`docs/design/auth/peer-gateways.md`), and
         // both read only what was granted to the binding's receiver.
         //
-        // The grantor is not checked here. It is the registry's owner, the
-        // only one who can pair, and the registry keeps that owner an active
-        // admin. A device stops with its owner because it signs in as them; a
-        // peer would not. A change that lets a membership be disabled at
-        // runtime, or admits a second owner, must add the grantor's liveness
-        // to this admission in the same change.
+        // The grantor's liveness is not checked here. The grantor is the
+        // pairing initiator: an active admin holding `credential.manage` when
+        // it paired, and no runtime operation disables a membership or takes
+        // that role away. A device stops with its owner because it signs in
+        // as them; a peer would not. A change that lets a membership be
+        // disabled or demoted at runtime, or gives another admin a way to
+        // pair, must add the pairing initiator's membership to this admission
+        // in the same change.
         if binding.credential_id != *session.context().credential_id()
             || binding.organization_id != *session.context().organization_id()
         {

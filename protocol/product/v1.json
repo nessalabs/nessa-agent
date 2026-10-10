@@ -4377,7 +4377,7 @@
           "minLength": 1,
           "maxLength": 20,
           "pattern": "^(0|[1-9][0-9]{0,19})$",
-          "description": "Current owner catalogue head."
+          "description": "Current catalogue head as this receiver sees it: the latest revision among the conversations granted to it and its own grant changes. It moves on a grant, a revoke or a change to a granted conversation, never on the owner's other work."
         }
       },
       "required": ["scope", "head"],

@@ -191,9 +191,9 @@ fn granted_to(reader: &Reader) -> Option<String> {
 /// A paired reader's head: the latest revision among the owner's rows granted
 /// to `receiver`, and among `receiver`'s grant changes that changed something.
 /// A revoke stamps the row it takes away with a new revision and journals
-/// that revision, so the head moves forward on a revoke and never back: the
-/// journal only grows and conversation rows are never removed. Zero when the
-/// receiver was never granted anything.
+/// that revision, so in steady state the head moves forward on a revoke and
+/// never back: the journal only grows and conversation rows are never
+/// removed. Zero when the receiver was never granted anything.
 fn granted_head(
     connection: &Connection,
     organization: &OrganizationId,
@@ -1467,7 +1467,15 @@ impl ConversationCatalogue for LocalConversationStore {
             let cursor_id = pass.cursor.as_ref().map(|key| ConversationId::new(key.id.as_str()).map(|id| id.to_string()).map_err(|_| ConversationError::CatalogueInvalidRequest)).transpose()?.unwrap_or_default();
             let transaction = connection.transaction().map_err(failed)?;
             catalogue_incarnation(&transaction, incarnation)?;
+            // A pass may not reach past the head this reader is shown: the
+            // owner's for the owner, the granted head for a paired reader.
+            // Checking a paired reader's boundary against the owner's head
+            // would let it find that head by probing boundaries.
             let head = owner_head(&transaction, &organization, &owner)?;
+            let head = match granted_to(&reader) {
+                None => head,
+                Some(receiver) => granted_head(&transaction, &organization, &owner, &receiver)?,
+            };
             if boundary > head {
                 return Err(ConversationError::CatalogueInvalidRequest);
             }
