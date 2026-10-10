@@ -228,7 +228,12 @@ impl LeaseHold for SshHold {
         let gone = self.gone.clone();
         // Ends with the lease's route: its offers' sender goes with it.
         tokio::spawn(async move {
-            while let Some(Published { artifact, file }) = published.recv().await {
+            while let Some(Published {
+                artifact,
+                file,
+                unanswered,
+            }) = published.recv().await
+            {
                 let answering = link.clone();
                 let answered = lease.clone();
                 let offer = ArtifactOffer {
@@ -240,7 +245,7 @@ impl LeaseHold for SshHold {
                     )),
                     file,
                     answer: ArtifactAnswer::new(move |outcome| {
-                        answering.collected(&answered, artifact, outcome);
+                        answering.collected(&answered, artifact, outcome, unanswered);
                     }),
                 };
                 // Nobody takes them any more: its answer's drop says so.

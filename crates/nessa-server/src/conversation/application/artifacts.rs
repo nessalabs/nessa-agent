@@ -9,16 +9,17 @@
 //!   name or type unreadable? ──▶ refused invalid, nothing read
 //!   ConversationAttachments::keep_published(file, bytes, record)
 //!     the conversation already holds it ──▶ record ──▶ alreadyHeld, nothing read
-//!     else bytes pulled ──▶ size and digest checked ──▶ pending hold, audited
-//!       ──▶ record: SessionManager::record_artifact ──▶ the hold made usable
+//!     else bytes pulled ──▶ size and digest checked ──▶ hold audited, usable
+//!       ──▶ record: SessionManager::record_artifact; refused ──▶ taken back
 //!     interrupted, mismatched, lease ended, or not recorded ──▶ refused, no hold
 //!   answer ──▶ the host lets go of its staged copy
 //! ```
 //!
 //! Arrows are steps, in order. Nothing is kept from bytes not checked
 //! against the digest the host published, and a hold is made only once
-//! its bytes are. The conversation's record is the last word before a file
-//! is usable: no file is kept that the conversation did not record.
+//! its bytes are. A file is recorded only once held, and taken back when
+//! the conversation will not record it: the two never disagree for longer
+//! than that.
 //! Every offer is answered, by its answer's drop if by nothing else.
 use super::{
     environment::LiveLease, ArtifactKept, ArtifactRecordGate, ConversationAttachments,
@@ -268,8 +269,8 @@ impl ArtifactCollector {
     }
 
     /// The conversation's record of a published file, asked for by whoever
-    /// keeps it once its bytes are checked and before the file is usable,
-    /// so a file is never kept that the conversation did not record: a
+    /// keeps it once it is held, so a file is never kept that the
+    /// conversation did not record, nor recorded unheld: a
     /// lease that ended meanwhile, or a conversation with no room left, is
     /// a refusal, stashed in `refused` for the host to be told.
     fn record_gate(

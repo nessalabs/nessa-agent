@@ -37,8 +37,8 @@ use nessa_sdk::application::agent_execution::{
 };
 use nessa_sdk::domain::{
     agent_execution::leases::{
-        AgentWork, EnvironmentRef, LeaseDeadline, LeaseGrants, LeaseId, LeaseTerms, LeaseWork,
-        SandboxProfile, SshDestination,
+        AgentWork, EnvironmentRef, LeaseDeadline, LeaseEndCause, LeaseGrants, LeaseId, LeaseTerms,
+        LeaseWork, SandboxProfile, SshDestination,
     },
     effective_capabilities::value_objects::EffectiveCapabilities,
 };
@@ -181,6 +181,9 @@ fn files_under(root: &Path) -> HashMap<String, Vec<u8>> {
 /// stream carries toward the gateway, which a test can cut.
 struct Host {
     root: tempfile::TempDir,
+    /// Where publish points go: short, as a Unix socket's path is bounded
+    /// (104 bytes on macOS) and the temporary directory there is long.
+    sockets: tempfile::TempDir,
     workspace: PathBuf,
     launcher: Arc<Publisher>,
     channels: Arc<Channels>,
@@ -211,6 +214,7 @@ impl Host {
             carried: Arc::default(),
             relays: Mutex::default(),
             root,
+            sockets: tempfile::Builder::new().prefix("ns").tempdir().unwrap(),
         })
     }
 
@@ -264,9 +268,9 @@ impl LeaseConnector for Connector {
         let (host_in, host_out) = split(served);
         let outbox = FileOutbox::open(
             host.root.path().join("outbox"),
-            host.root
+            host.sockets
                 .path()
-                .join(format!("s{}", uuid::Uuid::new_v4().simple())),
+                .join(&uuid::Uuid::new_v4().simple().to_string()[..8]),
             &host.workspace,
         )?;
         let ledger = FileLedger::open(host.root.path().join("leases.jsonl"))?;
@@ -380,12 +384,23 @@ fn issuer() -> ActionContext {
 /// what each offer became is sent on the returned channel.
 struct Leased {
     lease: LeaseId,
-    _held: EnvironmentLease,
+    held: EnvironmentLease,
     _process: HarnessProcess,
     kept: tokio::sync::mpsc::UnboundedReceiver<Result<ArtifactKept, CollectionRefusal>>,
 }
 
 async fn leased(host: &Arc<Host>, fixture: &Fixture) -> Leased {
+    leased_pausing(host, fixture, None).await
+}
+
+/// [`leased`], whose first record, once asked, says so on `entered` and
+/// waits for `go`.
+async fn leased_pausing(
+    host: &Arc<Host>,
+    fixture: &Fixture,
+    pause: Option<(Arc<tokio::sync::Notify>, tokio::sync::oneshot::Receiver<()>)>,
+) -> Leased {
+    let mut pause = pause;
     let environment = SshEnvironment::new(
         devbox(),
         Arc::new(Connector(host.clone())),
@@ -446,7 +461,18 @@ async fn leased(host: &Arc<Host>, fixture: &Fixture) -> Leased {
                     requested_by: issuer(),
                     file,
                     bytes,
-                    record: Box::new(|| Box::pin(async { true })),
+                    record: {
+                        let pause = pause.take();
+                        Box::new(move || {
+                            Box::pin(async move {
+                                if let Some((entered, go)) = pause {
+                                    entered.notify_one();
+                                    let _ = go.await;
+                                }
+                                true
+                            })
+                        })
+                    },
                 })
                 .await;
             answer.answer(match result {
@@ -459,7 +485,7 @@ async fn leased(host: &Arc<Host>, fixture: &Fixture) -> Leased {
     });
     Leased {
         lease,
-        _held: held,
+        held,
         _process: process,
         kept,
     }
@@ -662,6 +688,48 @@ async fn a_lease_lost_mid_read_fails_as_ended_and_leaves_no_partial_hold() {
     assert!(fixture.store.held().is_empty());
     assert_eq!(fixture.store.pending(), 0);
     assert_eq!(staged(&host), 0);
+}
+
+/// A file kept while its lease's End is asked is told to the host as held:
+/// the End waits for its answer, so the host never answers it as ended.
+#[tokio::test]
+async fn a_file_kept_as_its_lease_ends_is_answered_held_before_the_end() {
+    let host = Host::new();
+    let fixture = Fixture::new(AttachmentLimits::default());
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let (go, wait) = tokio::sync::oneshot::channel();
+    let mut leased = leased_pausing(&host, &fixture, Some((entered.clone(), wait))).await;
+    let bytes = pattern(100_000, 7);
+    let file = host.file("Nessa.dmg", &bytes);
+    let publisher = {
+        let host = host.clone();
+        tokio::spawn(async move { host.publish(&file).await })
+    };
+    tokio::time::timeout(Duration::from_secs(5), entered.notified())
+        .await
+        .expect("the file was kept and its record asked");
+    let ending = {
+        let hold = leased.held.hold.clone();
+        tokio::spawn(async move { hold.end(LeaseEndCause::Stopped).await })
+    };
+    // Give the End every chance to go first.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    go.send(()).unwrap();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(10), publisher)
+            .await
+            .expect("the publisher is answered")
+            .unwrap(),
+        PublishAnswer::Held {
+            digest: hex(&bytes),
+            size: bytes.len() as u64,
+        }
+    );
+    assert_eq!(leased.kept.recv().await, Some(Ok(ArtifactKept::Held)));
+    tokio::time::timeout(Duration::from_secs(10), ending)
+        .await
+        .expect("the lease ends once its file is answered")
+        .unwrap();
 }
 
 #[tokio::test]

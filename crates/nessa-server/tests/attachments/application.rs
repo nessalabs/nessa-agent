@@ -3314,8 +3314,8 @@ async fn a_published_file_already_held_is_never_read() {
 }
 
 /// A file whose bytes are right but that its conversation did not record
-/// is never usable: its hold, created and audited, is taken back as not
-/// recorded, and nothing is held.
+/// is not kept: its hold, created, audited and made usable, is taken back
+/// as not recorded, and nothing is held.
 #[tokio::test]
 async fn a_published_file_its_conversation_did_not_record_is_taken_back() {
     let fixture = Fixture::new(AttachmentLimits::default());
@@ -3338,7 +3338,7 @@ async fn a_published_file_its_conversation_did_not_record_is_taken_back() {
     let [AttachmentAuditRecord::HoldCreated { hold }, AttachmentAuditRecord::HoldReverted {
         hold: reverted,
         cause: RevertCause::NotRecorded,
-        was: RetiredFrom::Pending,
+        was: RetiredFrom::Held,
     }] = records.as_slice()
     else {
         panic!("a creation and its reversal expected, got {records:?}")
@@ -3348,7 +3348,8 @@ async fn a_published_file_its_conversation_did_not_record_is_taken_back() {
 }
 
 /// A file the conversation already holds, but did not record under this
-/// lease, is not answered as held, and the existing hold is left as it is.
+/// lease, is not answered as held, and the existing hold is left as it is;
+/// the finding was audited before the conversation was asked.
 #[tokio::test]
 async fn a_published_file_already_held_but_not_recorded_is_not_kept() {
     let fixture = Fixture::new(AttachmentLimits::default());
@@ -3371,7 +3372,14 @@ async fn a_published_file_already_held_but_not_recorded_is_not_kept() {
     assert!(asked.load(Ordering::SeqCst));
     assert!(!pulled.load(Ordering::SeqCst), "the body was read");
     assert_eq!(fixture.store.held(), before);
-    assert!(fixture.audit.taken().is_empty());
+    let records = fixture.audit.taken();
+    assert!(
+        matches!(
+            records.as_slice(),
+            [AttachmentAuditRecord::AlreadyPublished { .. }]
+        ),
+        "{records:?}"
+    );
 }
 
 /// An upload kept normalized does not hold the file it came from: the

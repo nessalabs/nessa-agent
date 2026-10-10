@@ -157,6 +157,9 @@ struct Routes {
 pub(crate) struct Published {
     pub(crate) artifact: u32,
     pub(crate) file: StagedArtifact,
+    /// Held, as a pump holds it, until its answer is queued: the lease's
+    /// End waits for it, so a file answered before the End is told before it.
+    pub(crate) unanswered: OwnedRwLockReadGuard<()>,
 }
 
 /// What a granted lease is handed: its watch, and the files published
@@ -621,24 +624,38 @@ impl HostLink {
     }
 
     /// Tell the host what became of a file it published under `lease`,
-    /// unless the lease is no longer held here or its End is already on its
-    /// way, when the host answers it as ended. Always sent, behind what is queued.
-    pub(crate) fn collected(&self, lease: &str, artifact: u32, outcome: Collection) {
-        let held = self
-            .routes()
-            .leases
-            .get(lease)
-            .is_some_and(|route| !route.end_sent);
-        if held {
-            deliver(
-                &self.frames,
-                None,
-                ToEnvironment::Collected {
-                    lease: lease.into(),
-                    artifact,
-                    outcome,
-                },
-            );
+    /// unless the lease is no longer held here. `unanswered` is let go only
+    /// once the answer is queued, so the lease's End, which waits for it,
+    /// always goes after: the host never answers as ended a file this
+    /// gateway kept.
+    pub(crate) fn collected(
+        &self,
+        lease: &str,
+        artifact: u32,
+        outcome: Collection,
+        unanswered: OwnedRwLockReadGuard<()>,
+    ) {
+        if !self.routes().leases.contains_key(lease) {
+            return;
+        }
+        let frame = ToEnvironment::Collected {
+            lease: lease.into(),
+            artifact,
+            outcome,
+        };
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => {
+                let frames = self.frames.clone();
+                runtime.spawn(async move {
+                    let _ = frames.send(frame).await;
+                    drop(unanswered);
+                });
+            }
+            Err(_) => {
+                if self.frames.try_send(frame).is_err() {
+                    tracing::error!("an artifact's answer found no room; it is not sent");
+                }
+            }
         }
     }
 
@@ -850,18 +867,27 @@ fn route_frame(routes: &mut Routes, frame: FromEnvironment) -> Routed {
             if route.ending {
                 return refused(CollectionRefusal::LeaseEnded);
             }
-            match route
-                .published
-                .as_ref()
-                .map(|offers| offers.try_send(Published { artifact, file }))
-            {
-                Some(Ok(())) => Routed::Done,
+            let Ok(unanswered) = route.pumps.clone().try_read_owned() else {
+                return refused(CollectionRefusal::LeaseEnded);
+            };
+            let offer = Published {
+                artifact,
+                file,
+                unanswered,
+            };
+            let sent = match route.published.as_ref() {
+                Some(offers) => offers.try_send(offer).map_err(|error| match error {
+                    mpsc::error::TrySendError::Full(_) => true,
+                    mpsc::error::TrySendError::Closed(_) => false,
+                }),
+                None => Err(false),
+            };
+            match sent {
+                Ok(()) => Routed::Done,
                 // The host keeps at most as many in flight as there is room
                 // for: one past it is not this gateway's to take.
-                Some(Err(mpsc::error::TrySendError::Full(_))) => {
-                    refused(CollectionRefusal::BudgetExceeded)
-                }
-                Some(Err(mpsc::error::TrySendError::Closed(_))) | None => {
+                Err(true) => refused(CollectionRefusal::BudgetExceeded),
+                Err(false) => {
                     route.published = None;
                     refused(CollectionRefusal::ChannelUnavailable)
                 }

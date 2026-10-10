@@ -588,9 +588,9 @@ pub struct PublishedArtifact {
     pub file: StagedArtifact,
     /// Its bytes, read only if they are needed.
     pub bytes: Box<dyn ArtifactBytes>,
-    /// Asked once, after the bytes are checked and before anything says the
-    /// file is kept: whether the conversation recorded it under the lease.
-    /// `false`, and the file is not kept.
+    /// Asked once the file is held, before anything says it is kept:
+    /// whether the conversation recorded it under the lease. `false`, and
+    /// the file is not kept.
     pub record: ArtifactRecordGate,
 }
 
