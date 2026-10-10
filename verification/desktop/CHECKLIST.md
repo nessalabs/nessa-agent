@@ -1451,3 +1451,29 @@ in production. It creates an idle conversation and sends no transcript output.
 
 Ownership and negative/recovered cases:
 [conversation admission](../../docs/design/conversation-admission.md).
+
+
+## Panel Messages catalogue follow (#722)
+
+`panel-list-follow.mjs` runs a real private scripted gateway and mounts the
+production ConversationList, effects, history store and client subscriptions
+in Chromium and WebKit. It is dev-only in run-all. The external caller uses a
+second authenticated connection under the same panel principal.
+
+- External create/send, archive and unarchive update the already-mounted list.
+  An archived held tab is excluded by explicit archived-list evidence. Catalogue
+  deletion removes the remote row; omission alone does not mark a held tab deleted.
+- Active and archived initial frames are required before first publication; they
+  are independent bounded replacements, not an atomic catalogue snapshot.
+- A controlled failure at the archived application port remains visible while a
+  real active-list frame adds another conversation. New paired follows recover it.
+  This injected outage does not claim to exercise a real gateway fault.
+- Leaving closes both target follows; an external change while hidden applies
+  nothing. Reopening catches up through two subscriptions. Normal external
+  changes retain the original mounted pair; no one-shot list reads occur.
+- Small screenshots show the live list and stale notice. The script closes its
+  page/client/gateway and deletes its conversations.
+
+The [panel-list ordering table](../../docs/design/record-subscriptions.md#panel-messages-list--issue-722)
+owns initial-half, stale-read, command, cleanup, incomplete and retry cases; the
+source-level regression tests cover those cases independently.

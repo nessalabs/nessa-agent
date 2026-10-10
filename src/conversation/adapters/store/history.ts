@@ -1,4 +1,10 @@
-import { createAction, createAsyncThunk, createSlice } from "@reduxjs/toolkit"
+import {
+  createAction,
+  createAsyncThunk,
+  createSlice,
+  nanoid,
+  type Dispatch,
+} from "@reduxjs/toolkit"
 
 import {
   ControlFailedError,
@@ -10,7 +16,7 @@ import {
   deletedAnyway,
   deletedMessage,
 } from "../../application/usecases"
-import type { ConversationSummary } from "../../application/view"
+import type { ConversationListing, ConversationSummary } from "../../application/view"
 import type { ReadFailure } from "../../model"
 
 /**
@@ -45,6 +51,8 @@ export type ConversationHistory = {
   failure: ReadFailure | null
   /** The read in flight, so an older answer arriving late cannot replace a newer one. */
   requestId: string | null
+  /** Whether requestId names the paired subscription publication, rather than a one-shot. */
+  following: boolean
   /** What the latest archive or delete's answer has to say, in the panel's words. */
   commandError: string | null
   /**
@@ -83,6 +91,7 @@ const initialState: ConversationHistory = {
   failure: null,
   complete: true,
   requestId: null,
+  following: false,
   commandError: null,
   undoable: null,
   latestAction: null,
@@ -91,6 +100,106 @@ const initialState: ConversationHistory = {
 }
 
 type Extra = { extra: { conversation: ConversationEffects } }
+
+type HistoryFollow = { stop(): void; refresh(): void }
+const historyFollows = new WeakMap<Extra["extra"], HistoryFollow>()
+
+/**
+ * One paired follow owned by this mounted Messages list. A command may refresh
+ * its subscriptions without replacing the scope that its cleanup closes (PL6).
+ */
+export const followConversations =
+  () =>
+  (
+    dispatch: Dispatch,
+    getState: () => { conversationHistory: ConversationHistory },
+    extra: Extra["extra"],
+  ): (() => void) => {
+    historyFollows.get(extra)?.stop()
+    let stopped = false
+    let generation = ""
+    let stops: Array<() => void> = []
+    const owner: HistoryFollow = {
+      stop() {
+        if (stopped) return
+        stopped = true
+        for (const stop of stops) stop()
+        if (historyFollows.get(extra) === owner) historyFollows.delete(extra)
+        dispatch(historyFollowStopped({ requestId: generation }))
+      },
+      refresh() {
+        if (stopped) return
+        // Invalidate before aborting: a stopped adapter can call back synchronously.
+        const requestId = (generation = nanoid())
+        const previous = stops
+        stops = []
+        dispatch(historyFollowStarted({ requestId }))
+        for (const stop of previous) stop()
+        let active: ConversationListing | undefined
+        let archived: ConversationListing | undefined
+        let knownArchived = new Set(getState().conversationHistory.archivedIds)
+        const failures: { active?: ReadFailure; archived?: ReadFailure } = {}
+        const current = () => !stopped && generation === requestId
+        const publish = () => {
+          if (!current() || !active || !archived) return
+          const namedArchived = archived.conversations.map((row) => row.conversationId)
+          if (archived.complete) knownArchived = new Set(namedArchived)
+          else {
+            for (const row of active.conversations)
+              knownArchived.delete(row.conversationId)
+            for (const id of namedArchived) knownArchived.add(id)
+          }
+          dispatch(
+            historyFollowReceived({
+              requestId,
+              rows: active.conversations,
+              archivedIds: [...knownArchived],
+              complete: active.complete && archived.complete,
+              failure: failures.active ?? failures.archived ?? null,
+            }),
+          )
+        }
+        for (const isArchived of [false, true]) {
+          const half = isArchived ? "archived" : "active"
+          const stop = extra.conversation.followList(isArchived, {
+            list(list) {
+              if (!current()) return
+              if (isArchived) archived = list
+              else active = list
+              delete failures[half]
+              publish()
+            },
+            failed(reason, cause) {
+              if (!current()) return
+              failures[half] = reason
+              console.warn(
+                "[nessa] conversation list was not refreshed",
+                half,
+                reason,
+                cause,
+              )
+              dispatch(historyFollowFailed({ requestId, reason }))
+            },
+          })
+          if (current()) stops.push(stop)
+          else stop()
+        }
+      },
+    }
+    historyFollows.set(extra, owner)
+    owner.refresh()
+    return () => owner.stop()
+  }
+
+/** Refresh current delivery after a command; a hidden Messages list reads once. */
+function refreshHistory(
+  dispatch: (action: ReturnType<typeof listConversations>) => unknown,
+  extra: Extra["extra"],
+) {
+  const held = historyFollows.get(extra)
+  if (held) held.refresh()
+  else void dispatch(listConversations())
+}
 
 /**
  * The conversations the list shows — those not archived — and which ones are
@@ -164,11 +273,11 @@ export const archiveConversation = createAsyncThunk<
     try {
       applied = await extra.conversation.archive(serverConversationId, archived)
     } catch (error) {
-      void dispatch(listConversations())
+      refreshHistory(dispatch, extra)
       return rejectWithValue(rejection(archived ? "archive" : "unarchive", title, error))
     }
-    void dispatch(listConversations())
     if (applied) dispatch(conversationArchived({ serverConversationId, archived }))
+    refreshHistory(dispatch, extra)
     return applied
   },
 )
@@ -189,7 +298,7 @@ export const deleteConversation = createAsyncThunk<
     try {
       await extra.conversation.delete(serverConversationId)
     } catch (error) {
-      void dispatch(listConversations())
+      refreshHistory(dispatch, extra)
       // A delete that happened: its tabs go, and what the list says is news
       // about it, not a failure to delete.
       if (error instanceof ControlFailedError && deletedAnyway(error.reason)) {
@@ -199,7 +308,7 @@ export const deleteConversation = createAsyncThunk<
       return rejectWithValue(rejection("delete", title, error))
     }
     dispatch(conversationDeleted(serverConversationId))
-    void dispatch(listConversations())
+    refreshHistory(dispatch, extra)
   },
 )
 
@@ -298,6 +407,40 @@ const historySlice = createSlice({
      * that transition rather than on the list unmounting, which development
      * mode also does on mount.
      */
+    historyFollowStarted(state, action: { payload: { requestId: string } }) {
+      state.requestId = action.payload.requestId
+      state.following = true
+    },
+    historyFollowStopped(state, action: { payload: { requestId: string } }) {
+      if (state.requestId !== action.payload.requestId) return
+      state.requestId = null
+      state.following = false
+    },
+    historyFollowReceived(
+      state,
+      action: {
+        payload: {
+          requestId: string
+          rows: ConversationSummary[]
+          archivedIds: string[]
+          complete: boolean
+          failure: ReadFailure | null
+        }
+      },
+    ) {
+      if (!state.following || state.requestId !== action.payload.requestId) return
+      state.rows = action.payload.rows
+      state.archivedIds = action.payload.archivedIds
+      state.complete = action.payload.complete
+      state.failure = action.payload.failure
+    },
+    historyFollowFailed(
+      state,
+      action: { payload: { requestId: string; reason: ReadFailure } },
+    ) {
+      if (state.following && state.requestId === action.payload.requestId)
+        state.failure = action.payload.reason
+    },
     commandErrorCleared(state) {
       state.commandError = null
       state.undoable = null
@@ -306,10 +449,11 @@ const historySlice = createSlice({
   extraReducers: (builder) => {
     builder
       .addCase(listConversations.pending, (state, action) => {
+        if (state.following) return
         state.requestId = action.meta.requestId
       })
       .addCase(listConversations.fulfilled, (state, action) => {
-        if (state.requestId !== action.meta.requestId) return
+        if (state.following || state.requestId !== action.meta.requestId) return
         state.rows = action.payload.rows
         state.archivedIds = action.payload.archivedIds
         state.complete = action.payload.complete
@@ -317,7 +461,7 @@ const historySlice = createSlice({
         state.requestId = null
       })
       .addCase(listConversations.rejected, (state, action) => {
-        if (state.requestId !== action.meta.requestId) return
+        if (state.following || state.requestId !== action.meta.requestId) return
         state.failure = action.payload ?? "unavailable"
         state.requestId = null
       })
@@ -368,4 +512,10 @@ const historySlice = createSlice({
 })
 
 export const conversationHistoryReducer = historySlice.reducer
-export const { commandErrorCleared } = historySlice.actions
+export const {
+  commandErrorCleared,
+  historyFollowStarted,
+  historyFollowStopped,
+  historyFollowReceived,
+  historyFollowFailed,
+} = historySlice.actions

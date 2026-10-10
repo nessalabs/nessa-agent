@@ -763,3 +763,10 @@ export const modePublication = {
   auto: "[data-tray-focus=mode-auto]",
   ask: "[data-tray-focus=mode-ask]",
 }
+
+/** Production panel Messages catalogue fixture (#722). */
+export const panelListFollow = {
+  page: "verification/desktop/fixtures/panel-list-follow/index.html",
+  panel: "[data-panel-list-follow]",
+  row: "[data-slot=conversation-history-item]",
+}

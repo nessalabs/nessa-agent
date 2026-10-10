@@ -1163,7 +1163,9 @@ async fn subscriptions_past_the_published_limit_are_refused() {
         .take(MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS)
         .enumerate()
     {
-        client.subscribe(&format!("view-{index}"), conversation).await;
+        client
+            .subscribe(&format!("view-{index}"), conversation)
+            .await;
     }
     client.send(
         "one-too-many",
@@ -1174,9 +1176,38 @@ async fn subscriptions_past_the_published_limit_are_refused() {
     assert_eq!(reply["error"]["code"], "subscription_capacity");
     client.send("list", "conversation.subscribeList", json!({}));
     assert_eq!(client.reply("list").await.0["ok"], true);
-    client.send("archived", "conversation.subscribeList", json!({"archived": true}));
+    client.send(
+        "archived",
+        "conversation.subscribeList",
+        json!({"archived": true}),
+    );
     let (reply, _) = client.reply("archived").await;
-    assert_eq!(reply["error"]["code"], "subscription_capacity");
+    assert_eq!(reply["ok"], true, "{reply}");
+    let archived = reply["payload"]["subscriptionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    client.send(
+        "duplicate-list",
+        "conversation.subscribeList",
+        json!({"archived": true}),
+    );
+    assert_eq!(
+        client.reply("duplicate-list").await.0["error"]["code"],
+        "subscription_duplicate"
+    );
+    client.send(
+        "release-archived",
+        "conversation.unsubscribe",
+        json!({"subscriptionId": archived}),
+    );
+    assert_eq!(client.reply("release-archived").await.0["ok"], true);
+    client.send(
+        "archived-again",
+        "conversation.subscribeList",
+        json!({"archived": true}),
+    );
+    assert_eq!(client.reply("archived-again").await.0["ok"], true);
     client.close().await;
 }
 

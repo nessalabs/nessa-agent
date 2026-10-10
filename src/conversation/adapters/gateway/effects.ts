@@ -506,6 +506,59 @@ export function gatewayEffects(
           throw readFailure(error)
         })
     },
+    followList(archived, follower) {
+      let stopped = false
+      let token = {}
+      let giveUp: AbortController | undefined
+      const failed = (error: unknown) => {
+        if (stopped) return
+        const failure = readFailure(error)
+        follower.failed(failure.reason, failure)
+        if (!stopped) void wait(FOLLOW_RETRY_MS).then(open)
+      }
+      const open = (): void => {
+        if (stopped) return
+        const mine = (token = {})
+        giveUp?.abort()
+        const { signal } = (giveUp = new AbortController())
+        const current = () => !stopped && token === mine
+        void Promise.resolve()
+          .then(() =>
+            connected().subscriptions.list(
+              {
+                list: (list) => {
+                  if (current()) follower.list(list)
+                },
+                ended: (end) => {
+                  if (!current()) return
+                  // Lagging is a fresh replacement, not a failed catalogue read.
+                  if (end.reason === "lagging") return open()
+                  token = {}
+                  failed(
+                    end.reason === "refused" && end.code
+                      ? new NessaRpcError(end.code, end.code)
+                      : new Error(`The list's subscription ended: ${end.reason}`),
+                  )
+                },
+              },
+              { archived, signal },
+            ),
+          )
+          .then(
+            (opened) => {
+              if (!current()) void opened.close().catch(() => undefined)
+            },
+            (error: unknown) => {
+              if (current()) failed(error)
+            },
+          )
+      }
+      open()
+      return () => {
+        stopped = true
+        giveUp?.abort()
+      }
+    },
     follow(conversationId, follower) {
       let stopped = false
       // The open whose frames apply: anything an earlier open brings is dropped.

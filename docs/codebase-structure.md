@@ -205,6 +205,15 @@ writing the full defaults on first launch is buying.
   selectors, not the cascade. It stays pure text because
   `check-architecture.mjs` runs on the Rust jobs with bare Node and no
   `node_modules`, where nothing may import a parser.
+The panel Messages list follows the explicit active and archived catalogues in
+`src/conversation/adapters/store/history.ts`, through the application-owned
+`ConversationEffects.followList` port and gateway/scenario adapters. Its
+paired publication and cleanup ordering is in
+[record subscriptions](design/record-subscriptions.md#panel-messages-list--issue-722).
+Feature tests live beside the history store, gateway adapter and list UI;
+`verification/desktop/scripts/panel-list-follow.mjs` drives the production panel
+against a private scripted gateway.
+
 - Product commands live in `src/conversation/application/usecases/`. The store
   is a projection: thunks call injected effects and reducers apply returned views.
   The shared tabs are `conversations` + `activeId`; beside them the

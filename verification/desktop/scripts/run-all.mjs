@@ -45,6 +45,7 @@ const functional = [
   "gateway-states",
   "conversation-unread",
   "mode-publication",
+  "panel-list-follow",
   "linked-devices",
   "settings-page",
   "widgets",

@@ -184,7 +184,7 @@ conversation, and a list batch, which is refused to a paired device
 ### Limits
 
 `x-subscriptionLimits` publishes `conversationTargets` (8) and `listTargets`
-(1) per connection, and `deliveryTimeoutMs` (10000). The SDK and catalogue
+(two: active and archived) per connection, and `deliveryTimeoutMs` (10000). The SDK and catalogue
 watch registries keep their own producer bounds (64 each); a full one refuses
 `subscription_capacity`. A list frame larger than the 64 KiB frame bound is
 cut, newest first, and marked `complete: false` (row L3): the client walks
@@ -293,6 +293,46 @@ subscription is open.
 | P6 | A frame identical to the last one this follow applied | Not applied again, so what is on screen keeps its references; any other frame applies, whatever its revision |
 | P7 | The tab switched, closed or unmounted | Its follow stopped; nothing it says applies after |
 | P8 | A tab followed while its after-command single read is on its way (switched to before its first frame) | The single read is stopped by the follow that replaces it, and settles, so the command it was reading for finishes; the store is the one place a tab's follow is replaced, a single read included, and the effects stop a follow only by its own function |
+
+### Panel Messages list — issue 722
+
+The Messages list follows the two explicit catalogue classifications through
+`ConversationEffects.followList(archived, follower)`. The product manifest owns
+`listTargets` (two): one active and one archived list on the existing connection.
+The panel does not infer archive status from a row missing from the active list.
+The history slice owns one paired follow per dependency scope, closes it when the
+Messages list leaves, and gives every replacement a fresh request identity.
+The client subscription gate owns abort-before-answer cleanup for each target.
+
+The first publication waits for both lists. Later each half replaces its own
+facts while retaining the other half. Those halves are separate bounded reads,
+not an atomic catalogue snapshot: an archive may temporarily occur in both
+halves, or neither. Explicit archived evidence excludes a held tab; omitted rows
+are not a tombstone. Incompleteness stays visible. An incomplete archived frame
+retains known archived identities unless an explicit active row says otherwise;
+identities explicitly named in the current archived frame remain excluded.
+A failed half retains its last facts and a stale-list notice, even while the
+other half updates. Neither success in the other half nor omission clears it.
+Commands restart the pair after their answer (including a lost answer), so frames
+read before an archive, undo or delete cannot replace their local evidence.
+One-shot list reads remain available while no Messages follow is held; their late
+answers cannot replace a held follow. No active subscription asks on a timer.
+
+Panel list rows (`adapters/store/history-follow.test.ts`,
+`adapters/gateway/list-follow.test.ts`, and `ui/conversation-list.test.ts`).
+
+| Row | State and input | Result |
+|---|---|---|
+| PL1 | Only one initial list has arrived, in either order | No half-list publication; both initial frames publish rows and explicit archived identities |
+| PL2 | An external create, archive, unarchive or delete changes one half | Replace only that half, retaining the other; archived identities are explicit, not inferred from missing active rows |
+| PL3 | One half fails, before or after its first frame | Retain published facts; show its typed stale failure; a successful other half does not clear it; a frame from the failed half clears that failure |
+| PL4 | The Messages list is mounted twice, replaced or leaves while a subscribe answer is pending | One paired owner; stop aborts each target; the client gate closes late answers; stopped frames/errors apply nothing |
+| PL5 | A one-shot list began before a follow, or answers while one is held | Its answer/failure cannot replace the follow; a later one-shot after unmount is allowed |
+| PL6 | Archive, undo or delete answers, or its answer is lost | The held pair is restarted with a fresh identity; old frames cannot erase local archive/delete evidence; its original UI cleanup still closes the restarted pair |
+| PL7 | Gateway reconnect or session availability changes | Replace the pair; the prior scope's cleanup and callbacks cannot stop or update the new one |
+| PL8 | A list ends lagging | Subscribe again at once without polling; any other end/refusal reports typed failure and waits the existing bounded retry pace |
+| PL9 | An archived list is incomplete | Keep explicit known archived identities not contradicted by an active row; current explicit archived rows stay excluded; completeness remains false |
+| PL10 | One-shot reads or a failed half coexist with local archive/delete/undo evidence | The list projection retains leaving/deleted identities and action ordering; recovery publishes only under the current pair identity |
 
 Client rows (`packages/nessa-client/src/presentation/subscription-api.test.ts`;
 the test names begin with the row id).
