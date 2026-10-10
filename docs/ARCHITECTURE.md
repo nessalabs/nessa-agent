@@ -319,7 +319,8 @@ not reading the session, which stays unread.
   the workspace as the split panes' source (below). `adapters/dom/` holds what
   belongs to the page: what the workspace adds to a drag — a session's card,
   the side columns that are never targets (`split-panes-drag.ts`) — keys,
-  focus following the focused pane (`focus.ts`), the page's measure of the
+  focus following the focused pane and owning its queued settlement for the mounted
+  subscription (`focus.ts`, [frame lifetime](design/ui-workspace-load.md#focus-frame-lifetime-730)), the page's measure of the
   panes' room (`measure.ts`, injected into the commands), the arrival of a
   first message, and the clock's ticks. `adapters/storage/` keeps the Agents overview's
   filter between launches (`remembered-filter.ts`).

@@ -306,6 +306,10 @@ _ADR 238 › Focus follows the focused pane_; keys in
   ⌘\\ and a pick, ⇧⌘\\, ⌘1–4, ⇧⌘] and ⇧⌘[, and ⌘W. _Check:_ `focus.mjs` (`focus-panes`).
 - [ ] **Closing ⌘K without a pick, or Settings, gives focus back** to what
   opened it. _Check:_ `focus.mjs` (`focus-panes`).
+- [ ] **Replacing a workspace layout retires queued focus settlement**: deliver
+  held callbacks after the old workspace unmounts; they enqueue zero new frame
+  work, and the current layout still focuses its composer. _Check:_ `focus.mjs`
+  (`focus-retired-layout`); [frame lifetime](../../docs/design/ui-workspace-load.md#focus-frame-lifetime-730), #730.
 - [ ] **A burst of keys leaves a working window**: no error, a focused pane.
   _Check:_ `focus.mjs` (`focus-mash`).
 - [ ] **A pane command from the overview**: one that is a navigation leaves

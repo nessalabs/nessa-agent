@@ -24,7 +24,7 @@
 import { attempt, CannotRun } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
-import { content, css, keys, names, storage } from "./lib/selectors.mjs"
+import { content, css, keys, names, preferenceEvents, storage } from "./lib/selectors.mjs"
 import {
   contentIs,
   focusComposer,
@@ -32,6 +32,7 @@ import {
   hideColumns,
   leaveSettings,
   overviewListed,
+  openPanes,
   paneCount,
   requestCount,
   settled,
@@ -931,6 +932,116 @@ async function keysWhileRowsArrive(page) {
   return { ...read, failures }
 }
 
+/** A retired workspace cannot start a new focus search from its held frame. */
+async function retiredLayout(page, layout) {
+  await openPanes(page, 2)
+  await page.keyboard.press(keys.focusPane(1))
+  await settled(page)
+  await frames(page, 4)
+  const clock = await page.evaluateHandle((workspace) => {
+    const previous = document.querySelector(workspace)
+    const request = window.requestAnimationFrame
+    const cancel = window.cancelAnimationFrame
+    const queued = new Map()
+    const cancelled = new Set()
+    let next = -1
+    let requests = 0
+    let retired = []
+    window.requestAnimationFrame = (callback) => {
+      const id = next--
+      requests++
+      queued.set(id, callback)
+      return id
+    }
+    window.cancelAnimationFrame = (id) => {
+      if (id >= 0) cancel.call(window, id)
+      else {
+        cancelled.add(id)
+        queued.delete(id)
+      }
+    }
+    return {
+      replaced: () =>
+        previous !== document.querySelector(workspace) && !previous?.isConnected,
+      capture() {
+        retired = [...queued.entries()]
+        return retired.length
+      },
+      deliverRetired() {
+        const before = requests
+        for (const [, callback] of retired) callback(performance.now())
+        return {
+          captured: retired.length,
+          cancelled: retired.filter(([id]) => cancelled.has(id)).length,
+          newRequests: requests - before,
+        }
+      },
+      async settle() {
+        for (let step = 0; step < 12 && queued.size > 0; step++) {
+          for (const id of [...queued.keys()]) {
+            const callback = queued.get(id)
+            if (!callback) continue
+            queued.delete(id)
+            callback(performance.now())
+          }
+          // A real browser paint commits effects that may request the next frame.
+          await new Promise((done) => request.call(window, done))
+        }
+        return queued.size
+      },
+      restore() {
+        queued.clear()
+        window.requestAnimationFrame = request
+        window.cancelAnimationFrame = cancel
+      },
+    }
+  }, css.workspace)
+  const failures = []
+  let retirement
+  let pending
+  try {
+    await page.keyboard.press(keys.focusPane(2))
+    const captured = await clock.evaluate((owner) => owner.capture())
+    if (captured !== 1)
+      throw new CannotRun(
+        `pane movement queued ${captured} frames; expected its one settlement`,
+      )
+    const next = layout === "columns" ? "sidebar" : "columns"
+    await page.evaluate(
+      ([key, event, value]) => {
+        localStorage.setItem(key, value)
+        window.dispatchEvent(new CustomEvent(event, { detail: value }))
+      },
+      [storage.layout, preferenceEvents.layout, next],
+    )
+    // RAF is held: poll the actual owner replacement, not a delay or fake paint.
+    await page.waitForFunction((owner) => owner.replaced(), clock, {
+      polling: 10,
+      timeout: 3000,
+    })
+    retirement = await clock.evaluate((owner) => owner.deliverRetired())
+    if (retirement.cancelled !== retirement.captured)
+      failures.push(
+        `retired owner cancelled ${retirement.cancelled} of ${retirement.captured} settlements`,
+      )
+    if (retirement.newRequests !== 0)
+      failures.push(`retired callbacks queued ${retirement.newRequests} new frames`)
+    pending = await clock.evaluate((owner) => owner.settle())
+    if (pending !== 0)
+      failures.push(`replacement has ${pending} frames after twelve paints`)
+  } finally {
+    await clock.evaluate((owner) => owner.restore())
+    await clock.dispose()
+  }
+  await page.keyboard.press(keys.focusPane(1))
+  await settled(page)
+  await frames(page, 3)
+  const after = await state(page)
+  const problem = inComposer(after)
+  if (problem) failures.push(`replacement: ${problem}`)
+  return { retirement, pending, after, failures }
+}
+
 const meta = {
   name: "focus",
   summary:
@@ -1084,6 +1195,22 @@ await main(meta, async ({ options, rep, url }) => {
       } finally {
         await opened.close()
       }
+      await attempt(rep, { name: "focus-retired-layout", engine, layout }, async () => {
+        const fresh = await openPage(browser, { url, layout, width: 1440, height: 900 })
+        try {
+          await need(fresh.page, css.composer, "a composer")
+          const result = await retiredLayout(fresh.page, layout)
+          if (options.shots)
+            await fresh.page
+              .locator(`${css.focusedPane} ${css.composerCard}`)
+              .screenshot({
+                path: `${options.shots}/focus-retired-${engine}-${layout}.png`,
+              })
+          return { ...result, failures: [...result.failures, ...fresh.errors] }
+        } finally {
+          await fresh.close()
+        }
+      })
       await attempt(rep, { name: "focus-home-handoff", engine, layout }, async () => {
         const fresh = await openPage(browser, { url, layout, width: 1440, height: 900 })
         try {

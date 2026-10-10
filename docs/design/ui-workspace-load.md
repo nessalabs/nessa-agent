@@ -12,6 +12,29 @@ is unchanged. A browser page whose query names a seeded run
 (`seededWorkspaceSpec`) boots that builder through `src/desktop/seeded-window.ts`.
 Nothing in this change writes a fixture file.
 
+## Focus frame lifetime (#730)
+
+`workspace/adapters/dom/focus.ts` owns the workspace store subscription's
+queued focus settlement and the current target search for one mounted effect.
+Cleanup retires the effect before cancelling its frames and stopping its search.
+A later delivery from that retired effect cannot start another search. Settlement
+keeps its existing ordering; it does not coalesce pane movement or choose another
+focus destination. The mounted effect still defers to dialogs and deliberate
+focus taken during target search.
+
+| State | Event ordering | Required observation |
+| --- | --- | --- |
+| Pane movement settlement queued | Cleanup before its first frame | No pending settlement/search and no later caret move. |
+| Window widget settlement queued | Cleanup before its first frame | No pending settlement/search and no later caret move. |
+| Return from overview queued | Cleanup before its first frame | Both deferred stages are retired; no search starts. |
+| Return's first frame delivered | Cleanup before its second frame | The nested frame is retired; no search starts. |
+| Effect retired | A previously queued callback is delivered despite cancellation | It creates neither a nested frame nor a target search. |
+| Previous effect queued work | Replace its store/scope, then deliver old work | Old work is inert; the current owner still settles its own pane movement. |
+| Effect mounted | Pane movement or window widget opening | First settlement frame starts target search; target paints before the caret lands. |
+| Effect mounted | Return from overview | Two settlement frames precede target search; the overview leave's own frame does not search the panes. |
+| Mounted search waiting to land | Person focuses a list or dialog | That focus remains the person's. |
+| Browser layout owner replaced while pane movement is queued | Replace the workspace layout, then deliver retired callbacks | Retired callbacks enqueue zero new work; current layout's focus remains usable. |
+
 ## What load coverage exists
 
 | Check | What it drives | Scale | Evidence |
