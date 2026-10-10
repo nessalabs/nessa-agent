@@ -655,7 +655,13 @@ refused before it reaches a host is still recorded, with who asked. A
 `command_issued` that could not be saved is kept with a `command_ended`
 (`not_started`) beside it, so a later save never shows a command that ran
 forever. A call cancelled before its grant asks nothing of the host; one
-cancelled during the grant is issued, never run, and ended.
+cancelled during the grant is issued, never run, and ended. A
+`command_ended` that cannot be saved, even once more, stays retained for
+the next save, and the answer says `recorded: false` as an error with the
+command's output, so the agent knows it ran and the records do not hold
+it yet. Output is counted per stream as captured; what was dropped past
+the bound is one total for both, since the capture drops from both
+together.
 
 **Orderings slice C meets.**
 
@@ -669,6 +675,7 @@ cancelled during the grant is issued, never run, and ended.
 | C6 | No turn running | Not decided; nothing recorded | service `a_command_with_no_turn_running_or_no_tools_configured_records_nothing` |
 | C7 | The connection lost while a command runs | The host stops it as lost and records it; the gateway answers `unanswered` | adapter `a_command_whose_connection_is_lost_is_unanswered_with_what_the_host_recorded` |
 | C8 | A granted command never run | Its End reaches the host, which ends it | adapter `a_granted_command_never_run_is_ended_on_the_host` |
+| C9 | A command's end, or its issue, cannot be saved | An unsaved issue never runs and never counts; an unsaved end is answered `recorded: false` and saved by the next save | service `a_command_whose_issue_cannot_be_saved_never_runs_and_never_counts`, `a_command_whose_end_cannot_be_saved_says_so_and_its_end_is_saved_later` |
 
 **Not in slice C.** Commands here, on a paired peer or a worker;
 receipts for a command that outlives its call; the `environment.list` and

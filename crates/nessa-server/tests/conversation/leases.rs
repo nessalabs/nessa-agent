@@ -2052,7 +2052,12 @@ async fn l14_a_command_runs_for_the_persons_turn_under_its_agent_lease_and_its_e
     host.finish
         .send_replace(Some(CommandExit::Exited { code: 0 }));
     let answer = running.await.unwrap().unwrap();
-    let CommandAnswer::Ran { lease, result } = answer else {
+    let CommandAnswer::Ran {
+        lease,
+        result,
+        recorded: true,
+    } = answer
+    else {
         panic!("it ran: {answer:?}");
     };
     assert_eq!(result.exit, CommandExit::Exited { code: 0 });
@@ -2230,7 +2235,12 @@ async fn l15_a_command_whose_caller_went_away_is_stopped_and_its_end_recorded() 
     .await
     .unwrap();
     caller_gone.send_replace(true);
-    let CommandAnswer::Ran { result, .. } = running.await.unwrap().unwrap() else {
+    let CommandAnswer::Ran {
+        result,
+        recorded: true,
+        ..
+    } = running.await.unwrap().unwrap()
+    else {
         panic!("it ran");
     };
     let stopped = CommandExit::Stopped {
@@ -2356,5 +2366,45 @@ async fn a_command_whose_issue_cannot_be_saved_never_runs_and_never_counts() {
         .await
         .unwrap();
     assert_eq!(view.lease.and_then(|lease| lease.commands), None);
+    go.send(()).unwrap();
+}
+
+#[tokio::test]
+async fn a_command_whose_end_cannot_be_saved_says_so_and_its_end_is_saved_later() {
+    let root = tempfile::tempdir().unwrap();
+    let host = CommandHost::new();
+    let harness = with_command_host(root.path(), host.clone(), Some(devbox_policy()));
+    harness.create().await;
+    let go = harness.running_turn().await;
+    // The disk stays away for the end: its write and the retry fail.
+    *harness.storage.failing.lock().unwrap() =
+        Some(|record| matches!(record, LeaseRecord::CommandEnded { .. }));
+    host.finish
+        .send_replace(Some(CommandExit::Exited { code: 0 }));
+    let answer = harness.run(command("devbox", &["ls"], "call")).await;
+    let Ok(CommandAnswer::Ran {
+        lease,
+        result,
+        recorded: false,
+    }) = answer
+    else {
+        panic!("it ran, and says its end is unsaved: {answer:?}");
+    };
+    assert_eq!(result.exit, CommandExit::Exited { code: 0 });
+    assert!(!harness
+        .saved_commands()
+        .iter()
+        .any(|record| matches!(record, LeaseRecord::CommandEnded { .. })));
+    // The end stayed retained: once storage recovers, the next save writes it.
+    *harness.storage.failing.lock().unwrap() = None;
+    assert!(matches!(
+        harness.run(command("devbox", &["ls"], "next")).await,
+        Ok(CommandAnswer::Ran { recorded: true, .. })
+    ));
+    assert!(harness.saved_commands().iter().any(|record| matches!(
+        record,
+        LeaseRecord::CommandEnded { lease: ended, exit: CommandExit::Exited { code: 0 }, .. }
+            if ended == &lease
+    )));
     go.send(()).unwrap();
 }

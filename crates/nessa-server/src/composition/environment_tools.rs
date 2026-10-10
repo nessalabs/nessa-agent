@@ -208,8 +208,12 @@ fn answered(answer: &CommandAnswer) -> Value {
             json!({"refused": refusal_code(*refusal), "message": refusal_message(*refusal)}),
             true,
         ),
-        CommandAnswer::Ran { lease, result: ran } => {
-            let succeeded = ran.exit == CommandExit::Exited { code: 0 };
+        CommandAnswer::Ran {
+            lease,
+            result: ran,
+            recorded,
+        } => {
+            let succeeded = ran.exit == CommandExit::Exited { code: 0 } && *recorded;
             result(
                 json!({
                     "lease": lease.as_str(),
@@ -218,6 +222,7 @@ fn answered(answer: &CommandAnswer) -> Value {
                     "stderr": String::from_utf8_lossy(&ran.stderr),
                     "droppedBytes": ran.dropped_bytes,
                     "cleanup": cleanup(ran),
+                    "recorded": recorded,
                 }),
                 !succeeded,
             )

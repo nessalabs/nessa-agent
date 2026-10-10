@@ -371,8 +371,10 @@ pub enum CommandExit {
 }
 
 /// What a command printed, as kept in its lease's record: how much of each
-/// stream there was, how much of it was dropped past the capture bound, and
-/// the last bytes of each, as text.
+/// stream was captured, how much of both together was dropped past the
+/// capture bound, and the last bytes of each, as text. A capture drops from
+/// both streams together and counts the drop once, so a stream's own total
+/// is not known: what each carried is at least what was captured of it.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct CommandOutput {
     stdout_bytes: u64,
@@ -405,15 +407,15 @@ impl CommandOutput {
             stderr_tail: tail(stderr_tail),
         }
     }
-    /// Bytes its standard output carried.
+    /// Bytes of its standard output captured.
     pub fn stdout_bytes(&self) -> u64 {
         self.stdout_bytes
     }
-    /// Bytes its standard error carried.
+    /// Bytes of its standard error captured.
     pub fn stderr_bytes(&self) -> u64 {
         self.stderr_bytes
     }
-    /// Bytes not captured past the bound.
+    /// Bytes of both streams together not captured past the bound.
     pub fn dropped_bytes(&self) -> u64 {
         self.dropped_bytes
     }

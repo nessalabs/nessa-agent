@@ -69,10 +69,13 @@ pub struct CommandCall {
 pub enum CommandAnswer {
     /// It was refused, with its reason; nothing ran.
     Refused(CommandRefusal),
-    /// It ran, under `lease`.
+    /// It ran, under `lease`. `recorded` is false when its end could not
+    /// be saved, even once more: the end stays retained and goes with the
+    /// conversation's next save, but the records do not hold it yet.
     Ran {
         lease: LeaseId,
         result: CommandResult,
+        recorded: bool,
     },
 }
 
@@ -317,10 +320,21 @@ impl ConversationService {
                 }
             })
             .await;
-        if !matches!(&committed, Ok(commit) if commit.saved.is_ok()) {
+        // An end the records do not hold is not answered as if they did: one
+        // more save is tried, then the answer says it is unsaved.
+        let recorded = match &committed {
+            Ok(commit) if commit.saved.is_ok() => true,
+            Ok(_) => manager.save_retained_lease_records().await.is_ok(),
+            Err(_) => false,
+        };
+        if !recorded {
             tracing::error!(conversation_id = %id, lease = lease.as_str(), exit = ?result.exit, "a command's end could not be recorded");
         }
-        Ok(CommandAnswer::Ran { lease, result })
+        Ok(CommandAnswer::Ran {
+            lease,
+            result,
+            recorded,
+        })
     }
 
     /// Record `refused` as refused for `refusal`, and answer so.

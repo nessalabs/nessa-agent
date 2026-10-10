@@ -92,7 +92,7 @@ fn an_answer_says_how_the_command_ended_or_why_it_was_refused() {
         refused["structuredContent"]["refused"],
         "environment_unreachable"
     );
-    let ran = |exit, cleanup| {
+    let ran_as = |exit, cleanup, recorded| {
         answered(&CommandAnswer::Ran {
             lease: LeaseId::new("lease-1").unwrap(),
             result: CommandResult {
@@ -102,8 +102,10 @@ fn an_answer_says_how_the_command_ended_or_why_it_was_refused() {
                 dropped_bytes: 4,
                 cleanup,
             },
+            recorded,
         })
     };
+    let ran = |exit, cleanup| ran_as(exit, cleanup, true);
     let exited = ran(
         CommandExit::Exited { code: 0 },
         Some(LeaseCleanup::Confirmed { forced: false }),
@@ -118,6 +120,7 @@ fn an_answer_says_how_the_command_ended_or_why_it_was_refused() {
             "stderr": "\u{fffd}",
             "droppedBytes": 4,
             "cleanup": "confirmed",
+            "recorded": true,
         })
     );
     assert_eq!(exited["content"][0]["type"], "text");
@@ -134,6 +137,16 @@ fn an_answer_says_how_the_command_ended_or_why_it_was_refused() {
     );
     assert_eq!(stopped["structuredContent"]["cleanup"], "uncertain");
     assert_eq!(ran(CommandExit::Exited { code: 1 }, None)["isError"], true);
+    // A command whose end the records do not hold is not answered as a
+    // success, though what it printed is still said.
+    let unrecorded = ran_as(
+        CommandExit::Exited { code: 0 },
+        Some(LeaseCleanup::Confirmed { forced: false }),
+        false,
+    );
+    assert_eq!(unrecorded["isError"], true);
+    assert_eq!(unrecorded["structuredContent"]["recorded"], false);
+    assert_eq!(unrecorded["structuredContent"]["stdout"], "out");
 }
 
 #[test]
