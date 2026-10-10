@@ -42,13 +42,17 @@ pub(crate) struct ProcessScope {
 
 /// Where the scope's harness runs: a child of this process, in a process
 /// group of its own, or on a host that supervises it ([`HarnessProcess`]).
+/// Both variants are boxed: a `Child` is several hundred bytes on Windows.
 enum Process {
-    Local {
-        child: Child,
-        group: u32,
-        stderr: Option<JoinHandle<()>>,
-    },
+    Local(Box<LocalProcess>),
     Remote(Box<dyn HarnessControl>),
+}
+
+/// A harness run as this process's child, in a process group of its own.
+struct LocalProcess {
+    child: Child,
+    group: u32,
+    stderr: Option<JoinHandle<()>>,
 }
 
 /// The harness's standard input: this process's pipe to its child, or the
@@ -103,7 +107,7 @@ impl AsyncRead for ProcessOutput {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 impl ProcessInput {
     /// The child's pipe, for tests that drive a local harness's descriptor.
     pub(crate) fn local(&self) -> &ChildStdin {
@@ -114,7 +118,7 @@ impl ProcessInput {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 impl ProcessOutput {
     /// The child's pipe, for tests that read a local harness directly.
     pub(crate) fn into_local(self) -> ChildStdout {
@@ -330,11 +334,11 @@ impl ProcessScope {
             }
         });
         Ok(Self {
-            process: Process::Local {
+            process: Process::Local(Box::new(LocalProcess {
                 child,
                 group,
                 stderr: Some(stderr),
-            },
+            })),
             stdin: stdin.map(ProcessInput::Local),
             stdout: Some(ProcessOutput::Local(stdout)),
             forced: false,
@@ -368,7 +372,7 @@ impl ProcessScope {
     #[cfg(all(test, unix))]
     pub(crate) fn group(&self) -> u32 {
         match &self.process {
-            Process::Local { group, .. } => *group,
+            Process::Local(local) => local.group,
             Process::Remote(_) => panic!("a local harness's group"),
         }
     }
@@ -440,7 +444,7 @@ impl ProcessScope {
         let outcome = match &mut self.process {
             // The host stops its own process tree and says what that took.
             Process::Remote(control) => control.cleanup(grace, kill_timeout).await?,
-            Process::Local { .. } => self.cleanup_local(grace, kill_timeout).await?,
+            Process::Local(_) => self.cleanup_local(grace, kill_timeout).await?,
         };
         self.outcome = Some(outcome);
         #[cfg(all(test, unix))]
@@ -456,9 +460,10 @@ impl ProcessScope {
         grace: Duration,
         kill_timeout: Duration,
     ) -> Result<CloseOutcome, AgentError> {
-        let Process::Local { group, .. } = self.process else {
+        let Process::Local(local) = &self.process else {
             unreachable!("only a local scope is waited on here")
         };
+        let group = local.group;
         let mut gone = self.wait_scope(grace).await;
         if !gone {
             // Forced only if a signal reached the group; a group that already
@@ -474,9 +479,10 @@ impl ProcessScope {
             }
             gone = self.wait_scope(kill_timeout).await;
         }
-        let Process::Local { child, stderr, .. } = &mut self.process else {
+        let Process::Local(local) = &mut self.process else {
             unreachable!("only a local scope is waited on here")
         };
+        let LocalProcess { child, stderr, .. } = &mut **local;
         if let Some(mut stderr) = stderr.take() {
             stderr.abort();
             let _ = (&mut stderr).await;
@@ -504,9 +510,10 @@ impl ProcessScope {
     }
 
     async fn wait_scope(&mut self, budget: Duration) -> bool {
-        let Process::Local { child, group, .. } = &mut self.process else {
+        let Process::Local(local) = &mut self.process else {
             return false;
         };
+        let LocalProcess { child, group, .. } = &mut **local;
         let group = *group;
         let end = Instant::now() + budget;
         loop {
@@ -532,11 +539,11 @@ impl Drop for ProcessScope {
     fn drop(&mut self) {
         // A remote scope's control asks its host for a forced stop when it is
         // dropped unconfirmed (`HarnessControl`).
-        if let Process::Local { group, stderr, .. } = &self.process {
+        if let Process::Local(local) = &self.process {
             if self.outcome.is_none() {
-                let _ = signal_group(*group, true);
+                let _ = signal_group(local.group, true);
             }
-            if let Some(stderr) = stderr {
+            if let Some(stderr) = &local.stderr {
                 stderr.abort();
             }
         }
