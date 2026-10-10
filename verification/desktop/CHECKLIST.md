@@ -320,6 +320,11 @@ _ADR 238 › Focus follows the focused pane_; keys in
 
 ## Agents overview
 
+Header and group measurements wait for the published `data-overview-listed`
+marker, including a reopened list; finite motion finishing does not mean its
+deferred rows have all mounted. The sampling order is in
+[UI workspace load](../../docs/design/ui-workspace-load.md#verification-sampling-order).
+
 _ADR 238 › What fills the content region_ (the overview is workspace state).
 
 - [ ] **It is always offered**: on a fresh profile, with nothing stored, the
@@ -630,6 +635,10 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   built and the agent, `--agent claude|codex`, signed in on the machine). The
   refusal of the hidden tool that declares no UI depends on #412.
 - [ ] **An app's message and context, with no model key** (#550): with `--scripted`, the review app's message control opens a review; Allow lands the message in the transcript labelled as that app's, and its context control answers success. Chromium and WebKit share the conversation and send the same text, so each engine records execution ids before the click and requires exactly one new send, and the transcript row that was not already shown. The scripted agent replays one recorded turn, then answers a later prompt with text and no tool call, so the check needs no Claude key and no user model key. _Check:_ `mcp-apps-gateway.mjs --scripted` (`message`, `context`). `messagesArrived` in `gateway-view.mjs`.
+  Its message input reuses the release check's trusted-pointer entry before
+  one real click. A missing fixture pending state is reported as missing input;
+  an Allow is named only if the check actually clicked it. See the
+  [sampling order](../../docs/design/ui-workspace-load.md#verification-sampling-order).
 - [ ] **One tool call is drawn once** (#418): a harness reports one call as an
   announcement and then updates under its id (Codex three frames, or two
   in the recorded `review_rows` turn; Claude four), and the window draws it as one transcript step and one inline app
@@ -1009,7 +1018,10 @@ it is redesigned on its own branch.
   window's does. _Check:_ `shared-controls.mjs` (`identity`, per engine and
   layout; "‹ nessa Agent" measured inside Settings, over the inert window
   that keeps its own; and in the classic shell). Rule:
-  `ui/identity.css`. At the base commit the classic shell's read
+  `ui/identity.css`. Sampling waits for its finite hover transition through
+  `waitUntilSettled`, retaining the exact fill assertion. Browser measurement
+  ordering is in [UI workspace load](../../docs/design/ui-workspace-load.md#verification-sampling-order).
+  At the base commit the classic shell's read
   "nessaStudio" with no name, no pill and no fill, in the kit's grey.
 - [ ] **Every empty state is the kit's `EmptyState`, in the window's type
   (#657).** The session list's, the workspace's failure, an overview group

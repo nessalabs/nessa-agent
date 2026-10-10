@@ -69,6 +69,19 @@ sequenceDiagram
 
 Creation revisions compare as integers, so a cursor of `"10"` is after `"9"`. One `within()` budget covers every observe page of a walk. Before each page the walk also asks whether its list subscription is still the current one; a listener who has left is not asked another page (`a listener who leaves during an observe walk is asked no further page`). A stored row that cannot be read back makes that observe page unfinished and nameless as a cursor, so the index keeps the list and does not drop the rows the page left out (`an_unreadable_summary_leaves_the_page_unfinished_and_keeps_the_others`). A list frame has no second page. An incomplete list of 500, with an observe pass that does not finish, is not a 10,000-chat success.
 
+## Verification sampling order
+
+These rows order browser input and measurement; they add no product state or
+dispatch policy. Existing published readiness and shared waits are the owners.
+
+| State | Event | Measurement or next action | Enforcer |
+| --- | --- | --- | --- |
+| A control has received hover | Its finite CSS transition is still running | Wait for finite animations before reading the exact hover fill | `waitUntilSettled` in `lib/browser.mjs`; `shared-controls.mjs` identity check |
+| The overview shell is mounted, with only a prefix of its rows | Header height, scroll room or group baseline is requested | Wait for the published complete-list marker; reopening uses the same marker | `data-overview-listed` in `overview.tsx`; `responsive.mjs` header and counts checks |
+| A pane has closed beside a live inline sandbox | The message control is about to be clicked | Obtain the current frame, wait for trusted pointer entry, then click once | `pointerOnto` in `mcp-apps-gateway.mjs`, shared with its release check |
+| The message click returned | The fixture output is still empty | Report missing input before waiting for a gateway review; do not claim an Allow occurred | `mcp-apps-gateway.mjs` message check; fixture's synchronous pending output |
+| The fixture observed the message input | Its review is published and Allow is actually clicked | Keep review origin, exact choice, transcript and acknowledgment assertions | `mcp-apps-gateway.mjs` message check |
+
 ## Gateway bounds that a 10,000-chat run has to respect
 
 Numbers below are the owners' published values. This change does not alter them.
