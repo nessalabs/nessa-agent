@@ -4,6 +4,8 @@
 //! a host that has none (issue #703), `connector.rs` the one effect that
 //! leaves this process (running `ssh`, in `open_ssh.rs`), and `audit.rs` the
 //! gateway's own evidence about its hosts (kept by `durable_audit.rs`).
+//! A file the host publishes (issue #701) is read off it by `transfer.rs`,
+//! over `sftp.rs` on an artifact channel of that same connection.
 //! Unix only, as its composition (`composition/local_auth.rs`) and the
 //! `nessa env serve` it speaks to are.
 //!
@@ -15,6 +17,8 @@ mod environment;
 mod install;
 mod link;
 mod open_ssh;
+mod sftp;
+mod transfer;
 pub(crate) use durable_audit::DurableEnvironmentAudit;
 pub(crate) use environment::{SshEnvironment, SshTimings};
 pub(crate) use install::HostInstaller;
@@ -23,3 +27,7 @@ pub(crate) use open_ssh::OpenSshConnector;
 #[cfg(test)]
 #[path = "../../../../tests/conversation/ssh_environment.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../../tests/conversation/ssh_artifacts.rs"]
+mod artifact_tests;

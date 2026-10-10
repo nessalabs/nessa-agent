@@ -310,6 +310,7 @@ mod retained_tests {
             invocations: Vec::new(),
             queue_history: Vec::new(),
             lease: None,
+            artifacts: Vec::new(),
         };
         let expected = super::super::retained::snapshot(&snapshot);
         let mut state = CommittedTranscript::restore(Some(snapshot), 1, 1).unwrap();

@@ -2,6 +2,7 @@
 //! The physical frame and the application fold are separate boundaries.
 
 use super::{
+    artifacts::WireArtifact,
     cancellation::Cancellation,
     errors::{Outcome, SavedError},
     leases::WireLease,
@@ -66,6 +67,7 @@ enum WireChange<E = Event> {
         after: Option<String>,
     },
     Lease(WireLease),
+    Artifact(WireArtifact),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -170,6 +172,7 @@ impl<'a> From<&'a SessionChange> for WireChange<Event<&'a str>> {
                 after: encode_context(after),
             },
             SessionChange::Lease(record) => Self::Lease(record.into()),
+            SessionChange::Artifact(record) => Self::Artifact(record.into()),
         }
     }
 }
@@ -251,6 +254,7 @@ impl TryFrom<WireChange> for SessionChange {
                 after: decode_context(after)?,
             },
             WireChange::Lease(record) => Self::Lease(record.decode()?),
+            WireChange::Artifact(record) => Self::Artifact(record.decode()?),
         })
     }
 }

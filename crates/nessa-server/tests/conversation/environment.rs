@@ -300,3 +300,34 @@ fn l11_l12_l16_a_lease_an_earlier_run_left_is_accounted_for_from_where_it_stood(
     // the fold then refuses, never a fresh one.
     assert_eq!(next_revision(Some(&live), &[]), LeaseRevision::FIRST);
 }
+
+/// Bytes that hand out `chunks`, then their end.
+struct Chunks(VecDeque<Vec<u8>>);
+impl super::super::ArtifactBytes for Chunks {
+    fn next(&mut self) -> super::super::ArtifactChunk<'_> {
+        let next = self.0.pop_front();
+        Box::pin(async move { Ok(next) })
+    }
+}
+
+/// A file still being read when its lease's end is asked is cut off, its
+/// end included, so it is never kept under a lease that is ending.
+#[tokio::test]
+async fn a_published_file_is_read_only_while_its_lease_is_live() {
+    let opening = open_lease(
+        in_process_environment().as_ref(),
+        request(SandboxProfiles::HARNESS_DEFAULT),
+        binding(),
+    )
+    .await;
+    let live = LiveLease::new(&opening);
+    assert!(live.is_live());
+    let mut bytes = live.while_live(Box::new(Chunks(VecDeque::from([b"one".to_vec()]))));
+    assert_eq!(bytes.next().await, Ok(Some(b"one".to_vec())));
+    opening.fence.ending();
+    assert!(!live.is_live());
+    assert_eq!(
+        bytes.next().await,
+        Err(super::super::ArtifactReadFailure::LeaseEnded)
+    );
+}

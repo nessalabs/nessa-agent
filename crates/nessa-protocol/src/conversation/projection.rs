@@ -1,8 +1,8 @@
 use super::domain::ConversationId;
 use super::tool_uis::{McpToolUis, NoMcpToolUis};
 use super::view::{
-    ConversationAnswerOption, ConversationApprovalModeChangeView, ConversationAsked,
-    ConversationCapabilities, ConversationLeaseCause, ConversationLeaseCleanup,
+    ConversationAnswerOption, ConversationApprovalModeChangeView, ConversationArtifact,
+    ConversationAsked, ConversationCapabilities, ConversationLeaseCause, ConversationLeaseCleanup,
     ConversationLeaseEnvironment, ConversationLeaseRefusal, ConversationLeaseSandbox,
     ConversationLeaseState, ConversationLeaseView, ConversationLifecycle,
     ConversationLifecyclePhase, ConversationMcpTool, ConversationMessage, ConversationMessageApp,
@@ -41,6 +41,8 @@ const MAX_MESSAGES: usize = 24;
 pub const MAX_TEXT: usize = 8192;
 const MAX_TOOLS: usize = 16;
 const MAX_PERMISSIONS: usize = 16;
+/// Most artifacts the view lists: the newest, in the order they were recorded.
+pub const MAX_VIEW_ARTIFACTS: usize = 64;
 // Application transcript body; product catalog enrichment is serialized afterward.
 pub const MAX_VIEW_BYTES: usize = 60_000;
 /// The largest single review the view offers, encoded. One review may not take
@@ -428,6 +430,13 @@ impl Projection {
                 lease: snapshot
                     .and_then(|snapshot| snapshot.lease.as_ref())
                     .map(lease_view),
+                artifacts: snapshot.map_or_else(Vec::new, |snapshot| {
+                    snapshot.artifacts
+                        [snapshot.artifacts.len().saturating_sub(MAX_VIEW_ARTIFACTS)..]
+                        .iter()
+                        .map(ConversationArtifact::from)
+                        .collect()
+                }),
             },
         };
         if let Some(snapshot) = snapshot {
@@ -1370,6 +1379,10 @@ pub fn bound_view_within(
             if message.files.pop().is_none() {
                 message.attachments.pop();
             }
+        } else if !view.artifacts.is_empty() {
+            // The oldest listed artifact yields once the transcript has
+            // nothing left to give: the conversation still holds it.
+            view.artifacts.remove(0);
         } else if !view.tools.is_empty() {
             view.tools.remove(0);
         } else if !view.pending.is_empty() {
@@ -1401,9 +1414,12 @@ fn transcript_can_yield(view: &ConversationView) -> bool {
 }
 
 /// Whether `view` still has anything a bound may give up before its
-/// interactions: its transcript, tool calls or queue.
+/// interactions: its transcript, artifacts, tool calls or queue.
 fn gives_up_anything_but_interactions(view: &ConversationView) -> bool {
-    transcript_can_yield(view) || !view.tools.is_empty() || !view.pending.is_empty()
+    transcript_can_yield(view)
+        || !view.artifacts.is_empty()
+        || !view.tools.is_empty()
+        || !view.pending.is_empty()
 }
 
 /// Whether `view` may offer an ask or review from `execution`: only while its

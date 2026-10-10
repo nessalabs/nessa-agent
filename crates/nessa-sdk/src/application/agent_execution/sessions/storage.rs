@@ -1,7 +1,7 @@
 //! Typed session snapshot persistence and exclusive access contracts.
 #![deny(missing_docs)]
 
-use super::{CommittedStatus, CommittedViewState, CurrentLease, LeaseRecord};
+use super::{ArtifactRecord, CommittedStatus, CommittedViewState, CurrentLease, LeaseRecord};
 use crate::application::agent_execution::agents::{AgentError, DiagnosticTreeLimits};
 use crate::application::agent_execution::executions::{
     ExecutionEvent, ExecutionRequest, SubmissionMode,
@@ -282,6 +282,9 @@ pub struct SessionSnapshot {
     /// lease was recorded. Earlier leases stay in the stream; only the latest
     /// is folded here.
     pub lease: Option<CurrentLease>,
+    /// Artifacts the conversation holds, oldest first: append-only, at most
+    /// [`ArtifactRecord::MAX_PER_CONVERSATION`].
+    pub artifacts: Vec<ArtifactRecord>,
 }
 
 /// One SDK decision retained for an atomic semantic-record save.
@@ -359,6 +362,10 @@ pub enum SessionChange {
     /// One fact about the conversation's lease, validated by the lease rules
     /// before it is committed and again when it is read back.
     Lease(LeaseRecord),
+    /// A file published under the conversation's live lease, now held by the
+    /// conversation. Checked against the latest lease before it is committed
+    /// and again when it is read back.
+    Artifact(ArtifactRecord),
 }
 impl SessionSnapshot {
     pub(crate) fn retained_bytes(&self) -> usize {
@@ -960,6 +967,7 @@ mod committed_tests {
             }],
             queue_history: Vec::new(),
             lease: None,
+            artifacts: Vec::new(),
         };
         let before = super::super::retained::snapshot(&snapshot);
         snapshot.invocations[0].acknowledgement = SubmissionAcknowledgement::Failed {

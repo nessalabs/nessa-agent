@@ -10,6 +10,7 @@
 //! applies to each semantic batch. No previous history is re-encoded during a save.
 //! Cancellation maps an undispatched local decision and caller separately from
 //! scheduling edges and provider settlement reports.
+mod artifacts;
 mod cancellation;
 pub(super) mod checkpoint;
 pub(super) mod decode;

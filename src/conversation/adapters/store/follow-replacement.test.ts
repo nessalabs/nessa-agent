@@ -16,6 +16,7 @@ import { bindConversation, controlConversation, followConversation } from "./sli
 function gatewayView(): ConversationView {
   return {
     questions: [],
+    artifacts: [],
     conversationId: "server",
     title: null,
     revision: "capabilities",

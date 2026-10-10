@@ -186,6 +186,10 @@ fn record_conversation(record: &AttachmentAuditRecord) -> ConversationId {
         AttachmentAuditRecord::BlobRemoved { removed } => {
             removed.retirements()[0].hold().conversation_id().clone()
         }
+        AttachmentAuditRecord::AlreadyPublished { published, .. }
+        | AttachmentAuditRecord::PublishRejected { published, .. } => {
+            published.conversation_id().clone()
+        }
     }
 }
 
@@ -757,7 +761,7 @@ impl StagedUpload for MemoryStaged {
                 .or_insert_with(|| self.bytes.clone());
             let existing = state.position(&hold);
             if let Some(index) = existing.filter(|index| state.records[*index].kept) {
-                return Ok(Kept::Existing(state.records[index].hold.clone()));
+                return Ok(Kept::Existing(Box::new(state.records[index].hold.clone())));
             }
             if let Some(index) = existing {
                 state.records.remove(index);

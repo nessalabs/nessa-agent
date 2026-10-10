@@ -1184,7 +1184,7 @@ fn environments(
     if !hosts.is_empty() {
         let audit = DurableEnvironmentAudit::new(root.join("audit").join("environments"), clock)
             .map_err(|error| RunError::Agent(error.to_string()))?;
-        let connector = Arc::new(OpenSshConnector);
+        let connector = Arc::new(OpenSshConnector::new());
         let installer = Arc::new(HostInstaller::this_build(connector.clone()));
         for host in hosts {
             environments.insert(

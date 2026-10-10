@@ -27,7 +27,14 @@ import {
   PolicyEndTurnSupport,
   PreToolPolicySupport,
 } from "../generated/product.js"
-import { imageAttachments, linkedFiles } from "./attachment-validate.js"
+import {
+  imageAttachments,
+  linkedFiles,
+  MAX_UPLOAD_BYTES,
+  validDigest,
+  validMediaType,
+  validSize,
+} from "./attachment-validate.js"
 import { approvalModeChoices } from "./agents-validate.js"
 import { boundedName } from "./mcp-app-validate.js"
 import { decimal } from "./passive-read-validate.js"
@@ -190,6 +197,7 @@ export function conversationView(value: unknown, expected: string): Conversation
     "transcriptState",
     "runtime",
     "lease",
+    "artifacts",
     "title",
     "approvalMode",
     "approvalModes",
@@ -573,6 +581,7 @@ export function conversationView(value: unknown, expected: string): Conversation
     flag(runtime, "reasoning")
   }
   if (item.lease !== undefined) lease(item.lease)
+  for (const artifact of items(item, "artifacts", 64)) conversationArtifact(artifact)
   const capabilities = record(item.capabilities)
   const capabilityKeys = [
     "queue",
@@ -784,6 +793,20 @@ function lease(value: unknown) {
   // The SSH destination, exactly when the lease names an SSH environment.
   if (item.environment === "ssh") text(item, "host", 253, false)
   else if (item.host !== undefined) throw new Error("Invalid conversation lease host")
+}
+
+/** One artifact the view lists: the published shape, closed. The conversation
+ * keeps an artifact as one of its uploads, so it is bounded as an upload is. */
+function conversationArtifact(item: Record<string, unknown>) {
+  exact(item, ["executionId", "lease", "name", "digest", "mimeType", "size"])
+  if (item.executionId !== undefined) identity(item, "executionId")
+  text(item, "lease", 128, false)
+  text(item, "name", 255, false)
+  if (!validDigest(item.digest)) throw new Error("Invalid conversation artifact digest")
+  if (!validMediaType(item.mimeType))
+    throw new Error("Invalid conversation artifact mimeType")
+  if (!validSize(item.size, MAX_UPLOAD_BYTES))
+    throw new Error("Invalid conversation artifact size")
 }
 
 export function conversationReorder(

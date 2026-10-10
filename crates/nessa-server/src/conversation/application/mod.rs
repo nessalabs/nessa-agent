@@ -133,6 +133,7 @@ pub(crate) mod catalogue_watch;
 pub use catalogue_watch::{
     CatalogueChangeWatch, CatalogueWatchError, CatalogueWatchState, WatchCatalogue,
 };
+mod artifacts;
 mod catalogue_read;
 mod environment;
 mod error;
@@ -161,6 +162,11 @@ pub use catalogue_read::{
 // The port itself, which placement and the service use on every host.
 pub(crate) use environment::{Environment, EnvironmentFuture};
 // For the adapters, which only the Unix gateway composes (`infrastructure`).
+pub use artifacts::{
+    ArtifactAnswer, ArtifactBytes, ArtifactChunk, ArtifactOffer, ArtifactReadFailure,
+    ARTIFACT_READ_RESUMES,
+};
+pub(crate) use artifacts::{ArtifactBudget, ArtifactCollector};
 #[cfg(any(unix, test))]
 pub(crate) use environment::{EnvironmentDeclaration, EnvironmentLease, LeaseHold, LeaseRelease};
 pub use error::{ConversationError, DeletionFailures, StopFailure};
@@ -180,16 +186,17 @@ pub(crate) use placement::Environments;
 #[cfg(any(unix, test))]
 pub(crate) use placement::{ConversationPlacements, PlacementError};
 pub use ports::{
-    AttachmentRelease, AttachmentReleaseCause, ConversationAttachments, ConversationCreation,
-    ConversationCreationAudit, ConversationCreationAuditRecord, ConversationCreationCause,
-    ConversationCreationDisposition, ConversationDeletionAudit, ConversationDeletionAuditRecord,
-    ConversationDeletionCause, ConversationFileLinkAudit, ConversationFileLinkAuditRecord,
-    ConversationFileLinkCause, ConversationFileLinkState, ConversationFuture, ConversationListing,
+    ArtifactKept, ArtifactRecordGate, AttachmentRelease, AttachmentReleaseCause,
+    ConversationAttachments, ConversationCreation, ConversationCreationAudit,
+    ConversationCreationAuditRecord, ConversationCreationCause, ConversationCreationDisposition,
+    ConversationDeletionAudit, ConversationDeletionAuditRecord, ConversationDeletionCause,
+    ConversationFileLinkAudit, ConversationFileLinkAuditRecord, ConversationFileLinkCause,
+    ConversationFileLinkState, ConversationFuture, ConversationListing,
     ConversationModeApplication, ConversationModeAudit, ConversationModeAuditPhase,
     ConversationModeRequest, ConversationModeRequestState, ConversationOwnershipState,
     ConversationRepository, ConversationSummaries, ListedConversation, ListedConversations,
-    ObservationCursor, ObservedConversations, RuntimeReadiness, SubmittedFile, SubmittedImage,
-    SubmittedMessage, UnfinishedDeletions,
+    ObservationCursor, ObservedConversations, PublishedArtifact, RuntimeReadiness, SubmittedFile,
+    SubmittedImage, SubmittedMessage, UnfinishedDeletions,
 };
 pub use provider_sessions::{
     ProviderSessionEraser, ProviderSessionErasers, ProviderSessionHandler,

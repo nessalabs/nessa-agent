@@ -639,6 +639,7 @@ async fn restored_scheduling_from_a_custom_store_is_validated_before_provider_op
             result: Some(Ok(ExecutionOutcome::Completed)),
         }],
         lease: None,
+        artifacts: Vec::new(),
     });
     assert!(matches!(
         attached_agent(provider.clone(), storage.manager().await).await,

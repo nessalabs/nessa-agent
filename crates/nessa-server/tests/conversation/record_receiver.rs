@@ -121,6 +121,7 @@ async fn gateway_child() {
             invocations: vec![],
             queue_history: vec![],
             lease: None,
+            artifacts: Vec::new(),
         };
         writer
             .save_changes(

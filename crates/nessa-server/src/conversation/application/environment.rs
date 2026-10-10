@@ -118,6 +118,13 @@ pub(crate) trait LeaseHold: Send + Sync {
     /// running under it and answers what releasing it took. The caller bounds
     /// the wait.
     fn end(&self, cause: LeaseEndCause) -> EnvironmentFuture<'_, LeaseRelease>;
+    /// The files the environment publishes under the lease, each offered to
+    /// be kept (issue #701), handed out once: `None` for an environment that
+    /// publishes nothing, as in process, and for every ask after the first.
+    /// It ends once the lease is no longer held there.
+    fn artifacts(&self) -> Option<tokio::sync::mpsc::Receiver<super::ArtifactOffer>> {
+        None
+    }
 }
 
 /// What an environment answered when its lease was ended.
@@ -280,6 +287,10 @@ impl LeaseFence {
         if state.phase == FencePhase::Live {
             state.phase = FencePhase::Ending;
         }
+    }
+    /// Whether the lease is still Live: not ending, not closed.
+    pub(crate) fn is_live(&self) -> bool {
+        self.state().phase == FencePhase::Live
     }
     /// The lease ended or was interrupted: no event is accepted any more.
     pub(crate) fn close(&self) {
@@ -617,6 +628,58 @@ impl LiveLease {
         self.hold.as_ref().and_then(|hold| hold.lost())
     }
 
+    /// The files published under this lease, handed out once; see
+    /// [`LeaseHold::artifacts`].
+    pub(crate) fn artifacts(&self) -> Option<tokio::sync::mpsc::Receiver<super::ArtifactOffer>> {
+        self.hold.as_ref().and_then(|hold| hold.artifacts())
+    }
+
+    pub(crate) fn id(&self) -> &LeaseId {
+        &self.lease
+    }
+
+    /// Whether the lease is still Live: once its end is asked, nothing more
+    /// is kept under it.
+    pub(crate) fn is_live(&self) -> bool {
+        self.fence.is_live()
+    }
+
+    /// `bytes`, read only while this lease is Live: once its end is asked
+    /// they fail as the lease ended, their last chunk included, so a file
+    /// still being read when the lease ends is never kept.
+    pub(crate) fn while_live(
+        &self,
+        bytes: Box<dyn super::ArtifactBytes>,
+    ) -> Box<dyn super::ArtifactBytes> {
+        Box::new(WhileLive {
+            fence: self.fence.clone(),
+            bytes,
+        })
+    }
+}
+
+/// A published file's bytes, cut off once their lease stops being Live.
+struct WhileLive {
+    fence: Arc<LeaseFence>,
+    bytes: Box<dyn super::ArtifactBytes>,
+}
+
+impl super::ArtifactBytes for WhileLive {
+    fn next(&mut self) -> super::ArtifactChunk<'_> {
+        Box::pin(async move {
+            if !self.fence.is_live() {
+                return Err(super::ArtifactReadFailure::LeaseEnded);
+            }
+            let chunk = self.bytes.next().await?;
+            match self.fence.is_live() {
+                true => Ok(chunk),
+                false => Err(super::ArtifactReadFailure::LeaseEnded),
+            }
+        })
+    }
+}
+
+impl LiveLease {
     /// Close `agent` under this lease for `cause`, asked by `actor`. The
     /// cause is recorded before anything is stopped, unless the lease is
     /// already ending, when the first cause stands (rows L5, L6). Then the

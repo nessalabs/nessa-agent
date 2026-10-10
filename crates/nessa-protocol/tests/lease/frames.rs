@@ -1,8 +1,8 @@
 //! Lease frames: their wire shape, the hello another build is recognised by,
 //! and the bounds on a frame and the bytes it carries.
 use super::{
-    decode, encode, fingerprint, read_hello, Cleanup, Data, FromEnvironment, Hello, ToEnvironment,
-    MAX_DATA_BYTES, MAX_FRAME_BYTES,
+    decode, encode, fingerprint, read_hello, Cleanup, Collection, CollectionRefusal, Data,
+    FromEnvironment, Hello, StagedArtifact, ToEnvironment, MAX_DATA_BYTES, MAX_FRAME_BYTES,
 };
 use crate::pairing::FrameReader;
 use std::collections::BTreeMap;
@@ -47,6 +47,18 @@ fn every_frame_round_trips_and_names_its_lease() {
         },
         ToEnvironment::End { lease: "l".into() },
         ToEnvironment::Account { lease: "l".into() },
+        ToEnvironment::Collected {
+            lease: "l".into(),
+            artifact: 3,
+            outcome: Collection::Held,
+        },
+        ToEnvironment::Collected {
+            lease: "l".into(),
+            artifact: 4,
+            outcome: Collection::Refused {
+                reason: CollectionRefusal::BudgetExceeded,
+            },
+        },
     ];
     for frame in to {
         let decoded: ToEnvironment = decode(&body(&encode(&frame).unwrap())).unwrap();
@@ -76,12 +88,64 @@ fn every_frame_round_trips_and_names_its_lease() {
             channel: 2,
             data: Data(b"{}\n".to_vec()),
         },
+        FromEnvironment::Published {
+            lease: "l".into(),
+            artifact: 3,
+            file: staged(),
+        },
     ];
     for frame in from {
         let decoded: FromEnvironment = decode(&body(&encode(&frame).unwrap())).unwrap();
         assert_eq!(decoded.lease(), Some("l"));
         assert_eq!(decoded, frame);
     }
+}
+
+fn staged() -> StagedArtifact {
+    StagedArtifact {
+        name: "Nessa.dmg".into(),
+        media_type: "application/x-apple-diskimage".into(),
+        size: 7,
+        digest: "ab".repeat(32),
+        path: "/home/me/.local/share/nessa/environment/outbox/l/3".into(),
+    }
+}
+
+/// Gate: a publish says which file and where, never its bytes; the
+/// collection answers what became of it, by name.
+#[test]
+fn a_publish_carries_no_bytes_and_its_collection_is_named() {
+    let text = String::from_utf8(
+        serde_json::to_vec(&FromEnvironment::Published {
+            lease: "l".into(),
+            artifact: 3,
+            file: staged(),
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        text,
+        format!(
+            r#"{{"type":"published","lease":"l","artifact":3,"file":{{"name":"Nessa.dmg","mediaType":"application/x-apple-diskimage","size":7,"digest":"{}","path":"/home/me/.local/share/nessa/environment/outbox/l/3"}}}}"#,
+            "ab".repeat(32)
+        )
+    );
+    let text = String::from_utf8(
+        serde_json::to_vec(&ToEnvironment::Collected {
+            lease: "l".into(),
+            artifact: 3,
+            outcome: Collection::Refused {
+                reason: CollectionRefusal::ChannelUnavailable,
+            },
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        text,
+        r#"{"type":"collected","lease":"l","artifact":3,"outcome":{"outcome":"refused","reason":"channelUnavailable"}}"#
+    );
 }
 
 #[test]

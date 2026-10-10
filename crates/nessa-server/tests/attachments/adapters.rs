@@ -255,3 +255,137 @@ async fn a_release_in_nobodys_name_is_refused_as_invalid_and_lets_go_of_nothing(
     ));
     assert_eq!(fixture.store.held().len(), 1);
 }
+
+/// A host's published bytes: each chunk in turn, then how the read ended.
+struct HostBytes {
+    chunks: std::vec::IntoIter<Vec<u8>>,
+    end: Option<crate::conversation::application::ArtifactReadFailure>,
+    read: Arc<std::sync::atomic::AtomicBool>,
+}
+impl crate::conversation::application::ArtifactBytes for HostBytes {
+    fn next(&mut self) -> crate::conversation::application::ArtifactChunk<'_> {
+        self.read.store(true, Ordering::SeqCst);
+        let next = match self.chunks.next() {
+            Some(chunk) => Ok(Some(chunk)),
+            None => self.end.map_or(Ok(None), Err),
+        };
+        Box::pin(async move { next })
+    }
+}
+
+fn offer(
+    file: nessa_protocol::lease::StagedArtifact,
+    chunks: &[&[u8]],
+    end: Option<crate::conversation::application::ArtifactReadFailure>,
+) -> (
+    crate::conversation::application::PublishedArtifact,
+    Arc<std::sync::atomic::AtomicBool>,
+) {
+    let read = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let published = crate::conversation::application::PublishedArtifact {
+        organization_id: organization("org"),
+        conversation_id: conversation(CONVERSATION),
+        lease: "lease-1".into(),
+        requested_by: nessa_sdk::application::agent_execution::permissions::ActionContext::new(
+            "owner",
+            "phone",
+            "request-1",
+        )
+        .unwrap(),
+        file,
+        bytes: Box::new(HostBytes {
+            chunks: chunks
+                .iter()
+                .map(|chunk| chunk.to_vec())
+                .collect::<Vec<_>>()
+                .into_iter(),
+            end,
+            read: read.clone(),
+        }),
+        record: Box::new(|| Box::pin(async { true })),
+    };
+    (published, read)
+}
+
+/// What the host says it staged: `bytes` under the name it published.
+fn staged(bytes: &[u8]) -> nessa_protocol::lease::StagedArtifact {
+    let digest = digest_of(bytes).to_string();
+    nessa_protocol::lease::StagedArtifact {
+        name: "report.pdf".into(),
+        media_type: "application/pdf".into(),
+        size: bytes.len() as u64,
+        digest: digest.strip_prefix("sha256:").unwrap_or(&digest).into(),
+        path: "/outbox/0".into(),
+    }
+}
+
+/// A published file is kept as its conversation's, once; what it is told
+/// back says how a read failed, that bytes were not the file published, or
+/// that what the host described cannot be kept at all.
+#[tokio::test]
+async fn a_published_file_is_kept_and_a_failed_read_says_why() {
+    use crate::conversation::application::{ArtifactKept, ArtifactReadFailure};
+    use nessa_protocol::lease::CollectionRefusal;
+    let fixture = Fixture::new(AttachmentLimits::default());
+    let holds = ConversationHolds::new(fixture.service.clone());
+    let file: &[u8] = b"twenty bytes of file";
+    for (end, refusal) in [
+        (
+            ArtifactReadFailure::LeaseEnded,
+            CollectionRefusal::LeaseEnded,
+        ),
+        (ArtifactReadFailure::Changed, CollectionRefusal::Mismatch),
+        (
+            ArtifactReadFailure::Unavailable,
+            CollectionRefusal::ChannelUnavailable,
+        ),
+    ] {
+        let (published, _) = offer(staged(file), &[&file[..10]], Some(end));
+        assert_eq!(
+            holds.keep_published(published).await,
+            Err(refusal),
+            "{end:?}"
+        );
+    }
+    let (published, _) = offer(staged(file), &[b"twenty bytes of fil!"], None);
+    assert_eq!(
+        holds.keep_published(published).await,
+        Err(CollectionRefusal::Mismatch)
+    );
+    for described in [
+        nessa_protocol::lease::StagedArtifact {
+            digest: "not-a-digest".into(),
+            ..staged(file)
+        },
+        nessa_protocol::lease::StagedArtifact {
+            digest: format!("sha256:{}", staged(file).digest),
+            ..staged(file)
+        },
+        nessa_protocol::lease::StagedArtifact {
+            media_type: "PDF".into(),
+            ..staged(file)
+        },
+    ] {
+        let (published, read) = offer(described.clone(), &[file], None);
+        assert_eq!(
+            holds.keep_published(published).await,
+            Err(CollectionRefusal::Invalid),
+            "{described:?}"
+        );
+        assert!(!read.load(Ordering::SeqCst), "{described:?}");
+    }
+    assert!(fixture.store.held().is_empty());
+
+    let (published, _) = offer(staged(file), &[&file[..7], &file[7..]], None);
+    assert_eq!(
+        holds.keep_published(published).await,
+        Ok(ArtifactKept::Held)
+    );
+    assert_eq!(fixture.store.held()[0].lease(), Some("lease-1"));
+    let (published, read) = offer(staged(file), &[file], None);
+    assert_eq!(
+        holds.keep_published(published).await,
+        Ok(ArtifactKept::AlreadyHeld)
+    );
+    assert!(!read.load(Ordering::SeqCst));
+}

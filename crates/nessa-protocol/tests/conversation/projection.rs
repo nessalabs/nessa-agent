@@ -278,6 +278,7 @@ fn review_snapshot(events: Vec<ExecutionEvent>) -> SessionSnapshot {
             result: None,
         }],
         lease: None,
+        artifacts: Vec::new(),
     }
 }
 
@@ -2246,5 +2247,115 @@ fn startup_authentication_uses_primary_retained_cause_without_a_provider_report(
             shown_snapshot(&snapshot).messages[0].authentication_required,
             None
         );
+    }
+}
+
+mod artifacts {
+    use super::*;
+    use crate::conversation::projection::MAX_VIEW_ARTIFACTS;
+    use crate::conversation::view::ConversationArtifact;
+    use nessa_sdk::application::agent_execution::sessions::{
+        ArtifactName, ArtifactRecord, PublishedFile,
+    };
+    use nessa_sdk::domain::agent_execution::leases::LeaseId;
+    use nessa_sdk::domain::common::value_objects::{MediaType, Sha256Digest};
+
+    fn artifact(index: usize, turn: Option<&str>) -> ArtifactRecord {
+        ArtifactRecord {
+            lease: LeaseId::new("lease-1").unwrap(),
+            turn: turn.map(|turn| ExecutionId::new(turn).unwrap()),
+            name: ArtifactName::new(format!("file-{index}.txt")).unwrap(),
+            file: PublishedFile::new(
+                Sha256Digest::from_bytes([1; 32]),
+                MediaType::parse("text/plain").unwrap(),
+                index as u64 + 1,
+            )
+            .unwrap(),
+            actor: ActionContext::new("person", "panel", "send").unwrap(),
+        }
+    }
+    fn holding(artifacts: Vec<ArtifactRecord>) -> SessionSnapshot {
+        let mut snapshot = completed_snapshot("execution", Vec::new());
+        snapshot.artifacts = artifacts;
+        snapshot
+    }
+    fn names(view: &ConversationView) -> Vec<String> {
+        view.artifacts.iter().map(|a| a.name.clone()).collect()
+    }
+
+    #[test]
+    fn the_view_lists_each_artifact_as_recorded_in_camel_case() {
+        let view = shown_snapshot(&holding(vec![
+            artifact(0, Some("execution")),
+            artifact(1, None),
+        ]));
+        assert_eq!(
+            view.artifacts[0],
+            ConversationArtifact {
+                execution_id: Some("execution".into()),
+                lease: "lease-1".into(),
+                name: "file-0.txt".into(),
+                digest: format!("sha256:{}", "01".repeat(32)),
+                mime_type: "text/plain".into(),
+                size: 1,
+            }
+        );
+        let wire = serde_json::to_value(&view).unwrap();
+        assert_eq!(
+            wire["artifacts"][0],
+            serde_json::json!({
+                "executionId": "execution",
+                "lease": "lease-1",
+                "name": "file-0.txt",
+                "digest": format!("sha256:{}", "01".repeat(32)),
+                "mimeType": "text/plain",
+                "size": 1,
+            })
+        );
+        // No turn was running: the field is left out, not null.
+        assert!(wire["artifacts"][1].get("executionId").is_none());
+        assert_eq!(
+            serde_json::to_value(shown_snapshot(&holding(Vec::new()))).unwrap()["artifacts"],
+            serde_json::json!([])
+        );
+    }
+
+    #[test]
+    fn the_view_lists_the_newest_artifacts_in_the_order_they_were_recorded() {
+        let count = MAX_VIEW_ARTIFACTS + 3;
+        let view = shown_snapshot(&holding((0..count).map(|i| artifact(i, None)).collect()));
+        let expected: Vec<String> = (3..count).map(|i| format!("file-{i}.txt")).collect();
+        assert_eq!(names(&view), expected);
+        // The list is a window, not a transcript cut: nothing says it was.
+        assert!(!view.truncated);
+    }
+
+    #[test]
+    fn artifacts_yield_oldest_first_after_the_transcript_and_before_tools() {
+        let view = bound_view(shown_snapshot(&holding(
+            (0..MAX_VIEW_ARTIFACTS).map(|i| artifact(i, None)).collect(),
+        )));
+        let full = serde_json::to_vec(&view).unwrap().len();
+        // An older message yields before any artifact does.
+        let mut longer = view.clone();
+        let older = longer.messages[0].clone();
+        longer.messages.insert(0, older);
+        let bounded = bound_view_within(longer, full, true);
+        assert_eq!(bounded.artifacts.len(), MAX_VIEW_ARTIFACTS);
+        // With the transcript given up, the oldest artifact goes next.
+        let mut bare = view;
+        bare.messages.clear();
+        let full = serde_json::to_vec(&bare).unwrap().len();
+        let bounded = bound_view_within(bare, full - 1, true);
+        assert!(bounded.truncated);
+        assert_eq!(bounded.artifacts.len(), MAX_VIEW_ARTIFACTS - 1);
+        assert_eq!(bounded.artifacts[0].name, "file-1.txt");
+        // Kept back for its interactions, a bound still gives artifacts up.
+        let mut bare = shown_snapshot(&holding(vec![artifact(0, None)]));
+        bare.messages.clear();
+        let full = serde_json::to_vec(&bare).unwrap().len();
+        assert!(bound_view_within(bare, full - 1, false)
+            .artifacts
+            .is_empty());
     }
 }

@@ -1,15 +1,15 @@
 //! Test-only provider and metadata ports; all scheduling runs through the real SDK Agent.
 use crate::conversation::application::{
-    AttachmentRelease, ConversationAgent, ConversationAgentFuture, ConversationAgentSource,
-    ConversationAgents, ConversationAttachments, ConversationCreation, ConversationCreationAudit,
-    ConversationCreationAuditRecord, ConversationCreationDisposition, ConversationDeletionAudit,
-    ConversationDeletionAuditRecord, ConversationDeletionBudgets, ConversationDependencies,
-    ConversationError, ConversationFileLinkAudit, ConversationFileLinkAuditRecord,
-    ConversationFuture, ConversationLimits, ConversationListing, ConversationModeApplication,
-    ConversationModeRequest, ConversationModeRequestState, ConversationRepository,
-    ConversationService, ConversationSummaries, ListedConversation, ListedConversations,
-    ObservationCursor, ObservedConversations, ProviderSessionEraser, ProviderSessionErasers,
-    UnfinishedDeletions,
+    ArtifactKept, AttachmentRelease, ConversationAgent, ConversationAgentFuture,
+    ConversationAgentSource, ConversationAgents, ConversationAttachments, ConversationCreation,
+    ConversationCreationAudit, ConversationCreationAuditRecord, ConversationCreationDisposition,
+    ConversationDeletionAudit, ConversationDeletionAuditRecord, ConversationDeletionBudgets,
+    ConversationDependencies, ConversationError, ConversationFileLinkAudit,
+    ConversationFileLinkAuditRecord, ConversationFuture, ConversationLimits, ConversationListing,
+    ConversationModeApplication, ConversationModeRequest, ConversationModeRequestState,
+    ConversationRepository, ConversationService, ConversationSummaries, ListedConversation,
+    ListedConversations, ObservationCursor, ObservedConversations, ProviderSessionEraser,
+    ProviderSessionErasers, PublishedArtifact, UnfinishedDeletions,
 };
 use crate::conversation::domain::{Conversation, ConversationDeletion, ProviderSessionErasure};
 use nessa_auth::domain::{OrganizationId, PrincipalId};
@@ -755,6 +755,12 @@ pub(crate) struct MemoryAttachments {
     /// this before it records the release. A test looks at the slot there.
     pub(crate) hold_release: Mutex<Option<oneshot::Receiver<()>>>,
     pub(crate) release_entered: Notify,
+    /// Every published file kept: its lease, name and bytes.
+    pub(crate) published: Mutex<Vec<(String, String, Vec<u8>)>>,
+    /// When set, `keep_published` notifies [`Self::record_entered`] once
+    /// the bytes are read and waits for this before it asks for the record.
+    pub(crate) hold_record: Mutex<Option<oneshot::Receiver<()>>>,
+    pub(crate) record_entered: Notify,
 }
 impl ConversationAttachments for MemoryAttachments {
     fn holds<'a>(
@@ -785,6 +791,42 @@ impl ConversationAttachments for MemoryAttachments {
                 return Err(ConversationError::Audit);
             }
             Ok(())
+        })
+    }
+    fn keep_published(
+        &self,
+        mut published: PublishedArtifact,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<ArtifactKept, nessa_protocol::lease::CollectionRefusal>,
+                > + Send
+                + '_,
+        >,
+    > {
+        Box::pin(async move {
+            let mut bytes = Vec::new();
+            while let Some(chunk) = published
+                .bytes
+                .next()
+                .await
+                .map_err(|failure| failure.refusal())?
+            {
+                bytes.extend(chunk);
+            }
+            let wait = self.hold_record.lock().unwrap().take();
+            if let Some(wait) = wait {
+                self.record_entered.notify_one();
+                let _ = wait.await;
+            }
+            if !(published.record)().await {
+                return Err(nessa_protocol::lease::CollectionRefusal::NotKept);
+            }
+            self.published
+                .lock()
+                .unwrap()
+                .push((published.lease, published.file.name, bytes));
+            Ok(ArtifactKept::Held)
         })
     }
 }

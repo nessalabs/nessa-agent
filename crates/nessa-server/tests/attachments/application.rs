@@ -3156,3 +3156,275 @@ async fn release_report_stored_lengths_agree_before_actual_durable_audit() {
         }
     }
 }
+
+const LEASE: &str = "0b7d3a1e-0000-4000-8000-000000000001";
+
+/// What an environment offered under `LEASE`, as the conversation context
+/// builds it: who asked for the lease's work, and which lease it is.
+fn published(bytes: &[u8]) -> PublishedFile {
+    PublishedFile::new(
+        organization("org"),
+        conversation(CONVERSATION),
+        attachment(bytes, PDF),
+        Caller::new(principal("owner"), "phone", "request-1").unwrap(),
+        LEASE,
+    )
+    .unwrap()
+}
+
+/// The conversation's answer that it recorded the file.
+fn recorded() -> PublishRecord {
+    Box::new(|| Box::pin(async { true }))
+}
+
+/// The conversation's answer that it did not record the file, and whether
+/// it was ever asked.
+fn unrecorded(asked: Arc<AtomicBool>) -> PublishRecord {
+    Box::new(move || {
+        Box::pin(async move {
+            asked.store(true, Ordering::SeqCst);
+            false
+        })
+    })
+}
+
+/// A body that says whether it was ever read, and gives nothing if it is.
+struct UntouchedBody(Arc<AtomicBool>);
+impl UploadBody for UntouchedBody {
+    fn next(&mut self) -> PortFuture<'_, Option<Vec<u8>>, UploadInterrupted> {
+        self.0.store(true, Ordering::SeqCst);
+        Box::pin(async { Err(UploadInterrupted) })
+    }
+}
+
+/// A published file is held under the lease that published it, and its
+/// creation is recorded with that lease before the hold is usable.
+#[tokio::test]
+async fn a_published_file_is_held_under_its_lease() {
+    let fixture = Fixture::new(AttachmentLimits::default());
+    assert_eq!(
+        fixture
+            .service
+            .keep_published(published(BYTES), ChannelBody::of(BYTES, 7), recorded())
+            .await,
+        Ok(PublishKept::Held(attachment(BYTES, PDF)))
+    );
+    let held = fixture.store.held();
+    let [hold] = held.as_slice() else {
+        panic!("one hold expected, got {held:?}")
+    };
+    assert_eq!(hold.lease(), Some(LEASE));
+    assert_eq!(hold.uploaded(), hold.stored());
+    assert_eq!(hold.uploaded_by().action_id(), "request-1");
+    assert_eq!(hold.ticket_issued_at_ms(), NOW_MS);
+    assert_eq!(fixture.store.pending(), 0);
+    assert_eq!(
+        fixture.audit.taken(),
+        [AttachmentAuditRecord::HoldCreated { hold: hold.clone() }]
+    );
+}
+
+/// Bytes that are not the file offered, by digest or by length, or that
+/// stop before their end, are refused and recorded, and leave nothing held
+/// and nothing pending.
+#[tokio::test]
+async fn a_published_file_whose_bytes_differ_or_stop_is_refused_with_nothing_held() {
+    let longer = [BYTES, b"!"].concat();
+    for (body, expected) in [
+        (
+            ChannelBody::of(b"twenty bytes of fil!", 7),
+            UploadRejection::DigestMismatch,
+        ),
+        (ChannelBody::of(&longer, 7), UploadRejection::SizeMismatch),
+        (
+            ChannelBody::of(&BYTES[..10], 7),
+            UploadRejection::SizeMismatch,
+        ),
+        (
+            {
+                let (sender, body) = ChannelBody::open();
+                sender.send(Ok(BYTES[..10].to_vec())).unwrap();
+                sender.send(Err(UploadInterrupted)).unwrap();
+                body
+            },
+            UploadRejection::UploadInterrupted,
+        ),
+    ] {
+        let fixture = Fixture::new(AttachmentLimits::default());
+        assert_eq!(
+            fixture
+                .service
+                .keep_published(published(BYTES), body, recorded())
+                .await,
+            Err(UploadError::Rejected {
+                reason: expected,
+                evidence: AuditDelivery::Recorded,
+            }),
+            "{expected:?}"
+        );
+        assert_eq!(
+            fixture.audit.taken(),
+            [AttachmentAuditRecord::PublishRejected {
+                published: published(BYTES).offered_at(NOW_MS),
+                reason: expected,
+            }],
+            "{expected:?}"
+        );
+        assert!(fixture.store.held().is_empty(), "{expected:?}");
+        assert_eq!(fixture.store.pending(), 0, "{expected:?}");
+        assert_eq!(
+            fixture.store.staged.load(Ordering::SeqCst),
+            0,
+            "{expected:?}"
+        );
+    }
+}
+
+/// A file the conversation already holds is answered as held without one
+/// byte of it being read, and the publish is recorded against that hold.
+#[tokio::test]
+async fn a_published_file_already_held_is_never_read() {
+    let fixture = Fixture::new(AttachmentLimits::default());
+    let kept = fixture.upload(CONVERSATION, BYTES, PDF).await;
+    let before = fixture.store.held();
+    fixture.audit.taken_all();
+    fixture.clock.set(NOW_MS + 50);
+    let pulled = Arc::new(AtomicBool::new(false));
+    assert_eq!(
+        fixture
+            .service
+            .keep_published(
+                published(BYTES),
+                Box::new(UntouchedBody(pulled.clone())),
+                recorded(),
+            )
+            .await,
+        Ok(PublishKept::AlreadyHeld(kept))
+    );
+    assert!(!pulled.load(Ordering::SeqCst), "the body was read");
+    assert_eq!(fixture.store.held(), before);
+    assert_eq!(fixture.store.staged.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        fixture.audit.taken(),
+        [AttachmentAuditRecord::AlreadyPublished {
+            published: published(BYTES).offered_at(NOW_MS + 50),
+            hold: before[0].clone(),
+        }]
+    );
+}
+
+/// A file whose bytes are right but that its conversation did not record
+/// is not kept: its hold, created, audited and made usable, is taken back
+/// as not recorded, and nothing is held.
+#[tokio::test]
+async fn a_published_file_its_conversation_did_not_record_is_taken_back() {
+    let fixture = Fixture::new(AttachmentLimits::default());
+    let asked = Arc::new(AtomicBool::new(false));
+    assert_eq!(
+        fixture
+            .service
+            .keep_published(
+                published(BYTES),
+                ChannelBody::of(BYTES, 7),
+                unrecorded(asked.clone())
+            )
+            .await,
+        Err(UploadError::NotKept)
+    );
+    assert!(asked.load(Ordering::SeqCst));
+    assert!(fixture.store.held().is_empty());
+    assert_eq!(fixture.store.pending(), 0);
+    let records = fixture.audit.taken();
+    let [AttachmentAuditRecord::HoldCreated { hold }, AttachmentAuditRecord::HoldReverted {
+        hold: reverted,
+        cause: RevertCause::NotRecorded,
+        was: RetiredFrom::Held,
+    }] = records.as_slice()
+    else {
+        panic!("a creation and its reversal expected, got {records:?}")
+    };
+    assert_eq!(hold, reverted);
+    assert_eq!(hold.lease(), Some(LEASE));
+}
+
+/// A file the conversation already holds, but did not record under this
+/// lease, is not answered as held, and the existing hold is left as it is;
+/// the finding was audited before the conversation was asked.
+#[tokio::test]
+async fn a_published_file_already_held_but_not_recorded_is_not_kept() {
+    let fixture = Fixture::new(AttachmentLimits::default());
+    fixture.upload(CONVERSATION, BYTES, PDF).await;
+    let before = fixture.store.held();
+    fixture.audit.taken_all();
+    let asked = Arc::new(AtomicBool::new(false));
+    let pulled = Arc::new(AtomicBool::new(false));
+    assert_eq!(
+        fixture
+            .service
+            .keep_published(
+                published(BYTES),
+                Box::new(UntouchedBody(pulled.clone())),
+                unrecorded(asked.clone()),
+            )
+            .await,
+        Err(UploadError::NotKept)
+    );
+    assert!(asked.load(Ordering::SeqCst));
+    assert!(!pulled.load(Ordering::SeqCst), "the body was read");
+    assert_eq!(fixture.store.held(), before);
+    let records = fixture.audit.taken();
+    assert!(
+        matches!(
+            records.as_slice(),
+            [AttachmentAuditRecord::AlreadyPublished { .. }]
+        ),
+        "{records:?}"
+    );
+}
+
+/// An upload kept normalized does not hold the file it came from: the
+/// same original published under a lease is read and kept as it is, and
+/// a later upload of that original is still normalized, never answered by
+/// the published hold.
+#[tokio::test]
+async fn a_normalized_upload_and_a_published_original_never_stand_for_each_other() {
+    let original = b"a very large heic photograph";
+    let fixture = Fixture::with_normalizer(
+        AttachmentLimits::default(),
+        StubNormalizer::producing(b"small jpeg", "image/jpeg"),
+    );
+    let normalized = fixture.upload(CONVERSATION, original, "image/heic").await;
+    let raw = attachment(original, "image/heic");
+    let published = PublishedFile::new(
+        organization("org"),
+        conversation(CONVERSATION),
+        raw.clone(),
+        Caller::new(principal("owner"), "phone", "request-1").unwrap(),
+        LEASE,
+    )
+    .unwrap();
+    assert_eq!(
+        fixture
+            .service
+            .keep_published(published, ChannelBody::of(original, 7), recorded())
+            .await,
+        Ok(PublishKept::Held(raw.clone()))
+    );
+    assert_eq!(fixture.store.blob(raw.digest()).unwrap(), original);
+    // An upload of the same original is normalized as any upload is.
+    let mut request = begin_request(CONVERSATION, original, "image/heic");
+    request.request_id = "begin-2".into();
+    let outcome = fixture
+        .service
+        .begin(caller("org", "owner"), request)
+        .await
+        .unwrap();
+    assert!(
+        matches!(
+            outcome,
+            BeginOutcome::Stored(ref stored) if *stored == normalized
+        ) || matches!(outcome, BeginOutcome::UploadRequired { .. }),
+        "{outcome:?}"
+    );
+    assert!(!matches!(outcome, BeginOutcome::Stored(ref stored) if *stored == raw));
+}

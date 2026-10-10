@@ -1461,3 +1461,72 @@ async fn cleanup_distinguishes_active_unrelated_and_candidate_uncertain_retentio
         }
     }
 }
+
+/// A published hold is saved with the lease that published it and comes
+/// back with it; an upload is saved and restored with none. A lease record
+/// whose file changed between arriving and being kept describes no publish.
+#[test]
+fn a_saved_hold_keeps_the_lease_that_published_it_and_only_that_one() {
+    let file = attachment(b"bytes", PDF);
+    let published = Hold::published(
+        organization("org"),
+        conversation(CONVERSATION),
+        file,
+        Caller::new(principal("owner"), "phone", "request-1").unwrap(),
+        "lease-1",
+        1_000,
+        2_000,
+    )
+    .unwrap();
+    let bytes = encode(&published, RecordState::Kept, "saved-generation");
+    let value: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(value["lease"], "lease-1");
+    let saved = decode(&bytes).unwrap();
+    assert_eq!(saved.hold, published);
+    assert_eq!(saved.hold.lease(), Some("lease-1"));
+
+    let uploaded = hold_for("org", CONVERSATION, b"bytes", b"bytes");
+    let bytes = encode(&uploaded, RecordState::Kept, "saved-generation");
+    let value: Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(value.get("lease").is_none(), "{value}");
+    let saved = decode(&bytes).unwrap();
+    assert_eq!(saved.hold, uploaded);
+    assert_eq!(saved.hold.lease(), None);
+
+    let mut changed: Value =
+        serde_json::from_slice(&encode(&published, RecordState::Kept, "saved-generation")).unwrap();
+    changed["uploaded"]["digest"] = serde_json::json!(digest_of(b"other").to_string());
+    assert!(decode(&serde_json::to_vec(&changed).unwrap()).is_none());
+    let normalized = hold_for("org", CONVERSATION, b"photograph", b"normalized");
+    let mut leased: Value =
+        serde_json::from_slice(&encode(&normalized, RecordState::Kept, "saved-generation"))
+            .unwrap();
+    leased["lease"] = serde_json::json!("lease-1");
+    assert!(decode(&serde_json::to_vec(&leased).unwrap()).is_none());
+}
+
+/// A saved published hold comes back only with a lease id a conversation's
+/// record could name: the one rule `LeaseId` holds.
+#[test]
+fn a_saved_hold_whose_lease_no_record_could_name_is_not_restored() {
+    let published = Hold::published(
+        organization("org"),
+        conversation(CONVERSATION),
+        attachment(b"bytes", PDF),
+        Caller::new(principal("owner"), "phone", "request-1").unwrap(),
+        "lease-1",
+        1_000,
+        2_000,
+    )
+    .unwrap();
+    for lease in ["lease 1", "lease/1", "läse", &"a".repeat(129)] {
+        let mut saved: Value =
+            serde_json::from_slice(&encode(&published, RecordState::Kept, "saved-generation"))
+                .unwrap();
+        saved["lease"] = serde_json::json!(lease);
+        assert!(
+            decode(&serde_json::to_vec(&saved).unwrap()).is_none(),
+            "{lease}"
+        );
+    }
+}

@@ -524,6 +524,7 @@ async fn manager(previous_turns: usize) -> (SessionManager, Arc<FaultLease>, Exe
     let snapshot = SessionSnapshot {
         queue_history: Vec::new(),
         lease: None,
+        artifacts: Vec::new(),
         id: id.clone(),
         provider: ProviderIdentity::new("fixture", "model", "workspace").unwrap(),
         provider_context: ProviderContext::Recorded(
@@ -1170,6 +1171,7 @@ fn a_restored_tool_call_that_changes_its_mcp_identity_is_corrupt() {
             invocations: vec![record],
             queue_history: Vec::new(),
             lease: None,
+            artifacts: Vec::new(),
         }
     };
     for kept in [None, Some(McpTool::new("charts", "show").unwrap())] {
@@ -1323,6 +1325,268 @@ mod lease_records {
             LeaseRecordError::Refused(StorageError::Corrupt("x".into())),
             LeaseRecordError::Unreadable,
             LeaseRecordError::Storage(StorageError::Io("y".into())),
+        ];
+        let messages: std::collections::HashSet<String> =
+            errors.iter().map(ToString::to_string).collect();
+        assert_eq!(messages.len(), errors.len());
+    }
+}
+
+mod artifact_records {
+    use super::*;
+    use crate::application::agent_execution::sessions::{
+        ArtifactName, ArtifactRecord, ArtifactRecordError, PublishedFile,
+    };
+    use crate::domain::agent_execution::leases::{
+        AgentWork, EnvironmentRef, LeaseDeadline, LeaseEndCause, LeaseGrants, LeaseId,
+        LeaseRevision, LeaseTerms, LeaseWork, SandboxProfile,
+    };
+    use crate::domain::common::value_objects::{MediaType, Sha256Digest};
+
+    fn actor() -> ActionContext {
+        ActionContext::new("person", "desktop", "send").unwrap()
+    }
+    fn issued() -> LeaseRecord {
+        LeaseRecord::Issued {
+            lease: LeaseId::new("lease-1").unwrap(),
+            revision: LeaseRevision::FIRST,
+            terms: LeaseTerms {
+                environment: EnvironmentRef::Here,
+                work: LeaseWork::Agent(AgentWork::new("claude", "sonnet").unwrap()),
+                sandbox: SandboxProfile::HarnessDefault,
+                grants: LeaseGrants::Opening,
+                deadline: LeaseDeadline::UntilEnded,
+            },
+            actor: actor(),
+        }
+    }
+    fn artifact(lease: &str, turn: Option<&str>) -> ArtifactRecord {
+        ArtifactRecord {
+            lease: LeaseId::new(lease).unwrap(),
+            turn: turn.map(|turn| ExecutionId::new(turn).unwrap()),
+            name: ArtifactName::new("report.pdf").unwrap(),
+            file: PublishedFile::new(
+                Sha256Digest::from_bytes([7; 32]),
+                MediaType::parse("application/pdf").unwrap(),
+                12,
+            )
+            .unwrap(),
+            actor: actor(),
+        }
+    }
+    /// A loaded conversation whose turn `active` runs under the live `lease-1`.
+    async fn leased() -> (SessionManager, Arc<FaultLease>) {
+        let (manager, lease, _) = manager(0).await;
+        let commit = manager
+            .record_lease(|_| (vec![issued()], ()))
+            .await
+            .unwrap();
+        assert_eq!(commit.saved, Ok(()));
+        (manager, lease)
+    }
+    async fn observed_artifacts(manager: &SessionManager) -> Vec<ArtifactRecord> {
+        manager
+            .evidence
+            .lock()
+            .await
+            .observed
+            .as_ref()
+            .unwrap()
+            .artifacts
+            .clone()
+    }
+
+    #[tokio::test]
+    async fn an_artifact_under_the_live_lease_is_saved_as_its_own_unit() {
+        let (manager, lease) = leased().await;
+        assert_eq!(
+            manager.artifact_room().await,
+            Some(ArtifactRecord::MAX_PER_CONVERSATION)
+        );
+        let record = artifact("lease-1", Some("active"));
+        manager.record_artifact(record.clone()).await.unwrap();
+        assert_eq!(
+            lease.changes.lock().unwrap().last().unwrap(),
+            &vec![SessionChange::Artifact(record.clone())]
+        );
+        let load = lease.load().await.unwrap();
+        assert_eq!(load.snapshot().unwrap().artifacts, vec![record]);
+        assert_eq!(
+            manager.artifact_room().await,
+            Some(ArtifactRecord::MAX_PER_CONVERSATION - 1)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_file_recorded_again_under_its_lease_is_recorded_once() {
+        let (manager, lease) = leased().await;
+        manager
+            .record_artifact(artifact("lease-1", Some("active")))
+            .await
+            .unwrap();
+        let saves = lease.changes.lock().unwrap().len();
+        let mut renamed = artifact("lease-1", None);
+        renamed.name = ArtifactName::new("again.pdf").unwrap();
+        assert_eq!(manager.record_artifact(renamed).await, Ok(()));
+        assert_eq!(lease.changes.lock().unwrap().len(), saves);
+        assert_eq!(observed_artifacts(&manager).await.len(), 1);
+        // Still refused under a lease that is not this one.
+        assert_eq!(
+            manager.record_artifact(artifact("lease-2", None)).await,
+            Err(ArtifactRecordError::NotThisLease)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refused_artifact_retains_nothing() {
+        let (manager, lease) = leased().await;
+        let saves = lease.changes.lock().unwrap().len();
+        let mut other_actor = artifact("lease-1", None);
+        other_actor.actor = ActionContext::new("someone", "desktop", "send").unwrap();
+        for (record, expected) in [
+            (artifact("lease-2", None), ArtifactRecordError::NotThisLease),
+            (other_actor, ArtifactRecordError::NotThisLease),
+            (
+                artifact("lease-1", Some("never")),
+                ArtifactRecordError::UnknownTurn,
+            ),
+        ] {
+            assert_eq!(manager.record_artifact(record).await, Err(expected));
+        }
+        assert_eq!(lease.changes.lock().unwrap().len(), saves);
+        assert!(observed_artifacts(&manager).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn no_artifact_is_recorded_under_an_ending_lease_or_before_any_lease() {
+        let (manager, _, _) = manager(0).await;
+        assert_eq!(
+            manager.record_artifact(artifact("lease-1", None)).await,
+            Err(ArtifactRecordError::NotThisLease)
+        );
+        let (manager, _) = leased().await;
+        let ending = LeaseRecord::Ending {
+            lease: LeaseId::new("lease-1").unwrap(),
+            cause: LeaseEndCause::Closed,
+            actor: None,
+        };
+        let commit = manager.record_lease(|_| (vec![ending], ())).await.unwrap();
+        assert_eq!(commit.saved, Ok(()));
+        assert_eq!(
+            manager.record_artifact(artifact("lease-1", None)).await,
+            Err(ArtifactRecordError::NotThisLease)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_full_conversation_refuses_another_artifact() {
+        let (manager, lease) = leased().await;
+        let saves = lease.changes.lock().unwrap().len();
+        manager
+            .evidence
+            .lock()
+            .await
+            .observed
+            .as_mut()
+            .unwrap()
+            .artifacts = vec![artifact("lease-1", None); ArtifactRecord::MAX_PER_CONVERSATION];
+        assert_eq!(manager.artifact_room().await, Some(0));
+        let another = ArtifactRecord {
+            file: PublishedFile::new(
+                Sha256Digest::from_bytes([8; 32]),
+                MediaType::parse("application/pdf").unwrap(),
+                12,
+            )
+            .unwrap(),
+            ..artifact("lease-1", None)
+        };
+        assert_eq!(
+            manager.record_artifact(another).await,
+            Err(ArtifactRecordError::Full)
+        );
+        assert_eq!(lease.changes.lock().unwrap().len(), saves);
+        assert_eq!(
+            observed_artifacts(&manager).await.len(),
+            ArtifactRecord::MAX_PER_CONVERSATION
+        );
+    }
+
+    /// A file already recorded under its lease is answered as recorded
+    /// when the conversation is full, and counts as having room; another
+    /// file does not.
+    #[tokio::test]
+    async fn a_full_conversation_still_answers_a_file_it_records() {
+        let (manager, lease) = leased().await;
+        let recorded = artifact("lease-1", None);
+        manager.record_artifact(recorded.clone()).await.unwrap();
+        let saves = lease.changes.lock().unwrap().len();
+        manager
+            .evidence
+            .lock()
+            .await
+            .observed
+            .as_mut()
+            .unwrap()
+            .artifacts
+            .resize(ArtifactRecord::MAX_PER_CONVERSATION, recorded.clone());
+        assert_eq!(
+            manager
+                .has_artifact_room(&recorded.lease, &recorded.file)
+                .await,
+            Some(true)
+        );
+        assert_eq!(manager.record_artifact(recorded.clone()).await, Ok(()));
+        assert_eq!(lease.changes.lock().unwrap().len(), saves);
+        let other = PublishedFile::new(
+            Sha256Digest::from_bytes([8; 32]),
+            recorded.file.media_type().clone(),
+            recorded.file.size(),
+        )
+        .unwrap();
+        assert_eq!(
+            manager.has_artifact_room(&recorded.lease, &other).await,
+            Some(false)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_save_keeps_the_artifact_for_the_next_save() {
+        let (manager, lease) = leased().await;
+        lease.fail_save.store(true, Ordering::SeqCst);
+        let record = artifact("lease-1", None);
+        assert!(matches!(
+            manager.record_artifact(record.clone()).await,
+            Err(ArtifactRecordError::Storage(StorageError::Io(_)))
+        ));
+        assert_eq!(observed_artifacts(&manager).await, vec![record.clone()]);
+        lease.fail_save.store(false, Ordering::SeqCst);
+        manager.save_retained_lease_records().await.unwrap();
+        let saves = lease.changes.lock().unwrap();
+        assert_eq!(
+            saves.last().unwrap(),
+            &vec![SessionChange::Artifact(record)]
+        );
+    }
+
+    #[tokio::test]
+    async fn nothing_is_recorded_or_counted_before_the_conversation_is_loaded() {
+        let (manager, _, _) = manager(0).await;
+        manager.evidence.lock().await.observed = None;
+        assert_eq!(manager.artifact_room().await, None);
+        assert_eq!(
+            manager.record_artifact(artifact("lease-1", None)).await,
+            Err(ArtifactRecordError::NotLoaded)
+        );
+    }
+
+    #[test]
+    fn every_artifact_record_error_explains_itself() {
+        let errors = [
+            ArtifactRecordError::NotLoaded,
+            ArtifactRecordError::Full,
+            ArtifactRecordError::NotThisLease,
+            ArtifactRecordError::UnknownTurn,
+            ArtifactRecordError::Storage(StorageError::Io("y".into())),
         ];
         let messages: std::collections::HashSet<String> =
             errors.iter().map(ToString::to_string).collect();

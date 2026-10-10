@@ -256,6 +256,7 @@ pub(super) enum ChangeUndo {
     ),
     Context(ProviderContext),
     Lease(Option<super::CurrentLease>),
+    Artifact,
 }
 
 impl continuation::Continuation {
@@ -360,6 +361,7 @@ impl continuation::Continuation {
                     invocations: Vec::new(),
                     queue_history: Vec::new(),
                     lease: None,
+                    artifacts: Vec::new(),
                 });
             }
             SessionChange::InputAccepted(record) => {
@@ -655,6 +657,14 @@ impl continuation::Continuation {
                 let next = super::CurrentLease::apply(snapshot.lease.as_ref(), record)?;
                 undo.push(ChangeUndo::Lease(snapshot.lease.replace(next)));
             }
+            SessionChange::Artifact(record) => {
+                let snapshot = candidate
+                    .as_mut()
+                    .ok_or_else(|| corrupt("artifact record precedes session open"))?;
+                record.admit_saved(snapshot, |turn| positions.contains_key(turn))?;
+                snapshot.artifacts.push(record.clone());
+                undo.push(ChangeUndo::Artifact);
+            }
         }
 
         Ok(())
@@ -813,6 +823,18 @@ impl continuation::Continuation {
                     .saturating_sub(super::retained::lease(snapshot.lease.as_ref()))
                     .saturating_add(super::retained::lease(prior.as_ref()));
                 snapshot.lease = prior;
+            }
+            ChangeUndo::Artifact => {
+                let record = self
+                    .snapshot
+                    .as_mut()
+                    .expect("open")
+                    .artifacts
+                    .pop()
+                    .expect("artifact record");
+                self.snapshot_bytes = self
+                    .snapshot_bytes
+                    .saturating_sub(super::retained::artifact(&record));
             }
         }
     }

@@ -1,9 +1,10 @@
 use super::{
     AttachmentAudit, AttachmentAuditRecord, AttachmentStore, AuditDelivery, AuditUnavailable,
     BeginError, Confirmation, ConversationOwnership, Discard, HoldClaim, ImageNormalizer, Kept,
-    NormalizeError, Ownership, OwnershipUnavailable, ReceivedBytes, ReleaseCause, ReleaseError,
-    ReleaseEvidence, RetirementEvidence, RevertCause, StagedUpload, StoreUnavailable, TicketSecret,
-    TicketSecrets, UploadBody, UploadError, UploadRejection,
+    NormalizeError, Ownership, OwnershipUnavailable, PublishKept, PublishRecord, PublishedFile,
+    ReceivedBytes, ReleaseCause, ReleaseError, ReleaseEvidence, RetirementEvidence, RevertCause,
+    StagedUpload, StoreUnavailable, TicketSecret, TicketSecrets, UploadBody, UploadError,
+    UploadRejection,
 };
 use crate::attachments::domain::{
     Attachment, Caller, Hold, MediaType, Redemption, RetiredFrom, TicketBook, TicketLifetime,
@@ -62,6 +63,10 @@ impl DeliveryTally {
 /// and a build stops here rather than letting a close reach a release that has
 /// nobody to name.
 const _: () = assert!(Caller::MAX_BYTES == ActionContext::MAX_IDENTITY_BYTES);
+// The largest file an environment may publish is the largest storage keeps:
+// one bound, stated by the protocol both ends read, and checked here against
+// storage's, so neither stages what the other would refuse.
+const _: () = assert!(nessa_protocol::lease::MAX_ARTIFACT_BYTES == Attachment::MAX_BYTES);
 
 /// Verified session identity supplied by the gateway boundary.
 #[derive(Clone, Debug)]
@@ -122,6 +127,11 @@ pub struct AttachmentLimits {
     pub max_normalizations: usize,
     /// How long one transfer may take from its first byte to its last.
     pub upload_deadline: Duration,
+    /// How long reading one file an environment published may take, from
+    /// its first byte to its last, retries over the artifact channel
+    /// included. Longer than an upload's: the file may be as large as
+    /// storage keeps, read over a remote link.
+    pub publish_deadline: Duration,
     /// How long one audit record may take to be acknowledged. Every record
     /// gets this much; one slow record does not spend another's time.
     pub audit_deadline: Duration,
@@ -148,6 +158,7 @@ impl Default for AttachmentLimits {
             max_uploads: 4,
             max_normalizations: 2,
             upload_deadline: Duration::from_secs(120),
+            publish_deadline: Duration::from_secs(15 * 60),
             audit_deadline: Duration::from_secs(5),
             audit_budget: Duration::from_secs(30),
             audit_admission: 1,
@@ -582,6 +593,9 @@ impl AttachmentService {
             )
             .await
             .map_err(|_| BeginError::Storage)?
+            // A published file is kept as it was published, never as an
+            // upload is (normalized): it does not stand for one.
+            .filter(|hold| hold.lease().is_none())
         {
             return Ok(BeginOutcome::Stored(hold.stored().clone()));
         }
@@ -775,7 +789,7 @@ impl AttachmentService {
                 let stored = existing.stored().clone();
                 let record = AttachmentAuditRecord::AlreadyHeld {
                     ticket,
-                    hold: existing,
+                    hold: *existing,
                 };
                 match self.audit(record).await {
                     AuditDelivery::Recorded => Ok(stored),
@@ -785,7 +799,7 @@ impl AttachmentService {
                     AuditDelivery::Unavailable => Err(UploadError::AuditUnavailable),
                 }
             }
-            Ok(Kept::Pending(claim)) => self.record_then_confirm(hold, claim, pending).await,
+            Ok(Kept::Pending(claim)) => self.record_then_confirm(hold, claim, None, pending).await,
         }
     }
 
@@ -801,15 +815,23 @@ impl AttachmentService {
         &self,
         hold: Hold,
         claim: HoldClaim,
+        recorded: Option<PublishRecord>,
         pending: &PendingHold,
     ) -> Result<Attachment, UploadError> {
         *lock(pending) = Some((hold.clone(), claim.clone()));
-        let settled = self.settle(hold, claim).await;
+        let settled = self.settle(hold, claim, recorded).await;
         *lock(pending) = None;
         settled
     }
 
-    async fn settle(&self, hold: Hold, claim: HoldClaim) -> Result<Attachment, UploadError> {
+    /// `recorded`, for a published file, is asked once the hold is usable:
+    /// the conversation's record of it is what says it may stay.
+    async fn settle(
+        &self,
+        hold: Hold,
+        claim: HoldClaim,
+        recorded: Option<PublishRecord>,
+    ) -> Result<Attachment, UploadError> {
         let created = AttachmentAuditRecord::HoldCreated { hold: hold.clone() };
         if self.audit(created).await == AuditDelivery::Unavailable {
             self.take_back(&hold, &claim, RevertCause::AuditUnconfirmed)
@@ -848,7 +870,21 @@ impl AttachmentService {
             Err(OwnershipUnavailable) => return Err(self.not_confirmed(&hold, &claim).await),
         }
         match self.inner.store.confirm(&hold, &claim).await {
-            Ok(Confirmation::Confirmed | Confirmation::AlreadyKept) => Ok(hold.stored().clone()),
+            Ok(Confirmation::Confirmed | Confirmation::AlreadyKept) => {
+                // Recorded only once it is held, so the conversation never
+                // names a file it does not hold; one it would not record is
+                // taken back, kept for no longer than this.
+                let refused = match recorded {
+                    Some(recorded) => !recorded().await,
+                    None => false,
+                };
+                if refused {
+                    self.take_back(&hold, &claim, RevertCause::NotRecorded)
+                        .await;
+                    return Err(UploadError::NotKept);
+                }
+                Ok(hold.stored().clone())
+            }
             Ok(Confirmation::Gone) => {
                 // Its conversation let go of its files meanwhile, or an upload
                 // of the same file that had taken this hold over took it back.
@@ -1052,6 +1088,196 @@ impl AttachmentService {
             .finish()
             .await
             .map_err(|_| UploadRejection::StorageUnavailable)
+    }
+
+    /// Keep a file an environment published under a lease, reading `body`
+    /// only when the conversation does not already keep exactly that file.
+    /// The bytes are staged and must be exactly the size and digest the
+    /// environment offered; only then is a hold written, pending, its
+    /// creation recorded with the lease as cause, and the hold made usable:
+    /// the one creation order every hold has. Then `recorded` is asked, and
+    /// a file the conversation would not record is taken back, so a file
+    /// is kept only while its conversation names it, and named only once
+    /// held. A transfer that breaks or differs leaves nothing visible, and
+    /// its refusal is audited.
+    ///
+    /// The work runs in its own task, so a caller that goes away cannot take
+    /// a half-written hold's evidence with it.
+    pub async fn keep_published(
+        &self,
+        published: PublishedFile,
+        body: Box<dyn UploadBody>,
+        recorded: PublishRecord,
+    ) -> Result<PublishKept, UploadError> {
+        let published = published.offered_at(self.inner.clock.unix_milliseconds());
+        let existing = self
+            .inner
+            .store
+            .find_upload(
+                published.organization_id(),
+                published.conversation_id(),
+                published.file(),
+            )
+            .await;
+        // Already kept only when what the conversation keeps is these very
+        // bytes: an upload kept normalized does not hold what was published.
+        let existing = existing.map(|found| found.filter(|hold| hold.stored() == published.file()));
+        match existing {
+            Ok(Some(hold)) => return self.already_published(published, hold, recorded).await,
+            Ok(None) => {}
+            Err(StoreUnavailable) => {
+                return Err(self
+                    .reject_published(published, UploadRejection::StorageUnavailable)
+                    .await)
+            }
+        }
+        let permit = self
+            .inner
+            .uploads
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| UploadError::Busy)?;
+        let pending: Arc<PendingHold> = Arc::default();
+        let service = self.clone();
+        let written = pending.clone();
+        let offer = published.clone();
+        let work = tokio::spawn(async move {
+            let _permit = permit;
+            service
+                .receive_published(offer, body, recorded, &written)
+                .await
+        });
+        match work.await {
+            Ok(outcome) => outcome,
+            Err(_) => {
+                if let Some((hold, claim)) = written_hold(&pending) {
+                    self.take_back(&hold, &claim, RevertCause::UploadUnresolved)
+                        .await;
+                }
+                Err(self
+                    .reject_published(published, UploadRejection::Unresolved)
+                    .await)
+            }
+        }
+    }
+
+    async fn receive_published(
+        &self,
+        published: PublishedFile,
+        mut body: Box<dyn UploadBody>,
+        recorded: PublishRecord,
+        pending: &PendingHold,
+    ) -> Result<PublishKept, UploadError> {
+        let file = published.file().clone();
+        let unavailable = |_| UploadRejection::StorageUnavailable;
+        let staged = async {
+            let mut staged = self.inner.store.stage().await.map_err(unavailable)?;
+            let received = timeout(
+                self.inner.limits.publish_deadline,
+                Self::stream_exactly(&file, staged.as_mut(), body.as_mut()),
+            )
+            .await
+            .map_err(|_| UploadRejection::UploadTimeout)??;
+            if received.size != file.size() {
+                return Err(UploadRejection::SizeMismatch);
+            }
+            if received.digest != file.digest() {
+                return Err(UploadRejection::DigestMismatch);
+            }
+            Ok(staged)
+        }
+        .await;
+        drop(body);
+        let staged = match staged {
+            Ok(staged) => staged,
+            Err(reason) => return Err(self.reject_published(published, reason).await),
+        };
+        let Some(hold) = Hold::published(
+            published.organization_id().clone(),
+            published.conversation_id().clone(),
+            file,
+            published.caller().clone(),
+            published.lease(),
+            published.offered_at_ms(),
+            self.inner.clock.unix_milliseconds(),
+        ) else {
+            return Err(self
+                .reject_published(published, UploadRejection::StorageUnavailable)
+                .await);
+        };
+        match staged.keep(hold.clone()).await {
+            Err(StoreUnavailable) => Err(self
+                .reject_published(published, UploadRejection::StorageUnavailable)
+                .await),
+            Ok(Kept::Existing(existing)) => {
+                self.already_published(published, *existing, recorded).await
+            }
+            Ok(Kept::Pending(claim)) => self
+                .record_then_confirm(hold, claim, Some(recorded), pending)
+                .await
+                .map(PublishKept::Held),
+        }
+    }
+
+    /// The conversation already keeps exactly the published file: the
+    /// publish's finding audited, then recorded under this lease too, it is
+    /// already held. Audited first, so a finding that could not be audited
+    /// leaves no record, and one the conversation would not record is still
+    /// a true finding.
+    async fn already_published(
+        &self,
+        published: PublishedFile,
+        hold: Hold,
+        recorded: PublishRecord,
+    ) -> Result<PublishKept, UploadError> {
+        let stored = hold.stored().clone();
+        let record = AttachmentAuditRecord::AlreadyPublished { published, hold };
+        if self.audit(record).await == AuditDelivery::Unavailable {
+            return Err(UploadError::AuditUnavailable);
+        }
+        match recorded().await {
+            true => Ok(PublishKept::AlreadyHeld(stored)),
+            false => Err(UploadError::NotKept),
+        }
+    }
+
+    /// Stream `body` into `staged`, refusing it as soon as it runs longer
+    /// than `file` said.
+    async fn stream_exactly(
+        file: &Attachment,
+        staged: &mut dyn StagedUpload,
+        body: &mut dyn UploadBody,
+    ) -> Result<ReceivedBytes, UploadRejection> {
+        let mut received = 0_u64;
+        while let Some(chunk) = body
+            .next()
+            .await
+            .map_err(|_| UploadRejection::UploadInterrupted)?
+        {
+            received = received.saturating_add(chunk.len() as u64);
+            if received > file.size() {
+                return Err(UploadRejection::SizeMismatch);
+            }
+            staged
+                .write(chunk)
+                .await
+                .map_err(|_| UploadRejection::StorageUnavailable)?;
+        }
+        staged
+            .finish()
+            .await
+            .map_err(|_| UploadRejection::StorageUnavailable)
+    }
+
+    async fn reject_published(
+        &self,
+        published: PublishedFile,
+        reason: UploadRejection,
+    ) -> UploadError {
+        let evidence = self
+            .audit(AttachmentAuditRecord::PublishRejected { published, reason })
+            .await;
+        UploadError::Rejected { reason, evidence }
     }
 
     /// Whether the conversation keeps exactly this stored file.

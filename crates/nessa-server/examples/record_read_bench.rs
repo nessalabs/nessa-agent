@@ -237,6 +237,7 @@ async fn seed(
         invocations: Vec::new(),
         queue_history: Vec::new(),
         lease: None,
+        artifacts: Vec::new(),
     };
     let mut binding = lease.load().await?.binding().clone();
     let opened = SessionSaveUnit::new(vec![SessionChange::Opened {

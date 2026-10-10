@@ -474,6 +474,7 @@ async fn gateway_child() {
                             invocations: vec![],
                             queue_history: vec![],
                             lease: None,
+                            artifacts: Vec::new(),
                         },
                         vec![SessionSaveUnit::new(changes).unwrap()],
                     )

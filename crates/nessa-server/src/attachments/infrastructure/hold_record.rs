@@ -85,6 +85,10 @@ struct StoredHold {
     uploaded_by: StoredCaller,
     ticket_issued_at_ms: u64,
     uploaded_at_ms: u64,
+    /// The lease whose environment published the file; absent for an
+    /// upload, which every record written before publishing existed is.
+    #[serde(default, skip_serializing_if = "SavedField::is_missing")]
+    lease: SavedField<String>,
     #[serde(default, skip_serializing_if = "SavedField::is_missing")]
     was: SavedField<RetiredFrom>,
     #[serde(default, skip_serializing_if = "SavedField::is_missing")]
@@ -169,6 +173,7 @@ pub(super) fn encode(hold: &Hold, state: RecordState, generation: &str) -> Vec<u
         },
         ticket_issued_at_ms: hold.ticket_issued_at_ms(),
         uploaded_at_ms: hold.uploaded_at_ms(),
+        lease: SavedField(hold.lease().map(str::to_owned)),
         was,
         retirement,
     })
@@ -190,20 +195,39 @@ pub(super) fn decode(bytes: &[u8]) -> Option<HoldRecord> {
     if record.generation.is_empty() || record.generation.len() > 64 {
         return None;
     }
-    let hold = Hold::restore(
-        OrganizationId::new(record.organization_id).ok()?,
-        ConversationId::new(&record.conversation_id).ok()?,
-        attachment(&record.uploaded)?,
-        attachment(&record.stored)?,
-        Caller::new(
-            PrincipalId::new(record.uploaded_by.principal_id).ok()?,
-            &record.uploaded_by.surface_id,
-            &record.uploaded_by.action_id,
-        )
-        .ok()?,
-        record.ticket_issued_at_ms,
-        record.uploaded_at_ms,
-    )?;
+    let organization = OrganizationId::new(record.organization_id).ok()?;
+    let conversation = ConversationId::new(&record.conversation_id).ok()?;
+    let uploaded = attachment(&record.uploaded)?;
+    let stored = attachment(&record.stored)?;
+    let caller = Caller::new(
+        PrincipalId::new(record.uploaded_by.principal_id).ok()?,
+        &record.uploaded_by.surface_id,
+        &record.uploaded_by.action_id,
+    )
+    .ok()?;
+    let hold = match record.lease.0 {
+        None => Hold::restore(
+            organization,
+            conversation,
+            uploaded,
+            stored,
+            caller,
+            record.ticket_issued_at_ms,
+            record.uploaded_at_ms,
+        )?,
+        // A published file is kept as it arrived: a record saying otherwise
+        // describes a publish that cannot have happened.
+        Some(lease) if uploaded == stored => Hold::published(
+            organization,
+            conversation,
+            stored,
+            caller,
+            &lease,
+            record.ticket_issued_at_ms,
+            record.uploaded_at_ms,
+        )?,
+        Some(_) => return None,
+    };
     if let RecordState::Retired { was, evidence } = &state {
         RetiredHold::new(hold.clone(), *was, evidence.clone())?;
     }
@@ -304,6 +328,7 @@ pub(super) enum StoredRevertCause {
     UploadUnresolved,
     ConversationDeleted,
     ConversationNotFound,
+    NotRecorded,
 }
 impl From<RevertCause> for StoredRevertCause {
     fn from(cause: RevertCause) -> Self {
@@ -314,6 +339,7 @@ impl From<RevertCause> for StoredRevertCause {
             RevertCause::UploadUnresolved => Self::UploadUnresolved,
             RevertCause::ConversationDeleted => Self::ConversationDeleted,
             RevertCause::ConversationNotFound => Self::ConversationNotFound,
+            RevertCause::NotRecorded => Self::NotRecorded,
         }
     }
 }
@@ -326,6 +352,7 @@ impl From<StoredRevertCause> for RevertCause {
             StoredRevertCause::UploadUnresolved => Self::UploadUnresolved,
             StoredRevertCause::ConversationDeleted => Self::ConversationDeleted,
             StoredRevertCause::ConversationNotFound => Self::ConversationNotFound,
+            StoredRevertCause::NotRecorded => Self::NotRecorded,
         }
     }
 }
