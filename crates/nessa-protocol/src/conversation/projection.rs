@@ -1,4 +1,4 @@
-use super::domain::ConversationId;
+use super::domain::{ConversationApprovalMode, ConversationId};
 use super::tool_uis::{McpToolUis, NoMcpToolUis};
 use super::view::{
     ConversationAnswerOption, ConversationApprovalModeChangeView, ConversationAsked,
@@ -9,7 +9,8 @@ use super::view::{
     ConversationMessageStatus, ConversationPart, ConversationPending, ConversationPendingMode,
     ConversationPermission, ConversationPermissionAsk, ConversationPermissionOption,
     ConversationPermissionOptionEffect, ConversationPermissionOrigin, ConversationQuestion,
-    ConversationTool, ConversationTranscriptState, ConversationView, MAX_STRUCTURED_CONTENT_BYTES,
+    ConversationRuntime, ConversationSelectionView, ConversationTool, ConversationTranscriptState,
+    ConversationView, MAX_STRUCTURED_CONTENT_BYTES,
 };
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
@@ -189,8 +190,17 @@ pub struct CommittedCursor {
     pub observed_head: u64,
 }
 
+/// Stored semantic facts are changed through their projection-owned operations.
+/// External callers can inspect the immutable view but cannot revise it directly.
+///
+/// ```compile_fail
+/// use nessa_protocol::conversation::projection::Projection;
+/// use nessa_protocol::conversation::view::ConversationCapabilities;
+/// let mut projection = Projection::new("conversation".into(), ConversationCapabilities::read_only(), None);
+/// projection.view.selection = None;
+/// ```
 pub struct Projection {
-    pub view: ConversationView,
+    view: ConversationView,
     epoch: Uuid,
     revision: u64,
     committed_position: Option<(String, u64, u64, u64)>,
@@ -609,6 +619,45 @@ impl Projection {
     pub fn with_tool_uis(mut self, tool_uis: Arc<dyn McpToolUis>) -> Self {
         self.tool_uis = tool_uis;
         self
+    }
+    /// Inspect stored facts without bypassing their replacement/revision owner.
+    ///
+    /// ```compile_fail
+    /// use nessa_protocol::conversation::projection::Projection;
+    /// use nessa_protocol::conversation::view::ConversationCapabilities;
+    /// let mut projection = Projection::new("conversation".into(), ConversationCapabilities::read_only(), None);
+    /// projection.view().selection = None;
+    /// ```
+    pub fn view(&self) -> &ConversationView {
+        &self.view
+    }
+    /// Replace the coherent durable selection and revise only when it changes.
+    /// `selection_and_runtime_replacements_own_revision_without_transcript_output`.
+    pub fn selection(&mut self, selection: ConversationSelectionView) {
+        let selection = Some(selection);
+        if self.view.selection != selection {
+            self.view.selection = selection;
+            self.bump();
+        }
+    }
+    /// Publish an acknowledged committed mode through the selection owner.
+    /// `publishing_mode_without_a_selection_does_not_invent_one`.
+    pub fn approval_mode(&mut self, mode: ConversationApprovalMode) {
+        if let Some(selection) = self.view.selection.clone() {
+            self.selection(ConversationSelectionView {
+                approval_mode: mode,
+                ..selection
+            });
+        }
+    }
+    /// Replace runtime display facts through the same revision owner.
+    /// `selection_and_runtime_replacements_own_revision_without_transcript_output`.
+    pub fn runtime(&mut self, runtime: ConversationRuntime) {
+        let runtime = Some(runtime);
+        if self.view.runtime != runtime {
+            self.view.runtime = runtime;
+            self.bump();
+        }
     }
     fn bump(&mut self) {
         self.revision = self.revision.wrapping_add(1);

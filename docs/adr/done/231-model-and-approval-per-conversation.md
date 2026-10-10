@@ -266,6 +266,29 @@ mode not in the selected model's binding-published `approvalModes` is refused, t
 `approvalModes` (its binding's list for the conversation's fixed model from §1). The composer's tray can then offer
 exactly what this conversation's agent honours without a second read.
 
+### Current mode and metadata receipt ownership (#712, #726, #727)
+
+The existing current read and LiveOnly subscription path consume the held
+conversation owner. This correction adds no passive history route or display
+paging. The mode operation retains its admitted intent through the observed
+application, audit and correlated terminal receipt. Projection replacement owns
+its revision. The existing stopping mark fences current publication until
+physical cleanup is confirmed; record acknowledgement remains a separate fact.
+
+| Ordering | Decision and owner | Regression |
+| --- | --- | --- |
+| Normal mode commit or lost acknowledgement with matching Applied readback | Replace the committed selection through Projection and advance revision without transcript output | confirmed mode changes revise current reads |
+| Caller disappears while the provider response is pending | Owned command settles; serialized current reads remain pending until acknowledgement and durable settlement | admitted mode change outlives caller |
+| Begin/observe/terminal reply substitutes target, actor, prior, requested, application or time | Keep admitted intent and the locally observed application; require full expected terminal equality before success/publication | terminal intent and record matrices |
+| Terminal write/readback construction or polling panics | Contain the fault, reconcile a complete durable terminal or retire and recover the prior mode | terminal panic/readback matrices |
+| Pending query contradicts enclosing conversation/owner/prior/state | Refuse before cleanup, audit or read-only recovery publication | pending query correlation |
+| Unconfirmed physical retirement, including historical terminal retries | Retain stopping owner; current read/follow refuse Closed or explicitly marked read-only pending recovery | retained stopping publication |
+| Current wire read and live subscription own a retained stopping target | Refuse a clean replacement and end the follow; confirmed cleanup permits the current durable mode | wire retirement publication |
+| Current read waits for summary while gateway retirement exhausts admission drain and stops the owner | Recheck the same held owner after the await, refuse Closed; confirmed release publishes through the existing signal | retirement during current publication |
+| Repository load or create ACK returns another target | Shared metadata_target refuses before ownership, grant/source, provider, audit or summary effects | metadata query and creation target |
+| Created ACK differs from the full admitted immutable proposal | Refuse Metadata before creation audit/provider opening; legitimate stored retry uses its original origin | creation admitted origin |
+| Existing ACK retains another historical creator/action/time | Preserve original creation and separately attribute current reopening | historical Existing |
+
 ### 4. Changing the mode mid-conversation
 
 A new command, `conversation.setApprovalMode {conversationId, requestId, mode}`,

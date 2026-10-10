@@ -391,13 +391,13 @@ impl ExecutionEventStream for FencedEvents {
 /// gateway's environment no longer runs — the gateway started again — is
 /// accounted for first: ended as lost with what the environment says it holds
 /// for it (rows L11, L12), so a lease is never left silently Live and the new
-/// one takes the next revision (row L16). A previous lease not yet final here
-/// is never one this process still runs: a conversation's slot opens once and
-/// is never reused (`Slot`), and a closing slot is let go only once
-/// `close_leased` has returned, after the close's last lease record and
-/// dropped events are committed (`release_live_slot`), so an opening cannot
-/// begin beside a run of the same conversation or its close
-/// (`l13_concurrent_commands_open_one_lease_and_one_agent`).
+/// one takes the next revision (row L16). A slot opens once and is not reused.
+/// `stopping` retains it until physical cleanup is confirmed; `release_slot`
+/// then permits a new owner. `close_leased` attempts the final lease and
+/// dropped-event records before that release. A record-save failure is reported
+/// and may leave the previous lease nonfinal for the next opening to account for.
+/// Cleanup confirmation, rather than record acknowledgement, excludes an opening
+/// beside the previous run (`l13_concurrent_commands_open_one_lease_and_one_agent`).
 ///
 /// A latest lease this build cannot read is never issued over (row L21): it
 /// may be a later build's lease still Live, and a lease issued over it would

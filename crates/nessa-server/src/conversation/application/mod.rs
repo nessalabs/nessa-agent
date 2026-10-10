@@ -1,5 +1,6 @@
 //! Authenticated commands resolve one shared Agent owner per conversation.
-//! Service -> metadata repository; shared Agent -> SDK session storage/provider.
+//! Service -> metadata_target -> metadata repository.
+//! Shared Agent -> SDK session storage/provider.
 //! Service::create_command -> SDK CreationCoordinator -> principal control lease;
 //! service/creation keeps current target deletion and the existing admission guard.
 //! Service -> ConversationSummaries: what a list shows about each conversation,
@@ -17,7 +18,8 @@
 //! Service -> ConversationAttachments: a message may refer only to images this
 //! conversation uploaded, and closing the conversation lets them go.
 //! Passive read admission -> current auth, durable receiver binding, then
-//! ownership repository. It never opens an Agent or a record source.
+//! metadata_target -> ownership repository. It refuses another target before
+//! ownership, grant/source or selection is consumed. It never opens an Agent.
 //! `record_read` admits each physical head or page against fresh authority
 //! before resolving SDK identity or opening a source.
 //! Service -> ConversationFileLinkAudit: a message may also point at files on
@@ -140,6 +142,7 @@ mod error_code;
 mod live_changes;
 mod locks;
 mod mcp_apps;
+mod metadata_target;
 mod passive_read;
 mod placement;
 mod ports;

@@ -1,5 +1,6 @@
 mod creation;
 mod mutation;
+use super::metadata_target::{load_conversation, validate_target};
 use super::session_key::conversation_session;
 use super::{
     app_reviews::{AppReviews, ReviewAnswer, ReviewAnswerer},
@@ -723,6 +724,24 @@ async fn supervised<T: Send + 'static>(
         .await
         .map_err(|_| ConversationError::Unavailable)?
 }
+/// Correlate a retained pending envelope with the loaded conversation, before
+/// it can authorize cleanup or be joined into a publication.
+/// `terminal_pending_query_is_correlated_before_cleanup_and_publication`.
+fn pending_for(
+    id: &ConversationId,
+    record: &Conversation,
+    request: ConversationModeRequest,
+) -> Result<ConversationModeRequest, ConversationError> {
+    if request.conversation_id != *id
+        || request.organization_id != *record.organization()
+        || request.initiator_principal_id != *record.owner()
+        || request.prior != record.approval_mode()
+        || request.state != ConversationModeRequestState::Pending
+    {
+        return Err(ConversationError::ApprovalModeUncertain);
+    }
+    Ok(request)
+}
 /// What a reader of the gateway log is told about a failed provider opening.
 /// Kept apart from the tracing call so the wording has its own regression.
 #[derive(Debug, PartialEq, Eq)]
@@ -1013,7 +1032,7 @@ impl ConversationService {
         // across repository or audit I/O. Existing ownership is checked before
         // this request can reserve capacity or open a provider.
         let creation_guard = service.inner.creation.lock().await;
-        if let Some(record) = service.inner.metadata.load(&id).await? {
+        if let Some(record) = load_conversation(service.inner.metadata.as_ref(), &id).await? {
             // A deleted conversation is not created again under its
             // identity, whoever asks; only its owner is told why
             // (`a_deleted_conversation_refuses_every_command_on_it`).
@@ -1032,10 +1051,7 @@ impl ConversationService {
                 // recorded after its deletion
                 // (`a_reopen_racing_a_delete_is_not_recorded_after_the_deletion`).
                 let _creation = service.inner.creation.lock().await;
-                service
-                    .inner
-                    .metadata
-                    .load(&id)
+                load_conversation(service.inner.metadata.as_ref(), &id)
                     .await?
                     .ok_or(ConversationError::NotFound)?
                     .check_access(&caller.organization_id, &caller.principal_id)?;
@@ -1128,9 +1144,19 @@ impl ConversationService {
             .environment
             .place(&id, requested.environment.as_deref())
             .await?;
-        let outcome = service.inner.metadata.create(proposed).await?;
+        let outcome = service.inner.metadata.create(proposed.clone()).await?;
         let record = &outcome.conversation;
+        validate_target(&id, record)?;
         record.check_access(&caller.organization_id, &caller.principal_id)?;
+        // Created acknowledges this exact admitted proposal. Existing alone
+        // retains another creator's historical evidence. The regressions are
+        // `creation_created_acknowledgement_preserves_the_admitted_origin` and
+        // `creation_mislabeled_historical_created_refuses_before_audit_and_recovers`.
+        if outcome.disposition == super::ConversationCreationDisposition::Created
+            && record != &proposed
+        {
+            return Err(ConversationError::Metadata);
+        }
         service.reconcile_creation_audit(record).await?;
         if outcome.disposition == super::ConversationCreationDisposition::Existing
             && caller.action_id != record.creation_action()
@@ -1250,10 +1276,7 @@ impl ConversationService {
         open: bool,
     ) -> Result<(Arc<Slot>, Arc<LiveConversation>), Halt> {
         let actor = caller.actor()?;
-        let record = self
-            .inner
-            .metadata
-            .load(id)
+        let record = load_conversation(self.inner.metadata.as_ref(), id)
             .await?
             .ok_or(ConversationError::NotFound)?;
         record
@@ -1295,10 +1318,7 @@ impl ConversationService {
                     .value
                     .get_or_init(|| async {
                         let preparation = async {
-                            let record = service
-                                .inner
-                                .metadata
-                                .load(&id)
+                            let record = load_conversation(service.inner.metadata.as_ref(), &id)
                                 .await
                                 .map_err(|cause| OpeningFailure {
                                     cause,
@@ -1555,7 +1575,7 @@ impl ConversationService {
                             let mut projection =
                                 Projection::new(id.to_string(), capabilities, snapshot.as_ref())
                                     .with_tool_uis(service.inner.tool_uis.clone());
-                            projection.view.selection = Some(ConversationSelectionView {
+                            projection.selection(ConversationSelectionView {
                                 agent: record.agent().expect("agent was resolved"),
                                 model: record.model().as_str().into(),
                                 approval_mode: record.approval_mode(),
@@ -1570,7 +1590,7 @@ impl ConversationService {
                                 .or(service.inner.workspace.as_ref());
                             if let Some(workspace) = workspace {
                                 let identity = configured.provider.identity();
-                                projection.view.runtime = Some(ConversationRuntime {
+                                projection.runtime(ConversationRuntime {
                                     model: identity.model_id().into(),
                                     provider: identity.name().into(),
                                     workspace: workspace.clone(),
@@ -1773,20 +1793,17 @@ impl ConversationService {
         id: &ConversationId,
         caller: &ConversationCaller,
     ) -> Result<(), ConversationError> {
-        let record = self
-            .inner
-            .metadata
-            .load(id)
+        let record = load_conversation(self.inner.metadata.as_ref(), id)
             .await?
             .ok_or(ConversationError::NotFound)?;
         record.check_access(&caller.organization_id, &caller.principal_id)?;
-        let Some(mut request) = self.inner.metadata.pending_mode_change(id).await? else {
+        let Some(request) = self.inner.metadata.pending_mode_change(id).await? else {
             return Ok(());
         };
+        let mut request = pending_for(id, &record, request)?;
         self.retire_mode_session(id).await?;
         if request.application.is_none() {
-            request = self
-                .inner
+            self.inner
                 .metadata
                 .observe_mode_application(
                     id,
@@ -1794,6 +1811,10 @@ impl ConversationService {
                     ConversationModeApplication::Uncertain,
                 )
                 .await?;
+            request = ConversationModeRequest {
+                application: Some(ConversationModeApplication::Uncertain),
+                ..request
+            };
         }
         self.inner
             .mode_audit
@@ -1848,35 +1869,34 @@ impl ConversationService {
             let _admission = service.admit().await?;
             let _mode = service.inner.mode_changes.lock(&id).await;
             let _actor = caller.actor()?;
-            let record = service
-                .inner
-                .metadata
-                .load(&id)
+            let record = load_conversation(service.inner.metadata.as_ref(), &id)
                 .await?
                 .ok_or(ConversationError::NotFound)?;
             record.check_access(&caller.organization_id, &caller.principal_id)?;
+            let matches_call = |request: &ConversationModeRequest| {
+                request.conversation_id == id
+                    && request.request_id == caller.action_id
+                    && request.requested == mode
+                    && request.organization_id == caller.organization_id
+                    && request.initiator_principal_id == caller.principal_id
+                    && request.initiator_surface_id == caller.surface_id
+            };
+            let saved_result = |request: &ConversationModeRequest| match request.state {
+                ConversationModeRequestState::Applied if matches!(request.application, Some(ConversationModeApplication::Applied | ConversationModeApplication::Deferred)) => Ok(request.requested),
+                ConversationModeRequestState::Applied | ConversationModeRequestState::Pending => Err(ConversationError::ApprovalModeUncertain),
+                ConversationModeRequestState::NotApplied if request.application.is_some() => Err(ConversationError::ApprovalModeNotApplied),
+                ConversationModeRequestState::NotApplied => Err(ConversationError::ApprovalModeUncertain),
+            };
             if let Some(existing) = service
                 .inner
                 .metadata
                 .mode_change(&id, &caller.action_id)
                 .await?
             {
-                if existing.requested != mode
-                    || existing.organization_id != caller.organization_id
-                    || existing.initiator_principal_id != caller.principal_id
-                    || existing.initiator_surface_id != caller.surface_id
-                {
+                if !matches_call(&existing) {
                     return Err(ConversationError::RequestConflict);
                 }
-                return match existing.state {
-                    ConversationModeRequestState::Applied => Ok(existing.requested),
-                    ConversationModeRequestState::NotApplied => {
-                        Err(ConversationError::ApprovalModeNotApplied)
-                    }
-                    ConversationModeRequestState::Pending => {
-                        Err(ConversationError::ApprovalModeUncertain)
-                    }
-                };
+                return saved_result(&existing);
             }
             let agent = record.agent().ok_or(ConversationError::AgentUnsupported)?;
             service
@@ -1929,7 +1949,7 @@ impl ConversationService {
                 application: None,
                 requested_at_ms: service.inner.clock.unix_milliseconds(),
             };
-            let request = match service.inner.metadata.begin_mode_change(intent).await {
+            let request = match service.inner.metadata.begin_mode_change(intent.clone()).await {
                 Ok(request) => request,
                 Err(error) => {
                     // A lost write acknowledgement must not cause a second
@@ -1940,19 +1960,20 @@ impl ConversationService {
                     };
                 }
             };
-            match request.state {
-                ConversationModeRequestState::Applied => return Ok(request.requested),
-                ConversationModeRequestState::NotApplied => {
-                    return Err(ConversationError::ApprovalModeNotApplied)
+            if request.state != ConversationModeRequestState::Pending {
+                if !matches_call(&request) {
+                    return Err(ConversationError::RequestConflict);
                 }
-                ConversationModeRequestState::Pending if request.application.is_some() => {
-                    return Err(ConversationError::ApprovalModeUncertain)
-                }
-                ConversationModeRequestState::Pending => {}
+                return saved_result(&request);
+            }
+            // The admitted prior and actor are the original intent's, not an
+            // adapter reply's. A changed pending record cannot authorize an effect.
+            if request != intent {
+                return Err(ConversationError::ApprovalModeUncertain);
             }
             let application = match &live {
                 None => ConversationModeApplication::Deferred,
-                Some(_) if mode == request.prior => ConversationModeApplication::Applied,
+                Some(_) if mode == intent.prior => ConversationModeApplication::Applied,
                 Some(live) => match live
                     .agent
                     .set_approval_mode(provider_approval_mode(mode))
@@ -1962,18 +1983,24 @@ impl ConversationService {
                     Err(_) => ConversationModeApplication::Uncertain,
                 },
             };
-            let request = match service
+            match service
                 .inner
                 .metadata
-                .observe_mode_application(&id, &request.request_id, application)
+                .observe_mode_application(&id, &intent.request_id, application)
                 .await {
-                    Ok(request) => request,
+                    Ok(_) => {},
                     Err(error) => {
                         drop(live);
                         let _ = service.retire_mode_session(&id).await;
                         return Err(error);
                     }
                 };
+            // The application audit describes the effect this owner observed.
+            // Metadata's response cannot replace its target, actor or meaning.
+            let request = ConversationModeRequest {
+                application: Some(application),
+                ..intent
+            };
             if service
                 .inner
                 .mode_audit
@@ -1992,38 +2019,34 @@ impl ConversationService {
                 }
                 return Err(ConversationError::ApprovalModeUncertain);
             }
-            let terminal = match service
-                .inner
-                .metadata
-                .finish_mode_change(
-                    &id,
-                    &request.request_id,
-                    ConversationModeRequestState::Applied,
-                )
-                .await {
-                    Ok(terminal) => terminal,
-                    Err(_) => {
-                        match service.inner.metadata.mode_change(&id, &request.request_id).await {
-                            Ok(Some(terminal)) if terminal.state == ConversationModeRequestState::Applied => {
-                                if let Some(live) = &live {
-                                    if let Some(selection) = &mut live.projection.lock().await.view.selection {
-                                        selection.approval_mode = terminal.requested;
-                                    }
-                                }
-                                return Ok(terminal.requested);
-                            }
-                            _ => {
-                                drop(live);
-                                let _ = service.recover_mode_change(&id, &caller).await;
-                                return Err(ConversationError::ApprovalModeUncertain);
-                            }
-                        }
-                    }
-                };
-            if let Some(live) = live {
-                if let Some(selection) = &mut live.projection.lock().await.view.selection {
-                    selection.approval_mode = terminal.requested;
+            let expected = ConversationModeRequest {
+                state: ConversationModeRequestState::Applied,
+                ..request
+            };
+            // Keep the admitted owner through invocation and polling faults:
+            // a lost terminal acknowledgement still needs durable settlement.
+            let write = AssertUnwindSafe(async {
+                service.inner.metadata.finish_mode_change(
+                    &id, &expected.request_id, ConversationModeRequestState::Applied,
+                ).await
+            }).catch_unwind().await;
+            let terminal = match write {
+                Ok(Ok(terminal)) => Some(terminal),
+                Ok(Err(_)) | Err(_) => AssertUnwindSafe(async {
+                    service.inner.metadata.mode_change(&id, &expected.request_id).await
+                }).catch_unwind().await.ok().and_then(Result::ok).flatten(),
+            }.filter(|terminal| terminal == &expected);
+            let Some(terminal) = terminal else {
+                drop(live);
+                // Already Applied means no pending request, so recovery alone
+                // would keep the stale held projection. Retirement comes first.
+                if service.retire_mode_session(&id).await.is_ok() {
+                    let _ = service.recover_mode_change(&id, &caller).await;
                 }
+                return Err(ConversationError::ApprovalModeUncertain);
+            };
+            if let Some(live) = live {
+                live.projection.lock().await.approval_mode(terminal.requested);
             }
             Ok(terminal.requested)
             }
@@ -2116,7 +2139,7 @@ impl ConversationService {
         // view never says no to what a send at the same moment would admit.
         let image_input = self
             .takes_images(&live.agent, operation_capabilities)
-            .unwrap_or(projection.view.capabilities.image_input);
+            .unwrap_or(projection.view().capabilities.image_input);
         projection.capabilities(ConversationCapabilities {
             queue: true,
             steer: true,
@@ -2144,6 +2167,18 @@ impl ConversationService {
         // Bounded there, before its app reviews are added beside it.
         let view = app_calls::with_app_reviews(view, live.app_reviews.reviews());
         self.check_view_access(&id, &caller).await?;
+        let slot = self
+            .readable_slot(&id)
+            .await?
+            .ok_or(ConversationError::Agent(AgentError::Closed))?;
+        let same_owner = slot
+            .value
+            .get()
+            .and_then(|value| value.as_ref().ok())
+            .is_some_and(|known| Arc::ptr_eq(known, &live));
+        if !same_owner {
+            return Err(ConversationError::Agent(AgentError::Closed));
+        }
         Ok((view, cursor))
     }
     /// The agent of `id` if one is live or opening (waited for), after the
@@ -2157,12 +2192,28 @@ impl ConversationService {
         caller: &ConversationCaller,
     ) -> Result<Option<Arc<LiveConversation>>, ConversationError> {
         self.check_view_access(id, caller).await?;
-        let slot = self.inner.conversations.lock().await.get(id).cloned();
+        let slot = self.readable_slot(id).await?;
         match slot {
             // `wait_for_slot` fails only with the slot's own opening failure.
             Some(slot) => Ok(self.wait_for_slot(id, slot).await.ok()),
             None => Ok(None),
         }
+    }
+    /// The existing slot owns both submission admission and current publication.
+    /// A retained stop cannot produce a clean replacement from its old projection
+    /// (`retained_stopping_publication_refuses_current_reads_until_confirmed_cleanup`).
+    async fn readable_slot(
+        &self,
+        id: &ConversationId,
+    ) -> Result<Option<Arc<Slot>>, ConversationError> {
+        let slot = self.inner.conversations.lock().await.get(id).cloned();
+        if slot
+            .as_ref()
+            .is_some_and(|slot| slot.stopping.load(Ordering::SeqCst))
+        {
+            return Err(ConversationError::Agent(AgentError::Closed));
+        }
+        Ok(slot)
     }
     /// A conversation nothing has open, as its committed records fold with
     /// no agent: read-only, lifecycle absent, nothing awaiting an answer.
@@ -2171,10 +2222,7 @@ impl ConversationService {
         id: &ConversationId,
         caller: &ConversationCaller,
     ) -> Result<(ConversationView, Option<CommittedCursor>), ConversationError> {
-        let record = self
-            .inner
-            .metadata
-            .load(id)
+        let record = load_conversation(self.inner.metadata.as_ref(), id)
             .await?
             .ok_or(ConversationError::NotFound)?;
         record.check_access(&caller.organization_id, &caller.principal_id)?;
@@ -2250,16 +2298,14 @@ impl ConversationService {
         id: &ConversationId,
         caller: &ConversationCaller,
     ) -> Result<Option<(ConversationView, Option<CommittedCursor>)>, ConversationError> {
-        let record = self
-            .inner
-            .metadata
-            .load(id)
+        let record = load_conversation(self.inner.metadata.as_ref(), id)
             .await?
             .ok_or(ConversationError::NotFound)?;
         record.check_access(&caller.organization_id, &caller.principal_id)?;
         let Some(request) = self.inner.metadata.pending_mode_change(id).await? else {
             return Ok(None);
         };
+        let request = pending_for(id, &record, request)?;
         let change = ConversationApprovalModeChangeView {
             request_id: request.request_id,
             requested_mode: request.requested.as_str().into(),
@@ -2301,9 +2347,7 @@ impl ConversationService {
         id: &ConversationId,
         caller: &ConversationCaller,
     ) -> Result<(), ConversationError> {
-        self.inner
-            .metadata
-            .load(id)
+        load_conversation(self.inner.metadata.as_ref(), id)
             .await?
             .ok_or(ConversationError::NotFound)?
             .check_access(&caller.organization_id, &caller.principal_id)?;
@@ -2539,7 +2583,7 @@ impl ConversationService {
                 .projection
                 .lock()
                 .await
-                .view
+                .view()
                 .selection
                 .as_ref()
                 .is_some_and(|selection| selection.approval_mode != ConversationApprovalMode::Ask);
@@ -2558,7 +2602,7 @@ impl ConversationService {
                     .projection
                     .lock()
                     .await
-                    .view
+                    .view()
                     .selection
                     .as_ref()
                     .map(|selection| selection.approval_mode)
@@ -3033,7 +3077,7 @@ impl ConversationService {
         change: impl FnOnce(Option<&ConversationSummary>) -> Option<ConversationSummary>,
     ) {
         let _writes = self.inner.summary_writes.lock(id).await;
-        match self.inner.metadata.load(id).await {
+        match load_conversation(self.inner.metadata.as_ref(), id).await {
             Ok(Some(record)) if record.deletion().is_none() => {}
             Ok(_) => return,
             Err(error) => {
@@ -3267,10 +3311,7 @@ impl ConversationService {
             // Whose conversation this is comes from the ownership record, before
             // anything else. Letting go of files must not depend on being able
             // to start a provider, so it cannot depend on `resolve` for this.
-            let record = service
-                .inner
-                .metadata
-                .load(&id)
+            let record = load_conversation(service.inner.metadata.as_ref(), &id)
                 .await?
                 .ok_or(ConversationError::NotFound)?;
             record.check_access(&caller.organization_id, &caller.principal_id)?;
@@ -3313,11 +3354,21 @@ impl ConversationService {
                     None => (Ok(()), service.release_closed_uploads(&id, &caller).await),
                 }
             } else {
-                let (closed, may_release) = match service.resolve(&id, &caller).await {
-                    Ok(live) => {
-                        service.end_apps(&id, &live, &initiator_of(&actor));
+                let (closed, may_release) = match service.resolve_opening(&id, &caller, true).await
+                {
+                    Ok((slot, live)) => {
                         let result = service
-                            .close_leased(&live, LeaseEndCause::Closed, actor)
+                            .stopping(
+                                &id,
+                                slot,
+                                None,
+                                StopBy {
+                                    actor: &actor,
+                                    ended_by: &initiator_of(&actor),
+                                    cause: LeaseEndCause::Closed,
+                                },
+                                ConfirmedClose::ReleaseSlot,
+                            )
                             .await;
                         // Let go once its cleanup is confirmed, even when the
                         // record of that was not saved: the close answers that
@@ -3327,10 +3378,6 @@ impl ConversationService {
                             Ok(_) => true,
                             Err(error) => confirmed_despite(error).is_some(),
                         };
-                        if closed {
-                            let _ = live.join_attachment_owner().await;
-                            service.release_live_slot(&id, &live).await;
-                        }
                         let snapshot = live.agent.session_manager().snapshot().await;
                         // A closed agent runs nothing more, so nothing can still
                         // need the files. An agent that did not close keeps its
@@ -3347,7 +3394,7 @@ impl ConversationService {
                     // closed, and that is reported. Nothing was read about what it
                     // has queued either, so its files stay where they are and the
                     // next close, which can open it, lets them go.
-                    Err(error) => (Err(error), false),
+                    Err(error) => (Err(error.into()), false),
                 };
                 let released = if may_release {
                     service.release_closed_uploads(&id, &caller).await
@@ -3400,10 +3447,7 @@ impl ConversationService {
             // the summary under: an archive either lands before that erasure
             // or finds the tombstone.
             let _writes = service.inner.summary_writes.lock(&id).await;
-            let record = service
-                .inner
-                .metadata
-                .load(&id)
+            let record = load_conversation(service.inner.metadata.as_ref(), &id)
                 .await?
                 .ok_or(ConversationError::NotFound)?;
             record.check_access(&caller.organization_id, &caller.principal_id)?;
@@ -3514,10 +3558,7 @@ impl ConversationService {
     ) -> Result<Fence, FenceFailure> {
         caller.actor().map_err(|_| FenceFailure::InvalidInput)?;
         let requested_at_ms = self.inner.clock.unix_milliseconds();
-        let record = self
-            .inner
-            .metadata
-            .load(id)
+        let record = load_conversation(self.inner.metadata.as_ref(), id)
             .await
             .map_err(RepositoryFailure::from_load)?
             .ok_or(FenceFailure::NotFound)?;
@@ -3549,10 +3590,7 @@ impl ConversationService {
             None => (self.inner.deletions.lock(id).await, true),
         };
         if waited {
-            let current = self
-                .inner
-                .metadata
-                .load(id)
+            let current = load_conversation(self.inner.metadata.as_ref(), id)
                 .await
                 .map_err(RepositoryFailure::from_load)?
                 .ok_or(FenceFailure::NotFound)?;
@@ -3712,10 +3750,7 @@ impl ConversationService {
             let Some(_deleting) = service.inner.deletions.try_lock(&id) else {
                 return Ok(BackgroundTry::HeldElsewhere);
             };
-            let record = service
-                .inner
-                .metadata
-                .load(&id)
+            let record = load_conversation(service.inner.metadata.as_ref(), &id)
                 .await
                 .map_err(RepositoryFailure::from_load)?
                 .ok_or(ConversationError::NotFound)?;
@@ -4753,20 +4788,6 @@ impl ConversationService {
             .unwrap_or(Err(AgentError::CleanupUncertain))
     }
 
-    async fn release_live_slot(&self, id: &ConversationId, live: &Arc<LiveConversation>) {
-        let slot = self.inner.conversations.lock().await.get(id).cloned();
-        if let Some(slot) = slot {
-            if slot
-                .value
-                .get()
-                .and_then(|value| value.as_ref().ok())
-                .is_some_and(|known| Arc::ptr_eq(known, live))
-            {
-                self.release_slot(id, &slot).await;
-            }
-        }
-    }
-
     async fn release_slot(&self, id: &ConversationId, slot: &Arc<Slot>) {
         let released = {
             let mut owners = self.inner.conversations.lock().await;
@@ -5323,3 +5344,11 @@ mod opening_diagnostics_tests;
 #[cfg(test)]
 #[path = "../../../tests/conversation/deletion.rs"]
 mod deletion_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/conversation/creation_metadata.rs"]
+mod creation_metadata_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/conversation/approval_mode.rs"]
+mod approval_mode_tests;
