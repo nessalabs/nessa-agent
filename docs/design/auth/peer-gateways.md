@@ -186,6 +186,13 @@ parts of #705 and the slices it names:
   development dependency (`scripts/architecture/rust-dependency-graphs.mjs`);
   the next part decides whether the enrollment client moves to a crate both
   may use (`nessa-protocol` or `nessa-auth`) or the server gets its own.
+  Because a peer polls its head instead of watching, that part also gives
+  the head an access path by receiver: today the journal half of the
+  granted head walks the owner's grant changes, since
+  `read_grant_changes` is indexed by conversation first. The index (or a
+  stored per-receiver head) comes with that part's schema version, not
+  here: a version change refuses every existing conversation database, and
+  no peer can poll until a gateway can enroll as one.
 - **The peer table's last addresses and local discovery.** The issue lists
   them; the ADR places local discovery in slice I, and the map leaves "whether
   to announce at all, and what it reveals" unresolved. This side's peer table
