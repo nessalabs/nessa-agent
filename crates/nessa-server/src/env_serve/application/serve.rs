@@ -1090,11 +1090,22 @@ impl Served {
             // gateway's `End` of it is answered after its `Ran`.
             if !lost {
                 // A gateway taken as gone while this waits for room to say
-                // it is not waited on: its end is recorded either way.
+                // it is not waited on: its end is recorded either way. Only
+                // that stop abandons the send: a stop channel whose sender
+                // went with an ended lease says nothing about the gateway.
                 let mut gone = stopped.clone();
+                let lost = async move {
+                    if gone
+                        .wait_for(|stop| *stop == Some(CommandStop::Lost))
+                        .await
+                        .is_err()
+                    {
+                        std::future::pending::<()>().await;
+                    }
+                };
                 tokio::select! {
                     _ = frames.send(ran(lease, outcome)) => {}
-                    _ = gone.wait_for(|stop| *stop == Some(CommandStop::Lost)) => {}
+                    () = lost => {}
                 }
             }
             done.send_replace(Some(cleanup));
