@@ -291,6 +291,8 @@ where
 struct Channel {
     /// `None` once its input was closed.
     input: Option<mpsc::Sender<Vec<u8>>>,
+    /// Writes what its input queue holds, then the end of it, to the harness.
+    pump: JoinHandle<()>,
     control: Box<dyn HarnessControl>,
     output: JoinHandle<()>,
 }
@@ -621,7 +623,7 @@ impl Served {
             control,
         } = process;
         let (sender, receiver) = mpsc::channel(INPUT_QUEUE);
-        tokio::spawn(pump_input(input, receiver));
+        let pump = tokio::spawn(pump_input(input, receiver));
         let output = tokio::spawn(pump_output(
             output,
             lease.clone(),
@@ -633,6 +635,7 @@ impl Served {
                 channel,
                 Channel {
                     input: Some(sender),
+                    pump,
                     control,
                     output,
                 },
@@ -715,10 +718,18 @@ impl Served {
         let task = tokio::spawn(async move {
             let Channel {
                 input,
+                mut pump,
                 mut control,
                 mut output,
             } = running;
+            // What the harness's input already accepted, and the end of it,
+            // reach it before its grace begins, so it is never stopped for
+            // input still on its way. Bounded by the grace itself: a harness
+            // that does not read is not waited on longer (`stop_steps`).
             drop(input);
+            if tokio::time::timeout(grace, &mut pump).await.is_err() {
+                pump.abort();
+            }
             let cleanup = match control.cleanup(grace, kill).await {
                 Ok(outcome) => Cleanup::Confirmed {
                     forced: outcome.forced,

@@ -63,12 +63,13 @@ pub const MAX_STOP_WAIT: Duration = Duration::from_secs(60);
 
 /// The longest an environment's stop of one harness can take before it
 /// answers, for a [`ToEnvironment::Stop`] asking `grace` and `kill`, each
-/// capped at [`MAX_STOP_WAIT`] as the environment caps them: the grace, a
-/// signal, a forced kill and reaping the process, each within `kill`, and
-/// then at most `kill` more for its output to end. Recording the stop comes
-/// after these, and is the caller's margin to allow.
+/// capped at [`MAX_STOP_WAIT`] as the environment caps them: the input the
+/// harness already accepted, and its end, delivered within `grace`; then the
+/// grace; a signal, a forced kill and reaping the process, each within
+/// `kill`; and then at most `kill` more for its output to end. Recording the
+/// stop comes after these, and is the caller's margin to allow.
 pub fn stop_steps(grace: Duration, kill: Duration) -> Duration {
-    grace.min(MAX_STOP_WAIT) + kill.min(MAX_STOP_WAIT) * 4
+    grace.min(MAX_STOP_WAIT) * 2 + kill.min(MAX_STOP_WAIT) * 4
 }
 
 /// A harness's bytes, base64 on the wire.

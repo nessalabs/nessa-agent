@@ -10,12 +10,15 @@ use tokio::io::{duplex, split, AsyncReadExt, AsyncWriteExt, DuplexStream, ReadHa
 
 /// A harness that echoes its input, and counts how often it was stopped.
 /// Its stop takes `slow`. A `deaf` one never reads its input, until it is
-/// stopped.
+/// stopped. A `leisurely` one reads its input a little at a time, echoes
+/// nothing, and leaves by itself a while after its input ends; its stop is
+/// forced unless it left within the grace.
 struct EchoLauncher {
     stopped: Arc<AtomicUsize>,
     launched: Mutex<Vec<BTreeMap<String, String>>>,
     slow: Mutex<Duration>,
     deaf: AtomicBool,
+    leisurely: AtomicBool,
 }
 
 struct EchoControl {
@@ -23,16 +26,24 @@ struct EchoControl {
     slow: Duration,
     /// Lets a deaf harness go once it is stopped.
     released: Arc<tokio::sync::Notify>,
+    /// A leisurely harness's leaving by itself.
+    left: Option<tokio::sync::watch::Receiver<bool>>,
 }
 
 impl HarnessControl for EchoControl {
-    fn cleanup(&mut self, _grace: Duration, _kill: Duration) -> HarnessCleanupFuture<'_> {
+    fn cleanup(&mut self, grace: Duration, _kill: Duration) -> HarnessCleanupFuture<'_> {
         let slow = self.slow;
         Box::pin(async move {
             tokio::time::sleep(slow).await;
+            let forced = match &mut self.left {
+                Some(left) => tokio::time::timeout(grace, left.wait_for(|left| *left))
+                    .await
+                    .is_err(),
+                None => false,
+            };
             self.released.notify_one();
             self.stopped.fetch_add(1, Ordering::SeqCst);
-            Ok(CloseOutcome { forced: false })
+            Ok(CloseOutcome { forced })
         })
     }
 }
@@ -54,7 +65,22 @@ impl HarnessLauncher for EchoLauncher {
         let (mut harness_out, output) = duplex(4096);
         let released = Arc::new(tokio::sync::Notify::new());
         let deaf = self.deaf.load(Ordering::SeqCst).then(|| released.clone());
+        let (leaving, left) = tokio::sync::watch::channel(false);
+        let left = self.leisurely.load(Ordering::SeqCst).then_some(left);
+        let leisurely = left.is_some();
         tokio::spawn(async move {
+            if leisurely {
+                let mut buffer = [0; 4096];
+                while let Ok(read) = harness_in.read(&mut buffer).await {
+                    if read == 0 {
+                        tokio::time::sleep(Duration::from_millis(300)).await;
+                        leaving.send_replace(true);
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                return;
+            }
             if let Some(released) = deaf {
                 released.notified().await;
                 return;
@@ -78,6 +104,7 @@ impl HarnessLauncher for EchoLauncher {
                 stopped: self.stopped.clone(),
                 slow: *self.slow.lock().unwrap(),
                 released,
+                left,
             }),
         })
     }
@@ -149,6 +176,7 @@ impl Gateway {
             launched: Mutex::new(Vec::new()),
             slow: Mutex::new(Duration::ZERO),
             deaf: AtomicBool::new(false),
+            leisurely: AtomicBool::new(false),
         });
         let served = tokio::spawn(serve(
             environment_in,
@@ -979,4 +1007,55 @@ async fn an_unrecorded_input_overflow_stops_the_harness_uncertain() {
         }
     );
     assert_eq!(gateway.stopped.load(Ordering::SeqCst), 1);
+}
+
+/// A stop gives the harness its grace after the input it already accepted,
+/// and the end of it, reached it: a harness that leaves by itself once its
+/// input ends is not forced for input still on its way.
+#[tokio::test(start_paused = true)]
+async fn a_stop_starts_its_grace_after_the_harness_has_its_input() {
+    let mut gateway = Gateway::start();
+    assert_eq!(gateway.next().await, hello());
+    gateway.granted(LEASE).await;
+    gateway.launcher.leisurely.store(true, Ordering::SeqCst);
+    gateway
+        .send(ToEnvironment::Start {
+            lease: LEASE.into(),
+            channel: 1,
+            environment: BTreeMap::new(),
+        })
+        .await;
+    // Ten reads' worth: about 200 ms for the harness to take in, then 300 ms
+    // to leave. The grace, 400 ms, covers the leaving, not both.
+    for _ in 0..10 {
+        gateway
+            .send(ToEnvironment::Input {
+                lease: LEASE.into(),
+                channel: 1,
+                data: Data(vec![b'x'; 4096]),
+            })
+            .await;
+    }
+    gateway
+        .send(ToEnvironment::Stop {
+            lease: LEASE.into(),
+            channel: 1,
+            grace_ms: 400,
+            kill_ms: 100,
+        })
+        .await;
+    let said = loop {
+        match gateway.next().await {
+            FromEnvironment::OutputClosed { .. } => continue,
+            other => break other,
+        }
+    };
+    assert_eq!(
+        said,
+        FromEnvironment::Stopped {
+            lease: LEASE.into(),
+            channel: 1,
+            cleanup: Cleanup::Confirmed { forced: false },
+        }
+    );
 }
