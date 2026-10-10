@@ -226,7 +226,11 @@ impl ShareConversation<'_> {
             }
             Err(_) => return Err(ConversationError::ShareTargetNotPaired),
         };
-        if is_peer_principal(target.credential.principal_id()) {
+        // The answer must be about the credential asked for: a principal
+        // read off any other could pass a peer as a device.
+        if target.credential.id() != &credential
+            || is_peer_principal(target.credential.principal_id())
+        {
             return Err(ConversationError::ShareTargetNotPaired);
         }
         self.grants

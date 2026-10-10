@@ -16,7 +16,8 @@ use nessa_auth::{
         credential_admin::RevokeCredentialRequest,
         pairing::{ClientPendingStore, DeviceConnectionProof, PairingStore, PrivateKeyMaterial},
         ports::{
-            AccessError, CredentialEvidence, CredentialVerifier, PortFuture, VerifiedCredential,
+            AccessError, AccessReader, AccessSnapshot, CredentialEvidence, CredentialVerifier,
+            PortFuture, VerifiedCredential,
         },
     },
     domain::{AudienceId, CredentialId, OrganizationId, ResourceId},
@@ -515,6 +516,14 @@ async fn a_peer_gateway_pairs_as_its_own_principal_and_reads_nothing_ungranted()
     fixture.gateway.shutdown().await;
 }
 
+/// Answers every read with `self.1`'s snapshot, whatever was asked.
+struct MisreadAccess<A>(Arc<A>, CredentialId);
+impl<A: AccessReader> AccessReader for MisreadAccess<A> {
+    fn read<'a>(&'a self, _: &'a CredentialId) -> PortFuture<'a, AccessSnapshot> {
+        self.0.read(&self.1)
+    }
+}
+
 /// Row H8 (`docs/design/auth/peer-gateways.md`): the owner cannot share a
 /// conversation with a paired peer yet. `conversation.share` refuses its
 /// credential `share_target_not_paired` and writes no grant, while the same
@@ -576,6 +585,30 @@ async fn a_peer_cannot_be_shared_with_and_reads_nothing_even_if_granted() {
     };
     assert!(matches!(
         share(&peer, "share-peer").await,
+        Err(ConversationError::ShareTargetNotPaired)
+    ));
+    assert!(!metadata.is_granted(&id, &peer.receiver).await.unwrap());
+    // An access reader that answers about another credential (here, always
+    // the device's) never lets the peer pass as that device.
+    let misread = MisreadAccess(
+        fixture.registry.clone(),
+        CredentialId::new(device.credential.clone()).unwrap(),
+    );
+    let misread_shares = ShareConversation {
+        conversations: metadata.as_ref(),
+        receivers: fixture.receivers.as_ref(),
+        grants: metadata.as_ref(),
+        access: &misread,
+    };
+    assert!(matches!(
+        misread_shares
+            .share(
+                caller("share-peer-misread"),
+                id.clone(),
+                CredentialId::new(peer.credential.clone()).unwrap(),
+                110,
+            )
+            .await,
         Err(ConversationError::ShareTargetNotPaired)
     ));
     assert!(!metadata.is_granted(&id, &peer.receiver).await.unwrap());
