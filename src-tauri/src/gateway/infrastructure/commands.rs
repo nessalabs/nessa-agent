@@ -699,13 +699,22 @@ mod configuration_directory {
                 return Ok(self.inner.load());
             }
             let updated = self.inner.update(change)?;
-            if self
-                .failures
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
-                    count.checked_sub(1)
-                })
-                .is_ok()
-            {
+            let mut remaining = self.failures.load(Ordering::SeqCst);
+            let refuse = loop {
+                let Some(next) = remaining.checked_sub(1) else {
+                    break false;
+                };
+                match self.failures.compare_exchange(
+                    remaining,
+                    next,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                ) {
+                    Ok(_) => break true,
+                    Err(current) => remaining = current,
+                }
+            };
+            if refuse {
                 assert!(!self.panic_after_save, "settings acknowledgement panicked");
                 return Err(io::Error::other("settings publication not confirmed"));
             }
