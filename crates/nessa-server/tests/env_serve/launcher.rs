@@ -15,7 +15,7 @@ fn this_build_comes_first_on_the_host_s_search_path() {
     );
     assert_eq!(
         search_path(directory, None),
-        Some(OsString::from("/home/me/.nessa/env/ab12"))
+        Some(OsString::from("/home/me/.nessa/env/ab12:/bin:/usr/bin"))
     );
     // A directory no search path can hold is not put on one.
     assert_eq!(search_path(Path::new("/odd:dir"), None), None);

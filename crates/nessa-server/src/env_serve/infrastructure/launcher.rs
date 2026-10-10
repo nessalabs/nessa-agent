@@ -120,14 +120,20 @@ impl HarnessLauncher for ConfiguredLauncher {
     }
 }
 
+/// What `execvp` searches when `PATH` is unset.
+const UNSET_PATH: &str = "/bin:/usr/bin";
+
 /// `directory` first, then the host's `configured` search path: what a
-/// harness that may publish runs as `nessa` is the build serving it. `None`
-/// when no search path can hold `directory`.
+/// harness that may publish runs as `nessa` is the build serving it. With
+/// none configured, the rest is what a lookup with no `PATH` searches, so
+/// adding `directory` never takes a command away. `None` when no search
+/// path can hold `directory`.
 pub(crate) fn search_path(
     directory: &Path,
     configured: Option<&std::ffi::OsStr>,
 ) -> Option<OsString> {
-    let rest = configured.map(std::env::split_paths).into_iter().flatten();
+    let configured = configured.unwrap_or(std::ffi::OsStr::new(UNSET_PATH));
+    let rest = std::env::split_paths(configured);
     std::env::join_paths(std::iter::once(directory.to_path_buf()).chain(rest)).ok()
 }
 
