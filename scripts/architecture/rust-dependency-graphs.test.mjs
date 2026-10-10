@@ -106,4 +106,3 @@ test("the device client stays portable and cannot reach the gateway, including r
     /reaches denied package "nessa-server"/,
   )
 })
-
