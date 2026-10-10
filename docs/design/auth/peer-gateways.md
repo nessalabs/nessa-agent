@@ -88,10 +88,15 @@ Authenticate a protected session on the native listener, and nothing else
 yet. Every read of the owner's conversations is refused as not its own
 (`wrong_owner`): the receiver binding pairing made names the owner whose
 conversations it may read, and the session's principal is the peer, not that
-owner. The socket's owner methods are `forbidden` to it, as to a device. A
-peer reads what it is granted once per-conversation grants (slice G, #704)
-treat its binding as a grantee; until then it reads nothing, so pairing a peer
-discloses nothing.
+owner. The socket's owner methods are `forbidden` to it, as to a device.
+
+That holds even for a conversation shared with it. Per-conversation grants
+(slice G, #704, merged in #720) let the owner `conversation.share` with the
+peer's credential, because the peer's receiver binding names the owner as its
+grantor, and the grant is written. The peer still reads nothing: every read
+admission refuses a session whose principal is not the binding's owner before
+it consults a grant. Reading what it is granted is the next part (below), so
+pairing a peer, or sharing with one, discloses nothing yet.
 
 ```mermaid
 sequenceDiagram
@@ -113,8 +118,10 @@ sequenceDiagram
     GW-->>Peer: Active {credential, receiver, epoch}
     Peer->>GW: openProduct, session.authenticate
     GW-->>Peer: ready, principalId = gateway:<key hex>
-    Peer->>GW: conversation.catalogueHead
-    GW-->>Peer: wrong_owner (nothing granted; slice G)
+    Owner->>GW: conversation.share {credentialId: the peer's}
+    GW-->>Owner: applied (the binding names the owner as grantor)
+    Peer->>GW: conversation.catalogueHead (or any read)
+    GW-->>Peer: wrong_owner (session principal is not the binding's owner)
     Owner->>GW: credential.revoke (or pairing.cancel)
     Peer->>GW: openProduct
     GW-->>Peer: Refused
@@ -133,6 +140,7 @@ Each row has at least one test.
 | H5 | The owner revokes a paired peer's credential | Its next connection is refused at `openProduct` | `a_revoked_peer_gateway_is_refused_its_next_connection` |
 | H6 | `credential.issue` for a principal of kind `gateway` | Refused `Conflict`, nothing written: no second way to make a peer | `a_gateway_principal_holds_only_what_pairing_issued_it` |
 | H7 | A gateway that pairs no peer | Every device enrollment, registry and client file reads and writes as before | the existing device pairing suites |
+| H8 | The owner shares a conversation with a paired peer's credential | The share applies; on the native channel the peer's catalogue and record heads and both watches are `wrong_owner`, while a device granted the same conversation passes admission; on the socket its read, view and list subscriptions and lists are `conversation_not_found` and `conversation.shares` is `forbidden` | `a_peer_granted_a_conversation_still_reads_nothing_of_it`; `a_peer_granted_a_conversation_reads_nothing_on_the_socket` |
 
 ## What this part does not do
 
@@ -145,19 +153,24 @@ rest, proposed as the next part of #705 and the slices it names:
   development dependency (`scripts/architecture/rust-dependency-graphs.mjs`);
   the next part decides whether the enrollment client moves to a crate both
   may use (`nessa-protocol` or `nessa-auth`) or the server gets its own.
-- **Reading what it is granted.** Slice G (#704) names a grantee by its
-  receiver binding. The binding's `owner_id` is the **grantor**: the owner
+- **Reading what it is granted.** Slice G (#704, merged in #720) names a
+  grantee by its receiver binding. The binding's `owner_id` is the **grantor**: the owner
   whose conversations the receiver reads, who paired it. It is never the
   reader and must never be read as one; for a peer the reader is the
   session's `gateway` principal. Today admission refuses a session whose
   principal is not the binding's owner, which is what keeps a peer from
-  reading anything. That check may be replaced by comparing the binding's
+  reading anything. It is made in two places, each before any grant is
+  consulted: `AdmitPassiveRead::binding` (catalogue head, manifest and
+  resolve, record head and pages, catalogue and record watches) and
+  `reader_of` (the socket's `conversation.read`, view subscriptions and
+  lists). That check may be replaced by comparing the binding's
   credential with the session's **only in the same change that puts every
   peer read path behind G's grant filter**: the catalogue page, resolve and
   head, record head and pages, and catalogue and record watches. Relaxing it
   first would hand a peer the owner's whole catalogue. Whatever records a
   peer's read (audit, journal, logs) names the session's principal, never the
-  binding's owner.
+  binding's owner. Until then a share to a peer is accepted and listed by
+  `conversation.shares` like a device's, and sits unused.
 - **The peer table's last addresses and local discovery.** The issue lists
   them; the ADR places local discovery in slice I, and the map leaves "whether
   to announce at all, and what it reveals" unresolved. This side's peer table

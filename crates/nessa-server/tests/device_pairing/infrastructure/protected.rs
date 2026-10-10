@@ -19,10 +19,14 @@ use nessa_auth::{
             AccessError, CredentialEvidence, CredentialVerifier, PortFuture, VerifiedCredential,
         },
     },
-    domain::{AudienceId, OrganizationId, ResourceId},
+    domain::{AudienceId, CredentialId, OrganizationId, ResourceId},
 };
 use nessa_client_core::pairing::NativeEnrollmentClient;
 use nessa_protocol::agents::AgentId;
+use nessa_protocol::conversation::domain::{
+    ConversationApprovalMode, ConversationId, ConversationModelId,
+};
+use nessa_protocol::conversation::read_scope::ReceiverReadScope;
 use nessa_protocol::pairing::{
     encode_frame,
     wire::{
@@ -33,6 +37,12 @@ use nessa_protocol::pairing::{
 use nessa_server::{
     agents::application::{AgentProbe, AgentProbeEvidence},
     app::dependencies::RuntimeDependencies,
+    conversation::application::{
+        ConversationCaller, ConversationRepository, ReadGrants, RecordReadError, RecordReadFuture,
+        RecordReadLease, RecordReadOperation, RecordReadResponse, RecordReadSource,
+        ShareConversation,
+    },
+    conversation::domain::Conversation,
     conversation::infrastructure::{LocalConversationStore, NessaCatalogueReadSource},
     device_pairing::infrastructure::ProtectedSessions,
     product::{DeviceCredentials, NativeSessions, ProductDependencies, ProductRouteState},
@@ -44,6 +54,7 @@ use std::{
     net::{SocketAddr, TcpStream},
     sync::Arc,
 };
+use uuid::Uuid;
 
 struct NoAgents;
 impl AgentProbe for NoAgents {
@@ -110,8 +121,32 @@ fn sessions_with(
     fixture: &Fixture,
     devices: Arc<dyn DeviceCredentials>,
 ) -> Arc<dyn ProtectedSessions> {
+    sessions_on(fixture, devices, conversation_store(fixture))
+}
+/// The fixture's conversation store, which a native session reads.
+fn conversation_store(fixture: &Fixture) -> Arc<LocalConversationStore> {
     let root = private_root(fixture.directory.path(), "conversation-metadata");
-    let metadata = Arc::new(LocalConversationStore::open(&root.join("metadata.sqlite3")).unwrap());
+    Arc::new(LocalConversationStore::open(&root.join("metadata.sqlite3")).unwrap())
+}
+/// A record source whose every read answers `history_pruned`: a read that
+/// reaches it was admitted, and one refused by admission never does.
+struct PrunedRecords;
+impl RecordReadSource for PrunedRecords {
+    fn read<'a>(
+        &'a self,
+        _: ReceiverReadScope,
+        _: RecordReadOperation,
+        _: RecordReadLease,
+    ) -> RecordReadFuture<'a, RecordReadResponse> {
+        Box::pin(async { Err(RecordReadError::HistoryPruned) })
+    }
+}
+/// Native sessions served from `metadata`, a store the test also writes.
+fn sessions_on(
+    fixture: &Fixture,
+    devices: Arc<dyn DeviceCredentials>,
+    metadata: Arc<LocalConversationStore>,
+) -> Arc<dyn ProtectedSessions> {
     let state = ProductRouteState::new(
         ResourceId::new("gateway").unwrap(),
         OrganizationId::new("org").unwrap(),
@@ -133,7 +168,8 @@ fn sessions_with(
     .with_catalogue_source(Arc::new(NessaCatalogueReadSource::new(
         metadata,
         Id::new("gateway").unwrap(),
-    )));
+    )))
+    .with_record_source(Arc::new(PrunedRecords));
     Arc::new(NativeSessions::new(state, devices))
 }
 
@@ -474,6 +510,117 @@ async fn a_peer_gateway_pairs_as_its_own_principal_and_reads_nothing_ungranted()
     assert_eq!(head["ok"], false, "{head}");
     assert_eq!(code(&head), "wrong_owner");
     assert_eq!(code(&list), "forbidden");
+    stop.send(()).unwrap();
+    listener.await.unwrap().unwrap();
+    fixture.gateway.shutdown().await;
+}
+
+/// Row H8 (`docs/design/auth/peer-gateways.md`): the owner may share a
+/// conversation with a peer's credential, since the peer's receiver binding
+/// names the owner as its grantor, but the peer still reads nothing of it on
+/// the native channel: catalogue and record heads and both watches are
+/// refused `wrong_owner`, because passive-read admission refuses a session
+/// whose principal is not the binding's owner, and a peer's session is its
+/// own `gateway` principal. A device granted the same conversation passes
+/// that admission, so the share itself took effect. The socket's reads ask
+/// `reader_of`, which refuses the same shape (`subscriptions.rs`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_peer_granted_a_conversation_still_reads_nothing_of_it() {
+    let fixture = Fixture::new().await;
+    let metadata = conversation_store(&fixture);
+    let sessions = sessions_on(
+        &fixture,
+        Arc::new(Devices(fixture.registry.clone())),
+        metadata.clone(),
+    );
+    let (address, stop, listener, _) = fixture.listener_serving(Some(sessions)).await;
+    let peer = pair_as(&fixture, address, "peer", ConsentClass::PeerRead).await;
+    let device = pair(&fixture, address, "device").await;
+    let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    metadata
+        .create(
+            Conversation::new(
+                id.clone(),
+                fixture.session.context().organization_id().clone(),
+                fixture.session.context().principal_id().clone(),
+                "panel".into(),
+                "create".into(),
+                1,
+                AgentId::Claude,
+                ConversationModelId::new("model").unwrap(),
+                ConversationApprovalMode::Ask,
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let shares = ShareConversation {
+        conversations: metadata.as_ref(),
+        receivers: fixture.receivers.as_ref(),
+        grants: metadata.as_ref(),
+    };
+    for (credential, request) in [
+        (&peer.credential, "share-peer"),
+        (&device.credential, "share-device"),
+    ] {
+        let caller = ConversationCaller {
+            organization_id: fixture.session.context().organization_id().clone(),
+            principal_id: fixture.session.context().principal_id().clone(),
+            surface_id: "panel".into(),
+            action_id: request.into(),
+        };
+        let applied = shares
+            .share(
+                caller,
+                id.clone(),
+                CredentialId::new(credential.clone()).unwrap(),
+                110,
+            )
+            .await
+            .unwrap();
+        assert!(applied, "{request}");
+    }
+    assert!(metadata.is_granted(&id, &peer.receiver).await.unwrap());
+    let reads = |paired: &Paired| {
+        let credential = paired.credential.clone();
+        let (receiver, epoch) = (paired.receiver.clone(), paired.epoch.to_string());
+        let saved = paired.store.clone();
+        let conversation = id.to_string();
+        blocking(move || {
+            let mut probe = Probe::open(address, &saved);
+            let nonce = probe.nonce.clone();
+            let ready = probe.authenticate(&credential, &nonce).unwrap();
+            assert_eq!(ready["ok"], true, "{ready}");
+            let by_receiver = json!({"receiverId": receiver, "accessEpoch": epoch});
+            let mut in_conversation = by_receiver.clone();
+            in_conversation["conversationId"] = json!(conversation);
+            [
+                ("conversation.catalogueHead", by_receiver.clone()),
+                ("conversation.watchCatalogue", by_receiver),
+                ("conversation.recordsHead", in_conversation.clone()),
+                ("conversation.watchRecords", in_conversation),
+            ]
+            .map(|(method, params)| (method, probe.call(method, params).unwrap()))
+        })
+    };
+    for (method, answer) in reads(&peer).await {
+        assert_eq!(code(&answer), "wrong_owner", "peer {method}: {answer}");
+    }
+    // The device passes the admission the peer fails: its catalogue head
+    // answers, and its record head reaches the source, which answers
+    // `history_pruned`. This fixture has no change-watch storage, so an
+    // admitted watch answers `temporarily_unavailable`.
+    for (method, answer) in reads(&device).await {
+        let expected = match method {
+            "conversation.catalogueHead" => {
+                assert_eq!(answer["ok"], true, "device {method}: {answer}");
+                continue;
+            }
+            "conversation.recordsHead" => "history_pruned",
+            _ => "temporarily_unavailable",
+        };
+        assert_eq!(code(&answer), expected, "device {method}: {answer}");
+    }
     stop.send(()).unwrap();
     listener.await.unwrap().unwrap();
     fixture.gateway.shutdown().await;

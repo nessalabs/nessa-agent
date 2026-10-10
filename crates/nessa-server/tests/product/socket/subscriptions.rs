@@ -1832,6 +1832,51 @@ async fn a_paired_device_on_the_socket_sees_only_what_it_was_granted() {
     fixture.assert_lists_refused().await;
 }
 
+/// Row H8 (`docs/design/auth/peer-gateways.md`): a peer gateway's receiver
+/// binding names the owner who paired it, its grantor, while its session is
+/// its own `gateway` principal. Granted a conversation, it still reads
+/// nothing of it on the socket: `reader_of` refuses a session whose principal
+/// is not the binding's owner, before any grant is consulted, so its read,
+/// view subscription and lists are all refused, and it cannot list shares.
+#[tokio::test]
+async fn a_peer_granted_a_conversation_reads_nothing_on_the_socket() {
+    let fixture = SubscriptionFixture::new().await;
+    fixture.turn("first").await;
+    let fixture = fixture.with_devices(Devices::new(&[("credential", "receiver", "grantor", true)]));
+    fixture
+        .grant_to(crate::conversation::application::ReadGrantTransition::Grant)
+        .await;
+    let conversation = json!({"conversationId": fixture.id.to_string()});
+    for (method, params) in [
+        ("conversation.read", conversation.clone()),
+        ("conversation.list", json!({})),
+        ("conversation.observe", json!({})),
+    ] {
+        let answer = fixture.call(method, params).await;
+        assert_eq!(
+            answer["error"]["code"], "conversation_not_found",
+            "{method}: {answer}"
+        );
+    }
+    // Sharing needs `credential.manage`, which a gateway principal can never
+    // hold, so the policy refuses it before the share command is asked.
+    let shares = fixture.call("conversation.shares", conversation.clone()).await;
+    assert_eq!(shares["error"]["code"], "forbidden", "{shares}");
+    let mut client = fixture.connect();
+    for (id, method, params) in [
+        ("view", "conversation.subscribe", conversation),
+        ("list", "conversation.subscribeList", json!({})),
+    ] {
+        client.send(id, method, params);
+        let (reply, _) = client.reply(id).await;
+        assert_eq!(
+            reply["error"]["code"], "conversation_not_found",
+            "{method}: {reply}"
+        );
+    }
+    client.close().await;
+}
+
 /// Row G13: a revoke ends a device's subscription before its next batch.
 #[tokio::test]
 async fn a_revoke_ends_a_device_subscription_before_its_next_batch() {

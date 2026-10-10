@@ -176,7 +176,7 @@ Environments lane, in order:
   authorities over one conversation. The granting side (enrollment under a
   peer class, the `gateway` kind and what it can hold, revocation) is its
   first part ([peer gateways](../../design/auth/peer-gateways.md)); the peer
-  side and grant-scoped reads follow, the latter after G.
+  side and grant-scoped reads follow, the latter now that G has merged.
 - [ ] **I. Environment grants to peers; outbound environment connection;
   local discovery** ([#706](https://github.com/nessalabs/nessa-agent/issues/706)). *Gate:* the peer admits and may
   narrow under its policy; narrowed grants recorded; lease ends on revoke;

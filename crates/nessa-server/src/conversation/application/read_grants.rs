@@ -25,6 +25,12 @@
 //! device, because only pairing creates receiver bindings, and it reads only
 //! what it was granted. Every other session is the owner's own surface and
 //! reads by ownership, exactly as before this slice.
+//!
+//! A paired peer gateway (`docs/design/auth/peer-gateways.md`) has a binding
+//! too, but its session is its own principal, not the binding's owner, so
+//! [`reader_of`] and passive-read admission refuse it before it becomes a
+//! [`Reader`]. Relaxing that owner check is safe only in the change that puts
+//! every peer read path behind the grant filter.
 
 use super::{ConversationCaller, ConversationError, ConversationFuture, ConversationRepository};
 use crate::conversation::application::ReceiverAuthority;
