@@ -41,6 +41,14 @@ describe("a lease's status in words", () => {
         { state: "refused", refusal: "agent_unavailable" },
         "Couldn't start: host can't run this agent",
       ],
+      [
+        { state: "refused", refusal: "environment_platform_unsupported" },
+        "Couldn't start: Nessa can't install itself on this host's system",
+      ],
+      [
+        { state: "refused", refusal: "environment_install_failed" },
+        "Couldn't start: installing Nessa on the host failed",
+      ],
       [{ state: "refused" }, "Couldn't start"],
       [{ state: "unreadable" }, "Not known"],
     ]

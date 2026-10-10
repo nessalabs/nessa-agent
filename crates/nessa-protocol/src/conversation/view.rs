@@ -747,6 +747,8 @@ pub enum ConversationLeaseRefusal {
     EnvironmentVersionMismatch,
     EnvironmentBusy,
     AgentUnavailable,
+    EnvironmentPlatformUnsupported,
+    EnvironmentInstallFailed,
 }
 
 /// Non-secret runtime facts selected by server composition.

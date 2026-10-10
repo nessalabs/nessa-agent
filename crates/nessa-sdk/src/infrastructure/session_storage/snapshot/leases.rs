@@ -76,6 +76,10 @@ const REFUSED: &str = "refused";
 /// shape reads it as unreadable (row L21) instead of corrupt.
 const ISSUED_V2: &str = "issued_v2";
 const REFUSED_V2: &str = "refused_v2";
+/// A refusal of installing this build on a host (issue #703), which the
+/// second shape cannot hold either: a build that knows only the first two
+/// reads it as unreadable instead of corrupt.
+const REFUSED_V3: &str = "refused_v3";
 const ENDING: &str = "ending";
 const ENDED: &str = "ended";
 const INTERRUPTED: &str = "interrupted";
@@ -171,6 +175,8 @@ enum Refusal {
     EnvironmentVersionMismatch,
     EnvironmentBusy,
     AgentUnavailable,
+    EnvironmentPlatformUnsupported,
+    EnvironmentInstallFailed,
 }
 
 impl From<&LeaseTerms> for Terms {
@@ -272,6 +278,8 @@ impl From<LeaseRefusal> for Refusal {
             LeaseRefusal::EnvironmentVersionMismatch => Self::EnvironmentVersionMismatch,
             LeaseRefusal::EnvironmentBusy => Self::EnvironmentBusy,
             LeaseRefusal::AgentUnavailable => Self::AgentUnavailable,
+            LeaseRefusal::EnvironmentPlatformUnsupported => Self::EnvironmentPlatformUnsupported,
+            LeaseRefusal::EnvironmentInstallFailed => Self::EnvironmentInstallFailed,
         }
     }
 }
@@ -283,13 +291,22 @@ impl From<Refusal> for LeaseRefusal {
             Refusal::EnvironmentVersionMismatch => Self::EnvironmentVersionMismatch,
             Refusal::EnvironmentBusy => Self::EnvironmentBusy,
             Refusal::AgentUnavailable => Self::AgentUnavailable,
+            Refusal::EnvironmentPlatformUnsupported => Self::EnvironmentPlatformUnsupported,
+            Refusal::EnvironmentInstallFailed => Self::EnvironmentInstallFailed,
         }
     }
 }
 
 /// The kind an issuance or refusal is stored under: slice A's while its shape
-/// holds the record, the second one otherwise.
+/// holds the record, the third for an install's refusal, the second
+/// otherwise.
 fn issuance_kind(terms: &LeaseTerms, refusal: Option<LeaseRefusal>) -> &'static str {
+    if matches!(
+        refusal,
+        Some(LeaseRefusal::EnvironmentPlatformUnsupported | LeaseRefusal::EnvironmentInstallFailed)
+    ) {
+        return REFUSED_V3;
+    }
     let first_shape = terms.environment == EnvironmentRef::Here
         && matches!(refusal, None | Some(LeaseRefusal::SandboxUnavailable));
     match (first_shape, refusal) {
@@ -413,7 +430,7 @@ impl WireLease {
             return Err(corrupt("a lease record exceeds its stored bound"));
         }
         Ok(match self.kind.as_str() {
-            ISSUED | REFUSED | ISSUED_V2 | REFUSED_V2 => {
+            ISSUED | REFUSED | ISSUED_V2 | REFUSED_V2 | REFUSED_V3 => {
                 let saved: Issuance = body(&self.body)?;
                 let lease = lease(saved.lease)?;
                 let revision = revision(saved.revision)?;
@@ -432,7 +449,7 @@ impl WireLease {
                         terms,
                         actor,
                     },
-                    (Some(refusal), REFUSED | REFUSED_V2) => LeaseRecord::Refused {
+                    (Some(refusal), REFUSED | REFUSED_V2 | REFUSED_V3) => LeaseRecord::Refused {
                         lease,
                         revision,
                         terms,
@@ -667,6 +684,20 @@ mod tests {
                 },
                 REFUSED_V2,
             ),
+            (
+                // An install's refusal, which the second shape cannot hold.
+                LeaseRecord::Refused {
+                    lease: id("lease-1"),
+                    revision: LeaseRevision::FIRST,
+                    terms: LeaseTerms {
+                        environment: EnvironmentRef::Ssh(SshDestination::new("devbox").unwrap()),
+                        ..terms(LeaseDeadline::UntilEnded)
+                    },
+                    refusal: LeaseRefusal::EnvironmentInstallFailed,
+                    actor: actor(),
+                },
+                REFUSED_V3,
+            ),
         ];
         for (record, kind) in cases {
             let wire = WireLease::from(&record);
@@ -681,16 +712,22 @@ mod tests {
                 .unwrap(),
                 record
             );
-            // Under the first kinds it is corrupt, never a lease here.
-            let first = if kind == ISSUED_V2 { ISSUED } else { REFUSED };
-            assert!(matches!(
-                WireLease {
-                    kind: first.into(),
-                    body: wire.body,
-                }
-                .decode(),
-                Err(StorageError::Corrupt(_))
-            ));
+            // Under the earlier kinds it is corrupt, never a lease here.
+            let earlier: &[&str] = match kind {
+                ISSUED_V2 => &[ISSUED],
+                REFUSED_V2 => &[REFUSED],
+                _ => &[REFUSED, REFUSED_V2],
+            };
+            for first in earlier {
+                assert!(matches!(
+                    WireLease {
+                        kind: (*first).into(),
+                        body: wire.body.clone(),
+                    }
+                    .decode(),
+                    Err(StorageError::Corrupt(_))
+                ));
+            }
         }
         // What slice A wrote is still written and read as it was.
         assert_eq!(WireLease::from(&every_kind()[0]).kind, ISSUED);

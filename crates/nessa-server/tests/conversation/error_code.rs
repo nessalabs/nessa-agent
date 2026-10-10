@@ -58,6 +58,14 @@ fn an_ssh_hosts_refusals_are_the_hosts_and_never_this_gateways_configuration() {
             ConversationErrorCode::EnvironmentVersionMismatch,
         ),
         (
+            LeaseRefusal::EnvironmentPlatformUnsupported,
+            ConversationErrorCode::EnvironmentPlatformUnsupported,
+        ),
+        (
+            LeaseRefusal::EnvironmentInstallFailed,
+            ConversationErrorCode::EnvironmentInstallFailed,
+        ),
+        (
             LeaseRefusal::SandboxUnavailable,
             ConversationErrorCode::SandboxUnavailable,
         ),

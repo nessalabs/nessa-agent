@@ -1,6 +1,7 @@
 //! The gateway's own evidence about its SSH environments: each connection,
-//! each refusal by version or business, each connection lost, and each frame
-//! dropped because it named no lease or harness the gateway holds (row L9).
+//! each refusal by version or business, each connection lost, each frame
+//! dropped because it named no lease or harness the gateway holds (row L9),
+//! and each install of this build on a host, begun, done or refused.
 //! One immutable JSON file per record, like the gateway's other audits, with
 //! when it was observed.
 use serde::Serialize;
@@ -44,6 +45,74 @@ pub(crate) enum EnvironmentEvent {
         lease: String,
         channel: u32,
     },
+    /// This build is about to be sent to a host that has no copy of it,
+    /// to be kept under `digest` if its SHA-256 there is that and it speaks
+    /// `protocol`.
+    /// Recorded before a byte is sent. `lease` is the lease whose opening
+    /// found no copy, in every install record: it joins them to its
+    /// issuance and its actor, and pairs this start with its outcome, as a
+    /// lease opens at most one install.
+    InstallStarted {
+        host: String,
+        lease: String,
+        protocol: String,
+        digest: String,
+    },
+    /// It verified on the host and is in place.
+    Installed {
+        host: String,
+        lease: String,
+        protocol: String,
+        digest: String,
+    },
+    /// The upload's answer was lost, and the host's probe then found a copy
+    /// of this protocol in place: this upload's or another gateway's of the
+    /// same protocol, so no digest is claimed for it.
+    InstallFound {
+        host: String,
+        lease: String,
+        protocol: String,
+    },
+    /// The upload's answer did not come, or was not one it gives, and the
+    /// probe after it found no copy. Its script may still be running on the
+    /// host, and may yet place a copy it verified, which a later lease then
+    /// serves (recorded `Connected`): so this says neither installed nor
+    /// refused.
+    InstallUnsettled {
+        host: String,
+        lease: String,
+        protocol: String,
+        digest: String,
+    },
+    /// Nothing was installed, and why; `seen` is what the host said, where
+    /// that is the reason (its platform, the digest it saw, the protocol the
+    /// copy spoke).
+    InstallRefused {
+        host: String,
+        lease: String,
+        reason: InstallRefusal,
+        seen: Option<String>,
+    },
+}
+
+/// Why this build was not installed on a host.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum InstallRefusal {
+    /// The host runs on a system or processor this build was not made for.
+    Platform,
+    /// This build's own executable could not be read here.
+    Source,
+    /// What arrived on the host is not what was sent.
+    Fingerprint,
+    /// What arrived runs, and speaks another lease protocol.
+    Version,
+    /// What arrived does not run on the host.
+    Unrunnable,
+    /// The host has no tool to take a SHA-256 with.
+    DigestTool,
+    /// A step on the host failed: a directory, a file, its mode, the rename.
+    Failed,
 }
 
 /// Where those records go.

@@ -683,6 +683,8 @@ const leaseValues = {
     environment_version_mismatch: true,
     environment_busy: true,
     agent_unavailable: true,
+    environment_platform_unsupported: true,
+    environment_install_failed: true,
   } satisfies Record<NonNullable<ConversationLease["refusal"]>, true>,
 }
 
