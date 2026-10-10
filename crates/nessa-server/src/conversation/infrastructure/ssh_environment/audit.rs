@@ -1,6 +1,7 @@
 //! The gateway's own evidence about its SSH environments: each connection,
-//! each refusal by version or business, each connection lost, and each frame
-//! dropped because it named no lease or harness the gateway holds (row L9).
+//! each refusal by version or business, each connection lost, each frame
+//! dropped because it named no lease or harness the gateway holds (row L9),
+//! and each install of this build on a host, begun, done or refused.
 //! One immutable JSON file per record, like the gateway's other audits, with
 //! when it was observed.
 use serde::Serialize;
@@ -44,6 +45,50 @@ pub(crate) enum EnvironmentEvent {
         lease: String,
         channel: u32,
     },
+    /// This build is about to be sent to a host that has no copy of it,
+    /// to be installed under `protocol` if its SHA-256 there is `digest`.
+    /// Recorded before a byte is sent.
+    InstallStarted {
+        host: String,
+        protocol: String,
+        digest: String,
+    },
+    /// It verified on the host and is in place.
+    Installed {
+        host: String,
+        protocol: String,
+        digest: String,
+    },
+    /// Nothing was installed, and why; `seen` is what the host said, where
+    /// that is the reason (its platform, the digest it saw, the protocol the
+    /// copy spoke).
+    InstallRefused {
+        host: String,
+        reason: InstallRefusal,
+        seen: Option<String>,
+    },
+}
+
+/// Why this build was not installed on a host.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum InstallRefusal {
+    /// The host runs on a system or processor this build was not made for.
+    Platform,
+    /// This build's own executable could not be read here.
+    Source,
+    /// What arrived on the host is not what was sent.
+    Fingerprint,
+    /// What arrived runs, and speaks another lease protocol.
+    Version,
+    /// What arrived does not run on the host.
+    Unrunnable,
+    /// The host has no tool to take a SHA-256 with.
+    DigestTool,
+    /// A step on the host failed: a directory, a file, its mode, the rename.
+    Failed,
+    /// The host's answer did not come, or was not one of these.
+    Unanswered,
 }
 
 /// Where those records go.

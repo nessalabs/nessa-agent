@@ -56,9 +56,13 @@ struct Serving {
 }
 
 fn serve(root: &Path) -> Serving {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_nessa"))
-        .args(["env", "serve"])
-        .env_clear()
+    let mut command = Command::new(env!("CARGO_BIN_EXE_nessa"));
+    command.args(["env", "serve"]).env_clear();
+    serve_by(command, root)
+}
+
+fn serve_by(mut command: Command, root: &Path) -> Serving {
+    let mut child = command
         .env("NESSA_DATA_DIR", root)
         .env("NESSA_STAGE", "ci")
         .stdin(Stdio::piped())
@@ -301,4 +305,77 @@ fn a_host_with_no_agents_configured_says_so_after_its_hello() {
         }
     );
     serving.finish();
+}
+
+/// Run `command` as `sshd` hands it to a login shell, in `home`.
+fn on_host(home: &Path, command: &str) -> Command {
+    let mut shell = Command::new("sh");
+    shell
+        .arg("-c")
+        .arg(command)
+        .env_clear()
+        .env("HOME", home)
+        .env("PATH", std::env::var_os("PATH").unwrap());
+    shell
+}
+
+/// First use (#703), with this real binary and this machine's own `sh` and
+/// tools — Linux and macOS each in CI: a home without it probes absent on a
+/// platform this build runs on; the binary sent with its digest installs;
+/// the probe then finds it; and the gateway's serve command starts exactly
+/// that copy, whose hello names this build's lease protocol.
+#[test]
+fn this_build_installs_on_a_host_without_it_and_then_serves_there() {
+    use nessa_server::env::LEASE_PROTOCOL;
+    use nessa_server::env_serve::install::{
+        probe_command, serve_command, upload_command, Platform, Probe, Upload,
+    };
+    use sha2::{Digest, Sha256};
+    let home = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    host(root.path(), "/bin/cat");
+    let probe = |home: &Path| {
+        let output = on_host(home, &probe_command(LEASE_PROTOCOL))
+            .output()
+            .unwrap();
+        Probe::parse(&String::from_utf8(output.stdout).unwrap()).unwrap()
+    };
+    match probe(home.path()) {
+        Probe::Absent(platform) => assert!(Platform::this_build().runs_on(&platform), "{platform}"),
+        Probe::Present => panic!("nothing is installed in an empty home"),
+    }
+    let binary = Path::new(env!("CARGO_BIN_EXE_nessa"));
+    let digest = format!("{:x}", Sha256::digest(std::fs::read(binary).unwrap()));
+    let output = on_host(home.path(), &upload_command(LEASE_PROTOCOL, &digest))
+        .stdin(std::fs::File::open(binary).unwrap())
+        .output()
+        .unwrap();
+    let answer = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(Upload::parse(&answer), Some(Upload::Installed), "{answer}");
+    assert_eq!(probe(home.path()), Probe::Present);
+    let serving = serve_by(
+        on_host(home.path(), &serve_command(LEASE_PROTOCOL)),
+        root.path(),
+    );
+    match serving.next() {
+        FromEnvironment::Hello { protocol, .. } => assert_eq!(protocol, LEASE_PROTOCOL),
+        other => panic!("the hello comes first: {other:?}"),
+    }
+    serving.finish();
+}
+
+/// The binary says the lease protocol it speaks, which is what an install
+/// checks a copy against before putting it in place.
+#[test]
+fn env_protocol_prints_this_builds_lease_protocol() {
+    let output = Command::new(env!("CARGO_BIN_EXE_nessa"))
+        .args(["env", "protocol"])
+        .env_clear()
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        format!("{}\n", nessa_server::env::LEASE_PROTOCOL)
+    );
 }

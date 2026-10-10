@@ -559,13 +559,110 @@ Slice B's lease rows, beside slice A's above:
 | L13 | yes: the gateway's one slot per conversation, and the host refuses a second grant of a lease id its audit records (S4) |
 | L17 to L19 | not in slice B: no idle sleep and no low-disk pause yet |
 
-**Not in slice B.** First-use install (the host's `PATH` must already have
-this build's `nessa`); a reconnect budget; idle sleep and low-disk pause;
+**Not in slice B.** First-use install (slice F, below); a reconnect budget; idle sleep and low-disk pause;
 `environments.list` health; previews and artifacts; MCP servers for an
 agent on a host; OpenCode on a host; deleting the provider's own session on
 the host when a conversation is deleted (the erase answers `no_handler` for
 a placed conversation, and the host keeps it); rotating the host ledger;
 a passphrase or second factor prompt (`BatchMode=yes` refuses instead).
+
+### Slice F: first-use install over SSH (#703)
+
+**What is installed, and where.** Only `nessa` itself: this gateway's own
+executable, and only on a host it runs on — the same system and processor,
+and on Linux the GNU C library it links. That copy is the one certain to
+speak this build's lease protocol, which is a fingerprint of its sources;
+no other platform's build of the same sources is published anywhere a
+digest could pin, so a host of another platform is refused
+(`environment_platform_unsupported`) rather than sent something unverified
+([#734](https://github.com/nessalabs/nessa-agent/issues/734) adds release
+builds per platform). It goes to `~/.nessa/env/<protocol>/nessa` on the
+host: the directory names the protocol, so the gateway runs exactly the
+copy of its own build, a host keeps one copy per protocol, and two gateways
+of different builds never replace each other's. The serve command runs that
+path and no other; a `nessa` the host's search path would find is never
+used. The harness, its account and its credentials stay the host's own
+(below).
+
+```mermaid
+sequenceDiagram
+    participant G as Gateway (SshEnvironment)
+    participant A as Gateway audit
+    participant H as Host over ssh
+    G->>H: sh -c 'exec ~/.nessa/env/P/nessa env serve'
+    alt this build is there
+        H-->>G: Hello with protocol P, as slice B
+    else nothing there
+        H-->>G: the stream ends with nothing said
+        G->>H: probe
+        H-->>G: absent, with its system, processor and C library
+        alt this build does not run there
+            G->>A: InstallRefused platform
+            G-->>G: refused environment_platform_unsupported
+        else it runs there
+            G->>G: open this executable, take its SHA-256
+            G->>A: InstallStarted, before a byte is sent
+            G->>H: upload: the bytes on stdin, the digest and P in the command
+            H->>H: private temporary file, then its SHA-256 equals the digest?
+            H->>H: it runs, and env protocol says P?
+            H->>H: rename into ~/.nessa/env/P/nessa
+            H-->>G: installed, or refused with the reason and what it saw
+            G->>A: Installed, or InstallRefused with the reason
+            G->>H: the serve command again, then the hello checked as always
+        end
+    end
+```
+
+**Defaults chosen.**
+
+| What | Default | Why |
+| --- | --- | --- |
+| When it runs | Only after the serve command's stream ended with nothing said; a host already serving this build gets no probe and no write | gate 2: a host with the right version is not touched |
+| Commands | each one `sh -c '<script>'`, the script with no single quote, `!`, backslash or newline, and only hex put into it | `sshd` hands the command to the account's login shell; bash, zsh, fish and tcsh all pass one single-quoted word on unread (each run for real, below) |
+| Platform | `uname -s`, `uname -m` (`arm64` read as `aarch64`, `amd64` as `x86_64`), and `getconf GNU_LIBC_VERSION` for the GNU C library | a GNU build fails to load without it; no Rosetta or emulation is assumed |
+| Verification | on the host, before anything is found there: its SHA-256 (`sha256sum`, or `shasum -a 256` on macOS) must be the digest taken of the bytes sent, then the copy must run and `nessa env protocol` must print the protocol it is installed under; then one `mv` within `~/.nessa/env` | a copy cut short, damaged, unrunnable (an old C library, a home mounted without execution) or of another build is never put where the serve command finds it |
+| The bytes sent | the executable opened once: the digest is of what that open file reads, so a replacement of the path meanwhile is not mixed in | |
+| Files | the directory made under umask 077; the copy mode 700; a temporary file left by an install cut off is removed by a later install after 60 minutes | |
+| Timeouts | probe 30 s; upload, verification and placing 10 minutes | |
+| Gateway audit | `InstallStarted` before the first byte (and nothing is sent if it cannot be recorded), then `Installed` or `InstallRefused` with its reason (`platform`, `source`, `fingerprint`, `version`, `unrunnable`, `digest_tool`, `failed`, `unanswered`) and what the host said | the install's evidence beside slice B's connection records |
+| Refusals | the host's platform, `environment_platform_unsupported`; a fingerprint, an unrunnable copy, no digest tool, or a step that failed, `environment_install_failed`; a copy that speaks another protocol, `environment_version_mismatch`; no answer, `environment_unreachable` | each said in the composer; an install refusal is stored as `refused_v3`, a kind earlier builds read as unreadable rather than corrupt |
+| Old copies | kept | a gateway of an older build may still use its own; removing them is a later `nessa env` command |
+
+**Orderings.** Each row has its test, in
+`tests/conversation/ssh_environment.rs` (the installer against a scripted
+host), `tests/env_serve/install.rs` (the host's commands, run by this
+machine's own `sh` with its own tools, so on Linux and macOS in CI) and
+`tests/env_serve_binary.rs` (the real binary installed and served).
+
+| Row | Input or order | Decision | Test |
+| --- | --- | --- | --- |
+| F1 | The host serves this build | Nothing probed, nothing written; only the connection recorded | `a_host_with_this_build_is_not_touched` |
+| F2 | Nothing there, the host runs this build | Probed, recorded, sent with its digest, verified, placed; recorded installed; served | `a_host_without_this_build_gets_it_installed_and_then_serves`, `an_upload_that_verifies_is_installed_where_the_probe_and_serve_look`, `this_build_installs_on_a_host_without_it_and_then_serves_there` |
+| F3 | Another system or processor | Refused `environment_platform_unsupported`; nothing sent | `a_host_this_build_cannot_run_on_is_refused_and_sent_nothing`, `a_build_runs_only_on_its_own_system_and_processor` |
+| F4 | Bytes that are not the ones sent, or cut short | Refused `environment_install_failed` with the digest the host saw; nothing left | `bytes_that_are_not_the_ones_sent_are_refused_and_nothing_is_left`, `a_copy_cut_short_is_refused_by_its_fingerprint`, `an_install_the_host_refuses_is_refused_with_its_reason` |
+| F5 | A copy speaking another protocol | Refused `environment_version_mismatch` with the protocol it said; nothing left | `a_copy_speaking_another_protocol_is_refused_and_nothing_is_left` |
+| F6 | A copy that does not run, no digest tool, a step that fails | Refused `environment_install_failed` with its reason | `a_copy_that_does_not_run_there_is_refused`, `a_home_that_cannot_hold_it_is_a_failed_step` |
+| F7 | The probe says present, yet nothing served | Refused `environment_unreachable`; nothing written | `a_host_that_has_this_build_and_does_not_serve_is_unreachable_and_untouched` |
+| F8 | The install cannot be recorded | Nothing sent; `environment_install_failed` | `an_install_that_cannot_be_recorded_sends_nothing` |
+| F9 | A command reaching a login shell other than `sh` | Passed to `sh` whole | `every_command_survives_any_login_shell`, and over real `ssh` below |
+| F10 | A home whose path has spaces | Used as it is | `a_home_with_spaces_in_its_path_is_used_as_it_is` |
+
+**Verified on hosts.** The host commands run on both CI systems (Linux and
+macOS) with their own `sh`, `uname`, digest tool, `mktemp`, `find` and
+`mv`, and the real binary is installed and served through them on both.
+Over real `ssh`, `first_use_over_real_ssh` (run by hand, given hosts)
+installed, served and leased on Linux accounts whose login shells were
+bash, fish, zsh and tcsh, and then found each copy and touched nothing.
+
+**The harness's account.** First use creates no account. Creating one
+needs root, which `BatchMode=yes` cannot ask for, and an account Nessa made
+would change what the person's own SSH trust means. The harness runs as the
+account the destination logs in to, with that account's own `config.json`
+naming its harness and its own sign-in: the environment authority holds the
+provider's credentials (ADR 252), and the gateway sends none. A person who
+wants the harness apart from their own files makes that account themselves
+and names `harness@host`; the sandbox profile stays the harness default
+either way, and the conversation names the destination, account included.
 
 ## Three transports, one contract
 
@@ -609,8 +706,10 @@ costs nothing more than `ssh` already cost you.
   channel and any previews on it. Nothing else is opened; nothing listens
   on the host.
 - **Nothing installed until asked.** The first lease installs
-  `nessa env serve` ([first-use install](#build-order)); until then the
-  host is untouched. Version skew is a typed refusal with the fix named.
+  `nessa env serve` ([first-use install](#slice-f-first-use-install-over-ssh-703));
+  until then the host is untouched, and a host that has this build is never
+  touched. A host this build cannot run on, or a copy that does not verify,
+  is a typed refusal the composer says.
 - **Agent forwarding is never used**, and the environment doctor says so
   if a host's config turns it on. The host's key is pinned through the
   same `known_hosts` your shell trusts; a changed key is a refusal, not a
@@ -1239,12 +1338,10 @@ Named so they are not mistaken for settled:
   contract would be a second contract. Open for B: a permission authority
   does not serialize, so a remote environment answers permissions through
   the lease's control channel and the gateway's fence mints the authority.
-- **First-use install over SSH.** What `nessa env serve` needs on the host
-  (Rust binary per platform, the harness itself, its credential), and how
-  version skew between gateway and environment is refused.
-- **The harness's account on an environment.** How first-use install
-  creates the separate account on macOS and Linux, what it may read, and
-  what the profile says where it cannot be created.
+- **First-use install to a host of another platform.** Settled for a host
+  the gateway's own build runs on ([slice F](#slice-f-first-use-install-over-ssh-703));
+  a build per platform, published and pinned, is
+  [#734](https://github.com/nessalabs/nessa-agent/issues/734).
 - **Workspace bootstrap.** When the files are not already on the host (a
   fresh container, a new box), how a lease names a repository to clone or
   an archive to push, and its size bound.

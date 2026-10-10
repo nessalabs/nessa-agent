@@ -4,6 +4,8 @@
 //! ```text
 //! open(lease, grant, binding)
 //!   ──▶ link (one per host: connect, hello, this build?)
+//!         the stream ended with nothing said ──▶ installer.ensure(host)
+//!           installed now ──▶ connect once more; present already ──▶ unreachable
 //!   ──▶ binding.on_host(LeaseHost) ──▶ the same binding, starting its harness there
 //!   ──▶ link.grant(lease, agent) ──▶ EnvironmentLease { provider, SshHold }
 //! binding opens a session ──▶ LeaseHost::start ──▶ Start{lease, channel}
@@ -24,7 +26,8 @@
 use super::{
     audit::EnvironmentAudit,
     connector::LeaseConnector,
-    link::{HostLink, StartError},
+    install::{HostInstaller, Installation},
+    link::{HostLink, Opening, StartError},
 };
 use crate::conversation::application::{
     Environment, EnvironmentDeclaration, EnvironmentFuture, EnvironmentLease, LeaseHold,
@@ -77,6 +80,8 @@ struct Inner {
     host: SshDestination,
     connector: Arc<dyn LeaseConnector>,
     audit: Arc<dyn EnvironmentAudit>,
+    /// Puts this build on the host when none is there.
+    installer: Arc<HostInstaller>,
     timings: SshTimings,
     /// The one connection to the host, opened when first needed and opened
     /// again once lost. Held while connecting, so one is opened at a time.
@@ -88,6 +93,7 @@ impl SshEnvironment {
         host: SshDestination,
         connector: Arc<dyn LeaseConnector>,
         audit: Arc<dyn EnvironmentAudit>,
+        installer: Arc<HostInstaller>,
         timings: SshTimings,
     ) -> Self {
         Self {
@@ -95,6 +101,7 @@ impl SshEnvironment {
                 host,
                 connector,
                 audit,
+                installer,
                 timings,
                 link: Mutex::new(None),
             }),
@@ -109,16 +116,37 @@ impl Inner {
             return Ok(link.clone());
         }
         *held = None;
-        let link = HostLink::open(
+        let link = match self.open().await {
+            Err(Opening::NotServed) => {
+                match self
+                    .installer
+                    .ensure(&self.host, self.audit.as_ref())
+                    .await?
+                {
+                    // Installed, so the stream ended for another reason.
+                    Installation::Present => return Err(LeaseRefusal::EnvironmentUnreachable),
+                    Installation::Installed => self.open().await,
+                }
+            }
+            opened => opened,
+        };
+        let link = link.map_err(|opening| match opening {
+            Opening::Refused(refusal) => refusal,
+            Opening::NotServed => LeaseRefusal::EnvironmentUnreachable,
+        })?;
+        *held = Some(link.clone());
+        Ok(link)
+    }
+
+    async fn open(&self) -> Result<Arc<HostLink>, Opening> {
+        HostLink::open(
             &self.host,
             self.connector.as_ref(),
             self.audit.clone(),
             self.timings.connect,
             self.timings.keepalive,
         )
-        .await?;
-        *held = Some(link.clone());
-        Ok(link)
+        .await
     }
 
     /// What the host recorded of `lease`, asked on the connection there is

@@ -3,9 +3,14 @@
 //! scripted host. What it refuses, what it routes, and what becomes of a
 //! lease whose connection is lost.
 use super::{
+    audit::InstallRefusal,
     audit::{EnvironmentAudit, EnvironmentEvent},
-    connector::{ssh_arguments, LeaseConnection, LeaseConnector},
+    connector::{serve_arguments, LeaseConnection, LeaseConnector},
     environment::{SshEnvironment, SshTimings},
+    install::{
+        open_build, Build, BuildSource, HostInstaller, InstallTimings, RemoteShell, ShellFuture,
+    },
+    open_ssh::OpenSshConnector,
 };
 use crate::conversation::application::{Environment, LeaseRelease};
 use crate::env::{LEASE_PROTOCOL, VERSION};
@@ -13,6 +18,7 @@ use crate::env_serve::application::FrameStream;
 use crate::env_serve::application::{
     serve, HarnessLauncher, LeaseLedger, LedgerEntry, ServeTimings,
 };
+use crate::env_serve::install::Platform;
 use nessa_protocol::lease::{decode, encode, Cleanup, Data, FromEnvironment, ToEnvironment};
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
@@ -154,6 +160,9 @@ enum Reach {
     Stalling(tokio::sync::watch::Receiver<bool>),
     /// `ssh` cannot be started.
     Unreachable,
+    /// The stream ends at once with nothing said on it: no copy of this
+    /// build where `ssh` looked, or nothing reached at all.
+    Silent,
 }
 
 struct Connector {
@@ -224,6 +233,7 @@ impl LeaseConnector for Connector {
         let (host_end, host) = duplex(1 << 20);
         match reach {
             Reach::Unreachable => return Err(io::Error::other("no route to host")),
+            Reach::Silent => drop(host),
             Reach::Serving => {
                 let (host_in, host_out) = split(host);
                 tokio::spawn(serve(
@@ -390,6 +400,7 @@ fn environment(connector: Arc<Connector>, audit: Arc<Audit>) -> SshEnvironment {
         devbox(),
         connector,
         audit,
+        no_install(),
         SshTimings {
             connect: Duration::from_secs(5),
             answer: Duration::from_secs(5),
@@ -879,6 +890,7 @@ async fn a_grant_not_answered_in_time_is_ended_on_the_host() {
         devbox(),
         connector.clone(),
         Arc::new(Audit::default()),
+        no_install(),
         SshTimings {
             connect: Duration::from_secs(5),
             answer: Duration::from_millis(50),
@@ -911,20 +923,24 @@ async fn a_grant_not_answered_in_time_is_ended_on_the_host() {
     .expect("the unanswered lease is ended on the host");
 }
 
-/// The destination comes after every option and the remote command is
-/// fixed words: what `ssh` is run with. Which destinations are accepted is
-/// `SshDestination`'s own test.
+/// The destination comes after every option, and the remote command runs
+/// the copy of this build installed under its lease protocol, never a
+/// `nessa` the host's search path finds: what `ssh` is run with. Which
+/// destinations are accepted is `SshDestination`'s own test.
 #[test]
 fn ssh_is_run_with_the_destination_after_its_options() {
     let host = devbox();
-    let arguments = ssh_arguments(&host);
-    let separator = arguments.iter().position(|word| *word == "--").unwrap();
+    let arguments = serve_arguments(&host);
+    let separator = arguments.iter().position(|word| word == "--").unwrap();
     assert_eq!(
         &arguments[separator + 1..],
-        ["devbox", "nessa", "env", "serve"]
+        [
+            "devbox".to_owned(),
+            format!("sh -c 'exec \"$HOME/.nessa/env/{LEASE_PROTOCOL}/nessa\" env serve'")
+        ]
     );
-    assert!(arguments.contains(&"BatchMode=yes"));
-    assert!(arguments.contains(&"ForwardAgent=no"));
+    assert!(arguments.iter().any(|word| word == "BatchMode=yes"));
+    assert!(arguments.iter().any(|word| word == "ForwardAgent=no"));
 }
 
 /// A launch whose variables do not fit in one frame is refused to its
@@ -1260,6 +1276,7 @@ async fn an_idle_connection_sends_keepalives() {
         devbox(),
         connector.clone(),
         Arc::new(Audit::default()),
+        no_install(),
         SshTimings {
             connect: Duration::from_secs(5),
             answer: Duration::from_secs(5),
@@ -1357,4 +1374,421 @@ async fn a_loss_whose_audit_fails_leaves_the_lease_unanswered() {
         opened.hold.end(LeaseEndCause::Lost).await,
         LeaseRelease::Unanswered
     );
+}
+
+// ---- first use: installing this build on a host (#703) ----
+
+/// A host's shell, scripted: what its probe and its upload answer. An
+/// upload answered `installed` makes the host serve from then on, as the
+/// copy it put in place would. Keeps every command and what was sent.
+struct Shell {
+    probe: String,
+    upload: String,
+    connector: Arc<Connector>,
+    runs: Mutex<Vec<(String, Option<Vec<u8>>)>>,
+}
+
+impl Shell {
+    fn new(probe: &str, upload: &str, connector: Arc<Connector>) -> Arc<Self> {
+        Arc::new(Self {
+            probe: probe.into(),
+            upload: upload.into(),
+            connector,
+            runs: Mutex::new(Vec::new()),
+        })
+    }
+    fn runs(&self) -> Vec<(String, Option<Vec<u8>>)> {
+        self.runs.lock().unwrap().clone()
+    }
+}
+
+impl RemoteShell for Shell {
+    fn run<'a>(
+        &'a self,
+        _host: &'a SshDestination,
+        command: String,
+        input: Option<std::fs::File>,
+    ) -> ShellFuture<'a> {
+        Box::pin(async move {
+            let sent = input.map(|mut file| {
+                let mut bytes = Vec::new();
+                std::io::Read::read_to_end(&mut file, &mut bytes).unwrap();
+                bytes
+            });
+            let upload = sent.is_some();
+            self.runs.lock().unwrap().push((command, sent));
+            if !upload {
+                return Ok(self.probe.clone());
+            }
+            if self.upload.trim() == "installed" {
+                *self.connector.reach.lock().unwrap() = Reach::Serving;
+            }
+            Ok(self.upload.clone())
+        })
+    }
+}
+
+/// What is sent as this build.
+const THIS_BUILD: &[u8] = b"this build's executable";
+
+struct Built;
+impl BuildSource for Built {
+    fn open(&self) -> io::Result<Build> {
+        let mut file = tempfile::tempfile()?;
+        std::io::Write::write_all(&mut file, THIS_BUILD)?;
+        std::io::Seek::seek(&mut file, std::io::SeekFrom::Start(0))?;
+        Ok(Build {
+            file,
+            digest: this_digest(),
+        })
+    }
+}
+
+fn this_digest() -> String {
+    use sha2::Digest;
+    format!("{:x}", sha2::Sha256::digest(THIS_BUILD))
+}
+
+fn installer(shell: Arc<dyn RemoteShell>) -> Arc<HostInstaller> {
+    Arc::new(HostInstaller::new(
+        shell,
+        Arc::new(Built),
+        Platform {
+            os: "linux".into(),
+            arch: "x86_64".into(),
+            libc: "gnu".into(),
+        },
+        LEASE_PROTOCOL,
+        InstallTimings {
+            probe: Duration::from_secs(5),
+            upload: Duration::from_secs(5),
+        },
+    ))
+}
+
+/// The installer of an environment whose host never needs one: its probe
+/// says this build is there.
+fn no_install() -> Arc<HostInstaller> {
+    struct Present;
+    impl RemoteShell for Present {
+        fn run<'a>(
+            &'a self,
+            _host: &'a SshDestination,
+            _command: String,
+            _input: Option<std::fs::File>,
+        ) -> ShellFuture<'a> {
+            Box::pin(async { Ok("present\n".to_owned()) })
+        }
+    }
+    installer(Arc::new(Present))
+}
+
+fn installing(connector: Arc<Connector>, shell: Arc<Shell>, audit: Arc<Audit>) -> SshEnvironment {
+    SshEnvironment::new(
+        devbox(),
+        connector,
+        audit,
+        installer(shell),
+        SshTimings {
+            connect: Duration::from_secs(5),
+            answer: Duration::from_secs(5),
+            ..SshTimings::default()
+        },
+    )
+}
+
+fn refused(reason: InstallRefusal, seen: Option<&str>) -> EnvironmentEvent {
+    EnvironmentEvent::InstallRefused {
+        host: "devbox".into(),
+        reason,
+        seen: seen.map(Into::into),
+    }
+}
+
+/// A host serving this build is not touched: no probe, no upload, nothing
+/// recorded but the connection.
+#[tokio::test]
+async fn a_host_with_this_build_is_not_touched() {
+    let connector = Connector::new(Reach::Serving);
+    let shell = Shell::new("present", "installed", connector.clone());
+    let audit = Arc::new(Audit::default());
+    let environment = installing(connector.clone(), shell.clone(), audit.clone());
+    let (binding, _host) = binding(true);
+    assert!(environment
+        .open(&lease(), &terms("claude"), binding)
+        .await
+        .is_ok());
+    assert!(shell.runs().is_empty());
+    assert_eq!(connector.connects.load(Ordering::SeqCst), 1);
+    assert!(audit
+        .events()
+        .iter()
+        .all(|event| matches!(event, EnvironmentEvent::Connected { .. })));
+}
+
+/// A host with no copy of this build gets one: probed, sent with its
+/// digest, recorded before a byte goes and after it verified, then served.
+#[tokio::test]
+async fn a_host_without_this_build_gets_it_installed_and_then_serves() {
+    let connector = Connector::new(Reach::Silent);
+    let shell = Shell::new(
+        "absent Linux x86_64 gnu\n",
+        "installed\n",
+        connector.clone(),
+    );
+    let audit = Arc::new(Audit::default());
+    let environment = installing(connector.clone(), shell.clone(), audit.clone());
+    let (binding, _host) = binding(true);
+    environment
+        .open(&lease(), &terms("claude"), binding)
+        .await
+        .map(|_| ())
+        .unwrap();
+    let runs = shell.runs();
+    assert_eq!(runs.len(), 2);
+    assert_eq!(
+        runs[0],
+        (
+            crate::env_serve::install::probe_command(LEASE_PROTOCOL),
+            None
+        )
+    );
+    assert_eq!(
+        runs[1],
+        (
+            crate::env_serve::install::upload_command(LEASE_PROTOCOL, &this_digest()),
+            Some(THIS_BUILD.to_vec())
+        )
+    );
+    assert_eq!(connector.connects.load(Ordering::SeqCst), 2);
+    let installed = |started: bool| {
+        let (protocol, digest) = (LEASE_PROTOCOL.to_owned(), this_digest());
+        let host = "devbox".to_owned();
+        match started {
+            true => EnvironmentEvent::InstallStarted {
+                host,
+                protocol,
+                digest,
+            },
+            false => EnvironmentEvent::Installed {
+                host,
+                protocol,
+                digest,
+            },
+        }
+    };
+    assert_eq!(
+        audit.events(),
+        vec![
+            installed(true),
+            installed(false),
+            EnvironmentEvent::Connected {
+                host: "devbox".into(),
+                workspace: "/srv/work".into(),
+            },
+        ]
+    );
+}
+
+/// A host on a system or processor this build does not run on is refused
+/// with that reason, and is sent nothing.
+#[tokio::test]
+async fn a_host_this_build_cannot_run_on_is_refused_and_sent_nothing() {
+    let connector = Connector::new(Reach::Silent);
+    let shell = Shell::new("absent Darwin arm64 other", "installed", connector.clone());
+    let audit = Arc::new(Audit::default());
+    let environment = installing(connector.clone(), shell.clone(), audit.clone());
+    assert_eq!(
+        environment
+            .open(&lease(), &terms("claude"), binding_only())
+            .await
+            .err(),
+        Some(LeaseRefusal::EnvironmentPlatformUnsupported)
+    );
+    assert_eq!(shell.runs().len(), 1);
+    assert_eq!(
+        audit.events(),
+        vec![refused(
+            InstallRefusal::Platform,
+            Some("macos aarch64 other")
+        )]
+    );
+}
+
+/// What the host refuses is refused here with its reason: bytes that are
+/// not the ones sent and a copy that does not run fail the install, a copy
+/// speaking another protocol is another version. None is connected to.
+#[tokio::test]
+async fn an_install_the_host_refuses_is_refused_with_its_reason() {
+    let cases = [
+        (
+            "refused fingerprint 00ff",
+            LeaseRefusal::EnvironmentInstallFailed,
+            refused(InstallRefusal::Fingerprint, Some("00ff")),
+        ),
+        (
+            "refused version fedcba9876543210",
+            LeaseRefusal::EnvironmentVersionMismatch,
+            refused(InstallRefusal::Version, Some("fedcba9876543210")),
+        ),
+        (
+            "refused unrunnable",
+            LeaseRefusal::EnvironmentInstallFailed,
+            refused(InstallRefusal::Unrunnable, None),
+        ),
+        (
+            "refused digest_tool",
+            LeaseRefusal::EnvironmentInstallFailed,
+            refused(InstallRefusal::DigestTool, None),
+        ),
+        (
+            "failed publish",
+            LeaseRefusal::EnvironmentInstallFailed,
+            refused(InstallRefusal::Failed, Some("publish")),
+        ),
+        (
+            "Connection closed by remote host",
+            LeaseRefusal::EnvironmentUnreachable,
+            refused(InstallRefusal::Unanswered, None),
+        ),
+    ];
+    for (answer, refusal, event) in cases {
+        let connector = Connector::new(Reach::Silent);
+        let shell = Shell::new("absent Linux x86_64 gnu", answer, connector.clone());
+        let audit = Arc::new(Audit::default());
+        let environment = installing(connector.clone(), shell.clone(), audit.clone());
+        assert_eq!(
+            environment
+                .open(&lease(), &terms("claude"), binding_only())
+                .await
+                .err(),
+            Some(refusal),
+            "{answer}"
+        );
+        assert_eq!(connector.connects.load(Ordering::SeqCst), 1, "{answer}");
+        let events = audit.events();
+        assert!(
+            matches!(events[0], EnvironmentEvent::InstallStarted { .. }),
+            "{answer}"
+        );
+        assert_eq!(events[1..], [event], "{answer}");
+    }
+}
+
+/// A host whose probe says this build is there, though its stream ended
+/// with nothing said, is not written to: the trouble is the host's.
+#[tokio::test]
+async fn a_host_that_has_this_build_and_does_not_serve_is_unreachable_and_untouched() {
+    let connector = Connector::new(Reach::Silent);
+    let shell = Shell::new("present", "installed", connector.clone());
+    let audit = Arc::new(Audit::default());
+    let environment = installing(connector.clone(), shell.clone(), audit.clone());
+    assert_eq!(
+        environment
+            .open(&lease(), &terms("claude"), binding_only())
+            .await
+            .err(),
+        Some(LeaseRefusal::EnvironmentUnreachable)
+    );
+    assert_eq!(shell.runs().len(), 1);
+    assert!(audit.events().is_empty());
+}
+
+/// An install that cannot be recorded is not made: nothing is sent.
+#[tokio::test]
+async fn an_install_that_cannot_be_recorded_sends_nothing() {
+    let connector = Connector::new(Reach::Silent);
+    let shell = Shell::new("absent Linux x86_64 gnu", "installed", connector.clone());
+    let audit = Arc::new(Audit::default());
+    audit.1.store(true, Ordering::SeqCst);
+    let environment = installing(connector.clone(), shell.clone(), audit.clone());
+    assert_eq!(
+        environment
+            .open(&lease(), &terms("claude"), binding_only())
+            .await
+            .err(),
+        Some(LeaseRefusal::EnvironmentInstallFailed)
+    );
+    assert_eq!(shell.runs().len(), 1, "probed, and nothing uploaded");
+}
+
+/// First use over a real `ssh` and real hosts, run by hand where there are
+/// some (the CI runners have none): `NESSA_SSH_FIRST_USE_HOSTS` names
+/// OpenSSH destinations, comma-separated, each without this build installed
+/// and with a `config.json` naming Claude's harness, and
+/// `NESSA_SSH_FIRST_USE_BUILD` the `nessa` built from this source. Each host
+/// is installed, served and leased; a second connection finds it there and
+/// touches nothing.
+#[tokio::test]
+#[ignore = "needs real hosts: NESSA_SSH_FIRST_USE_HOSTS and NESSA_SSH_FIRST_USE_BUILD"]
+async fn first_use_over_real_ssh() {
+    struct File(std::path::PathBuf);
+    impl BuildSource for File {
+        fn open(&self) -> io::Result<Build> {
+            open_build(&self.0)
+        }
+    }
+    async fn open(host: &SshDestination, installer: Arc<HostInstaller>, audit: Arc<Audit>) {
+        let environment = SshEnvironment::new(
+            host.clone(),
+            Arc::new(OpenSshConnector),
+            audit,
+            installer,
+            SshTimings::default(),
+        );
+        let opened = environment
+            .open(&lease(), &terms("claude"), binding(true).0)
+            .await
+            .unwrap_or_else(|refusal| panic!("{}: {refusal:?}", host.as_str()));
+        let released = opened.hold.end(LeaseEndCause::Closed).await;
+        assert!(
+            matches!(released, LeaseRelease::Released(_)),
+            "{released:?}"
+        );
+    }
+    let hosts = std::env::var("NESSA_SSH_FIRST_USE_HOSTS").unwrap();
+    let build = std::path::PathBuf::from(std::env::var("NESSA_SSH_FIRST_USE_BUILD").unwrap());
+    for host in hosts.split(',') {
+        let host = SshDestination::new(host).unwrap();
+        let installer = Arc::new(HostInstaller::new(
+            Arc::new(OpenSshConnector),
+            Arc::new(File(build.clone())),
+            Platform::this_build(),
+            LEASE_PROTOCOL,
+            InstallTimings::default(),
+        ));
+        let first = Arc::new(Audit::default());
+        open(&host, installer.clone(), first.clone()).await;
+        let kinds: Vec<_> = first
+            .events()
+            .iter()
+            .map(|event| match event {
+                EnvironmentEvent::InstallStarted { .. } => "started",
+                EnvironmentEvent::Installed { .. } => "installed",
+                EnvironmentEvent::Connected { .. } => "connected",
+                _ => "other",
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            ["started", "installed", "connected"],
+            "{}",
+            host.as_str()
+        );
+        let second = Arc::new(Audit::default());
+        open(&host, installer.clone(), second.clone()).await;
+        assert!(
+            second
+                .events()
+                .iter()
+                .all(|event| matches!(event, EnvironmentEvent::Connected { .. })),
+            "{}: {:?}",
+            host.as_str(),
+            second.events()
+        );
+        eprintln!(
+            "{}: installed, served, leased; then found and not touched",
+            host.as_str()
+        );
+    }
 }

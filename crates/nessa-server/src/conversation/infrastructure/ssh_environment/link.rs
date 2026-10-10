@@ -3,6 +3,7 @@
 //!
 //! ```text
 //! open: connect ──▶ first frame ──▶ read_hello ──▶ protocol == LEASE_PROTOCOL?
+//!          the stream ended first ──▶ NotServed: nothing installed there yet?
 //!          no ──▶ VersionRefused, nothing sent ──▶ EnvironmentVersionMismatch
 //!          empty workspace ──▶ Unavailable{busy | notConfigured} ──▶ refused
 //!          yes ──▶ writer task (frames out), demux task (frames in)
@@ -167,18 +168,35 @@ pub(crate) struct StartedChannel {
     pub(crate) output: DuplexStream,
 }
 
+/// Why no connection was opened.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Opening {
+    /// Refused, with its reason.
+    Refused(LeaseRefusal),
+    /// The stream ended before anything was said on it: `ssh` reached
+    /// nothing there, or no copy of this build is installed where it looked.
+    NotServed,
+}
+
+impl From<LeaseRefusal> for Opening {
+    fn from(refusal: LeaseRefusal) -> Self {
+        Self::Refused(refusal)
+    }
+}
+
 impl HostLink {
     /// Connect to `host` and read its hello within `deadline`.
     ///
     /// # Errors
-    /// The typed refusal: unreachable, another build, or busy.
+    /// The typed refusal: unreachable, another build, or busy; or the stream
+    /// ending with nothing said on it.
     pub(crate) async fn open(
         host: &SshDestination,
         connector: &dyn LeaseConnector,
         audit: Arc<dyn EnvironmentAudit>,
         deadline: Duration,
         keepalive: Keepalive,
-    ) -> Result<Arc<Self>, LeaseRefusal> {
+    ) -> Result<Arc<Self>, Opening> {
         let connection = connector.connect(host).map_err(|error| {
             tracing::warn!(host = host.as_str(), %error, "ssh could not be started");
             LeaseRefusal::EnvironmentUnreachable
@@ -186,12 +204,19 @@ impl HostLink {
         let mut stream = FrameStream::new(connection.from_environment);
         let first = match tokio::time::timeout(deadline, stream.next()).await {
             Ok(Ok(Some(body))) => body,
-            Ok(Ok(None) | Err(_)) | Err(_) => {
+            Ok(Ok(None)) => {
+                tracing::warn!(
+                    host = host.as_str(),
+                    "the host's stream ended before its environment said anything"
+                );
+                return Err(Opening::NotServed);
+            }
+            Ok(Err(_)) | Err(_) => {
                 tracing::warn!(
                     host = host.as_str(),
                     "the host's environment did not answer"
                 );
-                return Err(LeaseRefusal::EnvironmentUnreachable);
+                return Err(LeaseRefusal::EnvironmentUnreachable.into());
             }
         };
         let hello = match read_hello(&first) {
@@ -210,12 +235,16 @@ impl HostLink {
                     host = host.as_str(),
                     "the host speaks another lease protocol"
                 );
-                return Err(LeaseRefusal::EnvironmentVersionMismatch);
+                return Err(LeaseRefusal::EnvironmentVersionMismatch.into());
             }
         };
         let workspace = PathBuf::from(&hello.workspace);
         if !workspace.is_absolute() {
-            return Err(Self::unavailable(host, &mut stream, audit.as_ref(), deadline).await);
+            return Err(
+                Self::unavailable(host, &mut stream, audit.as_ref(), deadline)
+                    .await
+                    .into(),
+            );
         }
         let connected = EnvironmentEvent::Connected {
             host: host.as_str().into(),
@@ -223,7 +252,7 @@ impl HostLink {
         };
         if let Err(error) = audit.record(&connected) {
             tracing::error!(%error, "an environment connection could not be recorded; it is not used");
-            return Err(LeaseRefusal::EnvironmentUnreachable);
+            return Err(LeaseRefusal::EnvironmentUnreachable.into());
         }
         let (frames, outgoing) = mpsc::channel(TO_HOST_QUEUE);
         tokio::spawn(write_frames(connection.to_environment, outgoing, keepalive));

@@ -7,6 +7,8 @@
 //! ```text
 //! composition::env_serve_command ──▶ infrastructure (launcher, ledger, lock)
 //!                                 ──▶ application::serve (the frame loop)
+//! the gateway's SSH environment   ──▶ install (where this build lives on a
+//!                                     host, and the commands that put it there)
 //! ```
 //!
 //! Arrows are construction and the call that runs it. Unix only, as
@@ -15,3 +17,5 @@
 pub mod application;
 #[cfg(unix)]
 pub mod infrastructure;
+#[cfg(unix)]
+pub mod install;

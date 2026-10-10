@@ -80,6 +80,12 @@ pub fn lease_view(current: &CurrentLease) -> ConversationLeaseView {
                 }
                 LeaseRefusal::EnvironmentBusy => ConversationLeaseRefusal::EnvironmentBusy,
                 LeaseRefusal::AgentUnavailable => ConversationLeaseRefusal::AgentUnavailable,
+                LeaseRefusal::EnvironmentPlatformUnsupported => {
+                    ConversationLeaseRefusal::EnvironmentPlatformUnsupported
+                }
+                LeaseRefusal::EnvironmentInstallFailed => {
+                    ConversationLeaseRefusal::EnvironmentInstallFailed
+                }
             });
             current.records().first().and_then(|record| match record {
                 LeaseRecord::Refused { terms, .. } => Some(terms),

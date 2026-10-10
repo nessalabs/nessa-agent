@@ -124,7 +124,11 @@ function nothingWasDone(
     case "environment-unavailable":
       return "The SSH host this conversation runs on could not be reached, is serving another gateway, or cannot run its agent, so nothing was done. Try again once it is reachable."
     case "environment-version-mismatch":
-      return "The SSH host this conversation runs on has another version of Nessa than this gateway, so nothing was sent to it. Install this version there."
+      return "The copy of Nessa on the SSH host this conversation runs on is not the one this gateway installs there, so nothing was sent to it."
+    case "environment-platform-unsupported":
+      return "The SSH host this conversation runs on has a different operating system or processor than this computer, so Nessa could not install itself there and nothing was done."
+    case "environment-install-failed":
+      return "Nessa could not install itself on the SSH host this conversation runs on: the copy did not verify, did not run there, or could not be stored, so nothing was done. Try again; the gateway's environment audit says which."
     case "conversation-not-found":
       return "The gateway no longer has this conversation, so nothing was done."
     case "conversation-state-unreadable":
