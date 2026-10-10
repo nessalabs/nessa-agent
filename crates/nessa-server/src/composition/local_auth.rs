@@ -235,6 +235,7 @@ pub(super) async fn product_state(
                     policy: policy.clone(),
                     receivers: receivers.clone(),
                     clock: Arc::new(SystemClock),
+                    deadline_clock: uptime.clone(),
                     gateway: Resource::new(organization.clone(), gateway.clone()),
                     audience: audience.clone(),
                 },

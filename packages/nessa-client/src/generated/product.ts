@@ -2029,7 +2029,7 @@ export interface PeerListResult {
   /** Every peer this gateway keeps, by key. */
   items: PeerGateway[]
 }
-/** Why the gateway refused a peer method it dispatched. peer_not_configured: native pairing is off in this gateway's configuration, so it has no key to enroll with. peer_not_found: no peer with that key. peer_exists: a record for that peer is already kept; forget it first. peer_capacity: this gateway keeps as many peers as it may. peer_busy: an enrollment is running; another enrollment or a forget waits for it. peer_unreachable: nothing answered at the address, the connection failed, or what answered is not a gateway enrolling peers; an open port is not told from a closed one. peer_invitation_refused: the peer refused the code: no open invitation, or an expired, used or wrong code; it does not say which. peer_wrong_invitation: the code is for a device, not a gateway. peer_own_gateway: the address is this gateway's own. peer_unavailable: storage, the key or a worker failed; retry later. */
+/** Why the gateway refused a peer method it dispatched. peer_not_configured: native pairing is off in this gateway's configuration, so it has no key to enroll with. peer_not_found: no peer with that key. peer_exists: a record for that peer is already kept; forget it first. peer_capacity: this gateway keeps as many peers as it may. peer_busy: an enrollment or a forget is running; another waits for it. peer_unreachable: nothing answered at the address, the connection failed, or what answered is not a gateway enrolling peers; an open port is not told from a closed one. peer_invitation_refused: the peer refused the code: no open invitation, or an expired, used or wrong code; it does not say which. peer_wrong_invitation: the code is for a device, not a gateway. peer_own_gateway: the address is this gateway's own. peer_unavailable: storage, the key or a worker failed; retry later. peer_audit_unavailable: the command's audit record could not be kept; if that was before its effect nothing changed, and if after, the effect stands and peer.list shows it. */
 export const PeerErrorCode = {
   PeerNotConfigured: "peer_not_configured",
   PeerNotFound: "peer_not_found",
@@ -2041,6 +2041,7 @@ export const PeerErrorCode = {
   PeerWrongInvitation: "peer_wrong_invitation",
   PeerOwnGateway: "peer_own_gateway",
   PeerUnavailable: "peer_unavailable",
+  PeerAuditUnavailable: "peer_audit_unavailable",
 } as const
 export type PeerErrorCode = (typeof PeerErrorCode)[keyof typeof PeerErrorCode]
 /** Opaque current-connection watch identity. It grants no permission, is not a source position, and must be discarded on connection replacement. */

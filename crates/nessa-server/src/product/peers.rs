@@ -9,7 +9,7 @@ use super::{
     socket::{failure, success},
     state::ProductRouteState,
 };
-use crate::peer_gateways::infrastructure::{PeerEntry, PeerError, PeerPhase};
+use crate::peer_gateways::infrastructure::{PeerEntry, PeerPhase};
 use nessa_auth::{
     adapters::pairing::ManualCode, application::session::AuthenticatedSession,
     domain::pairing::DeviceKey,
@@ -56,7 +56,7 @@ pub(super) async fn dispatch(
                         items: entries.iter().map(wire).collect(),
                     },
                 ),
-                Err(error) => failure(&id, refusal(error)),
+                Err(error) => failure(&id, error.code()),
             };
         }
         "peer.forget" => {
@@ -71,7 +71,7 @@ pub(super) async fn dispatch(
     };
     match result {
         Ok(entry) => success(&id, &wire(&entry)),
-        Err(error) => failure(&id, refusal(error)),
+        Err(error) => failure(&id, error.code()),
     }
 }
 
@@ -104,21 +104,4 @@ fn wire(entry: &PeerEntry) -> PeerGateway {
         credential_id,
         receiver_id,
     }
-}
-
-/// The wire code for a refused peer command. Total over every failure, so a
-/// new one does not compile until it is given a code.
-fn refusal(error: PeerError) -> &'static str {
-    match error {
-        PeerError::Busy => PeerErrorCode::PeerBusy,
-        PeerError::Unreachable => PeerErrorCode::PeerUnreachable,
-        PeerError::InvitationRefused => PeerErrorCode::PeerInvitationRefused,
-        PeerError::WrongInvitation => PeerErrorCode::PeerWrongInvitation,
-        PeerError::OwnGateway => PeerErrorCode::PeerOwnGateway,
-        PeerError::Exists => PeerErrorCode::PeerExists,
-        PeerError::Capacity => PeerErrorCode::PeerCapacity,
-        PeerError::NotFound => PeerErrorCode::PeerNotFound,
-        PeerError::Unavailable => PeerErrorCode::PeerUnavailable,
-    }
-    .as_str()
 }

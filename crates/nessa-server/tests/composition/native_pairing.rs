@@ -100,6 +100,7 @@ impl Namespace {
             policy: Arc::new(CedarPolicyEvaluator::new().unwrap()),
             receivers: self.receivers(),
             clock: Arc::new(SystemClock),
+            deadline_clock: RuntimeDependencies::default().clock,
             gateway: Resource::new(
                 OrganizationId::new("org").unwrap(),
                 ResourceId::new("gateway").unwrap(),

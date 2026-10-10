@@ -472,7 +472,10 @@ The dialing side of a peer gateway is `nessa-server/src/peer_gateways/`.
 `infrastructure/records.rs` keeps one private record per peer under
 `peer-gateways/` and is the enrollment client's store for one enrollment
 (`PeerSlot`), naming the gateway's own native key without copying it;
-`infrastructure/commands.rs` holds the owner's enroll, list and forget. The
+`infrastructure/commands.rs` holds the owner's enroll, list and forget, which
+hand their evidence (`application/`, the `PeerAudit` port) to
+`infrastructure/audit.rs`, one private file per record under
+`peer-gateways-audit/`. The
 product methods are `nessa-server/src/product/peers.rs`, composed beside native
 pairing in `composition/native_pairing.rs`. Tests are
 `tests/peer_gateways/enroll.rs` and the two-process case in

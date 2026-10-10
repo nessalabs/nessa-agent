@@ -1996,6 +1996,7 @@ pub enum PeerErrorCode {
     PeerWrongInvitation,
     PeerOwnGateway,
     PeerUnavailable,
+    PeerAuditUnavailable,
 }
 impl PeerErrorCode {
     pub fn as_str(self) -> &'static str {
@@ -2010,6 +2011,7 @@ impl PeerErrorCode {
             Self::PeerWrongInvitation => "peer_wrong_invitation",
             Self::PeerOwnGateway => "peer_own_gateway",
             Self::PeerUnavailable => "peer_unavailable",
+            Self::PeerAuditUnavailable => "peer_audit_unavailable",
         }
     }
 }

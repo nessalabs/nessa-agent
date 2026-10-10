@@ -189,7 +189,9 @@ sequenceDiagram
     participant R as B's peer records
     participant K as B's gateway key store
     participant A as Gateway A (native listener)
+    participant U as B's peer audit
     O->>B: peer.enroll {address, code} (Cedar: credential.manage)
+    B->>U: intent {operation, address, owner} (not kept: peer_audit_unavailable, nothing dialed)
     B->>A: TCP connect, TLS with B's own native key
     B->>R: enrollment key?
     R->>K: restore B's gateway key
@@ -200,6 +202,7 @@ sequenceDiagram
     R->>R: refuse another key, B's own key, a kept peer, or one past MAX_PEERS
     B->>A: KE3 (confirm)
     A-->>B: Claimed
+    B->>U: outcome {operation, peer, absent -> pending, answer} (not kept: peer_audit_unavailable)
     B-->>O: PeerGateway {peerKey, phase: pending, address}
 ```
 
@@ -228,11 +231,22 @@ sequenceDiagram
   a closed one answer alike. The client keeps a failed TLS handshake
   (`NativeClientError::Handshake`) apart from a failed PAKE proof, so a
   service that is not a gateway never reads as a wrong code.
-- **Enrolling and forgetting take turns.** One enrollment runs at a time, and
-  `peer.forget` is `peer_busy` while it does, so it cannot remove the record
-  that enrollment is saving and spend the peer's invitation for nothing.
-  Each enrollment and forget is logged with the peer's key, the address, the
-  outcome and the initiator; never the code or key material.
+- **Enrolling and forgetting take turns.** One enrollment or forget runs at a
+  time, and another is `peer_busy` while it does, so a forget cannot remove
+  the record an enrollment is saving and spend the peer's invitation for
+  nothing.
+- **Each enroll and forget is audited.** The command hands an intent to the
+  `PeerAudit` port before its effect (the address and the owner who asked;
+  for a forget, the record as it was) and an outcome after it (the peer, its
+  record before and after, and the answer), correlated by one operation id.
+  `DurablePeerAudit` keeps each record as its own private file in
+  `peer-gateways-audit/`, synced before it is acknowledged. An intent that is
+  not kept refuses the command before anything is dialed or removed; an
+  outcome that is not kept answers `peer_audit_unavailable` while the effect
+  stands, so the owner never sees success without its evidence. A process
+  that stops between an effect and its outcome leaves the intent, and the
+  peer record says what it came to. Logs carry the same fields; never the
+  code or key material.
 - **Forgetting is local.** A gateway principal can never hold
   `credential.manage`, so B cannot revoke what A issued it. A's owner revokes
   it on A (`credential.revoke`), which is what stops B reading.
@@ -250,6 +264,7 @@ sequenceDiagram
 | P9 | A pending save with any key but the gateway's own, or for a pin that is the gateway's own key | Refused, nothing written; the second is `peer_own_gateway` | `a_record_takes_only_the_gateways_key_and_an_unreadable_one_can_be_forgotten` |
 | P10 | A record of another shape, or a valid one whose `gatewayKey` is not this gateway's | Listed `unreadable`; its credential does not load (`Corrupt`); enrolling into that peer is `peer_exists` and leaves it as it was; `peer.forget` removes it | same |
 | P11 | `peer.forget` while an enrollment runs | `peer_busy`; once the enrollment ends, forget runs | `forgetting_waits_for_a_running_enrollment` |
+| P12 | An enroll or forget that succeeds or is refused; its intent, or its outcome, not kept | Intent and outcome kept, naming the operation, peer, address, state before and after, answer, cause and owner; no intent: nothing dialed or removed, `peer_audit_unavailable`; no outcome: the record made or removed stands, `peer_audit_unavailable` | `enrolling_and_forgetting_are_audited_and_answer_only_when_kept`, `the_durable_peer_audit_reports_a_record_it_could_not_keep` |
 
 ## What this part does not do
 

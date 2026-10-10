@@ -124,6 +124,19 @@ pub enum SlotRefusal {
     Capacity,
 }
 
+/// What one enrollment's saves did to its peer's record: the record it
+/// created, one it already had made pending and replaced on a retry, or a
+/// save storage did not confirm.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SlotSave {
+    /// No record was there; this enrollment made it.
+    Created,
+    /// This peer's pending record was there and the save replaced it.
+    Replaced,
+    /// Storage did not confirm the save: the record may or may not be there.
+    Uncertain,
+}
+
 /// The private directory of peer records, and the gateway key they refer to.
 /// One per gateway; every operation holds its lock, so a record is never read
 /// half-replaced by this process.
@@ -159,6 +172,7 @@ impl PeerRecords {
             address: Some(address),
             peer: Mutex::new(None),
             refusal: Mutex::new(None),
+            saved: Mutex::new(None),
         }
     }
     /// A slot for the peer already recorded under `key`, for reading its
@@ -169,6 +183,7 @@ impl PeerRecords {
             address: None,
             peer: Mutex::new(Some(key)),
             refusal: Mutex::new(None),
+            saved: Mutex::new(None),
         }
     }
     /// Every peer, in key order, at most `MAX_PEERS`: saving refuses one
@@ -332,6 +347,8 @@ pub struct PeerSlot {
     address: Option<SocketAddr>,
     peer: Mutex<Option<DeviceKey>>,
     refusal: Mutex<Option<SlotRefusal>>,
+    /// The peer and what the first save that touched its record did.
+    saved: Mutex<Option<(DeviceKey, SlotSave)>>,
 }
 impl PeerSlot {
     /// The peer this slot saved or was opened for, once known.
@@ -342,6 +359,17 @@ impl PeerSlot {
     /// rather than storage.
     pub fn refusal(&self) -> Option<SlotRefusal> {
         *self.refusal.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+    /// The peer whose record this slot's saves touched, and how the first
+    /// of them did; `None` when no save reached storage.
+    pub fn saved(&self) -> Option<(DeviceKey, SlotSave)> {
+        *self.saved.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+    fn note_save(&self, peer: DeviceKey, save: SlotSave) {
+        self.saved
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get_or_insert((peer, save));
     }
     fn refuse(&self, refusal: SlotRefusal) -> PrivateStateError {
         *self.refusal.lock().unwrap_or_else(PoisonError::into_inner) = Some(refusal);
@@ -463,8 +491,21 @@ impl ClientPendingStore for PeerSlot {
             phase: PeerPhase::Pending,
         };
         if existing.as_ref() != Some(&record) {
-            self.records.write(&record, &own, replace)?;
+            if let Err(error) = self.records.write(&record, &own, replace) {
+                if matches!(error, PrivateStateError::Uncertain) {
+                    self.note_save(peer, SlotSave::Uncertain);
+                }
+                return Err(error);
+            }
         }
+        self.note_save(
+            peer,
+            if replace {
+                SlotSave::Replaced
+            } else {
+                SlotSave::Created
+            },
+        );
         *self.peer.lock().unwrap_or_else(PoisonError::into_inner) = Some(peer);
         Ok(())
     }

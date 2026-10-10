@@ -279,6 +279,7 @@ async fn gateway_child() {
             policy: Arc::new(CedarPolicyEvaluator::new().unwrap()),
             receivers: receivers.clone(),
             clock: Arc::new(SystemClock),
+            deadline_clock: RuntimeDependencies::default().clock,
             gateway: Resource::new(
                 OrganizationId::new(organization.clone()).unwrap(),
                 ResourceId::new(gateway.clone()).unwrap(),

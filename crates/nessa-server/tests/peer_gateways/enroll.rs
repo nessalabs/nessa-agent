@@ -1,7 +1,7 @@
 //! The dialing side of a peer gateway over the real `/session` route, Cedar,
 //! and a real peer: gateway B enrolls, with its own native key, into gateway
 //! A's peer invitation, keeping a reference to that key and never a copy.
-//! Rows P1–P11 in `docs/design/auth/peer-gateways.md` ("The dialing side").
+//! Rows P1–P12 in `docs/design/auth/peer-gateways.md` ("The dialing side").
 use super::product_client::ProductClient;
 use super::support::{private_root, Fixture, Time, WAIT};
 use base64::{engine::general_purpose::STANDARD, Engine};
@@ -33,7 +33,12 @@ use nessa_protocol::pairing::wire::NativePairingStatus;
 use nessa_server::{
     agents::application::{AgentProbe, AgentProbeEvidence},
     app::dependencies::RuntimeDependencies,
-    peer_gateways::infrastructure::{PeerCommands, PeerEntry, PeerPhase, PeerRecords, SlotRefusal},
+    peer_gateways::{
+        application::{PeerAudit, PeerAuditFuture, PeerAuditRecord, PeerAuditUnavailable},
+        infrastructure::{
+            DurablePeerAudit, PeerCommands, PeerEntry, PeerPhase, PeerRecords, SlotRefusal,
+        },
+    },
     product::{ProductDependencies, ProductRouteState},
     server::entrypoint::http,
 };
@@ -41,7 +46,7 @@ use serde_json::{json, Value};
 use std::{
     net::{SocketAddr, TcpStream},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 
 struct NoAgents;
@@ -51,18 +56,68 @@ impl AgentProbe for NoAgents {
     }
 }
 
-/// Gateway B: its own native key, its peer records, and a product socket the
-/// fixture's owner authenticates to.
+/// A wall clock that moves one millisecond each time it is read, so the
+/// audit's observation times order its records.
+struct Ticks(std::sync::atomic::AtomicU64);
+impl nessa_auth::application::ports::Clock for Ticks {
+    fn unix_milliseconds(&self) -> u64 {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+/// The durable peer audit, which can be told to refuse one kind of record.
+struct Audit {
+    durable: DurablePeerAudit,
+    directory: PathBuf,
+    refuse: Mutex<Option<&'static str>>,
+}
+impl Audit {
+    /// Refuse every record of `kind` (`peer_enroll_requested`, ...) from now.
+    fn refuse(&self, kind: Option<&'static str>) {
+        *self.refuse.lock().unwrap() = kind;
+    }
+    /// Every kept record, oldest operation first, intent before outcome.
+    fn records(&self) -> Vec<Value> {
+        let mut records: Vec<Value> = std::fs::read_dir(&self.directory)
+            .unwrap()
+            .map(|entry| {
+                serde_json::from_slice(&std::fs::read(entry.unwrap().path()).unwrap()).unwrap()
+            })
+            .collect();
+        records.sort_by_key(|record| record["observedAtMs"].as_u64().unwrap());
+        records
+    }
+}
+fn kind(record: &PeerAuditRecord) -> &'static str {
+    match record {
+        PeerAuditRecord::EnrollRequested { .. } => "peer_enroll_requested",
+        PeerAuditRecord::EnrollFinished { .. } => "peer_enroll_finished",
+        PeerAuditRecord::ForgetRequested { .. } => "peer_forget_requested",
+        PeerAuditRecord::ForgetFinished { .. } => "peer_forget_finished",
+    }
+}
+impl PeerAudit for Audit {
+    fn record(&self, record: PeerAuditRecord) -> PeerAuditFuture<'_> {
+        if *self.refuse.lock().unwrap() == Some(kind(&record)) {
+            return Box::pin(async { Err(PeerAuditUnavailable) });
+        }
+        self.durable.record(record)
+    }
+}
+
+/// Gateway B: its own native key, its peer records, its peer audit, and a
+/// product socket the fixture's owner authenticates to.
 struct Dialing {
     identity: NativeIdentity,
     records: Arc<PeerRecords>,
     directory: PathBuf,
+    audit: Arc<Audit>,
     product: SocketAddr,
 }
 impl Dialing {
     async fn new(fixture: &Fixture) -> Self {
         let root = private_root(fixture.directory.path(), "dialing");
-        for directory in ["native-pairing", "peer-gateways"] {
+        for directory in ["native-pairing", "peer-gateways", "peer-gateways-audit"] {
             nessa_local_storage::create_directory_beneath(&root, Path::new(directory)).unwrap();
         }
         let keys = Arc::new(FilePairingState::open(&root, Path::new("native-pairing")).unwrap());
@@ -80,11 +135,20 @@ impl Dialing {
             )
             .unwrap(),
         );
+        let audit = Arc::new(Audit {
+            durable: DurablePeerAudit::new(
+                root.join("peer-gateways-audit"),
+                Arc::new(Ticks(1.into())),
+            ),
+            directory: root.join("peer-gateways-audit"),
+            refuse: Mutex::new(None),
+        });
         let product = serve(
             fixture,
             Some(PeerCommands::new(
                 records.clone(),
                 RuntimeDependencies::default().clock,
+                audit.clone(),
             )),
         )
         .await;
@@ -92,6 +156,7 @@ impl Dialing {
             identity,
             records,
             directory: root.join("peer-gateways"),
+            audit,
             product,
         }
     }
@@ -625,4 +690,140 @@ async fn forgetting_waits_for_a_running_enrollment() {
         ProductClient::connect(product, &token).refused("peer.forget", json!({"peerKey": key}))
     });
     assert_eq!(after, "peer_not_found");
+}
+
+/// Row P12: each enroll and forget keeps an intent before its effect and an
+/// outcome after it, naming the operation, the peer, the state before and
+/// after, the cause and the owner who asked; refusals are kept the same way.
+/// An intent that cannot be kept refuses the command before anything changes.
+/// An outcome that cannot be kept refuses the answer while the effect stands,
+/// so the owner never sees success without its evidence.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn enrolling_and_forgetting_are_audited_and_answer_only_when_kept() {
+    let fixture = Fixture::new().await;
+    let (native, stop, listener, _) = fixture.listener().await;
+    let dialing = Dialing::new(&fixture).await;
+    let token = fixture.owner_token.clone();
+    let peer_key = pin_at(native).await;
+    let hex: String = peer_key[12..]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let call = |method: &str, params: Value| {
+        let method = method.to_owned();
+        blocking(|| ProductClient::connect(dialing.product, &token).call(&method, params))
+    };
+    let enroll = |code: &str| {
+        call(
+            "peer.enroll",
+            json!({"address": native.to_string(), "code": code}),
+        )
+    };
+    let forget = || call("peer.forget", json!({"peerKey": &peer_key[12..]}));
+    let code_of = |frame: &Value| frame["error"]["code"].as_str().unwrap_or("ok").to_owned();
+    let owner = json!({"kind": "principal", "principalId": "owner"});
+    let address = native.to_string();
+
+    // Success: an enrollment's intent, then its outcome with the record it made.
+    let (code, _) = invite(&fixture, ConsentClass::PeerRead).await;
+    assert_eq!(enroll(&code)["ok"], true);
+    let kept = dialing.audit.records();
+    assert_eq!(kept.len(), 2, "{kept:?}");
+    let (requested, finished) = (&kept[0], &kept[1]);
+    assert_eq!(requested["kind"], "peer_enroll_requested");
+    assert_eq!(requested["target"]["address"], address);
+    assert_eq!(requested["initiator"], owner);
+    assert_eq!(requested["cause"], "owner_requested");
+    assert_eq!(finished["kind"], "peer_enroll_finished");
+    assert_eq!(finished["operationId"], requested["operationId"]);
+    assert_eq!(finished["target"]["peerKey"], hex);
+    assert_eq!(finished["transition"]["before"]["phase"], "absent");
+    assert_eq!(
+        finished["transition"]["after"],
+        json!({"phase": "pending", "address": address})
+    );
+    assert_eq!(finished["outcome"], json!({"result": "succeeded"}));
+    assert_eq!(finished["initiator"], owner);
+    assert_ne!(requested["recordId"], finished["recordId"]);
+    let text = serde_json::to_string(&kept).unwrap();
+    assert!(!text.contains(&code), "the code is never kept");
+
+    // Success: a forget's intent names the record as it was.
+    assert_eq!(forget()["ok"], true);
+    let kept = dialing.audit.records();
+    let (requested, finished) = (&kept[2], &kept[3]);
+    assert_eq!(requested["kind"], "peer_forget_requested");
+    assert_eq!(
+        requested["transition"]["before"],
+        json!({"phase": "pending", "address": address})
+    );
+    assert_eq!(finished["kind"], "peer_forget_finished");
+    assert_eq!(finished["operationId"], requested["operationId"]);
+    assert_eq!(finished["target"]["peerKey"], hex);
+    assert_eq!(finished["transition"]["after"]["phase"], "absent");
+    assert_eq!(finished["initiator"], owner);
+
+    // Failure: a refused enrollment is kept, with nothing before or after.
+    let (code, id) = invite(&fixture, ConsentClass::PeerRead).await;
+    let wrong = if code == "ABCD-2345" {
+        "ABCD-2346"
+    } else {
+        "ABCD-2345"
+    };
+    assert_eq!(code_of(&enroll(wrong)), "peer_invitation_refused");
+    let kept = dialing.audit.records();
+    let finished = &kept[5];
+    assert_eq!(kept[4]["kind"], "peer_enroll_requested");
+    assert_eq!(finished["kind"], "peer_enroll_finished");
+    assert_eq!(
+        finished["outcome"],
+        json!({"result": "refused", "code": "peer_invitation_refused"})
+    );
+    assert_eq!(finished["transition"]["after"]["phase"], "absent");
+    assert_eq!(finished["target"]["peerKey"], Value::Null);
+    cancel(&fixture, id).await;
+
+    // The intent cannot be kept: nothing is dialed, so the code stays usable.
+    let (code, _) = invite(&fixture, ConsentClass::PeerRead).await;
+    dialing.audit.refuse(Some("peer_enroll_requested"));
+    assert_eq!(code_of(&enroll(&code)), "peer_audit_unavailable");
+    assert!(dialing.files().is_empty(), "nothing saved");
+    assert_eq!(dialing.audit.records().len(), 6, "nothing else kept");
+
+    // The outcome cannot be kept: the record stands, the answer is refused.
+    dialing.audit.refuse(Some("peer_enroll_finished"));
+    assert_eq!(code_of(&enroll(&code)), "peer_audit_unavailable");
+    assert_eq!(dialing.files().len(), 1, "the enrollment's record stands");
+    let listed = call("peer.list", json!({}));
+    assert_eq!(listed["payload"]["items"][0]["phase"], "pending");
+    assert_eq!(dialing.audit.records().len(), 7, "its intent is kept");
+
+    // A forget whose intent cannot be kept removes nothing.
+    dialing.audit.refuse(Some("peer_forget_requested"));
+    assert_eq!(code_of(&forget()), "peer_audit_unavailable");
+    assert_eq!(dialing.files().len(), 1, "the record stays");
+
+    // A forget whose outcome cannot be kept still removes the record.
+    dialing.audit.refuse(Some("peer_forget_finished"));
+    assert_eq!(code_of(&forget()), "peer_audit_unavailable");
+    assert!(dialing.files().is_empty(), "the removal stands");
+    let kept = dialing.audit.records();
+    assert_eq!(kept.last().unwrap()["kind"], "peer_forget_requested");
+    dialing.audit.refuse(None);
+    assert_eq!(code_of(&forget()), "peer_not_found");
+    stop.send(()).unwrap();
+    listener.await.unwrap().unwrap();
+}
+
+/// The durable adapter refuses, rather than drops, a record it cannot keep.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_durable_peer_audit_reports_a_record_it_could_not_keep() {
+    let directory = tempfile::tempdir().unwrap();
+    let audit = DurablePeerAudit::new(directory.path().join("missing"), Arc::new(Time));
+    let record = PeerAuditRecord::EnrollRequested {
+        operation: uuid::Uuid::new_v4(),
+        initiator: nessa_auth::domain::PrincipalId::new("owner").unwrap(),
+        address: "127.0.0.1:1".parse().unwrap(),
+    };
+    assert_eq!(audit.record(record).await, Err(PeerAuditUnavailable));
 }
