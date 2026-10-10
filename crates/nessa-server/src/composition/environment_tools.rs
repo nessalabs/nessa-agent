@@ -215,8 +215,11 @@ fn answered(answer: &CommandAnswer) -> Value {
         } => {
             // A success is an exit 0 whose end is recorded here and whose
             // cleanup the host confirmed; anything less is said as an error.
-            let succeeded =
-                ran.exit == CommandExit::Exited { code: 0 } && *recorded && ran.cleanup.is_some();
+            // A command that exited holds a process, so `NotHeld` beside it
+            // confirms nothing.
+            let succeeded = ran.exit == CommandExit::Exited { code: 0 }
+                && *recorded
+                && matches!(ran.cleanup, Some(LeaseCleanup::Confirmed { .. }));
             result(
                 json!({
                     "lease": lease.as_str(),

@@ -311,3 +311,24 @@ async fn a_file_written_in_the_workspace_is_never_run_under_a_bare_name() {
         .await;
     assert_eq!(ran.end, CommandEnd::NotStarted);
 }
+
+#[tokio::test]
+async fn output_the_capture_could_not_read_to_its_end_says_so_last_on_stderr() {
+    let snapshot = OutputSnapshot {
+        chunks: vec![shepherd::OutputChunk {
+            stream: OutputStream::Stdout,
+            bytes: b"partial".to_vec(),
+        }],
+        tail: Vec::new(),
+        dropped_bytes: 0,
+        stdout_closed: true,
+        stderr_closed: true,
+        errors: vec!["pipe remained open after root reap; reader stopped".into()],
+    };
+    let collected = collect(|| snapshot.clone(), Duration::ZERO).await;
+    assert_eq!(collected.stdout, b"partial");
+    assert_eq!(
+        String::from_utf8(collected.stderr).unwrap(),
+        "\n[nessa: output capture incomplete: pipe remained open after root reap; reader stopped]\n"
+    );
+}

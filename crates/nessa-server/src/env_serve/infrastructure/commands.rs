@@ -246,7 +246,9 @@ struct Collected {
 /// keep at most [`MAX_DATA_BYTES`] of both streams together: the newest, in
 /// the order they were written, as the capture drops its oldest. Each read
 /// consumes its chunks; the dropped count is cumulative, so the last
-/// snapshot's is the total.
+/// snapshot's is the total. A stream the capture could not read to its end
+/// lost bytes no count can say, so each such error is told last on stderr,
+/// where whoever reads the output sees it is not whole.
 async fn collect(mut read: impl FnMut() -> OutputSnapshot, wait: Duration) -> Collected {
     let deadline = tokio::time::Instant::now() + wait;
     let mut chunks = Vec::new();
@@ -260,6 +262,12 @@ async fn collect(mut read: impl FnMut() -> OutputSnapshot, wait: Duration) -> Co
         );
         let open = !snapshot.stdout_closed || !snapshot.stderr_closed;
         if !open || tokio::time::Instant::now() >= deadline {
+            chunks.extend(snapshot.errors.iter().map(|error| {
+                (
+                    OutputStream::Stderr,
+                    format!("\n[nessa: output capture incomplete: {error}]\n").into_bytes(),
+                )
+            }));
             return bounded(chunks, snapshot.dropped_bytes);
         }
         tokio::time::sleep(OUTPUT_POLL).await;

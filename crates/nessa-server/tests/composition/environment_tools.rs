@@ -147,8 +147,12 @@ fn an_answer_says_how_the_command_ended_or_why_it_was_refused() {
     assert_eq!(unrecorded["isError"], true);
     assert_eq!(unrecorded["structuredContent"]["recorded"], false);
     assert_eq!(unrecorded["structuredContent"]["stdout"], "out");
-    // Nor one whose cleanup the host could not confirm.
+    // Nor one whose cleanup the host could not confirm, or said was of
+    // nothing held.
     assert_eq!(ran(CommandExit::Exited { code: 0 }, None)["isError"], true);
+    let not_held = ran(CommandExit::Exited { code: 0 }, Some(LeaseCleanup::NotHeld));
+    assert_eq!(not_held["isError"], true);
+    assert_eq!(not_held["structuredContent"]["cleanup"], "not_held");
 }
 
 #[test]
