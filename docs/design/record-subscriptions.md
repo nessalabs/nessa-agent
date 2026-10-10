@@ -177,8 +177,9 @@ and again before every read, once the batch holds its `requests` permit: a
 request holds its capacity before it is admitted (`dispatch` does the same), so
 nothing revoked while a batch waits for a permit is read (row S30). An unsubscribe is admitted by the socket before
 it changes anything (row S29). Both use the same admission as `dispatch`
-(`admit_now`). Slice G (read grants) adds its per-conversation check there; nothing
-else decides whether a frame may be read.
+(`admit_now`). Both targets ask the read grant there too: a view batch for its
+conversation, and a list batch, which is refused to a paired device
+([read grants](read-grants.md)); nothing else decides whether a frame may be read.
 
 ### Limits
 

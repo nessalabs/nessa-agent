@@ -125,7 +125,11 @@ fn sessions_with(
             agent_probe: Arc::new(NoAgents),
         },
     )
-    .with_passive_read(fixture.receivers.clone(), metadata.clone())
+    .with_passive_read(
+        fixture.receivers.clone(),
+        metadata.clone(),
+        metadata.clone(),
+    )
     .with_catalogue_source(Arc::new(NessaCatalogueReadSource::new(
         metadata,
         Id::new("gateway").unwrap(),

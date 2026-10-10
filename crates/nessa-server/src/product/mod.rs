@@ -30,6 +30,7 @@ mod change_watch;
 mod event_sequence;
 mod operational_limits;
 pub(crate) mod passive_read;
+mod read_access;
 pub(crate) mod record_read;
 mod socket;
 mod state;

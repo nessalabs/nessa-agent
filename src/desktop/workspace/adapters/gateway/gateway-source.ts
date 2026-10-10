@@ -1508,6 +1508,7 @@ function reasonFor(
     case ConversationErrorCode.SubmissionConflict:
     case ConversationErrorCode.ConversationStateUnreadable:
     case ConversationErrorCode.ConversationConfigurationChanged:
+    case ConversationErrorCode.ShareTargetNotPaired:
       return uncertain ? "unavailable" : "not-supported"
     // Not done now, or not known to be: busy, starting, stopped, storage or
     // audit that did not answer, an outcome the gateway could not settle.

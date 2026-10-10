@@ -4,7 +4,7 @@ use crate::agent_install::application::AgentInstallations;
 use crate::agents::application::{AgentProbe, SharedAgentReadiness};
 use crate::attachments::{application::AttachmentService, entrypoint::http::UploadRoute};
 use crate::conversation::application::{
-    CatalogueReadSource, ConversationRepository, ConversationService, McpAppAudit,
+    CatalogueReadSource, ConversationRepository, ConversationService, McpAppAudit, ReadGrants,
     ReceiverAuthority, RecordReadSource, WatchCatalogue, WatchNamespaces, WatchRecords,
 };
 use crate::conversation::infrastructure::UuidWatchNamespaces;
@@ -31,6 +31,14 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::sync::Semaphore;
+
+/// The receiver bindings, ownership and read grants a paired device's reads
+/// are admitted by.
+pub(crate) type PassiveReadAuthorities = (
+    Arc<dyn ReceiverAuthority>,
+    Arc<dyn ConversationRepository>,
+    Arc<dyn ReadGrants>,
+);
 
 /// Dependencies and trusted gateway selectors for the product route.
 ///
@@ -75,7 +83,9 @@ pub struct ProductRouteState {
     pub(crate) policy: Arc<dyn PolicyEvaluator>,
     pub(crate) conversations: Option<Arc<ConversationService>>,
     /// Passive reads use these independent authorities without opening an Agent.
-    pub(crate) passive_read: Option<(Arc<dyn ReceiverAuthority>, Arc<dyn ConversationRepository>)>,
+    /// The read grants are also what every socket read asks for a paired
+    /// device (`read_access`).
+    pub(crate) passive_read: Option<PassiveReadAuthorities>,
     pub(crate) catalogue_source: Option<Arc<dyn CatalogueReadSource>>,
     pub(crate) record_source: Option<Arc<dyn RecordReadSource>>,
     pub(crate) agent_installations: Option<Arc<dyn AgentInstallations>>,
@@ -298,8 +308,9 @@ impl ProductRouteState {
         mut self,
         receivers: Arc<dyn ReceiverAuthority>,
         conversations: Arc<dyn ConversationRepository>,
+        read_grants: Arc<dyn ReadGrants>,
     ) -> Self {
-        self.passive_read = Some((receivers, conversations));
+        self.passive_read = Some((receivers, conversations, read_grants));
         self
     }
 

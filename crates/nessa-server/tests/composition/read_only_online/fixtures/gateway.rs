@@ -312,7 +312,7 @@ async fn gateway_child() {
             agent_probe: Arc::new(NoAgents),
         },
     )
-    .with_passive_read(receivers.clone(), metadata.clone())
+    .with_passive_read(receivers.clone(), metadata.clone(), metadata.clone())
     // The same producers `composition::local_auth` composes, over the same
     // storage and metadata owners the reads use.
     .with_change_watches(
@@ -436,6 +436,12 @@ async fn gateway_child() {
                 )
                 .await
                 .unwrap();
+            share_with_devices(
+                metadata.as_ref(),
+                &ConversationId::new(target).unwrap(),
+                &setup,
+            )
+            .await;
             let session = SessionId::new(target).unwrap();
             let lease = storage.open(session.clone()).await.unwrap();
             if large {
@@ -615,4 +621,40 @@ async fn pair_device(
     assert!(matches!(active, NativePairingStatus::Active { .. }));
     client.shutdown().await;
     (receiver.as_str().to_owned(), epoch, credential)
+}
+
+/// The owner shares a fixture conversation with every device the fixture
+/// paired: a paired device reads only what it was granted (issue 704).
+pub(super) async fn share_with_devices(
+    metadata: &LocalConversationStore,
+    id: &ConversationId,
+    setup: &Setup,
+) {
+    let devices = [
+        Some((setup.receiver.clone(), setup.credential.clone())),
+        setup
+            .second_receiver
+            .clone()
+            .zip(setup.second_credential.clone()),
+    ];
+    for (receiver, credential) in devices.into_iter().flatten() {
+        crate::conversation::application::ReadGrants::change(
+            metadata,
+            crate::conversation::application::ReadGrantChange {
+                transition: crate::conversation::application::ReadGrantTransition::Grant,
+                conversation_id: id.clone(),
+                receiver_id: Some(receiver),
+                credential_id: nessa_auth::domain::CredentialId::new(credential).unwrap(),
+                initiator: crate::conversation::application::ConversationCaller {
+                    organization_id: OrganizationId::new(setup.organization.clone()).unwrap(),
+                    principal_id: PrincipalId::new(setup.owner.clone()).unwrap(),
+                    surface_id: "setup".into(),
+                    action_id: uuid(),
+                },
+                at_ms: SystemClock.unix_milliseconds(),
+            },
+        )
+        .await
+        .unwrap();
+    }
 }

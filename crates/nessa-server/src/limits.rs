@@ -5,6 +5,7 @@
 //! [`OperationalLimits`], a fixed socket constant, or a bound the protocol
 //! schema publishes. `docs/limits.md` is that catalogue rendered, and the
 //! test beside this module refuses a copy that has drifted.
+use crate::conversation::application::MAX_READ_GRANTS_PER_CONVERSATION;
 use crate::conversation::infrastructure::{DISCOVERY_STEPS_PER_READ, MAX_CATALOGUE_CHANGE_WATCHES};
 use crate::product::passive_read::deadlines::RECORD_SEND_TIMEOUT;
 use crate::product::{OperationalLimits, SessionSettings, RECORD_LANE, RECORD_SLOT, REFUSAL_LANE};
@@ -188,6 +189,12 @@ fn catalogue() -> &'static [Limit] {
             meaning: "the catalogue watches every socket shares; a list subscription holds one beside its record watch, as a device's catalogue watch does; past this one is refused subscription_capacity",
         },
         Limit {
+            id: "conversation.read_grants",
+            tier: "fixed",
+            owner: "MAX_READ_GRANTS_PER_CONVERSATION in crates/nessa-server/src/conversation/application/read_grants.rs, the schema's ConversationSharesResult maxItems",
+            meaning: "the paired devices one conversation is shared with; one more conversation.share is refused invalid_request, so a conversation.shares answer always fits one frame",
+        },
+        Limit {
             id: "record.read_work_budget",
             tier: "configured",
             owner: "config.json limits.readWorkBudgetMs",
@@ -272,6 +279,10 @@ pub(crate) fn effective_json(
     put(
         "conversation.catalogue_watches",
         count(MAX_CATALOGUE_CHANGE_WATCHES),
+    );
+    put(
+        "conversation.read_grants",
+        MAX_READ_GRANTS_PER_CONVERSATION.unsigned_abs(),
     );
     put("record.read_work_budget", millis(limits.read_work_budget()));
     put("record.discovery_steps", count(DISCOVERY_STEPS_PER_READ));

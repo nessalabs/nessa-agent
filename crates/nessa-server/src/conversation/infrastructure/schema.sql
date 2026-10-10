@@ -85,4 +85,44 @@ CREATE TABLE summaries (
     archived INTEGER NOT NULL CHECK (archived IN (0, 1))
 ) STRICT;
 
-PRAGMA user_version = 3;
+-- Which paired device may read which conversation (issue 704). A row is a
+-- grant; revoking removes it. Nothing is granted by default or by list. The
+-- device is named by its receiver binding and by the credential the owner
+-- chose it by; both are minted when it paired and never reused.
+CREATE TABLE read_grants (
+    conversation_id TEXT NOT NULL REFERENCES conversations (id),
+    receiver_id TEXT NOT NULL,
+    credential_id TEXT NOT NULL,
+    role TEXT NOT NULL CHECK (role = 'read'),
+    granted_at_ms INTEGER NOT NULL,
+    PRIMARY KEY (receiver_id, conversation_id),
+    UNIQUE (credential_id, conversation_id)
+) STRICT;
+
+-- A conversation's grants, for its shares list, count and revoke.
+CREATE INDEX read_grants_conversation ON read_grants (conversation_id);
+
+-- Every grant and revoke as the owner made it: before and after, who, from
+-- which surface, under which request, and the catalogue revision it took. A
+-- request that changed nothing is kept too, with before equal to after, so a
+-- retry of it replays that answer.
+-- Never changed or removed.
+CREATE TABLE read_grant_changes (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id TEXT NOT NULL REFERENCES conversations (id),
+    receiver_id TEXT NOT NULL,
+    credential_id TEXT NOT NULL,
+    before TEXT NOT NULL CHECK (before IN ('none', 'read')),
+    after TEXT NOT NULL CHECK (after IN ('none', 'read')),
+    initiator TEXT NOT NULL,
+    surface TEXT NOT NULL,
+    request TEXT NOT NULL,
+    changed_at_ms INTEGER NOT NULL,
+    revision INTEGER NOT NULL
+) STRICT;
+
+-- One journal row per request: a retried request is answered from it.
+CREATE UNIQUE INDEX read_grant_changes_request
+    ON read_grant_changes (conversation_id, initiator, surface, request);
+
+PRAGMA user_version = 4;

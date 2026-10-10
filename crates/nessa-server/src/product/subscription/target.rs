@@ -18,6 +18,7 @@ use crate::conversation::application::{
 use crate::product::{
     conversation::{caller, read_list, read_view},
     passive_read::deadlines::{PASSIVE_READ_TIMEOUT, RECORD_SEND_TIMEOUT},
+    read_access,
     socket::{admit_now, failure, success},
     state::{note_limit, ProductRouteState},
 };
@@ -30,6 +31,7 @@ use nessa_protocol::product::generated::{
     ConversationViewed, MAX_PAYLOAD_BYTES, SUBSCRIPTION_DELIVERY_TIMEOUT_MS,
 };
 use nessa_protocol::product::passive_read::decimal_u64;
+use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_protocol::protocol::{EventFrame, OutgoingMessage};
 use nessa_sdk::application::agent_execution::sessions::{
     ChangeWatchError, ChangeWatchState, CommittedChangeWatch, StorageError,
@@ -266,14 +268,24 @@ impl Sources {
 /// The one admission of a subscription batch: the session is still current,
 /// the method's grant still holds under current policy, and the browser
 /// session is still present. Asked before every read, so access lost between
-/// two batches ends the subscription before the next (row S14). Slice G's
-/// per-conversation read grant is checked here and nowhere else.
+/// two batches ends the subscription before the next (row S14). A view also
+/// asks the read grant for its conversation here, and a list is refused to a
+/// paired device here (`read_access`, rows G12 and G13), so a device's
+/// subscribe that may not read takes no watch and a revoke ends the
+/// subscription before its next read.
 pub(super) async fn authorize_batch(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
     target: &Target,
 ) -> Result<AuthenticatedSession, &'static str> {
-    admit_now(state, session, target.method()).await
+    let current = admit_now(state, session, target.method()).await?;
+    match target {
+        Target::View { conversation, .. } => {
+            read_access::admit_conversation(state, &current, conversation).await?
+        }
+        Target::List { .. } => read_access::admit_list(state, &current).await?,
+    }
+    Ok(current)
 }
 
 /// One read's result: a view and where it was folded through, or a list.
@@ -301,6 +313,11 @@ fn retry_after(error: &ConversationError, attempt: u32) -> Option<Duration> {
         error,
         ConversationError::Storage(StorageError::ReadCapacity | StorageError::Busy)
     );
+    backoff(transient, attempt)
+}
+
+/// The wait before attempt `attempt + 1` of something `transient`, or `None`.
+fn backoff(transient: bool, attempt: u32) -> Option<Duration> {
     if !transient || attempt >= TRANSIENT_RETRIES {
         return None;
     }
@@ -334,7 +351,24 @@ async fn read_batch(
         // request. Admitted before waiting for capacity, a grant revoked
         // during the wait would let one read through (row S30).
         let permit = state.requests.clone().acquire_owned().await;
-        let current = authorize_batch(state, session, target).await?;
+        let current = match authorize_batch(state, session, target).await {
+            Ok(current) => current,
+            // A batch's admission that could not be verified now (the
+            // receiver lookup, row G11) is retried as a read slot is, so one
+            // transient miss does not end an owner's subscription.
+            Err(code) => match backoff(
+                code == ConversationErrorCode::TemporarilyUnavailable.as_str(),
+                attempt,
+            ) {
+                Some(wait) => {
+                    drop(permit);
+                    attempt += 1;
+                    tokio::time::sleep(wait).await;
+                    continue;
+                }
+                None => return Err(code.to_owned()),
+            },
+        };
         let read = match target {
             Target::View { conversation, .. } => {
                 // A follower opens nothing (row S26).

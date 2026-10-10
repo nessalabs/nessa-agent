@@ -101,6 +101,8 @@ impl WatchFixture {
             )
             .await
             .unwrap();
+        // The watching device is granted the conversation (read grants).
+        crate::conversation_test_support::grant_read(metadata.as_ref(), &id, "receiver").await;
         let storage = Arc::new(RecordStorage::new(directory.path().join("records")).unwrap());
         storage.initialize().await.unwrap();
         let records = Arc::new(CountingRecords {
@@ -140,7 +142,7 @@ impl WatchFixture {
             .unwrap();
         }
         let state = state
-            .with_passive_read(receiver.clone(), metadata.clone())
+            .with_passive_read(receiver.clone(), metadata.clone(), metadata.clone())
             .with_change_watches(records.clone(), metadata)
             .with_record_source(reads.clone());
         let session = authenticate(&state).await;
@@ -422,6 +424,7 @@ async fn watch_admission_worker_loss_retains_original_owner_while_other_read_and
     });
     let _release = ReleaseHeld(work.clone());
     let metadata = fixture.state.passive_read.as_ref().unwrap().1.clone();
+    let grants = fixture.state.passive_read.as_ref().unwrap().2.clone();
     fixture.state = fixture.state.clone().with_passive_read(
         Arc::new(HoldFirstReceiver {
             actual: RecordBinding,
@@ -433,6 +436,7 @@ async fn watch_admission_worker_loss_retains_original_owner_while_other_read_and
             during_hold: AtomicU64::new(0),
         }),
         metadata,
+        grants,
     );
     let reader = Arc::new(NessaRecordReadSource::new(
         fixture.storage.clone(),
@@ -759,6 +763,7 @@ async fn lost_socket_observer_cannot_erase_fault_after_original_authority_worker
     });
     let _release = ReleaseHeld(work.clone());
     let metadata = fixture.state.passive_read.as_ref().unwrap().1.clone();
+    let grants = fixture.state.passive_read.as_ref().unwrap().2.clone();
     fixture.state = fixture.state.clone().with_passive_read(
         Arc::new(PanicAfterReceiver(HoldFirstReceiver {
             actual: RecordBinding,
@@ -770,6 +775,7 @@ async fn lost_socket_observer_cannot_erase_fault_after_original_authority_worker
             during_hold: AtomicU64::new(0),
         })),
         metadata,
+        grants,
     );
     let (socket, peer) = test_socket(None);
     let socket = tokio::spawn(run_authenticated(
@@ -819,10 +825,11 @@ async fn unwatch_ack_retains_original_authority_target_until_actual_join() {
         during_hold: AtomicU64::new(0),
     });
     let metadata = fixture.state.passive_read.as_ref().unwrap().1.clone();
+    let grants = fixture.state.passive_read.as_ref().unwrap().2.clone();
     fixture.state = fixture
         .state
         .clone()
-        .with_passive_read(authority.clone(), metadata);
+        .with_passive_read(authority.clone(), metadata, grants);
     let (socket, mut peer) = test_socket(None);
     let socket = tokio::spawn(run_authenticated(
         socket,
@@ -1318,10 +1325,11 @@ async fn actual_actor_replaces_unsent_dirty_after_observing_source_terminal_befo
         during_hold: AtomicU64::new(0),
     });
     let metadata = fixture.state.passive_read.as_ref().unwrap().1.clone();
+    let grants = fixture.state.passive_read.as_ref().unwrap().2.clone();
     fixture.state = fixture
         .state
         .clone()
-        .with_passive_read(authority.clone(), metadata);
+        .with_passive_read(authority.clone(), metadata, grants);
     let mut watches = ConnectionWatches::new(&fixture.state);
     let slot = Arc::new(Arc::new(Semaphore::new(1)).try_acquire_owned().unwrap());
     let request = RequestFrame::new("actor-registration", "conversation.watchRecords", &json!({"conversationId": fixture.id.to_string(), "receiverId": "receiver", "accessEpoch": "3"})).unwrap();
@@ -1571,10 +1579,11 @@ async fn held_receiver_fixture(
         during_hold: AtomicU64::new(0),
     });
     let metadata = fixture.state.passive_read.as_ref().unwrap().1.clone();
+    let grants = fixture.state.passive_read.as_ref().unwrap().2.clone();
     fixture.state = fixture
         .state
         .clone()
-        .with_passive_read(authority.clone(), metadata)
+        .with_passive_read(authority.clone(), metadata, grants)
         .with_settings(checked_every(interval));
     (fixture, work, authority)
 }
@@ -2187,7 +2196,8 @@ impl HostWatchFixture {
             Arc::new(receiver)
         };
         let metadata = inner.state.passive_read.as_ref().unwrap().1.clone();
-        inner.state = inner.state.clone().with_passive_read(receiver, metadata);
+        let grants = inner.state.passive_read.as_ref().unwrap().2.clone();
+        inner.state = inner.state.clone().with_passive_read(receiver, metadata, grants);
         let (socket, peer) = test_socket(None);
         let socket = tokio::spawn(run_authenticated(
             socket,
@@ -2301,4 +2311,71 @@ impl Drop for HostWatchFixture {
     fn drop(&mut self) {
         self.release();
     }
+}
+
+/// Takes the fixture's grant on its conversation away from its device.
+async fn revoke_grant(fixture: &WatchFixture) {
+    let grants = fixture.state.passive_read.as_ref().unwrap().2.clone();
+    let revoked = grants
+        .change(crate::conversation::application::ReadGrantChange {
+            transition: crate::conversation::application::ReadGrantTransition::Revoke,
+            conversation_id: fixture.id.clone(),
+            receiver_id: None,
+            credential_id: CredentialId::new("receiver-credential").unwrap(),
+            initiator: crate::product::conversation::caller(&fixture.session, "unshare".into()),
+            at_ms: 1,
+        })
+        .await
+        .unwrap();
+    assert!(revoked);
+}
+
+/// Read grants row G1: a records watch on a conversation the device was not
+/// granted is refused at admission, as a conversation that is not its
+/// owner's, and installs no watch.
+#[tokio::test]
+async fn a_records_watch_on_an_ungranted_conversation_is_refused() {
+    let fixture = WatchFixture::new().await;
+    revoke_grant(&fixture).await;
+    let (socket, mut peer) = test_socket(None);
+    let socket = tokio::spawn(run_authenticated(
+        socket,
+        fixture.state.clone(),
+        fixture.session.clone(),
+    ));
+    fixture.watch(&peer, "install");
+    let reply = text(peer.message().await);
+    assert_eq!(reply["id"], "install");
+    assert_eq!(reply["ok"], false, "{reply}");
+    assert_eq!(reply["error"]["code"], "wrong_owner", "{reply}");
+    assert_eq!(fixture.records.installed.load(Ordering::SeqCst), 0);
+    fixture.finish(peer, socket).await;
+}
+
+/// Read grants row G15: a records watch installed while granted delivers no
+/// notice once the grant is revoked: the next notice is admitted again,
+/// refused, and the connection closes as `authorization_lost`.
+#[tokio::test]
+async fn a_revoke_ends_an_installed_records_watch_at_its_next_notice() {
+    let fixture = WatchFixture::new().await;
+    let (socket, mut peer) = test_socket(None);
+    let socket = tokio::spawn(run_authenticated(
+        socket,
+        fixture.state.clone(),
+        fixture.session.clone(),
+    ));
+    fixture.watch(&peer, "install");
+    let installed = text(peer.message().await);
+    assert_eq!(installed["ok"], true, "{installed}");
+    revoke_grant(&fixture).await;
+    fixture.commit().await;
+    let Message::Close(Some(close)) = peer.message().await else {
+        panic!("the notice after a revoke must close rather than deliver");
+    };
+    assert_eq!(
+        close.code,
+        SessionCloseReason::AuthorizationLost.web_socket_code()
+    );
+    assert!(peer.output.try_recv().is_err());
+    fixture.finish(peer, socket).await;
 }

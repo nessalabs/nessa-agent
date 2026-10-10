@@ -102,6 +102,7 @@ const outcomes: Readonly<Record<ConversationErrorCode, Outcome>> = {
   [ConversationErrorCode.ApprovalRequestConflict]: "failed",
   [ConversationErrorCode.ConversationsNotConfigured]: "failed",
   [ConversationErrorCode.UnknownMethod]: "failed",
+  [ConversationErrorCode.ShareTargetNotPaired]: "failed",
   [ConversationErrorCode.ConversationCapacity]: "failed",
   [ConversationErrorCode.ConversationConfigurationChanged]: "failed",
   [ConversationErrorCode.ConversationStateUnreadable]: "failed",
