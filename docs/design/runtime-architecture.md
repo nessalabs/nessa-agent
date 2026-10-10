@@ -661,6 +661,8 @@ machine's own `sh` with its own tools, so on Linux and macOS in CI) and
 | F14 | A copy there that no longer runs or speaks another protocol | Absent, so installed again | `a_copy_that_no_longer_runs_or_speaks_another_protocol_is_absent` |
 | F15 | Another build of the same protocol on the host (a harness or dependency change) | Not this build's path, so absent: this build is installed and served beside it | `an_upload_that_verifies_is_installed_where_the_probe_and_serve_look`, `a_host_without_this_build_gets_it_installed_and_then_serves` |
 | F16 | The executable replaced at its path, or its bytes changed since they were measured | The file opened at start is still the one measured and sent; bytes that no longer match are not sent: `InstallRefused` `source`, `environment_install_failed` | `an_executable_replaced_at_its_path_is_still_the_one_measured_and_sent`, `an_executable_replaced_since_it_was_measured_is_not_sent` |
+| F17 | Something other than a file where the copy goes (a directory at `~/.nessa/env/<digest>/nessa`) | Nothing is moved into it: `InstallRefused` `failed` `publish`, `environment_install_failed` | `a_directory_where_the_copy_goes_is_a_failed_step_and_nothing_goes_in_it` |
+| F18 | A login shell that prints a long banner before the answer | Its output is read to the end and only the last 4 KiB kept, so the answer on the last line is still read | `a_long_login_banner_does_not_hide_the_answer` |
 
 **Verified on hosts.** The host commands run on both CI systems (Linux and
 macOS) with their own `sh`, `uname`, digest tool, `mktemp`, `find` and

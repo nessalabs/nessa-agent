@@ -235,6 +235,23 @@ fn a_home_that_cannot_hold_it_is_a_failed_step() {
 }
 
 #[test]
+fn a_directory_where_the_copy_goes_is_a_failed_step_and_nothing_goes_in_it() {
+    let home = tempfile::tempdir().unwrap();
+    let source = tempfile::tempdir().unwrap();
+    let (path, digest) = build(source.path(), PROTOCOL, true);
+    let target = installed(home.path(), &digest);
+    std::fs::create_dir_all(&target).unwrap();
+    let answer = on_host(home.path(), &upload_command(PROTOCOL, &digest), Some(&path));
+    assert_eq!(
+        Upload::parse(&answer),
+        Some(Upload::Refused(UploadRefusal::Failed("publish".into()))),
+        "{answer}"
+    );
+    assert_eq!(std::fs::read_dir(&target).unwrap().count(), 0);
+    assert!(leftovers(home.path()).is_empty());
+}
+
+#[test]
 fn a_home_with_spaces_in_its_path_is_used_as_it_is() {
     let parent = tempfile::tempdir().unwrap();
     let home = parent.path().join("a home with spaces");

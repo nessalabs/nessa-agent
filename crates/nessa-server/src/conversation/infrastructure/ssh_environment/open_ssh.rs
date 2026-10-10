@@ -17,8 +17,9 @@ pub(crate) struct OpenSshConnector;
 /// Most lines of `ssh`'s own standard error kept in the log per connection.
 const MAX_STDERR_LINES: usize = 32;
 
-/// Most bytes of a host command's output read; the rest is discarded.
-const MAX_SHELL_OUTPUT: u64 = 4096;
+/// Most bytes of a host command's output kept: the last ones, where its
+/// answer is.
+const MAX_SHELL_OUTPUT: usize = 4096;
 
 /// Log the first lines of `ssh`'s own standard error.
 fn log_stderr(host: &SshDestination, stderr: impl AsyncRead + Send + Unpin + 'static) {
@@ -92,15 +93,42 @@ impl RemoteShell for OpenSshConnector {
                 .stdout
                 .take()
                 .ok_or_else(|| io::Error::other("no ssh stdout"))?;
-            let mut output = Vec::new();
-            stdout
-                .take(MAX_SHELL_OUTPUT)
-                .read_to_end(&mut output)
-                .await?;
+            let output = read_tail(stdout).await?;
             child.wait().await?;
             Ok(String::from_utf8_lossy(&output).into_owned())
         })
     }
 }
 
+/// Reads `stream` to its end, keeping only its last [`MAX_SHELL_OUTPUT`]
+/// bytes: a login shell may say anything first, and the answer is the last
+/// line.
+async fn read_tail(mut stream: impl AsyncRead + Unpin) -> io::Result<Vec<u8>> {
+    let mut tail = Vec::new();
+    let mut chunk = [0; 1024];
+    loop {
+        let read = stream.read(&mut chunk).await?;
+        if read == 0 {
+            return Ok(tail);
+        }
+        tail.extend_from_slice(&chunk[..read]);
+        let excess = tail.len().saturating_sub(MAX_SHELL_OUTPUT);
+        tail.drain(..excess);
+    }
+}
+
 struct KeptChild(#[expect(dead_code, reason = "held so the child is killed on drop")] Child);
+
+#[cfg(test)]
+mod tests {
+    use super::{read_tail, MAX_SHELL_OUTPUT};
+
+    #[tokio::test]
+    async fn a_long_login_banner_does_not_hide_the_answer() {
+        let mut said = "welcome\n".repeat(MAX_SHELL_OUTPUT).into_bytes();
+        said.extend_from_slice(b"present\n");
+        let tail = read_tail(said.as_slice()).await.unwrap();
+        assert_eq!(tail.len(), MAX_SHELL_OUTPUT);
+        assert!(tail.ends_with(b"welcome\npresent\n"));
+    }
+}

@@ -95,7 +95,9 @@ set -- $s; [ \"$1\" = \"{digest}\" ] || {fingerprint}; \
 chmod 700 \"$t\" || {failed_mode}; \
 v=$(\"$t\" env protocol 2>/dev/null) || {unrunnable}; \
 [ \"$v\" = \"{protocol}\" ] || {version}; \
-mkdir -p \"$d/{digest}\" && mv -f \"$t\" \"$d/{digest}/nessa\" || {failed_publish}; \
+mkdir -p \"$d/{digest}\" || {failed_publish}; \
+[ -d \"$d/{digest}/nessa\" ] && {failed_publish}; \
+mv -f \"$t\" \"$d/{digest}/nessa\" || {failed_publish}; \
 echo installed'",
         failed_write = refuse("failed write"),
         no_digest = refuse("refused digest_tool"),
