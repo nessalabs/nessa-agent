@@ -4581,7 +4581,7 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 64,
-          "description": "Fixed class of access the consent is for."
+          "description": "Fixed class of access the consent is for, which also says who it enrolls: gateway-conversation-read for one of the owner's devices, peer-gateway-conversation-read for a peer gateway."
         },
         "grant": {
           "$ref": "#/$defs/ProductGrant",

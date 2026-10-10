@@ -7,6 +7,10 @@ use super::{
     RevocationCause, Supersession, TransitionCause,
 };
 
+/// The read action: the one grant pairing issues, and the only one a peer
+/// gateway can hold.
+pub(crate) const CONVERSATION_READ: &str = "conversation.read";
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 /// Kind of actor. This classification conveys no permission or role, with one
 /// exception stated by [`PrincipalKind::may_hold`]: the grants a kind can
@@ -36,7 +40,7 @@ impl PrincipalKind {
     pub fn may_hold(self, action: &Action) -> bool {
         match self {
             Self::Human | Self::Agent | Self::Integration => true,
-            Self::Gateway => action.as_str() == "conversation.read",
+            Self::Gateway => action.as_str() == CONVERSATION_READ,
         }
     }
 }

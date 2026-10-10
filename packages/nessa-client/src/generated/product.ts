@@ -1905,7 +1905,7 @@ export interface PairingOwnerStatus {
   consentId: number[]
   /** Consent generation the device enrolls under. */
   generation: number
-  /** Fixed class of access the consent is for. */
+  /** Fixed class of access the consent is for, which also says who it enrolls: gateway-conversation-read for one of the owner's devices, peer-gateway-conversation-read for a peer gateway. */
   class: string
   /** The exact action and resource the consent covers. */
   grant: ProductGrant

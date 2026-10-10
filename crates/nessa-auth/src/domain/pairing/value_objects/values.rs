@@ -1,6 +1,7 @@
 use super::wire_values::{DEVICE_KEY_BYTES, IDENTITY_BYTES};
 use crate::domain::{
-    Action, AudienceId, Grant, Initiator, MembershipId, OrganizationId, PrincipalId, Resource,
+    models::CONVERSATION_READ, Action, AudienceId, Grant, Initiator, MembershipId, OrganizationId,
+    PrincipalId, Resource,
 };
 use std::{error::Error, fmt};
 
@@ -161,7 +162,7 @@ pub struct ConsentIntent {
 impl ConsentIntent {
     /// Publish the sole gateway-read grant representation for boundary projections.
     pub fn read_grant(resource: Resource) -> Result<Grant, PairingError> {
-        let action = Action::new("conversation.read").map_err(|_| PairingError::Invalid)?;
+        let action = Action::new(CONVERSATION_READ).map_err(|_| PairingError::Invalid)?;
         Ok(Grant::new(action, resource))
     }
 
