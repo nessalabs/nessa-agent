@@ -34,6 +34,7 @@ Each row is a limit the gateway names when a refusal or a silent close hits it. 
 | record.read_work_budget | configured | 200 | config.json limits.readWorkBudgetMs | a cold read still preparing at this budget answers that it is preparing |
 | record.discovery_steps | fixed | 128 | record read DISCOVERY_STEPS_PER_READ | a cold read that uses every discovery step answers that the source is preparing |
 | peer.poll_interval | fixed | 30000 | POLL_INTERVAL in crates/nessa-server/src/peer_gateways/infrastructure/poller.rs | how often each up-to-date peer gateway is read, jittered 80 to 120 percent; what a peer shares or unshares reaches this gateway's cache within about one interval |
-| peer.poll_backoff_cap | fixed | 900000 | POLL_BACKOFF_CAP in crates/nessa-server/src/peer_gateways/infrastructure/poller.rs | the longest a peer that keeps failing waits before it is read again; the wait doubles from the interval up to this |
+| peer.poll_backoff_cap | fixed | 900000 | POLL_BACKOFF_CAP in crates/nessa-server/src/peer_gateways/infrastructure/poller.rs | the longest any peer waits between reads, jitter included; a peer that keeps failing waits twice as long each time, from the interval up to this |
+| peer.read_budget | fixed | 60000 | READ_BUDGET in crates/nessa-server/src/peer_gateways/infrastructure/poller.rs | the longest one read of a peer gateway runs; a read that reaches it ends incomplete, keeps what it read, and continues on the next cycle, so a slow peer cannot hold the peer commands or the other peers |
 
 | client.preparing_attempts | client | the client's own | `PREPARING_ATTEMPTS` in `crates/nessa-client-core/src/read_only_sync/application/watch.rs` | how many times a preparing read is asked again |

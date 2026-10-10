@@ -7,7 +7,7 @@
 //! test beside this module refuses a copy that has drifted.
 use crate::conversation::application::MAX_READ_GRANTS_PER_CONVERSATION;
 use crate::conversation::infrastructure::{DISCOVERY_STEPS_PER_READ, MAX_CATALOGUE_CHANGE_WATCHES};
-use crate::peer_gateways::infrastructure::{POLL_BACKOFF_CAP, POLL_INTERVAL};
+use crate::peer_gateways::infrastructure::{POLL_BACKOFF_CAP, POLL_INTERVAL, READ_BUDGET};
 use crate::product::passive_read::deadlines::RECORD_SEND_TIMEOUT;
 use crate::product::{OperationalLimits, SessionSettings, RECORD_LANE, RECORD_SLOT, REFUSAL_LANE};
 use nessa_protocol::product::generated::{
@@ -218,7 +218,13 @@ fn catalogue() -> &'static [Limit] {
             id: "peer.poll_backoff_cap",
             tier: "fixed",
             owner: "POLL_BACKOFF_CAP in crates/nessa-server/src/peer_gateways/infrastructure/poller.rs",
-            meaning: "the longest a peer that keeps failing waits before it is read again; the wait doubles from the interval up to this",
+            meaning: "the longest any peer waits between reads, jitter included; a peer that keeps failing waits twice as long each time, from the interval up to this",
+        },
+        Limit {
+            id: "peer.read_budget",
+            tier: "fixed",
+            owner: "READ_BUDGET in crates/nessa-server/src/peer_gateways/infrastructure/poller.rs",
+            meaning: "the longest one read of a peer gateway runs; a read that reaches it ends incomplete, keeps what it read, and continues on the next cycle, so a slow peer cannot hold the peer commands or the other peers",
         },
     ]
 }
@@ -301,6 +307,7 @@ pub(crate) fn effective_json(
     put("record.discovery_steps", count(DISCOVERY_STEPS_PER_READ));
     put("peer.poll_interval", millis(POLL_INTERVAL));
     put("peer.poll_backoff_cap", millis(POLL_BACKOFF_CAP));
+    put("peer.read_budget", millis(READ_BUDGET));
     serde_json::Value::Object(values.into_iter().collect())
 }
 
