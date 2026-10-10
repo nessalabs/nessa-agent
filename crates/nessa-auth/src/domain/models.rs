@@ -11,6 +11,19 @@ use super::{
 /// gateway can hold.
 pub(crate) const CONVERSATION_READ: &str = "conversation.read";
 
+/// The conversation authority's actions: what only the gateway that owns a
+/// conversation may hold. `conversation.write` admits commands into a
+/// conversation and answers its approvals; `credential.manage` holds
+/// credentials, pairs devices and peers, and manages who is granted what
+/// (every grant-management method is admitted under it). This is the one list
+/// of them: a peer gateway can never hold any, however its allowlist grows.
+pub const CONVERSATION_AUTHORITY_ACTIONS: &[&str] = &["conversation.write", "credential.manage"];
+
+/// What a peer gateway may hold. Slice I widens it to the environment-grant
+/// actions; the conversation authority's actions stay out of it whatever is
+/// added, because [`PrincipalKind::may_hold`] refuses them first.
+const PEER_GATEWAY_ACTIONS: &[&str] = &[CONVERSATION_READ];
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 /// Kind of actor. This classification conveys no permission or role, with one
 /// exception stated by [`PrincipalKind::may_hold`]: the grants a kind can
@@ -31,16 +44,22 @@ impl PrincipalKind {
     /// allowed; this answers only what the kind can express.
     ///
     /// A peer gateway holds surface grants only: it may read what it is
-    /// granted. It can never hold an action of the conversation authority:
-    /// `conversation.write` admits commands into a conversation and answers
-    /// its approvals, and `credential.manage` holds credentials and pairs
-    /// devices. The gateway that owns a conversation keeps those, so whatever
+    /// granted. It can never hold an action of the conversation authority
+    /// ([`CONVERSATION_AUTHORITY_ACTIONS`]: `conversation.write`, which admits
+    /// commands into a conversation and answers its approvals, and
+    /// `credential.manage`, which holds credentials, pairs and manages
+    /// grants). The gateway that owns a conversation keeps those, so whatever
     /// a peer is later allowed to run for it, the peer cannot hold both
-    /// authorities over one conversation.
+    /// authorities over one conversation. Slice I widens the peer's allowlist
+    /// to the environment-grant actions; the authority's actions stay excluded
+    /// here, before the allowlist is consulted, so a widening cannot admit one.
     pub fn may_hold(self, action: &Action) -> bool {
         match self {
             Self::Human | Self::Agent | Self::Integration => true,
-            Self::Gateway => action.as_str() == CONVERSATION_READ,
+            Self::Gateway => {
+                !CONVERSATION_AUTHORITY_ACTIONS.contains(&action.as_str())
+                    && PEER_GATEWAY_ACTIONS.contains(&action.as_str())
+            }
         }
     }
 }

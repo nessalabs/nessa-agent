@@ -8,8 +8,10 @@ use std::{error::Error, fmt};
 const MAX_ATTEMPTS: u8 = 5;
 const DEVICE_READ_CLASS: &str = "gateway-conversation-read";
 const PEER_READ_CLASS: &str = "peer-gateway-conversation-read";
-/// Prefix of the principal id a peer gateway's credential names.
-const PEER_PRINCIPAL_PREFIX: &str = "gateway:";
+/// Prefix of the principal id a peer gateway's credential names. The
+/// registry reserves it: a principal's id has it exactly when its kind is a
+/// gateway.
+pub const PEER_PRINCIPAL_PREFIX: &str = "gateway:";
 
 /// Expected pairing refusal; operational adapter failures are separate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

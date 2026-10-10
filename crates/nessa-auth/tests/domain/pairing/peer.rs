@@ -2,7 +2,7 @@
 //! that kind can never hold (`docs/design/auth/peer-gateways.md`, rows H1 and H4).
 use nessa_auth::domain::{
     pairing::{peer_principal, ConsentClass, DeviceKey},
-    Action, PrincipalId, PrincipalKind,
+    Action, PrincipalId, PrincipalKind, CONVERSATION_AUTHORITY_ACTIONS,
 };
 
 /// Row H4: a gateway principal can hold the read grant and none of the
@@ -20,6 +20,15 @@ fn a_gateway_principal_can_hold_only_the_read_grant() {
         assert!(
             !PrincipalKind::Gateway.may_hold(&action(refused)),
             "{refused}"
+        );
+    }
+    // Every action of the conversation authority is refused to a peer, by
+    // name from the one list of them.
+    assert!(!CONVERSATION_AUTHORITY_ACTIONS.is_empty());
+    for authority in CONVERSATION_AUTHORITY_ACTIONS {
+        assert!(
+            !PrincipalKind::Gateway.may_hold(&action(authority)),
+            "{authority}"
         );
     }
     for kind in [

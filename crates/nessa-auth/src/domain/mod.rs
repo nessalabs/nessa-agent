@@ -36,7 +36,7 @@ pub use identifiers::{
 };
 pub use models::{
     Credential, Grant, Membership, MembershipRole, MembershipStatus, Organization, Principal,
-    PrincipalKind, Resource,
+    PrincipalKind, Resource, CONVERSATION_AUTHORITY_ACTIONS,
 };
 pub use transition::{
     CredentialLifecycle, CredentialTransition, Initiator, IssuanceCause, RevocationCause,

@@ -19,6 +19,7 @@ use crate::{
             AuthRevisionSource, IssueCredentialOutcome, IssueCredentialRequest,
             RevokeCredentialRequest,
         },
+        credential_registry::{CredentialRegistryFault, RegistryInvariant},
         dto::{
             InitiatorDto, IssuanceCauseDto, MembershipInputDto, MembershipRoleDto,
             MembershipStateDto, PrincipalInputDto, PrincipalKindDto, TransitionCauseDto,
@@ -42,7 +43,7 @@ use crate::{
             PairingRecord, PublicIntent, TerminalCause,
         },
         Action, AudienceId, AuthContext, CredentialId, MembershipId, MembershipRole,
-        OrganizationId, PrincipalId, Resource, ResourceId,
+        OrganizationId, PrincipalId, Resource, ResourceId, CONVERSATION_AUTHORITY_ACTIONS,
     },
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
@@ -3686,6 +3687,104 @@ fn a_gateway_principal_holds_only_what_pairing_issued_it() {
     assert_eq!(pairing["class"], "peer");
     pairing.as_object_mut().unwrap().remove("class");
     std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+    assert!(matches!(
+        open_store(&path),
+        Err(LocalStoreError::InvalidRegistry { .. })
+    ));
+    std::fs::write(&path, &original_bytes).unwrap();
+    assert!(open_store(&path).is_ok());
+}
+
+fn peer_credential(registry: &Registry) -> &super::super::StoredCredential {
+    registry
+        .credentials
+        .iter()
+        .find(|entry| entry.metadata.id == "native-device")
+        .unwrap()
+}
+
+#[test]
+fn the_kind_alone_refuses_a_gateway_any_conversation_authority() {
+    let fixture = peer_claim();
+    publish(&fixture);
+    let path = fixture.directory.path().join("native/credentials.v1.json");
+    let original: Registry = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert!(super::super::validate_principal_kind(&original, peer_credential(&original)).is_ok());
+    // Only the grants change, so the credential's verifier, membership and
+    // binding to its pairing stay valid: the kind's allowance is the one
+    // check left to refuse it.
+    for action in CONVERSATION_AUTHORITY_ACTIONS {
+        let mut changed = original.clone();
+        changed
+            .credentials
+            .iter_mut()
+            .find(|entry| entry.metadata.id == "native-device")
+            .unwrap()
+            .metadata
+            .grants[0]
+            .action = (*action).into();
+        assert!(matches!(
+            super::super::validate_principal_kind(&changed, peer_credential(&changed)),
+            Err(CredentialRegistryFault::InvalidState(
+                RegistryInvariant::CredentialMetadata
+            ))
+        ));
+    }
+}
+
+#[test]
+fn a_pairing_bound_credential_names_a_gateway_exactly_when_its_class_is_a_peers() {
+    for (fixture, class) in [(enrolled_claim(), Some("peer")), (peer_claim(), None)] {
+        publish(&fixture);
+        let path = fixture.directory.path().join("native/credentials.v1.json");
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let pairing = value["pairings"][0].as_object_mut().unwrap();
+        match class {
+            Some(class) => {
+                pairing.insert("class".into(), class.into());
+            }
+            None => {
+                pairing.remove("class");
+            }
+        }
+        let changed: Registry = serde_json::from_value(value).unwrap();
+        assert!(matches!(
+            super::super::validate_principal_kind(&changed, peer_credential(&changed)),
+            Err(CredentialRegistryFault::InvalidState(
+                RegistryInvariant::CredentialBinding
+            ))
+        ));
+    }
+}
+
+#[test]
+fn the_gateway_id_prefix_belongs_to_gateway_principals_alone() {
+    let fixture = enrolled_claim();
+    publish(&fixture);
+    let path = fixture.directory.path().join("native/credentials.v1.json");
+    let before = std::fs::read(&path).unwrap();
+    let mut request = ordinary_issue("prefixed-reader");
+    request.principal.id = "gateway:reader".into();
+    request.membership.principal_id = "gateway:reader".into();
+    assert!(matches!(
+        fixture.store.issue_sync(request),
+        Err(LocalStoreError::Conflict)
+    ));
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    fixture
+        .store
+        .issue_sync(ordinary_issue("distinct-reader"))
+        .unwrap();
+    drop(fixture.store);
+    let original_bytes = std::fs::read(&path).unwrap();
+    // The same agent, renamed into the prefix everywhere it is named, is
+    // otherwise a consistent registry.
+    let renamed = String::from_utf8(original_bytes.clone())
+        .unwrap()
+        .replace("\"reader\"", "\"gateway:reader\"");
+    assert_ne!(renamed.as_bytes(), original_bytes.as_slice());
+    std::fs::write(&path, &renamed).unwrap();
     assert!(matches!(
         open_store(&path),
         Err(LocalStoreError::InvalidRegistry { .. })

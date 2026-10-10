@@ -33,7 +33,10 @@ use crate::{
         },
     },
     domain::{
-        pairing::{validate_pairing_collection, InvitationId, PairingError},
+        pairing::{
+            validate_pairing_collection, ConsentClass, InvitationId, PairingError,
+            PEER_PRINCIPAL_PREFIX,
+        },
         Action, AudienceId, Credential, CredentialId, CredentialTransition, DomainError, Initiator,
         IssuanceCause, Membership, Principal, PrincipalId, PrincipalKind, Supersession,
         TransitionCause,
@@ -1542,6 +1545,11 @@ fn validate_registry(
             RegistryInvariant::DuplicateIdentity,
         ));
     }
+    if !registry.principals.iter().all(principal_id_matches_kind) {
+        return Err(CredentialRegistryFault::InvalidState(
+            RegistryInvariant::DuplicateIdentity,
+        ));
+    }
     for membership in &registry.memberships {
         if !principals.contains(&membership.principal_id)
             || !organizations.contains(&membership.organization_id)
@@ -1662,12 +1670,20 @@ fn validate_registry(
     Ok(())
 }
 
+/// Whether a principal's id and kind agree: an id with the gateway prefix is
+/// a gateway's, and a gateway's id has it. A principal of another kind can
+/// then never be mistaken for a peer by its id, or a peer for anything else.
+fn principal_id_matches_kind(principal: &PrincipalInputDto) -> bool {
+    principal.id.starts_with(PEER_PRINCIPAL_PREFIX) == (principal.kind == PrincipalKindDto::Gateway)
+}
+
 /// What a credential's principal kind allows, held for every credential the
 /// registry keeps. A gateway principal is a paired peer: its credential is
 /// bound to the key it pinned by pairing (never a bearer secret), its
 /// membership is a member's, and its grants are only those
 /// `PrincipalKind::may_hold` lets a peer hold, so it can never carry the
-/// conversation authority's actions.
+/// conversation authority's actions. A pairing-bound credential names a
+/// gateway principal exactly when its enrollment's class is a peer's.
 fn validate_principal_kind(
     registry: &Registry,
     credential: &StoredCredential,
@@ -1682,7 +1698,25 @@ fn validate_principal_kind(
         .ok_or(CredentialRegistryFault::InvalidState(
             RegistryInvariant::CredentialBinding,
         ))?;
-    if kind != PrincipalKind::Gateway {
+    let gateway = kind == PrincipalKind::Gateway;
+    if let StoredProof::Device(DeviceProofBinding::DevicePairing { invitation, .. }) =
+        &credential.verifier
+    {
+        let peer_class = registry
+            .pairings
+            .iter()
+            .find(|pairing| pairing.id().bytes() == invitation)
+            .map(|pairing| pairing.class() == ConsentClass::PeerRead)
+            .ok_or(CredentialRegistryFault::InvalidState(
+                RegistryInvariant::CredentialBinding,
+            ))?;
+        if peer_class != gateway {
+            return Err(CredentialRegistryFault::InvalidState(
+                RegistryInvariant::CredentialBinding,
+            ));
+        }
+    }
+    if !gateway {
         return Ok(());
     }
     if !matches!(credential.verifier, StoredProof::Device(_)) {
@@ -1742,8 +1776,10 @@ fn validate_issue(
 ) -> Result<(), LocalStoreError> {
     // A peer gateway is enrolled only by pairing, which binds its credential
     // to the key it pinned; an issued bearer secret would be a second way in.
+    // Its id prefix is reserved too, whatever kind a request claims.
     if request.audience_id != registry.gateway_id
         || request.principal.kind == PrincipalKindDto::Gateway
+        || request.principal.id.starts_with(PEER_PRINCIPAL_PREFIX)
         || request.request_id.trim().is_empty()
         || request.request_id.len() > 200
         || request.issuer_principal_id.trim().is_empty()

@@ -174,6 +174,10 @@ impl StoredPairing {
             history: Vec::new(),
         })
     }
+    /// Who this enrollment enrolls, as stored.
+    pub(crate) fn class(&self) -> ConsentClass {
+        self.class.domain()
+    }
     pub(crate) fn was_activated(&self) -> bool {
         self.history
             .iter()
