@@ -148,3 +148,34 @@ fn a_full_cache_is_listed_quota_and_a_read_that_saved_nothing_unreachable() {
         SyncState::Failed
     );
 }
+
+/// A status step's outcome is the record's store's: a transition whose write
+/// failed is refused whatever the status read said, and one that landed
+/// succeeded though the status then failed.
+#[test]
+fn a_status_change_outcome_is_what_its_store_did() {
+    assert_eq!(status_outcome(Some(SlotOutcome::Landed)), Ok(()));
+    assert_eq!(
+        status_outcome(Some(SlotOutcome::NotLanded)),
+        Err("peer_unavailable")
+    );
+    // Begun and never returned: not confirmed.
+    assert_eq!(status_outcome(None), Err("peer_unavailable"));
+}
+
+/// A read whose worker panics after it withdrew a conversation still reports
+/// that conversation, so its withdrawal is audited; the read itself is a
+/// cache failure.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_read_that_panics_still_reports_what_it_withdrew() {
+    let (work, withdrawn) = spawn_read(|withdrawn| {
+        withdrawn.push("withdrawn".to_owned());
+        std::panic::resume_unwind(Box::new("the read failed part way"))
+    });
+    let joined = work.await;
+    assert!(joined.as_ref().is_err_and(JoinError::is_panic));
+    assert_eq!(
+        read_ended(joined, &withdrawn),
+        (Err(ReadFailure::Cache), vec!["withdrawn".to_owned()])
+    );
+}

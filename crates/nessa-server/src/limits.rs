@@ -7,7 +7,9 @@
 //! test beside this module refuses a copy that has drifted.
 use crate::conversation::application::MAX_READ_GRANTS_PER_CONVERSATION;
 use crate::conversation::infrastructure::{DISCOVERY_STEPS_PER_READ, MAX_CATALOGUE_CHANGE_WATCHES};
-use crate::peer_gateways::infrastructure::{POLL_BACKOFF_CAP, POLL_INTERVAL, PREEMPT, READ_BUDGET};
+use crate::peer_gateways::infrastructure::{
+    AUDIT_QUEUE, POLL_BACKOFF_CAP, POLL_INTERVAL, PREEMPT, READ_BUDGET,
+};
 use crate::product::passive_read::deadlines::RECORD_SEND_TIMEOUT;
 use crate::product::{OperationalLimits, SessionSettings, RECORD_LANE, RECORD_SLOT, REFUSAL_LANE};
 use nessa_protocol::product::generated::{
@@ -230,7 +232,13 @@ fn catalogue() -> &'static [Limit] {
             id: "peer.preempt",
             tier: "fixed",
             owner: "PREEMPT in crates/nessa-server/src/peer_gateways/infrastructure/commands.rs",
-            meaning: "the longest peer.enroll or peer.forget waits for a peer read it stopped to give back its turn; at least twice the read's unstoppable connect (the 5 s handshake), and the read's audit records are kept after it, so past it the command answers peer_busy only if local storage stalls",
+            meaning: "the longest peer.enroll or peer.forget waits for a peer read it stopped to give back its turn; at least twice the read's unstoppable connect (the 5 s handshake), and the read only queues its audit records before it gives the turn back, so past it the command answers peer_busy only if local storage stalls",
+        },
+        Limit {
+            id: "peer.audit_queue",
+            tier: "fixed",
+            owner: "AUDIT_QUEUE in crates/nessa-server/src/peer_gateways/infrastructure/audit.rs",
+            meaning: "the most peer audit records waiting to be written, one at a time in the order they were handed over; a record past it is refused at once, so peer.enroll or peer.forget answers peer_audit_unavailable before any effect and a peer read's change stands with its record logged as not kept; an owner command's record waits behind at most this many, well inside its 5 s audit deadline",
         },
     ]
 }
@@ -315,6 +323,7 @@ pub(crate) fn effective_json(
     put("peer.poll_backoff_cap", millis(POLL_BACKOFF_CAP));
     put("peer.read_budget", millis(READ_BUDGET));
     put("peer.preempt", millis(PREEMPT));
+    put("peer.audit_queue", count(AUDIT_QUEUE));
     serde_json::Value::Object(values.into_iter().collect())
 }
 

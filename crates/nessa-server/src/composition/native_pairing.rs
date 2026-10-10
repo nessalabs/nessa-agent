@@ -13,6 +13,7 @@
 //! start:   BoundNative --> listener task (failed --> watch)
 //!          --> PeerPoller (reads each peer) --> RunningNative
 //! stop:    signal_stop (listener and poller) --> join: the poller's workers,
+//!          then the peer audit closed and drained (bounded by AUDIT_DEADLINE),
 //!          then listener drain, then GatewayPairing::shutdown, then reconcile_cleanup
 //! ```
 //! Arrows are construction and ownership handoffs, in order. Design rows
@@ -29,7 +30,7 @@ use crate::device_pairing::infrastructure::{
 };
 use crate::peer_gateways::infrastructure::{
     DurablePeerAudit, EnrollmentEntropy, PeerCommands, PeerPoller, PeerRecords, PollInputs,
-    PollPolicy, TcpPeerConnector,
+    PollPolicy, TcpPeerConnector, AUDIT_DEADLINE,
 };
 use crate::product::{DeviceCredentials, NativeSessions, ProductRouteState};
 use nessa_auth::{
@@ -93,6 +94,8 @@ pub(super) struct PreparedNative {
     registry: Arc<LocalCredentialStore>,
     /// The peer commands the poller reads through once serving starts.
     peers: Arc<PeerCommands>,
+    /// Their audit, closed and drained when native pairing stops.
+    audit: Arc<DurablePeerAudit>,
     /// Wall time for when a peer read finished.
     clock: Arc<dyn Clock>,
 }
@@ -135,6 +138,11 @@ pub(super) async fn prepare(
     .await
     .map_err(|error| RunError::Native(NativeFailure::Identity(error)))?;
     let registry = inputs.registry;
+    let audit = Arc::new(DurablePeerAudit::new(
+        root.join(PEER_AUDIT_DIRECTORY),
+        inputs.clock.clone(),
+        inputs.deadline_clock.clone(),
+    ));
     let peers = Arc::new(PeerCommands::new(
         Arc::new(
             PeerRecords::open(
@@ -147,10 +155,7 @@ pub(super) async fn prepare(
             .map_err(|error| RunError::Native(NativeFailure::PrivateState(error)))?,
         ),
         inputs.deadline_clock,
-        Arc::new(DurablePeerAudit::new(
-            root.join(PEER_AUDIT_DIRECTORY),
-            inputs.clock.clone(),
-        )),
+        audit.clone(),
         Arc::new(TcpPeerConnector),
         Arc::new(|| Box::new(OsEntropy) as Box<dyn EnrollmentEntropy>),
     ));
@@ -182,6 +187,7 @@ pub(super) async fn prepare(
             address: config.listen_address,
             registry,
             peers: peers.clone(),
+            audit,
             clock: wall,
         },
         commands,
@@ -195,6 +201,7 @@ pub(super) struct BoundNative {
     listener: NativeEnrollmentListener,
     address: SocketAddr,
     peers: Arc<PeerCommands>,
+    audit: Arc<DurablePeerAudit>,
     clock: Arc<dyn Clock>,
 }
 
@@ -235,6 +242,7 @@ pub(super) async fn bind(
         address,
         registry,
         peers,
+        audit,
         clock: wall,
     } = prepared;
     let bind_failed = |source| RunError::Native(NativeFailure::Bind { address, source });
@@ -250,6 +258,7 @@ pub(super) async fn bind(
         listener: NativeEnrollmentListener::new(socket, connections),
         address: bound,
         peers,
+        audit,
         clock: wall,
     })
 }
@@ -287,6 +296,8 @@ pub(super) struct RunningNative {
     task: JoinHandle<IoResult<()>>,
     /// Reads what each peer granted; stopped and joined with the listener.
     poller: PeerPoller,
+    /// The peer commands' audit: closed and drained once the poller is joined.
+    audit: Arc<DurablePeerAudit>,
 }
 
 /// Start serving. An accept failure that ends the listener is published on
@@ -299,7 +310,10 @@ pub(super) fn start(
 ) -> RunningNative {
     let poller = bound.start_poller();
     let BoundNative {
-        gateway, listener, ..
+        gateway,
+        listener,
+        audit,
+        ..
     } = bound;
     let (stop, stopped) = oneshot::channel::<()>();
     let task = tokio::spawn(listener.run(
@@ -317,6 +331,7 @@ pub(super) fn start(
         stop: Some(stop),
         task,
         poller,
+        audit,
     }
 }
 
@@ -343,6 +358,12 @@ impl RunningNative {
         // The poller's read and status workers end before anything else is
         // waited on: they hold sockets to peers and the peer turn.
         self.poller.join().await;
+        // Then the peer audit: closed, so an owner command from now is
+        // refused before any effect, and what was queued, the poller's last
+        // records included, written within one bound on the deadline clock.
+        if !self.audit.drained(AUDIT_DEADLINE).await {
+            tracing::error!("peer gateway audit not drained before shutdown");
+        }
         let drained = match self.task.await {
             Ok(_) => Ok(()),
             Err(error) => Err(NativeShutdownFailure::ListenerFault(if error.is_panic() {

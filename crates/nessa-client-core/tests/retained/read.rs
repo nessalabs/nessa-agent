@@ -165,6 +165,87 @@ fn a_walk_reports_whether_every_conversation_was_read_to_the_end() {
     assert_eq!(scripted.asked.len(), 1);
 }
 
+/// Row m3: a full cache stays listed full when the walk past it is then
+/// stopped or loses its connection; a damaged cache or a refusal still wins.
+#[test]
+fn a_held_quota_outlasts_a_stop_or_a_lost_connection() {
+    for cut in [ReadFailure::Stopped, ReadFailure::Unreachable] {
+        let mut scripted = Scripted::new(vec![
+            ("a", Err(ReadFailure::Quota)),
+            ("b", Ok(Conversation::Withdrawn)),
+            ("c", Err(cut)),
+        ]);
+        assert_eq!(
+            walk(&mut scripted, None),
+            Err(ReadFailure::Quota),
+            "{cut:?}"
+        );
+        assert_eq!(scripted.withdrawn, ["b"]);
+        // A catalogue held back the same way.
+        let mut scripted = Scripted::new(vec![("a", Err(cut))]);
+        assert_eq!(
+            walk(&mut scripted, Some(ReadFailure::Quota)),
+            Err(ReadFailure::Quota)
+        );
+    }
+    for failure in [ReadFailure::CacheDamaged, ReadFailure::Refused] {
+        let mut scripted = Scripted::new(vec![("a", Err(ReadFailure::Quota)), ("b", Err(failure))]);
+        assert_eq!(walk(&mut scripted, None), Err(failure));
+    }
+}
+
+fn progress(completed: u64, generation: u64) -> CatalogueProgress {
+    let id = |text: &str| Id::new(text).unwrap();
+    CatalogueProgress {
+        scope: Scope::new(
+            id("receiver"),
+            id("origin"),
+            id("stream"),
+            id("incarnation"),
+            id("schema"),
+            id("epoch"),
+        ),
+        completed,
+        generation,
+        active: None,
+    }
+}
+
+/// A cache whose catalogue progress is at the head but which notes no
+/// finished walk there is walked: an earlier walk was cut short after its
+/// catalogue pass, and the conversations it did not reach may no longer be
+/// granted. Only a walk noted at the same head and generation settles it.
+#[test]
+fn a_cache_without_the_walk_marker_is_walked_at_an_unchanged_head() {
+    let saved = progress(7, 3);
+    assert!(!settled(Some(&saved), None, 7), "no walk noted");
+    assert!(
+        !settled(Some(&saved), Some((6, 3)), 7),
+        "walked at an older head"
+    );
+    assert!(
+        !settled(Some(&saved), Some((7, 2)), 7),
+        "walked before the catalogue was reset"
+    );
+    assert!(settled(Some(&saved), Some((7, 3)), 7));
+    // The gateway's head moved on: walk, whatever was noted.
+    assert!(!settled(Some(&saved), Some((7, 3)), 8));
+    assert!(!settled(None, Some((7, 3)), 7), "no progress at all");
+}
+
+/// Only a walk that finished is noted, and one whose note cannot be written
+/// is not reported complete: the note is what the next read settles on.
+#[test]
+fn a_marker_that_cannot_be_written_reports_incomplete() {
+    assert!(walked(true, || Ok(())));
+    assert!(!walked(true, || Err(CacheError::Unavailable)));
+    assert!(!walked(true, || Err(CacheError::Quota)));
+    // An incomplete walk notes nothing.
+    assert!(!walked(false, || panic!(
+        "an incomplete walk is never noted"
+    )));
+}
+
 fn report(complete: bool) -> ReadReport {
     ReadReport {
         moved: true,

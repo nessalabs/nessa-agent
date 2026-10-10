@@ -11,10 +11,11 @@
 //! The poller changes what this gateway holds of a peer on its own, with no
 //! owner asking: it saves a credential, marks an ended enrollment, empties a
 //! cache, or drops the conversations a peer stopped granting. Each change is
-//! kept as one record after it is made, and after the poller has given the
-//! owner's commands their turn back, naming the system as its initiator. A
+//! handed over as one record right after it is made, while the poller still
+//! holds the owner's commands' turn, naming the system as its initiator; the
+//! poller waits for it to be kept only after it gives the turn back. A
 //! record that cannot be kept is logged and the change stands: cleanup is
-//! never held back for its evidence, and neither is an owner command.
+//! never held back for its evidence.
 use nessa_auth::domain::{pairing::DeviceKey, PrincipalId};
 use std::{
     future::Future,
@@ -160,6 +161,12 @@ pub type PeerAuditFuture<'a> =
     Pin<Box<dyn Future<Output = Result<(), PeerAuditUnavailable>> + Send + 'a>>;
 
 /// Keeps peer command evidence. `Ok` means the record is durable.
+///
+/// The record is handed over when `record` is called, not when the returned
+/// future is polled: records are kept in the order of those calls, and one
+/// whose future is dropped unpolled is still kept. The poller relies on that
+/// to place its records in the order it held the turn
+/// (`records_land_in_turn_order`, `an_unpolled_poller_record_is_still_written`).
 pub trait PeerAudit: Send + Sync {
     fn record(&self, record: PeerAuditRecord) -> PeerAuditFuture<'_>;
 }

@@ -163,6 +163,16 @@ pub enum SlotTransition {
     Ended,
 }
 
+/// Whether the transition a status read began reached storage: the one
+/// answer to whether that change landed, whatever the status then said.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SlotOutcome {
+    /// Every write of the transition was confirmed.
+    Landed,
+    /// A write failed or was not confirmed; the record is as storage left it.
+    NotLanded,
+}
+
 /// Why a forget did not finish, by the step that failed: the cache, which
 /// goes first and leaves the record untouched, or the record.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -216,6 +226,7 @@ impl PeerRecords {
             found: Mutex::new(None),
             saved: Mutex::new(None),
             transition: Mutex::new(None),
+            outcome: Mutex::new(None),
         }
     }
     /// A slot for the peer already recorded under `key`, for reading its
@@ -229,6 +240,7 @@ impl PeerRecords {
             found: Mutex::new(None),
             saved: Mutex::new(None),
             transition: Mutex::new(None),
+            outcome: Mutex::new(None),
         }
     }
     /// Every peer, in key order, at most `MAX_PEERS`: saving refuses one
@@ -452,6 +464,8 @@ pub struct PeerSlot {
     saved: Mutex<Option<SlotSave>>,
     /// The transition a status read began on the record, if one did.
     transition: Mutex<Option<SlotTransition>>,
+    /// Whether that transition's writes landed, once they returned.
+    outcome: Mutex<Option<SlotOutcome>>,
 }
 impl PeerSlot {
     /// The peer this slot saved or was opened for, once known.
@@ -484,6 +498,22 @@ impl PeerSlot {
             .transition
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
+    }
+    /// Whether the transition [`Self::transition`] names landed; `None` when
+    /// none began, or its writes have not returned.
+    pub fn outcome(&self) -> Option<SlotOutcome> {
+        *self.outcome.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+    /// Note how the transition's writes ended, and pass their result on.
+    fn note_outcome(
+        &self,
+        written: Result<(), PrivateStateError>,
+    ) -> Result<(), PrivateStateError> {
+        *self.outcome.lock().unwrap_or_else(PoisonError::into_inner) = Some(match written {
+            Ok(()) => SlotOutcome::Landed,
+            Err(_) => SlotOutcome::NotLanded,
+        });
+        written
     }
     fn note_transition(&self, transition: SlotTransition) {
         *self
@@ -678,14 +708,14 @@ impl ClientPendingStore for PeerSlot {
             PeerPhase::Active { .. } | PeerPhase::Revoked => Err(PrivateStateError::Conflict),
             PeerPhase::Pending => {
                 self.note_transition(SlotTransition::Approved);
-                self.records.write(
+                self.note_outcome(self.records.write(
                     &PeerRecord {
                         phase: active,
                         ..record
                     },
                     &own,
                     true,
-                )
+                ))
             }
         }
     }
@@ -708,18 +738,20 @@ impl ClientPendingStore for PeerSlot {
             return Err(PrivateStateError::Conflict);
         }
         self.note_transition(SlotTransition::Ended);
-        self.records.remove_cache_locked(&peer)?;
-        if record.phase == PeerPhase::Revoked {
-            return Ok(());
-        }
-        self.records.write(
-            &PeerRecord {
-                phase: PeerPhase::Revoked,
-                ..record
-            },
-            &own,
-            true,
-        )
+        self.note_outcome((|| {
+            self.records.remove_cache_locked(&peer)?;
+            if record.phase == PeerPhase::Revoked {
+                return Ok(());
+            }
+            self.records.write(
+                &PeerRecord {
+                    phase: PeerPhase::Revoked,
+                    ..record
+                },
+                &own,
+                true,
+            )
+        })())
     }
 }
 

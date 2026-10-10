@@ -19,13 +19,16 @@
 //! shut, its waits woken) and takes the turn once given back; the cycle's
 //! read carries on at the next one. Only another owner command makes it
 //! `Busy`. A cycle holds the turn only for its own peer I/O and local
-//! writes: it keeps the audit records of its changes after it gives the turn
-//! back, so a slow audit never holds an owner command.
+//! writes: it hands each change's record to the audit under the turn, which
+//! queues it at once, and waits for it to be kept only after it gives the
+//! turn back, so the evidence is in turn order and a slow audit never holds
+//! the turn.
 use super::records::{
     ForgetFailure, PeerEntry, PeerPhase, PeerRecords, PeerSlot, SlotFound, SlotRefusal, SlotSave,
 };
 use crate::peer_gateways::application::{
-    CacheState, PeerAudit, PeerAuditRecord, PeerConnector, PeerHolding, PeerState, PollerCause,
+    CacheState, PeerAudit, PeerAuditFuture, PeerAuditRecord, PeerConnector, PeerHolding, PeerState,
+    PollerCause,
 };
 use nessa_auth::{
     adapters::pairing::{rand, CryptoRng, ManualCode, PairingCryptoError, RngCore},
@@ -69,7 +72,8 @@ pub const AUDIT_DEADLINE: Duration = Duration::from_secs(5);
 /// stopped to give back the turn. Stopping shuts the cycle's sockets and
 /// wakes its waits, so what is left is a read's operating-system connect,
 /// which cannot be stopped and lasts at most [`HANDSHAKE`], and local writes;
-/// the cycle's audit records are kept after it gives the turn back.
+/// the cycle only queues its audit records under the turn, and waits for them
+/// after it gives the turn back.
 pub const PREEMPT: Duration = Duration::from_secs(10);
 // The connect a stop cannot cut short, with as long again for local work.
 const _: () = assert!(PREEMPT.as_millis() >= 2 * HANDSHAKE.as_millis());
@@ -621,39 +625,61 @@ impl PeerCommands {
             cache: CacheState::Unknown,
         })
     }
-    /// Keep the evidence of one change the poller made to `peer`, after it
-    /// was made and after the cycle that made it gave the turn back: the one
-    /// way a poller change is audited. A record not kept within
-    /// [`AUDIT_DEADLINE`] is logged and the change stands; the cleanup it
-    /// records is never undone or held back for it, and no owner command
-    /// waits on it.
-    pub(super) async fn poller_changed(
+    /// Hand the audit the evidence of one change the poller made to `peer`,
+    /// after it was made and while the cycle still holds the turn: the one
+    /// way a poller change is audited. The audit takes the record now, so its
+    /// place among the owner commands' records is the turn's; the answer is
+    /// awaited by [`Self::poller_kept`] once the turn is given back.
+    pub(super) fn poller_changed(
         &self,
         peer: DeviceKey,
         cause: PollerCause,
         before: PeerHolding,
         after: PeerHolding,
         outcome: Result<(), &'static str>,
-    ) {
+    ) -> PollerRecord<'_> {
         let operation = Uuid::new_v4();
         let name = format!("{cause:?}");
-        let kept = self
-            .keep(PeerAuditRecord::PollerChanged {
-                operation,
-                peer,
-                cause,
-                before,
-                after: after.clone(),
-                outcome,
-            })
-            .await;
-        if kept {
-            tracing::info!(peer = %hex(&peer), operation = %operation, cause = %name,
-                after = ?after, outcome = ?outcome, "peer gateway poller change");
-        } else {
-            tracing::error!(peer = %hex(&peer), operation = %operation, cause = %name,
-                after = ?after, outcome = ?outcome,
-                "peer gateway poller change not audited; the change stands");
+        let kept = self.audit.record(PeerAuditRecord::PollerChanged {
+            operation,
+            peer,
+            cause,
+            before,
+            after: after.clone(),
+            outcome,
+        });
+        PollerRecord {
+            peer,
+            operation,
+            name,
+            after,
+            outcome,
+            kept,
+        }
+    }
+    /// Wait for one cycle's records, all within one [`AUDIT_DEADLINE`], and
+    /// log each: kept, or not kept and the change stands. The cleanup a
+    /// record describes is never undone or held back for it, and no owner
+    /// command waits on it: the cycle has already given back the turn.
+    pub(super) async fn poller_kept(&self, mut records: Vec<PollerRecord<'_>>) {
+        let mut kept = vec![false; records.len()];
+        let answers = (&mut records, &mut kept);
+        self.within(AUDIT_DEADLINE, move || async move {
+            for (record, kept) in answers.0.iter_mut().zip(answers.1.iter_mut()) {
+                *kept = (&mut record.kept).await.is_ok();
+            }
+        })
+        .await;
+        for (record, kept) in records.iter().zip(kept) {
+            let (peer, operation, cause) = (hex(&record.peer), record.operation, &record.name);
+            if kept {
+                tracing::info!(peer = %peer, operation = %operation, cause = %cause,
+                    after = ?record.after, outcome = ?record.outcome, "peer gateway poller change");
+            } else {
+                tracing::error!(peer = %peer, operation = %operation, cause = %cause,
+                    after = ?record.after, outcome = ?record.outcome,
+                    "peer gateway poller change not audited; the change stands");
+            }
         }
     }
     async fn blocking<T: Send + 'static>(
@@ -666,6 +692,16 @@ impl PeerCommands {
             .map_err(|_| PeerError::Unavailable)?
             .map_err(|_| PeerError::Unavailable)
     }
+}
+
+/// One poller change handed to the audit, and its answer still to come.
+pub(super) struct PollerRecord<'a> {
+    peer: DeviceKey,
+    operation: Uuid,
+    name: String,
+    after: PeerHolding,
+    outcome: Result<(), &'static str>,
+    kept: PeerAuditFuture<'a>,
 }
 
 /// One enrollment's entropy, handed to the client as a concrete generator.

@@ -4,8 +4,10 @@
 //! deletions, empties a cache that cannot continue, keeps to its read budget,
 //! gives way to the owner's commands, and stops at A's revocation or denial.
 //! Each change the poller makes is audited; with an audit that refuses those
-//! records, every change still lands, and with one that stalls, the owner's
-//! commands still go ahead. Rows R1–R14 and R18 in
+//! records, every change still lands. With the durable audit, every record
+//! lands in the order the turn was held, a stalled store holds an owner
+//! command no longer than its own audit deadline, and a full queue refuses
+//! at once. Rows R1–R14, R18 and R21 in
 //! `docs/design/auth/peer-gateways.md` ("Reading a peer").
 use crate::app::dependencies::RuntimeDependencies;
 use crate::composition::local_auth::SystemClock;
@@ -24,8 +26,9 @@ use crate::peer_gateways::application::{
     PeerState, PollerCause,
 };
 use crate::peer_gateways::infrastructure::{
-    EnrollmentEntropy, EnrollmentEntropySource, PeerCommands, PeerEntry, PeerPhase, PeerPoller,
-    PeerSync, PollInputs, PollPolicy, SyncState, TcpPeerConnector,
+    DurablePeerAudit, EnrollmentEntropy, EnrollmentEntropySource, PeerCommands, PeerEntry,
+    PeerError, PeerPhase, PeerPoller, PeerSync, PollInputs, PollPolicy, SyncState,
+    TcpPeerConnector, AUDIT_DEADLINE,
 };
 use crate::product::{ProductDependencies, ProductRouteState};
 use nessa_auth::adapters::cedar::CedarPolicyEvaluator;
@@ -51,10 +54,11 @@ use nessa_protocol::conversation::domain::{
 use nessa_sdk::application::agent_execution::sessions::SessionStorage;
 use nessa_sdk::infrastructure::session_storage::RecordStorage;
 use nessa_sync::replication::domain::Id;
+use serde_json::Value;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::runtime::Handle;
@@ -385,40 +389,24 @@ impl Drop for Relay {
 }
 
 /// B's peer audit: owner command records are taken as kept; each poller
-/// change is kept, or refused when `refuse`. While stalled, a poller change
-/// is answered only once the test opens the audit, and kept then.
+/// change is kept, or refused when `refuse`.
 struct Changes {
     refuse: bool,
     kept: Mutex<Vec<PeerAuditRecord>>,
     refused: AtomicUsize,
-    /// `false` while poller changes are held unanswered.
-    open: tokio::sync::watch::Sender<bool>,
-    /// Poller changes handed over while stalled.
-    stalled: AtomicUsize,
 }
 impl Changes {
-    fn new(refuse: bool, stall: bool) -> Arc<Self> {
+    fn new(refuse: bool) -> Arc<Self> {
         Arc::new(Self {
             refuse,
             kept: Mutex::new(Vec::new()),
             refused: AtomicUsize::new(0),
-            open: tokio::sync::watch::channel(!stall).0,
-            stalled: AtomicUsize::new(0),
         })
     }
 }
 impl PeerAudit for Changes {
     fn record(&self, record: PeerAuditRecord) -> PeerAuditFuture<'_> {
         let poller = matches!(record, PeerAuditRecord::PollerChanged { .. });
-        if poller && !*self.open.borrow() {
-            self.stalled.fetch_add(1, Ordering::SeqCst);
-            let mut open = self.open.subscribe();
-            return Box::pin(async move {
-                let _ = open.wait_for(|open| *open).await;
-                self.kept.lock().unwrap().push(record);
-                Ok(())
-            });
-        }
         let refused = poller && self.refuse;
         if refused {
             self.refused.fetch_add(1, Ordering::SeqCst);
@@ -435,12 +423,107 @@ impl PeerAudit for Changes {
     }
 }
 
-/// A monotonic clock that never moves: no deadline on it ever passes.
-struct Frozen;
-impl nessa_protocol::clock::Clock for Frozen {
+/// A monotonic clock that moves only when the test moves it.
+struct Manual(AtomicU64);
+impl nessa_protocol::clock::Clock for Manual {
     fn elapsed_ms(&self) -> u64 {
-        1_000
+        self.0.load(Ordering::SeqCst)
     }
+}
+
+/// Holds B's durable audit writer before it writes record `at`, until
+/// opened: a store that stalls.
+struct Stall {
+    at: u64,
+    reached: AtomicBool,
+    open: Mutex<bool>,
+    opened: Condvar,
+}
+impl Stall {
+    fn new(at: u64) -> Arc<Self> {
+        Arc::new(Self {
+            at,
+            reached: AtomicBool::new(false),
+            open: Mutex::new(false),
+            opened: Condvar::new(),
+        })
+    }
+    fn hook(self: &Arc<Self>) -> Arc<dyn Fn(u64) + Send + Sync> {
+        let stall = self.clone();
+        Arc::new(move |sequence| {
+            if sequence != stall.at {
+                return;
+            }
+            stall.reached.store(true, Ordering::SeqCst);
+            let mut open = stall.open.lock().unwrap();
+            while !*open {
+                open = stall.opened.wait(open).unwrap();
+            }
+        })
+    }
+    async fn until_reached(&self) {
+        tokio::time::timeout(WAIT, async {
+            while !self.reached.load(Ordering::SeqCst) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the writer never reached the stalled record");
+    }
+    fn release(&self) {
+        *self.open.lock().unwrap() = true;
+        self.opened.notify_all();
+    }
+}
+
+/// A private directory for B's durable audit beneath `root`.
+fn audit_directory(root: &Path) -> PathBuf {
+    nessa_local_storage::create_directory(root).unwrap();
+    #[cfg(unix)]
+    let root = root.canonicalize().unwrap();
+    let directory = root.join("b-audit");
+    nessa_local_storage::create_directory(&directory).unwrap();
+    directory
+}
+
+/// The durable audit's records, in sequence order.
+fn audit_files(directory: &Path) -> Vec<Value> {
+    let mut records: Vec<Value> = std::fs::read_dir(directory)
+        .unwrap()
+        .map(|entry| {
+            serde_json::from_slice(&std::fs::read(entry.unwrap().path()).unwrap()).unwrap()
+        })
+        .collect();
+    records.sort_by_key(|record| record["sequence"].as_u64().unwrap());
+    records
+}
+
+/// Each record's kind, with the poller's cause, in sequence order; and the
+/// sequences are 1, 2, 3 ... with no gap, their observation times in order.
+fn audit_kinds(directory: &Path) -> Vec<String> {
+    let records = audit_files(directory);
+    let sequences: Vec<u64> = records
+        .iter()
+        .map(|record| record["sequence"].as_u64().unwrap())
+        .collect();
+    assert_eq!(sequences, (1..=records.len() as u64).collect::<Vec<_>>());
+    let observed: Vec<u64> = records
+        .iter()
+        .map(|record| record["observedAtMs"].as_u64().unwrap())
+        .collect();
+    assert!(
+        observed.windows(2).all(|pair| pair[0] <= pair[1]),
+        "observed in sequence order: {observed:?}"
+    );
+    records
+        .iter()
+        .map(|record| match record["cause"].as_str() {
+            Some(cause) if record["kind"] == "peer_poller_changed" => {
+                format!("peer_poller_changed {cause}")
+            }
+            _ => record["kind"].as_str().unwrap().to_owned(),
+        })
+        .collect()
 }
 
 /// One kept poller change, as the table below names it: its cause, and the
@@ -493,19 +576,22 @@ struct Reader {
 }
 impl Reader {
     async fn prepare(root: &Path, refuse: bool) -> Self {
+        let changes = Changes::new(refuse);
         Self::prepare_with(
             root,
-            Changes::new(refuse, false),
+            changes.clone(),
+            changes,
             RuntimeDependencies::default().clock,
         )
         .await
     }
-    /// B with `changes` as its peer audit and `clock` for its peer
-    /// commands: every deadline, wait and read budget of theirs and its
-    /// poller's.
+    /// B with `audit` as its peer audit (`changes` when that is the one the
+    /// test reads) and `clock` for its peer commands: every deadline, wait
+    /// and read budget of theirs and its poller's.
     async fn prepare_with(
         root: &Path,
         changes: Arc<Changes>,
+        audit: Arc<dyn PeerAudit>,
         clock: Arc<dyn nessa_protocol::clock::Clock>,
     ) -> Self {
         let (gateway, organization) = (uuid(), uuid());
@@ -531,7 +617,7 @@ impl Reader {
         let peers = Arc::new(PeerCommands::new(
             prepared.records().clone(),
             clock,
-            changes.clone(),
+            audit,
             Arc::new(TcpPeerConnector),
             entropy(),
         ));
@@ -617,6 +703,13 @@ impl Reader {
             .unwrap()
             .execute_batch(statement)
             .unwrap();
+    }
+    /// How many finished walks B's cache of `key` notes.
+    fn walks(&self, key: &DeviceKey) -> i64 {
+        nessa_local_database::rusqlite::Connection::open(self.cache_path(key))
+            .unwrap()
+            .query_row("SELECT count(*) FROM retained_walks", [], |row| row.get(0))
+            .unwrap()
     }
     /// The poller changes kept so far, as `change` names them.
     fn kept(&self) -> Vec<String> {
@@ -779,6 +872,15 @@ async fn reads(refuse: bool) {
         .unwrap();
     synced_with(&b, 1).await;
     assert_eq!(b.cached(&key, &reader.0), vec![y.to_string()]);
+    assert_eq!(b.walks(&key), 1, "a finished walk is noted");
+
+    // R21: a cache whose last walk was cut short, after a failure or a
+    // restart, has no note: every poller here is a new one, as after a
+    // restart. At A's unchanged head, the cache is walked again, not taken
+    // as settled, and the walk notes itself once it finishes.
+    b.tamper(&key, "DELETE FROM retained_walks");
+    synced_with(&b, 1).await;
+    assert_eq!(b.walks(&key), 1, "walked again at an unchanged head");
 
     // R6: B's cache records more of A's catalogue than A serves, as after A
     // is restored from an older copy. The cache cannot continue
@@ -805,9 +907,10 @@ async fn reads(refuse: bool) {
     synced_with(&b, 1).await;
     assert_eq!(b.cached(&key, &reader.0), vec![y.to_string()]);
 
-    // R8: B's cache has a shape this build does not read. Derived from A, it
-    // is emptied and read again.
-    b.tamper(&key, "DROP TABLE cache_purges");
+    // R8: B's cache has a shape this build does not read, as every cache
+    // made before walks were noted has. Derived from A, it is emptied and
+    // read again.
+    b.tamper(&key, "PRAGMA user_version = 1");
     synced_with(&b, 1).await;
     assert_eq!(b.cached(&key, &reader.0), vec![y.to_string()]);
 
@@ -868,12 +971,12 @@ async fn reads(refuse: bool) {
     // R12: forgetting a peer removes its cache with its record. A cache left
     // by an earlier failed removal goes too.
     let cache = b.cache_path(&key);
-    let mut left = std::fs::OpenOptions::new();
-    left.write(true).create_new(true);
-    // Private, as the cache's own file is: a file anyone can read is refused.
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut left, 0o600);
-    std::io::Write::write_all(&mut left.open(&cache).unwrap(), b"left behind").unwrap();
+    // Made private by the storage owner, as the cache's own file is, on
+    // every system: a file anyone can read is refused.
+    let mut left =
+        nessa_local_storage::open(&cache, nessa_local_storage::OpenMode::CreateNew).unwrap();
+    std::io::Write::write_all(&mut left, b"left behind").unwrap();
+    drop(left);
     b.peers.forget(key, &b.owner).await.unwrap();
     assert!(b.peers.list().await.unwrap().is_empty());
     assert!(!cache.exists(), "forget removes the cache");
@@ -940,53 +1043,223 @@ async fn reads(refuse: bool) {
         .unwrap();
 }
 
-/// R18: a poller change whose audit never answers holds no owner command.
-/// The cycle keeps its records only once it has given back the turn, so a
-/// forget made while the audit is stalled goes ahead at once, though no
-/// deadline on B's frozen clock can ever pass; the stalled record lands once
-/// the audit answers.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_stalled_poller_audit_never_holds_an_owner_command() {
-    let directory = tempfile::tempdir().unwrap();
-    let mut a = Peer::start(&directory.path().join("a")).await;
-    let changes = Changes::new(false, true);
-    let b = Reader::prepare_with(
-        &directory.path().join("b"),
-        changes.clone(),
-        Arc::new(Frozen),
-    )
-    .await;
-    let relay = Relay::start(a.native).await;
-    let (key, _) = enroll(&a, &b, &relay, true).await;
-
-    // B's poller reads the Active status, saves the credential, reads, and
-    // hands the audit that change, which it never answers.
-    let poller = b.poller(POLICY);
-    tokio::time::timeout(WAIT, async {
-        while changes.stalled.load(Ordering::SeqCst) == 0 {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("the poller hands its change to the audit");
-    let forgotten = tokio::time::timeout(PROMPT, b.peers.forget(key, &b.owner))
-        .await
-        .expect("a stalled poller audit does not hold the forget");
-    assert!(forgotten.is_ok(), "{forgotten:?}");
-    assert!(b.peers.list().await.unwrap().is_empty());
-    assert!(!b.cache_path(&key).exists(), "forget removes the cache");
-
-    // Answered, the poller's record lands, and the poller stops.
-    changes.open.send_replace(true);
-    tokio::time::timeout(WAIT, poller.join()).await.unwrap();
-    assert_eq!(b.kept(), ["approved: pending+none -> active+none"]);
-    assert_eq!(changes.stalled.load(Ordering::SeqCst), 1);
-
-    drop(relay);
+/// Stop A's listener and wait for it.
+async fn stop(mut a: Peer) {
     let mut running = a.running.take().unwrap();
     running.signal_stop();
     tokio::time::timeout(WAIT, running.join())
         .await
         .unwrap()
         .unwrap();
+}
+
+/// R18: with the durable audit, records land in the order the turn was
+/// held. A cycle's change is handed over while it holds the turn, so the
+/// forget that stops it comes after it, though the forget's intent is kept
+/// before it asks for the turn.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn records_land_in_turn_order() {
+    let directory = tempfile::tempdir().unwrap();
+    let a = Peer::start(&directory.path().join("a")).await;
+    let audits = audit_directory(&directory.path().join("audits"));
+    let audit = Arc::new(DurablePeerAudit::new(
+        audits.clone(),
+        Arc::new(SystemClock),
+        RuntimeDependencies::default().clock,
+    ));
+    let b = Reader::prepare_with(
+        &directory.path().join("b"),
+        Changes::new(false),
+        audit.clone(),
+        RuntimeDependencies::default().clock,
+    )
+    .await;
+    let relay = Relay::start(a.native).await;
+    let (key, _) = enroll(&a, &b, &relay, true).await;
+
+    // The cycle reads the Active status, saves the credential, and holds its
+    // read; the forget stops it.
+    relay.hold_after(1);
+    let held = relay.held();
+    let poller = b.poller(POLICY);
+    relay.until_held(held).await;
+    tokio::time::timeout(PROMPT, b.peers.forget(key, &b.owner))
+        .await
+        .expect("forget stops the read")
+        .unwrap();
+    tokio::time::timeout(WAIT, poller.join()).await.unwrap();
+    assert!(audit.drained(AUDIT_DEADLINE).await);
+    assert_eq!(
+        audit_kinds(&audits),
+        [
+            "peer_enroll_requested",
+            "peer_enroll_finished",
+            "peer_poller_changed peer_approved",
+            "peer_forget_requested",
+            "peer_forget_finished",
+        ]
+    );
+
+    drop(relay);
+    stop(a).await;
+}
+
+/// R18: a store that stalls holds an owner command no longer than its own
+/// audit deadline. The cycle's record is queued under the turn and the
+/// writer stalls on it; the forget's intent waits behind it, in order, and is
+/// answered `peer_audit_unavailable` once B's clock passes the deadline, with
+/// nothing removed. Once the store answers, every record lands in sequence
+/// and the forget goes ahead.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stalled_audit_never_holds_an_owner_command() {
+    let directory = tempfile::tempdir().unwrap();
+    let a = Peer::start(&directory.path().join("a")).await;
+    let audits = audit_directory(&directory.path().join("audits"));
+    let clock = Arc::new(Manual(AtomicU64::new(1_000)));
+    let stall = Stall::new(3);
+    let audit = Arc::new(DurablePeerAudit::with_writer_hook(
+        audits.clone(),
+        Arc::new(SystemClock),
+        clock.clone(),
+        crate::peer_gateways::infrastructure::AUDIT_QUEUE,
+        stall.hook(),
+    ));
+    let b = Reader::prepare_with(
+        &directory.path().join("b"),
+        Changes::new(false),
+        audit.clone(),
+        clock.clone(),
+    )
+    .await;
+    let relay = Relay::start(a.native).await;
+    let (key, _) = enroll(&a, &b, &relay, true).await;
+
+    relay.hold_after(1);
+    let held = relay.held();
+    let poller = b.poller(POLICY);
+    relay.until_held(held).await;
+    stall.until_reached().await;
+    let forget = tokio::spawn({
+        let (peers, owner) = (b.peers.clone(), b.owner.clone());
+        async move { peers.forget(key, &owner).await }
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!forget.is_finished(), "held while B's clock stands");
+    clock
+        .0
+        .fetch_add(AUDIT_DEADLINE.as_millis() as u64, Ordering::SeqCst);
+    let answered = tokio::time::timeout(PROMPT, forget)
+        .await
+        .expect("answered once the deadline passes")
+        .unwrap();
+    assert_eq!(answered.err(), Some(PeerError::AuditUnavailable));
+    assert_eq!(b.peers.list().await.unwrap().len(), 1, "nothing removed");
+
+    stall.release();
+    tokio::time::timeout(PROMPT, b.peers.forget(key, &b.owner))
+        .await
+        .expect("forget stops the read")
+        .unwrap();
+    tokio::time::timeout(WAIT, poller.join()).await.unwrap();
+    assert!(audit.drained(AUDIT_DEADLINE).await);
+    assert_eq!(
+        audit_kinds(&audits),
+        [
+            "peer_enroll_requested",
+            "peer_enroll_finished",
+            "peer_poller_changed peer_approved",
+            // The first forget's intent, kept late; its call had already
+            // been refused, so it has no outcome and changed nothing.
+            "peer_forget_requested",
+            "peer_forget_requested",
+            "peer_forget_finished",
+        ]
+    );
+
+    drop(relay);
+    stop(a).await;
+}
+
+fn filler() -> PeerAuditRecord {
+    PeerAuditRecord::ForgetRequested {
+        operation: Uuid::new_v4(),
+        initiator: PrincipalId::new("filler").unwrap(),
+        peer: DeviceKey::new([9; 32]),
+    }
+}
+
+/// R21: a full audit queue answers at once, on a clock that never moves. An
+/// owner command is refused `peer_audit_unavailable` before it dials or
+/// removes anything; a poller change still lands, and its record, refused,
+/// is logged and never written.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_full_queue_refuses_the_owner_and_drops_the_poller_record() {
+    let directory = tempfile::tempdir().unwrap();
+    let a = Peer::start(&directory.path().join("a")).await;
+    let audits = audit_directory(&directory.path().join("audits"));
+    let stall = Stall::new(3);
+    let audit = Arc::new(DurablePeerAudit::with_writer_hook(
+        audits.clone(),
+        Arc::new(SystemClock),
+        Arc::new(Manual(AtomicU64::new(1_000))),
+        1,
+        stall.hook(),
+    ));
+    let b = Reader::prepare_with(
+        &directory.path().join("b"),
+        Changes::new(false),
+        audit.clone(),
+        Arc::new(Manual(AtomicU64::new(1_000))),
+    )
+    .await;
+    let relay = Relay::start(a.native).await;
+    let (key, _) = enroll(&a, &b, &relay, true).await;
+
+    // The writer stalls on one record, and one more fills the queue.
+    drop(audit.record(filler()));
+    stall.until_reached().await;
+    drop(audit.record(filler()));
+
+    // The poller's change lands; its record has no room.
+    synced_with(&b, 0).await;
+    let (entry, _) = b.peer().await;
+    assert!(matches!(
+        &entry,
+        PeerEntry::Readable(record) if matches!(record.phase(), PeerPhase::Active { .. })
+    ));
+
+    // The owner is refused at once, before anything is dialed or removed.
+    let accepted = relay.accepted();
+    let created = a
+        .commands
+        .create(&a.session, ConsentClass::PeerRead)
+        .await
+        .unwrap();
+    let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
+    let enrolled = tokio::time::timeout(PROMPT, b.peers.enroll(relay.address, code, &b.owner))
+        .await
+        .expect("a full queue answers at once");
+    assert_eq!(enrolled.err(), Some(PeerError::AuditUnavailable));
+    let forgotten = tokio::time::timeout(PROMPT, b.peers.forget(key, &b.owner))
+        .await
+        .expect("a full queue answers at once");
+    assert_eq!(forgotten.err(), Some(PeerError::AuditUnavailable));
+    assert_eq!(relay.accepted(), accepted, "nothing dialed");
+    assert_eq!(b.peers.list().await.unwrap().len(), 1, "nothing removed");
+
+    stall.release();
+    assert!(audit.drained(AUDIT_DEADLINE).await);
+    assert_eq!(
+        audit_kinds(&audits),
+        [
+            "peer_enroll_requested",
+            "peer_enroll_finished",
+            "peer_forget_requested",
+            "peer_forget_requested",
+        ],
+        "the two fillers, and no poller record"
+    );
+
+    drop(relay);
+    stop(a).await;
 }

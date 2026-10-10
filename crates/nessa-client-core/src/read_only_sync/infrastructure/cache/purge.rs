@@ -39,6 +39,7 @@ impl CachePurges for ReadOnlyCache {
             "transcript_checkpoints",
             "transcript_progress",
             "catalogue_entries",
+            "retained_walks",
             "catalogue_progress",
         ] {
             transaction

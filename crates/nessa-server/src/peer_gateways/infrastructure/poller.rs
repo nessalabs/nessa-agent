@@ -13,8 +13,9 @@
 //!     Terminal or Unclaimed --> the client removes the cache and marks the
 //!                               record revoked; the peer is not read again
 //!     otherwise (still pending) --> wait
-//!   give back the turn
-//!   every change above --> PeerCommands::poller_changed (the audit)
+//!   every change above, as it is made --> PeerCommands::poller_changed
+//!                                          (queued by the audit at once)
+//!   give back the turn --> PeerCommands::poller_kept (waits for the audit)
 //! ```
 //! Arrows are calls, in order. No read happens without a fresh Active
 //! status, and nothing is removed without a Terminal one: a refused
@@ -31,14 +32,17 @@
 //! Each change the poller makes to what is held of a peer goes through one
 //! step that reads what is held before and after it: the status step
 //! (credential saved, enrollment ended), the cache reset, and the
-//! conversations a read withdrew. The cycle keeps what each step found and
-//! hands it to `poller_changed` once it has given back the turn, so an audit
-//! that is slow or stalled never makes an owner command wait.
+//! conversations a read withdrew. Each step hands what it found to
+//! `poller_changed` while the cycle still holds the turn, and the audit takes
+//! the record at once, so the evidence is in the order the turn was held:
+//! a change the cycle made comes before the owner command that stopped it.
+//! The cycle waits for the audit's answers only once it has given back the
+//! turn, so an audit that is slow or stalled never holds the turn.
 use super::commands::{
-    CycleStop, CycleTurn, EnrollmentEntropySource, PeerCommands, PeerSync, SyncState,
+    CycleStop, CycleTurn, EnrollmentEntropySource, PeerCommands, PeerSync, PollerRecord, SyncState,
 };
-use super::records::{PeerEntry, PeerPhase, PeerRecord, SlotTransition};
-use crate::peer_gateways::application::{PeerHolding, PollerCause, WITHDRAWN_PER_RECORD};
+use super::records::{PeerEntry, PeerPhase, PeerRecord, SlotOutcome, SlotTransition};
+use crate::peer_gateways::application::{PollerCause, WITHDRAWN_PER_RECORD};
 use nessa_auth::{
     adapters::pairing::NativeIdentity,
     application::{pairing::ClientPendingStore, ports::Clock as WallClock},
@@ -48,8 +52,15 @@ use nessa_client_core::pairing::{NativeClientError, NativeEnrollmentClient};
 use nessa_client_core::retained::{ReadFailure, ReadReport, ReaderAccess, RetainedCache};
 use nessa_protocol::pairing::socket::WAKE_TICK;
 use nessa_protocol::pairing::wire::NativePairingStatus;
-use std::{collections::HashMap, sync::Arc, time::Duration};
-use tokio::{sync::watch, task::JoinHandle};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex, PoisonError},
+    time::Duration,
+};
+use tokio::{
+    sync::watch,
+    task::{JoinError, JoinHandle},
+};
 
 /// How often each peer is read once it is up to date.
 pub const POLL_INTERVAL: Duration = Duration::from_secs(30);
@@ -91,22 +102,11 @@ pub struct PollInputs {
     pub entropy: EnrollmentEntropySource,
 }
 
-/// One change a cycle made to what is held of a peer, kept until the cycle
-/// has given back the turn and then handed to the audit.
-struct Change {
-    cause: PollerCause,
-    before: PeerHolding,
-    after: PeerHolding,
-    outcome: Result<(), &'static str>,
-}
-
 /// When a peer is next read, and why.
 struct Due {
     /// By the injected monotonic clock.
     at: u64,
     failures: u32,
-    /// The last read stopped short: read again even if the head is unchanged.
-    settle: bool,
 }
 
 /// The running poller, and how to stop it.
@@ -168,13 +168,11 @@ impl Poller {
                 let due = self.due.entry(key).or_insert(Due {
                     at: now,
                     failures: 0,
-                    settle: false,
                 });
                 if due.at > now {
                     continue;
                 }
-                let settle = due.settle;
-                let Some(pace) = self.cycle(key, settle).await else {
+                let Some(pace) = self.cycle(key).await else {
                     return;
                 };
                 self.reschedule(key, pace);
@@ -246,7 +244,6 @@ impl Poller {
         };
         let (wait, failures) = next_wait(&self.inputs.policy, pace, due.failures, draw);
         due.failures = failures;
-        due.settle = matches!(pace, Pace::Continue | Pace::Stopped);
         due.at = now.saturating_add(millis(wait));
     }
 
@@ -267,38 +264,28 @@ impl Poller {
     }
 
     /// One peer: under the turn, its record read again, the pinned status,
-    /// then a read if it is Active; then, with the turn given back, the
-    /// evidence of each change that made. `None` when the poller stopped.
-    async fn cycle(&self, key: DeviceKey, settle: bool) -> Option<Pace> {
+    /// then a read if it is Active, each change handed to the audit as it is
+    /// made; then, with the turn given back, the audit's answers. `None` when
+    /// the poller stopped.
+    async fn cycle(&self, key: DeviceKey) -> Option<Pace> {
         let cycle = CycleStop::new();
         let turn = self.take_turn(&cycle).await?;
         let mut changes = Vec::new();
-        let pace = self.held(key, settle, &cycle, &mut changes).await;
-        // Given back before the evidence is kept: an audit, however slow,
-        // never holds an owner command. The changes stand either way.
+        let pace = self.held(key, &cycle, &mut changes).await;
+        // Given back before the answers are awaited: an audit, however slow,
+        // never holds the turn. The changes stand either way.
         drop(turn);
-        for change in changes {
-            self.commands
-                .poller_changed(
-                    key,
-                    change.cause,
-                    change.before,
-                    change.after,
-                    change.outcome,
-                )
-                .await;
-        }
+        self.commands.poller_kept(changes).await;
         pace
     }
 
     /// The part of a cycle that holds the turn. Each change it makes is
-    /// pushed to `changes`.
-    async fn held(
-        &self,
+    /// handed to the audit at once and its answer pushed to `changes`.
+    async fn held<'a>(
+        &'a self,
         key: DeviceKey,
-        settle: bool,
         cycle: &Arc<CycleStop>,
-        changes: &mut Vec<Change>,
+        changes: &mut Vec<PollerRecord<'a>>,
     ) -> Option<Pace> {
         // Forgotten, ended or replaced since the listing: what is read is
         // what the record says now, under the turn.
@@ -338,7 +325,7 @@ impl Poller {
                 access_epoch,
             }) => {
                 let mut result = self
-                    .read(&record, &receiver, access_epoch, settle, cycle, changes)
+                    .read(&record, &receiver, access_epoch, cycle, changes)
                     .await;
                 if let Some(cause) = match &result {
                     Some(Err(ReadFailure::ResetRequired)) => Some(PollerCause::ResetRequired),
@@ -348,7 +335,7 @@ impl Poller {
                     // Derived from the peer: emptied and read again from nothing.
                     self.reset(key, cause, changes).await;
                     result = self
-                        .read(&record, &receiver, access_epoch, true, cycle, changes)
+                        .read(&record, &receiver, access_epoch, cycle, changes)
                         .await;
                 }
                 match result {
@@ -380,29 +367,25 @@ impl Poller {
 
     /// The peer's pinned status through its record, as one audited step:
     /// what is held before and after it, and the change if the status began
-    /// one. `None` when the cycle was stopped.
-    async fn status(
-        &self,
+    /// one, its outcome as the record's store reports it. `None` when the
+    /// cycle was stopped.
+    async fn status<'a>(
+        &'a self,
         record: &PeerRecord,
         cycle: &Arc<CycleStop>,
-        changes: &mut Vec<Change>,
+        changes: &mut Vec<PollerRecord<'a>>,
     ) -> Option<Result<Status, NativeClientError>> {
         let key = *record.key();
         let before = self.commands.holding(key).await;
-        let (status, transition) = self.ask_status(record, cycle).await;
+        let (status, transition, landed) = self.ask_status(record, cycle).await;
         let after = self.commands.holding(key).await;
-        let outcome = match &status {
-            Some(Ok(_)) => Ok(()),
-            _ => Err("peer_unavailable"),
-        };
+        let outcome = status_outcome(landed);
         match status_cause(transition, status.as_ref()) {
             // A transition that changed nothing and failed nowhere is no change.
-            Some(cause) if after != before || outcome.is_err() => changes.push(Change {
-                cause,
-                before,
-                after,
-                outcome,
-            }),
+            Some(cause) if after != before || outcome.is_err() => changes.push(
+                self.commands
+                    .poller_changed(key, cause, before, after, outcome),
+            ),
             Some(_) => {}
             None if after != before => {
                 tracing::warn!(peer = %hex(&key), before = ?before, after = ?after,
@@ -413,7 +396,8 @@ impl Poller {
         Some(status?.map(|(status, _)| status))
     }
 
-    /// The status, and the transition its store began, if any.
+    /// The status, the transition its store began, if any, and whether that
+    /// transition's writes landed.
     async fn ask_status(
         &self,
         record: &PeerRecord,
@@ -421,6 +405,7 @@ impl Poller {
     ) -> (
         Option<Result<(Status, String), NativeClientError>>,
         Option<SlotTransition>,
+        Option<SlotOutcome>,
     ) {
         let mut stopped = self.stopped.clone();
         // The same connect as an enrollment's: the injected connector, bounded
@@ -428,10 +413,10 @@ impl Poller {
         let stream = tokio::select! {
             connected = self.commands.dial(record.address()) => match connected {
                 Ok(stream) => stream,
-                Err(error) => return (Some(Err(NativeClientError::Io(error.kind()))), None),
+                Err(error) => return (Some(Err(NativeClientError::Io(error.kind()))), None, None),
             },
-            () = cycle.stopped() => return (None, None),
-            () = until_stopped(&mut stopped) => return (None, None),
+            () = cycle.stopped() => return (None, None, None),
+            () = until_stopped(&mut stopped) => return (None, None, None),
         };
         let slot = Arc::new(self.commands.records().slot(*record.key()));
         let client = NativeEnrollmentClient::new(slot.clone(), self.commands.clock.clone());
@@ -469,12 +454,17 @@ impl Poller {
                 | NativePairingStatus::Staging(_) => (Status::Waiting, String::new()),
             })
         });
-        (status, slot.transition())
+        (status, slot.transition(), slot.outcome())
     }
 
     /// Empty the peer's cache for `cause`, as one audited step. The cache is
     /// closed: the read that asked for this has ended.
-    async fn reset(&self, key: DeviceKey, cause: PollerCause, changes: &mut Vec<Change>) {
+    async fn reset<'a>(
+        &'a self,
+        key: DeviceKey,
+        cause: PollerCause,
+        changes: &mut Vec<PollerRecord<'a>>,
+    ) {
         let before = self.commands.holding(key).await;
         let records = self.commands.records().clone();
         let removed = tokio::task::spawn_blocking(move || records.remove_cache(&key)).await;
@@ -485,26 +475,23 @@ impl Poller {
         };
         tracing::warn!(peer = %hex(&key), cause = ?cause, removed = outcome.is_ok(),
             "peer gateway cache cannot continue against what the peer serves; emptied, reading again");
-        changes.push(Change {
-            cause,
-            before,
-            after,
-            outcome,
-        });
+        changes.push(
+            self.commands
+                .poller_changed(key, cause, before, after, outcome),
+        );
     }
 
     /// Read the peer into its cache, on a blocking thread, within the read
     /// budget. The conversations the read withdrew are one change, however
-    /// it ended, recorded in runs of [`WITHDRAWN_PER_RECORD`]. `None` when
-    /// the poller stopped.
-    async fn read(
-        &self,
+    /// it ended, a panic included, recorded in runs of
+    /// [`WITHDRAWN_PER_RECORD`]. `None` when the poller stopped.
+    async fn read<'a>(
+        &'a self,
         record: &PeerRecord,
         receiver: &str,
         access_epoch: u64,
-        settle: bool,
         cycle: &Arc<CycleStop>,
-        changes: &mut Vec<Change>,
+        changes: &mut Vec<PollerRecord<'a>>,
     ) -> Option<Result<ReadReport, ReadFailure>> {
         let key = *record.key();
         let records = self.commands.records().clone();
@@ -515,35 +502,30 @@ impl Poller {
             cycle.read().clone(),
             self.inputs.policy.read_budget,
         );
-        let work = tokio::task::spawn_blocking(move || {
-            let mut withdrawn = Vec::new();
-            let result = (|| {
-                let credential = records
-                    .slot(key)
-                    .load_credential()
-                    .map_err(|_| ReadFailure::Cache)?
-                    .ok_or(ReadFailure::Cache)?;
-                let id = credential.credential().as_str().to_owned();
-                let (secret, pin, _) = credential.into_enrollment().into_parts();
-                let identity = NativeIdentity::restore(secret).map_err(|_| ReadFailure::Cache)?;
-                let mut cache = RetainedCache::open(&records.cache_path(&key), wall, clock)?;
-                cache.read(
-                    ReaderAccess {
-                        address,
-                        identity: &identity,
-                        pin,
-                        credential: &id,
-                        receiver: &receiver,
-                        access_epoch,
-                        client_id: CLIENT_ID,
-                    },
-                    settle,
-                    &stop,
-                    budget,
-                    &mut withdrawn,
-                )
-            })();
-            (result, withdrawn)
+        let (work, withdrawn) = spawn_read(move |withdrawn| {
+            let credential = records
+                .slot(key)
+                .load_credential()
+                .map_err(|_| ReadFailure::Cache)?
+                .ok_or(ReadFailure::Cache)?;
+            let id = credential.credential().as_str().to_owned();
+            let (secret, pin, _) = credential.into_enrollment().into_parts();
+            let identity = NativeIdentity::restore(secret).map_err(|_| ReadFailure::Cache)?;
+            let mut cache = RetainedCache::open(&records.cache_path(&key), wall, clock)?;
+            cache.read(
+                ReaderAccess {
+                    address,
+                    identity: &identity,
+                    pin,
+                    credential: &id,
+                    receiver: &receiver,
+                    access_epoch,
+                    client_id: CLIENT_ID,
+                },
+                &stop,
+                budget,
+                withdrawn,
+            )
         });
         tokio::pin!(work);
         let mut stopped = self.stopped.clone();
@@ -555,21 +537,22 @@ impl Poller {
                 (&mut work).await
             }
         };
-        let (result, withdrawn) = ended.unwrap_or((Err(ReadFailure::Cache), Vec::new()));
+        let (result, withdrawn) = read_ended(ended, &withdrawn);
         if !withdrawn.is_empty() {
             // Read after the fact: each withdrawal removed rows inside the
             // cache, so the record and whether a cache is there are as the
             // read left them, before and after alike.
             let held = self.commands.holding(key).await;
             for conversations in withdrawn.chunks(WITHDRAWN_PER_RECORD) {
-                changes.push(Change {
-                    cause: PollerCause::Withdrawn {
+                changes.push(self.commands.poller_changed(
+                    key,
+                    PollerCause::Withdrawn {
                         conversations: conversations.to_vec(),
                     },
-                    before: held.clone(),
-                    after: held.clone(),
-                    outcome: Ok(()),
-                });
+                    held.clone(),
+                    held.clone(),
+                    Ok(()),
+                ));
             }
         }
         if self.stopping() {
@@ -643,6 +626,44 @@ fn status_cause(
     })
 }
 
+/// Whether a status step's change landed: from the record's store, which
+/// alone knows whether the transition it began was written, never from
+/// whether the status read then succeeded.
+fn status_outcome(landed: Option<SlotOutcome>) -> Result<(), &'static str> {
+    match landed {
+        Some(SlotOutcome::Landed) => Ok(()),
+        Some(SlotOutcome::NotLanded) | None => Err("peer_unavailable"),
+    }
+}
+
+/// The conversations a read has withdrawn so far, outside its worker.
+type Withdrawn = Arc<Mutex<Vec<String>>>;
+
+/// Start `read` on a blocking thread, with the conversations it withdraws
+/// kept outside that thread: a read that panics part way has still removed
+/// them from the cache, and its caller still learns of them.
+fn spawn_read(
+    read: impl FnOnce(&mut Vec<String>) -> Result<ReadReport, ReadFailure> + Send + 'static,
+) -> (JoinHandle<Result<ReadReport, ReadFailure>>, Withdrawn) {
+    let withdrawn = Arc::new(Mutex::new(Vec::new()));
+    let work = tokio::task::spawn_blocking({
+        let withdrawn = withdrawn.clone();
+        move || read(&mut withdrawn.lock().unwrap_or_else(PoisonError::into_inner))
+    });
+    (work, withdrawn)
+}
+
+/// How a read started by [`spawn_read`] ended, and what it withdrew, however
+/// it ended: a worker that panicked is a cache failure, and what it withdrew
+/// before is kept.
+fn read_ended(
+    joined: Result<Result<ReadReport, ReadFailure>, JoinError>,
+    withdrawn: &Mutex<Vec<String>>,
+) -> (Result<ReadReport, ReadFailure>, Vec<String>) {
+    let withdrawn = std::mem::take(&mut *withdrawn.lock().unwrap_or_else(PoisonError::into_inner));
+    (joined.unwrap_or(Err(ReadFailure::Cache)), withdrawn)
+}
+
 /// How a cycle that did not read is listed.
 fn sync_state(why: &Unread) -> SyncState {
     match why {
@@ -676,9 +697,9 @@ enum Status {
 enum Pace {
     /// Read to the end: the interval.
     Settled,
-    /// Read up to a bound: soon, and settle.
+    /// Read up to a bound: soon.
     Continue,
-    /// Stopped by an owner command: soon, and settle; failures unchanged.
+    /// Stopped by an owner command: soon; failures unchanged.
     Stopped,
     /// Still pending on the peer: the interval.
     Waiting,

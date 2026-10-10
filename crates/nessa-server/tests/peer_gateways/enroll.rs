@@ -40,8 +40,8 @@ use nessa_server::{
         },
         infrastructure::{
             DurablePeerAudit, EnrollmentEntropy, EnrollmentEntropySource, PeerCommands, PeerEntry,
-            PeerError, PeerPhase, PeerRecords, SlotRefusal, SlotTransition, TcpPeerConnector,
-            AUDIT_DEADLINE, CONNECT,
+            PeerError, PeerPhase, PeerRecords, SlotOutcome, SlotRefusal, SlotTransition,
+            TcpPeerConnector, AUDIT_DEADLINE, CONNECT,
         },
     },
     product::{ProductDependencies, ProductRouteState},
@@ -85,7 +85,7 @@ impl Audit {
     fn refuse(&self, kind: Option<&'static str>) {
         *self.refuse.lock().unwrap() = kind;
     }
-    /// Every kept record, oldest operation first, intent before outcome.
+    /// Every kept record, in the order the audit took them.
     fn records(&self) -> Vec<Value> {
         let mut records: Vec<Value> = std::fs::read_dir(&self.directory)
             .unwrap()
@@ -93,7 +93,7 @@ impl Audit {
                 serde_json::from_slice(&std::fs::read(entry.unwrap().path()).unwrap()).unwrap()
             })
             .collect();
-        records.sort_by_key(|record| record["observedAtMs"].as_u64().unwrap());
+        records.sort_by_key(|record| record["sequence"].as_u64().unwrap());
         records
     }
 }
@@ -166,6 +166,7 @@ impl Dialing {
             durable: DurablePeerAudit::new(
                 root.join("peer-gateways-audit"),
                 Arc::new(Ticks(1.into())),
+                RuntimeDependencies::default().clock,
             ),
             directory: root.join("peer-gateways-audit"),
             refuse: Mutex::new(None),
@@ -880,7 +881,11 @@ async fn enrolling_and_forgetting_are_audited_and_answer_only_when_kept() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_durable_peer_audit_reports_a_record_it_could_not_keep() {
     let directory = tempfile::tempdir().unwrap();
-    let audit = DurablePeerAudit::new(directory.path().join("missing"), Arc::new(Time));
+    let audit = DurablePeerAudit::new(
+        directory.path().join("missing"),
+        Arc::new(Time),
+        RuntimeDependencies::default().clock,
+    );
     let record = PeerAuditRecord::EnrollRequested {
         operation: uuid::Uuid::new_v4(),
         initiator: nessa_auth::domain::PrincipalId::new("owner").unwrap(),
@@ -1587,6 +1592,7 @@ async fn a_slot_names_the_transition_a_status_began_whatever_storage_did() {
     slot.save_credential(&credential, &receiver, intent)
         .unwrap();
     assert_eq!(slot.transition(), Some(SlotTransition::Approved));
+    assert_eq!(slot.outcome(), Some(SlotOutcome::Landed));
     assert!(active(&dialing.records));
     // Saved again as it is: nothing begun.
     let again = dialing.records.slot(key);
@@ -1594,6 +1600,7 @@ async fn a_slot_names_the_transition_a_status_began_whatever_storage_did() {
         .save_credential(&credential, &receiver, intent)
         .unwrap();
     assert_eq!(again.transition(), None);
+    assert_eq!(again.outcome(), None);
 
     // The ending's cache removal fails: a directory stands where SQLite's
     // journal would be. The record is left active, and the change is still
@@ -1607,5 +1614,7 @@ async fn a_slot_names_the_transition_a_status_began_whatever_storage_did() {
     let ending = dialing.records.slot(key);
     assert!(ending.end_enrollment(intent).is_err());
     assert_eq!(ending.transition(), Some(SlotTransition::Ended));
+    // The status read may report that ending; its change did not land.
+    assert_eq!(ending.outcome(), Some(SlotOutcome::NotLanded));
     assert!(active(&dialing.records), "the record is as it was");
 }

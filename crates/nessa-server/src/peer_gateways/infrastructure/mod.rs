@@ -7,7 +7,7 @@ mod commands;
 mod connector;
 mod poller;
 mod records;
-pub use audit::DurablePeerAudit;
+pub use audit::{DurablePeerAudit, AUDIT_QUEUE};
 pub use commands::{
     EnrollmentEntropy, EnrollmentEntropySource, PeerCommands, PeerError, PeerSync, SyncState,
     AUDIT_DEADLINE, CONNECT, PREEMPT,
@@ -17,6 +17,6 @@ pub use poller::{
     PeerPoller, PollInputs, PollPolicy, POLL_BACKOFF_CAP, POLL_INTERVAL, READ_BUDGET,
 };
 pub use records::{
-    ForgetFailure, PeerEntry, PeerPhase, PeerRecord, PeerRecords, PeerSlot, SlotFound, SlotRefusal,
-    SlotSave, SlotTransition,
+    ForgetFailure, PeerEntry, PeerPhase, PeerRecord, PeerRecords, PeerSlot, SlotFound, SlotOutcome,
+    SlotRefusal, SlotSave, SlotTransition,
 };

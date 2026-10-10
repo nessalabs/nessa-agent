@@ -5,7 +5,7 @@
 //!
 //! ```text
 //! RetainedCache::read --> Session (pinned TLS, openProduct, authenticate)
-//!   --> catalogueHead: unchanged and settled --> done
+//!   --> catalogueHead: unchanged, and walked to the end there --> done
 //!   --> run_catalogue (manifest pass, resolve) --> the cache
 //!   --> per cached conversation: recordsHead
 //!         wrong_owner --> withdraw it (entry and transcript)
@@ -20,6 +20,13 @@
 //! a read that reaches it having saved something ends incomplete, and the
 //! next carries on. One that saved nothing is `Unreachable`: a peer that
 //! answers too slowly to make headway is backed off, not read again soon.
+//!
+//! Whether the cache is settled is a fact about the cache, so the cache keeps
+//! it: a walk of every cached conversation that finished, to the end, notes
+//! the catalogue head and progress generation it walked at. Only a read that
+//! finds the head unchanged and that note there skips the walk; a walk cut
+//! short by a budget, a failure, a stop or a restart left no note, so the
+//! next read walks again whatever happened in between.
 //!
 //! A peer's catalogue pass carries no row for a conversation it is no longer
 //! granted: the gateway narrows rows to the reader's grants, so an unshared
@@ -51,7 +58,9 @@ use nessa_protocol::product::generated::{
 use nessa_protocol::product_contract::generated::RecordReadErrorCode;
 use nessa_sync::replication::{
     application::{StoreError, SyncError},
-    catalogue::{CatalogueError, CatalogueStoreError, EntryKey, MAX_CATALOGUE_ENTRIES},
+    catalogue::{
+        CatalogueError, CatalogueProgress, CatalogueStoreError, EntryKey, MAX_CATALOGUE_ENTRIES,
+    },
     domain::{Id, Limits, Scope},
 };
 use std::cell::Cell;
@@ -102,8 +111,9 @@ pub struct ReaderAccess<'a> {
 /// What one read did.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReadReport {
-    /// The gateway's catalogue head had moved past what the cache held, or a
-    /// settle was asked for, so the cache was read into.
+    /// The gateway's catalogue head had moved past what the cache held, or
+    /// the cache had no finished walk at that head, so the cache was read
+    /// into.
     pub moved: bool,
     /// Everything granted is in the cache. `false` when a page bound was
     /// reached or a conversation's records could not be read this time.
@@ -355,9 +365,10 @@ impl RetainedCache {
     }
 
     /// Read what the gateway grants `access` into this cache, within
-    /// `budget` on the injected clock. Unless `settle`, an unchanged catalogue
-    /// head ends the read after one call; a caller whose last read was
-    /// incomplete passes `settle` to finish it. Each conversation removed
+    /// `budget` on the injected clock. An unchanged catalogue head ends the
+    /// read after one call only when the cache notes a finished walk at that
+    /// head ([`settled`]); otherwise every cached conversation is walked, and
+    /// only a walk that finished notes it ([`walked`]). Each conversation removed
     /// because the gateway no longer grants it is pushed to `withdrawn` as it
     /// goes, so the caller learns of it however the read ends.
     ///
@@ -369,7 +380,6 @@ impl RetainedCache {
     pub fn read(
         &mut self,
         access: ReaderAccess<'_>,
-        settle: bool,
         stop: &Arc<ReadStop>,
         budget: Duration,
         withdrawn: &mut Vec<String>,
@@ -385,7 +395,7 @@ impl RetainedCache {
         });
         let before = withdrawn.len();
         self.progressed = false;
-        let result = self.read_inner(access, settle, &ending, withdrawn);
+        let result = self.read_inner(access, &ending, withdrawn);
         stop.release();
         let progressed = self.progressed || withdrawn.len() > before;
         match read_end(result, stop.is_stopped(), ending.spent(), progressed) {
@@ -402,7 +412,6 @@ impl RetainedCache {
     fn read_inner(
         &mut self,
         access: ReaderAccess<'_>,
-        settle: bool,
         ending: &Arc<Stopping>,
         withdrawn: &mut Vec<String>,
     ) -> Result<ReadReport, ReadFailure> {
@@ -460,10 +469,11 @@ impl RetainedCache {
         {
             return Err(ReadFailure::ResetRequired);
         }
-        let settled = saved
-            .as_ref()
-            .is_some_and(|saved| saved.completed == head && saved.active.is_none());
-        if settled && !settle {
+        let walk = self
+            .cache
+            .retained_walk(&receiver, scope.origin(), scope.stream())
+            .map_err(|error| cache_failure(&error))?;
+        if settled(saved.as_ref(), walk, head) {
             return Ok(ReadReport {
                 moved: false,
                 complete: true,
@@ -510,7 +520,7 @@ impl RetainedCache {
         };
 
         let ids = self.live(&scope)?;
-        let complete = read_each(
+        let each = read_each(
             ids,
             held_back,
             &mut Each {
@@ -523,9 +533,17 @@ impl RetainedCache {
             },
             withdrawn,
         )?;
+        let complete = walked(catalogue_complete && each, || {
+            let progress = self
+                .cache
+                .retained_catalogue_progress(&receiver, scope.origin(), scope.stream())?
+                .ok_or(CacheError::Stale)?;
+            self.cache
+                .note_walk(&scope, progress.completed, progress.generation)
+        });
         Ok(ReadReport {
             moved: true,
-            complete: catalogue_complete && complete,
+            complete,
             conversations: self.live(&scope)?.len(),
         })
     }
@@ -644,6 +662,37 @@ impl RetainedCache {
     }
 }
 
+/// Whether the cache is settled at the gateway's catalogue `head`: its
+/// progress completed there with no pass under way, and a walk of every
+/// cached conversation finished at that same head and progress generation.
+/// Progress alone is not enough: a walk cut short after the catalogue pass
+/// leaves conversations the gateway no longer grants, and only walking them
+/// withdraws them.
+fn settled(saved: Option<&CatalogueProgress>, walk: Option<(u64, u64)>, head: u64) -> bool {
+    saved.is_some_and(|saved| {
+        saved.completed == head
+            && saved.active.is_none()
+            && walk == Some((saved.completed, saved.generation))
+    })
+}
+
+/// Whether a read that walked everything it holds is complete: only when the
+/// walk was, and `note`, which keeps that in the cache, succeeded. The note is
+/// the evidence a later read settles on, so a read that cannot write it does
+/// not report itself complete; the next read walks again.
+fn walked(complete: bool, note: impl FnOnce() -> Result<(), CacheError>) -> bool {
+    if !complete {
+        return false;
+    }
+    match note() {
+        Ok(()) => true,
+        Err(error) => {
+            tracing::warn!(%error, "retained walk could not be noted; the next read walks again");
+            false
+        }
+    }
+}
+
 /// How a read that has returned ends, from what it returned, whether it was
 /// stopped, whether its budget is spent, and whether it saved anything.
 #[derive(Debug, Eq, PartialEq)]
@@ -701,7 +750,9 @@ trait EachConversation {
 /// withdrawal always applies, and the walk then ends with that failure,
 /// `Quota` first. Any other failure ends it at once: a damaged cache or one
 /// that cannot continue is emptied whole, and a lost connection asks nothing
-/// more.
+/// more. A walk cut short by a stop or a lost connection after a failure was
+/// held back still ends with the held failure: the cache is still full, and
+/// the caller lists it so.
 fn read_each(
     ids: Vec<Id>,
     held_back: Option<ReadFailure>,
@@ -744,6 +795,9 @@ fn read_each(
                 if held != Some(ReadFailure::Quota) {
                     held = Some(failure);
                 }
+            }
+            Some(failure @ (ReadFailure::Stopped | ReadFailure::Unreachable)) => {
+                return Err(held.unwrap_or(failure))
             }
             Some(failure) => return Err(failure),
         }
