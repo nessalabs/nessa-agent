@@ -72,7 +72,9 @@ for cache observations and a separate monotonic clock through
 `nessa_protocol::clock::Clock` for socket budgets. Device application ports
 receive these dependencies explicitly; they do not resolve gateway state.
 `composition::execute` takes input and output handles for command presentation.
-Gateway process tests call that public entry point through a dev-dependency.
+Gateway process tests call that public entry point through a dev-dependency
+that enables the crate's `cli` feature; the gateway's own build links the
+crate without it.
 
 ## Rust desktop host
 

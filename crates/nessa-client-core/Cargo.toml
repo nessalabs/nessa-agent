@@ -5,6 +5,18 @@ edition.workspace = true
 rust-version = "1.89"
 publish = false
 description = "Device-side enrollment and retained gateway sync"
+
+[features]
+default = ["cli"]
+# The standalone example's command line: argument parsing, JSON presentation
+# and the retained-sync composition behind them. A peer gateway links this
+# crate for its client without it (ADR 483).
+cli = []
+
+[[example]]
+name = "read_only_sync"
+required-features = ["cli"]
+
 [dependencies]
 nessa-auth = { path = "../nessa-auth" }
 nessa-protocol = { path = "../nessa-protocol" }

@@ -444,8 +444,8 @@ restore, `receivers.rs` (the receiver port over the conversation context's
 `LocalReceiverAuthority`), `owner_commands.rs`, the owner-only handle the
 product socket holds, and `owner_admission.rs`, the lease every owner command
 holds until shutdown drains it. The native device client is
-`crates/nessa-client-core/src/pairing/client.rs`; gateway tests consume it as a
-dev-dependency.
+`crates/nessa-client-core/src/pairing/client.rs`; the gateway links it for a
+peer gateway's side, and gateway tests consume it.
 The owner product methods are `nessa-server/src/product/pairing.rs`, and the
 product session over a protected native connection is
 `nessa-server/src/product/native.rs`; mounting is
@@ -1657,10 +1657,11 @@ cite its numbers.
 `crates/nessa-client-core` owns native device enrollment and retained sync.
 Its [module map](../crates/nessa-client-core/README.md) connects the pairing
 client, `read_only_sync` layers, executable composition, and matching tests.
-The gateway consumes this crate only as a dev-dependency. The portable package
+The gateway links this crate without its `cli` feature, which holds the
+example's command line and the retained-sync composition behind it; gateway
+tests enable it as a dev-dependency (ADR 483, amended). The portable package
 gate refuses any client dependency path to `nessa-server`, including renamed
-and transitive edges. It also refuses gateway normal/build paths to the client;
-dev-only edges break production paths. Both ends depend on `nessa-protocol` for shared rules.
+and transitive edges. Both ends depend on `nessa-protocol` for shared rules.
 
 ### Retained read-only example
 

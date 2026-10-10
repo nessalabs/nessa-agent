@@ -124,5 +124,6 @@ CREATE TABLE read_grant_changes (
 -- One journal row per request: a retried request is answered from it.
 CREATE UNIQUE INDEX read_grant_changes_request
     ON read_grant_changes (conversation_id, initiator, surface, request);
+-- Its index by receiver is RECEIVER_INDEX in store.rs, made on every open.
 
 PRAGMA user_version = 4;
