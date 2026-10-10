@@ -97,6 +97,7 @@ fn state(state: &PeerState) -> Value {
             "credentialId": credential, "receiverId": receiver}),
         PeerState::Unreadable => json!({"phase": "unreadable"}),
         PeerState::Unknown => json!({"phase": "unknown"}),
+        PeerState::NotRead => json!({"phase": "not_read"}),
     }
 }
 
@@ -142,12 +143,10 @@ pub(super) fn record_value(record: &PeerAuditRecord) -> Value {
             operation,
             initiator,
             peer,
-            before,
         } => json!({
             "kind": "peer_forget_requested",
             "operationId": operation.to_string(),
             "target": {"peerKey": hex(peer)},
-            "transition": {"before": state(before)},
             "cause": "owner_requested",
             "initiator": person(initiator),
         }),

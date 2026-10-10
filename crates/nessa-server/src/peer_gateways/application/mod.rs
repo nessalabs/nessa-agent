@@ -2,7 +2,8 @@
 //! to an injected audit port before they answer. Serialization, record
 //! identity and observation time belong to the adapter that keeps them.
 //!
-//! Each command writes an intent before its effect and an outcome after it,
+//! Every call of a command writes an intent before anything else, even before
+//! it checks whether it may run, and an outcome on every way it can end,
 //! correlated by one operation id. No intent, no effect: a command whose
 //! intent cannot be kept changes nothing. An outcome that cannot be kept
 //! turns the answer into a refusal, while the effect it describes stays.
@@ -42,20 +43,22 @@ pub enum PeerState {
     Unreadable,
     /// Storage did not confirm whether the change landed.
     Unknown,
+    /// The command ended before it read the record.
+    NotRead,
 }
 
 /// One owner transition over this gateway's peers. Every record names the
 /// operation it belongs to and the principal who asked.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PeerAuditRecord {
-    /// `peer.enroll` admitted: nothing has been dialed yet.
+    /// `peer.enroll` asked: nothing has been checked or dialed yet.
     EnrollRequested {
         operation: Uuid,
         initiator: PrincipalId,
         address: SocketAddr,
     },
-    /// That enrollment ended. `peer` is known once the peer authenticated;
-    /// `outcome` is the refusal the owner was given, if any.
+    /// That enrollment ended. `peer` is known once the peer presented its
+    /// key; `outcome` is the refusal the owner was given, if any.
     EnrollFinished {
         operation: Uuid,
         initiator: PrincipalId,
@@ -65,12 +68,11 @@ pub enum PeerAuditRecord {
         after: PeerState,
         outcome: Result<(), &'static str>,
     },
-    /// `peer.forget` admitted for a kept peer: nothing removed yet.
+    /// `peer.forget` asked: nothing has been checked or removed yet.
     ForgetRequested {
         operation: Uuid,
         initiator: PrincipalId,
         peer: DeviceKey,
-        before: PeerState,
     },
     /// That forget ended.
     ForgetFinished {

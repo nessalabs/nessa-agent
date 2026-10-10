@@ -191,7 +191,8 @@ sequenceDiagram
     participant A as Gateway A (native listener)
     participant U as B's peer audit
     O->>B: peer.enroll {address, code} (Cedar: credential.manage)
-    B->>U: intent {operation, address, owner} (not kept: peer_audit_unavailable, nothing dialed)
+    B->>U: intent {operation, address, owner} (not kept: peer_audit_unavailable, nothing checked or dialed)
+    B->>B: take the turn (held: peer_busy, outcome audited)
     B->>A: TCP connect via PeerConnector, bounded by the deadline clock (passed: peer_unreachable)
     B->>A: TLS with B's own native key
     B->>R: enrollment key?
@@ -200,10 +201,11 @@ sequenceDiagram
     B->>A: OPAQUE with the code (wrong code: peer_invitation_refused)
     A-->>B: KE2, authenticating A's key
     B->>R: save pending {A's pin, B's key by its public half, address}
+    R->>R: note A's key, then its record as read
     R->>R: refuse another key, B's own key, a kept peer, or one past MAX_PEERS
     B->>A: KE3 (confirm)
     A-->>B: Claimed
-    B->>U: outcome {operation, peer, absent -> pending, answer} (not kept: peer_audit_unavailable)
+    B->>U: outcome {operation, peer, before -> after, answer}, on every path (not kept: peer_audit_unavailable)
     B-->>O: PeerGateway {peerKey, phase: pending, address}
 ```
 
@@ -235,18 +237,24 @@ sequenceDiagram
 - **Every deadline is the injected clock's.** The connect goes through the
   `PeerConnector` port, which sets no timeout of its own; the command reads
   the injected monotonic clock every wake tick and drops the attempt once
-  the connect deadline passes. The handshake and enrollment deadlines read
+  the connect deadline passes, and reads it again when a connection
+  completes, so one that completes past the deadline is closed unused. The handshake and enrollment deadlines read
   the same clock, so a substituted clock drives the whole enrollment.
 - **Enrolling and forgetting take turns.** One enrollment or forget runs at a
   time, and another is `peer_busy` while it does, so a forget cannot remove
   the record an enrollment is saving and spend the peer's invitation for
   nothing.
-- **Each enroll and forget is audited.** The command hands an intent to the
-  `PeerAudit` port before its effect (the address and the owner who asked;
-  for a forget, the record as it was) and an outcome after it (the peer, its
-  record before and after, and the answer), correlated by one operation id.
-  A `peer_exists` refusal names the peer that refused it, with its record as
-  found as both before and after.
+- **Every enroll and forget call is audited.** Both commands run only
+  through one audited wrapper. It hands an intent to the `PeerAudit` port
+  before anything else, even the check that no other command holds the turn
+  (the address or the peer named, and the owner who asked), and an outcome
+  on every way the call ends (the peer, its record before and after, and the
+  answer), correlated by one operation id. The command body answers with
+  that evidence on each of its returns, as its type demands, so no early
+  return skips the outcome. The enrollment's slot notes the peer's key the
+  moment the peer's pin reaches it, and its record as first read, so every
+  later refusal (`peer_exists`, `peer_capacity`, `peer_own_gateway`) names
+  them; a call that ended before reading the record says `not_read`.
   `DurablePeerAudit` keeps each record as its own private file in
   `peer-gateways-audit/`, synced before it is acknowledged. An intent that is
   not kept refuses the command before anything is dialed or removed; an
@@ -273,7 +281,8 @@ sequenceDiagram
 | P10 | A record of another shape, or a valid one whose `gatewayKey` is not this gateway's | Listed `unreadable`; its credential does not load (`Corrupt`); enrolling into that peer is `peer_exists`, audited `unreadable` before and after, and leaves it as it was; `peer.forget` removes it | same |
 | P11 | `peer.forget` while an enrollment runs | `peer_busy`; once the enrollment ends, forget runs | `forgetting_waits_for_a_running_enrollment` |
 | P12 | An enroll or forget that succeeds or is refused; its intent, or its outcome, not kept | Intent and outcome kept, naming the operation, peer, address, state before and after, answer, cause and owner; no intent: nothing dialed or removed, `peer_audit_unavailable`; no outcome: the record made or removed stands, `peer_audit_unavailable` | `enrolling_and_forgetting_are_audited_and_answer_only_when_kept`, `the_durable_peer_audit_reports_a_record_it_could_not_keep` |
-| P13 | A connect that never answers | Held while the injected deadline clock stands still; once it passes the connect deadline, `peer_unreachable`, audited, the attempt dropped and nothing saved | `a_connect_that_never_answers_ends_when_the_injected_clock_passes_its_deadline` |
+| P13 | A connect that never answers; one that completes past the deadline | Held while the injected deadline clock stands still; once it passes the connect deadline, `peer_unreachable`, audited, the attempt dropped and nothing saved; a late connection is closed unused, `peer_unreachable` | `a_connect_that_never_answers_ends_when_the_injected_clock_passes_its_deadline`, `a_connect_completed_after_the_deadline_is_refused_and_closed` |
+| P14 | Every answer of `peer.enroll` (ok, busy, unreachable, refused code, wrong invitation, own gateway, exists, capacity) and of `peer.forget` (ok, busy, not found) | Exactly one intent and one outcome per call under one operation id, naming the owner, the target, and the peer once known; the table must list every answer | `every_peer_command_answer_keeps_one_intent_and_one_outcome` |
 
 ## What this part does not do
 
