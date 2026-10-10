@@ -10,9 +10,10 @@
 //!                               audited in peer-gateways-audit/)
 //! bind:    PreparedNative --> TcpEnrollmentAccept --> the one NativeEnrollmentConnections
 //!          (with NativeSessions: the product state + the registry's device verifier)
-//! start:   BoundNative --> listener task (failed --> watch) --> RunningNative
-//! stop:    signal_stop --> join: listener drain, then GatewayPairing::shutdown,
-//!          then reconcile_cleanup
+//! start:   BoundNative --> listener task (failed --> watch)
+//!          --> PeerPoller (reads each peer) --> RunningNative
+//! stop:    signal_stop (listener and poller) --> join: the poller's workers,
+//!          then listener drain, then GatewayPairing::shutdown, then reconcile_cleanup
 //! ```
 //! Arrows are construction and ownership handoffs, in order. Design rows
 //! S1–S14 in `docs/design/auth/device-pairing.md` ("Owner routes and mounting")
@@ -26,7 +27,9 @@ use crate::device_pairing::infrastructure::{
     NativeEnrollmentConnections, NativeEnrollmentListener, PairingOwnerCommands,
     PairingRuntimeDependencies, TcpEnrollmentAccept,
 };
-use crate::peer_gateways::infrastructure::{DurablePeerAudit, PeerCommands, PeerRecords};
+use crate::peer_gateways::infrastructure::{
+    DurablePeerAudit, PeerCommands, PeerPoller, PeerRecords, PollPolicy,
+};
 use crate::product::{DeviceCredentials, NativeSessions, ProductRouteState};
 use nessa_auth::{
     adapters::{
@@ -87,6 +90,10 @@ pub(super) struct PreparedNative {
     gateway: Arc<GatewayPairing>,
     address: SocketAddr,
     registry: Arc<LocalCredentialStore>,
+    /// The peer commands the poller reads through once serving starts.
+    peers: Arc<PeerCommands>,
+    /// Wall time for when a peer read finished.
+    clock: Arc<dyn Clock>,
 }
 
 /// Prepare native pairing before either socket is bound (design rows S3–S8):
@@ -100,7 +107,7 @@ pub(super) struct PreparedNative {
 pub(super) async fn prepare(
     config: &NativeConfig,
     inputs: NativeInputs,
-) -> Result<(PreparedNative, PairingOwnerCommands, PeerCommands), RunError> {
+) -> Result<(PreparedNative, PairingOwnerCommands, Arc<PeerCommands>), RunError> {
     // The private-state owner wants a trusted absolute root; on Unix that is
     // the canonical spelling, as its own tests use.
     #[cfg(unix)]
@@ -127,7 +134,7 @@ pub(super) async fn prepare(
     .await
     .map_err(|error| RunError::Native(NativeFailure::Identity(error)))?;
     let registry = inputs.registry;
-    let peers = PeerCommands::new(
+    let peers = Arc::new(PeerCommands::new(
         Arc::new(
             PeerRecords::open(
                 &root,
@@ -143,7 +150,8 @@ pub(super) async fn prepare(
             root.join(PEER_AUDIT_DIRECTORY),
             inputs.clock.clone(),
         )),
-    );
+    ));
+    let wall = inputs.clock.clone();
     let gateway = Arc::new(
         GatewayPairing::open(PairingRuntimeDependencies {
             enrollments: registry.clone(),
@@ -170,6 +178,8 @@ pub(super) async fn prepare(
             gateway,
             address: config.listen_address,
             registry,
+            peers: peers.clone(),
+            clock: wall,
         },
         commands,
         peers,
@@ -181,6 +191,8 @@ pub(super) struct BoundNative {
     gateway: Arc<GatewayPairing>,
     listener: NativeEnrollmentListener,
     address: SocketAddr,
+    peers: Arc<PeerCommands>,
+    clock: Arc<dyn Clock>,
 }
 
 impl BoundNative {
@@ -205,6 +217,8 @@ pub(super) async fn bind(
         gateway,
         address,
         registry,
+        peers,
+        clock: wall,
     } = prepared;
     let bind_failed = |source| RunError::Native(NativeFailure::Bind { address, source });
     let socket = TcpEnrollmentAccept::new(TcpListener::bind(address).await.map_err(bind_failed)?);
@@ -218,6 +232,8 @@ pub(super) async fn bind(
         gateway,
         listener: NativeEnrollmentListener::new(socket, connections),
         address: bound,
+        peers,
+        clock: wall,
     })
 }
 
@@ -252,6 +268,8 @@ pub(super) struct RunningNative {
     gateway: Arc<GatewayPairing>,
     stop: Option<oneshot::Sender<()>>,
     task: JoinHandle<IoResult<()>>,
+    /// Reads what each peer granted; stopped and joined with the listener.
+    poller: PeerPoller,
 }
 
 /// Start serving. An accept failure that ends the listener is published on
@@ -263,8 +281,13 @@ pub(super) fn start(
     failure: watch::Sender<Option<ErrorKind>>,
 ) -> RunningNative {
     let BoundNative {
-        gateway, listener, ..
+        gateway,
+        listener,
+        peers,
+        clock,
+        ..
     } = bound;
+    let poller = PeerPoller::start(peers, PollPolicy::default(), clock);
     let (stop, stopped) = oneshot::channel::<()>();
     let task = tokio::spawn(listener.run(
         OsEntropy::default,
@@ -280,6 +303,7 @@ pub(super) fn start(
         gateway,
         stop: Some(stop),
         task,
+        poller,
     }
 }
 
@@ -290,6 +314,7 @@ impl RunningNative {
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
         }
+        self.poller.signal_stop();
     }
 
     /// Wait for the listener to collect its peers and drain its connection
@@ -302,6 +327,9 @@ impl RunningNative {
     /// complete is reported and stays pending in the registry.
     pub(super) async fn join(mut self) -> Result<(), NativeShutdownFailure> {
         self.signal_stop();
+        // The poller's read and status workers end before anything else is
+        // waited on: they hold sockets to peers and the peer turn.
+        self.poller.join().await;
         let drained = match self.task.await {
             Ok(_) => Ok(()),
             Err(error) => Err(NativeShutdownFailure::ListenerFault(if error.is_panic() {

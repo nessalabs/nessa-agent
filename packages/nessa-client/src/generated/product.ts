@@ -2005,14 +2005,15 @@ export interface PeerForgetParams {
   /** The peer's key, as peer.list shows it. */
   peerKey: number[]
 }
-/** Where this gateway's enrollment with a peer stands, as this gateway last heard. pending: claimed, waiting on the peer's owner to approve, or not yet confirmed. active: the peer issued this gateway a credential. unreadable: the peer's record is there but this build cannot read it, or it was made with a key that is no longer this gateway's; only peer.forget helps. */
+/** Where this gateway's enrollment with a peer stands, as this gateway last heard. pending: claimed, waiting on the peer's owner to approve, or not yet confirmed. active: the peer issued this gateway a credential. revoked: the peer ended the enrollment (its owner revoked the credential, or denied, cancelled or let expire the claim), its retained cache is removed and it is no longer read; only peer.forget helps. unreadable: the peer's record is there but this build cannot read it, or it was made with a key that is no longer this gateway's; only peer.forget helps. */
 export const PeerPhase = {
   Pending: "pending",
   Active: "active",
+  Revoked: "revoked",
   Unreadable: "unreadable",
 } as const
 export type PeerPhase = (typeof PeerPhase)[keyof typeof PeerPhase]
-/** One peer gateway this gateway enrolled into. Result of peer.enroll and peer.forget. */
+/** One peer gateway this gateway enrolled into. Result of peer.enroll and peer.forget; peer.list adds sync for a pending or active peer. */
 export interface PeerGateway {
   /** The peer's key: what identifies the peer, whatever address it answers at. Its TLS key is pinned to exactly this. */
   peerKey: number[]
@@ -2023,6 +2024,24 @@ export interface PeerGateway {
   credentialId?: string
   /** The receiver the peer paired with that credential, once active. */
   receiverId?: string
+  sync?: PeerSync
+}
+/** How reading a peer last went, since this gateway started. waiting: not read yet, or still pending on the peer. synced: the last read brought the retained cache up to what the peer grants. syncing: the last read stopped at a bound and the next continues it. unreachable: the peer could not be reached; reads back off. failed: the peer answered but the read failed; reads back off. */
+export const PeerSyncState = {
+  Waiting: "waiting",
+  Synced: "synced",
+  Syncing: "syncing",
+  Unreachable: "unreachable",
+  Failed: "failed",
+} as const
+export type PeerSyncState = (typeof PeerSyncState)[keyof typeof PeerSyncState]
+/** What this gateway last saw reading a peer: its poller reads each pending or active peer's status and grants on a cadence. */
+export interface PeerSync {
+  state: PeerSyncState
+  /** When the last read of this peer finished, in Unix milliseconds. Absent until one has since this gateway started. */
+  lastSyncedAtMs?: number
+  /** Conversations the peer granted that this gateway's retained cache holds, as the last read counted. Absent until one has. */
+  conversations?: number
 }
 /** Result of peer.list. */
 export interface PeerListResult {

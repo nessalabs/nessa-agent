@@ -453,9 +453,17 @@ impl Session {
 }
 /// `source_preparing` is a complete, correlated answer: the gateway keeps its
 /// preparation progress for the same read, so the connection stays usable for
-/// the next operation. Every other failure leaves the stream's state unknown.
+/// the next operation. `wrong_owner` is one too: the gateway answered that
+/// this reader holds no grant on that one conversation, which says nothing
+/// about the next read on another. Every other failure leaves the stream's
+/// state unknown.
 fn keeps_connection(error: GatewayError) -> bool {
-    error == GatewayError::Record(RecordReadErrorCode::SourcePreparing)
+    matches!(
+        error,
+        GatewayError::Record(
+            RecordReadErrorCode::SourcePreparing | RecordReadErrorCode::WrongOwner
+        )
+    )
 }
 fn shape_decode<T: DeserializeOwned>(
     value: Value,

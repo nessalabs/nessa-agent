@@ -33,6 +33,11 @@ pub enum PeerState {
         /// The receiver the peer paired with it.
         receiver: String,
     },
+    /// The peer ended the enrollment; the record stays until forgotten.
+    Revoked {
+        /// Where the peer last answered.
+        address: SocketAddr,
+    },
     /// A record is there and this build cannot read it.
     Unreadable,
     /// Storage did not confirm whether the change landed.

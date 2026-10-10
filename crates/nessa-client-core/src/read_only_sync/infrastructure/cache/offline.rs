@@ -36,6 +36,44 @@ impl SavedReads for ReadOnlyCache {
 }
 
 impl ReadOnlyCache {
+    /// The one catalogue scope saved for `receiver`. A receiver reads one
+    /// gateway's catalogue, so a second is damage.
+    pub(crate) fn catalogue_scope_of(
+        &mut self,
+        receiver: &Id,
+    ) -> Result<Option<nessa_sync::replication::domain::Scope>, CacheError> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .map_err(rows::database_error)?;
+        let targets = {
+            let mut statement = tx
+                .prepare(
+                    "SELECT CASE WHEN octet_length(origin)<=?2 THEN origin END,
+                            CASE WHEN octet_length(stream)<=?2 THEN stream END
+                     FROM catalogue_progress WHERE receiver=?1 LIMIT 2",
+                )
+                .map_err(rows::database_error)?;
+            let selected = statement
+                .query_map(
+                    params![receiver.as_str(), rows::MAX_STORED_ID_BYTES as i64],
+                    |row| Ok((|| Ok((rows::identifier(row, 0)?, rows::identifier(row, 1)?)))()),
+                )
+                .map_err(rows::database_error)?;
+            selected
+                .map(|row| row.map_err(rows::database_error)?)
+                .collect::<Result<Vec<(Id, Id)>, CacheError>>()?
+        };
+        let scope = match targets.as_slice() {
+            [] => None,
+            [(origin, stream)] => catalogue_rows::progress_target(&tx, receiver, origin, stream)?
+                .map(|progress| progress.scope),
+            _ => return Err(CacheError::Corrupt),
+        };
+        tx.commit().map_err(rows::database_error)?;
+        Ok(scope)
+    }
+
     pub(crate) fn retained_catalogue_progress(
         &self,
         receiver: &Id,

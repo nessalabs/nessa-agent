@@ -37,7 +37,7 @@ use std::{
     ffi::{OsStr, OsString},
     io::{self, Read, Write},
     net::SocketAddr,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex, PoisonError},
 };
 use subtle::ConstantTimeEq;
@@ -64,6 +64,10 @@ pub enum PeerPhase {
         /// The receiver the peer paired with that credential.
         receiver: ResourceId,
     },
+    /// The peer ended this enrollment: its owner revoked the credential, or
+    /// denied, cancelled or let expire the claim, as an authenticated status
+    /// said. Nothing more is read from it; only forgetting it helps.
+    Revoked,
 }
 
 /// One readable peer record.
@@ -142,6 +146,8 @@ pub enum SlotSave {
 /// half-replaced by this process.
 pub struct PeerRecords {
     directory: PrivateDirectory,
+    /// The same directory by path, where each peer's retained cache opens.
+    path: PathBuf,
     keys: Arc<dyn GatewayKeyStore>,
     gateway: AudienceId,
     clock: Arc<dyn Clock>,
@@ -159,6 +165,7 @@ impl PeerRecords {
     ) -> Result<Self, PrivateStateError> {
         Ok(Self {
             directory: PrivateDirectory::open_beneath(root, directory).map_err(storage_error)?,
+            path: root.join(directory),
             keys,
             gateway,
             clock,
@@ -218,6 +225,10 @@ impl PeerRecords {
         let Some(entry) = self.entry(key, &self.own_spki()?)? else {
             return Ok(None);
         };
+        // The cache first: a record left by a failure here can be forgotten
+        // again, while a cache left without its record would be found by
+        // nothing.
+        self.remove_cache_locked(key)?;
         let name = file_name(key);
         let file = match self.directory.open_file(&name, OpenMode::ReadNonblocking) {
             Ok(file) => file,
@@ -232,6 +243,53 @@ impl PeerRecords {
             .sync()
             .map_err(|_| PrivateStateError::Uncertain)?;
         Ok(Some(entry))
+    }
+
+    /// Where the retained cache of what `key` granted this gateway lives:
+    /// beside its record, as `<peer key hex>.sqlite3`.
+    pub fn cache_path(&self, key: &DeviceKey) -> PathBuf {
+        self.path.join(cache_name(key))
+    }
+    /// Remove `key`'s retained cache, and a rollback journal SQLite left
+    /// beside it, if there. The caller holds the cache closed.
+    pub fn remove_cache(&self, key: &DeviceKey) -> Result<(), PrivateStateError> {
+        let _guard = self.lock();
+        self.remove_cache_locked(key)
+    }
+    /// Whether `key` has a retained cache.
+    pub fn has_cache(&self, key: &DeviceKey) -> Result<bool, PrivateStateError> {
+        let _guard = self.lock();
+        match self
+            .directory
+            .open_file(&cache_name(key), OpenMode::ReadNonblocking)
+        {
+            Ok(_) => Ok(true),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(storage_error(error)),
+        }
+    }
+    fn remove_cache_locked(&self, key: &DeviceKey) -> Result<(), PrivateStateError> {
+        let cache = cache_name(key);
+        let mut journal = cache.clone();
+        journal.push("-journal");
+        let mut removed = false;
+        for name in [journal, cache] {
+            let file = match self.directory.open_file(&name, OpenMode::ReadNonblocking) {
+                Ok(file) => file,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(storage_error(error)),
+            };
+            self.directory
+                .remove_file(&name, &file)
+                .map_err(storage_error)?;
+            removed = true;
+        }
+        if removed {
+            self.directory
+                .sync()
+                .map_err(|_| PrivateStateError::Uncertain)?;
+        }
+        Ok(())
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, ()> {
@@ -531,7 +589,7 @@ impl ClientPendingStore for PeerSlot {
         };
         match &record.phase {
             PeerPhase::Active { .. } if record.phase == active => Ok(()),
-            PeerPhase::Active { .. } => Err(PrivateStateError::Conflict),
+            PeerPhase::Active { .. } | PeerPhase::Revoked => Err(PrivateStateError::Conflict),
             PeerPhase::Pending => self.records.write(
                 &PeerRecord {
                     phase: active,
@@ -542,6 +600,9 @@ impl ClientPendingStore for PeerSlot {
             ),
         }
     }
+    /// The peer's authenticated end of this enrollment. A device's record
+    /// goes so it can enroll again; a peer's stays, marked revoked, so the
+    /// owner sees what happened and forgets it. Its credential goes with it.
     fn end_enrollment(&self, expected: PublicIntent) -> Result<(), PrivateStateError> {
         let Some(peer) = self.peer() else {
             return Ok(());
@@ -554,20 +615,17 @@ impl ClientPendingStore for PeerSlot {
         if record.intent != expected {
             return Err(PrivateStateError::Conflict);
         }
-        let name = file_name(&peer);
-        let file = self
-            .records
-            .directory
-            .open_file(&name, OpenMode::ReadNonblocking)
-            .map_err(storage_error)?;
-        self.records
-            .directory
-            .remove_file(&name, &file)
-            .map_err(storage_error)?;
-        self.records
-            .directory
-            .sync()
-            .map_err(|_| PrivateStateError::Uncertain)
+        if record.phase == PeerPhase::Revoked {
+            return Ok(());
+        }
+        self.records.write(
+            &PeerRecord {
+                phase: PeerPhase::Revoked,
+                ..record
+            },
+            &own,
+            true,
+        )
     }
 }
 
@@ -587,6 +645,12 @@ struct Stored {
     generation: u64,
     expiry_ms: u64,
     credential: Option<StoredCredential>,
+    /// The peer ended the enrollment; never with a credential.
+    #[serde(default, skip_serializing_if = "is_false")]
+    revoked: bool,
+}
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -607,8 +671,9 @@ fn encode(record: &PeerRecord, own: &[u8; 44]) -> Result<Vec<u8>, PrivateStateEr
         consent: STANDARD.encode(intent.consent().bytes()),
         generation: intent.generation(),
         expiry_ms: intent.expiry_ms(),
+        revoked: record.phase == PeerPhase::Revoked,
         credential: match &record.phase {
-            PeerPhase::Pending => None,
+            PeerPhase::Pending | PeerPhase::Revoked => None,
             PeerPhase::Active {
                 credential,
                 receiver,
@@ -649,9 +714,11 @@ fn decode(bytes: &[u8], key: &DeviceKey, own: &[u8; 44]) -> Result<PeerRecord, P
         ConsentClass::PeerRead,
     )
     .map_err(|_| PrivateStateError::Corrupt)?;
-    let phase = match stored.credential {
-        None => PeerPhase::Pending,
-        Some(credential) => PeerPhase::Active {
+    let phase = match (stored.revoked, stored.credential) {
+        (true, None) => PeerPhase::Revoked,
+        (true, Some(_)) => return Err(PrivateStateError::Corrupt),
+        (false, None) => PeerPhase::Pending,
+        (false, Some(credential)) => PeerPhase::Active {
             credential: CredentialId::new(credential.credential_id)
                 .map_err(|_| PrivateStateError::Corrupt)?,
             receiver: ResourceId::new(credential.receiver_id)
@@ -683,6 +750,15 @@ fn peer_key(pin: &[u8; 44]) -> DeviceKey {
     let mut key = [0; DeviceKey::LENGTH];
     key.copy_from_slice(&pin[SPKI_PREFIX_BYTES..]);
     DeviceKey::new(key)
+}
+
+/// `<64 lowercase hex>.sqlite3`: the peer's retained cache, which the
+/// listing passes over.
+fn cache_name(key: &DeviceKey) -> OsString {
+    let mut name = file_name(key).into_string().unwrap_or_default();
+    name.truncate(2 * DeviceKey::LENGTH);
+    name.push_str(".sqlite3");
+    OsString::from(name)
 }
 
 /// `<64 lowercase hex>.json`.

@@ -343,7 +343,7 @@ pub(super) async fn product_state(
         Some((prepared, commands, peers)) => {
             product = product
                 .with_pairing(Arc::new(commands))
-                .with_peers(Arc::new(peers));
+                .with_peers(peers);
             Some(prepared)
         }
         None => None,

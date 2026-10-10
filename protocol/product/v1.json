@@ -4830,8 +4830,8 @@
     },
     "PeerPhase": {
       "type": "string",
-      "enum": ["pending", "active", "unreadable"],
-      "description": "Where this gateway's enrollment with a peer stands, as this gateway last heard. pending: claimed, waiting on the peer's owner to approve, or not yet confirmed. active: the peer issued this gateway a credential. unreadable: the peer's record is there but this build cannot read it, or it was made with a key that is no longer this gateway's; only peer.forget helps."
+      "enum": ["pending", "active", "revoked", "unreadable"],
+      "description": "Where this gateway's enrollment with a peer stands, as this gateway last heard. pending: claimed, waiting on the peer's owner to approve, or not yet confirmed. active: the peer issued this gateway a credential. revoked: the peer ended the enrollment (its owner revoked the credential, or denied, cancelled or let expire the claim), its retained cache is removed and it is no longer read; only peer.forget helps. unreadable: the peer's record is there but this build cannot read it, or it was made with a key that is no longer this gateway's; only peer.forget helps."
     },
     "PeerGateway": {
       "type": "object",
@@ -4863,10 +4863,41 @@
           "minLength": 1,
           "maxLength": 256,
           "description": "The receiver the peer paired with that credential, once active."
+        },
+        "sync": {
+          "$ref": "#/$defs/PeerSync"
         }
       },
       "required": ["peerKey", "phase"],
-      "description": "One peer gateway this gateway enrolled into. Result of peer.enroll and peer.forget."
+      "description": "One peer gateway this gateway enrolled into. Result of peer.enroll and peer.forget; peer.list adds sync for a pending or active peer."
+    },
+    "PeerSyncState": {
+      "type": "string",
+      "enum": ["waiting", "synced", "syncing", "unreachable", "failed"],
+      "description": "How reading a peer last went, since this gateway started. waiting: not read yet, or still pending on the peer. synced: the last read brought the retained cache up to what the peer grants. syncing: the last read stopped at a bound and the next continues it. unreachable: the peer could not be reached; reads back off. failed: the peer answered but the read failed; reads back off."
+    },
+    "PeerSync": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "$ref": "#/$defs/PeerSyncState"
+        },
+        "lastSyncedAtMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "When the last read of this peer finished, in Unix milliseconds. Absent until one has since this gateway started."
+        },
+        "conversations": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Conversations the peer granted that this gateway's retained cache holds, as the last read counted. Absent until one has."
+        }
+      },
+      "required": ["state"],
+      "description": "What this gateway last saw reading a peer: its poller reads each pending or active peer's status and grants on a cadence."
     },
     "PeerListResult": {
       "type": "object",

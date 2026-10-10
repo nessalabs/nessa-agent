@@ -1955,6 +1955,7 @@ pub struct PeerForgetParams {
 pub enum PeerPhase {
     Pending,
     Active,
+    Revoked,
     Unreadable,
 }
 impl PeerPhase {
@@ -1962,6 +1963,7 @@ impl PeerPhase {
         match self {
             Self::Pending => "pending",
             Self::Active => "active",
+            Self::Revoked => "revoked",
             Self::Unreadable => "unreadable",
         }
     }
@@ -1977,6 +1979,37 @@ pub struct PeerGateway {
     pub credential_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub receiver_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync: Option<PeerSync>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PeerSyncState {
+    Waiting,
+    Synced,
+    Syncing,
+    Unreachable,
+    Failed,
+}
+impl PeerSyncState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Waiting => "waiting",
+            Self::Synced => "synced",
+            Self::Syncing => "syncing",
+            Self::Unreachable => "unreachable",
+            Self::Failed => "failed",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PeerSync {
+    pub state: PeerSyncState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_synced_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversations: Option<u64>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

@@ -29,6 +29,8 @@ use std::{
     sync::Arc,
     time::Duration,
 };
+use std::collections::HashMap;
+use std::sync::{Mutex, PoisonError};
 use tokio::sync::Semaphore;
 use uuid::Uuid;
 
@@ -83,14 +85,45 @@ impl PeerError {
     }
 }
 
+/// How reading a peer last went, as the poller saw it since this gateway
+/// started.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SyncState {
+    /// Not read since this gateway started.
+    Waiting,
+    /// The last read brought the cache up to what the peer grants.
+    Synced,
+    /// The last read stopped at a bound; the next one continues.
+    Syncing,
+    /// The peer could not be reached; reads back off.
+    Unreachable,
+    /// The peer answered, but the read failed; reads back off.
+    Failed,
+}
+
+/// A peer's sync, for `peer.list`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PeerSync {
+    /// How the last read went.
+    pub state: SyncState,
+    /// Wall time the last read finished, if one has since this gateway
+    /// started.
+    pub last_synced_ms: Option<u64>,
+    /// Conversations the peer's retained cache holds, as last counted.
+    pub conversations: Option<u64>,
+}
+
 /// The owner's peer commands over one gateway's records.
 pub struct PeerCommands {
-    records: Arc<PeerRecords>,
-    clock: Arc<dyn MonotonicClock>,
+    pub(super) records: Arc<PeerRecords>,
+    pub(super) clock: Arc<dyn MonotonicClock>,
     audit: Arc<dyn PeerAudit>,
-    /// One enroll or forget at a time: an enrollment runs a key-stretching
-    /// function, and a forget must not remove the record one is saving.
-    enrolling: Semaphore,
+    /// One enroll, forget or peer read at a time: an enrollment runs a
+    /// key-stretching function, a forget must not remove the record one is
+    /// saving, and a read writes the record and its cache.
+    pub(super) turn: Arc<Semaphore>,
+    /// What the poller last saw of each peer.
+    pub(super) syncs: Mutex<HashMap<DeviceKey, PeerSync>>,
 }
 impl PeerCommands {
     /// Commands over `records`, with `clock` for the enrollment's deadlines
@@ -104,8 +137,27 @@ impl PeerCommands {
             records,
             clock,
             audit,
-            enrolling: Semaphore::new(1),
+            turn: Arc::new(Semaphore::new(1)),
+            syncs: Mutex::new(HashMap::new()),
         }
+    }
+    pub(super) fn set_sync(&self, key: DeviceKey, sync: Option<PeerSync>) {
+        let mut syncs = self.syncs.lock().unwrap_or_else(PoisonError::into_inner);
+        match sync {
+            Some(sync) => {
+                syncs.insert(key, sync);
+            }
+            None => {
+                syncs.remove(&key);
+            }
+        }
+    }
+    pub(super) fn sync_of(&self, key: &DeviceKey) -> Option<PeerSync> {
+        self.syncs
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(key)
+            .copied()
     }
     /// Enroll this gateway, with its own key, into the peer invitation that
     /// `code` opens at `address`, for `initiator`. The record is saved,
@@ -120,7 +172,7 @@ impl PeerCommands {
         code: ManualCode,
         initiator: &PrincipalId,
     ) -> Result<PeerEntry, PeerError> {
-        let Ok(_permit) = self.enrolling.try_acquire() else {
+        let Ok(_permit) = self.turn.try_acquire() else {
             tracing::info!(address = %address, initiator = initiator.as_str(),
                 outcome = ?PeerError::Busy, "peer gateway enrollment refused");
             return Err(PeerError::Busy);
@@ -218,9 +270,25 @@ impl PeerCommands {
             .await?
             .ok_or(PeerError::Unavailable)
     }
-    /// Every kept peer.
-    pub async fn list(&self) -> Result<Vec<PeerEntry>, PeerError> {
-        self.blocking(|records| records.list()).await
+    /// Every kept peer, with what its reading last came to.
+    pub async fn list(&self) -> Result<Vec<(PeerEntry, Option<PeerSync>)>, PeerError> {
+        let entries = self.blocking(|records| records.list()).await?;
+        Ok(entries
+            .into_iter()
+            .map(|entry| {
+                let sync = match &entry {
+                    PeerEntry::Readable(record) if record.phase() != &PeerPhase::Revoked => {
+                        Some(self.sync_of(record.key()).unwrap_or(PeerSync {
+                            state: SyncState::Waiting,
+                            last_synced_ms: None,
+                            conversations: None,
+                        }))
+                    }
+                    _ => None,
+                };
+                (entry, sync)
+            })
+            .collect())
     }
     /// Remove the record for `key` and return what it was, for `initiator`.
     /// Local only: the peer's owner revokes the credential on the peer.
@@ -258,7 +326,7 @@ impl PeerCommands {
         initiator: &PrincipalId,
         operation: Uuid,
     ) -> Result<PeerEntry, PeerError> {
-        let _permit = self.enrolling.try_acquire().map_err(|_| PeerError::Busy)?;
+        let _permit = self.turn.try_acquire().map_err(|_| PeerError::Busy)?;
         // Nothing else writes peer records while the permit is held, so the
         // record read here is the one the removal finds.
         let found = self
@@ -280,7 +348,10 @@ impl PeerCommands {
             .await
             .unwrap_or(Err(PrivateStateError::Unavailable));
         let (after, outcome) = match removed {
-            Ok(Some(entry)) => (PeerState::Absent, Ok(entry)),
+            Ok(Some(entry)) => {
+                self.set_sync(key, None);
+                (PeerState::Absent, Ok(entry))
+            }
             Ok(None) => (PeerState::Absent, Err(PeerError::NotFound)),
             // Removed, then not confirmed durable.
             Err(PrivateStateError::Uncertain) => (PeerState::Unknown, Err(PeerError::Unavailable)),
@@ -329,6 +400,9 @@ fn state_of(entry: &PeerEntry) -> PeerState {
                 address: record.address(),
                 credential: credential.as_str().to_owned(),
                 receiver: receiver.as_str().to_owned(),
+            },
+            PeerPhase::Revoked => PeerState::Revoked {
+                address: record.address(),
             },
         },
     }

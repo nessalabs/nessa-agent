@@ -95,6 +95,9 @@ fn state(state: &PeerState) -> Value {
             receiver,
         } => json!({"phase": "active", "address": address.to_string(),
             "credentialId": credential, "receiverId": receiver}),
+        PeerState::Revoked { address } => {
+            json!({"phase": "revoked", "address": address.to_string()})
+        }
         PeerState::Unreadable => json!({"phase": "unreadable"}),
         PeerState::Unknown => json!({"phase": "unknown"}),
     }
