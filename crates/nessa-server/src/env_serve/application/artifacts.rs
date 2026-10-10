@@ -99,6 +99,13 @@ pub(crate) enum PublishAnswer {
         /// Why.
         reason: PublishRefusal,
     },
+    /// The gateway answered, and what it answered stands, but this side
+    /// could not record that answer: the publish is not reported as a
+    /// success while its evidence here is missing.
+    Unrecorded {
+        /// What the gateway answered.
+        collection: Collection,
+    },
 }
 
 /// One request on a lease's publish point, with where its answer goes.
@@ -304,17 +311,9 @@ impl Publisher {
             Ok(Err(reason)) => return refused(reason),
             Err(_) => return refused(PublishRefusal::StagingFailed),
         };
-        let entry = LedgerEntry::Published {
-            lease: lease.to_owned(),
-            artifact,
-            digest: staged.digest.clone(),
-            size: staged.size,
-        };
-        if let Err(error) = self.ledger.record(&entry) {
-            tracing::error!(lease, artifact, %error, "a publish could not be recorded; it is not sent");
-            self.outbox.discard(lease, artifact);
-            return refused(PublishRefusal::AuditUnavailable);
-        }
+        // Waiting before it is recorded: a lease that ended while the copy
+        // was staged records no publish, and one that ends from here on
+        // answers it, so every publish on record has its collection too.
         let (sender, answer) = oneshot::channel();
         {
             let mut in_flight = lock(&self.in_flight);
@@ -324,6 +323,18 @@ impl Publisher {
                 return refused(PublishRefusal::LeaseEnded);
             }
             in_flight.waiting.insert(artifact, sender);
+        }
+        let entry = LedgerEntry::Published {
+            lease: lease.to_owned(),
+            artifact,
+            digest: staged.digest.clone(),
+            size: staged.size,
+        };
+        if let Err(error) = self.ledger.record(&entry) {
+            tracing::error!(lease, artifact, %error, "a publish could not be recorded; it is not sent");
+            lock(&self.in_flight).waiting.remove(&artifact);
+            self.outbox.discard(lease, artifact);
+            return refused(PublishRefusal::AuditUnavailable);
         }
         let (digest, size) = (staged.digest.clone(), staged.size);
         let frame = FromEnvironment::Published {
@@ -345,10 +356,14 @@ impl Publisher {
             artifact,
             outcome,
         };
-        if let Err(error) = self.ledger.record(&entry) {
-            tracing::error!(lease, artifact, %error, "an artifact's collection could not be recorded");
-        }
+        let recorded = self.ledger.record(&entry);
         self.outbox.discard(lease, artifact);
+        if let Err(error) = recorded {
+            tracing::error!(lease, artifact, %error, "an artifact's collection could not be recorded");
+            return PublishAnswer::Unrecorded {
+                collection: outcome,
+            };
+        }
         match outcome {
             Collection::Held => PublishAnswer::Held { digest, size },
             Collection::AlreadyHeld => PublishAnswer::AlreadyHeld { digest, size },

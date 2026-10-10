@@ -1120,6 +1120,8 @@ struct RecordingOutbox {
     points: Mutex<HashMap<String, mpsc::Sender<crate::env_serve::application::PublishCall>>>,
     discarded: Mutex<Vec<(String, u32)>>,
     closed: Mutex<Vec<String>>,
+    /// When set, the next staging says it began, then waits to be let go.
+    stall: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
 }
 
 impl RecordingOutbox {
@@ -1153,6 +1155,11 @@ impl crate::env_serve::application::ArtifactOutbox for RecordingOutbox {
         _request: &crate::env_serve::application::PublishRequest,
     ) -> Result<nessa_protocol::lease::StagedArtifact, crate::env_serve::application::PublishRefusal>
     {
+        let stall = self.stall.lock().unwrap().take();
+        if let Some((began, go)) = stall {
+            began.send(()).unwrap();
+            let _ = go.recv();
+        }
         Ok(Self::staged(artifact))
     }
     fn discard(&self, lease: &str, artifact: u32) {
@@ -1322,6 +1329,72 @@ async fn a_file_the_gateway_refuses_is_answered_with_its_reason() {
         })
     );
     assert_eq!(*outbox.discarded.lock().unwrap(), [(LEASE.into(), 0)]);
+}
+
+/// A lease that ends while a file is still being staged records no publish
+/// and offers the gateway nothing: the harness is told the lease ended.
+#[tokio::test]
+async fn a_lease_ending_during_staging_records_no_publish() {
+    let (mut gateway, outbox) = Gateway::publishing();
+    gateway.started(LEASE).await;
+    let (began, staging) = std::sync::mpsc::channel();
+    let (go, held) = std::sync::mpsc::channel();
+    *outbox.stall.lock().unwrap() = Some((began, held));
+    let answered = publish(&outbox, LEASE).await;
+    tokio::task::spawn_blocking(move || staging.recv_timeout(Duration::from_secs(5)))
+        .await
+        .unwrap()
+        .expect("staging began");
+    gateway
+        .send(ToEnvironment::End {
+            lease: LEASE.into(),
+        })
+        .await;
+    assert!(matches!(
+        gateway.said().await,
+        FromEnvironment::Ended { .. }
+    ));
+    go.send(()).unwrap();
+    assert_eq!(
+        answer_of(answered).await,
+        crate::env_serve::application::PublishAnswer::NotPublished {
+            reason: crate::env_serve::application::PublishRefusal::LeaseEnded,
+        }
+    );
+    assert!(!gateway
+        .ledger
+        .entries()
+        .iter()
+        .any(|entry| matches!(entry, LedgerEntry::Published { .. })));
+    assert_eq!(*outbox.discarded.lock().unwrap(), [(LEASE.into(), 0)]);
+}
+
+/// A gateway's answer this side cannot record is not reported as a success:
+/// the harness is told what the gateway answered and that it went
+/// unrecorded.
+#[tokio::test]
+async fn a_collection_that_cannot_be_recorded_is_not_reported_as_held() {
+    let (mut gateway, outbox) = Gateway::publishing();
+    gateway.started(LEASE).await;
+    let answered = publish(&outbox, LEASE).await;
+    assert!(matches!(
+        gateway.said().await,
+        FromEnvironment::Published { artifact: 0, .. }
+    ));
+    gateway.ledger.failing.store(true, Ordering::SeqCst);
+    gateway
+        .send(ToEnvironment::Collected {
+            lease: LEASE.into(),
+            artifact: 0,
+            outcome: Collection::Held,
+        })
+        .await;
+    assert_eq!(
+        answer_of(answered).await,
+        crate::env_serve::application::PublishAnswer::Unrecorded {
+            collection: Collection::Held,
+        }
+    );
 }
 
 /// Past the in-flight bound a publish is refused busy on this side, and the
