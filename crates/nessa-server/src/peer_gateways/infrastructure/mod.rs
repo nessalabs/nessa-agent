@@ -8,7 +8,7 @@ mod connector;
 mod poller;
 mod records;
 pub use audit::DurablePeerAudit;
-pub use commands::{PeerCommands, PeerError, PeerSync, SyncState, CONNECT};
+pub use commands::{PeerCommands, PeerError, PeerSync, SyncState, AUDIT_DEADLINE, CONNECT};
 pub use connector::TcpPeerConnector;
 pub use poller::{PeerPoller, PollPolicy, POLL_BACKOFF_CAP, POLL_INTERVAL};
 pub use records::{

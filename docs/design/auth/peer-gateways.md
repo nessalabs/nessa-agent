@@ -238,7 +238,11 @@ sequenceDiagram
   `PeerConnector` port, which sets no timeout of its own; the command reads
   the injected monotonic clock every wake tick and drops the attempt once
   the connect deadline passes, and reads it again when a connection
-  completes, so one that completes past the deadline is closed unused. The handshake and enrollment deadlines read
+  completes, so one that completes past the deadline is closed unused.
+  Each audit record is bounded the same way, by `AUDIT_DEADLINE`: one not
+  acknowledged in time counts as not kept, though the audit may still keep
+  it later. Each enrollment's entropy comes from an injected source too, so
+  a failing generator is a typed `peer_unavailable`, audited. The handshake and enrollment deadlines read
   the same clock, so a substituted clock drives the whole enrollment.
 - **Enrolling and forgetting take turns.** One enrollment or forget runs at a
   time, and another is `peer_busy` while it does, so a forget cannot remove
@@ -283,6 +287,8 @@ sequenceDiagram
 | P12 | An enroll or forget that succeeds or is refused; its intent, or its outcome, not kept | Intent and outcome kept, naming the operation, peer, address, state before and after, answer, cause and owner; no intent: nothing dialed or removed, `peer_audit_unavailable`; no outcome: the record made or removed stands, `peer_audit_unavailable` | `enrolling_and_forgetting_are_audited_and_answer_only_when_kept`, `the_durable_peer_audit_reports_a_record_it_could_not_keep` |
 | P13 | A connect that never answers; one that completes past the deadline | Held while the injected deadline clock stands still; once it passes the connect deadline, `peer_unreachable`, audited, the attempt dropped and nothing saved; a late connection is closed unused, `peer_unreachable` | `a_connect_that_never_answers_ends_when_the_injected_clock_passes_its_deadline`, `a_connect_completed_after_the_deadline_is_refused_and_closed` |
 | P14 | Every answer of `peer.enroll` (ok, busy, unreachable, refused code, wrong invitation, own gateway, exists, capacity) and of `peer.forget` (ok, busy, not found) | Exactly one intent and one outcome per call under one operation id, naming the owner, the target, and the peer once known; the table must list every answer | `every_peer_command_answer_keeps_one_intent_and_one_outcome` |
+| P15 | The injected entropy for an enrollment fails | `peer_unavailable`, nothing saved, its intent and outcome kept | `an_enrollment_whose_entropy_fails_is_unavailable_and_audited` |
+| P16 | The audit never acknowledges an intent, or an outcome | Held while the injected clock stands; once it passes `AUDIT_DEADLINE`, `peer_audit_unavailable`: no intent, nothing dialed; no outcome, the effect stands | `an_audit_that_never_answers_ends_the_call_at_its_deadline` |
 
 ## What this part does not do
 
