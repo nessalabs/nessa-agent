@@ -1507,6 +1507,47 @@ async fn a_lease_end_answers_every_waiting_publisher() {
         .is_err());
 }
 
+/// A publish the gateway never answered before its connection was lost is
+/// answered unanswered, not as ended: the gateway may have kept it.
+#[tokio::test]
+async fn a_publish_cut_off_by_a_lost_connection_is_answered_unanswered() {
+    let (mut gateway, outbox) = Gateway::publishing();
+    gateway.started(LEASE).await;
+    let answered = publish(&outbox, LEASE).await;
+    assert!(matches!(
+        gateway.said().await,
+        FromEnvironment::Published { artifact: 0, .. }
+    ));
+    let Gateway {
+        writer,
+        frames,
+        served,
+        ledger,
+        ..
+    } = gateway;
+    drop(writer);
+    drop(frames);
+    tokio::time::timeout(Duration::from_secs(5), served)
+        .await
+        .expect("serving ends with its stream")
+        .unwrap();
+    assert_eq!(
+        answer_of(answered).await,
+        crate::env_serve::application::PublishAnswer::Unanswered
+    );
+    let entries = ledger.entries();
+    assert!(entries.contains(&LedgerEntry::Unanswered {
+        lease: LEASE.into(),
+        artifact: 0,
+    }));
+    assert!(
+        !entries
+            .iter()
+            .any(|entry| matches!(entry, LedgerEntry::Collected { .. })),
+        "{entries:?}"
+    );
+}
+
 /// A harness is told its lease's publish point; a host that could not open
 /// one tells it of none.
 #[tokio::test]

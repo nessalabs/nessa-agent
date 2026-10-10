@@ -106,6 +106,10 @@ pub(crate) enum PublishAnswer {
         /// What the gateway answered.
         collection: Collection,
     },
+    /// The connection to the gateway was lost before it answered: the
+    /// conversation may hold the file or may not, and this side cannot
+    /// tell. Publishing it again under a later lease answers which.
+    Unanswered,
 }
 
 /// One request on a lease's publish point, with where its answer goes.
@@ -154,7 +158,8 @@ struct InFlight {
     next: u32,
     /// Numbers held by a publish not yet answered, staging included.
     reserved: usize,
-    /// Each published artifact's wait for the gateway's answer.
+    /// Each published artifact's wait for the gateway's answer. One let go
+    /// unanswered was lost with the connection.
     waiting: HashMap<u32, oneshot::Sender<Collection>>,
     /// The lease ended: nothing more is published under it.
     ended: bool,
@@ -224,9 +229,12 @@ impl LeaseArtifacts {
         }
     }
 
-    /// The lease ended: nothing more is published, every artifact still in
-    /// flight is answered as ended with it, and what it staged is let go.
-    pub(crate) fn end(self) {
+    /// The lease ended: nothing more is published and what it staged is let
+    /// go. An artifact still in flight is answered as ended with it when the
+    /// gateway ended it, since the gateway answers each before its end; when
+    /// the lease was `lost` with the connection, it is left unanswered, as
+    /// the gateway may have kept it.
+    pub(crate) fn end(self, lost: bool) {
         self.dispatcher.abort();
         let waiting: Vec<_> = {
             let mut in_flight = lock(&self.in_flight);
@@ -234,9 +242,11 @@ impl LeaseArtifacts {
             in_flight.waiting.drain().collect()
         };
         for (_, waiting) in waiting {
-            let _ = waiting.send(Collection::Refused {
-                reason: CollectionRefusal::LeaseEnded,
-            });
+            if !lost {
+                let _ = waiting.send(Collection::Refused {
+                    reason: CollectionRefusal::LeaseEnded,
+                });
+            }
         }
         self.outbox.close(&self.lease);
     }
@@ -342,14 +352,22 @@ impl Publisher {
             artifact,
             file: staged,
         };
-        let outcome = if self.frames.send(frame).await.is_err() {
-            Collection::Refused {
-                reason: CollectionRefusal::LeaseEnded,
+        // No frame sent, or no answer before the wait was let go: the
+        // connection is gone, and with it what the gateway made of the file.
+        let outcome = match self.frames.send(frame).await {
+            Ok(()) => answer.await.ok(),
+            Err(_) => None,
+        };
+        let Some(outcome) = outcome else {
+            let entry = LedgerEntry::Unanswered {
+                lease: lease.to_owned(),
+                artifact,
+            };
+            if let Err(error) = self.ledger.record(&entry) {
+                tracing::error!(lease, artifact, %error, "an unanswered publish could not be recorded");
             }
-        } else {
-            answer.await.unwrap_or(Collection::Refused {
-                reason: CollectionRefusal::LeaseEnded,
-            })
+            self.outbox.discard(lease, artifact);
+            return PublishAnswer::Unanswered;
         };
         let entry = LedgerEntry::Collected {
             lease: lease.to_owned(),

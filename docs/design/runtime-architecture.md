@@ -922,8 +922,12 @@ sequenceDiagram
   conversation never names a file it does not hold; a lease that began
   ending, or a conversation with no room left, refuses the record, and the
   hold is taken back at once. The host is answered before the lease's End
-  is sent, so it never answers as ended a file the gateway kept. Its hold
-  is the conversation's, released with its other files.
+  is sent, so it never answers as ended a file the gateway kept. When the
+  connection is lost instead, a publish the gateway had not answered is
+  answered `unanswered` and recorded so on the host: the conversation's
+  record is then the only word on it, and publishing again answers which.
+  Its hold is the conversation's, released with its other files; the
+  record stays as history.
 
 ## Previews: a port, not a file
 

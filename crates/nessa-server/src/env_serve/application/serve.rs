@@ -130,6 +130,9 @@ pub(crate) enum LedgerEntry {
         artifact: u32,
         outcome: Collection,
     },
+    /// The connection to the gateway was lost before it answered a
+    /// published file: what the gateway made of it is not known here.
+    Unanswered { lease: String, artifact: u32 },
     /// A frame naming nothing this connection holds was dropped.
     Dropped {
         lease: Option<String>,
@@ -837,7 +840,7 @@ impl Served {
         // Nothing more is published under it, and nothing it staged is read
         // again: the gateway ended it, or is gone.
         if let Some(artifacts) = held.artifacts.take() {
-            artifacts.end();
+            artifacts.end(lost);
         }
         let (done, ended) = watch::channel(None);
         // Ends already recorded are the audit's to answer from.

@@ -14,7 +14,7 @@
 //! record past [`ArtifactRecord::MAX_PER_CONVERSATION`] is refused, never
 //! made room for. An artifact recorded under a lease this build cannot read is
 //! kept as written, as that lease's own records are.
-use super::{CurrentLeaseState, SessionSnapshot, StorageError};
+use super::{CurrentLeaseState, LeaseRecord, SessionSnapshot, StorageError};
 use crate::application::agent_execution::permissions::ActionContext;
 use crate::domain::agent_execution::{
     executions::ExecutionId,
@@ -228,8 +228,11 @@ impl fmt::Display for ArtifactRefusal {
 }
 
 /// Whether every artifact `snapshot` saves stays within the conversation's
-/// bound and names a turn it accepted. Which lease each was published under is
-/// checked when it is folded; a saved snapshot keeps only the latest lease.
+/// bound, names a turn it accepted, and, when it names the snapshot's latest
+/// lease, was published under it as [`ArtifactRecord::admit`] allows: that
+/// lease was issued, to the record's actor. A saved snapshot keeps only the
+/// latest lease, so an artifact under an earlier one is kept as written; a
+/// record log replays each beside its lease and checks it in full.
 pub(super) fn validate_saved(snapshot: &SessionSnapshot) -> Result<(), StorageError> {
     if snapshot.artifacts.len() > ArtifactRecord::MAX_PER_CONVERSATION {
         return Err(StorageError::Corrupt(
@@ -251,6 +254,29 @@ pub(super) fn validate_saved(snapshot: &SessionSnapshot) -> Result<(), StorageEr
         return Err(StorageError::Corrupt(format!(
             "artifact record: {}",
             ArtifactRefusal::UnknownTurn
+        )));
+    }
+    let Some(latest) = snapshot.lease.as_ref() else {
+        return Ok(());
+    };
+    // Who the latest lease was issued to, or `None` when it was refused and
+    // so published nothing. One this build cannot read is not checked.
+    let (lease, issuer) = match latest.state() {
+        CurrentLeaseState::Unreadable { .. } => return Ok(()),
+        CurrentLeaseState::Held(lease) => (lease.id(), latest.issued_by()),
+        CurrentLeaseState::Refused { .. } => match latest.records().first() {
+            Some(LeaseRecord::Refused { lease, .. }) => (lease, None),
+            _ => return Ok(()),
+        },
+    };
+    let unproven = snapshot
+        .artifacts
+        .iter()
+        .any(|artifact| &artifact.lease == lease && issuer != Some(&artifact.actor));
+    if unproven {
+        return Err(StorageError::Corrupt(format!(
+            "artifact record: {}",
+            ArtifactRefusal::NotThisLease
         )));
     }
     Ok(())

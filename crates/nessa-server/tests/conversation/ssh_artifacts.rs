@@ -676,15 +676,9 @@ async fn a_lease_lost_mid_read_fails_as_ended_and_leaves_no_partial_hold() {
             .expect("an outcome in time"),
         Some(Err(CollectionRefusal::LeaseEnded))
     );
-    // The host ended the lease with its connection, and said so.
-    assert!(matches!(
-        publisher.await.unwrap(),
-        PublishAnswer::NotPublished {
-            reason: PublishRefusal::LeaseEnded
-        } | PublishAnswer::Refused {
-            reason: CollectionRefusal::LeaseEnded
-        }
-    ));
+    // The host lost the lease with its connection, before any answer: it
+    // says it does not know, rather than that nothing was kept.
+    assert_eq!(publisher.await.unwrap(), PublishAnswer::Unanswered);
     assert!(fixture.store.held().is_empty());
     assert_eq!(fixture.store.pending(), 0);
     assert_eq!(staged(&host), 0);

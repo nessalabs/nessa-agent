@@ -220,6 +220,33 @@ fn a_saved_artifact_must_name_a_turn_the_conversation_accepted() {
 }
 
 #[test]
+fn a_saved_artifact_under_the_latest_lease_must_be_its_issuer_s() {
+    let mut snapshot = under(fold(&[issued("lease-1")]));
+    snapshot.artifacts = vec![artifact("lease-1", None), artifact("earlier", None)];
+    assert_eq!(validate_saved(&snapshot), Ok(()));
+    let mut other_actor = artifact("lease-1", None);
+    other_actor.actor = actor("other");
+    snapshot.artifacts.push(other_actor);
+    assert!(matches!(
+        validate_saved(&snapshot),
+        Err(StorageError::Corrupt(message)) if message.contains("not the latest live one")
+    ));
+
+    let refused = LeaseRecord::Refused {
+        lease: LeaseId::new("lease-1").unwrap(),
+        revision: LeaseRevision::FIRST,
+        terms: terms(),
+        refusal: LeaseRefusal::SandboxUnavailable,
+        actor: actor("send"),
+    };
+    let mut snapshot = under(fold(&[refused]));
+    snapshot.artifacts = vec![artifact("earlier", None)];
+    assert_eq!(validate_saved(&snapshot), Ok(()));
+    snapshot.artifacts.push(artifact("lease-1", None));
+    assert!(validate_saved(&snapshot).is_err());
+}
+
+#[test]
 fn every_refusal_explains_itself() {
     let messages: std::collections::HashSet<String> = [
         ArtifactRefusal::Full,
