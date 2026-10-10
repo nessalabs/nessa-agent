@@ -2694,14 +2694,12 @@ async fn device_pass(
     reader: Reader,
     completed: u64,
 ) -> Vec<(ConversationId, u64)> {
-    let head = store
-        .head(
-            &org(),
-            &alice(),
-            &crate::conversation::application::Reader::Owner,
-        )
-        .await
-        .unwrap();
+    // A pass reaches the head this reader is shown, as a device's does; a
+    // reader whose head is not past what it completed has nothing to page.
+    let head = store.head(&org(), &alice(), &reader).await.unwrap();
+    if head.revision <= completed {
+        return Vec::new();
+    }
     let mut request = catalogue_request(
         alice(),
         &head.incarnation,
