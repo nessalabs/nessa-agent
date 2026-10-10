@@ -8,6 +8,13 @@ pub struct ReceiverBinding {
     pub receiver_id: String,
     pub credential_id: CredentialId,
     pub organization_id: OrganizationId,
+    /// The owner whose conversations this receiver reads: the grantor, who
+    /// paired it. It is never the reader. For a device the two are the same
+    /// principal; for a peer gateway (`docs/design/auth/peer-gateways.md`)
+    /// the reader is the session's `gateway` principal, and admission refuses
+    /// a session whose principal is not this owner until every peer read path
+    /// is behind slice G's grant filter. Whatever records a read attributes it
+    /// to the session's principal, never to this field.
     pub owner_id: PrincipalId,
     pub access_epoch: u64,
     pub active: bool,

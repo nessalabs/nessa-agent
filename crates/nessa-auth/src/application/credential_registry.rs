@@ -121,6 +121,9 @@ pub enum RegistryInvariant {
     GatewayIdentity,
     OwnerMembership,
     DuplicateIdentity,
+    /// A principal's id and kind disagree: the gateway id prefix is held by a
+    /// principal of another kind, or a gateway lacks it.
+    PrincipalKind,
     MembershipBinding,
     CredentialMetadata,
     CredentialBinding,
@@ -137,6 +140,7 @@ impl RegistryInvariant {
             Self::GatewayIdentity => "gateway_identity",
             Self::OwnerMembership => "owner_membership",
             Self::DuplicateIdentity => "duplicate_identity",
+            Self::PrincipalKind => "principal_kind",
             Self::MembershipBinding => "membership_binding",
             Self::CredentialMetadata => "credential_metadata",
             Self::CredentialBinding => "credential_binding",

@@ -26,6 +26,7 @@ use nessa_auth::application::dto::{
 };
 use nessa_auth::application::ports::Clock;
 use nessa_auth::application::session::{AuthenticateSession, AuthenticatedSession};
+use nessa_auth::domain::pairing::ConsentClass;
 use nessa_auth::domain::{AudienceId, OrganizationId, PrincipalId, Resource, ResourceId};
 use nessa_client_core::pairing::NativeEnrollmentClient;
 use nessa_protocol::agents::AgentId;
@@ -594,7 +595,10 @@ async fn pair_device(
     native: SocketAddr,
     directory: &str,
 ) -> (String, u64, String) {
-    let created = commands.create(session).await.unwrap();
+    let created = commands
+        .create(session, ConsentClass::DeviceRead)
+        .await
+        .unwrap();
     let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
     nessa_local_storage::create_directory_beneath(root, Path::new(directory)).unwrap();
     let device = Arc::new(FilePairingState::open(root, Path::new(directory)).unwrap());

@@ -4,3 +4,6 @@ mod invitation;
 
 #[path = "domain/pairing/disclosure.rs"]
 mod disclosure;
+
+#[path = "domain/pairing/peer.rs"]
+mod peer;

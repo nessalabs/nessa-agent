@@ -179,7 +179,7 @@
       "grant": "credential.manage"
     },
     "pairing.create": {
-      "params": null,
+      "params": "PairingCreateParams",
       "grant": "credential.manage"
     },
     "pairing.pending": {

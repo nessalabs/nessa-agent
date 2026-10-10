@@ -134,14 +134,14 @@ Four rules every slice meets:
 
 Environments lane, in order:
 
-- [ ] **A. `Environment` port and local lease record** ([#698](https://github.com/nessalabs/nessa-agent/issues/698)).
+- [x] **A. `Environment` port and local lease record** ([#698](https://github.com/nessalabs/nessa-agent/issues/698); merged in [#714](https://github.com/nessalabs/nessa-agent/pull/714)).
   Today's in-process SDK composition behind one typed port; a lease record
   for every run; per-binding sandbox-profile declaration. *Gate:* golden
   evidence identical before and after; the port has one adapter; the fold
   renders the lease; every row of the lease ordering table has a
   regression, with L1, L5, L6, L8, L9 and L13 exercised in process.
-- [ ] **B. `nessa env serve` over SSH, binary placed by hand**
-  ([#699](https://github.com/nessalabs/nessa-agent/issues/699)). The environment role alone, speaking lease frames on stdio;
+- [x] **B. `nessa env serve` over SSH, binary placed by hand**
+  ([#699](https://github.com/nessalabs/nessa-agent/issues/699); merged in [#721](https://github.com/nessalabs/nessa-agent/pull/721)). The environment role alone, speaking lease frames on stdio;
   the gateway's SSH adapter driving the system OpenSSH client with one
   multiplexed session; "run on buildbox" in the composer; a preview as a
   forward on that session; idle sleep and low-disk pause as the
@@ -158,9 +158,9 @@ Environments lane, in order:
   publishes files by digest; the transcript shows them; download verifies.
   *Gate:* a DMG and a screenshot built remotely arrive, verify and are
   audited with the lease as cause; the control channel carries no bytes.
-- [ ] **E. Record subscriptions; desktop off polling** ([#702](https://github.com/nessalabs/nessa-agent/issues/702);
+- [x] **E. Record subscriptions; desktop off polling** ([#702](https://github.com/nessalabs/nessa-agent/issues/702);
   bounded reads #296 and the one fold #277 are done and are its
-  foundation). *Gate:*
+  foundation; merged in [#715](https://github.com/nessalabs/nessa-agent/pull/715)). *Gate:*
   lagging-subscriber close, replay/live changeover, slow-client isolation,
   measured latency; polling deleted in the same change.
 - [ ] **F. First-use install over SSH** ([#703](https://github.com/nessalabs/nessa-agent/issues/703)), reusing the
@@ -173,7 +173,10 @@ Environments lane, in order:
 - [ ] **H. Peer gateway as a `gateway` principal kind** ([#705](https://github.com/nessalabs/nessa-agent/issues/705)).
   Device pairing reused; a peer reads what it is granted. *Gate:* same
   enrollment and listener; one new principal kind; a peer cannot hold both
-  authorities over one conversation.
+  authorities over one conversation. The granting side (enrollment under a
+  peer class, the `gateway` kind and what it can hold, revocation) is its
+  first part ([peer gateways](../../design/auth/peer-gateways.md)); the peer
+  side and grant-scoped reads follow, the latter now that G has merged.
 - [ ] **I. Environment grants to peers; outbound environment connection;
   local discovery** ([#706](https://github.com/nessalabs/nessa-agent/issues/706)). *Gate:* the peer admits and may
   narrow under its policy; narrowed grants recorded; lease ends on revoke;

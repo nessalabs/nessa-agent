@@ -3,6 +3,7 @@
 //! `docs/design/auth/device-pairing.md` ("Owner routes and mounting").
 use super::product_client::ProductClient;
 use super::support::{pending, Fixture, Time, WAIT};
+use nessa_auth::domain::pairing::ConsentClass;
 use nessa_auth::{
     adapters::{
         cedar::CedarPolicyEvaluator,
@@ -112,6 +113,43 @@ async fn owner_route_create_orders_code_after_commit() {
     assert_eq!(
         status["grant"],
         json!({"action": "conversation.read", "resource": {"organizationId": "org", "id": "gateway"}})
+    );
+}
+
+/// Row H1 (`docs/design/auth/peer-gateways.md`): the owner chooses who an
+/// invitation enrolls. `enrollee: "gateway"` creates a peer gateway's
+/// invitation on the same method and listener; its status names the peer class
+/// and the same read grant. Absent or `"device"` is a device's.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn owner_route_creates_a_peer_gateway_invitation() {
+    let fixture = Fixture::new().await;
+    let address = serve(&fixture, true).await;
+    let token = fixture.owner_token.clone();
+    let (peer, device) = blocking(|| {
+        let mut owner = ProductClient::connect(address, &token);
+        let peer = owner.ok("pairing.create", json!({"enrollee": "gateway"}));
+        let id = invitation(&peer["status"]);
+        owner.ok("pairing.cancel", json!({"invitationId": id}));
+        let device = owner.ok("pairing.create", json!({"enrollee": "device"}));
+        (peer, device)
+    });
+    assert_eq!(peer["status"]["class"], "peer-gateway-conversation-read");
+    assert_eq!(device["status"]["class"], "gateway-conversation-read");
+    for created in [&peer, &device] {
+        assert_eq!(
+            created["status"]["grant"],
+            json!({"action": "conversation.read", "resource": {"organizationId": "org", "id": "gateway"}})
+        );
+    }
+    let id: [u8; 16] = serde_json::from_value(invitation(&peer["status"])).unwrap();
+    assert_eq!(
+        fixture
+            .registry
+            .read_pairing(InvitationId::new(id))
+            .unwrap()
+            .intent()
+            .class(),
+        ConsentClass::PeerRead
     );
 }
 
@@ -406,6 +444,11 @@ async fn owner_route_refuses_malformed_params_before_the_store() {
         let mut owner = ProductClient::connect(address, &token);
         for (method, params) in [
             ("pairing.create", json!({"code": "ABCD-2345"})),
+            ("pairing.create", json!({"enrollee": "admin"})),
+            (
+                "pairing.create",
+                json!({"enrollee": "gateway", "grant": "conversation.write"}),
+            ),
             ("pairing.pending", json!({"all": true})),
             ("pairing.status", json!({"invitationId": vec![1; 15]})),
             ("pairing.status", json!({"invitationId": vec![1; 17]})),

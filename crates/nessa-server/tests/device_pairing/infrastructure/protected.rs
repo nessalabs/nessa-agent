@@ -4,6 +4,7 @@
 //! TLS and private storage; the device side is a raw probe that frames product
 //! messages itself, so each refusal is observed on the wire.
 use super::support::{pending, private_root, Fixture, WAIT};
+use nessa_auth::domain::pairing::{peer_principal, ConsentClass, DeviceKey};
 use nessa_auth::{
     adapters::{
         cedar::CedarPolicyEvaluator,
@@ -15,13 +16,18 @@ use nessa_auth::{
         credential_admin::RevokeCredentialRequest,
         pairing::{ClientPendingStore, DeviceConnectionProof, PairingStore, PrivateKeyMaterial},
         ports::{
-            AccessError, CredentialEvidence, CredentialVerifier, PortFuture, VerifiedCredential,
+            AccessError, AccessReader, AccessSnapshot, CredentialEvidence, CredentialVerifier,
+            PortFuture, VerifiedCredential,
         },
     },
-    domain::{AudienceId, OrganizationId, ResourceId},
+    domain::{AudienceId, Credential, CredentialId, OrganizationId, ResourceId},
 };
 use nessa_client_core::pairing::NativeEnrollmentClient;
 use nessa_protocol::agents::AgentId;
+use nessa_protocol::conversation::domain::{
+    ConversationApprovalMode, ConversationId, ConversationModelId,
+};
+use nessa_protocol::conversation::read_scope::ReceiverReadScope;
 use nessa_protocol::pairing::{
     encode_frame,
     wire::{
@@ -32,6 +38,12 @@ use nessa_protocol::pairing::{
 use nessa_server::{
     agents::application::{AgentProbe, AgentProbeEvidence},
     app::dependencies::RuntimeDependencies,
+    conversation::application::{
+        ConversationCaller, ConversationError, ConversationRepository, ReadGrantChange,
+        ReadGrantTransition, ReadGrants, RecordReadError, RecordReadFuture, RecordReadLease,
+        RecordReadOperation, RecordReadResponse, RecordReadSource, ShareConversation,
+    },
+    conversation::domain::Conversation,
     conversation::infrastructure::{LocalConversationStore, NessaCatalogueReadSource},
     device_pairing::infrastructure::ProtectedSessions,
     product::{DeviceCredentials, NativeSessions, ProductDependencies, ProductRouteState},
@@ -43,6 +55,7 @@ use std::{
     net::{SocketAddr, TcpStream},
     sync::Arc,
 };
+use uuid::Uuid;
 
 struct NoAgents;
 impl AgentProbe for NoAgents {
@@ -109,8 +122,32 @@ fn sessions_with(
     fixture: &Fixture,
     devices: Arc<dyn DeviceCredentials>,
 ) -> Arc<dyn ProtectedSessions> {
+    sessions_on(fixture, devices, conversation_store(fixture))
+}
+/// The fixture's conversation store, which a native session reads.
+fn conversation_store(fixture: &Fixture) -> Arc<LocalConversationStore> {
     let root = private_root(fixture.directory.path(), "conversation-metadata");
-    let metadata = Arc::new(LocalConversationStore::open(&root.join("metadata.sqlite3")).unwrap());
+    Arc::new(LocalConversationStore::open(&root.join("metadata.sqlite3")).unwrap())
+}
+/// A record source whose every read answers `history_pruned`: a read that
+/// reaches it was admitted, and one refused by admission never does.
+struct PrunedRecords;
+impl RecordReadSource for PrunedRecords {
+    fn read<'a>(
+        &'a self,
+        _: ReceiverReadScope,
+        _: RecordReadOperation,
+        _: RecordReadLease,
+    ) -> RecordReadFuture<'a, RecordReadResponse> {
+        Box::pin(async { Err(RecordReadError::HistoryPruned) })
+    }
+}
+/// Native sessions served from `metadata`, a store the test also writes.
+fn sessions_on(
+    fixture: &Fixture,
+    devices: Arc<dyn DeviceCredentials>,
+    metadata: Arc<LocalConversationStore>,
+) -> Arc<dyn ProtectedSessions> {
     let state = ProductRouteState::new(
         ResourceId::new("gateway").unwrap(),
         OrganizationId::new("org").unwrap(),
@@ -132,7 +169,8 @@ fn sessions_with(
     .with_catalogue_source(Arc::new(NessaCatalogueReadSource::new(
         metadata,
         Id::new("gateway").unwrap(),
-    )));
+    )))
+    .with_record_source(Arc::new(PrunedRecords));
     Arc::new(NativeSessions::new(state, devices))
 }
 
@@ -143,15 +181,31 @@ struct Paired {
     credential: String,
     receiver: String,
     epoch: u64,
+    /// The key the gateway pinned when it approved the claim.
+    key: DeviceKey,
 }
 async fn pair(fixture: &Fixture, address: SocketAddr, name: &str) -> Paired {
+    pair_as(fixture, address, name, ConsentClass::DeviceRead).await
+}
+/// One party of `class` paired to Active through the same listener and
+/// enrollment: a device, or a peer gateway.
+async fn pair_as(
+    fixture: &Fixture,
+    address: SocketAddr,
+    name: &str,
+    class: ConsentClass,
+) -> Paired {
     let created = fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), class, OsEntropy)
         .await
         .unwrap();
     let (_, store) = pending(fixture.directory.path(), name);
-    let client = NativeEnrollmentClient::new(store.clone(), RuntimeDependencies::default().clock);
+    let client = NativeEnrollmentClient::enrolling(
+        class,
+        store.clone(),
+        RuntimeDependencies::default().clock,
+    );
     let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
     tokio::time::timeout(
         WAIT,
@@ -199,6 +253,7 @@ async fn pair(fixture: &Fixture, address: SocketAddr, name: &str) -> Paired {
         store,
         receiver: receiver.as_str().to_owned(),
         epoch: access_epoch,
+        key,
     }
 }
 
@@ -426,6 +481,267 @@ async fn protected_session_refuses_after_revocation() {
     fixture.gateway.shutdown().await;
 }
 
+/// Rows H1, H3 (`docs/design/auth/peer-gateways.md`): a peer gateway pairs with
+/// the same enrollment, on the same listener, and its credential names a
+/// principal of kind `gateway` for the key it pinned, not the owner. Until it
+/// is granted a conversation (slice G), it reads nothing of the owner's: its
+/// catalogue read is refused as the owner's, and the socket's owner methods
+/// are forbidden to it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_peer_gateway_pairs_as_its_own_principal_and_reads_nothing_ungranted() {
+    let fixture = Fixture::new().await;
+    let (address, stop, listener, _) = fixture.listener_serving(Some(sessions(&fixture))).await;
+    let peer = pair_as(&fixture, address, "peer", ConsentClass::PeerRead).await;
+    let credential = peer.credential.clone();
+    let (receiver, epoch) = (peer.receiver.clone(), peer.epoch);
+    let saved = peer.store.clone();
+    let principal = peer_principal(&peer.key).unwrap();
+    let (ready, head, list) = blocking(move || {
+        let mut probe = Probe::open(address, &saved);
+        let nonce = probe.nonce.clone();
+        let ready = probe.authenticate(&credential, &nonce).unwrap();
+        let head = probe.catalogue_head(&receiver, epoch).unwrap();
+        let list = probe.call("conversation.list", json!({})).unwrap();
+        (ready, head, list)
+    })
+    .await;
+    assert_eq!(ready["ok"], true, "{ready}");
+    assert_eq!(ready["payload"]["principalId"], principal.as_str());
+    assert_ne!(ready["payload"]["principalId"], "owner");
+    assert_eq!(head["ok"], false, "{head}");
+    assert_eq!(code(&head), "wrong_owner");
+    assert_eq!(code(&list), "forbidden");
+    stop.send(()).unwrap();
+    listener.await.unwrap().unwrap();
+    fixture.gateway.shutdown().await;
+}
+
+/// Answers every read with `self.1`'s snapshot, whatever was asked.
+struct MisreadAccess<A>(Arc<A>, CredentialId);
+impl<A: AccessReader> AccessReader for MisreadAccess<A> {
+    fn read<'a>(&'a self, _: &'a CredentialId) -> PortFuture<'a, AccessSnapshot> {
+        self.0.read(&self.1)
+    }
+}
+
+/// Answers about the credential asked for, but names the actor of another
+/// (`.1`) on it, leaving the asked credential's own membership in place.
+struct ContradictoryAccess<A>(Arc<A>, CredentialId);
+impl<A: AccessReader> AccessReader for ContradictoryAccess<A> {
+    fn read<'a>(&'a self, credential: &'a CredentialId) -> PortFuture<'a, AccessSnapshot> {
+        Box::pin(async move {
+            let mut asked = self.0.read(credential).await?;
+            let other = self.0.read(&self.1).await?;
+            let named = &asked.credential;
+            asked.credential = Credential::new(
+                named.id().clone(),
+                other.credential.principal_id().clone(),
+                named.organization_id().clone(),
+                named.audience_id().clone(),
+                named.issued_at(),
+                named.expires_at(),
+                named.grants().to_vec(),
+            )
+            .unwrap();
+            Ok(asked)
+        })
+    }
+}
+
+/// Row H8 (`docs/design/auth/peer-gateways.md`): the owner cannot share a
+/// conversation with a paired peer yet. `conversation.share` refuses its
+/// credential `share_target_not_paired` and writes no grant, while the same
+/// share to a device applies. A grant on the peer's receiver that is already
+/// in the store, written here directly, still discloses nothing on the native
+/// channel: catalogue and record heads and both watches are refused
+/// `wrong_owner`, because passive-read admission refuses a session whose
+/// principal is not the binding's owner, and a peer's session is its own
+/// `gateway` principal. The device passes that admission.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_peer_cannot_be_shared_with_and_reads_nothing_even_if_granted() {
+    let fixture = Fixture::new().await;
+    let metadata = conversation_store(&fixture);
+    let sessions = sessions_on(
+        &fixture,
+        Arc::new(Devices(fixture.registry.clone())),
+        metadata.clone(),
+    );
+    let (address, stop, listener, _) = fixture.listener_serving(Some(sessions)).await;
+    let peer = pair_as(&fixture, address, "peer", ConsentClass::PeerRead).await;
+    let device = pair(&fixture, address, "device").await;
+    let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    metadata
+        .create(
+            Conversation::new(
+                id.clone(),
+                fixture.session.context().organization_id().clone(),
+                fixture.session.context().principal_id().clone(),
+                "panel".into(),
+                "create".into(),
+                1,
+                AgentId::Claude,
+                ConversationModelId::new("model").unwrap(),
+                ConversationApprovalMode::Ask,
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let shares = ShareConversation {
+        conversations: metadata.as_ref(),
+        receivers: fixture.receivers.as_ref(),
+        grants: metadata.as_ref(),
+        access: fixture.registry.as_ref(),
+    };
+    let caller = |request: &str| ConversationCaller {
+        organization_id: fixture.session.context().organization_id().clone(),
+        principal_id: fixture.session.context().principal_id().clone(),
+        surface_id: "panel".into(),
+        action_id: request.into(),
+    };
+    let share = |paired: &Paired, request: &str| {
+        shares.share(
+            caller(request),
+            id.clone(),
+            CredentialId::new(paired.credential.clone()).unwrap(),
+            110,
+        )
+    };
+    assert!(matches!(
+        share(&peer, "share-peer").await,
+        Err(ConversationError::ShareTargetNotPaired)
+    ));
+    assert!(!metadata.is_granted(&id, &peer.receiver).await.unwrap());
+    // An access reader that answers about another credential (here, always
+    // the device's) never lets the peer pass as that device.
+    let misread = MisreadAccess(
+        fixture.registry.clone(),
+        CredentialId::new(device.credential.clone()).unwrap(),
+    );
+    // Nor one that answers about the peer's credential but names the
+    // device's actor on it, against the peer's own membership.
+    let contradictory = ContradictoryAccess(
+        fixture.registry.clone(),
+        CredentialId::new(device.credential.clone()).unwrap(),
+    );
+    let readers: [(&dyn AccessReader, &str); 2] = [
+        (&misread, "share-peer-misread"),
+        (&contradictory, "share-peer-contradictory"),
+    ];
+    for (access, request) in readers {
+        let shares = ShareConversation {
+            conversations: metadata.as_ref(),
+            receivers: fixture.receivers.as_ref(),
+            grants: metadata.as_ref(),
+            access,
+        };
+        assert!(matches!(
+            shares
+                .share(
+                    caller(request),
+                    id.clone(),
+                    CredentialId::new(peer.credential.clone()).unwrap(),
+                    110,
+                )
+                .await,
+            Err(ConversationError::ShareTargetNotPaired)
+        ));
+        assert!(!metadata.is_granted(&id, &peer.receiver).await.unwrap());
+    }
+    assert!(share(&device, "share-device").await.unwrap());
+    // A grant on the peer's receiver, as one would stand had it been written
+    // before this refusal: the read admission alone must still refuse.
+    assert!(metadata
+        .change(ReadGrantChange {
+            transition: ReadGrantTransition::Grant,
+            conversation_id: id.clone(),
+            receiver_id: Some(peer.receiver.clone()),
+            credential_id: CredentialId::new(peer.credential.clone()).unwrap(),
+            initiator: caller("grant-peer"),
+            at_ms: 110,
+        })
+        .await
+        .unwrap());
+    assert!(metadata.is_granted(&id, &peer.receiver).await.unwrap());
+    let reads = |paired: &Paired| {
+        let credential = paired.credential.clone();
+        let (receiver, epoch) = (paired.receiver.clone(), paired.epoch.to_string());
+        let saved = paired.store.clone();
+        let conversation = id.to_string();
+        blocking(move || {
+            let mut probe = Probe::open(address, &saved);
+            let nonce = probe.nonce.clone();
+            let ready = probe.authenticate(&credential, &nonce).unwrap();
+            assert_eq!(ready["ok"], true, "{ready}");
+            let by_receiver = json!({"receiverId": receiver, "accessEpoch": epoch});
+            let mut in_conversation = by_receiver.clone();
+            in_conversation["conversationId"] = json!(conversation);
+            [
+                ("conversation.catalogueHead", by_receiver.clone()),
+                ("conversation.watchCatalogue", by_receiver),
+                ("conversation.recordsHead", in_conversation.clone()),
+                ("conversation.watchRecords", in_conversation),
+            ]
+            .map(|(method, params)| (method, probe.call(method, params).unwrap()))
+        })
+    };
+    for (method, answer) in reads(&peer).await {
+        assert_eq!(code(&answer), "wrong_owner", "peer {method}: {answer}");
+    }
+    // The device passes the admission the peer fails: its catalogue head
+    // answers, and its record head reaches the source, which answers
+    // `history_pruned`. This fixture has no change-watch storage, so an
+    // admitted watch answers `temporarily_unavailable`.
+    for (method, answer) in reads(&device).await {
+        let expected = match method {
+            "conversation.catalogueHead" => {
+                assert_eq!(answer["ok"], true, "device {method}: {answer}");
+                continue;
+            }
+            "conversation.recordsHead" => "history_pruned",
+            _ => "temporarily_unavailable",
+        };
+        assert_eq!(code(&answer), expected, "device {method}: {answer}");
+    }
+    stop.send(()).unwrap();
+    listener.await.unwrap().unwrap();
+    fixture.gateway.shutdown().await;
+}
+
+/// Row H5: revoking a peer's credential refuses its next connection at
+/// `openProduct`, the same as a device's.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_revoked_peer_gateway_is_refused_its_next_connection() {
+    let fixture = Fixture::new().await;
+    let (address, stop, listener, _) = fixture.listener_serving(Some(sessions(&fixture))).await;
+    let peer = pair_as(&fixture, address, "peer", ConsentClass::PeerRead).await;
+    let registry = fixture.registry.clone();
+    let credential = peer.credential.clone();
+    let saved = peer.store.clone();
+    let after = blocking(move || {
+        // A paired peer is admitted: `openProduct` answers a challenge.
+        drop(Probe::open(address, &saved));
+        registry
+            .revoke_sync(RevokeCredentialRequest {
+                request_id: "revoke-peer".into(),
+                issuer_principal_id: "owner".into(),
+                credential_id: credential,
+                revoked_at: 111,
+            })
+            .unwrap();
+        let (key, pin) = device_key(&saved);
+        open_product(address, NativeIdentity::restore(key).unwrap(), pin)
+    })
+    .await;
+    assert!(
+        matches!(after, Some(NativePairingReply::Refused)),
+        "{after:?}"
+    );
+    stop.send(()).unwrap();
+    listener.await.unwrap().unwrap();
+    fixture.gateway.shutdown().await;
+}
+
 /// Row PR7: a read naming another receiver or a stale epoch is refused by
 /// admission with its own code.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -541,7 +857,7 @@ async fn open_product_is_only_a_first_envelope_and_needs_sessions() {
     // the one under test.
     fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
         .await
         .unwrap();
     let replies = blocking(move || {

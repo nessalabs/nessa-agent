@@ -14,6 +14,8 @@ pub enum PrincipalKindDto {
     Human,
     Integration,
     Agent,
+    /// A paired peer gateway. Only device pairing creates one.
+    Gateway,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

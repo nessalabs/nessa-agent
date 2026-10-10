@@ -7,6 +7,7 @@ use crate::app::dependencies::RuntimeDependencies;
 use crate::composition::local_auth::SystemClock;
 use crate::device_pairing::infrastructure::{GatewayIdentityError, PairingRuntimeError};
 use crate::product::ProductDependencies;
+use nessa_auth::domain::pairing::ConsentClass;
 use nessa_auth::{
     adapters::{
         cedar::CedarPolicyEvaluator,
@@ -152,7 +153,10 @@ async fn native_startup_history_without_key_refuses_before_bind() {
             .unwrap();
         // A first start publishes the key; an invitation is enrollment history.
         assert!(namespace.key_file().exists());
-        let created = commands.create(&session).await.unwrap();
+        let created = commands
+            .create(&session, ConsentClass::DeviceRead)
+            .await
+            .unwrap();
         drop((prepared, commands));
         drop(registry);
         if whole_directory {
@@ -206,7 +210,10 @@ async fn native_bind_failure_preserves_key_and_history() {
     )
     .await
     .unwrap();
-    let created = commands.create(&session).await.unwrap();
+    let created = commands
+        .create(&session, ConsentClass::DeviceRead)
+        .await
+        .unwrap();
     let key = std::fs::read(namespace.key_file()).unwrap();
     let Err(RunError::Native(NativeFailure::Bind {
         address: refused,
@@ -282,7 +289,7 @@ async fn native_shutdown_joins_a_held_peer() {
     assert!(matches!(peer.read(&mut byte), Ok(0) | Err(_)));
     // The runtime's create admission is closed by the join.
     assert!(matches!(
-        commands.create(&session).await,
+        commands.create(&session, ConsentClass::DeviceRead).await,
         Err(PairingRuntimeError::ShuttingDown)
     ));
     assert!(

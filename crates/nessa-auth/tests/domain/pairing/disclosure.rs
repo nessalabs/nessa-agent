@@ -1,7 +1,7 @@
 use nessa_auth::domain::{
     pairing::{
-        AttemptId, ConsentIntent, ConsentIntentId, DisclosedConsent, InvitationId, PairingError,
-        PublicIntent,
+        AttemptId, ConsentClass, ConsentIntent, ConsentIntentId, DisclosedConsent, InvitationId,
+        PairingError, PublicIntent,
     },
     Action, AudienceId, Grant, MembershipId, OrganizationId, PrincipalId, Resource, ResourceId,
 };
@@ -18,6 +18,7 @@ fn public() -> PublicIntent {
         ConsentIntentId::new([3; 16]),
         1,
         600_000,
+        ConsentClass::DeviceRead,
     )
     .unwrap()
 }
@@ -29,6 +30,7 @@ fn canonical() -> ConsentIntent {
         PrincipalId::new("owner").unwrap(),
         MembershipId::new("membership").unwrap(),
         resource("org-1", "gateway-1"),
+        ConsentClass::DeviceRead,
     )
     .unwrap()
 }
@@ -43,6 +45,7 @@ fn consent_generation_floor_and_read_class_are_owned_at_construction() {
             intent.owner().clone(),
             intent.membership().clone(),
             intent.resource().clone(),
+            ConsentClass::DeviceRead,
         ),
         Err(PairingError::Invalid)
     );
@@ -53,6 +56,7 @@ fn consent_generation_floor_and_read_class_are_owned_at_construction() {
         intent.owner().clone(),
         intent.membership().clone(),
         intent.resource().clone(),
+        ConsentClass::DeviceRead,
     )
     .unwrap();
     assert_eq!(accepted.generation(), 1);
@@ -76,6 +80,7 @@ fn public_intent_refuses_each_zero_bound_and_accepts_positive_neighbor() {
                 intent.consent(),
                 generation,
                 expiry,
+                ConsentClass::DeviceRead,
             ),
             Err(PairingError::Invalid)
         );
@@ -86,6 +91,7 @@ fn public_intent_refuses_each_zero_bound_and_accepts_positive_neighbor() {
         intent.consent(),
         1,
         1,
+        ConsentClass::DeviceRead,
     )
     .unwrap();
     assert_eq!(accepted.generation(), 1);
@@ -106,6 +112,7 @@ fn disclosure_correlates_whole_canonical_intent() {
                 ConsentIntentId::new([9; 16]),
                 1,
                 public().expiry_ms(),
+                ConsentClass::DeviceRead,
             )
             .unwrap(),
             intent.audience().clone(),
@@ -119,6 +126,7 @@ fn disclosure_correlates_whole_canonical_intent() {
                 public().consent(),
                 2,
                 public().expiry_ms(),
+                ConsentClass::DeviceRead,
             )
             .unwrap(),
             intent.audience().clone(),
@@ -164,7 +172,8 @@ fn disclosure_correlates_whole_canonical_intent() {
                 public().attempt(),
                 public().consent(),
                 2,
-                public().expiry_ms()
+                public().expiry_ms(),
+                ConsentClass::DeviceRead,
             )
             .unwrap(),
             &intent
@@ -200,6 +209,7 @@ fn disclosure_retains_received_scope_on_retry() {
             public().consent(),
             1,
             public().expiry_ms(),
+            ConsentClass::DeviceRead,
         )
         .unwrap(),
         PublicIntent::new(
@@ -208,6 +218,7 @@ fn disclosure_retains_received_scope_on_retry() {
             public().consent(),
             1,
             public().expiry_ms(),
+            ConsentClass::DeviceRead,
         )
         .unwrap(),
         PublicIntent::new(
@@ -216,6 +227,7 @@ fn disclosure_retains_received_scope_on_retry() {
             ConsentIntentId::new([9; 16]),
             1,
             public().expiry_ms(),
+            ConsentClass::DeviceRead,
         )
         .unwrap(),
         PublicIntent::new(
@@ -224,6 +236,7 @@ fn disclosure_retains_received_scope_on_retry() {
             public().consent(),
             2,
             public().expiry_ms(),
+            ConsentClass::DeviceRead,
         )
         .unwrap(),
         PublicIntent::new(
@@ -232,6 +245,7 @@ fn disclosure_retains_received_scope_on_retry() {
             public().consent(),
             1,
             public().expiry_ms() + 1,
+            ConsentClass::DeviceRead,
         )
         .unwrap(),
     ] {

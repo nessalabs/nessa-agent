@@ -11,6 +11,7 @@ impl TryFrom<PrincipalInputDto> for Principal {
                 PrincipalKindDto::Human => PrincipalKind::Human,
                 PrincipalKindDto::Agent => PrincipalKind::Agent,
                 PrincipalKindDto::Integration => PrincipalKind::Integration,
+                PrincipalKindDto::Gateway => PrincipalKind::Gateway,
             },
         ))
     }

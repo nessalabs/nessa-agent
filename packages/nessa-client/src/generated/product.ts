@@ -53,7 +53,7 @@ export interface ProductSessionReady {
   version: 1
   /** Identifier of the connected gateway. */
   gatewayId: string
-  /** Authenticated human, integration, or agent identity. */
+  /** Authenticated human, integration, agent, or paired peer gateway identity. */
   principalId: string
   /** Organization in which this session operates. */
   organizationId: string
@@ -70,7 +70,7 @@ export interface ProductSessionReady {
   /** Registered product methods; permission is checked for every command. */
   methods: string[]
 }
-/** Identity that acts in the product: a human, integration, or agent. A principal needs an active organization membership and an appropriate credential to access the gateway. */
+/** Identity that acts in the product: a human, integration, agent, or paired peer gateway. A principal needs an active organization membership and an appropriate credential to access the gateway. */
 export interface ProductPrincipal {
   /** Stable identifier for this identity. */
   id: string
@@ -202,11 +202,12 @@ export const sessionClosePolicy = {
   server_shutdown: { webSocketCode: 1000, retryable: false },
   transport_interrupted: { webSocketCode: 1006, retryable: true },
 } as const
-/** Supported categories of authenticated actors: human users, integrations, and agents. */
+/** Supported categories of authenticated actors: human users, integrations, agents, and paired peer gateways. Only device pairing creates a gateway principal; credential.issue refuses one. */
 export const PrincipalKind = {
   Human: "human",
   Integration: "integration",
   Agent: "agent",
+  Gateway: "gateway",
 } as const
 export type PrincipalKind = (typeof PrincipalKind)[keyof typeof PrincipalKind]
 /** Organization roles understood by product authorization policy. */
@@ -1853,6 +1854,14 @@ export const CatalogueReadErrorCode = {
 } as const
 export type CatalogueReadErrorCode =
   (typeof CatalogueReadErrorCode)[keyof typeof CatalogueReadErrorCode]
+/** Who an invitation enrolls. device: one of the owner's own devices; its credential acts as the owner. gateway: a peer gateway; its credential names a principal of kind gateway, identified by the key it pinned at pairing, and can hold only the conversation.read grant. Both use the same enrollment and listener; the choice is bound into the enrollment and cannot be changed by the enrolling side. */
+export const PairingEnrollee = { Device: "device", Gateway: "gateway" } as const
+export type PairingEnrollee = (typeof PairingEnrollee)[keyof typeof PairingEnrollee]
+/** Wire input for pairing.create. The owner, organization and gateway come from the session, never from the request. */
+export interface PairingCreateParams {
+  /** Who the invitation enrolls; absent means device. */
+  enrollee?: PairingEnrollee
+}
 /** Wire input for pairing.status, pairing.deny and pairing.cancel: the invitation the owner names. The owner, organization and gateway come from the session, never from the request. */
 export interface PairingInvitationParams {
   /** Random identity of the invitation, as its bytes. */
@@ -1925,7 +1934,7 @@ export interface PairingOwnerStatus {
   consentId: number[]
   /** Consent generation the device enrolls under. */
   generation: number
-  /** Fixed class of access the consent is for. */
+  /** Fixed class of access the consent is for, which also says who it enrolls: gateway-conversation-read for one of the owner's devices, peer-gateway-conversation-read for a peer gateway. */
   class: string
   /** The exact action and resource the consent covers. */
   grant: ProductGrant

@@ -5,9 +5,9 @@ use crate::application::dto::{
 };
 use crate::domain::{
     pairing::{
-        AttemptFailure, AttemptId, ConsentIntent, ConsentIntentId, DeviceKey, Event, InvitationId,
-        PairingError, PairingEvent, PairingInitiator, PairingPhase, PairingPolicy, PairingRecord,
-        PairingTransition, TerminalCause,
+        AttemptFailure, AttemptId, ConsentClass, ConsentIntent, ConsentIntentId, DeviceKey, Event,
+        InvitationId, PairingError, PairingEvent, PairingInitiator, PairingPhase, PairingPolicy,
+        PairingRecord, PairingTransition, TerminalCause,
     },
     AudienceId, CredentialId, CredentialTransition, MembershipId, OrganizationId, PrincipalId,
     Resource, ResourceId,
@@ -30,7 +30,37 @@ pub(crate) struct StoredPairing {
     created_at_ms: u64,
     lifetime_ms: u64,
     attempts: u8,
+    /// Who the invitation enrolls. Absent means a device: every enrollment
+    /// before peer gateways was one, and a device enrollment is still written
+    /// without it.
+    #[serde(default, skip_serializing_if = "StoredClass::is_device")]
+    class: StoredClass,
     history: Vec<StoredStep>,
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum StoredClass {
+    #[default]
+    Device,
+    Peer,
+}
+impl StoredClass {
+    fn is_device(&self) -> bool {
+        *self == Self::Device
+    }
+    fn from_domain(class: ConsentClass) -> Self {
+        match class {
+            ConsentClass::DeviceRead => Self::Device,
+            ConsentClass::PeerRead => Self::Peer,
+        }
+    }
+    fn domain(self) -> ConsentClass {
+        match self {
+            Self::Device => ConsentClass::DeviceRead,
+            Self::Peer => ConsentClass::PeerRead,
+        }
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -140,8 +170,13 @@ impl StoredPairing {
             created_at_ms: record.created_at_ms(),
             lifetime_ms: record.policy().lifetime_ms(),
             attempts: record.policy().attempts(),
+            class: StoredClass::from_domain(intent.class()),
             history: Vec::new(),
         })
+    }
+    /// Who this enrollment enrolls, as stored.
+    pub(crate) fn class(&self) -> ConsentClass {
+        self.class.domain()
     }
     pub(crate) fn was_activated(&self) -> bool {
         self.history
@@ -182,7 +217,9 @@ impl StoredPairing {
                     .credential()
                     .is_some_and(|id| id.as_str() == metadata.id)
                 && (live || ended)
-                && metadata.principal_id == intent.owner().as_str()
+                && record
+                    .credential_principal()
+                    .is_some_and(|principal| principal.as_str() == metadata.principal_id)
                 && credential.organization_id() == intent.resource().organization_id()
                 && metadata.audience_id == intent.audience().as_str()
                 && metadata.expires_at.is_none()
@@ -231,6 +268,7 @@ impl StoredPairing {
                 OrganizationId::new(self.organization.clone()).map_err(invalid)?,
                 ResourceId::new(self.resource.clone()).map_err(invalid)?,
             ),
+            self.class.domain(),
         )?;
         let mut record = PairingRecord::new(
             self.id(),

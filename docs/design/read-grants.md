@@ -31,7 +31,11 @@ The owner manages grants with three socket methods, each admitted by Cedar for
 - `conversation.share {requestId, conversationId, credentialId}` grants Read.
   The conversation must be the caller's and not deleted, and the credential an
   active paired device of the same owner (`share_target_not_paired`
-  otherwise).
+  otherwise). A paired peer gateway is refused the same way and nothing is
+  written: its reads are not yet narrowed by grant, so a grant stored now
+  would start disclosing when they are, without a fresh decision by the
+  owner. The change that narrows a peer's reads lifts this refusal
+  ([peer gateways](auth/peer-gateways.md), row H8).
 - `conversation.unshare {requestId, conversationId, credentialId}` revokes. It
   needs only ownership, so access can be taken away from a deleted
   conversation or an unpaired device.

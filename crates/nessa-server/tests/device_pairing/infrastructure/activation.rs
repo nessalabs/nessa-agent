@@ -4,6 +4,7 @@
 //! Real registry, Cedar, receiver authority, TLS and private storage; the
 //! receiver port is substituted only to lose an answer, block, or fail.
 use super::support::{pending, private_root, sockets, Fixture, Time, WAIT};
+use nessa_auth::domain::pairing::ConsentClass;
 use nessa_auth::{
     adapters::cedar::CedarPolicyEvaluator,
     adapters::pairing::{
@@ -193,7 +194,7 @@ impl Claimed {
     async fn new(fixture: &Fixture, name: &str) -> Self {
         let created = fixture
             .gateway
-            .create(fixture.session.clone(), OsEntropy)
+            .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
             .await
             .unwrap();
         let (address, stop, listener, _) = fixture.listener().await;
@@ -717,7 +718,7 @@ async fn device_keeps_the_issued_credential_and_clears_pending() {
     let fixture = Fixture::new().await;
     let created = fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
         .await
         .unwrap();
     let (address, stop, listener, _) = fixture.listener().await;
@@ -1000,7 +1001,7 @@ async fn terminal_status_ends_the_device_record_and_allows_a_new_enrollment() {
     );
     let created = fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
         .await
         .unwrap();
     let code = ManualCode::parse(created.code().expose_bytes()).unwrap();

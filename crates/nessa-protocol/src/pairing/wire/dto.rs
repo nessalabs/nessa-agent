@@ -1,8 +1,8 @@
 use super::{NativePairingStatus, NativeWireError};
 use nessa_auth::domain::{
     pairing::{
-        AttemptFailure, AttemptId, AttemptOutcome, ConsentIntentId, DisclosedConsent, InvitationId,
-        PairingError, PublicIntent, TerminalCause,
+        AttemptFailure, AttemptId, AttemptOutcome, ConsentClass, ConsentIntentId, DisclosedConsent,
+        InvitationId, PairingError, PublicIntent, TerminalCause,
     },
     Action, AudienceId, CredentialId, Grant, OrganizationId, Resource, ResourceId,
 };
@@ -27,22 +27,20 @@ impl WirePublic<'_> {
             consent: *public.consent().bytes(),
             generation: public.generation(),
             expiry_ms: public.expiry_ms(),
-            class: Cow::Borrowed(public.class()),
+            class: Cow::Borrowed(public.class().as_str()),
         }
     }
     pub(super) fn into_domain(self) -> Result<PublicIntent, NativeWireError> {
-        let public = PublicIntent::new(
+        let class = ConsentClass::parse(&self.class).ok_or(NativeWireError::Invalid)?;
+        PublicIntent::new(
             InvitationId::new(self.invitation),
             AttemptId::new(self.attempt),
             ConsentIntentId::new(self.consent),
             self.generation,
             self.expiry_ms,
+            class,
         )
-        .map_err(NativeWireError::Correlation)?;
-        if self.class != public.class() {
-            return Err(NativeWireError::Invalid);
-        }
-        Ok(public)
+        .map_err(NativeWireError::Correlation)
     }
 }
 #[derive(Serialize, Deserialize)]

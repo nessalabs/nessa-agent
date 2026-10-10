@@ -188,6 +188,7 @@ pub(super) fn client_failure(error: NativeClientError) -> Value {
         NativeClientError::Wire(_) => "wire",
         NativeClientError::Phase => "phase",
         NativeClientError::Refused => "refused",
+        NativeClientError::OtherEnrollee => "otherEnrollee",
         NativeClientError::Io(_) => "io",
         NativeClientError::Entropy => "entropy",
         NativeClientError::WorkerFault(_) => "workerFault",

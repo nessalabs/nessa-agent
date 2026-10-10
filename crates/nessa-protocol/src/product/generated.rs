@@ -119,6 +119,7 @@ pub enum PrincipalKind {
     Human,
     Integration,
     Agent,
+    Gateway,
 }
 impl PrincipalKind {
     pub fn as_str(self) -> &'static str {
@@ -126,6 +127,7 @@ impl PrincipalKind {
             Self::Human => "human",
             Self::Integration => "integration",
             Self::Agent => "agent",
+            Self::Gateway => "gateway",
         }
     }
 }
@@ -1745,6 +1747,26 @@ pub struct ConversationCatalogueResolveResult {
     pub descriptor: CatalogueDescriptor,
     pub entry: CatalogueDescriptor,
     pub payload: String,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PairingEnrollee {
+    Device,
+    Gateway,
+}
+impl PairingEnrollee {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Device => "device",
+            Self::Gateway => "gateway",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PairingCreateParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enrollee: Option<PairingEnrollee>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

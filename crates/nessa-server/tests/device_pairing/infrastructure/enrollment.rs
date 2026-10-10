@@ -1,4 +1,5 @@
 use super::support::{pending, sockets, Fault, FaultyStore, Fixture, Time, NOW_MS, WAIT};
+use nessa_auth::domain::pairing::ConsentClass;
 use nessa_auth::{
     adapters::pairing::{
         ClientAttempt, FilePairingState, GatewayTrust, ManualCode, NativeIdentity, NativeTransport,
@@ -56,7 +57,7 @@ async fn native_create_claim_approve_and_reopen_status() {
     let fixture = Fixture::new().await;
     let created = fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
         .await
         .unwrap();
     assert_eq!(created.record().phase(), PairingPhase::Available);
@@ -193,7 +194,7 @@ async fn native_owner_policy_denial_preserves_session_and_registry() {
     let before = fixture.registry.pending_pairings().unwrap();
     let result = fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
         .await;
     assert!(matches!(
         result,
@@ -215,7 +216,7 @@ async fn native_owner_policy_denial_preserves_session_and_registry() {
     assert_eq!(
         allowed
             .gateway
-            .create(allowed.session.clone(), OsEntropy)
+            .create(allowed.session.clone(), ConsentClass::DeviceRead, OsEntropy)
             .await
             .unwrap()
             .record()
@@ -261,7 +262,7 @@ async fn native_pending_save_failure_sends_no_claim_and_retry_recovers() {
     let fixture = Fixture::new().await;
     let created = fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
         .await
         .unwrap();
     let (address, stop, listener, connections) = fixture.listener().await;
@@ -337,7 +338,7 @@ async fn native_claim_reply_loss_preserves_pinned_status() {
     let fixture = Fixture::new().await;
     let created = fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
         .await
         .unwrap();
     let (address, stop, listener, connections) = fixture.listener().await;
@@ -461,7 +462,7 @@ async fn native_restart_ends_available_setup_and_preserves_key() {
     let fixture = Fixture::new().await;
     let created = fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
         .await
         .unwrap();
     let pin = fixture.gateway.identity().public_spki();
@@ -484,7 +485,7 @@ async fn native_restart_ends_available_setup_and_preserves_key() {
     );
     let neighbor = fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
         .await
         .unwrap();
     assert_eq!(neighbor.record().phase(), PairingPhase::Available);
@@ -496,7 +497,7 @@ async fn native_status_refuses_another_device_and_accepts_original() {
     let fixture = Fixture::new().await;
     let created = fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
         .await
         .unwrap();
     let (address, stop, listener, connections) = fixture.listener().await;
@@ -599,7 +600,7 @@ async fn native_finish_refuses_another_channel_without_claim() {
     let fixture = Fixture::new().await;
     let created = fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
         .await
         .unwrap();
     let identity = NativeIdentity::generate(&mut OsEntropy).unwrap();
@@ -689,7 +690,7 @@ async fn native_finish_refuses_another_channel_without_claim() {
         .unwrap();
     let created = fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
         .await
         .unwrap();
     let (address, stop, listener, connections) = fixture.listener().await;
@@ -762,7 +763,7 @@ async fn native_wrong_codes_are_charged_within_the_attempt_bound() {
     // Wrong codes short of the bound leave the invitation open for the right one.
     let created = fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
         .await
         .unwrap();
     let id = created.record().id();
@@ -801,7 +802,7 @@ async fn native_wrong_codes_are_charged_within_the_attempt_bound() {
     let client = NativeEnrollmentClient::new(state.clone(), RuntimeDependencies::default().clock);
     let created = fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
         .await
         .unwrap();
     let id = created.record().id();
@@ -841,7 +842,7 @@ async fn native_expired_and_used_codes_are_refused_without_a_claim() {
     // A code is used once: a second device presenting it after the claim is refused.
     let created = fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
         .await
         .unwrap();
     let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
@@ -870,7 +871,7 @@ async fn native_expired_and_used_codes_are_refused_without_a_claim() {
     // Expiry is exclusive: the last millisecond still opens, the deadline does not.
     let created = fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
         .await
         .unwrap();
     let id = created.record().id();
@@ -908,7 +909,7 @@ async fn native_owner_discovers_unfinished_enrollments_through_current_policy() 
     let fixture = Fixture::short_lived_owner().await;
     let created = fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
         .await
         .unwrap();
     let id = created.record().id();
@@ -1029,7 +1030,7 @@ async fn native_late_confirmation_is_settled_as_deadline_without_claim() {
     let fixture = Fixture::new().await;
     let created = fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
         .await
         .unwrap();
     let id = created.record().id();
@@ -1096,7 +1097,7 @@ async fn native_retry_refuses_another_invitation_before_a_new_attempt() {
     let fixture = Fixture::new().await;
     let created = fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
         .await
         .unwrap();
     let (address, stop, listener, connections) = fixture.listener().await;
@@ -1136,7 +1137,7 @@ async fn native_retry_refuses_another_invitation_before_a_new_attempt() {
         .unwrap();
     let replacement = fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
         .await
         .unwrap();
     let (address, stop, listener, connections) = fixture.listener().await;
@@ -1224,7 +1225,7 @@ async fn native_out_of_order_requests_are_refused_before_an_attempt_is_charged()
     let fixture = Fixture::new().await;
     let created = fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
         .await
         .unwrap();
     let id = created.record().id();
@@ -1296,13 +1297,13 @@ async fn native_expired_code_is_settled_before_the_next_create() {
     // create: the past-due invitation no longer holds the slot.
     let first = fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
         .await
         .unwrap();
     fixture.time.set(first.record().expires_at_ms());
     let second = fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
         .await
         .unwrap();
     assert!(expired_by_system(
@@ -1322,7 +1323,7 @@ async fn native_expired_code_is_settled_before_the_next_create() {
     // decide: cancelling a past-due invitation keeps Expired as its cause.
     let third = fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
         .await
         .unwrap();
     fixture.time.set(third.record().expires_at_ms());
@@ -1339,7 +1340,7 @@ async fn native_expired_code_is_settled_before_the_next_create() {
     // owner status: reads the settled record.
     let fourth = fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
         .await
         .unwrap();
     fixture.time.set(fourth.record().expires_at_ms());
@@ -1353,7 +1354,7 @@ async fn native_expired_code_is_settled_before_the_next_create() {
     // Before its deadline an invitation is left open.
     let open = fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
         .await
         .unwrap();
     fixture.time.set(open.record().expires_at_ms() - 1);
@@ -1369,7 +1370,7 @@ async fn native_claim_losing_to_expiry_is_settled_and_recoverable() {
     let fixture = Fixture::new().await;
     let created = fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
         .await
         .unwrap();
     let id = created.record().id();
@@ -1455,7 +1456,7 @@ async fn native_claim_losing_to_expiry_is_settled_and_recoverable() {
     // Begin arrives at the deadline, after a Hello one millisecond earlier.
     let created = fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
         .await
         .unwrap();
     let id = created.record().id();
@@ -1496,7 +1497,7 @@ async fn native_claim_losing_to_expiry_is_settled_and_recoverable() {
     assert_eq!(
         fixture
             .gateway
-            .create(fixture.session.clone(), OsEntropy)
+            .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
             .await
             .unwrap()
             .record()
@@ -1514,7 +1515,7 @@ async fn native_restart_expires_due_claimed_enrollments() {
     for name in ["first-private", "second-private"] {
         let created = fixture
             .gateway
-            .create(fixture.session.clone(), OsEntropy)
+            .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
             .await
             .unwrap();
         let (_, store) = pending(fixture.directory.path(), name);
@@ -1583,7 +1584,7 @@ async fn native_attempt_failures_record_their_cause() {
     let fixture = Fixture::new().await;
     let created = fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
         .await
         .unwrap();
     let id = created.record().id();
@@ -1659,7 +1660,7 @@ async fn native_failed_store_writes_stay_visible() {
     let store = store.get().unwrap().clone();
     let mut created = fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
         .await
         .unwrap();
     let mut id = created.record().id();
@@ -1766,7 +1767,7 @@ async fn native_failed_store_writes_stay_visible() {
             .unwrap();
         created = fixture
             .gateway
-            .create(fixture.session.clone(), OsEntropy)
+            .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
             .await
             .unwrap();
         id = created.record().id();
@@ -1809,7 +1810,7 @@ async fn native_committed_claim_is_reported_without_a_later_read() {
     let store = store.get().unwrap().clone();
     let created = fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
         .await
         .unwrap();
     // Every store read after the claim commits fails.
@@ -1841,7 +1842,7 @@ async fn native_client_refuses_a_gateway_that_changes_the_operation() {
     let fixture = Fixture::new().await;
     fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
         .await
         .unwrap();
     let genuine = fixture
@@ -1924,7 +1925,7 @@ async fn native_owner_store_work_runs_off_the_async_thread() {
         // Each command meets its own past-due invitation, so it settles an expiry.
         let created = fixture
             .gateway
-            .create(fixture.session.clone(), OsEntropy)
+            .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
             .await
             .unwrap();
         let id = created.record().id();
@@ -1950,7 +1951,7 @@ async fn native_owner_store_work_runs_off_the_async_thread() {
             _ => {
                 fixture
                     .gateway
-                    .create(fixture.session.clone(), OsEntropy)
+                    .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
                     .await
                     .unwrap();
             }
@@ -1973,7 +1974,7 @@ async fn native_refused_owner_changes_no_enrollment() {
     let fixture = Fixture::short_lived_owner().await;
     let created = fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
         .await
         .unwrap();
     let id = created.record().id();
@@ -2018,7 +2019,7 @@ async fn native_refused_owner_changes_no_enrollment() {
     assert!(matches!(
         fixture
             .gateway
-            .create(fixture.session.clone(), OsEntropy)
+            .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
             .await,
         Err(error) if error == refused
     ));
@@ -2092,7 +2093,7 @@ async fn native_restart_records_expiry_before_restart() {
     let fixture = Fixture::new().await;
     let created = fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
         .await
         .unwrap();
     let id = created.record().id();
@@ -2108,7 +2109,7 @@ async fn native_restart_records_expiry_before_restart() {
     // Already due when the gateway restarts: Expired is the first cause.
     let created = fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
         .await
         .unwrap();
     let id = created.record().id();
@@ -2126,7 +2127,7 @@ async fn native_past_due_conflicting_reservation_settles_expiry() {
     let fixture = Fixture::new().await;
     let created = fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
         .await
         .unwrap();
     let id = created.record().id();
@@ -2190,7 +2191,7 @@ async fn native_ended_invitation_setup_is_discarded() {
     // when the setup is gone; with a setup present it reports the read failure.
     let created = fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
         .await
         .unwrap();
     store.refuse(Some(Fault::Reads));
@@ -2216,7 +2217,7 @@ async fn native_ended_invitation_setup_is_discarded() {
     // A device status that settles the expiry drops the setup.
     let created = fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
         .await
         .unwrap();
     let (address, stop, listener, connections) = fixture.listener().await;
@@ -2286,7 +2287,7 @@ fn native_gateway_runs_on_a_one_thread_blocking_pool() {
             let fixture = Fixture::new().await;
             let created = fixture
                 .gateway
-                .create(fixture.session.clone(), OsEntropy)
+                .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
                 .await
                 .unwrap();
             let id = created.record().id();
@@ -2364,7 +2365,7 @@ async fn dropped_attempt_then_another_claim_lets_the_device_enroll_again() {
     let fixture = Fixture::new().await;
     let created = fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
         .await
         .unwrap();
     let (address, stop, listener, connections) = fixture.listener().await;
@@ -2441,7 +2442,7 @@ async fn dropped_attempt_then_another_claim_lets_the_device_enroll_again() {
     // A new code enrolls device A.
     let created = fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
         .await
         .unwrap();
     let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
@@ -2464,5 +2465,61 @@ async fn dropped_attempt_then_another_claim_lets_the_device_enroll_again() {
         .unwrap()
         .unwrap();
     connections.shutdown().await;
+    fixture.gateway.shutdown().await;
+}
+
+/// Row H2 (`docs/design/auth/peer-gateways.md`): the class the owner chose is bound
+/// into the enrollment. A device client given a peer gateway's code, and a
+/// peer client given a device's, refuses at the first reply, before any PAKE
+/// attempt is charged or any pending record saved; the invitation stays open
+/// for the party it was made for.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_client_refuses_an_invitation_for_another_kind_of_party() {
+    let fixture = Fixture::new().await;
+    let (address, stop, listener, _) = fixture.listener().await;
+    for (invited, enrolling, name) in [
+        (ConsentClass::PeerRead, ConsentClass::DeviceRead, "device"),
+        (ConsentClass::DeviceRead, ConsentClass::PeerRead, "peer"),
+    ] {
+        let created = fixture
+            .gateway
+            .create(fixture.session.clone(), invited, OsEntropy)
+            .await
+            .unwrap();
+        assert_eq!(created.record().intent().class(), invited);
+        let (_, store) = pending(fixture.directory.path(), name);
+        let client = NativeEnrollmentClient::enrolling(
+            enrolling,
+            store.clone(),
+            RuntimeDependencies::default().clock,
+        );
+        let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
+        let refused = tokio::time::timeout(
+            WAIT,
+            client.enroll(TcpStream::connect(address).unwrap(), code, OsEntropy),
+        )
+        .await
+        .unwrap();
+        assert_eq!(refused.unwrap_err(), NativeClientError::OtherEnrollee);
+        assert!(store.load_pending().unwrap().is_none());
+        let record = fixture
+            .registry
+            .read_pairing(created.record().id())
+            .unwrap();
+        assert_eq!(record.charged_attempts(), 0);
+        assert_eq!(record.phase(), PairingPhase::Available);
+        client.shutdown().await;
+        fixture
+            .gateway
+            .decide(
+                &fixture.session,
+                created.record().id(),
+                OwnerDecision::Cancel,
+            )
+            .await
+            .unwrap();
+    }
+    stop.send(()).unwrap();
+    listener.await.unwrap().unwrap();
     fixture.gateway.shutdown().await;
 }

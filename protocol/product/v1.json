@@ -175,7 +175,7 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 256,
-          "description": "Authenticated human, integration, or agent identity."
+          "description": "Authenticated human, integration, agent, or paired peer gateway identity."
         },
         "organizationId": {
           "type": "string",
@@ -251,7 +251,7 @@
       },
       "required": ["id", "kind"],
       "x-rust-type": "nessa_auth::application::dto::PrincipalInputDto",
-      "description": "Identity that acts in the product: a human, integration, or agent. A principal needs an active organization membership and an appropriate credential to access the gateway."
+      "description": "Identity that acts in the product: a human, integration, agent, or paired peer gateway. A principal needs an active organization membership and an appropriate credential to access the gateway."
     },
     "ProductMembership": {
       "type": "object",
@@ -556,8 +556,8 @@
     },
     "PrincipalKind": {
       "type": "string",
-      "enum": ["human", "integration", "agent"],
-      "description": "Supported categories of authenticated actors: human users, integrations, and agents."
+      "enum": ["human", "integration", "agent", "gateway"],
+      "description": "Supported categories of authenticated actors: human users, integrations, agents, and paired peer gateways. Only device pairing creates a gateway principal; credential.issue refuses one."
     },
     "MembershipRole": {
       "type": "string",
@@ -4502,6 +4502,23 @@
       ],
       "description": "Typed catalogue admission, source, capacity, and transport refusals."
     },
+    "PairingEnrollee": {
+      "type": "string",
+      "enum": ["device", "gateway"],
+      "description": "Who an invitation enrolls. device: one of the owner's own devices; its credential acts as the owner. gateway: a peer gateway; its credential names a principal of kind gateway, identified by the key it pinned at pairing, and can hold only the conversation.read grant. Both use the same enrollment and listener; the choice is bound into the enrollment and cannot be changed by the enrolling side."
+    },
+    "PairingCreateParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enrollee": {
+          "$ref": "#/$defs/PairingEnrollee",
+          "description": "Who the invitation enrolls; absent means device."
+        }
+      },
+      "required": [],
+      "description": "Wire input for pairing.create. The owner, organization and gateway come from the session, never from the request."
+    },
     "PairingInvitationParams": {
       "type": "object",
       "additionalProperties": false,
@@ -4647,7 +4664,7 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 64,
-          "description": "Fixed class of access the consent is for."
+          "description": "Fixed class of access the consent is for, which also says who it enrolls: gateway-conversation-read for one of the owner's devices, peer-gateway-conversation-read for a peer gateway."
         },
         "grant": {
           "$ref": "#/$defs/ProductGrant",

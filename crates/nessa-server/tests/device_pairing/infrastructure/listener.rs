@@ -1,5 +1,6 @@
 //! The listener's accept policy, driven through a scripted accept port.
 use super::support::{sockets, FaultyStore, Fixture, WAIT};
+use nessa_auth::domain::pairing::ConsentClass;
 use nessa_auth::{
     adapters::pairing::{GatewayTrust, NativeIdentity, NativeTransport, OsEntropy},
     domain::pairing::AttemptId,
@@ -133,7 +134,7 @@ async fn native_listener_skips_connection_failures_and_backs_off_on_exhaustion()
     let fixture = Fixture::new().await;
     fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
         .await
         .unwrap();
     let pin = fixture.gateway.identity().public_spki();
@@ -254,7 +255,7 @@ async fn native_listener_stops_on_a_listening_socket_failure() {
     let store = store.get().unwrap().clone();
     fixture
         .gateway
-        .create(fixture.session.clone(), OsEntropy)
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
         .await
         .unwrap();
     let pin = fixture.gateway.identity().public_spki();

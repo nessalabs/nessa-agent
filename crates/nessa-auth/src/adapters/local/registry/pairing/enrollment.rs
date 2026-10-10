@@ -5,7 +5,10 @@ use super::super::{
 use super::projection::StoredPairing;
 use crate::{
     application::{
-        dto::{CredentialGrantDto, CredentialMetadataDto, MembershipStateDto, ResourceDto},
+        dto::{
+            CredentialGrantDto, CredentialMetadataDto, MembershipInputDto, MembershipRoleDto,
+            MembershipStateDto, PrincipalInputDto, PrincipalKindDto, ResourceDto,
+        },
         pairing::{
             AttemptReservation, ConfirmedClaim, DeviceConnectionProof, GatewayKeyStore,
             NoReceiverCleanupProof, OwnerDecision, PairingAdmission, PairingStore,
@@ -16,11 +19,11 @@ use crate::{
     },
     domain::{
         pairing::{
-            validate_pairing_collection, AttemptFailure, AttemptId, AttemptOutcome, InvitationId,
-            PairingError, PairingEvent, PairingInitiator, PairingPhase, PairingRecord,
-            PairingTransition, TerminalCause,
+            validate_pairing_collection, AttemptFailure, AttemptId, AttemptOutcome, ConsentClass,
+            InvitationId, PairingError, PairingEvent, PairingInitiator, PairingPhase,
+            PairingRecord, PairingTransition, TerminalCause,
         },
-        AudienceId, CredentialId, Initiator, IssuanceCause,
+        AudienceId, CredentialId, Initiator, IssuanceCause, OrganizationId, PrincipalId,
     },
 };
 use std::sync::Arc;
@@ -412,9 +415,15 @@ impl PairingStore for LocalCredentialStore {
                 {
                     return Err(PairingStoreError::Domain(PairingError::Conflict));
                 }
+                let principal = record
+                    .credential_principal()
+                    .ok_or(PairingStoreError::Domain(PairingError::Invalid))?;
+                if intent.class() == ConsentClass::PeerRead {
+                    enroll_peer_principal(next, &principal, intent.resource().organization_id())?;
+                }
                 let metadata = CredentialMetadataDto {
                     id: credential.as_str().to_owned(),
-                    principal_id: intent.owner().as_str().to_owned(),
+                    principal_id: principal.as_str().to_owned(),
                     organization_id: intent.resource().organization_id().as_str().to_owned(),
                     audience_id: intent.audience().as_str().to_owned(),
                     issued_at: transition.ordering_time_ms() / 1000,
@@ -693,6 +702,47 @@ impl LocalCredentialStore {
             .map_err(|_| PairingStoreError::Unavailable)?;
         self.publish_revision(revision);
         Ok(PairingCommit::Applied(transition.after().clone()))
+    }
+}
+
+/// Make the gateway principal a peer's credential names, and its membership,
+/// unless pairing made them already: pairing the same peer key again names the
+/// same principal. A peer is a member, never an admin, and pairing is the only
+/// path that creates one (`validate_issue` refuses the others).
+fn enroll_peer_principal(
+    next: &mut Registry,
+    principal: &PrincipalId,
+    organization: &OrganizationId,
+) -> Result<(), PairingStoreError> {
+    let conflict = PairingStoreError::Domain(PairingError::Conflict);
+    let wanted = PrincipalInputDto {
+        id: principal.as_str().to_owned(),
+        kind: PrincipalKindDto::Gateway,
+    };
+    match next.principals.iter().find(|entry| entry.id == wanted.id) {
+        Some(existing) if existing != &wanted => return Err(conflict),
+        Some(_) => {}
+        None => next.principals.push(wanted),
+    }
+    let membership = MembershipInputDto {
+        id: principal.as_str().to_owned(),
+        principal_id: principal.as_str().to_owned(),
+        organization_id: organization.as_str().to_owned(),
+        role: MembershipRoleDto::Member,
+        state: MembershipStateDto::Active,
+    };
+    let bound = next.memberships.iter().find(|entry| {
+        entry.id == membership.id
+            || (entry.principal_id == membership.principal_id
+                && entry.organization_id == membership.organization_id)
+    });
+    match bound {
+        Some(existing) if existing != &membership => Err(conflict),
+        Some(_) => Ok(()),
+        None => {
+            next.memberships.push(membership);
+            Ok(())
+        }
     }
 }
 
