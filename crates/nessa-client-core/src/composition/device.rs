@@ -184,7 +184,9 @@ pub(super) fn client_failure(error: NativeClientError) -> Value {
         NativeClientError::OriginalNotRetryable => "originalNotRetryable",
         NativeClientError::NoPending => "noEnrollment",
         NativeClientError::Storage(_) => "storage",
-        NativeClientError::Crypto(_) => "crypto",
+        // The example's output keeps one code for both: its readers tell a
+        // failed handshake from a failed proof by nothing else.
+        NativeClientError::Crypto(_) | NativeClientError::Handshake(_) => "crypto",
         NativeClientError::Wire(_) => "wire",
         NativeClientError::Phase => "phase",
         NativeClientError::Refused => "refused",

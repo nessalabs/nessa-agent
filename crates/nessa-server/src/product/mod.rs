@@ -48,6 +48,7 @@ mod mcp_apps;
 pub(crate) mod mcp_servers;
 mod native;
 mod pairing;
+mod peers;
 
 pub use native::{DeviceCredentials, NativeSessions};
 

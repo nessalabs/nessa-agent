@@ -202,6 +202,18 @@
       "params": "PairingInvitationParams",
       "grant": "credential.manage"
     },
+    "peer.enroll": {
+      "params": "PeerEnrollParams",
+      "grant": "credential.manage"
+    },
+    "peer.list": {
+      "params": null,
+      "grant": "credential.manage"
+    },
+    "peer.forget": {
+      "params": "PeerForgetParams",
+      "grant": "credential.manage"
+    },
     "conversation.watchRecords": {
       "params": "ConversationWatchRecordsParams",
       "grant": null

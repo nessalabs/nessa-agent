@@ -14,6 +14,7 @@ use crate::mcp_servers::{
     application::McpServerSettings, entrypoint::http::ResourceRoute,
     infrastructure::ResourceTicketStore,
 };
+use crate::peer_gateways::infrastructure::PeerCommands;
 use axum::extract::FromRef;
 use nessa_auth::{
     application::{
@@ -112,6 +113,10 @@ pub struct ProductRouteState {
     /// listen address. `None` answers every pairing method
     /// `pairing_not_configured`.
     pub(crate) pairing: Option<Arc<PairingOwnerCommands>>,
+    /// This gateway's peer commands, composed with native pairing: a peer is
+    /// enrolled with the native key. `None` answers every peer method
+    /// `peer_not_configured`.
+    pub(crate) peers: Option<Arc<PeerCommands>>,
     pub(crate) uptime_clock: Arc<dyn UptimeClock>,
     pub(crate) agent_readiness: Arc<SharedAgentReadiness>,
 }
@@ -228,6 +233,7 @@ impl ProductRouteState {
             mcp_server_settings: None,
             mcp_authorization: None,
             pairing: None,
+            peers: None,
             conversations: None,
             passive_read: None,
             record_source: None,
@@ -294,6 +300,13 @@ impl ProductRouteState {
     /// runtime. Without them the pairing methods answer `pairing_not_configured`.
     pub fn with_pairing(mut self, pairing: Arc<PairingOwnerCommands>) -> Self {
         self.pairing = Some(pairing);
+        self
+    }
+
+    /// Register this gateway's peer commands. Without them the peer methods
+    /// answer `peer_not_configured`.
+    pub fn with_peers(mut self, peers: Arc<PeerCommands>) -> Self {
+        self.peers = Some(peers);
         self
     }
 

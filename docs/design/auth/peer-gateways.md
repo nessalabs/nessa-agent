@@ -1,4 +1,4 @@
-# Peer gateways — issue 705, slice H (first part)
+# Peer gateways — issue 705, slice H
 
 Status: this branch. Part of [#252](https://github.com/nessalabs/nessa-agent/issues/252)
 (slice H of [ADR 252](../../adr/todo/252-runtime-roles-and-execution-leases.md)).
@@ -174,31 +174,156 @@ Each row has at least one test.
 | H9 | A paired reader's catalogue head as the owner works, grants and revokes | An ungranted change and a grant to another receiver leave it; a grant, a change to a granted row and a revoke each move it; a revoke moves it forward, never back to an older granted row | `a_paired_readers_head_moves_only_with_what_it_was_granted` |
 | H10 | A registry whose owner membership is disabled or not an admin | Refused on open (`owner_membership`). The pairing initiator's membership is what keeps a grantor live; the owner's is the one the registry pins | `a_registry_whose_owner_is_not_an_active_admin_does_not_open` |
 
+## The dialing side
+
+Part 2b gives a gateway the other end: its owner enrolls it into another
+gateway's peer invitation, and it keeps what it learned there. The enrolling
+client is `nessa-client-core`'s, which the gateway links without its `cli`
+feature ([ADR 483](../../adr/done/483-protocol-and-client-core-crates.md),
+amended).
+
+```mermaid
+sequenceDiagram
+    participant O as B's owner
+    participant B as Gateway B (product socket)
+    participant R as B's peer records
+    participant K as B's gateway key store
+    participant A as Gateway A (native listener)
+    participant U as B's peer audit
+    O->>B: peer.enroll {address, code} (Cedar: credential.manage)
+    B->>U: intent {operation, address, owner} (not kept: peer_audit_unavailable, nothing checked or dialed)
+    B->>B: take the turn (held: peer_busy, outcome audited)
+    B->>A: TCP connect via PeerConnector, bounded by the deadline clock (passed: peer_unreachable)
+    B->>A: TLS with B's own native key
+    B->>R: enrollment key?
+    R->>K: restore B's gateway key
+    A-->>B: Hello (class must be peer read, else peer_wrong_invitation)
+    B->>A: OPAQUE with the code (wrong code: peer_invitation_refused)
+    A-->>B: KE2, authenticating A's key
+    B->>R: save pending {A's pin, B's key by its public half, address}
+    R->>R: note A's key, then its record as read
+    R->>R: refuse another key, B's own key, a kept peer, or one past MAX_PEERS
+    B->>A: KE3 (confirm)
+    A-->>B: Claimed
+    B->>U: outcome {operation, peer, before -> after, answer}, on every path (not kept: peer_audit_unavailable)
+    B-->>O: PeerGateway {peerKey, phase: pending, address}
+```
+
+- **One key, one principal.** B enrolls with the gateway's own native key,
+  injected from the gateway key store, never a key made for the enrollment
+  (`ClientPendingStore::enrollment_key`). A therefore names B by the same
+  `gateway:<key>` principal however often it is enrolled, which slice I
+  needs. The record names that key by its public half; the private half
+  stays in the key store alone, and a record made with a key that is no longer
+  the gateway's does not read.
+- **One file per peer.** `peer-gateways/<peer key hex>.json` beneath the
+  namespace, private, published by rename through `nessa-local-storage`. It
+  holds the peer's pin, the enrollment it claimed, the credential once
+  issued, and the address that last answered, with its own `schemaVersion`
+  ([ADR 202](../../adr/todo/202-versioned-local-datasets.md), record scope: a
+  record that does not read is listed `unreadable` and fails only that
+  peer).
+- **What the owner is told.** `peer.enroll` returns the pending record;
+  approval happens on A. The credential reaches the record when B next reads
+  its pinned status, which the next part's poller does. `peer.list` shows
+  every kept peer; `peer.forget` removes B's record only.
+- **It dials what the owner names.** `peer.enroll` connects from this
+  gateway's host to whatever IP address and port the owner gives, which is
+  why it is owner-only (`credential.manage`) and why every failure that is
+  not the peer protocol's own answer is `peer_unreachable`: an open port and
+  a closed one answer alike. The client keeps a failed TLS handshake
+  (`NativeClientError::Handshake`) apart from a failed PAKE proof, so a
+  service that is not a gateway never reads as a wrong code.
+- **Every deadline is the injected clock's.** The connect goes through the
+  `PeerConnector` port, which sets no timeout of its own; the command reads
+  the injected monotonic clock every wake tick and drops the attempt once
+  the connect deadline passes, and reads it again when a connection
+  completes, so one that completes past the deadline is closed unused.
+  Each audit record is bounded the same way, by `AUDIT_DEADLINE`: one not
+  acknowledged in time counts as not kept, though the audit may still keep
+  it later. Each enrollment's entropy comes from an injected source too, so
+  a failing generator is a typed `peer_unavailable`, audited. The handshake and enrollment deadlines read
+  the same clock, so a substituted clock drives the whole enrollment.
+- **Enrolling and forgetting take turns.** One enrollment or forget runs at a
+  time, and another is `peer_busy` while it does, so a forget cannot remove
+  the record an enrollment is saving and spend the peer's invitation for
+  nothing.
+- **Every enroll and forget call is audited.** Both commands run only
+  through one audited wrapper. It hands an intent to the `PeerAudit` port
+  before anything else, even the check that no other command holds the turn
+  (the address or the peer named, and the owner who asked), and an outcome
+  on every way the call ends (the peer, its record before and after, and the
+  answer), correlated by one operation id. The command body answers with
+  that evidence on each of its returns, as its type demands, so no early
+  return skips the outcome. The enrollment's slot notes the peer's key the
+  moment the peer's pin reaches it, and its record as first read, so every
+  later refusal (`peer_exists`, `peer_capacity`, `peer_own_gateway`) names
+  them; a call that ended before reading the record says `not_read`.
+  `DurablePeerAudit` keeps each record as its own private file in
+  `peer-gateways-audit/`, synced before it is acknowledged. An intent that is
+  not kept refuses the command before anything is dialed or removed; an
+  outcome that is not kept answers `peer_audit_unavailable` while the effect
+  stands, so the owner never sees success without its evidence. A process
+  that stops between an effect and its outcome leaves the intent, and the
+  peer record says what it came to. Logs carry the same fields; never the
+  code or key material.
+- **Forgetting is local.** A gateway principal can never hold
+  `credential.manage`, so B cannot revoke what A issued it. A's owner revokes
+  it on A (`credential.revoke`), which is what stops B reading.
+
+| Row | Situation | Result | Test |
+| --- | --- | --- | --- |
+| P1 | B enrolls into A's peer invitation | A records B's own native key as the claim; B keeps a pending record pinning A's key | `a_gateway_enrolls_into_a_peer_with_its_own_key_and_keeps_only_a_reference`, `a_composed_gateway_enrolls_into_another_with_its_own_key` |
+| P2 | B's record on disk | A's pin and B's key's public half; B's private key in no spelling | same |
+| P3 | A's owner approves; B reads its pinned status | The credential replaces pending in the same record; listed `active` | `a_gateway_enrolls_into_a_peer_with_its_own_key_and_keeps_only_a_reference` |
+| P4 | `peer.forget` | The record is removed; a second forget is `peer_not_found` | same |
+| P5 | A device invitation's code | `peer_wrong_invitation`, before the PAKE; nothing saved | `a_refused_or_wrong_class_invitation_saves_nothing`, `a_composed_gateway_enrolls_into_another_with_its_own_key` |
+| P6 | A wrong code, or a cancelled invitation | `peer_invitation_refused`; nothing saved | `a_refused_or_wrong_class_invitation_saves_nothing` |
+| P7 | Nothing at the address; a peer already kept | `peer_unreachable`; `peer_exists`, the kept record unchanged byte for byte, and audited with that peer's key and its state before and after, both as found | same |
+| P8 | No native pairing; a member; malformed params | `peer_not_configured`; `forbidden`; `invalid_request`, before any effect | `peer_routes_refuse_before_any_effect` |
+| P9 | A pending save with any key but the gateway's own, or for a pin that is the gateway's own key | Refused, nothing written; the second is `peer_own_gateway` | `a_record_takes_only_the_gateways_key_and_an_unreadable_one_can_be_forgotten` |
+| P10 | A record of another shape, or a valid one whose `gatewayKey` is not this gateway's | Listed `unreadable`; its credential does not load (`Corrupt`); enrolling into that peer is `peer_exists`, audited `unreadable` before and after, and leaves it as it was; `peer.forget` removes it | same |
+| P11 | `peer.forget` while an enrollment runs | `peer_busy`; once the enrollment ends, forget runs | `forgetting_waits_for_a_running_enrollment` |
+| P12 | An enroll or forget that succeeds or is refused; its intent, or its outcome, not kept | Intent and outcome kept, naming the operation, peer, address, state before and after, answer, cause and owner; no intent: nothing dialed or removed, `peer_audit_unavailable`; no outcome: the record made or removed stands, `peer_audit_unavailable` | `enrolling_and_forgetting_are_audited_and_answer_only_when_kept`, `the_durable_peer_audit_reports_a_record_it_could_not_keep` |
+| P13 | A connect that never answers; one that completes past the deadline | Held while the injected deadline clock stands still; once it passes the connect deadline, `peer_unreachable`, audited, the attempt dropped and nothing saved; a late connection is closed unused, `peer_unreachable` | `a_connect_that_never_answers_ends_when_the_injected_clock_passes_its_deadline`, `a_connect_completed_after_the_deadline_is_refused_and_closed` |
+| P14 | Every answer of `peer.enroll` (ok, busy, unreachable, refused code, wrong invitation, own gateway, exists, capacity) and of `peer.forget` (ok, busy, not found) | Exactly one intent and one outcome per call under one operation id, naming the owner, the target, and the peer once known; the table must list every answer | `every_peer_command_answer_keeps_one_intent_and_one_outcome` |
+| P15 | The injected entropy for an enrollment fails | `peer_unavailable`, nothing saved, its intent and outcome kept | `an_enrollment_whose_entropy_fails_is_unavailable_and_audited` |
+| P16 | The audit never acknowledges an intent, or an outcome | Held while the injected clock stands; once it passes `AUDIT_DEADLINE`, `peer_audit_unavailable`: no intent, nothing dialed; no outcome, the effect stands | `an_audit_that_never_answers_ends_the_call_at_its_deadline` |
+
 ## What this part does not do
 
 H as a whole is larger than one change. Part 1 (#725) is the granting side;
-part 2a puts a peer's reads behind its grants. The rest, proposed as the next
-parts of #705 and the slices it names:
+part 2a puts a peer's reads behind its grants; part 2b-1 lets the gateway link
+the client and gives the head an access path by receiver
+(`read_grant_changes_by_receiver`); part 2b-2 enrolls (above). The rest:
 
-- **The peer side.** A gateway that enrolls into another one, keeps the
-  resulting credential and pin, and reads as a surface. The enrolling client
-  is `nessa-client-core`'s, which the gateway now links without its `cli`
-  feature ([ADR 483](../../adr/done/483-protocol-and-client-core-crates.md),
-  amended). Because a peer polls its head instead of watching, the head reads
-  the grant journal by receiver: `read_grant_changes_by_receiver`, made by
-  `LocalConversationStore::open` on every open rather than by a new schema
-  version, since an index changes no shape a version 4 reader knows.
+- **The peer reading.** Polling each active peer's head, reading what it
+  granted into a retained cache, reading the pinned status of a pending one,
+  and handling `ResetRequired`.
 - **The peer table's last addresses and local discovery.** The issue lists
   them; the ADR places local discovery in slice I, and the map leaves "whether
   to announce at all, and what it reveals" unresolved. This side's peer table
   is the registry's rows: the principal (named by the key), the pinned key
   (the pairing's claim) and the grants (the credential's). Last addresses
-  belong to the side that dials.
+  belong to the side that dials, whose record keeps the one that last
+  answered (above).
 - **A Share or Linked gateways control on the desktop.** The method and the
   generated client take `enrollee`; the UI is a separate change with its
   browser verification.
 
 ## Known limits
+
+- **An enrollment that loses its last reply can leave a pending record.** B
+  saves its record before it confirms, as a device does, so a connection
+  that fails after that save answers `peer_unreachable` or
+  `peer_unavailable` while A may have recorded the claim. The record lists
+  `pending`; reading the pinned status (the next part) settles it, and
+  `peer.forget` removes it. Enrolling into the same peer again is
+  `peer_exists` until then.
+- **Shutdown does not wait for an enrollment.** Nothing holds a
+  `peer.enroll` open the way owner admission holds a pairing command, so its
+  blocking worker ends at its own enrollment deadline or with the process.
+  What it saved by then is a record like any other.
 
 - **The grantor's liveness is not a read check.** The grantor of a pairing
   is its initiator: an active admin holding `credential.manage` when it

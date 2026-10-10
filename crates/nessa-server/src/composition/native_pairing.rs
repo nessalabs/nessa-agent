@@ -5,7 +5,9 @@
 //! ```text
 //! prepare: native-pairing/ --> FilePairingState --> restore_gateway_identity
 //!                          --> GatewayPairing::open --> reconcile_cleanup
-//!                          --> (PreparedNative, PairingOwnerCommands)
+//!                          --> (PreparedNative, PairingOwnerCommands,
+//!                               PeerCommands over peer-gateways/ and the key,
+//!                               audited in peer-gateways-audit/)
 //! bind:    PreparedNative --> TcpEnrollmentAccept --> the one NativeEnrollmentConnections
 //!          (with NativeSessions: the product state + the registry's device verifier)
 //! start:   BoundNative --> listener task (failed --> watch) --> RunningNative
@@ -23,6 +25,9 @@ use crate::device_pairing::infrastructure::{
     restore_gateway_identity, ConversationReceivers, GatewayPairing, InvitationEntropy,
     NativeEnrollmentConnections, NativeEnrollmentListener, PairingOwnerCommands,
     PairingRuntimeDependencies, TcpEnrollmentAccept,
+};
+use crate::peer_gateways::infrastructure::{
+    DurablePeerAudit, EnrollmentEntropy, PeerCommands, PeerRecords, TcpPeerConnector,
 };
 use crate::product::{DeviceCredentials, NativeSessions, ProductRouteState};
 use nessa_auth::{
@@ -54,6 +59,10 @@ use tokio::{
 
 /// Where native pairing keeps its key, beneath the namespace directory.
 const PRIVATE_DIRECTORY: &str = "native-pairing";
+/// Where this gateway keeps what it learned from each gateway it dialed.
+const PEER_DIRECTORY: &str = "peer-gateways";
+/// Where the owner's peer enrolls and forgets are audited.
+const PEER_AUDIT_DIRECTORY: &str = "peer-gateways-audit";
 
 /// What startup needs from the rest of composition to prepare native pairing.
 pub(super) struct NativeInputs {
@@ -64,8 +73,13 @@ pub(super) struct NativeInputs {
     /// The receiver authority conversations read through, shared.
     pub receivers: Arc<LocalReceiverAuthority>,
     pub clock: Arc<dyn Clock>,
+    /// The root's monotonic clock, for deadlines: peer enrollment's here,
+    /// as inbound pairing's is given to `bind`.
+    pub deadline_clock: Arc<dyn MonotonicClock>,
     /// The gateway resource every invitation is for, from the registry.
     pub gateway: Resource,
+    /// The same gateway as the key store names it.
+    pub audience: AudienceId,
 }
 
 /// A gateway whose key is restored and whose enrollments are settled, not yet
@@ -83,11 +97,12 @@ pub(super) struct PreparedNative {
 /// which settles this gateway's unfinished enrollments, then the receivers of
 /// ended enrollments, lookup only. A cleanup that cannot complete refuses
 /// startup (row S8). The owner commands are for the product socket; they give
-/// no way back to the runtime.
+/// no way back to the runtime. The peer commands enroll this gateway into
+/// others with the same key, which their records refer to and never copy.
 pub(super) async fn prepare(
     config: &NativeConfig,
     inputs: NativeInputs,
-) -> Result<(PreparedNative, PairingOwnerCommands), RunError> {
+) -> Result<(PreparedNative, PairingOwnerCommands, PeerCommands), RunError> {
     // The private-state owner wants a trusted absolute root; on Unix that is
     // the canonical spelling, as its own tests use.
     #[cfg(unix)]
@@ -97,8 +112,10 @@ pub(super) async fn prepare(
         .map_err(|error| RunError::Native(NativeFailure::Directory(error)))?;
     #[cfg(not(unix))]
     let root = inputs.namespace.clone();
-    nessa_local_storage::create_directory_beneath(&root, Path::new(PRIVATE_DIRECTORY))
-        .map_err(|error| RunError::Native(NativeFailure::Directory(error)))?;
+    for directory in [PRIVATE_DIRECTORY, PEER_DIRECTORY, PEER_AUDIT_DIRECTORY] {
+        nessa_local_storage::create_directory_beneath(&root, Path::new(directory))
+            .map_err(|error| RunError::Native(NativeFailure::Directory(error)))?;
+    }
     let keys = Arc::new(
         FilePairingState::open(&root, Path::new(PRIVATE_DIRECTORY))
             .map_err(|error| RunError::Native(NativeFailure::PrivateState(error)))?,
@@ -112,6 +129,25 @@ pub(super) async fn prepare(
     .await
     .map_err(|error| RunError::Native(NativeFailure::Identity(error)))?;
     let registry = inputs.registry;
+    let peers = PeerCommands::new(
+        Arc::new(
+            PeerRecords::open(
+                &root,
+                Path::new(PEER_DIRECTORY),
+                keys.clone(),
+                inputs.audience,
+                inputs.clock.clone(),
+            )
+            .map_err(|error| RunError::Native(NativeFailure::PrivateState(error)))?,
+        ),
+        inputs.deadline_clock,
+        Arc::new(DurablePeerAudit::new(
+            root.join(PEER_AUDIT_DIRECTORY),
+            inputs.clock.clone(),
+        )),
+        Arc::new(TcpPeerConnector),
+        Arc::new(|| Box::new(OsEntropy) as Box<dyn EnrollmentEntropy>),
+    );
     let gateway = Arc::new(
         GatewayPairing::open(PairingRuntimeDependencies {
             enrollments: registry.clone(),
@@ -140,6 +176,7 @@ pub(super) async fn prepare(
             registry,
         },
         commands,
+        peers,
     ))
 }
 
