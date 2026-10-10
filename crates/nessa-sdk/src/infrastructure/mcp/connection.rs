@@ -15,20 +15,22 @@
 //! cause, and every pending call gets that cause; a call admitted after the
 //! end gets it too, because admission and the end share one lock. A panicked
 //! HTTP writer catches that panic on every await it performs, discards the
-//! payload, and settles the writer as panicked. A recovery completion the
-//! writer drops waits for that settlement: panic resolves
-//! [`McpError::ServerGone`], and a clean finish or cancellation resolves
-//! [`McpError::Unconfirmed`]. The same owner records the panic. The watch
-//! still joins a panic that escapes the writer. Drop and close abort that
-//! writer before its watch, so an exchange still in flight cannot retain the
-//! session.
+//! payload, and settles the writer as panicked. It then waits until its clock
+//! says the current moment has arrived and asks the same owner for that
+//! settlement: panic resolves [`McpError::ServerGone`], and a clean finish or
+//! cancellation resolves [`McpError::Unconfirmed`]. The runtime clock has
+//! already reached that moment. A recovery completion the writer drops waits
+//! for the same settlement. The watch still joins a panic that escapes the
+//! writer and asks for [`McpError::ServerGone`]. The tracing record is a fixed
+//! marker and the server id. The default panic hook can still print the panic
+//! message; request and response debug output does not include header values
+//! or body bytes. Drop and close abort that writer before its watch, so an
+//! exchange still in flight cannot retain the session.
 use super::framing::{self, FrameEnd, Frames, MAX_FRAME_BYTES};
 use super::http::{HttpSession, SendOutcome};
 use super::McpError;
 use crate::infrastructure::clock::{within, Clock, ClockInstant};
 use serde_json::{json, Value};
-#[cfg(all(test, unix))]
-use std::sync::atomic::AtomicBool;
 use std::{
     collections::HashMap,
     future::Future,
@@ -313,53 +315,64 @@ impl Connection {
         let writing = tokio::spawn({
             let shared = shared.clone();
             let session = session.clone();
+            let clock = clock.clone();
             async move {
                 // A caught panic settles itself before this drops. The first
                 // settlement sticks, so this drop does not overwrite it.
                 let _settle = SettleWriter(&session);
-                // Every await the writer performs is inside this catch:
-                // the queue recv, dispatch, dispatch_reply, and
-                // finish_recovery (including the initialized POST).
-                let panicked = catch_writer_panic(async {
+                // The loop runs on its own task. Awaiting a future in this
+                // task would keep that future, and a queued completion
+                // sender, alive until this task ends. The child task's
+                // completion drops them before the join handle resolves.
+                let session_loop = session.clone();
+                let shared_loop = shared.clone();
+                let mut writer_loop = AbortOnDrop(tokio::spawn(catch_writer_panic(async move {
+                    // Every await the writer performs is inside this catch:
+                    // the queue recv, dispatch, dispatch_reply, and
+                    // finish_recovery (including the initialized POST).
                     while let Some(frame) = frames.recv().await {
                         let outcome = match frame {
-                            Outgoing::Frame(frame) => session.dispatch(&frame).await,
+                            Outgoing::Frame(frame) => session_loop.dispatch(&frame).await,
                             Outgoing::PeerReply { frame, context } => {
-                                session.dispatch_reply(&frame, context).await
+                                session_loop.dispatch_reply(&frame, context).await
                             }
                             Outgoing::RecoveryReady {
                                 deadline,
                                 completed,
-                            } => session.finish_recovery(deadline, completed).await,
+                            } => session_loop.finish_recovery(deadline, completed).await,
                         };
                         match outcome {
                             SendOutcome::Done => {}
                             SendOutcome::FailCall { id, error } => {
                                 if let Some(id) = id {
-                                    shared.fail_one(id, error);
+                                    shared_loop.fail_one(id, error);
                                 }
                             }
                             SendOutcome::End(error) => {
-                                shutdown_and_end(&session, &shared, error);
+                                shutdown_and_end(&session_loop, &shared_loop, error);
                                 return;
                             }
                         }
                     }
-                })
-                .await
-                .is_err();
+                })));
+                let panicked = match (&mut writer_loop.0).await {
+                    Ok(Ok(())) => false,
+                    Ok(Err(())) => true,
+                    Err(error) => error.is_panic(),
+                };
                 if !panicked {
                     return;
                 }
-                // The caught future, including a completion sender owned by
-                // finish_recovery or still queued, drops when the await
-                // finishes. Recovery waits for settlement instead of deciding.
-                #[cfg(all(test, unix))]
-                if DELAY_WRITER_SETTLEMENT.load(Ordering::SeqCst) {
-                    tokio::time::sleep(Duration::from_millis(50)).await;
-                }
+                // Senders owned by the child are already dropped. Settlement
+                // is visible before the end is recorded. An already-due sleep
+                // returns immediately on the runtime clock. A test clock can
+                // hold it so recovery publishes that settlement before this
+                // record.
                 session.settle_writer(true);
-                record_writer_panic(&session, &shared);
+                let now = clock.now();
+                clock.sleep_until(now).await;
+                log_writer_panic(&session);
+                shutdown_and_end(&session, &shared, session.writer_settlement_cause());
             }
         });
         let http_writer = writing.abort_handle();
@@ -572,37 +585,28 @@ fn catch_writer_panic<F: Future>(future: F) -> impl Future<Output = Result<F::Ou
     })
 }
 
-/// Log a fixed marker and the server id, then [`shutdown_and_end`] with
-/// [`McpError::ServerGone`]. The panic payload stays out of that log.
-fn record_writer_panic(session: &HttpSession, shared: &Shared) {
+/// Log a fixed marker and the server id. The panic message stays out of that
+/// record. The default panic hook can still print the message; request and
+/// response debug output does not include header values or body bytes.
+fn log_writer_panic(session: &HttpSession) {
     tracing::error!(server = %session.server(), "custom HTTP writer panicked");
+}
+
+/// Log the marker, then [`shutdown_and_end`] with [`McpError::ServerGone`].
+/// This is the watch path: an escaped panic can settle as not panicked,
+/// because the task future is dropped after the panic was caught.
+fn record_writer_panic(session: &HttpSession, shared: &Shared) {
+    log_writer_panic(session);
     shutdown_and_end(session, shared, McpError::ServerGone);
 }
 
-/// When set, the watch waits before it records a panic that escaped the
-/// writer. The queued-recovery test uses this so a dropped completion can
-/// reach the reader first. A panic caught in the writer is recorded before
-/// that delay.
-#[cfg(all(test, unix))]
-static DELAY_PANICKED_WRITER_RECORD: AtomicBool = AtomicBool::new(false);
+/// Abort the writer loop if the task that joins it is dropped first.
+struct AbortOnDrop<T>(JoinHandle<T>);
 
-/// Let a queued recovery completion report before the watch records an
-/// escaped panic. Unix MCP fixtures only.
-#[cfg(all(test, unix))]
-pub(crate) fn delay_panicked_writer_record_for_test(delay: bool) {
-    DELAY_PANICKED_WRITER_RECORD.store(delay, Ordering::SeqCst);
-}
-
-/// When set, a caught writer panic waits after its future drops and before
-/// it settles. The finish-recovery test uses this so a completion that
-/// decides `Unconfirmed` immediately can reach the end owner first.
-#[cfg(all(test, unix))]
-static DELAY_WRITER_SETTLEMENT: AtomicBool = AtomicBool::new(false);
-
-/// Open that wait. Unix MCP fixtures only.
-#[cfg(all(test, unix))]
-pub(crate) fn delay_writer_settlement_for_test(delay: bool) {
-    DELAY_WRITER_SETTLEMENT.store(delay, Ordering::SeqCst);
+impl<T> Drop for AbortOnDrop<T> {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 /// First settlement wins. A caught panic settles itself as panicked before
@@ -617,20 +621,13 @@ impl Drop for SettleWriter<'_> {
 
 /// Join the HTTP writer. A panic that still fails the task is not a second
 /// end owner: [`record_writer_panic`]. An exchange panic is caught in the
-/// writer, which settles that outcome itself. A cause already recorded stays.
-/// A cancellation records nothing.
+/// writer, which settles that outcome and records it after an already-due
+/// clock sleep. A cause already recorded stays. A cancellation records nothing.
 async fn watch_http_writer(writer: JoinHandle<()>, shared: Arc<Shared>, session: Arc<HttpSession>) {
     let Err(error) = writer.await else {
         return;
     };
     if error.is_panic() {
-        #[cfg(all(test, unix))]
-        if DELAY_PANICKED_WRITER_RECORD.load(Ordering::SeqCst) {
-            // Park so the dropped recovery completion can reach the reader
-            // before this record. Only a test asks for that. An exchange
-            // panic caught in the writer has already recorded its cause.
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
         record_writer_panic(&session, &shared);
     }
 }

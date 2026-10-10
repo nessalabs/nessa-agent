@@ -3434,27 +3434,29 @@ async fn j27_delete_panic_releases_the_claim_for_reuse() {
     stop(&session).await;
 }
 
-struct ClearPanicDelay;
-impl Drop for ClearPanicDelay {
+struct ReleaseDueHold(Arc<ManualClock>);
+impl Drop for ReleaseDueHold {
     fn drop(&mut self) {
-        super::super::connection::delay_panicked_writer_record_for_test(false);
+        self.0.hold_already_due(false);
     }
 }
 
-struct ClearSettlementDelay;
-impl Drop for ClearSettlementDelay {
-    fn drop(&mut self) {
-        super::super::connection::delay_writer_settlement_for_test(false);
-    }
+/// Park point after the writer settles. `before` is how many clock waits
+/// existed before the panic. The new already-due wait is that park.
+async fn writer_parked_after_settle(clock: &ManualClock, before: usize) {
+    bounded(async {
+        while clock.waits().len() == before {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn j27_queued_recovery_keeps_the_writer_panic() {
-    // Ask the watch to wait. A panic that escapes the writer then loses to
-    // the dropped recovery completion. The writer records ServerGone first.
-    super::super::connection::delay_panicked_writer_record_for_test(true);
-    let _clear = ClearPanicDelay;
-    let (connection, session, peer, probe, gate, _) = held_recovery(202).await;
+    // Hold the writer's already-due sleep. Recovery publishes while the
+    // writer is parked after settlement, so a false settlement is the cause.
+    let (connection, session, peer, probe, gate, clock) = held_recovery(202).await;
     probe.event(json!({"id":0,"result":{"protocolVersion":"2025-06-18"}}));
     probe.released().await;
     bounded(async {
@@ -3463,9 +3465,13 @@ async fn j27_queued_recovery_keeps_the_writer_panic() {
         }
     })
     .await;
+    let waits_before_panic = clock.waits().len();
+    clock.hold_already_due(true);
+    let _release = ReleaseDueHold(clock.clone());
     let mut finished = session.finished();
     peer.control_panic.store(true, Ordering::SeqCst);
     gate.release();
+    writer_parked_after_settle(&clock, waits_before_panic).await;
     assert_eq!(bounded(connection.ended()).await, McpError::ServerGone);
     assert_eq!(connection.end_cause(), Some(McpError::ServerGone));
     assert_eq!(
@@ -3481,10 +3487,8 @@ async fn j27_queued_recovery_keeps_the_writer_panic() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn j27_finish_recovery_panic_defers_to_the_writer() {
-    // The caught future drops the completion sender before the writer
-    // settles. Waiting here lets an immediate Unconfirmed reach the end owner.
-    super::super::connection::delay_writer_settlement_for_test(true);
-    let _clear = ClearSettlementDelay;
+    // The test clock parks the writer after settlement and before its record.
+    // Recovery and the reader publish the end during that park.
     let cancelled = Arc::new(Gate::default());
     let initialized = Arc::new(Gate::default());
     let (probe, body) = Probe::body();
@@ -3497,8 +3501,8 @@ async fn j27_finish_recovery_panic_defers_to_the_writer() {
         .push_back((202, Some(cancelled.clone())));
     let peer = Arc::new(peer);
     let (session, incoming) = transport(peer.clone(), Arc::default());
-    let connection =
-        Connection::open_http(session.clone(), incoming, Arc::new(RuntimeClock::new()));
+    let clock = Arc::new(ManualClock::default());
+    let connection = Connection::open_http(session.clone(), incoming, clock.clone());
     bounded(connection.call("initialize", None))
         .await
         .unwrap()
@@ -3527,9 +3531,13 @@ async fn j27_finish_recovery_panic_defers_to_the_writer() {
     cancelled.release();
     initialized.reached().await;
     assert_eq!(connection.outgoing_queued_for_test(), 0);
+    let waits_before_panic = clock.waits().len();
+    clock.hold_already_due(true);
+    let _release = ReleaseDueHold(clock.clone());
     peer.initialized_panic.store(true, Ordering::SeqCst);
     let mut finished = session.finished();
     initialized.release();
+    writer_parked_after_settle(&clock, waits_before_panic).await;
     assert_eq!(bounded(connection.ended()).await, McpError::ServerGone);
     assert_eq!(connection.end_cause(), Some(McpError::ServerGone));
     assert_eq!(

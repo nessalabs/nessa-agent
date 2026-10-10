@@ -21,6 +21,7 @@
 //! HttpSession owns binding claims and the shared authorized modern POST policy.
 //! A panicked HTTP writer settles that outcome, and a recovery completion it
 //! drops waits for the settlement before choosing an end cause.
+//! Request and response debug output keeps header names and a body length.
 //! Its watch joins a panic that still fails the task and asks that same owner.
 //! Shutdown releases a claimed session id even when DELETE panics.
 //! ```
