@@ -14,20 +14,28 @@
 //! their own (stand-ins) cannot collide. The connection ends once, with one
 //! cause, and every pending call gets that cause; a call admitted after the
 //! end gets it too, because admission and the end share one lock. A panicked
-//! HTTP writer asks that same owner for [`McpError::ServerGone`] after the
-//! session fences new posts. Drop and close abort that writer before its
-//! watch, so an exchange still in flight cannot retain the session.
+//! HTTP writer catches that panic, discards the payload, and asks that same
+//! owner for [`McpError::ServerGone`] after the session fences new posts and
+//! before its queue drops. A later report from a dropped recovery completion
+//! cannot replace that cause. The watch still joins a panic that escapes the
+//! writer and asks the same owner. Drop and close abort that writer before
+//! its watch, so an exchange still in flight cannot retain the session.
 use super::framing::{self, FrameEnd, Frames, MAX_FRAME_BYTES};
 use super::http::{HttpSession, SendOutcome};
 use super::McpError;
 use crate::infrastructure::clock::{within, Clock, ClockInstant};
 use serde_json::{json, Value};
+#[cfg(all(test, unix))]
+use std::sync::atomic::AtomicBool;
 use std::{
     collections::HashMap,
+    future::Future,
+    panic::AssertUnwindSafe,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex, Weak,
     },
+    task::Poll,
     time::Duration,
 };
 #[cfg(all(test, unix))]
@@ -305,15 +313,29 @@ impl Connection {
             let session = session.clone();
             async move {
                 while let Some(frame) = frames.recv().await {
-                    let outcome = match frame {
-                        Outgoing::Frame(frame) => session.dispatch(&frame).await,
-                        Outgoing::PeerReply { frame, context } => {
-                            session.dispatch_reply(&frame, context).await
+                    // Catch inside this task, while `frames` is still alive.
+                    // A panic otherwise drops the queue during unwind, and a
+                    // queued recovery completion can record Unconfirmed before
+                    // the watch records the panic.
+                    let outcome = match catch_writer_panic(async {
+                        match frame {
+                            Outgoing::Frame(frame) => session.dispatch(&frame).await,
+                            Outgoing::PeerReply { frame, context } => {
+                                session.dispatch_reply(&frame, context).await
+                            }
+                            Outgoing::RecoveryReady {
+                                deadline,
+                                completed,
+                            } => session.finish_recovery(deadline, completed).await,
                         }
-                        Outgoing::RecoveryReady {
-                            deadline,
-                            completed,
-                        } => session.finish_recovery(deadline, completed).await,
+                    })
+                    .await
+                    {
+                        Ok(outcome) => outcome,
+                        Err(()) => {
+                            record_writer_panic(&session, &shared);
+                            return;
+                        }
                     };
                     match outcome {
                         SendOutcome::Done => {}
@@ -506,6 +528,17 @@ impl Connection {
     pub(crate) fn http_writer_watch_finished(&self) -> bool {
         self.writer_watch.is_finished()
     }
+
+    /// Frames waiting in the writer queue, not the one the writer already
+    /// dequeued. Unix MCP fixtures use this to see a `RecoveryReady` arrive
+    /// before the writer panics.
+    #[cfg(all(test, unix))]
+    pub(crate) fn outgoing_queued_for_test(&self) -> usize {
+        self.outgoing
+            .sender
+            .max_capacity()
+            .saturating_sub(self.outgoing.sender.capacity())
+    }
 }
 
 /// Fence new HTTP posts, then record `cause` once. The fence is first so a
@@ -515,17 +548,58 @@ fn shutdown_and_end(session: &HttpSession, shared: &Shared, cause: McpError) {
     shared.end(cause);
 }
 
-/// Join the HTTP writer. A panic is not a second end owner: log a fixed
-/// marker and the server id, then [`shutdown_and_end`] with
-/// [`McpError::ServerGone`]. The panic payload stays out of that log. A cause
-/// already recorded stays. A cancellation records nothing.
+/// Poll `future` and discard a panic payload. The future is not resumed after
+/// that panic. [`Shared::end`] stays the only end owner: the caller records
+/// [`McpError::ServerGone`] before the writer queue drops.
+fn catch_writer_panic<F: Future>(future: F) -> impl Future<Output = Result<F::Output, ()>> {
+    let mut future = Box::pin(future);
+    std::future::poll_fn(move |context| {
+        match std::panic::catch_unwind(AssertUnwindSafe(|| future.as_mut().poll(context))) {
+            Ok(Poll::Pending) => Poll::Pending,
+            Ok(Poll::Ready(value)) => Poll::Ready(Ok(value)),
+            Err(_) => Poll::Ready(Err(())),
+        }
+    })
+}
+
+/// Log a fixed marker and the server id, then [`shutdown_and_end`] with
+/// [`McpError::ServerGone`]. The panic payload stays out of that log.
+fn record_writer_panic(session: &HttpSession, shared: &Shared) {
+    tracing::error!(server = %session.server(), "custom HTTP writer panicked");
+    shutdown_and_end(session, shared, McpError::ServerGone);
+}
+
+/// When set, the watch waits before it records a panic that escaped the
+/// writer. The queued-recovery test uses this so a dropped completion can
+/// reach the reader first. A panic caught in the writer is recorded before
+/// that delay.
+#[cfg(all(test, unix))]
+static DELAY_PANICKED_WRITER_RECORD: AtomicBool = AtomicBool::new(false);
+
+/// Let a queued recovery completion report before the watch records an
+/// escaped panic. Unix MCP fixtures only.
+#[cfg(all(test, unix))]
+pub(crate) fn delay_panicked_writer_record_for_test(delay: bool) {
+    DELAY_PANICKED_WRITER_RECORD.store(delay, Ordering::SeqCst);
+}
+
+/// Join the HTTP writer. A panic that still fails the task is not a second
+/// end owner: [`record_writer_panic`]. An exchange panic is caught in the
+/// writer before this join, so the queue is still held when the cause is
+/// recorded. A cause already recorded stays. A cancellation records nothing.
 async fn watch_http_writer(writer: JoinHandle<()>, shared: Arc<Shared>, session: Arc<HttpSession>) {
     let Err(error) = writer.await else {
         return;
     };
     if error.is_panic() {
-        tracing::error!(server = %session.server(), "custom HTTP writer panicked");
-        shutdown_and_end(&session, &shared, McpError::ServerGone);
+        #[cfg(all(test, unix))]
+        if DELAY_PANICKED_WRITER_RECORD.load(Ordering::SeqCst) {
+            // Park so the dropped recovery completion can reach the reader
+            // before this record. Only a test asks for that. An exchange
+            // panic caught in the writer has already recorded its cause.
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        record_writer_panic(&session, &shared);
     }
 }
 

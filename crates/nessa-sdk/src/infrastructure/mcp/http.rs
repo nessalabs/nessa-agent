@@ -30,7 +30,8 @@
 //! `tests::post_streams` and `tests::http_progress`).
 //!
 //! Dropping the session aborts its GET and POST streams and asks for the same single
-//! DELETE. The DELETE itself is best-effort and bounded by the exchange.
+//! DELETE. The DELETE itself is best-effort and bounded by the exchange. A panic
+//! in that DELETE still releases the claimed id and signals [`HttpSession::finished`].
 #![deny(missing_docs)]
 
 use super::authorization::{Bearer, RemoteAuthorization};
@@ -268,6 +269,7 @@ impl HttpSession {
 
     /// Stop owned GET/POST streams and DELETE a claimed modern session id once.
     /// [`Self::finished`] observes completion after reader joins and DELETE.
+    /// A panic in that DELETE still releases the claim and signals finished.
     /// Legacy sessions and sessions with no id record that DELETE does not
     /// apply and do not send one.
     pub fn shutdown(&self) {
@@ -316,8 +318,17 @@ impl HttpSession {
                 finished.send_replace(true);
                 return;
             };
+            // Drop runs on success, on a DELETE panic, and if this task is
+            // aborted. The payload is not logged.
+            let _release = ReleaseClaimOnDrop {
+                claims,
+                url,
+                session_id: session_id.clone(),
+                local,
+                finished,
+            };
             let mut headers = vec![
-                ("Mcp-Session-Id".into(), session_id.clone()),
+                ("Mcp-Session-Id".into(), session_id),
                 (
                     "Accept".into(),
                     "application/json, text/event-stream".into(),
@@ -333,8 +344,6 @@ impl HttpSession {
                 body: Vec::new(),
             };
             let _ = exchange.exchange(request).await;
-            claims.release(&url, &session_id, local);
-            finished.send_replace(true);
         });
     }
 
@@ -1172,6 +1181,24 @@ impl HttpSession {
 impl Drop for HttpSession {
     fn drop(&mut self) {
         self.shutdown();
+    }
+}
+
+/// Release one claimed session id and signal shutdown finished.
+/// Constructed after reader joins and before DELETE, so both happen when
+/// DELETE returns, panics, or the cleanup task is dropped.
+struct ReleaseClaimOnDrop {
+    claims: Arc<SessionClaims>,
+    url: String,
+    session_id: String,
+    local: u64,
+    finished: watch::Sender<bool>,
+}
+
+impl Drop for ReleaseClaimOnDrop {
+    fn drop(&mut self) {
+        self.claims.release(&self.url, &self.session_id, self.local);
+        self.finished.send_replace(true);
     }
 }
 

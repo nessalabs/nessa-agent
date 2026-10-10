@@ -114,6 +114,7 @@ struct Peer {
     ordinary_response_id: Option<String>,
     recovery_exchange_failure: AtomicBool,
     control_panic: AtomicBool,
+    delete_panic: AtomicBool,
 }
 impl Peer {
     fn new() -> Self {
@@ -138,6 +139,7 @@ impl Peer {
             ordinary_response_id: None,
             recovery_exchange_failure: AtomicBool::new(false),
             control_panic: AtomicBool::new(false),
+            delete_panic: AtomicBool::new(false),
         }
     }
     async fn observed(&self, predicate: impl Fn(&HttpRequest) -> bool) {
@@ -188,6 +190,10 @@ impl HttpExchange for Peer {
         self.changed.notify_one();
         match request.method {
             HttpMethod::Delete => {
+                assert!(
+                    !self.delete_panic.swap(false, Ordering::SeqCst),
+                    "injected DELETE panic"
+                );
                 if let Some(gate) = &self.delete {
                     gate.enter().await;
                 }
@@ -3373,6 +3379,87 @@ async fn j27_close_releases_a_held_writer_and_deletes_once() {
         tokio::task::yield_now().await;
     }
     assert_eq!(Arc::strong_count(&session), 2);
+    assert_eq!(
+        peer.count(|request| request.method == HttpMethod::Delete),
+        1
+    );
+}
+
+#[tokio::test]
+async fn j27_delete_panic_releases_the_claim_for_reuse() {
+    let claims = Arc::new(SessionClaims::default());
+    let gate = Arc::new(Gate::default());
+    let peer = Arc::new(Peer::new());
+    peer.controls
+        .lock()
+        .unwrap()
+        .push_back((202, Some(gate.clone())));
+    let (session, incoming) = transport(peer.clone(), claims.clone());
+    let connection =
+        Connection::open_http(session.clone(), incoming, Arc::new(RuntimeClock::new()));
+    bounded(connection.call("initialize", None))
+        .await
+        .unwrap()
+        .unwrap();
+    connection
+        .notify("notifications/cancelled", Some(json!({"requestId": 1})))
+        .await
+        .unwrap();
+    gate.reached().await;
+    let mut finished = session.finished();
+    peer.control_panic.store(true, Ordering::SeqCst);
+    peer.delete_panic.store(true, Ordering::SeqCst);
+    gate.release();
+    assert_eq!(bounded(connection.ended()).await, McpError::ServerGone);
+    bounded(finished.wait_for(|done| *done)).await.unwrap();
+    assert_eq!(
+        peer.count(|request| request.method == HttpMethod::Delete),
+        1
+    );
+
+    let peer = Arc::new(Peer::new());
+    let (session, incoming) = transport(peer, claims);
+    let connection =
+        Connection::open_http(session.clone(), incoming, Arc::new(RuntimeClock::new()));
+    bounded(connection.call("initialize", None))
+        .await
+        .unwrap()
+        .unwrap();
+    stop(&session).await;
+}
+
+struct ClearPanicDelay;
+impl Drop for ClearPanicDelay {
+    fn drop(&mut self) {
+        super::super::connection::delay_panicked_writer_record_for_test(false);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn j27_queued_recovery_keeps_the_writer_panic() {
+    // Ask the watch to wait. A panic that escapes the writer then loses to
+    // the dropped recovery completion. The writer records ServerGone first.
+    super::super::connection::delay_panicked_writer_record_for_test(true);
+    let _clear = ClearPanicDelay;
+    let (connection, session, peer, probe, gate, _) = held_recovery(202).await;
+    probe.event(json!({"id":0,"result":{"protocolVersion":"2025-06-18"}}));
+    probe.released().await;
+    bounded(async {
+        while connection.outgoing_queued_for_test() == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    let mut finished = session.finished();
+    peer.control_panic.store(true, Ordering::SeqCst);
+    gate.release();
+    assert_eq!(bounded(connection.ended()).await, McpError::ServerGone);
+    assert_eq!(connection.end_cause(), Some(McpError::ServerGone));
+    assert_eq!(
+        peer.count(|request| method_of(request, "notifications/initialized")),
+        0
+    );
+    bounded(finished.wait_for(|done| *done)).await.unwrap();
     assert_eq!(
         peer.count(|request| request.method == HttpMethod::Delete),
         1
