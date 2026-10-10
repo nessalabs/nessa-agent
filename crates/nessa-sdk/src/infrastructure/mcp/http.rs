@@ -254,6 +254,12 @@ impl HttpSession {
         (session, incoming)
     }
 
+    /// The configured server this session posts for. This is an identity, not
+    /// a credential or a request body.
+    pub(crate) fn server(&self) -> Uuid {
+        self.server
+    }
+
     /// Resolves after shutdown joins owned readers and records its DELETE
     /// observation (or that DELETE does not apply). Subscribe before shutdown.
     pub fn finished(&self) -> watch::Receiver<bool> {

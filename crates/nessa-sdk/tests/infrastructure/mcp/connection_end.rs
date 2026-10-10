@@ -187,7 +187,7 @@ async fn closed_cause_survives_a_panicked_writer() {
     }
     let shared = open_state();
     shared.end(McpError::Closed);
-    let writer = tokio::spawn(async { panic!("local adapter writer panicked") });
+    let writer = tokio::spawn(async { panic!("bearer secret-token-not-for-logs") });
     timeout(BOUND, async {
         while !writer.is_finished() {
             tokio::task::yield_now().await;
@@ -209,9 +209,12 @@ async fn closed_cause_survives_a_panicked_writer() {
     watch_http_writer(writer, Arc::clone(&shared), Arc::clone(&session)).await;
     let log = String::from_utf8(recorded.lock().expect("log").clone()).expect("utf8 log");
     assert!(
-        log.contains("the HTTP MCP writer panicked")
-            && log.contains("local adapter writer panicked"),
+        log.contains("custom HTTP writer panicked"),
         "writer panic was not logged: {log}"
+    );
+    assert!(
+        !log.contains("secret-token-not-for-logs"),
+        "panic payload leaked into the log: {log}"
     );
     assert_eq!(recorded_cause(&shared), Some(McpError::Closed));
     timeout(BOUND, finished.wait_for(|done| *done))

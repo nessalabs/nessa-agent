@@ -515,15 +515,16 @@ fn shutdown_and_end(session: &HttpSession, shared: &Shared, cause: McpError) {
     shared.end(cause);
 }
 
-/// Join the HTTP writer. A panic is not a second end owner: log it, then
-/// [`shutdown_and_end`] with [`McpError::ServerGone`]. A cause already
-/// recorded stays. A cancellation records nothing.
+/// Join the HTTP writer. A panic is not a second end owner: log a fixed
+/// marker and the server id, then [`shutdown_and_end`] with
+/// [`McpError::ServerGone`]. The panic payload stays out of that log. A cause
+/// already recorded stays. A cancellation records nothing.
 async fn watch_http_writer(writer: JoinHandle<()>, shared: Arc<Shared>, session: Arc<HttpSession>) {
     let Err(error) = writer.await else {
         return;
     };
     if error.is_panic() {
-        tracing::error!(error = %error, "the HTTP MCP writer panicked");
+        tracing::error!(server = %session.server(), "custom HTTP writer panicked");
         shutdown_and_end(&session, &shared, McpError::ServerGone);
     }
 }
