@@ -158,11 +158,61 @@ struct InFlight {
     next: u32,
     /// Numbers held by a publish not yet answered, staging included.
     reserved: usize,
-    /// Each published artifact's wait for the gateway's answer. One let go
-    /// unanswered was lost with the connection.
-    waiting: HashMap<u32, oneshot::Sender<Collection>>,
+    /// Each published artifact's wait for how it was settled.
+    waiting: HashMap<u32, oneshot::Sender<Settled>>,
     /// The lease ended: nothing more is published under it.
     ended: bool,
+}
+
+/// How a published artifact was settled, recorded where it was settled:
+/// as the gateway's answer arrives, or as the lease ends. So the ledger
+/// orders each publish's settlement by when it happened, before an end that
+/// follows it.
+enum Settled {
+    /// The gateway answered, and the answer is recorded.
+    Answered(Collection),
+    /// The gateway answered, and the answer could not be recorded.
+    Unrecorded(Collection),
+    /// The connection was lost before the gateway answered.
+    Unanswered,
+}
+
+/// Record how `artifact` was settled, `None` meaning unanswered, and say
+/// so to its publisher.
+fn settle(
+    ledger: &dyn LeaseLedger,
+    lease: &str,
+    artifact: u32,
+    waiting: oneshot::Sender<Settled>,
+    outcome: Option<Collection>,
+) {
+    let settled = match outcome {
+        Some(outcome) => {
+            let entry = LedgerEntry::Collected {
+                lease: lease.to_owned(),
+                artifact,
+                outcome,
+            };
+            match ledger.record(&entry) {
+                Ok(()) => Settled::Answered(outcome),
+                Err(error) => {
+                    tracing::error!(lease, artifact, %error, "an artifact's collection could not be recorded");
+                    Settled::Unrecorded(outcome)
+                }
+            }
+        }
+        None => {
+            let entry = LedgerEntry::Unanswered {
+                lease: lease.to_owned(),
+                artifact,
+            };
+            if let Err(error) = ledger.record(&entry) {
+                tracing::error!(lease, artifact, %error, "an unanswered publish could not be recorded");
+            }
+            Settled::Unanswered
+        }
+    };
+    let _ = waiting.send(settled);
 }
 
 /// One lease's artifacts, while it is held.
@@ -172,6 +222,7 @@ pub(crate) struct LeaseArtifacts {
     in_flight: Arc<Mutex<InFlight>>,
     dispatcher: JoinHandle<()>,
     outbox: Arc<dyn ArtifactOutbox>,
+    ledger: Arc<dyn LeaseLedger>,
 }
 
 impl LeaseArtifacts {
@@ -198,7 +249,7 @@ impl LeaseArtifacts {
             Publisher {
                 in_flight: in_flight.clone(),
                 outbox: outbox.clone(),
-                ledger,
+                ledger: ledger.clone(),
                 frames,
             },
         ));
@@ -208,6 +259,7 @@ impl LeaseArtifacts {
             in_flight,
             dispatcher,
             outbox,
+            ledger,
         })
     }
 
@@ -216,13 +268,20 @@ impl LeaseArtifacts {
         &self.address
     }
 
-    /// The gateway's answer for `artifact`. `false` when no such artifact
+    /// The gateway's answer for `artifact`, recorded before this returns,
+    /// so before any frame that follows it. `false` when no such artifact
     /// waits for one: the frame names nothing held.
     pub(crate) fn collected(&self, artifact: u32, outcome: Collection) -> bool {
         let waiting = lock(&self.in_flight).waiting.remove(&artifact);
         match waiting {
             Some(waiting) => {
-                let _ = waiting.send(outcome);
+                settle(
+                    self.ledger.as_ref(),
+                    &self.lease,
+                    artifact,
+                    waiting,
+                    Some(outcome),
+                );
                 true
             }
             None => false,
@@ -241,12 +300,18 @@ impl LeaseArtifacts {
             in_flight.ended = true;
             in_flight.waiting.drain().collect()
         };
-        for (_, waiting) in waiting {
-            if !lost {
-                let _ = waiting.send(Collection::Refused {
-                    reason: CollectionRefusal::LeaseEnded,
-                });
-            }
+        // Recorded here, before the end itself is: each settled first.
+        for (artifact, waiting) in waiting {
+            let outcome = (!lost).then_some(Collection::Refused {
+                reason: CollectionRefusal::LeaseEnded,
+            });
+            settle(
+                self.ledger.as_ref(),
+                &self.lease,
+                artifact,
+                waiting,
+                outcome,
+            );
         }
         self.outbox.close(&self.lease);
     }
@@ -352,36 +417,21 @@ impl Publisher {
             artifact,
             file: staged,
         };
-        // No frame sent, or no answer before the wait was let go: the
-        // connection is gone, and with it what the gateway made of the file.
-        let outcome = match self.frames.send(frame).await {
-            Ok(()) => answer.await.ok(),
-            Err(_) => None,
-        };
-        let Some(outcome) = outcome else {
-            let entry = LedgerEntry::Unanswered {
-                lease: lease.to_owned(),
-                artifact,
-            };
-            if let Err(error) = self.ledger.record(&entry) {
-                tracing::error!(lease, artifact, %error, "an unanswered publish could not be recorded");
+        // No frame sent: the connection is gone, and with it what the
+        // gateway made of the file. Settled here unless an end already was.
+        if self.frames.send(frame).await.is_err() {
+            let waiting = lock(&self.in_flight).waiting.remove(&artifact);
+            if let Some(waiting) = waiting {
+                settle(self.ledger.as_ref(), lease, artifact, waiting, None);
             }
-            self.outbox.discard(lease, artifact);
-            return PublishAnswer::Unanswered;
-        };
-        let entry = LedgerEntry::Collected {
-            lease: lease.to_owned(),
-            artifact,
-            outcome,
-        };
-        let recorded = self.ledger.record(&entry);
-        self.outbox.discard(lease, artifact);
-        if let Err(error) = recorded {
-            tracing::error!(lease, artifact, %error, "an artifact's collection could not be recorded");
-            return PublishAnswer::Unrecorded {
-                collection: outcome,
-            };
         }
+        let settled = answer.await.unwrap_or(Settled::Unanswered);
+        self.outbox.discard(lease, artifact);
+        let outcome = match settled {
+            Settled::Answered(outcome) => outcome,
+            Settled::Unrecorded(collection) => return PublishAnswer::Unrecorded { collection },
+            Settled::Unanswered => return PublishAnswer::Unanswered,
+        };
         match outcome {
             Collection::Held => PublishAnswer::Held { digest, size },
             Collection::AlreadyHeld => PublishAnswer::AlreadyHeld { digest, size },

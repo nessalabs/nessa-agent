@@ -121,6 +121,8 @@ impl HarnessLauncher for EchoLauncher {
 struct MemoryLedger {
     entries: Mutex<Vec<LedgerEntry>>,
     failing: AtomicBool,
+    /// A collection takes a while to be recorded.
+    slow_collections: AtomicBool,
 }
 
 impl MemoryLedger {
@@ -133,6 +135,11 @@ impl LeaseLedger for MemoryLedger {
     fn record(&self, entry: &LedgerEntry) -> io::Result<()> {
         if self.failing.load(Ordering::SeqCst) {
             return Err(io::Error::other("disk gone"));
+        }
+        if matches!(entry, LedgerEntry::Collected { .. })
+            && self.slow_collections.load(Ordering::SeqCst)
+        {
+            std::thread::sleep(Duration::from_millis(200));
         }
         self.entries.lock().unwrap().push(entry.clone());
         Ok(())
@@ -1505,6 +1512,52 @@ async fn a_lease_end_answers_every_waiting_publisher() {
         })
         .await
         .is_err());
+}
+
+/// A collection the gateway sends just before its lease's End is on record
+/// before that end, however long recording it takes: what the gateway
+/// queued first, the ledger keeps first. On two threads, so the end could
+/// run while a collection is still being recorded elsewhere.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_collection_just_before_the_end_is_recorded_before_it() {
+    let (mut gateway, outbox) = Gateway::publishing();
+    gateway.started(LEASE).await;
+    gateway
+        .ledger
+        .slow_collections
+        .store(true, Ordering::SeqCst);
+    let answered = publish(&outbox, LEASE).await;
+    assert!(matches!(
+        gateway.said().await,
+        FromEnvironment::Published { artifact: 0, .. }
+    ));
+    gateway
+        .send(ToEnvironment::Collected {
+            lease: LEASE.into(),
+            artifact: 0,
+            outcome: Collection::Held,
+        })
+        .await;
+    gateway
+        .send(ToEnvironment::End {
+            lease: LEASE.into(),
+        })
+        .await;
+    assert!(matches!(
+        gateway.said().await,
+        FromEnvironment::Ended { .. }
+    ));
+    let entries = gateway.ledger.entries();
+    let at = |kind: fn(&LedgerEntry) -> bool| entries.iter().position(kind).unwrap();
+    assert!(
+        at(|entry| matches!(entry, LedgerEntry::Collected { .. }))
+            < at(|entry| matches!(entry, LedgerEntry::Ended { .. })),
+        "{entries:?}"
+    );
+    assert!(matches!(
+        answer_of(answered).await,
+        crate::env_serve::application::PublishAnswer::Held { .. }
+    ));
 }
 
 /// A publish the gateway never answered before its connection was lost is
