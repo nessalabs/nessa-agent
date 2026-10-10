@@ -233,14 +233,18 @@ impl RetainedCache {
         })
     }
 
-    /// Conversations the cache holds for `receiver`, read from the cache
-    /// alone.
-    pub fn conversations(&mut self, receiver: &str) -> Result<usize, ReadFailure> {
+    /// The conversations the cache holds for `receiver`, by id, read from
+    /// the cache alone.
+    pub fn conversation_ids(&mut self, receiver: &str) -> Result<Vec<String>, ReadFailure> {
         let receiver = Id::new(receiver).map_err(|_| ReadFailure::Cache)?;
         let Some(scope) = self.catalogue_scope(&receiver)? else {
-            return Ok(0);
+            return Ok(Vec::new());
         };
-        Ok(self.live(&scope)?.len())
+        Ok(self
+            .live(&scope)?
+            .into_iter()
+            .map(|id| id.as_str().to_owned())
+            .collect())
     }
 
     /// Read what the gateway grants `access` into this cache. Unless
