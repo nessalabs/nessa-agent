@@ -1,8 +1,11 @@
-//! Peer records on disk, their audit, and the owner commands over them.
+//! Peer records on disk, their audit, the connector enrollments dial with,
+//! and the owner commands over them.
 //! Design: `docs/design/auth/peer-gateways.md` ("The dialing side").
 mod audit;
 mod commands;
+mod connector;
 mod records;
 pub use audit::DurablePeerAudit;
-pub use commands::{PeerCommands, PeerError};
+pub use commands::{PeerCommands, PeerError, CONNECT};
+pub use connector::TcpPeerConnector;
 pub use records::{PeerEntry, PeerPhase, PeerRecord, PeerRecords, PeerSlot, SlotRefusal, SlotSave};

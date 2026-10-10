@@ -26,7 +26,9 @@ use crate::device_pairing::infrastructure::{
     NativeEnrollmentConnections, NativeEnrollmentListener, PairingOwnerCommands,
     PairingRuntimeDependencies, TcpEnrollmentAccept,
 };
-use crate::peer_gateways::infrastructure::{DurablePeerAudit, PeerCommands, PeerRecords};
+use crate::peer_gateways::infrastructure::{
+    DurablePeerAudit, PeerCommands, PeerRecords, TcpPeerConnector,
+};
 use crate::product::{DeviceCredentials, NativeSessions, ProductRouteState};
 use nessa_auth::{
     adapters::{
@@ -143,6 +145,7 @@ pub(super) async fn prepare(
             root.join(PEER_AUDIT_DIRECTORY),
             inputs.clock.clone(),
         )),
+        Arc::new(TcpPeerConnector),
     );
     let gateway = Arc::new(
         GatewayPairing::open(PairingRuntimeDependencies {

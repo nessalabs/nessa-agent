@@ -475,7 +475,8 @@ The dialing side of a peer gateway is `nessa-server/src/peer_gateways/`.
 `infrastructure/commands.rs` holds the owner's enroll, list and forget, which
 hand their evidence (`application/`, the `PeerAudit` port) to
 `infrastructure/audit.rs`, one private file per record under
-`peer-gateways-audit/`. The
+`peer-gateways-audit/`, and dial through the `PeerConnector` port, whose
+TCP adapter is `infrastructure/connector.rs`. The
 product methods are `nessa-server/src/product/peers.rs`, composed beside native
 pairing in `composition/native_pairing.rs`. Tests are
 `tests/peer_gateways/enroll.rs` and the two-process case in
