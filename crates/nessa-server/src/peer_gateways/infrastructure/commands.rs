@@ -18,7 +18,9 @@
 //! command that finds a cycle holding it stops that cycle (its read's sockets
 //! shut, its waits woken) and takes the turn once given back; the cycle's
 //! read carries on at the next one. Only another owner command makes it
-//! `Busy`.
+//! `Busy`. A cycle holds the turn only for its own peer I/O and local
+//! writes: it keeps the audit records of its changes after it gives the turn
+//! back, so a slow audit never holds an owner command.
 use super::records::{
     ForgetFailure, PeerEntry, PeerPhase, PeerRecords, PeerSlot, SlotFound, SlotRefusal, SlotSave,
 };
@@ -34,7 +36,7 @@ use nessa_auth::{
     },
 };
 use nessa_client_core::pairing::{NativeClientError, NativeEnrollmentClient};
-use nessa_client_core::retained::ReadStop;
+use nessa_client_core::retained::{ReadStop, HANDSHAKE};
 use nessa_protocol::clock::Clock as MonotonicClock;
 use nessa_protocol::pairing::socket::WAKE_TICK;
 use nessa_protocol::product::generated::PeerErrorCode;
@@ -64,9 +66,13 @@ pub const CONNECT: Duration = Duration::from_secs(5);
 /// One not acknowledged by then is not kept, as far as the command knows.
 pub const AUDIT_DEADLINE: Duration = Duration::from_secs(5);
 /// How long an owner command waits, by the same clock, for a poller cycle it
-/// stopped to give back the turn. Stopping shuts the cycle's sockets, so
-/// only a local write is left to finish.
-pub const PREEMPT: Duration = Duration::from_secs(5);
+/// stopped to give back the turn. Stopping shuts the cycle's sockets and
+/// wakes its waits, so what is left is a read's operating-system connect,
+/// which cannot be stopped and lasts at most [`HANDSHAKE`], and local writes;
+/// the cycle's audit records are kept after it gives the turn back.
+pub const PREEMPT: Duration = Duration::from_secs(10);
+// The connect a stop cannot cut short, with as long again for local work.
+const _: () = assert!(PREEMPT.as_millis() >= 2 * HANDSHAKE.as_millis());
 
 /// Why a peer command did not do what was asked.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -196,20 +202,32 @@ impl CycleStop {
     }
 }
 
-/// The turn as one poller cycle holds it. Dropping it clears the cycle,
-/// then gives the turn back.
+/// The turn as one poller cycle holds it. Dropping it clears the cycle and
+/// gives the turn back, both under the cycle's lock, so an owner command
+/// never finds the turn taken with no cycle to stop.
 pub(super) struct CycleTurn {
     commands: Arc<PeerCommands>,
-    _permit: OwnedSemaphorePermit,
+    permit: Option<OwnedSemaphorePermit>,
 }
 impl Drop for CycleTurn {
     fn drop(&mut self) {
-        *self
+        let mut holder = self
             .commands
             .cycle
             .lock()
-            .unwrap_or_else(PoisonError::into_inner) = None;
+            .unwrap_or_else(PoisonError::into_inner);
+        *holder = None;
+        drop(self.permit.take());
     }
+}
+/// What an owner command found when it asked for the turn.
+pub(super) enum OwnerTurn {
+    /// It was free.
+    Taken(OwnedSemaphorePermit),
+    /// This poller cycle holds it: stop it and wait.
+    Cycle(Arc<CycleStop>),
+    /// Another owner command holds it.
+    Busy,
 }
 impl PeerCommands {
     /// Commands over `records`, with `clock` for every deadline of an
@@ -246,7 +264,7 @@ impl PeerCommands {
         *holder = Some(cycle.clone());
         Some(CycleTurn {
             commands: self.clone(),
-            _permit: permit,
+            permit: Some(permit),
         })
     }
     /// Stop the cycle holding the turn, if one is.
@@ -259,17 +277,23 @@ impl PeerCommands {
     /// cycle that held it once stopped, within [`PREEMPT`]. `None` when
     /// another owner command holds it, or the cycle did not give it back.
     async fn owner_turn(&self) -> Option<OwnedSemaphorePermit> {
-        let cycle = {
-            let holder = self.cycle.lock().unwrap_or_else(PoisonError::into_inner);
-            match self.turn.clone().try_acquire_owned() {
-                Ok(permit) => return Some(permit),
-                Err(_) => holder.clone()?,
-            }
+        let cycle = match self.try_owner_turn() {
+            OwnerTurn::Taken(permit) => return Some(permit),
+            OwnerTurn::Cycle(cycle) => cycle,
+            OwnerTurn::Busy => return None,
         };
         cycle.stop();
         self.within(PREEMPT, || self.turn.clone().acquire_owned())
             .await?
             .ok()
+    }
+    /// The turn if free, else who holds it, read under the cycle's lock.
+    pub(super) fn try_owner_turn(&self) -> OwnerTurn {
+        let holder = self.cycle.lock().unwrap_or_else(PoisonError::into_inner);
+        match self.turn.clone().try_acquire_owned() {
+            Ok(permit) => OwnerTurn::Taken(permit),
+            Err(_) => holder.clone().map_or(OwnerTurn::Busy, OwnerTurn::Cycle),
+        }
     }
     pub(super) fn set_sync(&self, key: DeviceKey, sync: Option<PeerSync>) {
         let mut syncs = self.syncs.lock().unwrap_or_else(PoisonError::into_inner);
@@ -598,9 +622,11 @@ impl PeerCommands {
         })
     }
     /// Keep the evidence of one change the poller made to `peer`, after it
-    /// was made: the one way a poller change is audited. A record not kept
-    /// within [`AUDIT_DEADLINE`] is logged and the change stands; the
-    /// cleanup it records is never undone or held back for it.
+    /// was made and after the cycle that made it gave the turn back: the one
+    /// way a poller change is audited. A record not kept within
+    /// [`AUDIT_DEADLINE`] is logged and the change stands; the cleanup it
+    /// records is never undone or held back for it, and no owner command
+    /// waits on it.
     pub(super) async fn poller_changed(
         &self,
         peer: DeviceKey,
@@ -793,3 +819,7 @@ fn hex(key: &DeviceKey) -> String {
         .map(|byte| format!("{byte:02x}"))
         .collect()
 }
+
+#[cfg(test)]
+#[path = "../../../tests/peer_gateways/commands.rs"]
+mod tests;

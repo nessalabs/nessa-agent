@@ -124,8 +124,7 @@ fn holding(holding: &PeerHolding) -> Value {
     value
 }
 
-/// The cause's name, and what it names: the status's own cause or outcome,
-/// or the conversation withdrawn.
+/// The cause's name, and what it names: the status's own cause or outcome.
 fn cause(cause: &PollerCause) -> (&'static str, Option<&str>) {
     match cause {
         PollerCause::Approved => ("peer_approved", None),
@@ -210,14 +209,14 @@ pub(super) fn record_value(record: &PeerAuditRecord) -> Value {
             outcome: result,
         } => {
             let (name, detail) = cause(why);
-            let conversation = match why {
-                PollerCause::Withdrawn { conversation } => Some(conversation.as_str()),
+            let conversations = match why {
+                PollerCause::Withdrawn { conversations } => Some(conversations),
                 _ => None,
             };
             json!({
                 "kind": "peer_poller_changed",
                 "operationId": operation.to_string(),
-                "target": {"peerKey": hex(peer), "conversationId": conversation},
+                "target": {"peerKey": hex(peer), "conversationIds": conversations},
                 "transition": {"before": holding(before), "after": holding(after)},
                 "outcome": outcome(result),
                 "cause": name,

@@ -152,6 +152,17 @@ pub enum SlotSave {
     Uncertain,
 }
 
+/// Which transition a status read began on a kept peer's record, noted as
+/// the store begins it so a write that then fails is still named by it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SlotTransition {
+    /// An Active status: the issued credential is being saved.
+    Approved,
+    /// A Terminal or Unclaimed status: the cache is being removed and the
+    /// record marked revoked.
+    Ended,
+}
+
 /// Why a forget did not finish, by the step that failed: the cache, which
 /// goes first and leaves the record untouched, or the record.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -204,6 +215,7 @@ impl PeerRecords {
             refusal: Mutex::new(None),
             found: Mutex::new(None),
             saved: Mutex::new(None),
+            transition: Mutex::new(None),
         }
     }
     /// A slot for the peer already recorded under `key`, for reading its
@@ -216,6 +228,7 @@ impl PeerRecords {
             refusal: Mutex::new(None),
             found: Mutex::new(None),
             saved: Mutex::new(None),
+            transition: Mutex::new(None),
         }
     }
     /// Every peer, in key order, at most `MAX_PEERS`: saving refuses one
@@ -437,6 +450,8 @@ pub struct PeerSlot {
     found: Mutex<Option<(DeviceKey, SlotFound)>>,
     /// What the first save that touched the peer's record did.
     saved: Mutex<Option<SlotSave>>,
+    /// The transition a status read began on the record, if one did.
+    transition: Mutex<Option<SlotTransition>>,
 }
 impl PeerSlot {
     /// The peer this slot saved or was opened for, once known.
@@ -460,6 +475,21 @@ impl PeerSlot {
     /// How the first save that reached storage did; `None` when none did.
     pub fn saved(&self) -> Option<SlotSave> {
         *self.saved.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+    /// The transition a status read began on the record: noted before the
+    /// write, so it names the change whether or not storage then took it.
+    /// `None` when the status changed nothing.
+    pub fn transition(&self) -> Option<SlotTransition> {
+        *self
+            .transition
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+    fn note_transition(&self, transition: SlotTransition) {
+        *self
+            .transition
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(transition);
     }
     fn note_save(&self, save: SlotSave) {
         self.saved
@@ -646,14 +676,17 @@ impl ClientPendingStore for PeerSlot {
         match &record.phase {
             PeerPhase::Active { .. } if record.phase == active => Ok(()),
             PeerPhase::Active { .. } | PeerPhase::Revoked => Err(PrivateStateError::Conflict),
-            PeerPhase::Pending => self.records.write(
-                &PeerRecord {
-                    phase: active,
-                    ..record
-                },
-                &own,
-                true,
-            ),
+            PeerPhase::Pending => {
+                self.note_transition(SlotTransition::Approved);
+                self.records.write(
+                    &PeerRecord {
+                        phase: active,
+                        ..record
+                    },
+                    &own,
+                    true,
+                )
+            }
         }
     }
     /// The peer's authenticated end of this enrollment. A device's record
@@ -674,6 +707,7 @@ impl ClientPendingStore for PeerSlot {
         if record.intent != expected {
             return Err(PrivateStateError::Conflict);
         }
+        self.note_transition(SlotTransition::Ended);
         self.records.remove_cache_locked(&peer)?;
         if record.phase == PeerPhase::Revoked {
             return Ok(());

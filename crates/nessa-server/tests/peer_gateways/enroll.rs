@@ -40,8 +40,8 @@ use nessa_server::{
         },
         infrastructure::{
             DurablePeerAudit, EnrollmentEntropy, EnrollmentEntropySource, PeerCommands, PeerEntry,
-            PeerError, PeerPhase, PeerRecords, SlotRefusal, TcpPeerConnector, AUDIT_DEADLINE,
-            CONNECT,
+            PeerError, PeerPhase, PeerRecords, SlotRefusal, SlotTransition, TcpPeerConnector,
+            AUDIT_DEADLINE, CONNECT,
         },
     },
     product::{ProductDependencies, ProductRouteState},
@@ -1540,4 +1540,72 @@ async fn an_audit_that_never_answers_ends_the_call_at_its_deadline() {
     let kept = dialing.audit.records();
     assert_eq!(kept.len(), 1, "{kept:?}");
     assert_eq!(kept[0]["kind"], "peer_forget_requested");
+}
+
+/// The poller names a status's change by the transition the record's store
+/// began, not by what the record holds afterwards: an approval whose save
+/// went through, and an ending whose cache removal then failed, leaving the
+/// record active as it was, are each named by what was begun.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_slot_names_the_transition_a_status_began_whatever_storage_did() {
+    let fixture = Fixture::new().await;
+    let dialing = Dialing::new(&fixture).await;
+    let intent = PublicIntent::new(
+        InvitationId::new([1; 16]),
+        AttemptId::new([2; 16]),
+        ConsentIntentId::new([3; 16]),
+        1,
+        1,
+        ConsentClass::PeerRead,
+    )
+    .unwrap();
+    let peer = NativeIdentity::generate(&mut OsEntropy).unwrap();
+    dialing
+        .records
+        .enrolling("127.0.0.1:7443".parse().unwrap())
+        .save_pending(
+            dialing.identity.key_material(),
+            &peer.public_spki(),
+            intent,
+            None,
+        )
+        .unwrap();
+    let key = DeviceKey::new(peer.public_spki()[12..].try_into().unwrap());
+    let active = |records: &PeerRecords| match records.get(&key).unwrap() {
+        Some(PeerEntry::Readable(record)) => matches!(record.phase(), PeerPhase::Active { .. }),
+        other => panic!("{other:?}"),
+    };
+
+    // A status that saves nothing begins nothing.
+    let slot = dialing.records.slot(key);
+    assert_eq!(slot.transition(), None);
+    assert!(slot.load_credential().unwrap().is_none());
+    assert_eq!(slot.transition(), None);
+
+    let credential = nessa_auth::domain::CredentialId::new("credential").unwrap();
+    let receiver = ResourceId::new("receiver").unwrap();
+    slot.save_credential(&credential, &receiver, intent)
+        .unwrap();
+    assert_eq!(slot.transition(), Some(SlotTransition::Approved));
+    assert!(active(&dialing.records));
+    // Saved again as it is: nothing begun.
+    let again = dialing.records.slot(key);
+    again
+        .save_credential(&credential, &receiver, intent)
+        .unwrap();
+    assert_eq!(again.transition(), None);
+
+    // The ending's cache removal fails: a directory stands where SQLite's
+    // journal would be. The record is left active, and the change is still
+    // the ending that was begun.
+    let journal = dialing
+        .records
+        .cache_path(&key)
+        .with_extension("sqlite3-journal");
+    std::fs::create_dir(&journal).unwrap();
+    std::fs::write(journal.join("held"), b"").unwrap();
+    let ending = dialing.records.slot(key);
+    assert!(ending.end_enrollment(intent).is_err());
+    assert_eq!(ending.transition(), Some(SlotTransition::Ended));
+    assert!(active(&dialing.records), "the record is as it was");
 }

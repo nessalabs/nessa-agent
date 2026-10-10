@@ -10,10 +10,11 @@
 //!
 //! The poller changes what this gateway holds of a peer on its own, with no
 //! owner asking: it saves a credential, marks an ended enrollment, empties a
-//! cache, or drops a conversation a peer stopped granting. Each change is
-//! kept as one record after it is made, naming the system as its initiator.
-//! A record that cannot be kept is logged and the change stands: cleanup is
-//! never held back for its evidence.
+//! cache, or drops the conversations a peer stopped granting. Each change is
+//! kept as one record after it is made, and after the poller has given the
+//! owner's commands their turn back, naming the system as its initiator. A
+//! record that cannot be kept is logged and the change stands: cleanup is
+//! never held back for its evidence, and neither is an owner command.
 use nessa_auth::domain::{pairing::DeviceKey, PrincipalId};
 use std::{
     future::Future,
@@ -96,9 +97,14 @@ pub enum PollerCause {
     ResetRequired,
     /// The cache is damaged or has an older shape; it is emptied.
     CacheDamaged,
-    /// The peer no longer grants this conversation; it left the cache.
-    Withdrawn { conversation: String },
+    /// The peer no longer grants these conversations, which one read found;
+    /// each left the cache. At most [`WITHDRAWN_PER_RECORD`] in one record.
+    Withdrawn { conversations: Vec<String> },
 }
+
+/// The most conversations one withdrawal record names; a read that withdrew
+/// more keeps one record for each run of this many.
+pub const WITHDRAWN_PER_RECORD: usize = 64;
 
 /// One owner transition over this gateway's peers, or one change the poller
 /// made. Every record names the operation it belongs to and who asked: the

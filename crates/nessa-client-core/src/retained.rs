@@ -17,20 +17,24 @@
 //!
 //! A read has a budget on the injected monotonic clock. Every physical read
 //! and write waits no longer than it, and no conversation starts after it;
-//! a read that reaches it ends incomplete, and the next carries on.
+//! a read that reaches it having saved something ends incomplete, and the
+//! next carries on. One that saved nothing is `Unreachable`: a peer that
+//! answers too slowly to make headway is backed off, not read again soon.
 //!
 //! A peer's catalogue pass carries no row for a conversation it is no longer
 //! granted: the gateway narrows rows to the reader's grants, so an unshared
 //! row is absent rather than deleted. A read therefore asks each cached
 //! conversation's record head, and the gateway's `wrong_owner` is what
-//! withdraws one.
+//! withdraws one. A cache write that fails for space or storage does not stop
+//! that: the rest of the conversations are still asked, only whether they
+//! are granted, so a withdrawal always applies and frees what it held.
 use crate::read_only_sync::application::device::asks_status;
 use crate::read_only_sync::application::driver::{
     run_catalogue, run_records, RecordDriverCause, RecordDriverError,
 };
 use crate::read_only_sync::application::{
-    CacheError, CachePolicy, Cancellation, GatewayConnector, GatewayError, GatewayPolicy,
-    GatewayStream,
+    CacheError, CachePolicy, CachedProgress, Cancellation, GatewayConnector, GatewayError,
+    GatewayPolicy, GatewayStream,
 };
 use crate::read_only_sync::infrastructure::cache::ReadOnlyCache;
 use crate::read_only_sync::infrastructure::gateway::{
@@ -50,6 +54,7 @@ use nessa_sync::replication::{
     catalogue::{CatalogueError, CatalogueStoreError, EntryKey, MAX_CATALOGUE_ENTRIES},
     domain::{Id, Limits, Scope},
 };
+use std::cell::Cell;
 use std::io::{Read, Result as IoResult, Write};
 use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::path::Path;
@@ -65,8 +70,12 @@ const CHECKPOINT_BYTES: usize = 16 * 1024 * 1024;
 const CATALOGUE_PAGES: usize = 64;
 /// Record pages one read applies to one conversation before it moves on.
 const RECORD_PAGES: usize = 16;
-/// How long connecting and authenticating may take.
+/// How long connecting and authenticating may take, in milliseconds.
 const HANDSHAKE_MS: u64 = 5_000;
+/// How long connecting and authenticating may take. The operating system's
+/// connect inside it cannot be stopped: [`ReadStop::stop`] shuts the sockets a
+/// read has open, not one still connecting, so a stop can wait up to this.
+pub const HANDSHAKE: Duration = Duration::from_millis(HANDSHAKE_MS);
 /// Unrelated events one operation tolerates.
 const UNEXPECTED_EVENTS: usize = 16;
 
@@ -110,8 +119,9 @@ pub enum ReadFailure {
     /// its key, or a read it was not admitted to. The pinned status tells a
     /// revoked credential from a full pool.
     Refused,
-    /// The connection could not be made or did not last, or the key that
-    /// answered is not the pinned one.
+    /// The connection could not be made or did not last, the key that
+    /// answered is not the pinned one, or the read's budget ran out before
+    /// it saved anything.
     Unreachable,
     /// What the cache holds cannot continue against what the gateway now
     /// serves (another incarnation, epoch or scope, or a head behind the
@@ -120,19 +130,24 @@ pub enum ReadFailure {
     /// The gateway answered something outside the protocol.
     Protocol,
     /// The private cache could not be opened or written; trying again may
-    /// help.
+    /// help. Conversations the gateway no longer grants were still withdrawn.
     Cache,
     /// The private cache is damaged, or has a shape this build does not
     /// read. It is derived from the gateway, so only emptying it helps.
     CacheDamaged,
-    /// The private cache reached its size limit.
+    /// The private cache reached its size limit. Conversations the gateway
+    /// no longer grants were still withdrawn, which frees what they held.
     Quota,
     /// `ReadStop::stop` was called.
     Stopped,
 }
 
 /// Stops a read in progress: the flag every physical read and write asks,
-/// and the sockets it has open, shut so a blocked read returns at once.
+/// and the sockets it has open, shut so a blocked read returns at once where
+/// the operating system wakes it for that. Not every one does: on Windows a
+/// receive blocked in another thread is not woken by shutting its socket. So
+/// no physical wait is longer than [`STOP_SLICE`]; each slice asks the flag,
+/// and a stop reaches a blocked read within one slice on every system.
 #[derive(Default)]
 pub struct ReadStop {
     stopped: AtomicBool,
@@ -170,6 +185,10 @@ impl ReadStop {
         self.lock().clear();
     }
 }
+/// The longest one blocking socket wait of a read lasts before it asks its
+/// stop again. The wait as a whole is still the one the caller set.
+const STOP_SLICE: Duration = Duration::from_millis(50);
+
 /// A read's end: its stop, or its budget on the injected clock.
 struct Stopping {
     stop: Arc<ReadStop>,
@@ -193,34 +212,93 @@ impl Cancellation for Stopping {
 struct StoppableConnector(Arc<ReadStop>);
 impl GatewayConnector for StoppableConnector {
     fn connect(&self, address: SocketAddr, timeout: Duration) -> IoResult<Box<dyn GatewayStream>> {
+        // The connect itself cannot be stopped; it is bounded by `timeout`,
+        // at most [`HANDSHAKE`].
         let socket = TcpStream::connect_timeout(&address, timeout)?;
         self.0.register(&socket)?;
-        Ok(Box::new(Socket(socket)))
+        Ok(Box::new(Socket::new(socket, self.0.clone())))
     }
 }
-struct Socket(TcpStream);
+/// A read's socket. Each wait the caller sets is taken in slices of at most
+/// [`STOP_SLICE`], asking the stop before each, so a stop ends a blocked
+/// read or write within one slice even where shutting the socket from
+/// another thread does not wake it.
+struct Socket {
+    stream: TcpStream,
+    stop: Arc<ReadStop>,
+    read_for: Cell<Duration>,
+    write_for: Cell<Duration>,
+}
+impl Socket {
+    fn new(stream: TcpStream, stop: Arc<ReadStop>) -> Self {
+        Self {
+            stream,
+            stop,
+            read_for: Cell::new(STOP_SLICE),
+            write_for: Cell::new(STOP_SLICE),
+        }
+    }
+    /// `operation` on the stream, its wait `total` taken a slice at a time.
+    fn sliced<T>(
+        &mut self,
+        total: Duration,
+        set: fn(&TcpStream, Option<Duration>) -> IoResult<()>,
+        mut operation: impl FnMut(&mut TcpStream) -> IoResult<T>,
+    ) -> IoResult<T> {
+        let mut left = total;
+        loop {
+            if self.stop.is_stopped() {
+                return Err(std::io::Error::from(std::io::ErrorKind::ConnectionAborted));
+            }
+            let slice = left.min(STOP_SLICE);
+            set(&self.stream, Some(slice))?;
+            match operation(&mut self.stream) {
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    left = left.saturating_sub(slice);
+                    if left.is_zero() {
+                        return Err(error);
+                    }
+                }
+                done => return done,
+            }
+        }
+    }
+}
 impl Read for Socket {
     fn read(&mut self, bytes: &mut [u8]) -> IoResult<usize> {
-        self.0.read(bytes)
+        self.sliced(self.read_for.get(), TcpStream::set_read_timeout, |stream| {
+            stream.read(bytes)
+        })
     }
 }
 impl Write for Socket {
     fn write(&mut self, bytes: &[u8]) -> IoResult<usize> {
-        self.0.write(bytes)
+        self.sliced(
+            self.write_for.get(),
+            TcpStream::set_write_timeout,
+            |stream| stream.write(bytes),
+        )
     }
     fn flush(&mut self) -> IoResult<()> {
-        self.0.flush()
+        self.stream.flush()
     }
 }
 impl GatewayStream for Socket {
     fn read_timeout(&self, timeout: Duration) -> IoResult<()> {
-        self.0.set_read_timeout(Some(timeout))
+        self.read_for.set(timeout);
+        Ok(())
     }
     fn write_timeout(&self, timeout: Duration) -> IoResult<()> {
-        self.0.set_write_timeout(Some(timeout))
+        self.write_for.set(timeout);
+        Ok(())
     }
     fn shutdown(&self) -> IoResult<()> {
-        self.0.shutdown(Shutdown::Both)
+        self.stream.shutdown(Shutdown::Both)
     }
 }
 
@@ -230,6 +308,9 @@ pub struct RetainedCache {
     policy: CachePolicy,
     wall: Arc<dyn WallClock>,
     clock: Arc<dyn MonotonicClock>,
+    /// The read in progress has saved something: catalogue or transcript
+    /// progress moved, or a conversation was withdrawn.
+    progressed: bool,
 }
 impl RetainedCache {
     /// Open, or create, the cache at `path`, in a private directory that is
@@ -255,6 +336,7 @@ impl RetainedCache {
             policy,
             wall,
             clock,
+            progressed: false,
         })
     }
 
@@ -279,8 +361,11 @@ impl RetainedCache {
     /// because the gateway no longer grants it is pushed to `withdrawn` as it
     /// goes, so the caller learns of it however the read ends.
     ///
-    /// A read that reaches its budget ends `Ok` and incomplete, with what it
-    /// saved kept. One stopped by `stop` ends `Stopped`.
+    /// A read that reaches its budget having saved something ends `Ok` and
+    /// incomplete, with what it saved kept; one that saved nothing ends
+    /// `Unreachable`. One stopped by `stop` ends `Stopped`. A full cache
+    /// (`Quota`) or one that could not be written (`Cache`) still withdraws
+    /// every conversation the gateway no longer grants before it ends so.
     pub fn read(
         &mut self,
         access: ReaderAccess<'_>,
@@ -298,24 +383,19 @@ impl RetainedCache {
                 .elapsed_ms()
                 .saturating_add(u64::try_from(budget.as_millis()).unwrap_or(u64::MAX)),
         });
+        let before = withdrawn.len();
+        self.progressed = false;
         let result = self.read_inner(access, settle, &ending, withdrawn);
         stop.release();
-        match result {
-            // A stop shuts the read's sockets, which the read may see first
-            // as a closed connection: stopped all the same.
-            Err(_) if stop.is_stopped() => Err(ReadFailure::Stopped),
-            // The budget cut it short: what was saved stands, and the next
-            // read carries on from it.
-            Err(ReadFailure::Stopped | ReadFailure::Unreachable)
-                if !stop.is_stopped() && ending.spent() =>
-            {
-                Ok(ReadReport {
-                    moved: true,
-                    complete: false,
-                    conversations: self.conversation_ids(&receiver)?.len(),
-                })
-            }
-            result => result,
+        let progressed = self.progressed || withdrawn.len() > before;
+        match read_end(result, stop.is_stopped(), ending.spent(), progressed) {
+            ReadEnd::Read(report) => Ok(report),
+            ReadEnd::Incomplete => Ok(ReadReport {
+                moved: true,
+                complete: false,
+                conversations: self.conversation_ids(&receiver)?.len(),
+            }),
+            ReadEnd::Failed(failure) => Err(failure),
         }
     }
 
@@ -393,71 +473,72 @@ impl RetainedCache {
 
         let mut authorizer = catalogue.authorizer();
         let cache = &mut self.cache;
-        let attempt = connection
-            .run(|| {
-                run_catalogue(
-                    &scope,
-                    &mut authorizer,
-                    &mut catalogue,
-                    cache,
-                    CATALOGUE_PAGES,
-                )
-            })
-            .map_err(failure)?;
-        let mut complete = match (attempt.result, attempt.outcome.failure) {
+        let attempt = connection.run(|| {
+            run_catalogue(
+                &scope,
+                &mut authorizer,
+                &mut catalogue,
+                cache,
+                CATALOGUE_PAGES,
+            )
+        });
+        // Pages it applied stand however the pass then ended.
+        let applied = self
+            .cache
+            .retained_catalogue_progress(&receiver, scope.origin(), scope.stream())
+            .ok()
+            .flatten();
+        self.progressed |= applied != saved;
+        let attempt = attempt.map_err(failure)?;
+        let (catalogue_complete, held_back) = match (attempt.result, attempt.outcome.failure) {
             (_, Some(error)) => return Err(failure(error)),
-            (Some(Ok(run)), None) => run.complete,
+            (Some(Ok(run)), None) => (run.complete, None),
             (Some(Err(CatalogueError::Store(CatalogueStoreError::ResetRequired))), None) => {
                 return Err(ReadFailure::ResetRequired)
             }
             (Some(Err(CatalogueError::Store(_))), None) => {
-                return Err(self
+                let refused = self
                     .cache
                     .take_refusal()
-                    .map_or(ReadFailure::Cache, |error| cache_failure(&error)))
+                    .map_or(ReadFailure::Cache, |error| cache_failure(&error));
+                if !holds_back(refused) {
+                    return Err(refused);
+                }
+                (false, Some(refused))
             }
             (Some(Err(_)), None) | (None, None) => return Err(ReadFailure::Protocol),
         };
 
-        for id in self.live(&scope)? {
-            // No conversation starts once the budget is spent.
-            if ending.spent() {
-                complete = false;
-                break;
-            }
-            let Ok(conversation) = ConversationId::new(id.as_str()) else {
-                return Err(ReadFailure::CacheDamaged);
-            };
-            match self.records(&connection, &receiver, epoch, conversation)? {
-                Conversation::Read { complete: done } => complete &= done,
-                Conversation::Withdrawn => {
-                    self.cache
-                        .withdraw(&scope, &id)
-                        .map_err(|error| cache_failure(&error))?;
-                    withdrawn.push(id.as_str().to_owned());
-                }
-                Conversation::Unread { connection_kept } => {
-                    complete = false;
-                    if !connection_kept {
-                        break;
-                    }
-                }
-            }
-        }
+        let ids = self.live(&scope)?;
+        let complete = read_each(
+            ids,
+            held_back,
+            &mut Each {
+                reader: self,
+                connection: &connection,
+                receiver: &receiver,
+                epoch,
+                scope: &scope,
+                ending,
+            },
+            withdrawn,
+        )?;
         Ok(ReadReport {
             moved: true,
-            complete,
+            complete: catalogue_complete && complete,
             conversations: self.live(&scope)?.len(),
         })
     }
 
-    /// One conversation's records, from what the cache holds to the head.
+    /// One conversation's records, from what the cache holds to the head;
+    /// with `withdraw_only`, only whether the gateway still grants it.
     fn records(
         &mut self,
         connection: &GatewayConnection,
         receiver: &Id,
         epoch: u64,
         conversation: ConversationId,
+        withdraw_only: bool,
     ) -> Result<Conversation, ReadFailure> {
         let mut source = connection.records(receiver.clone(), epoch, conversation);
         let discovery = connection.run(|| source.discover()).map_err(failure)?;
@@ -470,21 +551,28 @@ impl RetainedCache {
             (Some(Err(error)), None) => return unread(error),
             (None, None) => return Err(ReadFailure::Protocol),
         };
+        if withdraw_only {
+            return Ok(Conversation::Unread {
+                connection_kept: true,
+            });
+        }
+        let saved = self.transcript_progress(&scope);
         let mut authorizer = source.authorizer();
         let (cache, limits, wall) = (&mut self.cache, self.policy.suffix_page(), &self.wall);
-        let attempt = connection
-            .run(|| {
-                run_records(
-                    &scope,
-                    &mut authorizer,
-                    &mut source,
-                    cache,
-                    limits,
-                    RECORD_PAGES,
-                    wall.as_ref(),
-                )
-            })
-            .map_err(failure)?;
+        let attempt = connection.run(|| {
+            run_records(
+                &scope,
+                &mut authorizer,
+                &mut source,
+                cache,
+                limits,
+                RECORD_PAGES,
+                wall.as_ref(),
+            )
+        });
+        // Pages it applied stand however the run then ended.
+        self.progressed |= self.transcript_progress(&scope) != saved;
+        let attempt = attempt.map_err(failure)?;
         let refusal = self.cache.take_refusal();
         match (attempt.result, attempt.outcome.failure) {
             (_, Some(error)) => unread(error),
@@ -506,6 +594,15 @@ impl RetainedCache {
             },
             (None, None) => Err(ReadFailure::Protocol),
         }
+    }
+
+    /// How far the cache holds `scope`'s transcript; `None` when it holds
+    /// none or cannot say.
+    fn transcript_progress(&mut self, scope: &Scope) -> Option<CachedProgress> {
+        self.cache
+            .retained_transcript_progress(scope.receiver(), scope.origin(), scope.stream())
+            .ok()
+            .flatten()
     }
 
     /// The catalogue scope the cache holds for `receiver`, if any.
@@ -547,7 +644,153 @@ impl RetainedCache {
     }
 }
 
+/// How a read that has returned ends, from what it returned, whether it was
+/// stopped, whether its budget is spent, and whether it saved anything.
+#[derive(Debug, Eq, PartialEq)]
+enum ReadEnd {
+    Read(ReadReport),
+    /// Cut short by the budget after saving something: what it saved stands
+    /// and the next read carries on from it.
+    Incomplete,
+    Failed(ReadFailure),
+}
+fn read_end(
+    result: Result<ReadReport, ReadFailure>,
+    stopped: bool,
+    spent: bool,
+    progressed: bool,
+) -> ReadEnd {
+    match result {
+        // A stop shuts the read's sockets, which the read may see first as a
+        // closed connection: stopped all the same.
+        Err(_) if stopped => ReadEnd::Failed(ReadFailure::Stopped),
+        // The budget cut it short, or no conversation started after it. One
+        // that saved nothing made no headway: the peer did not answer in
+        // time, and it is backed off rather than read again soon.
+        Err(ReadFailure::Stopped | ReadFailure::Unreachable) if spent => {
+            if progressed {
+                ReadEnd::Incomplete
+            } else {
+                ReadEnd::Failed(ReadFailure::Unreachable)
+            }
+        }
+        Ok(report) if spent && !report.complete && !progressed => {
+            ReadEnd::Failed(ReadFailure::Unreachable)
+        }
+        Ok(report) => ReadEnd::Read(report),
+        Err(failure) => ReadEnd::Failed(failure),
+    }
+}
+
+/// One cached conversation at a time, as [`read_each`] walks them.
+trait EachConversation {
+    /// Whether the read's budget is spent.
+    fn spent(&self) -> bool;
+    /// Its record head, and with it its records unless `withdraw_only`.
+    fn read(&mut self, id: &Id, withdraw_only: bool) -> Result<Conversation, ReadFailure>;
+    /// Remove it from the cache, entry and transcript together.
+    fn withdraw(&mut self, id: &Id) -> Result<(), ReadFailure>;
+}
+
+/// Every cached conversation `ids`, in order, until the budget is spent or
+/// the connection is lost: each one the gateway no longer grants is withdrawn
+/// and pushed to `withdrawn`, the rest are read. Whether all were read to the
+/// end. A cache write that fails for space or storage (`Quota`, `Cache`; or
+/// `held_back`, the catalogue's) does not end the walk: from then on each
+/// remaining conversation is asked only whether it is still granted, so a
+/// withdrawal always applies, and the walk then ends with that failure,
+/// `Quota` first. Any other failure ends it at once: a damaged cache or one
+/// that cannot continue is emptied whole, and a lost connection asks nothing
+/// more.
+fn read_each(
+    ids: Vec<Id>,
+    held_back: Option<ReadFailure>,
+    each: &mut impl EachConversation,
+    withdrawn: &mut Vec<String>,
+) -> Result<bool, ReadFailure> {
+    let mut held = held_back;
+    let mut complete = true;
+    for id in ids {
+        // No conversation starts once the budget is spent.
+        if each.spent() {
+            complete = false;
+            break;
+        }
+        let failed = match each.read(&id, held.is_some()) {
+            Ok(Conversation::Read { complete: done }) => {
+                complete &= done;
+                None
+            }
+            Ok(Conversation::Withdrawn) => match each.withdraw(&id) {
+                Ok(()) => {
+                    withdrawn.push(id.as_str().to_owned());
+                    None
+                }
+                Err(failure) => Some(failure),
+            },
+            Ok(Conversation::Unread { connection_kept }) => {
+                complete = false;
+                if !connection_kept {
+                    break;
+                }
+                None
+            }
+            Err(failure) => Some(failure),
+        };
+        match failed {
+            None => {}
+            Some(failure) if holds_back(failure) => {
+                complete = false;
+                if held != Some(ReadFailure::Quota) {
+                    held = Some(failure);
+                }
+            }
+            Some(failure) => return Err(failure),
+        }
+    }
+    held.map_or(Ok(complete), Err)
+}
+
+/// A cache failure the rest of a read's withdrawals still go ahead past.
+fn holds_back(failure: ReadFailure) -> bool {
+    matches!(failure, ReadFailure::Quota | ReadFailure::Cache)
+}
+
+/// The cache, over one read's connection.
+struct Each<'a> {
+    reader: &'a mut RetainedCache,
+    connection: &'a GatewayConnection,
+    receiver: &'a Id,
+    epoch: u64,
+    scope: &'a Scope,
+    ending: &'a Stopping,
+}
+impl EachConversation for Each<'_> {
+    fn spent(&self) -> bool {
+        self.ending.spent()
+    }
+    fn read(&mut self, id: &Id, withdraw_only: bool) -> Result<Conversation, ReadFailure> {
+        let Ok(conversation) = ConversationId::new(id.as_str()) else {
+            return Err(ReadFailure::CacheDamaged);
+        };
+        self.reader.records(
+            self.connection,
+            self.receiver,
+            self.epoch,
+            conversation,
+            withdraw_only,
+        )
+    }
+    fn withdraw(&mut self, id: &Id) -> Result<(), ReadFailure> {
+        self.reader
+            .cache
+            .withdraw(self.scope, id)
+            .map_err(|error| cache_failure(&error))
+    }
+}
+
 /// What one conversation's read came to.
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum Conversation {
     Read {
         complete: bool,
@@ -597,3 +840,7 @@ fn failure(error: GatewayError) -> ReadFailure {
         _ => ReadFailure::Protocol,
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/retained/read.rs"]
+mod tests;

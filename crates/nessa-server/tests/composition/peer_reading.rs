@@ -4,7 +4,8 @@
 //! deletions, empties a cache that cannot continue, keeps to its read budget,
 //! gives way to the owner's commands, and stops at A's revocation or denial.
 //! Each change the poller makes is audited; with an audit that refuses those
-//! records, every change still lands. Rows R1–R14 in
+//! records, every change still lands, and with one that stalls, the owner's
+//! commands still go ahead. Rows R1–R14 and R18 in
 //! `docs/design/auth/peer-gateways.md` ("Reading a peer").
 use crate::app::dependencies::RuntimeDependencies;
 use crate::composition::local_auth::SystemClock;
@@ -384,15 +385,41 @@ impl Drop for Relay {
 }
 
 /// B's peer audit: owner command records are taken as kept; each poller
-/// change is kept, or refused when `refuse`.
+/// change is kept, or refused when `refuse`. While stalled, a poller change
+/// is answered only once the test opens the audit, and kept then.
 struct Changes {
     refuse: bool,
     kept: Mutex<Vec<PeerAuditRecord>>,
     refused: AtomicUsize,
+    /// `false` while poller changes are held unanswered.
+    open: tokio::sync::watch::Sender<bool>,
+    /// Poller changes handed over while stalled.
+    stalled: AtomicUsize,
+}
+impl Changes {
+    fn new(refuse: bool, stall: bool) -> Arc<Self> {
+        Arc::new(Self {
+            refuse,
+            kept: Mutex::new(Vec::new()),
+            refused: AtomicUsize::new(0),
+            open: tokio::sync::watch::channel(!stall).0,
+            stalled: AtomicUsize::new(0),
+        })
+    }
 }
 impl PeerAudit for Changes {
     fn record(&self, record: PeerAuditRecord) -> PeerAuditFuture<'_> {
-        let refused = matches!(record, PeerAuditRecord::PollerChanged { .. }) && self.refuse;
+        let poller = matches!(record, PeerAuditRecord::PollerChanged { .. });
+        if poller && !*self.open.borrow() {
+            self.stalled.fetch_add(1, Ordering::SeqCst);
+            let mut open = self.open.subscribe();
+            return Box::pin(async move {
+                let _ = open.wait_for(|open| *open).await;
+                self.kept.lock().unwrap().push(record);
+                Ok(())
+            });
+        }
+        let refused = poller && self.refuse;
         if refused {
             self.refused.fetch_add(1, Ordering::SeqCst);
         } else {
@@ -405,6 +432,14 @@ impl PeerAudit for Changes {
                 Ok(())
             }
         })
+    }
+}
+
+/// A monotonic clock that never moves: no deadline on it ever passes.
+struct Frozen;
+impl nessa_protocol::clock::Clock for Frozen {
+    fn elapsed_ms(&self) -> u64 {
+        1_000
     }
 }
 
@@ -441,7 +476,7 @@ fn change(record: &PeerAuditRecord) -> Option<String> {
         PollerCause::Ended { detail } => format!("ended({})", detail.as_deref().unwrap_or("?")),
         PollerCause::ResetRequired => "reset_required".to_owned(),
         PollerCause::CacheDamaged => "cache_damaged".to_owned(),
-        PollerCause::Withdrawn { conversation } => format!("withdrew {conversation}"),
+        PollerCause::Withdrawn { conversations } => format!("withdrew {}", conversations.join(",")),
     };
     assert_eq!(*outcome, Ok(()), "{cause}");
     Some(format!("{cause}: {} -> {}", held(before), held(after)))
@@ -458,6 +493,21 @@ struct Reader {
 }
 impl Reader {
     async fn prepare(root: &Path, refuse: bool) -> Self {
+        Self::prepare_with(
+            root,
+            Changes::new(refuse, false),
+            RuntimeDependencies::default().clock,
+        )
+        .await
+    }
+    /// B with `changes` as its peer audit and `clock` for its peer
+    /// commands: every deadline, wait and read budget of theirs and its
+    /// poller's.
+    async fn prepare_with(
+        root: &Path,
+        changes: Arc<Changes>,
+        clock: Arc<dyn nessa_protocol::clock::Clock>,
+    ) -> Self {
         let (gateway, organization) = (uuid(), uuid());
         let (auth, _, owner) = owned(root, &gateway, &organization).await;
         let receivers = Arc::new(
@@ -476,16 +526,11 @@ impl Reader {
         )
         .await
         .unwrap();
-        let changes = Arc::new(Changes {
-            refuse,
-            kept: Mutex::new(Vec::new()),
-            refused: AtomicUsize::new(0),
-        });
         // Composition's peer commands, over the same records, with this
         // audit in place of the durable one.
         let peers = Arc::new(PeerCommands::new(
             prepared.records().clone(),
-            RuntimeDependencies::default().clock,
+            clock,
             changes.clone(),
             Arc::new(TcpPeerConnector),
             entropy(),
@@ -506,7 +551,6 @@ impl Reader {
             PollInputs {
                 policy,
                 wall: Arc::new(SystemClock),
-                clock: RuntimeDependencies::default().clock,
                 entropy: entropy(),
             },
         )
@@ -767,10 +811,13 @@ async fn reads(refuse: bool) {
     synced_with(&b, 1).await;
     assert_eq!(b.cached(&key, &reader.0), vec![y.to_string()]);
 
-    // R9: a read that runs out of its budget ends incomplete and keeps what
-    // the cache holds; the next one carries on.
+    // R9: a read that runs out of its budget having saved nothing made no
+    // headway: it is a failure, backed off, and the cache keeps what it
+    // held. The last finished read stays the last one: nothing refreshed it.
+    let (_, synced) = b.peer().await;
+    let last = synced.and_then(|sync| sync.last_synced_ms);
+    assert!(last.is_some());
     relay.hold_after(1);
-    let since = SystemClock.unix_milliseconds();
     b.poll_until_with(
         PollPolicy {
             read_budget: Duration::from_millis(300),
@@ -778,14 +825,15 @@ async fn reads(refuse: bool) {
         },
         move |_, sync| {
             sync.is_some_and(|sync| {
-                sync.state == SyncState::Syncing
-                    && sync.last_synced_ms.is_some_and(|at| at >= since)
+                sync.state == SyncState::Unreachable
+                    && sync.last_synced_ms == last
                     && sync.conversations == Some(1)
             })
         },
     )
     .await;
     relay.pass_all();
+    assert_eq!(b.cached(&key, &reader.0), vec![y.to_string()]);
 
     // R10: stopping the poller while a read is held shuts that read at once.
     relay.hold_after(1);
@@ -883,6 +931,57 @@ async fn reads(refuse: bool) {
     }
 
     // Nothing left running: A's listener drains; B's pollers were joined.
+    drop(relay);
+    let mut running = a.running.take().unwrap();
+    running.signal_stop();
+    tokio::time::timeout(WAIT, running.join())
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+/// R18: a poller change whose audit never answers holds no owner command.
+/// The cycle keeps its records only once it has given back the turn, so a
+/// forget made while the audit is stalled goes ahead at once, though no
+/// deadline on B's frozen clock can ever pass; the stalled record lands once
+/// the audit answers.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stalled_poller_audit_never_holds_an_owner_command() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut a = Peer::start(&directory.path().join("a")).await;
+    let changes = Changes::new(false, true);
+    let b = Reader::prepare_with(
+        &directory.path().join("b"),
+        changes.clone(),
+        Arc::new(Frozen),
+    )
+    .await;
+    let relay = Relay::start(a.native).await;
+    let (key, _) = enroll(&a, &b, &relay, true).await;
+
+    // B's poller reads the Active status, saves the credential, reads, and
+    // hands the audit that change, which it never answers.
+    let poller = b.poller(POLICY);
+    tokio::time::timeout(WAIT, async {
+        while changes.stalled.load(Ordering::SeqCst) == 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the poller hands its change to the audit");
+    let forgotten = tokio::time::timeout(PROMPT, b.peers.forget(key, &b.owner))
+        .await
+        .expect("a stalled poller audit does not hold the forget");
+    assert!(forgotten.is_ok(), "{forgotten:?}");
+    assert!(b.peers.list().await.unwrap().is_empty());
+    assert!(!b.cache_path(&key).exists(), "forget removes the cache");
+
+    // Answered, the poller's record lands, and the poller stops.
+    changes.open.send_replace(true);
+    tokio::time::timeout(WAIT, poller.join()).await.unwrap();
+    assert_eq!(b.kept(), ["approved: pending+none -> active+none"]);
+    assert_eq!(changes.stalled.load(Ordering::SeqCst), 1);
+
     drop(relay);
     let mut running = a.running.take().unwrap();
     running.signal_stop();

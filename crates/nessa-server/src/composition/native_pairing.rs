@@ -196,8 +196,6 @@ pub(super) struct BoundNative {
     address: SocketAddr,
     peers: Arc<PeerCommands>,
     clock: Arc<dyn Clock>,
-    /// The root's monotonic clock, which the poller's waits are measured on.
-    deadline_clock: Arc<dyn MonotonicClock>,
 }
 
 impl BoundNative {
@@ -205,15 +203,16 @@ impl BoundNative {
     pub(super) fn local_address(&self) -> SocketAddr {
         self.address
     }
-    /// Start reading each peer, on the root's clocks and the operating
-    /// system's entropy for its jitter.
+    /// Start reading each peer: its waits and read budget on the peer
+    /// commands' monotonic clock (the root's deadline clock), its finished
+    /// reads stamped by the root's wall clock, and the operating system's
+    /// entropy for its jitter.
     pub(super) fn start_poller(&self) -> PeerPoller {
         PeerPoller::start(
             self.peers.clone(),
             PollInputs {
                 policy: PollPolicy::default(),
                 wall: self.clock.clone(),
-                clock: self.deadline_clock.clone(),
                 entropy: Arc::new(|| Box::new(OsEntropy) as Box<dyn EnrollmentEntropy>),
             },
         )
@@ -252,7 +251,6 @@ pub(super) async fn bind(
         address: bound,
         peers,
         clock: wall,
-        deadline_clock: clock,
     })
 }
 

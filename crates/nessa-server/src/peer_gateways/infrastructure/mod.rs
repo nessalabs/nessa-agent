@@ -18,5 +18,5 @@ pub use poller::{
 };
 pub use records::{
     ForgetFailure, PeerEntry, PeerPhase, PeerRecord, PeerRecords, PeerSlot, SlotFound, SlotRefusal,
-    SlotSave,
+    SlotSave, SlotTransition,
 };

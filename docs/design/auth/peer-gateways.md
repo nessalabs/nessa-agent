@@ -249,7 +249,7 @@ sequenceDiagram
   the record an enrollment is saving and spend the peer's invitation for
   nothing. A poller cycle takes the same turn, but never makes a command
   busy: the command stops the cycle and takes the turn once it is given
-  back, within `PREEMPT` on the injected clock ("Reading a peer", below).
+  back, within `PREEMPT` (10 s) on the injected clock ("Reading a peer", below).
 - **Every enroll and forget call is audited.** Both commands run only
   through one audited wrapper. It hands an intent to the `PeerAudit` port
   before anything else, even the check that no other command holds the turn
@@ -323,14 +323,15 @@ sequenceDiagram
     P->>A: recordsHead for each cached conversation, while the budget lasts
     A-->>P: wrong_owner: no longer granted
     P->>C: withdraw it (entry and transcript)
-    P->>A: record pages for the rest
-    P->>U: each conversation withdrawn
-    C-->>P: ResetRequired or damaged: empty the cache, audit it, read once more
+    P->>A: record pages for the rest (cache full: heads only, to withdraw)
+    C-->>P: ResetRequired or damaged: empty the cache, read once more
     A-->>P: openProduct refused (redacted)
     P->>A: pinned status again; only Terminal ends the enrollment
     O->>P: peer.forget or peer.enroll while the cycle holds the turn
-    P->>P: cycle stopped: read sockets shut, waits woken, turn given back
+    P->>P: cycle stopped: read sockets shut, its stop flag asked every 50 ms, waits woken, turn given back
     P-->>O: the command runs; the read carries on at the next cycle
+    P->>P: give back the turn
+    P->>U: each change the cycle made (status, reset, conversations withdrawn), after the fact
 ```
 
 - **Status first, every time.** No read happens without a fresh Active
@@ -364,16 +365,31 @@ sequenceDiagram
   what it completed: `ResetRequired`), or that is damaged or of a shape this
   build does not read (`Corrupt`, `OutdatedSchema`), is deleted and read
   again from nothing. It is derived from A, so nothing is lost. A full cache
-  is not emptied: it lists `quota` and backs off.
-- **Every read has a budget.** `READ_BUDGET` (60 s) on the injected clock:
-  no physical read or write waits past it, and no conversation starts after
-  it. A read that reaches it ends incomplete, keeping what it saved, and the
-  next cycle carries on soon.
-- **The owner comes first.** A cycle registers itself with the turn it holds.
-  An owner command that finds it there stops it: the read's sockets are shut
-  and its waits woken, and the command takes the turn once given back,
-  within `PREEMPT` (5 s) on the injected clock. Only another owner command
-  answers `peer_busy`. The stopped read carries on at the next cycle.
+  is not emptied: it lists `quota` and backs off. A full cache, or one a
+  write fails on, still withdraws: from then on the read asks each remaining
+  conversation only whether it is still granted, so what the peer stopped
+  sharing always leaves and frees what it held.
+- **Every read has a budget.** `READ_BUDGET` (60 s) on the peer commands'
+  injected clock, the one their deadlines and `PREEMPT` use: no physical
+  read or write waits past it, and no conversation starts after it. A read
+  that reaches it having saved something ends incomplete (`syncing`), and
+  the next cycle carries on soon. One that saved nothing made no headway:
+  it is `unreachable`, backed off, and its last finished read is not
+  refreshed, so a peer that trickles is not read again every few seconds.
+- **The owner comes first.** A cycle registers itself with the turn it holds,
+  and gives the turn back and clears itself under one lock, so an owner
+  command never finds the turn taken with no cycle to stop. An owner command
+  that finds a cycle stops it: the read's sockets are shut and its waits
+  woken, and the command takes the turn once given back, within `PREEMPT`
+  (10 s) on the injected clock. Shutting a socket does not wake a receive
+  blocked in another thread on every system (Windows does not), so a read
+  never waits on its socket longer than 50 ms at a time and asks its stop
+  between. What a stop cannot cut short is an operating-system connect, at
+  most the 5 s handshake budget; `PREEMPT` is at least twice that, checked
+  when the gateway is built, to leave as long again for local writes. The
+  cycle's audit records are kept after it gives the turn back, so they
+  never count against `PREEMPT`. Only another owner command answers
+  `peer_busy`. The stopped read carries on at the next cycle.
 - **Revocation ends reading.** A Terminal or Unclaimed status removes the
   peer's cache and then marks the record `revoked`, both under the records'
   lock in the client's own call, so a stopped poller cannot leave a revoked
@@ -382,20 +398,33 @@ sequenceDiagram
   `peer.forget` removes the record.
 - **Every change the poller makes is audited.** It changes what is held of a
   peer through three steps only: the status (credential saved, enrollment
-  ended), the cache reset, and the read (each conversation withdrawn). Each
-  step reads the record and whether the cache is there before and after, and
-  hands both, with the cause (`peer_approved`, `peer_ended` with the
+  ended), the cache reset, and the read (conversations withdrawn). Each
+  step reads the record and whether the cache is there before and after,
+  and keeps both with the cause (`peer_approved`, `peer_ended` with the
   status's cause or outcome, `cache_reset_required`, `cache_damaged`,
-  `peer_withdrew` with the conversation) and the system as initiator, to
-  `PeerCommands::poller_changed`, bounded by `AUDIT_DEADLINE`. A record not
-  kept is logged as an error and the change stands: cleanup is never held
-  back or undone for its evidence.
+  `peer_withdrew` with the conversations) and the system as initiator. A
+  status step is named by the transition the record's store began (the
+  credential's save, or the ending), not by what the record holds after,
+  so a write that then fails is still named by what it was. The
+  conversations one read withdrew are one record, or one per 64
+  (`WITHDRAWN_PER_RECORD`). Once the cycle has given back the turn, each
+  record goes to `PeerCommands::poller_changed`, bounded by
+  `AUDIT_DEADLINE` on its own, so an audit that is slow or stalled delays
+  the poller and never an owner command. A record not kept is logged as an
+  error and the change stands: cleanup is never held back or undone for its
+  evidence.
+- **The evidence is after the fact.** Each record describes a change
+  already made: a withdrawal, for one, has already removed the conversation
+  from the cache, and its before and after both show what the read left. A
+  process that stops between a change and its record, a withdrawal included,
+  loses that record; the peer's record and cache on disk say what the change
+  came to, as an owner command's outcome does.
 - **Cadence.** Each peer is read every `POLL_INTERVAL` (30 s), spread 80 to
   120 percent, and after a failure after a backoff that doubles; every wait,
   jitter included, is held to `POLL_BACKOFF_CAP` (15 min). A read stopped
   at a bound, or by an owner command, continues sooner. Every wait is on the
   injected monotonic clock and the jitter is drawn from injected entropy.
-  `POLL_INTERVAL`, `POLL_BACKOFF_CAP` and `READ_BUDGET` are rows of
+  `POLL_INTERVAL`, `POLL_BACKOFF_CAP`, `READ_BUDGET` and `PREEMPT` are rows of
   [`limits.md`](../../limits.md).
 - **`peer.list` shows the reading.** Beside each pending or active peer:
   `sync.state` (`waiting`, `synced`, `syncing`, `unreachable`, `failed`,
@@ -417,14 +446,17 @@ sequenceDiagram
 | R6 | B's cache records more of A's catalogue than A serves | `ResetRequired`: B empties the cache, audits it, and reads again from nothing; `synced`, holding Y | same |
 | R7 | B's cache names another owner stream than the one A answers | The scope pin refuses it: `ResetRequired`, emptied and read again | same |
 | R8 | B's cache has a shape this build does not read | `cache_damaged`: emptied, audited, read again | same |
-| R9 | A read runs out of its budget | It ends incomplete: `syncing`, the conversations it held kept | same |
-| R10 | The poller stops while a read is held | The read's socket is shut and `join` returns at once, well before the read's own handshake deadline | same |
+| R9 | A read runs out of its budget having saved nothing | A failure: `unreachable`, backed off; its last finished read not refreshed; the conversations it held kept. One that saved something ends incomplete, `syncing` | same; `a_read_its_budget_cut_short_counts_only_if_it_saved_something` |
+| R10 | The poller stops while a read is held | The read's socket is shut, its stop asked every slice, and `join` returns at once, well before the read's own handshake deadline, on every system | same; `a_stop_ends_a_blocked_read_without_shutting_its_socket`, `a_sliced_wait_lasts_as_long_as_the_caller_set` |
 | R11 | A's owner revokes B's credential | B's read is refused, its status is Terminal; the cache is removed and the record lists `revoked`, audited `peer_ended (terminal: credential_revoked)`; no connection reaches A after | same |
 | R12 | B's owner forgets A, with a cache left behind | The record and the cache beside it are removed, the cache first, so a failure leaves a record that can be forgotten again | same |
 | R13 | B enrolls again and A's owner denies it | The record lists `revoked`, audited `peer_ended (terminal: denied)` | same |
 | R14 | B's owner forgets A while a read of A is held | The read is stopped and forget succeeds at once, not `peer_busy`; the record and the cache are gone | same |
 | R15 | Rows R1–R14 with an audit that refuses every poller change | Every change still lands; each was offered to the audit once, and refused | `every_poller_change_lands_when_its_audit_is_refused` |
 | R16 | A device reads its owner's catalogue; a peer reads a granted one | The device refuses another owner's stream; the peer accepts any owner stream for its receiver and epoch and refuses another schema, receiver or epoch, or a stream that is not an owner's (another prefix, uppercase hex, a conversation id) | `a_catalogue_scope_is_checked_as_its_reader_can`, `a_granted_catalogue_scope_is_checked_for_all_a_non_owner_can_check`, `every_owner_stream_has_the_shape_a_non_owner_reader_checks` |
+| R18 | A poller change whose audit never answers, then a forget | The forget goes ahead at once, though no deadline on B's frozen clock passes; once the audit answers, the poller's record lands | `a_stalled_poller_audit_never_holds_an_owner_command` |
+| R19 | A cached conversation over quota, then one the peer stopped granting | The second is withdrawn; the read ends `quota`; a storage failure is held back the same way, and only a damaged cache or a lost connection stops the withdrawals | `a_full_cache_still_withdraws_what_the_gateway_no_longer_grants`, `a_full_catalogue_still_withdraws_and_quota_outranks_a_storage_failure`, `a_withdrawal_that_cannot_be_written_does_not_stop_the_others`, `a_full_cache_is_listed_quota_and_a_read_that_saved_nothing_unreachable` |
+| R20 | A status step whose write fails after it began; a cycle giving back the turn as an owner command asks | Named by the transition begun (`peer_ended` after a failed ending, `peer_approved` after a failed save); the owner command finds the turn free or a cycle to stop, never `peer_busy` | `a_slot_names_the_transition_a_status_began_whatever_storage_did`, `a_status_change_is_named_by_the_transition_its_store_began`, `a_cycle_gives_back_the_turn_as_it_clears_itself` |
 | R17 | The wait after each cycle | The interval when settled or pending; an eighth of it when incomplete or stopped; doubling from the interval on each failure in a row; spread 80 to 120 percent; never past the cap; a failing entropy source draws the middle | `failures_double_the_wait_up_to_the_cap`, `jitter_spreads_a_wait_over_80_to_120_percent_and_the_cap_still_holds` and the other tests in `tests/peer_gateways/poller.rs` |
 
 ## What this part does not do
@@ -486,15 +518,23 @@ the client and gives the head an access path by receiver
   device's gateway session, whose connect is an operating-system connect.
   Its timeout is computed from the injected clock (the handshake deadline or
   the read budget, whichever is sooner), but the wait itself is the
-  operating system's, and a stop shuts the sockets a read has open, not one
-  still connecting. A stop or an owner command can therefore wait for that
-  connect, at most the 5 s handshake budget.
+  operating system's, and a stop reaches the sockets a read has open, not
+  one still connecting. A connect cannot be cut into slices the way a
+  receive is (each try would start over, and a slow link would never
+  connect), so a stop or an owner command can wait for it, at most the 5 s
+  handshake budget, which `PREEMPT` covers twice over.
 - **A budget-bound read can starve its last conversations.** Each read asks
   the cached conversations in the same order and stops starting new ones at
   its budget, so under constant change in the first ones, the last ones are
   read only once those settle. Rotating where a read starts is not built.
 - **A full cache is not tested end to end.** `quota` is reported from the
-  cache's own refusal; filling a 256 MiB cache in a test is not done.
+  cache's own refusal; filling a 256 MiB cache in a test is not done. The
+  walk that still withdraws past it is tested against scripted answers
+  (row R19).
+- **A budget hit after partial progress is not tested end to end.** Which
+  way a budget-bound read ends is tested against each case (row R9); an end
+  to end read cut by its budget after saving some pages needs a peer that
+  stalls mid-connection, which the relay does not do.
 - **A cache removal not confirmed durable is not tested.** It needs a
   directory sync that fails, which the private storage owner does not let a
   test inject.

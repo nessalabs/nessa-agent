@@ -100,3 +100,51 @@ fn a_failing_entropy_source_draws_the_middle() {
         Arc::new(|| Box::new(Failing) as Box<dyn super::super::commands::EnrollmentEntropy>);
     assert_eq!(draw(&failing), MIDDLE);
 }
+
+#[test]
+fn a_status_change_is_named_by_the_transition_its_store_began() {
+    let failed: Result<(Status, String), NativeClientError> =
+        Err(NativeClientError::Io(std::io::ErrorKind::BrokenPipe));
+    let ended: Result<(Status, String), NativeClientError> =
+        Ok((Status::Ended, "terminal: denied".to_owned()));
+    // The enrollment ended and its write then failed, whatever it left.
+    assert_eq!(
+        status_cause(Some(SlotTransition::Ended), Some(&failed)),
+        Some(PollerCause::Ended { detail: None })
+    );
+    // The credential's save failed: still the approval it was.
+    assert_eq!(
+        status_cause(Some(SlotTransition::Approved), Some(&failed)),
+        Some(PollerCause::Approved)
+    );
+    // Stopped part way.
+    assert_eq!(
+        status_cause(Some(SlotTransition::Ended), None),
+        Some(PollerCause::Ended { detail: None })
+    );
+    assert_eq!(
+        status_cause(Some(SlotTransition::Ended), Some(&ended)),
+        Some(PollerCause::Ended {
+            detail: Some("terminal: denied".to_owned())
+        })
+    );
+    // A status that began no transition changed nothing.
+    assert_eq!(status_cause(None, Some(&ended)), None);
+    assert_eq!(status_cause(None, Some(&failed)), None);
+}
+
+#[test]
+fn a_full_cache_is_listed_quota_and_a_read_that_saved_nothing_unreachable() {
+    assert_eq!(
+        sync_state(&Unread::Read(ReadFailure::Quota)),
+        SyncState::Quota
+    );
+    assert_eq!(
+        sync_state(&Unread::Read(ReadFailure::Unreachable)),
+        SyncState::Unreachable
+    );
+    assert_eq!(
+        sync_state(&Unread::Read(ReadFailure::Cache)),
+        SyncState::Failed
+    );
+}
