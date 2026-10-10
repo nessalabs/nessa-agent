@@ -234,6 +234,13 @@ pub(super) async fn dispatch(
                             .map(|receipt| command_receipt(&params.request_id, &receipt))
                     }
                     ConversationCommandOperation::Stop => {
+                        if has_creation_hints(&params)
+                            || params.text.is_some()
+                            || params.attachments.is_some()
+                            || params.files.is_some()
+                        {
+                            return Err(ConversationError::InvalidInput);
+                        }
                         let execution_id = params
                             .execution_id
                             .clone()
@@ -546,10 +553,18 @@ fn submitted_message(params: &ConversationSendParams) -> SubmittedMessage {
             .collect(),
     }
 }
+/// A creation's hints, its environment among them, name a creation; a receipt
+/// for any other operation that carries one is malformed, not a lookup.
+fn has_creation_hints(params: &ConversationReceiptParams) -> bool {
+    params.agent.is_some()
+        || params.model.is_some()
+        || params.approval_mode.is_some()
+        || params.environment.is_some()
+}
 fn submitted_message_from_receipt(
     params: &ConversationReceiptParams,
 ) -> Result<SubmittedMessage, ConversationError> {
-    if params.agent.is_some() || params.model.is_some() || params.approval_mode.is_some() {
+    if has_creation_hints(params) {
         return Err(ConversationError::InvalidInput);
     }
     Ok(SubmittedMessage {

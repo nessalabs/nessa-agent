@@ -1146,6 +1146,17 @@ mod gateway {
         .await;
         assert!(looked_up.ok, "{looked_up:?}");
         assert_eq!(looked_up.payload.as_ref().unwrap()["found"], true);
+        // An environment is a creation's hint: on any other operation's
+        // receipt it is malformed, never quietly left out of the lookup.
+        for receipt in [
+            json!({"conversationId":id,"requestId":"running","operation":"submit","executionId":"running","text":"running","environment":"devbox"}),
+            json!({"conversationId":id,"requestId":"running","operation":"steer","executionId":"running","text":"running","environment":"devbox"}),
+            json!({"conversationId":id,"requestId":"running","operation":"stop","executionId":"running","environment":"devbox"}),
+        ] {
+            let refused = chat_request(&state, &session, "conversation.receipt", receipt).await;
+            assert!(!refused.ok, "{refused:?}");
+            assert_eq!(refused.error.unwrap().code, "invalid_request");
+        }
         timeout(
             Duration::from_secs(1),
             provider.execution_started.notified(),
