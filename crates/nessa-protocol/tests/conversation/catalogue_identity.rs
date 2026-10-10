@@ -26,6 +26,7 @@ fn every_owner_stream_has_the_shape_a_non_owner_reader_checks() {
         "conversation-owner:abc",
         "conversation-other:0000000000000000000000000000000000000000000000000000000000000000",
         "conversation-owner:000000000000000000000000000000000000000000000000000000000000000G",
+        "conversation-owner:ABCDEF0000000000000000000000000000000000000000000000000000000000",
         "a-conversation-id",
     ] {
         assert!(

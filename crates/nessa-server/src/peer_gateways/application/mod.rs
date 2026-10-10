@@ -7,6 +7,13 @@
 //! correlated by one operation id. No intent, no effect: a command whose
 //! intent cannot be kept changes nothing. An outcome that cannot be kept
 //! turns the answer into a refusal, while the effect it describes stays.
+//!
+//! The poller changes what this gateway holds of a peer on its own, with no
+//! owner asking: it saves a credential, marks an ended enrollment, empties a
+//! cache, or drops a conversation a peer stopped granting. Each change is
+//! kept as one record after it is made, naming the system as its initiator.
+//! A record that cannot be kept is logged and the change stands: cleanup is
+//! never held back for its evidence.
 use nessa_auth::domain::{pairing::DeviceKey, PrincipalId};
 use std::{
     future::Future,
@@ -48,12 +55,54 @@ pub enum PeerState {
     Unreadable,
     /// Storage did not confirm whether the change landed.
     Unknown,
+    /// The record is as it was, and the removal of its cache, which comes
+    /// first, was not confirmed durable.
+    CacheUnconfirmed {
+        /// The record, untouched.
+        record: Box<PeerState>,
+    },
     /// The command ended before it read the record.
     NotRead,
 }
 
-/// One owner transition over this gateway's peers. Every record names the
-/// operation it belongs to and the principal who asked.
+/// Whether a peer's retained cache was there.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CacheState {
+    Present,
+    Absent,
+    /// Storage could not say.
+    Unknown,
+}
+
+/// A peer's record and its retained cache, as one poller change found or
+/// left them.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PeerHolding {
+    pub record: PeerState,
+    pub cache: CacheState,
+}
+
+/// Why the poller changed what this gateway holds of a peer.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PollerCause {
+    /// The peer's owner approved: an Active status, whose credential was saved.
+    Approved,
+    /// The peer ended the enrollment: a Terminal status (its owner revoked
+    /// the credential, or the invitation ended), or an Unclaimed one (this
+    /// attempt can never claim). `detail` names that status's cause or
+    /// outcome; `None` when the status failed after the change began.
+    Ended { detail: Option<String> },
+    /// The cache cannot continue against what the peer serves; it is emptied.
+    ResetRequired,
+    /// The cache is damaged or has an older shape; it is emptied.
+    CacheDamaged,
+    /// The peer no longer grants this conversation; it left the cache.
+    Withdrawn { conversation: String },
+}
+
+/// One owner transition over this gateway's peers, or one change the poller
+/// made. Every record names the operation it belongs to and who asked: the
+/// owner's principal, or the system.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PeerAuditRecord {
     /// `peer.enroll` asked: nothing has been checked or dialed yet.
@@ -86,6 +135,16 @@ pub enum PeerAuditRecord {
         peer: DeviceKey,
         before: PeerState,
         after: PeerState,
+        outcome: Result<(), &'static str>,
+    },
+    /// The poller changed what is held of `peer`, after the change was made.
+    /// `outcome` is a refusal when the change did not fully land.
+    PollerChanged {
+        operation: Uuid,
+        peer: DeviceKey,
+        cause: PollerCause,
+        before: PeerHolding,
+        after: PeerHolding,
         outcome: Result<(), &'static str>,
     },
 }

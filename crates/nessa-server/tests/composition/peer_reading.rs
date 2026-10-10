@@ -1,7 +1,11 @@
-//! Two composed gateways in one process: B enrolls into A as a peer, A's
-//! owner approves, and B's poller reads what A grants it into B's retained
-//! cache, follows A's shares and unshares, and stops at A's revocation.
-//! Rows R1–R5 in `docs/design/auth/peer-gateways.md` ("Reading a peer").
+//! Two composed gateways in one process: B enrolls into A as a peer, through
+//! a relay the test controls, A's owner approves, and B's poller reads what A
+//! grants it into B's retained cache, follows A's shares, unshares and
+//! deletions, empties a cache that cannot continue, keeps to its read budget,
+//! gives way to the owner's commands, and stops at A's revocation or denial.
+//! Each change the poller makes is audited; with an audit that refuses those
+//! records, every change still lands. Rows R1–R14 in
+//! `docs/design/auth/peer-gateways.md` ("Reading a peer").
 use crate::app::dependencies::RuntimeDependencies;
 use crate::composition::local_auth::SystemClock;
 use crate::composition::native_pairing::{bind, prepare, start, NativeInputs, RunningNative};
@@ -9,23 +13,29 @@ use crate::composition::runtime_config::NativeConfig;
 use crate::conversation::application::{
     ConversationCaller, ConversationRepository, ReadGrantChange, ReadGrantTransition, ReadGrants,
 };
-use crate::conversation::domain::Conversation;
+use crate::conversation::domain::{Conversation, ConversationDeletion};
 use crate::conversation::infrastructure::{
     LocalConversationStore, LocalReceiverAuthority, NessaCatalogueReadSource, NessaRecordReadSource,
 };
 use crate::device_pairing::infrastructure::PairingOwnerCommands;
+use crate::peer_gateways::application::{
+    CacheState, PeerAudit, PeerAuditFuture, PeerAuditRecord, PeerAuditUnavailable, PeerHolding,
+    PeerState, PollerCause,
+};
 use crate::peer_gateways::infrastructure::{
-    PeerCommands, PeerEntry, PeerPhase, PeerPoller, PeerSync, PollPolicy, SyncState,
+    EnrollmentEntropy, EnrollmentEntropySource, PeerCommands, PeerEntry, PeerPhase, PeerPoller,
+    PeerSync, PollInputs, PollPolicy, SyncState, TcpPeerConnector,
 };
 use crate::product::{ProductDependencies, ProductRouteState};
 use nessa_auth::adapters::cedar::CedarPolicyEvaluator;
 use nessa_auth::adapters::local::{BootstrapRequest, LocalCredentialStore};
-use nessa_auth::adapters::pairing::ManualCode;
+use nessa_auth::adapters::pairing::{ManualCode, OsEntropy};
 use nessa_auth::application::credential_admin::RevokeCredentialRequest;
 use nessa_auth::application::dto::{
     CredentialGrantDto, MembershipInputDto, MembershipRoleDto, MembershipStateDto,
     OrganizationInputDto, PrincipalInputDto, PrincipalKindDto, ResourceDto,
 };
+use nessa_auth::application::pairing::OwnerDecision;
 use nessa_auth::application::ports::Clock;
 use nessa_auth::application::session::{AuthenticateSession, AuthenticatedSession};
 use nessa_auth::domain::pairing::{ConsentClass, DeviceKey};
@@ -42,8 +52,10 @@ use nessa_sdk::infrastructure::session_storage::RecordStorage;
 use nessa_sync::replication::domain::Id;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::net::{TcpListener, TcpStream};
 use tokio::runtime::Handle;
 use uuid::Uuid;
 
@@ -53,7 +65,11 @@ const WAIT: Duration = Duration::from_secs(30);
 const POLICY: PollPolicy = PollPolicy {
     interval: Duration::from_millis(100),
     backoff_cap: Duration::from_millis(400),
+    read_budget: Duration::from_secs(60),
 };
+/// Well under the handshake deadline a held read would otherwise reach (5 s),
+/// so an end inside it was a stop, not that deadline.
+const PROMPT: Duration = Duration::from_secs(2);
 
 fn uuid() -> String {
     Uuid::new_v4().to_string()
@@ -277,15 +293,171 @@ impl Peer {
     }
 }
 
-/// Gateway B: native pairing prepared, for its key and its peer commands;
-/// its poller is started and stopped by each step.
+/// A TCP relay in front of A. It lets every new connection through, or a
+/// number of them and then holds each later one open and silent: the status
+/// of a cycle goes through, and its read is held.
+struct Relay {
+    address: SocketAddr,
+    state: Arc<RelayState>,
+    task: tokio::task::JoinHandle<()>,
+}
+#[derive(Default)]
+struct RelayState {
+    /// New connections still let through; `None` lets every one through.
+    through: Mutex<Option<usize>>,
+    accepted: AtomicUsize,
+    held: Mutex<Vec<TcpStream>>,
+    links: Mutex<Vec<tokio::task::JoinHandle<()>>>,
+}
+impl Relay {
+    async fn start(target: SocketAddr) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let state = Arc::new(RelayState::default());
+        let task = tokio::spawn({
+            let state = state.clone();
+            async move {
+                while let Ok((mut inbound, _)) = listener.accept().await {
+                    state.accepted.fetch_add(1, Ordering::SeqCst);
+                    let pass = match &mut *state.through.lock().unwrap() {
+                        None => true,
+                        Some(0) => false,
+                        Some(left) => {
+                            *left -= 1;
+                            true
+                        }
+                    };
+                    if !pass {
+                        state.held.lock().unwrap().push(inbound);
+                        continue;
+                    }
+                    let link = tokio::spawn(async move {
+                        if let Ok(mut outbound) = TcpStream::connect(target).await {
+                            let _ =
+                                tokio::io::copy_bidirectional(&mut inbound, &mut outbound).await;
+                        }
+                    });
+                    state.links.lock().unwrap().push(link);
+                }
+            }
+        });
+        Self {
+            address,
+            state,
+            task,
+        }
+    }
+    /// From now, let `count` new connections through and hold the rest.
+    fn hold_after(&self, count: usize) {
+        *self.state.through.lock().unwrap() = Some(count);
+    }
+    /// Let every new connection through, and close the held ones.
+    fn pass_all(&self) {
+        *self.state.through.lock().unwrap() = None;
+        self.state.held.lock().unwrap().clear();
+    }
+    fn accepted(&self) -> usize {
+        self.state.accepted.load(Ordering::SeqCst)
+    }
+    fn held(&self) -> usize {
+        self.state.held.lock().unwrap().len()
+    }
+    /// Wait until more than `count` connections are held.
+    async fn until_held(&self, count: usize) {
+        tokio::time::timeout(WAIT, async {
+            while self.held() <= count {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("a read was never held");
+    }
+}
+impl Drop for Relay {
+    fn drop(&mut self) {
+        self.task.abort();
+        for link in self.state.links.lock().unwrap().drain(..) {
+            link.abort();
+        }
+        self.state.held.lock().unwrap().clear();
+    }
+}
+
+/// B's peer audit: owner command records are taken as kept; each poller
+/// change is kept, or refused when `refuse`.
+struct Changes {
+    refuse: bool,
+    kept: Mutex<Vec<PeerAuditRecord>>,
+    refused: AtomicUsize,
+}
+impl PeerAudit for Changes {
+    fn record(&self, record: PeerAuditRecord) -> PeerAuditFuture<'_> {
+        let refused = matches!(record, PeerAuditRecord::PollerChanged { .. }) && self.refuse;
+        if refused {
+            self.refused.fetch_add(1, Ordering::SeqCst);
+        } else {
+            self.kept.lock().unwrap().push(record);
+        }
+        Box::pin(async move {
+            if refused {
+                Err(PeerAuditUnavailable)
+            } else {
+                Ok(())
+            }
+        })
+    }
+}
+
+/// One kept poller change, as the table below names it: its cause, and the
+/// record and cache before and after.
+fn change(record: &PeerAuditRecord) -> Option<String> {
+    let PeerAuditRecord::PollerChanged {
+        cause,
+        before,
+        after,
+        outcome,
+        ..
+    } = record
+    else {
+        return None;
+    };
+    let held = |holding: &PeerHolding| {
+        let phase = match &holding.record {
+            PeerState::Absent => "absent",
+            PeerState::Pending { .. } => "pending",
+            PeerState::Active { .. } => "active",
+            PeerState::Revoked { .. } => "revoked",
+            other => panic!("unexpected {other:?}"),
+        };
+        let cache = match holding.cache {
+            CacheState::Present => "cache",
+            CacheState::Absent => "none",
+            CacheState::Unknown => "unknown",
+        };
+        format!("{phase}+{cache}")
+    };
+    let cause = match cause {
+        PollerCause::Approved => "approved".to_owned(),
+        PollerCause::Ended { detail } => format!("ended({})", detail.as_deref().unwrap_or("?")),
+        PollerCause::ResetRequired => "reset_required".to_owned(),
+        PollerCause::CacheDamaged => "cache_damaged".to_owned(),
+        PollerCause::Withdrawn { conversation } => format!("withdrew {conversation}"),
+    };
+    assert_eq!(*outcome, Ok(()), "{cause}");
+    Some(format!("{cause}: {} -> {}", held(before), held(after)))
+}
+
+/// Gateway B: native pairing prepared, for its key and its peer records;
+/// its peer commands audited by `Changes`; its poller started and stopped by
+/// each step.
 struct Reader {
     peers: Arc<PeerCommands>,
+    changes: Arc<Changes>,
     owner: PrincipalId,
     directory: PathBuf,
 }
 impl Reader {
-    async fn prepare(root: &Path) -> Self {
+    async fn prepare(root: &Path, refuse: bool) -> Self {
         let (gateway, organization) = (uuid(), uuid());
         let (auth, _, owner) = owned(root, &gateway, &organization).await;
         let receivers = Arc::new(
@@ -296,7 +468,7 @@ impl Reader {
             )
             .unwrap(),
         );
-        let (_, _, peers) = prepare(
+        let (_, _, prepared) = prepare(
             &NativeConfig {
                 listen_address: "127.0.0.1:0".parse().unwrap(),
             },
@@ -304,14 +476,40 @@ impl Reader {
         )
         .await
         .unwrap();
+        let changes = Arc::new(Changes {
+            refuse,
+            kept: Mutex::new(Vec::new()),
+            refused: AtomicUsize::new(0),
+        });
+        // Composition's peer commands, over the same records, with this
+        // audit in place of the durable one.
+        let peers = Arc::new(PeerCommands::new(
+            prepared.records().clone(),
+            RuntimeDependencies::default().clock,
+            changes.clone(),
+            Arc::new(TcpPeerConnector),
+            entropy(),
+        ));
         #[cfg(unix)]
         let root = root.canonicalize().unwrap();
         Self {
             peers,
+            changes,
             owner: PrincipalId::new(owner).unwrap(),
             // Where composition keeps peer records and their caches.
             directory: root.join("peer-gateways"),
         }
+    }
+    fn poller(&self, policy: PollPolicy) -> PeerPoller {
+        PeerPoller::start(
+            self.peers.clone(),
+            PollInputs {
+                policy,
+                wall: Arc::new(SystemClock),
+                clock: RuntimeDependencies::default().clock,
+                entropy: entropy(),
+            },
+        )
     }
     /// The one peer's listing.
     async fn peer(&self) -> (PeerEntry, Option<PeerSync>) {
@@ -322,8 +520,15 @@ impl Reader {
     /// Run the poller until `done` holds of the peer's listing, then stop it
     /// and wait until nothing it started is running.
     async fn poll_until(&self, done: impl Fn(&PeerEntry, Option<&PeerSync>) -> bool) {
-        let poller = PeerPoller::start(self.peers.clone(), POLICY, Arc::new(SystemClock));
-        let last = std::sync::Mutex::new(None);
+        self.poll_until_with(POLICY, done).await;
+    }
+    async fn poll_until_with(
+        &self,
+        policy: PollPolicy,
+        done: impl Fn(&PeerEntry, Option<&PeerSync>) -> bool,
+    ) {
+        let poller = self.poller(policy);
+        let last = Mutex::new(None);
         let reached = tokio::time::timeout(WAIT, async {
             loop {
                 let (entry, sync) = self.peer().await;
@@ -335,22 +540,25 @@ impl Reader {
             }
         })
         .await;
-        poller.join().await;
+        tokio::time::timeout(WAIT, poller.join()).await.unwrap();
         assert!(
             reached.is_ok(),
             "the peer's listing never reached the expected state; last: {:?}",
             last.lock().unwrap()
         );
     }
-    /// The conversations B's cache of `key` holds for `receiver`.
-    fn cached(&self, key: &DeviceKey, receiver: &str) -> Vec<String> {
+    fn cache_path(&self, key: &DeviceKey) -> PathBuf {
         let hex: String = key
             .bytes()
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect();
+        self.directory.join(format!("{hex}.sqlite3"))
+    }
+    /// The conversations B's cache of `key` holds for `receiver`.
+    fn cached(&self, key: &DeviceKey, receiver: &str) -> Vec<String> {
         let mut cache = RetainedCache::open(
-            &self.directory.join(format!("{hex}.sqlite3")),
+            &self.cache_path(key),
             Arc::new(SystemClock),
             RuntimeDependencies::default().clock,
         )
@@ -359,6 +567,27 @@ impl Reader {
         ids.sort();
         ids
     }
+    /// Change B's cache of `key` by hand, as damage or a restore would.
+    fn tamper(&self, key: &DeviceKey, statement: &str) {
+        nessa_local_database::rusqlite::Connection::open(self.cache_path(key))
+            .unwrap()
+            .execute_batch(statement)
+            .unwrap();
+    }
+    /// The poller changes kept so far, as `change` names them.
+    fn kept(&self) -> Vec<String> {
+        self.changes
+            .kept
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(change)
+            .collect()
+    }
+}
+
+fn entropy() -> EnrollmentEntropySource {
+    Arc::new(|| Box::new(OsEntropy) as Box<dyn EnrollmentEntropy>)
 }
 
 /// A read that finished at or after `since`, complete.
@@ -370,25 +599,46 @@ fn synced_since(since: u64) -> impl Fn(&PeerEntry, Option<&PeerSync>) -> bool {
     }
 }
 
-/// Rows R1–R5: the two-gateway read, end to end.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_peer_reads_only_what_it_is_granted_and_stops_at_revocation() {
-    let directory = tempfile::tempdir().unwrap();
-    let mut a = Peer::start(&directory.path().join("a")).await;
-    let b = Reader::prepare(&directory.path().join("b")).await;
+/// Synced since now, holding `count` conversations.
+async fn synced_with(b: &Reader, count: u64) {
+    let since = SystemClock.unix_milliseconds();
+    b.poll_until(move |entry, sync| {
+        synced_since(since)(entry, sync)
+            && sync.is_some_and(|sync| sync.conversations == Some(count))
+    })
+    .await;
+}
 
-    // R1: B enrolls into A's peer invitation and A's owner approves; B's
-    // poller reads the Active status, saves the credential, and reads an
-    // empty grant.
+/// The peer's listing says the enrollment ended: revoked, no sync.
+fn revoked(entry: &PeerEntry, sync: Option<&PeerSync>) -> bool {
+    sync.is_none()
+        && matches!(entry, PeerEntry::Readable(record) if record.phase() == &PeerPhase::Revoked)
+}
+
+/// B enrolls through `relay` into a new invitation of A's. `approve` or
+/// deny it; the reader's receiver and credential once approved.
+async fn enroll(
+    a: &Peer,
+    b: &Reader,
+    relay: &Relay,
+    approve: bool,
+) -> (DeviceKey, Option<(String, String)>) {
     let created = a
         .commands
         .create(&a.session, ConsentClass::PeerRead)
         .await
         .unwrap();
     let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
-    let pending = b.peers.enroll(a.native, code, &b.owner).await.unwrap();
+    let pending = b.peers.enroll(relay.address, code, &b.owner).await.unwrap();
     let key = *pending.key();
     let id = created.record().id();
+    if !approve {
+        a.commands
+            .decide(&a.session, id, OwnerDecision::Deny)
+            .await
+            .unwrap();
+        return (key, None);
+    }
     let claimed = a.commands.status(&a.session, id).await.unwrap();
     let (_, claim) = claimed.claim_binding().unwrap();
     let approved = a
@@ -398,59 +648,158 @@ async fn a_peer_reads_only_what_it_is_granted_and_stops_at_revocation() {
         .unwrap()
         .record;
     let (receiver, _) = approved.receiver_binding().unwrap();
-    let reader = (
-        receiver.as_str().to_owned(),
-        approved.credential().unwrap().as_str().to_owned(),
+    (
+        key,
+        Some((
+            receiver.as_str().to_owned(),
+            approved.credential().unwrap().as_str().to_owned(),
+        )),
+    )
+}
+
+/// Rows R1–R14 with an audit that keeps every poller change: the effects,
+/// and the table of what was kept.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_peer_reads_only_what_it_is_granted_and_stops_at_revocation() {
+    reads(false).await;
+}
+
+/// The same rows with an audit that refuses every poller change: each change
+/// still lands, and each refusal is the poller's own record, never an owner
+/// command's.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn every_poller_change_lands_when_its_audit_is_refused() {
+    reads(true).await;
+}
+
+/// The two-gateway read, end to end.
+async fn reads(refuse: bool) {
+    let directory = tempfile::tempdir().unwrap();
+    let mut a = Peer::start(&directory.path().join("a")).await;
+    let b = Reader::prepare(&directory.path().join("b"), refuse).await;
+    let relay = Relay::start(a.native).await;
+
+    // R1: B enrolls into A's peer invitation and A's owner approves; B's
+    // poller reads the Active status, saves the credential, and reads an
+    // empty grant.
+    let (key, reader) = enroll(&a, &b, &relay, true).await;
+    let reader = reader.unwrap();
+    let (x, y, z) = (
+        a.conversation().await,
+        a.conversation().await,
+        a.conversation().await,
     );
-    let (x, y) = (a.conversation().await, a.conversation().await);
-    let since = SystemClock.unix_milliseconds();
-    b.poll_until(synced_since(since)).await;
-    let (entry, sync) = b.peer().await;
+    synced_with(&b, 0).await;
+    let (entry, _) = b.peer().await;
     assert!(matches!(
         &entry,
         PeerEntry::Readable(record) if matches!(record.phase(), PeerPhase::Active { .. })
     ));
-    assert_eq!(sync.unwrap().conversations, Some(0));
     assert!(b.cached(&key, &reader.0).is_empty());
 
     // R2: A shares X and not Y; B's cache gets X only.
     a.grant(ReadGrantTransition::Grant, &x, &reader).await;
-    let since = SystemClock.unix_milliseconds();
-    b.poll_until(synced_since(since)).await;
-    assert_eq!(b.peer().await.1.unwrap().conversations, Some(1));
+    synced_with(&b, 1).await;
     assert_eq!(b.cached(&key, &reader.0), vec![x.to_string()]);
 
     // R3: A shares Y and unshares X; the next read takes both.
     a.grant(ReadGrantTransition::Grant, &y, &reader).await;
     a.grant(ReadGrantTransition::Revoke, &x, &reader).await;
-    let since = SystemClock.unix_milliseconds();
-    b.poll_until(synced_since(since)).await;
-    assert_eq!(b.peer().await.1.unwrap().conversations, Some(1));
+    synced_with(&b, 1).await;
     assert_eq!(b.cached(&key, &reader.0), vec![y.to_string()]);
 
-    // R4: B's cache records more of A's catalogue than A now serves, as
-    // after A is restored from an older copy. The cache cannot continue
+    // R4: A unshares Y and shares nothing else; B's cache empties. Shared
+    // again, it comes back.
+    a.grant(ReadGrantTransition::Revoke, &y, &reader).await;
+    synced_with(&b, 0).await;
+    assert!(b.cached(&key, &reader.0).is_empty());
+    a.grant(ReadGrantTransition::Grant, &y, &reader).await;
+    synced_with(&b, 1).await;
+
+    // R5: A shares Z, then deletes it; B's cache drops it.
+    a.grant(ReadGrantTransition::Grant, &z, &reader).await;
+    synced_with(&b, 2).await;
+    a.metadata
+        .record_deletion(
+            &z,
+            ConversationDeletion::new(
+                OrganizationId::new(a.organization.clone()).unwrap(),
+                PrincipalId::new(a.owner.clone()).unwrap(),
+                "peer".into(),
+                uuid(),
+                SystemClock.unix_milliseconds(),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    synced_with(&b, 1).await;
+    assert_eq!(b.cached(&key, &reader.0), vec![y.to_string()]);
+
+    // R6: B's cache records more of A's catalogue than A serves, as after A
+    // is restored from an older copy. The cache cannot continue
     // (ResetRequired), so B empties it and reads again on its own. A read
     // that did not reset would fail on every poll and never be `synced`.
-    let hex: String = key
-        .bytes()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
-    nessa_local_database::rusqlite::Connection::open(b.directory.join(format!("{hex}.sqlite3")))
-        .unwrap()
-        .execute(
-            "UPDATE catalogue_progress SET completed = x'7fffffffffffffff'",
-            [],
-        )
-        .unwrap();
-    let since = SystemClock.unix_milliseconds();
-    b.poll_until(synced_since(since)).await;
+    b.tamper(
+        &key,
+        "UPDATE catalogue_progress SET completed = x'7fffffffffffffff'",
+    );
+    synced_with(&b, 1).await;
     assert_eq!(b.cached(&key, &reader.0), vec![y.to_string()]);
 
-    // R5: A's owner revokes B's credential. B's next read is refused, its
-    // pinned status says the enrollment ended, and B marks the record
-    // revoked, removes the cache, and reads A no more.
+    // R7: B's cache names another owner's catalogue for this receiver than
+    // the one A answers. It holds one catalogue per receiver, so it does not
+    // continue: ResetRequired again.
+    b.tamper(
+        &key,
+        &format!(
+            "PRAGMA foreign_keys = OFF;
+             UPDATE catalogue_progress SET stream = 'conversation-owner:{}'",
+            "0".repeat(64)
+        ),
+    );
+    synced_with(&b, 1).await;
+    assert_eq!(b.cached(&key, &reader.0), vec![y.to_string()]);
+
+    // R8: B's cache has a shape this build does not read. Derived from A, it
+    // is emptied and read again.
+    b.tamper(&key, "DROP TABLE cache_purges");
+    synced_with(&b, 1).await;
+    assert_eq!(b.cached(&key, &reader.0), vec![y.to_string()]);
+
+    // R9: a read that runs out of its budget ends incomplete and keeps what
+    // the cache holds; the next one carries on.
+    relay.hold_after(1);
+    let since = SystemClock.unix_milliseconds();
+    b.poll_until_with(
+        PollPolicy {
+            read_budget: Duration::from_millis(300),
+            ..POLICY
+        },
+        move |_, sync| {
+            sync.is_some_and(|sync| {
+                sync.state == SyncState::Syncing
+                    && sync.last_synced_ms.is_some_and(|at| at >= since)
+                    && sync.conversations == Some(1)
+            })
+        },
+    )
+    .await;
+    relay.pass_all();
+
+    // R10: stopping the poller while a read is held shuts that read at once.
+    relay.hold_after(1);
+    let held = relay.held();
+    let poller = b.poller(POLICY);
+    relay.until_held(held).await;
+    tokio::time::timeout(PROMPT, poller.join())
+        .await
+        .expect("a stop shuts the read in progress");
+    relay.pass_all();
+
+    // R11: A's owner revokes B's credential. B's next read is refused, its
+    // pinned status says the enrollment ended, and B removes the cache,
+    // marks the record revoked, and reads A no more.
     a.auth
         .revoke_sync(RevokeCredentialRequest {
             request_id: uuid(),
@@ -459,24 +808,18 @@ async fn a_peer_reads_only_what_it_is_granted_and_stops_at_revocation() {
             revoked_at: SystemClock.unix_seconds(),
         })
         .unwrap();
-    b.poll_until(|entry, sync| {
-        sync.is_none()
-            && matches!(entry, PeerEntry::Readable(record) if record.phase() == &PeerPhase::Revoked)
-    })
-    .await;
-    let hex: String = key
-        .bytes()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
-    assert!(
-        !b.directory.join(format!("{hex}.sqlite3")).exists(),
-        "the cache is removed"
-    );
+    b.poll_until(revoked).await;
+    assert!(!b.cache_path(&key).exists(), "the cache is removed");
+    // No connection reaches A over several intervals: not read again.
+    let accepted = relay.accepted();
+    let poller = b.poller(POLICY);
+    tokio::time::sleep(POLICY.interval * 6).await;
+    tokio::time::timeout(WAIT, poller.join()).await.unwrap();
+    assert_eq!(relay.accepted(), accepted, "a revoked peer is not read");
 
-    // R7: forgetting a peer removes its cache with its record. A cache left
+    // R12: forgetting a peer removes its cache with its record. A cache left
     // by an earlier failed removal goes too.
-    let cache = b.directory.join(format!("{hex}.sqlite3"));
+    let cache = b.cache_path(&key);
     let mut left = std::fs::OpenOptions::new();
     left.write(true).create_new(true);
     // Private, as the cache's own file is: a file anyone can read is refused.
@@ -487,7 +830,60 @@ async fn a_peer_reads_only_what_it_is_granted_and_stops_at_revocation() {
     assert!(b.peers.list().await.unwrap().is_empty());
     assert!(!cache.exists(), "forget removes the cache");
 
+    // R13: B enrolls again and A's owner denies it: B's status says the
+    // enrollment ended, and its record lists revoked.
+    let (denied, _) = enroll(&a, &b, &relay, false).await;
+    assert_eq!(denied, key);
+    b.poll_until(revoked).await;
+    b.peers.forget(key, &b.owner).await.unwrap();
+
+    // R14: B enrolls once more and is approved. Forgetting A while a read of
+    // it is held stops that read and goes ahead, rather than answering
+    // `peer_busy`: the record and the cache are gone.
+    let (_, reader) = enroll(&a, &b, &relay, true).await;
+    let reader = reader.unwrap();
+    a.grant(ReadGrantTransition::Grant, &y, &reader).await;
+    synced_with(&b, 1).await;
+    assert!(b.cache_path(&key).exists());
+    relay.hold_after(1);
+    let held = relay.held();
+    let poller = b.poller(POLICY);
+    relay.until_held(held).await;
+    tokio::time::timeout(PROMPT, b.peers.forget(key, &b.owner))
+        .await
+        .expect("forget stops the read rather than wait for it")
+        .unwrap();
+    assert!(b.peers.list().await.unwrap().is_empty());
+    assert!(!b.cache_path(&key).exists(), "forget removes the cache");
+    tokio::time::timeout(WAIT, poller.join()).await.unwrap();
+    relay.pass_all();
+
+    // Every change the poller made, in order: kept, or each refused and
+    // still made.
+    let expected = [
+        "approved: pending+none -> active+none".to_owned(),
+        format!("withdrew {x}: active+cache -> active+cache"),
+        format!("withdrew {y}: active+cache -> active+cache"),
+        "reset_required: active+cache -> active+none".to_owned(),
+        "reset_required: active+cache -> active+none".to_owned(),
+        "cache_damaged: active+cache -> active+none".to_owned(),
+        "ended(terminal: credential_revoked): active+cache -> revoked+none".to_owned(),
+        "ended(terminal: denied): pending+none -> revoked+none".to_owned(),
+        "approved: pending+none -> active+none".to_owned(),
+    ];
+    if refuse {
+        assert!(b.kept().is_empty(), "{:?}", b.kept());
+        assert_eq!(
+            b.changes.refused.load(Ordering::SeqCst),
+            expected.len(),
+            "each change was offered once"
+        );
+    } else {
+        assert_eq!(b.kept(), expected);
+    }
+
     // Nothing left running: A's listener drains; B's pollers were joined.
+    drop(relay);
     let mut running = a.running.take().unwrap();
     running.signal_stop();
     tokio::time::timeout(WAIT, running.join())

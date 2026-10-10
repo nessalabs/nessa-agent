@@ -10,7 +10,8 @@
 //! leaves the intent alone: the intent says what was asked, and the peer
 //! record on disk says what it came to.
 use crate::peer_gateways::application::{
-    PeerAudit, PeerAuditFuture, PeerAuditRecord, PeerAuditUnavailable, PeerState,
+    CacheState, PeerAudit, PeerAuditFuture, PeerAuditRecord, PeerAuditUnavailable, PeerHolding,
+    PeerState, PollerCause,
 };
 use nessa_auth::{
     application::ports::Clock,
@@ -83,7 +84,11 @@ fn person(initiator: &PrincipalId) -> Value {
     json!({"kind": "principal", "principalId": initiator.as_str()})
 }
 
-fn state(state: &PeerState) -> Value {
+fn state(of: &PeerState) -> Value {
+    phase(of)
+}
+
+fn phase(state: &PeerState) -> Value {
     match state {
         PeerState::Absent => json!({"phase": "absent"}),
         PeerState::Pending { address } => {
@@ -101,6 +106,33 @@ fn state(state: &PeerState) -> Value {
         PeerState::Unreadable => json!({"phase": "unreadable"}),
         PeerState::Unknown => json!({"phase": "unknown"}),
         PeerState::NotRead => json!({"phase": "not_read"}),
+        PeerState::CacheUnconfirmed { record } => {
+            let mut value = phase(record);
+            value["cache"] = json!("unconfirmed");
+            value
+        }
+    }
+}
+
+fn holding(holding: &PeerHolding) -> Value {
+    let mut value = state(&holding.record);
+    value["cache"] = json!(match holding.cache {
+        CacheState::Present => "present",
+        CacheState::Absent => "absent",
+        CacheState::Unknown => "unknown",
+    });
+    value
+}
+
+/// The cause's name, and what it names: the status's own cause or outcome,
+/// or the conversation withdrawn.
+fn cause(cause: &PollerCause) -> (&'static str, Option<&str>) {
+    match cause {
+        PollerCause::Approved => ("peer_approved", None),
+        PollerCause::Ended { detail } => ("peer_ended", detail.as_deref()),
+        PollerCause::ResetRequired => ("cache_reset_required", None),
+        PollerCause::CacheDamaged => ("cache_damaged", None),
+        PollerCause::Withdrawn { .. } => ("peer_withdrew", None),
     }
 }
 
@@ -169,5 +201,29 @@ pub(super) fn record_value(record: &PeerAuditRecord) -> Value {
             "cause": "owner_requested",
             "initiator": person(initiator),
         }),
+        PeerAuditRecord::PollerChanged {
+            operation,
+            peer,
+            cause: why,
+            before,
+            after,
+            outcome: result,
+        } => {
+            let (name, detail) = cause(why);
+            let conversation = match why {
+                PollerCause::Withdrawn { conversation } => Some(conversation.as_str()),
+                _ => None,
+            };
+            json!({
+                "kind": "peer_poller_changed",
+                "operationId": operation.to_string(),
+                "target": {"peerKey": hex(peer), "conversationId": conversation},
+                "transition": {"before": holding(before), "after": holding(after)},
+                "outcome": outcome(result),
+                "cause": name,
+                "causeDetail": detail,
+                "initiator": {"kind": "system", "component": "peer_poller"},
+            })
+        }
     }
 }

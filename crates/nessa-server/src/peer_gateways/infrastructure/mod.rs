@@ -10,10 +10,13 @@ mod records;
 pub use audit::DurablePeerAudit;
 pub use commands::{
     EnrollmentEntropy, EnrollmentEntropySource, PeerCommands, PeerError, PeerSync, SyncState,
-    AUDIT_DEADLINE, CONNECT,
+    AUDIT_DEADLINE, CONNECT, PREEMPT,
 };
 pub use connector::TcpPeerConnector;
-pub use poller::{PeerPoller, PollPolicy, POLL_BACKOFF_CAP, POLL_INTERVAL};
+pub use poller::{
+    PeerPoller, PollInputs, PollPolicy, POLL_BACKOFF_CAP, POLL_INTERVAL, READ_BUDGET,
+};
 pub use records::{
-    PeerEntry, PeerPhase, PeerRecord, PeerRecords, PeerSlot, SlotFound, SlotRefusal, SlotSave,
+    ForgetFailure, PeerEntry, PeerPhase, PeerRecord, PeerRecords, PeerSlot, SlotFound, SlotRefusal,
+    SlotSave,
 };

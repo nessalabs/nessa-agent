@@ -479,12 +479,15 @@ hand their evidence (`application/`, the `PeerAudit` port) to
 TCP adapter is `infrastructure/connector.rs`. `infrastructure/poller.rs`
 reads each kept peer's pinned status and what it granted, into a retained
 cache beside its record, through `nessa-client-core`'s public `retained`
-module. The
+module, under the commands' turn, which an owner command takes back by
+stopping the cycle; every change it makes is audited through
+`PeerCommands::poller_changed`. The
 product methods are `nessa-server/src/product/peers.rs`, composed beside native
 pairing in `composition/native_pairing.rs`, which starts and joins the poller.
 Tests are `tests/peer_gateways/enroll.rs` and the two-process case in
 `tests/device_pairing/mounted.rs`, both registered by `tests/native_enrollment.rs`,
-and the two-gateway read in `tests/composition/peer_reading.rs`.
+the two-gateway read in `tests/composition/peer_reading.rs`, and the
+poller's cadence in `tests/peer_gateways/poller.rs`.
 Design: [peer gateways](design/auth/peer-gateways.md#the-dialing-side),
 [reading a peer](design/auth/peer-gateways.md#reading-a-peer).
 

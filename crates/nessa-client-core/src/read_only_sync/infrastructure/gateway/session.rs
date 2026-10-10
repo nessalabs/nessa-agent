@@ -249,9 +249,20 @@ impl Session {
             .checked_sub(clock.elapsed_ms())
             .filter(|ms| *ms > 0)
             .ok_or(GatewayError::TimedOut)?;
+        // The run's own cancellation time bounds the connect too.
+        let cut = cancellation
+            .until_ms()
+            .map(|until| until.saturating_sub(clock.elapsed_ms()))
+            .filter(|left| *left < remaining);
+        if cut == Some(0) {
+            return Err(GatewayError::Cancelled);
+        }
         let stream = connector
-            .connect(address, Duration::from_millis(remaining))
-            .map_err(|error| io_cause(&error))?;
+            .connect(address, Duration::from_millis(cut.unwrap_or(remaining)))
+            .map_err(|error| match io_cause(&error) {
+                GatewayError::TimedOut if cut.is_some() => GatewayError::Cancelled,
+                cause => cause,
+            })?;
         let stream = DeadlineStream::new(stream, clock.clone(), cancellation, deadline);
         stream.remaining()?;
         let failure = stream.failure_owner();

@@ -15,6 +15,10 @@
 //! admits a read is the caller's: this module never decides a reader is
 //! revoked, it reports `Refused` and the caller asks.
 //!
+//! A read has a budget on the injected monotonic clock. Every physical read
+//! and write waits no longer than it, and no conversation starts after it;
+//! a read that reaches it ends incomplete, and the next carries on.
+//!
 //! A peer's catalogue pass carries no row for a conversation it is no longer
 //! granted: the gateway narrows rows to the reader's grants, so an unshared
 //! row is absent rather than deleted. A read therefore asks each cached
@@ -25,7 +29,8 @@ use crate::read_only_sync::application::driver::{
     run_catalogue, run_records, RecordDriverCause, RecordDriverError,
 };
 use crate::read_only_sync::application::{
-    CachePolicy, Cancellation, GatewayConnector, GatewayError, GatewayPolicy, GatewayStream,
+    CacheError, CachePolicy, Cancellation, GatewayConnector, GatewayError, GatewayPolicy,
+    GatewayStream,
 };
 use crate::read_only_sync::infrastructure::cache::ReadOnlyCache;
 use crate::read_only_sync::infrastructure::gateway::{
@@ -96,8 +101,6 @@ pub struct ReadReport {
     pub complete: bool,
     /// Conversations the cache holds after the read.
     pub conversations: usize,
-    /// Conversations removed because the gateway no longer grants them.
-    pub withdrawn: Vec<String>,
 }
 
 /// Why a read did not finish.
@@ -116,8 +119,14 @@ pub enum ReadFailure {
     ResetRequired,
     /// The gateway answered something outside the protocol.
     Protocol,
-    /// The private cache could not be opened or written.
+    /// The private cache could not be opened or written; trying again may
+    /// help.
     Cache,
+    /// The private cache is damaged, or has a shape this build does not
+    /// read. It is derived from the gateway, so only emptying it helps.
+    CacheDamaged,
+    /// The private cache reached its size limit.
+    Quota,
     /// `ReadStop::stop` was called.
     Stopped,
 }
@@ -161,10 +170,24 @@ impl ReadStop {
         self.lock().clear();
     }
 }
-struct Stopping(Arc<ReadStop>);
+/// A read's end: its stop, or its budget on the injected clock.
+struct Stopping {
+    stop: Arc<ReadStop>,
+    clock: Arc<dyn MonotonicClock>,
+    /// When the budget is spent, by `clock`.
+    until: u64,
+}
+impl Stopping {
+    fn spent(&self) -> bool {
+        self.clock.elapsed_ms() >= self.until
+    }
+}
 impl Cancellation for Stopping {
     fn cancelled(&self) -> bool {
-        self.0.is_stopped()
+        self.stop.is_stopped() || self.spent()
+    }
+    fn until_ms(&self) -> Option<u64> {
+        Some(self.until)
     }
 }
 struct StoppableConnector(Arc<ReadStop>);
@@ -225,8 +248,8 @@ impl RetainedCache {
         .map_err(|_| ReadFailure::Cache)?;
         let policy = CachePolicy::new(CACHE_BYTES, CHECKPOINT_BYTES, limits)
             .map_err(|_| ReadFailure::Cache)?;
-        let cache =
-            ReadOnlyCache::open(path, policy, wall.clone()).map_err(|_| ReadFailure::Cache)?;
+        let cache = ReadOnlyCache::open(path, policy, wall.clone())
+            .map_err(|error| cache_failure(&error))?;
         Ok(Self {
             cache,
             policy,
@@ -249,26 +272,61 @@ impl RetainedCache {
             .collect())
     }
 
-    /// Read what the gateway grants `access` into this cache. Unless
-    /// `settle`, an unchanged catalogue head ends the read after one call;
-    /// a caller whose last read was incomplete passes `settle` to finish it.
+    /// Read what the gateway grants `access` into this cache, within
+    /// `budget` on the injected clock. Unless `settle`, an unchanged catalogue
+    /// head ends the read after one call; a caller whose last read was
+    /// incomplete passes `settle` to finish it. Each conversation removed
+    /// because the gateway no longer grants it is pushed to `withdrawn` as it
+    /// goes, so the caller learns of it however the read ends.
+    ///
+    /// A read that reaches its budget ends `Ok` and incomplete, with what it
+    /// saved kept. One stopped by `stop` ends `Stopped`.
     pub fn read(
         &mut self,
         access: ReaderAccess<'_>,
         settle: bool,
         stop: &Arc<ReadStop>,
+        budget: Duration,
+        withdrawn: &mut Vec<String>,
     ) -> Result<ReadReport, ReadFailure> {
-        let result = self.read_inner(access, settle, stop);
+        let receiver = access.receiver.to_owned();
+        let ending = Arc::new(Stopping {
+            stop: stop.clone(),
+            clock: self.clock.clone(),
+            until: self
+                .clock
+                .elapsed_ms()
+                .saturating_add(u64::try_from(budget.as_millis()).unwrap_or(u64::MAX)),
+        });
+        let result = self.read_inner(access, settle, &ending, withdrawn);
         stop.release();
-        result
+        match result {
+            // A stop shuts the read's sockets, which the read may see first
+            // as a closed connection: stopped all the same.
+            Err(_) if stop.is_stopped() => Err(ReadFailure::Stopped),
+            // The budget cut it short: what was saved stands, and the next
+            // read carries on from it.
+            Err(ReadFailure::Stopped | ReadFailure::Unreachable)
+                if !stop.is_stopped() && ending.spent() =>
+            {
+                Ok(ReadReport {
+                    moved: true,
+                    complete: false,
+                    conversations: self.conversation_ids(&receiver)?.len(),
+                })
+            }
+            result => result,
+        }
     }
 
     fn read_inner(
         &mut self,
         access: ReaderAccess<'_>,
         settle: bool,
-        stop: &Arc<ReadStop>,
+        ending: &Arc<Stopping>,
+        withdrawn: &mut Vec<String>,
     ) -> Result<ReadReport, ReadFailure> {
+        let stop = &ending.stop;
         let receiver = Id::new(access.receiver).map_err(|_| ReadFailure::Protocol)?;
         let policy = GatewayPolicy::new(
             HANDSHAKE_MS,
@@ -286,7 +344,7 @@ impl RetainedCache {
             access.client_id,
             &StoppableConnector(stop.clone()),
             self.clock.clone(),
-            Arc::new(Stopping(stop.clone())),
+            ending.clone(),
             policy,
         )
         .map_err(failure)?;
@@ -315,7 +373,7 @@ impl RetainedCache {
         let saved = self
             .cache
             .retained_catalogue_progress(&receiver, scope.origin(), scope.stream())
-            .map_err(|_| ReadFailure::Cache)?;
+            .map_err(|error| cache_failure(&error))?;
         if saved
             .as_ref()
             .is_some_and(|saved| saved.scope != scope || saved.completed > head)
@@ -330,7 +388,6 @@ impl RetainedCache {
                 moved: false,
                 complete: true,
                 conversations: self.live(&scope)?.len(),
-                withdrawn: Vec::new(),
             });
         }
 
@@ -353,21 +410,30 @@ impl RetainedCache {
             (Some(Err(CatalogueError::Store(CatalogueStoreError::ResetRequired))), None) => {
                 return Err(ReadFailure::ResetRequired)
             }
-            (Some(Err(CatalogueError::Store(_))), None) => return Err(ReadFailure::Cache),
+            (Some(Err(CatalogueError::Store(_))), None) => {
+                return Err(self
+                    .cache
+                    .take_refusal()
+                    .map_or(ReadFailure::Cache, |error| cache_failure(&error)))
+            }
             (Some(Err(_)), None) | (None, None) => return Err(ReadFailure::Protocol),
         };
 
-        let mut withdrawn = Vec::new();
         for id in self.live(&scope)? {
+            // No conversation starts once the budget is spent.
+            if ending.spent() {
+                complete = false;
+                break;
+            }
             let Ok(conversation) = ConversationId::new(id.as_str()) else {
-                return Err(ReadFailure::Cache);
+                return Err(ReadFailure::CacheDamaged);
             };
             match self.records(&connection, &receiver, epoch, conversation)? {
                 Conversation::Read { complete: done } => complete &= done,
                 Conversation::Withdrawn => {
                     self.cache
                         .withdraw(&scope, &id)
-                        .map_err(|_| ReadFailure::Cache)?;
+                        .map_err(|error| cache_failure(&error))?;
                     withdrawn.push(id.as_str().to_owned());
                 }
                 Conversation::Unread { connection_kept } => {
@@ -382,7 +448,6 @@ impl RetainedCache {
             moved: true,
             complete,
             conversations: self.live(&scope)?.len(),
-            withdrawn,
         })
     }
 
@@ -420,7 +485,7 @@ impl RetainedCache {
                 )
             })
             .map_err(failure)?;
-        let _refusal = self.cache.take_refusal();
+        let refusal = self.cache.take_refusal();
         match (attempt.result, attempt.outcome.failure) {
             (_, Some(error)) => unread(error),
             (Some(Ok(run)), None) => Ok(Conversation::Read {
@@ -431,8 +496,9 @@ impl RetainedCache {
                     SyncError::Store(StoreError::ScopeMismatch { .. })
                     | SyncError::SourceBehindCheckpoint,
                 ) => Err(ReadFailure::ResetRequired),
-                RecordDriverCause::Core(SyncError::Store(_)) | RecordDriverCause::Cache(_) => {
-                    Err(ReadFailure::Cache)
+                RecordDriverCause::Cache(error) => Err(cache_failure(&error)),
+                RecordDriverCause::Core(SyncError::Store(_)) => {
+                    Err(refusal.as_ref().map_or(ReadFailure::Cache, cache_failure))
                 }
                 RecordDriverCause::Core(_) => Ok(Conversation::Unread {
                     connection_kept: false,
@@ -446,7 +512,7 @@ impl RetainedCache {
     fn catalogue_scope(&mut self, receiver: &Id) -> Result<Option<Scope>, ReadFailure> {
         self.cache
             .catalogue_scope_of(receiver)
-            .map_err(|_| ReadFailure::Cache)
+            .map_err(|error| cache_failure(&error))
     }
 
     /// Every conversation the cache holds under `scope` that is not deleted.
@@ -463,7 +529,7 @@ impl RetainedCache {
                     after.as_ref(),
                     MAX_CATALOGUE_ENTRIES,
                 )
-                .map_err(|_| ReadFailure::Cache)?
+                .map_err(|error| cache_failure(&error))?
             else {
                 return Ok(live);
             };
@@ -503,6 +569,17 @@ fn unread(error: GatewayError) -> Result<Conversation, ReadFailure> {
             connection_kept: error == GatewayError::Record(RecordReadErrorCode::SourcePreparing),
         }),
         other => Err(other),
+    }
+}
+
+/// A cache failure as the caller acts on it: a cache that cannot be read as
+/// one is emptied, a full one is reported as such, and anything else may pass.
+fn cache_failure(error: &CacheError) -> ReadFailure {
+    match error {
+        CacheError::Corrupt | CacheError::OutdatedSchema => ReadFailure::CacheDamaged,
+        CacheError::Quota => ReadFailure::Quota,
+        CacheError::Scope { .. } => ReadFailure::ResetRequired,
+        _ => ReadFailure::Cache,
     }
 }
 

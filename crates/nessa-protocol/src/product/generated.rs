@@ -1990,6 +1990,7 @@ pub enum PeerSyncState {
     Syncing,
     Unreachable,
     Failed,
+    Quota,
 }
 impl PeerSyncState {
     pub fn as_str(self) -> &'static str {
@@ -1999,6 +2000,7 @@ impl PeerSyncState {
             Self::Syncing => "syncing",
             Self::Unreachable => "unreachable",
             Self::Failed => "failed",
+            Self::Quota => "quota",
         }
     }
 }

@@ -152,6 +152,18 @@ pub enum SlotSave {
     Uncertain,
 }
 
+/// Why a forget did not finish, by the step that failed: the cache, which
+/// goes first and leaves the record untouched, or the record.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ForgetFailure {
+    /// The cache could not be removed (the record is as it was), or its
+    /// removal was not confirmed durable (`Uncertain`).
+    Cache(PrivateStateError),
+    /// The record could not be read or removed, or its removal was not
+    /// confirmed durable (`Uncertain`).
+    Record(PrivateStateError),
+}
+
 /// The private directory of peer records, and the gateway key they refer to.
 /// One per gateway; every operation holds its lock, so a record is never read
 /// half-replaced by this process.
@@ -233,28 +245,30 @@ impl PeerRecords {
     /// Remove the record for `key`, readable or not, and return what it was.
     /// Local only: the peer still holds the credential it issued until its
     /// owner revokes it there.
-    pub fn forget(&self, key: &DeviceKey) -> Result<Option<PeerEntry>, PrivateStateError> {
+    pub fn forget(&self, key: &DeviceKey) -> Result<Option<PeerEntry>, ForgetFailure> {
         let _guard = self.lock();
-        let Some(entry) = self.entry(key, &self.own_spki()?)? else {
+        let own = self.own_spki().map_err(ForgetFailure::Record)?;
+        let Some(entry) = self.entry(key, &own).map_err(ForgetFailure::Record)? else {
             return Ok(None);
         };
         // The cache first: a record left by a failure here can be forgotten
         // again, while a cache left without its record would be found by
         // nothing.
-        self.remove_cache_locked(key)?;
+        self.remove_cache_locked(key)
+            .map_err(ForgetFailure::Cache)?;
         let name = file_name(key);
         let file = match self.directory.open_file(&name, OpenMode::ReadNonblocking) {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(storage_error(error)),
+            Err(error) => return Err(ForgetFailure::Record(storage_error(error))),
         };
         // The open handle names the file read: a replacement is refused.
         self.directory
             .remove_file(&name, &file)
-            .map_err(storage_error)?;
+            .map_err(|error| ForgetFailure::Record(storage_error(error)))?;
         self.directory
             .sync()
-            .map_err(|_| PrivateStateError::Uncertain)?;
+            .map_err(|_| ForgetFailure::Record(PrivateStateError::Uncertain))?;
         Ok(Some(entry))
     }
 
@@ -644,7 +658,10 @@ impl ClientPendingStore for PeerSlot {
     }
     /// The peer's authenticated end of this enrollment. A device's record
     /// goes so it can enroll again; a peer's stays, marked revoked, so the
-    /// owner sees what happened and forgets it. Its credential goes with it.
+    /// owner sees what happened and forgets it. Its credential goes with it,
+    /// and its retained cache before either, under the records' lock: a
+    /// failure after that removal leaves the record as it was, for the next
+    /// status to end again, and never a revoked record beside a cache.
     fn end_enrollment(&self, expected: PublicIntent) -> Result<(), PrivateStateError> {
         let Some(peer) = self.peer() else {
             return Ok(());
@@ -657,6 +674,7 @@ impl ClientPendingStore for PeerSlot {
         if record.intent != expected {
             return Err(PrivateStateError::Conflict);
         }
+        self.records.remove_cache_locked(&peer)?;
         if record.phase == PeerPhase::Revoked {
             return Ok(());
         }

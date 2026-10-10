@@ -122,3 +122,7 @@ pub fn check_granted_catalogue_scope(
     }
     validate_passive_read_selector(receiver, epoch, scope)
 }
+
+#[cfg(test)]
+#[path = "../../tests/conversation/read_scope.rs"]
+mod tests;

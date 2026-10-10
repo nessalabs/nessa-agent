@@ -1,44 +1,58 @@
 //! Reading what each peer granted this gateway, on a cadence: one task,
-//! one peer at a time, each read holding the peer commands' turn so no
-//! enrollment or forget runs beside it.
+//! one peer at a time, each cycle holding the peer commands' turn so no
+//! enrollment or forget runs beside it. An owner command that wants the turn
+//! stops the cycle instead of waiting for it.
 //!
 //! ```text
-//! tick --> PeerRecords::list --> each due peer, pending or active:
+//! tick --> PeerRecords::list (schedules) --> each due peer:
+//!   take the turn --> re-read its record; gone or revoked --> drop it
 //!   pinned status (NativeEnrollmentClient over its PeerSlot)
 //!     Active   --> the client saves the credential --> RetainedCache::read
-//!                    Refused        --> pinned status again
-//!                    ResetRequired  --> remove the cache, read once more
-//!     Terminal or Unclaimed --> the client marks the record revoked
-//!                           --> remove the cache; the peer is not read again
+//!                    Refused                    --> pinned status again
+//!                    ResetRequired, CacheDamaged --> empty the cache, read once more
+//!     Terminal or Unclaimed --> the client removes the cache and marks the
+//!                               record revoked; the peer is not read again
 //!     otherwise (still pending) --> wait
+//!   every change above --> PeerCommands::poller_changed (the audit)
 //! ```
 //! Arrows are calls, in order. No read happens without a fresh Active
 //! status, and nothing is removed without a Terminal one: a refused
 //! `openProduct` is redacted, so a revoked credential and a full pool look
 //! alike until the status is asked (design row PC5, which the device follows
-//! too). Each peer is read again after the interval, with jitter, and after
-//! a failure, after a backoff that doubles up to its cap.
-use super::commands::{PeerCommands, PeerSync, SyncState};
+//! too). Each read has a budget on the injected clock and ends incomplete
+//! when it runs out. Each peer is read again after the interval, with
+//! jitter, sooner when its last read was incomplete or stopped, and after a
+//! failure, after a backoff that doubles up to its cap. Every wait is on the
+//! injected monotonic clock, and the jitter is drawn from injected entropy.
+//!
+//! Each change the poller makes to what is held of a peer goes through one
+//! step that reads what is held before and after it and hands both to
+//! `poller_changed`: the status step (credential saved, enrollment ended),
+//! the cache reset, and each conversation a read withdrew.
+use super::commands::{
+    CycleStop, CycleTurn, EnrollmentEntropySource, PeerCommands, PeerSync, SyncState,
+};
 use super::records::{PeerEntry, PeerPhase, PeerRecord};
+use crate::peer_gateways::application::{PeerState, PollerCause};
 use nessa_auth::{
     adapters::pairing::NativeIdentity,
     application::{pairing::ClientPendingStore, ports::Clock as WallClock},
     domain::pairing::DeviceKey,
 };
 use nessa_client_core::pairing::{NativeClientError, NativeEnrollmentClient};
-use nessa_client_core::retained::{ReadFailure, ReadReport, ReadStop, ReaderAccess, RetainedCache};
+use nessa_client_core::retained::{ReadFailure, ReadReport, ReaderAccess, RetainedCache};
+use nessa_protocol::clock::Clock as MonotonicClock;
+use nessa_protocol::pairing::socket::WAKE_TICK;
 use nessa_protocol::pairing::wire::NativePairingStatus;
 use std::{collections::HashMap, sync::Arc, time::Duration};
-use tokio::{
-    sync::watch,
-    task::JoinHandle,
-    time::{sleep_until, Instant},
-};
+use tokio::{sync::watch, task::JoinHandle};
 
 /// How often each peer is read once it is up to date.
 pub const POLL_INTERVAL: Duration = Duration::from_secs(30);
-/// The longest a failing peer waits before it is tried again.
+/// The longest a peer waits between reads, failing or not, jitter included.
 pub const POLL_BACKOFF_CAP: Duration = Duration::from_secs(15 * 60);
+/// The longest one read of a peer runs before it ends incomplete.
+pub const READ_BUDGET: Duration = Duration::from_secs(60);
 /// How this gateway names itself to a peer's product session.
 const CLIENT_ID: &str = "nessa-peer-gateway";
 
@@ -47,21 +61,35 @@ const CLIENT_ID: &str = "nessa-peer-gateway";
 pub struct PollPolicy {
     /// The wait between reads of a peer that is up to date.
     pub interval: Duration,
-    /// The longest wait after failures.
+    /// The longest wait between reads, after failures and jitter.
     pub backoff_cap: Duration,
+    /// The longest one read runs, by the injected clock.
+    pub read_budget: Duration,
 }
 impl Default for PollPolicy {
     fn default() -> Self {
         Self {
             interval: POLL_INTERVAL,
             backoff_cap: POLL_BACKOFF_CAP,
+            read_budget: READ_BUDGET,
         }
     }
 }
 
+/// What the poller is given: its cadence, the wall clock that stamps a
+/// finished read, the monotonic clock every wait is measured on, and the
+/// entropy its jitter is drawn from.
+pub struct PollInputs {
+    pub policy: PollPolicy,
+    pub wall: Arc<dyn WallClock>,
+    pub clock: Arc<dyn MonotonicClock>,
+    pub entropy: EnrollmentEntropySource,
+}
+
 /// When a peer is next read, and why.
 struct Due {
-    at: Instant,
+    /// By the injected monotonic clock.
+    at: u64,
     failures: u32,
     /// The last read stopped short: read again even if the head is unchanged.
     settle: bool,
@@ -70,38 +98,30 @@ struct Due {
 /// The running poller, and how to stop it.
 pub struct PeerPoller {
     stop: watch::Sender<bool>,
-    reads: Arc<ReadStop>,
+    commands: Arc<PeerCommands>,
     task: JoinHandle<()>,
 }
 impl PeerPoller {
-    /// Start reading `commands`' peers under `policy`. `wall` stamps when a
-    /// read finished.
-    pub fn start(
-        commands: Arc<PeerCommands>,
-        policy: PollPolicy,
-        wall: Arc<dyn WallClock>,
-    ) -> Self {
+    /// Start reading `commands`' peers with `inputs`.
+    pub fn start(commands: Arc<PeerCommands>, inputs: PollInputs) -> Self {
         let (stop, stopped) = watch::channel(false);
-        let reads = ReadStop::new();
         let poller = Poller {
-            commands,
-            policy,
-            wall,
-            reads: reads.clone(),
+            commands: commands.clone(),
+            inputs,
             stopped,
             due: HashMap::new(),
         };
         Self {
             stop,
-            reads,
+            commands,
             task: tokio::spawn(poller.run()),
         }
     }
-    /// Ask the poller to stop: its wait ends, and a read in progress has its
-    /// socket shut at once.
+    /// Ask the poller to stop: its waits end, and a cycle in progress is
+    /// stopped, its read's sockets shut at once.
     pub fn signal_stop(&self) {
         self.stop.send_replace(true);
-        self.reads.stop();
+        self.commands.stop_cycle();
     }
     /// Stop, and wait until nothing the poller started is running: its task,
     /// and the blocking read or status worker it was awaiting.
@@ -113,9 +133,7 @@ impl PeerPoller {
 
 struct Poller {
     commands: Arc<PeerCommands>,
-    policy: PollPolicy,
-    wall: Arc<dyn WallClock>,
-    reads: Arc<ReadStop>,
+    inputs: PollInputs,
     stopped: watch::Receiver<bool>,
     due: HashMap<DeviceKey, Due>,
 }
@@ -123,14 +141,16 @@ impl Poller {
     fn stopping(&self) -> bool {
         *self.stopped.borrow()
     }
+    fn now(&self) -> u64 {
+        self.inputs.clock.elapsed_ms()
+    }
     async fn run(mut self) {
         while !self.stopping() {
-            let now = Instant::now();
-            for record in self.peers().await {
+            let now = self.now();
+            for key in self.peers().await {
                 if self.stopping() {
                     return;
                 }
-                let key = *record.key();
                 let due = self.due.entry(key).or_insert(Due {
                     at: now,
                     failures: 0,
@@ -140,114 +160,125 @@ impl Poller {
                     continue;
                 }
                 let settle = due.settle;
-                let Some(outcome) = self.cycle(record, settle).await else {
-                    continue;
+                let Some(pace) = self.cycle(key, settle).await else {
+                    return;
                 };
-                self.reschedule(key, outcome);
+                self.reschedule(key, pace);
             }
             let next = self
                 .due
                 .values()
                 .map(|due| due.at)
                 .min()
-                .unwrap_or(now + self.policy.interval)
-                .min(Instant::now() + self.policy.interval);
-            let mut stopped = self.stopped.clone();
-            tokio::select! {
-                _ = sleep_until(next) => {}
-                _ = until_stopped(&mut stopped) => return,
+                .unwrap_or(u64::MAX)
+                .min(
+                    self.now()
+                        .saturating_add(millis(self.inputs.policy.interval)),
+                );
+            if !self.wait_until(next).await {
+                return;
             }
         }
     }
 
-    /// Readable peers still enrolled, pending or active. Revoked ones have
-    /// their cache removed here too, should an earlier removal have failed.
-    async fn peers(&mut self) -> Vec<PeerRecord> {
-        let records = self.commands.records.clone();
+    /// Wait until the injected clock reaches `at`, reading it every
+    /// [`WAKE_TICK`]. `false` once the poller is stopped.
+    async fn wait_until(&self, at: u64) -> bool {
+        let mut stopped = self.stopped.clone();
+        loop {
+            let left = at.saturating_sub(self.now());
+            if left == 0 {
+                return true;
+            }
+            tokio::select! {
+                () = tokio::time::sleep(Duration::from_millis(left).min(WAKE_TICK)) => {}
+                () = until_stopped(&mut stopped) => return false,
+            }
+        }
+    }
+
+    /// The peers to schedule: those whose records read and are not revoked.
+    /// Who is read is decided again under the turn.
+    async fn peers(&mut self) -> Vec<DeviceKey> {
+        let records = self.commands.records().clone();
         let listed = tokio::task::spawn_blocking(move || records.list()).await;
         let Ok(Ok(entries)) = listed else {
             tracing::warn!("peer gateway records could not be listed");
             return Vec::new();
         };
-        let mut live = Vec::new();
-        for entry in entries {
-            let PeerEntry::Readable(record) = entry else {
-                continue;
-            };
-            match record.phase() {
-                PeerPhase::Revoked => self.clear_revoked(*record.key()).await,
-                PeerPhase::Pending | PeerPhase::Active { .. } => live.push(record),
-            }
-        }
-        self.due
-            .retain(|key, _| live.iter().any(|record| record.key() == key));
+        let live: Vec<DeviceKey> = entries
+            .iter()
+            .filter_map(|entry| match entry {
+                PeerEntry::Readable(record) if record.phase() != &PeerPhase::Revoked => {
+                    Some(*record.key())
+                }
+                _ => None,
+            })
+            .collect();
+        self.due.retain(|key, _| live.contains(key));
+        self.commands.keep_syncs(&live);
         live
     }
 
-    async fn clear_revoked(&mut self, key: DeviceKey) {
-        self.due.remove(&key);
-        self.commands.set_sync(key, None);
-        let records = self.commands.records.clone();
-        let Ok(_turn) = self.commands.turn.clone().try_acquire_owned() else {
+    fn reschedule(&mut self, key: DeviceKey, pace: Pace) {
+        if pace == Pace::Gone {
+            self.due.remove(&key);
             return;
-        };
-        let _ = tokio::task::spawn_blocking(move || {
-            if records.has_cache(&key)? {
-                records.remove_cache(&key)?;
-                tracing::info!(peer = %hex(&key), "peer gateway cache removed after revocation");
-            }
-            Ok::<_, nessa_auth::application::pairing::PrivateStateError>(())
-        })
-        .await;
-    }
-
-    fn reschedule(&mut self, key: DeviceKey, outcome: Cycle) {
+        }
+        let draw = draw(&self.inputs.entropy);
+        let now = self.now();
         let Some(due) = self.due.get_mut(&key) else {
             return;
         };
-        let interval = self.policy.interval;
-        let wait = match outcome {
-            Cycle::Ended => {
-                self.due.remove(&key);
-                return;
-            }
-            Cycle::Settled { complete } => {
-                due.failures = 0;
-                due.settle = !complete;
-                // An incomplete read continues soon; a settled peer waits.
-                if complete {
-                    interval
-                } else {
-                    interval / 8
-                }
-            }
-            Cycle::Waiting => {
-                due.failures = 0;
-                interval
-            }
-            Cycle::Failed => {
-                due.failures = due.failures.saturating_add(1);
-                interval
-                    .saturating_mul(1 << due.failures.min(16))
-                    .min(self.policy.backoff_cap)
-            }
-        };
-        due.at = Instant::now() + jitter(wait);
+        let (wait, failures) = next_wait(&self.inputs.policy, pace, due.failures, draw);
+        due.failures = failures;
+        due.settle = matches!(pace, Pace::Continue | Pace::Stopped);
+        due.at = now.saturating_add(millis(wait));
     }
 
-    /// One peer: the pinned status, then a read if it is Active. `None` when
-    /// the poller stopped part way.
-    async fn cycle(&mut self, record: PeerRecord, settle: bool) -> Option<Cycle> {
-        let key = *record.key();
+    /// The turn for `cycle`, asked for every [`WAKE_TICK`] until free.
+    /// `None` once the poller is stopped.
+    async fn take_turn(&self, cycle: &Arc<CycleStop>) -> Option<CycleTurn> {
         let mut stopped = self.stopped.clone();
-        let turn = tokio::select! {
-            turn = self.commands.turn.clone().acquire_owned() => turn.ok()?,
-            _ = until_stopped(&mut stopped) => return None,
+        loop {
+            if let Some(turn) = self.commands.try_cycle_turn(cycle) {
+                // A stop asked before the cycle was registered did not reach it.
+                return (!self.stopping()).then_some(turn);
+            }
+            tokio::select! {
+                () = tokio::time::sleep(WAKE_TICK) => {}
+                () = until_stopped(&mut stopped) => return None,
+            }
+        }
+    }
+
+    /// One peer, under the turn: its record read again, the pinned status,
+    /// then a read if it is Active. `None` when the poller stopped.
+    async fn cycle(&mut self, key: DeviceKey, settle: bool) -> Option<Pace> {
+        let cycle = CycleStop::new();
+        let _turn = self.take_turn(&cycle).await?;
+        // Forgotten, ended or replaced since the listing: what is read is
+        // what the record says now, under the turn.
+        let records = self.commands.records().clone();
+        let record = match tokio::task::spawn_blocking(move || records.get(&key)).await {
+            Ok(Ok(Some(PeerEntry::Readable(record)))) if record.phase() != &PeerPhase::Revoked => {
+                record
+            }
+            Ok(Ok(_)) => {
+                self.commands.set_sync(key, None);
+                return Some(Pace::Gone);
+            }
+            _ => return Some(self.unread(key, &Unread::Storage)),
         };
-        let status = self.status(&record).await?;
-        let outcome = match status {
-            Err(error) => self.unread(&record, Some(error), None),
-            Ok(Status::Ended(cause)) => self.ended(&record, &cause).await,
+        let Some(status) = self.status(&record, &cycle).await else {
+            return self.stopped_short();
+        };
+        let pace = match status {
+            Err(error) => self.unread(key, &Unread::Status(error)),
+            Ok(Status::Ended) => {
+                self.commands.set_sync(key, None);
+                Pace::Gone
+            }
             Ok(Status::Waiting) => {
                 self.commands.set_sync(
                     key,
@@ -257,45 +288,108 @@ impl Poller {
                         conversations: None,
                     }),
                 );
-                Cycle::Waiting
+                Pace::Waiting
             }
             Ok(Status::Active {
                 receiver,
                 access_epoch,
-            }) => match self.read(&record, &receiver, access_epoch, settle).await? {
-                Ok(report) => self.read_done(&record, report),
-                Err(ReadFailure::Refused) => match self.status(&record).await? {
-                    Ok(Status::Ended(cause)) => self.ended(&record, &cause).await,
-                    _ => self.unread(&record, None, Some(ReadFailure::Refused)),
-                },
-                Err(ReadFailure::Stopped) => return None,
-                Err(failure) => self.unread(&record, None, Some(failure)),
-            },
+            }) => {
+                let mut result = self
+                    .read(&record, &receiver, access_epoch, settle, &cycle)
+                    .await;
+                if let Some(cause) = match &result {
+                    Some(Err(ReadFailure::ResetRequired)) => Some(PollerCause::ResetRequired),
+                    Some(Err(ReadFailure::CacheDamaged)) => Some(PollerCause::CacheDamaged),
+                    _ => None,
+                } {
+                    // Derived from the peer: emptied and read again from nothing.
+                    self.reset(key, cause).await;
+                    result = self
+                        .read(&record, &receiver, access_epoch, true, &cycle)
+                        .await;
+                }
+                match result {
+                    None => return self.stopped_short(),
+                    Some(Ok(report)) => self.read_done(key, report),
+                    Some(Err(ReadFailure::Refused)) => match self.status(&record, &cycle).await {
+                        None => return self.stopped_short(),
+                        Some(Ok(Status::Ended)) => {
+                            self.commands.set_sync(key, None);
+                            Pace::Gone
+                        }
+                        Some(_) => self.unread(key, &Unread::Read(ReadFailure::Refused)),
+                    },
+                    Some(Err(ReadFailure::Stopped)) => return self.stopped_short(),
+                    Some(Err(failure)) => self.unread(key, &Unread::Read(failure)),
+                }
+            }
         };
-        drop(turn);
-        Some(outcome)
+        Some(pace)
     }
 
-    /// The peer's pinned status through its record. `None` when stopped.
-    async fn status(&self, record: &PeerRecord) -> Option<Result<Status, NativeClientError>> {
-        let address = record.address();
+    /// A cycle cut short: by the poller stopping (`None`), or by an owner
+    /// command taking the turn, after which the peer is read again soon.
+    fn stopped_short(&self) -> Option<Pace> {
+        (!self.stopping()).then_some(Pace::Stopped)
+    }
+
+    /// The peer's pinned status through its record, as one audited step:
+    /// what is held before and after it, and the change if any. `None` when
+    /// the cycle was stopped.
+    async fn status(
+        &self,
+        record: &PeerRecord,
+        cycle: &Arc<CycleStop>,
+    ) -> Option<Result<Status, NativeClientError>> {
+        let key = *record.key();
+        let before = self.commands.holding(key).await;
+        let status = self.ask_status(record, cycle).await;
+        let after = self.commands.holding(key).await;
+        if after != before {
+            let cause = match &status {
+                Some(Ok((Status::Active { .. }, _))) => PollerCause::Approved,
+                Some(Ok((Status::Ended, detail))) => PollerCause::Ended {
+                    detail: Some(detail.clone()),
+                },
+                // Failed or stopped part way: named by what it left.
+                _ if matches!(after.record, PeerState::Active { .. }) => PollerCause::Approved,
+                _ => PollerCause::Ended { detail: None },
+            };
+            let outcome = match &status {
+                Some(Ok(_)) => Ok(()),
+                _ => Err("peer_unavailable"),
+            };
+            self.commands
+                .poller_changed(key, cause, before, after, outcome)
+                .await;
+        }
+        Some(status?.map(|(status, _)| status))
+    }
+
+    async fn ask_status(
+        &self,
+        record: &PeerRecord,
+        cycle: &Arc<CycleStop>,
+    ) -> Option<Result<(Status, String), NativeClientError>> {
         let mut stopped = self.stopped.clone();
         // The same connect as an enrollment's: the injected connector, bounded
-        // by the injected deadline clock.
+        // by the injected deadline clock. Its own error is kept.
         let stream = tokio::select! {
-            connected = self.commands.connect(address) => match connected {
+            connected = self.commands.dial(record.address()) => match connected {
                 Ok(stream) => stream,
-                Err(_) => return Some(Err(NativeClientError::Io(std::io::ErrorKind::TimedOut))),
+                Err(error) => return Some(Err(NativeClientError::Io(error.kind()))),
             },
-            _ = until_stopped(&mut stopped) => return None,
+            () = cycle.stopped() => return None,
+            () = until_stopped(&mut stopped) => return None,
         };
         let client = NativeEnrollmentClient::new(
-            Arc::new(self.commands.records.slot(*record.key())),
+            Arc::new(self.commands.records().slot(*record.key())),
             self.commands.clock.clone(),
         );
         let status = tokio::select! {
             status = client.status(stream, None) => Some(status),
-            _ = until_stopped(&mut stopped) => None,
+            () = cycle.stopped() => None,
+            () = until_stopped(&mut stopped) => None,
         };
         // Wakes and waits for the client's blocking worker, whichever ended.
         client.shutdown().await;
@@ -304,104 +398,126 @@ impl Poller {
                 receiver,
                 access_epoch,
                 ..
-            } => Status::Active {
-                receiver: receiver.as_str().to_owned(),
-                access_epoch,
-            },
-            NativePairingStatus::Terminal { cause, .. } => Status::Ended(format!("{cause:?}")),
-            NativePairingStatus::Unclaimed { outcome, .. } => {
-                Status::Ended(format!("unclaimed: {outcome:?}"))
-            }
+            } => (
+                Status::Active {
+                    receiver: receiver.as_str().to_owned(),
+                    access_epoch,
+                },
+                String::new(),
+            ),
+            NativePairingStatus::Terminal { cause, .. } => (
+                Status::Ended,
+                format!("terminal: {}", snake(&format!("{cause:?}"))),
+            ),
+            NativePairingStatus::Unclaimed { outcome, .. } => (
+                Status::Ended,
+                format!("unclaimed: {}", snake(&format!("{outcome:?}"))),
+            ),
             NativePairingStatus::Pending(_)
             | NativePairingStatus::Claimed(_)
             | NativePairingStatus::Approved(_)
-            | NativePairingStatus::Staging(_) => Status::Waiting,
+            | NativePairingStatus::Staging(_) => (Status::Waiting, String::new()),
         }))
     }
 
-    /// The client has marked the record revoked; its cache goes now.
-    async fn ended(&mut self, record: &PeerRecord, cause: &str) -> Cycle {
-        let key = *record.key();
-        self.commands.set_sync(key, None);
-        let records = self.commands.records.clone();
+    /// Empty the peer's cache for `cause`, as one audited step. The cache is
+    /// closed: the read that asked for this has ended.
+    async fn reset(&self, key: DeviceKey, cause: PollerCause) {
+        let before = self.commands.holding(key).await;
+        let records = self.commands.records().clone();
         let removed = tokio::task::spawn_blocking(move || records.remove_cache(&key)).await;
-        tracing::info!(
-            peer = %hex(&key),
-            address = %record.address(),
-            cause,
-            cache_removed = matches!(removed, Ok(Ok(()))),
-            "peer gateway ended this gateway's enrollment; no longer read"
-        );
-        Cycle::Ended
+        let after = self.commands.holding(key).await;
+        let outcome = match removed {
+            Ok(Ok(())) => Ok(()),
+            _ => Err("peer_unavailable"),
+        };
+        tracing::warn!(peer = %hex(&key), cause = ?cause, removed = outcome.is_ok(),
+            "peer gateway cache cannot continue against what the peer serves; emptied, reading again");
+        self.commands
+            .poller_changed(key, cause, before, after, outcome)
+            .await;
     }
 
-    /// Read the peer into its cache, on a blocking thread. A cache that
-    /// cannot continue is emptied and read once more. `None` when stopped.
+    /// Read the peer into its cache, on a blocking thread, within the read
+    /// budget. Each conversation the read withdrew is audited, however it
+    /// ended. `None` when the poller stopped.
     async fn read(
         &self,
         record: &PeerRecord,
         receiver: &str,
         access_epoch: u64,
         settle: bool,
+        cycle: &Arc<CycleStop>,
     ) -> Option<Result<ReadReport, ReadFailure>> {
         let key = *record.key();
-        let records = self.commands.records.clone();
+        let records = self.commands.records().clone();
         let (address, receiver) = (record.address(), receiver.to_owned());
-        let (wall, clock, stop) = (
-            self.wall.clone(),
+        let (wall, clock, stop, budget) = (
+            self.inputs.wall.clone(),
             self.commands.clock.clone(),
-            self.reads.clone(),
+            cycle.read().clone(),
+            self.inputs.policy.read_budget,
         );
         let work = tokio::task::spawn_blocking(move || {
-            let slot = records.slot(key);
-            let credential = slot
-                .load_credential()
-                .map_err(|_| ReadFailure::Cache)?
-                .ok_or(ReadFailure::Cache)?;
-            let id = credential.credential().as_str().to_owned();
-            let (secret, pin, _) = credential.into_enrollment().into_parts();
-            let identity = NativeIdentity::restore(secret).map_err(|_| ReadFailure::Cache)?;
-            let path = records.cache_path(&key);
-            let access = || ReaderAccess {
-                address,
-                identity: &identity,
-                pin,
-                credential: &id,
-                receiver: &receiver,
-                access_epoch,
-                client_id: CLIENT_ID,
-            };
-            let mut cache = RetainedCache::open(&path, wall.clone(), clock.clone())?;
-            match cache.read(access(), settle, &stop) {
-                Err(ReadFailure::ResetRequired) => {
-                    drop(cache);
-                    tracing::warn!(peer = %hex(&key), "peer gateway cache reset: what it held cannot continue against what the peer serves; reading again");
-                    records.remove_cache(&key).map_err(|_| ReadFailure::Cache)?;
-                    let mut cache = RetainedCache::open(&path, wall, clock)?;
-                    cache.read(access(), true, &stop)
-                }
-                result => result,
-            }
+            let mut withdrawn = Vec::new();
+            let result = (|| {
+                let credential = records
+                    .slot(key)
+                    .load_credential()
+                    .map_err(|_| ReadFailure::Cache)?
+                    .ok_or(ReadFailure::Cache)?;
+                let id = credential.credential().as_str().to_owned();
+                let (secret, pin, _) = credential.into_enrollment().into_parts();
+                let identity = NativeIdentity::restore(secret).map_err(|_| ReadFailure::Cache)?;
+                let mut cache = RetainedCache::open(&records.cache_path(&key), wall, clock)?;
+                cache.read(
+                    ReaderAccess {
+                        address,
+                        identity: &identity,
+                        pin,
+                        credential: &id,
+                        receiver: &receiver,
+                        access_epoch,
+                        client_id: CLIENT_ID,
+                    },
+                    settle,
+                    &stop,
+                    budget,
+                    &mut withdrawn,
+                )
+            })();
+            (result, withdrawn)
         });
         tokio::pin!(work);
         let mut stopped = self.stopped.clone();
-        let result = tokio::select! {
-            result = &mut work => result,
-            _ = until_stopped(&mut stopped) => {
-                // The read's sockets are shut by `signal_stop`; wait for it.
-                let _ = (&mut work).await;
-                return None;
+        let ended = tokio::select! {
+            ended = &mut work => ended,
+            () = until_stopped(&mut stopped) => {
+                // Shut the read's sockets and wait for it.
+                cycle.stop();
+                (&mut work).await
             }
         };
-        Some(result.unwrap_or(Err(ReadFailure::Cache)))
+        let (result, withdrawn) = ended.unwrap_or((Err(ReadFailure::Cache), Vec::new()));
+        for conversation in withdrawn {
+            let held = self.commands.holding(key).await;
+            self.commands
+                .poller_changed(
+                    key,
+                    PollerCause::Withdrawn { conversation },
+                    held.clone(),
+                    held,
+                    Ok(()),
+                )
+                .await;
+        }
+        if self.stopping() {
+            return None;
+        }
+        Some(result)
     }
 
-    fn read_done(&self, record: &PeerRecord, report: ReadReport) -> Cycle {
-        let key = *record.key();
-        for conversation in &report.withdrawn {
-            tracing::info!(peer = %hex(&key), conversation_id = conversation.as_str(),
-                "peer gateway no longer grants a conversation; removed from its cache");
-        }
+    fn read_done(&self, key: DeviceKey, report: ReadReport) -> Pace {
         self.commands.set_sync(
             key,
             Some(PeerSync {
@@ -410,43 +526,45 @@ impl Poller {
                 } else {
                     SyncState::Syncing
                 },
-                last_synced_ms: Some(self.wall.unix_milliseconds()),
+                last_synced_ms: Some(self.inputs.wall.unix_milliseconds()),
                 conversations: u64::try_from(report.conversations).ok(),
             }),
         );
-        Cycle::Settled {
-            complete: report.complete,
+        if report.complete {
+            Pace::Settled
+        } else {
+            Pace::Continue
         }
     }
 
-    fn unread(
-        &self,
-        record: &PeerRecord,
-        status: Option<NativeClientError>,
-        read: Option<ReadFailure>,
-    ) -> Cycle {
-        let key = *record.key();
-        let unreachable = matches!(
-            status,
-            Some(NativeClientError::Io(_) | NativeClientError::Handshake(_))
-        ) || read == Some(ReadFailure::Unreachable);
+    fn unread(&self, key: DeviceKey, why: &Unread) -> Pace {
+        let state = match why {
+            Unread::Status(NativeClientError::Io(_) | NativeClientError::Handshake(_))
+            | Unread::Read(ReadFailure::Unreachable) => SyncState::Unreachable,
+            Unread::Read(ReadFailure::Quota) => SyncState::Quota,
+            _ => SyncState::Failed,
+        };
         let previous = self.commands.sync_of(&key);
         self.commands.set_sync(
             key,
             Some(PeerSync {
-                state: if unreachable {
-                    SyncState::Unreachable
-                } else {
-                    SyncState::Failed
-                },
+                state,
                 last_synced_ms: previous.and_then(|sync| sync.last_synced_ms),
                 conversations: previous.and_then(|sync| sync.conversations),
             }),
         );
-        tracing::info!(peer = %hex(&key), address = %record.address(),
-            status = ?status, read = ?read, "peer gateway read failed; backing off");
-        Cycle::Failed
+        tracing::info!(peer = %hex(&key), why = ?why, "peer gateway read failed; backing off");
+        Pace::Failed
     }
+}
+
+/// Why a cycle did not read.
+#[derive(Debug)]
+enum Unread {
+    /// The record could not be read.
+    Storage,
+    Status(NativeClientError),
+    Read(ReadFailure),
 }
 
 /// Resolves once a stop is asked for, holding no borrow of the flag.
@@ -460,24 +578,83 @@ enum Status {
         receiver: String,
         access_epoch: u64,
     },
-    /// The peer ended this enrollment, for the cause given.
-    Ended(String),
+    /// The peer ended this enrollment; the client has removed the cache and
+    /// marked the record revoked.
+    Ended,
     /// Still pending on the peer.
     Waiting,
 }
 
-/// What one peer's cycle came to.
-enum Cycle {
-    Settled { complete: bool },
+/// What one peer's cycle came to, as its next wait follows from it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Pace {
+    /// Read to the end: the interval.
+    Settled,
+    /// Read up to a bound: soon, and settle.
+    Continue,
+    /// Stopped by an owner command: soon, and settle; failures unchanged.
+    Stopped,
+    /// Still pending on the peer: the interval.
     Waiting,
+    /// Failed: a backoff that doubles with each failure in a row.
     Failed,
-    Ended,
+    /// Forgotten or ended: not read again.
+    Gone,
 }
 
-/// `wait` spread over 80%–120%, so peers polled together drift apart.
-fn jitter(wait: Duration) -> Duration {
-    let spread = getrandom::u32().unwrap_or(u32::MAX / 2) % 401;
-    wait.mul_f64(0.8 + f64::from(spread) / 1000.0)
+/// The wait after `pace`, with `failures` failures in a row before it, and
+/// the failures in a row after it. `draw` spreads it over 80%–120%, so peers
+/// read together drift apart; then it is held to the cap, so the cap is the
+/// longest any peer waits.
+fn next_wait(policy: &PollPolicy, pace: Pace, failures: u32, draw: u32) -> (Duration, u32) {
+    let (base, failures) = match pace {
+        Pace::Settled | Pace::Waiting | Pace::Gone => (policy.interval, 0),
+        Pace::Continue => (policy.interval / 8, 0),
+        Pace::Stopped => (policy.interval / 8, failures),
+        Pace::Failed => {
+            let failures = failures.saturating_add(1);
+            (
+                policy
+                    .interval
+                    .saturating_mul(1 << failures.min(16))
+                    .min(policy.backoff_cap),
+                failures,
+            )
+        }
+    };
+    let spread = base.mul_f64(0.8 + f64::from(draw % 401) / 1000.0);
+    (spread.min(policy.backoff_cap), failures)
+}
+
+/// One draw for the jitter; the midpoint when entropy fails.
+fn draw(entropy: &EnrollmentEntropySource) -> u32 {
+    let mut bytes = [0u8; 4];
+    match entropy().try_fill_bytes(&mut bytes) {
+        Ok(()) => u32::from_le_bytes(bytes),
+        Err(_) => 200,
+    }
+}
+
+fn millis(wait: Duration) -> u64 {
+    u64::try_from(wait.as_millis()).unwrap_or(u64::MAX)
+}
+
+/// `TerminalCause::CredentialRevoked`'s Debug name as `credential_revoked`.
+fn snake(name: &str) -> String {
+    let mut out = String::with_capacity(name.len() + 4);
+    for (index, character) in name.chars().enumerate() {
+        if character.is_ascii_uppercase() {
+            if index > 0 {
+                out.push('_');
+            }
+            out.push(character.to_ascii_lowercase());
+        } else if character.is_ascii_alphanumeric() || character == '_' {
+            out.push(character);
+        } else {
+            break;
+        }
+    }
+    out
 }
 
 fn hex(key: &DeviceKey) -> String {
@@ -486,3 +663,7 @@ fn hex(key: &DeviceKey) -> String {
         .map(|byte| format!("{byte:02x}"))
         .collect()
 }
+
+#[cfg(test)]
+#[path = "../../../tests/peer_gateways/poller.rs"]
+mod tests;

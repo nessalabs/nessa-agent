@@ -28,8 +28,8 @@ use crate::device_pairing::infrastructure::{
     PairingRuntimeDependencies, TcpEnrollmentAccept,
 };
 use crate::peer_gateways::infrastructure::{
-    DurablePeerAudit, EnrollmentEntropy, PeerCommands, PeerPoller, PeerRecords, PollPolicy,
-    TcpPeerConnector,
+    DurablePeerAudit, EnrollmentEntropy, PeerCommands, PeerPoller, PeerRecords, PollInputs,
+    PollPolicy, TcpPeerConnector,
 };
 use crate::product::{DeviceCredentials, NativeSessions, ProductRouteState};
 use nessa_auth::{
@@ -196,12 +196,27 @@ pub(super) struct BoundNative {
     address: SocketAddr,
     peers: Arc<PeerCommands>,
     clock: Arc<dyn Clock>,
+    /// The root's monotonic clock, which the poller's waits are measured on.
+    deadline_clock: Arc<dyn MonotonicClock>,
 }
 
 impl BoundNative {
     /// The address the listener is bound to.
     pub(super) fn local_address(&self) -> SocketAddr {
         self.address
+    }
+    /// Start reading each peer, on the root's clocks and the operating
+    /// system's entropy for its jitter.
+    pub(super) fn start_poller(&self) -> PeerPoller {
+        PeerPoller::start(
+            self.peers.clone(),
+            PollInputs {
+                policy: PollPolicy::default(),
+                wall: self.clock.clone(),
+                clock: self.deadline_clock.clone(),
+                entropy: Arc::new(|| Box::new(OsEntropy) as Box<dyn EnrollmentEntropy>),
+            },
+        )
     }
 }
 
@@ -228,7 +243,7 @@ pub(super) async fn bind(
     let bound = socket.local_address().map_err(bind_failed)?;
     let sessions = NativeSessions::new(product, Arc::new(RegistryDevices(registry)));
     let connections = Arc::new(
-        NativeEnrollmentConnections::new(gateway.clone(), clock)
+        NativeEnrollmentConnections::new(gateway.clone(), clock.clone())
             .with_protected_sessions(Arc::new(sessions)),
     );
     Ok(BoundNative {
@@ -237,6 +252,7 @@ pub(super) async fn bind(
         address: bound,
         peers,
         clock: wall,
+        deadline_clock: clock,
     })
 }
 
@@ -283,14 +299,10 @@ pub(super) fn start(
     bound: BoundNative,
     failure: watch::Sender<Option<ErrorKind>>,
 ) -> RunningNative {
+    let poller = bound.start_poller();
     let BoundNative {
-        gateway,
-        listener,
-        peers,
-        clock,
-        ..
+        gateway, listener, ..
     } = bound;
-    let poller = PeerPoller::start(peers, PollPolicy::default(), clock);
     let (stop, stopped) = oneshot::channel::<()>();
     let task = tokio::spawn(listener.run(
         OsEntropy::default,

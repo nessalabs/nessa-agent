@@ -108,6 +108,7 @@ fn kind(record: &PeerAuditRecord) -> &'static str {
         PeerAuditRecord::EnrollFinished { .. } => "peer_enroll_finished",
         PeerAuditRecord::ForgetRequested { .. } => "peer_forget_requested",
         PeerAuditRecord::ForgetFinished { .. } => "peer_forget_finished",
+        PeerAuditRecord::PollerChanged { .. } => "peer_poller_changed",
     }
 }
 impl PeerAudit for Audit {
