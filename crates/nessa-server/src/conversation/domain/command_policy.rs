@@ -65,9 +65,9 @@ impl CommandPolicy {
             return Err(CommandRefusal::EnvironmentNotGranted);
         }
         let name = program_name(program);
-        // With an allow-list, a program is named bare and found on the
-        // host's search path, so a file the agent wrote under an allowed
-        // name elsewhere is not run.
+        // With an allow-list, a program is named bare, and the host finds
+        // it only in absolute search directories outside its workspace, so
+        // a file the agent wrote under an allowed name is not run.
         let allowed = self
             .allow
             .as_ref()

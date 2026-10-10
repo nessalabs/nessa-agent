@@ -2408,3 +2408,52 @@ async fn a_command_whose_end_cannot_be_saved_says_so_and_its_end_is_saved_later(
     )));
     go.send(()).unwrap();
 }
+
+#[tokio::test]
+async fn a_command_that_ends_after_its_agent_lease_ended_is_recorded_as_late_evidence() {
+    let root = tempfile::tempdir().unwrap();
+    let host = CommandHost::new();
+    let harness = with_command_host(root.path(), host.clone(), Some(devbox_policy()));
+    harness.create().await;
+    let go = harness.running_turn().await;
+    let service = harness.service.clone();
+    let id = harness.id.clone();
+    let running = tokio::spawn(async move {
+        let (_caller, stop) = tokio::sync::watch::channel(false);
+        service
+            .run_command(&id, command("devbox", &["sleep", "60"], "call"), stop)
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while host.granted.load(Ordering::SeqCst) == 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    go.send(()).unwrap();
+    harness
+        .service
+        .close(harness.id.clone(), caller("close"))
+        .await
+        .unwrap();
+    // Its parent is final but still the conversation's latest lease, so the
+    // end arriving now is recorded beside it, and a new lease cannot replace
+    // it while the command's call still holds the conversation.
+    host.finish
+        .send_replace(Some(CommandExit::Exited { code: 0 }));
+    let answer = running.await.unwrap();
+    let Ok(CommandAnswer::Ran {
+        lease,
+        recorded: true,
+        ..
+    }) = answer
+    else {
+        panic!("its end is recorded: {answer:?}");
+    };
+    assert!(harness.saved_commands().iter().any(|record| matches!(
+        record,
+        LeaseRecord::CommandEnded { lease: ended, exit: CommandExit::Exited { code: 0 }, .. }
+            if ended == &lease
+    )));
+}

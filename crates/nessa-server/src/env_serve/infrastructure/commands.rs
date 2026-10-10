@@ -10,7 +10,10 @@
 //!
 //! Arrows are calls, in order. Its environment is cleared to a few account
 //! variables, so a command does not inherit the credentials an agent's
-//! harness is started with. Nothing encloses it beyond its own account: the
+//! harness is started with. A program named bare is found only in the
+//! absolute `PATH` directories outside the workspace, and run by that path:
+//! a file the agent wrote in the workspace is never found under an allowed
+//! name, whatever `PATH` the serving process was started with. Nothing encloses it beyond its own account: the
 //! working directory is spelled beneath the workspace, but a link there can
 //! still lead out, and nothing stops the command from going elsewhere.
 use crate::env_serve::application::{CommandRan, CommandRunner, CommandStop};
@@ -20,7 +23,13 @@ use shepherd::{
     EnvPolicy, GracePeriod, OutputMode, OutputSnapshot, OutputStream, ProcessExit, ProcessSpec,
     ProcessSupervisor, Signal, TerminateOptions, TerminationOutcome,
 };
-use std::{ffi::OsString, future::Future, path::PathBuf, pin::Pin, time::Duration};
+use std::{
+    ffi::{OsStr, OsString},
+    future::Future,
+    path::{Path, PathBuf},
+    pin::Pin,
+    time::Duration,
+};
 use tokio::sync::watch;
 
 /// How long a stopped command has to leave by itself before it is killed.
@@ -47,20 +56,33 @@ pub(crate) struct ShepherdCommands {
     supervisor: ProcessSupervisor,
     workspace: PathBuf,
     environment: Vec<(OsString, OsString)>,
+    /// Where a program named bare is looked for, in order.
+    search: Vec<PathBuf>,
 }
 
 impl ShepherdCommands {
     /// Commands supervised by `supervisor` in `workspace`, with
-    /// `environment` and nothing else.
+    /// `environment` and nothing else; its `PATH` keeps only what
+    /// [`trusted_search`] keeps.
     pub(crate) fn new(
         supervisor: ProcessSupervisor,
         workspace: PathBuf,
-        environment: Vec<(OsString, OsString)>,
+        mut environment: Vec<(OsString, OsString)>,
     ) -> Self {
+        let path = environment
+            .iter()
+            .find(|(key, _)| key == "PATH")
+            .map(|(_, value)| value.as_os_str());
+        let search = trusted_search(path, &workspace);
+        environment.retain(|(key, _)| key != "PATH");
+        if let Ok(path) = std::env::join_paths(&search) {
+            environment.push(("PATH".into(), path));
+        }
         Self {
             supervisor,
             workspace,
             environment,
+            search,
         }
     }
 }
@@ -76,7 +98,11 @@ impl CommandRunner for ShepherdCommands {
             Some(beneath) => self.workspace.join(beneath),
             None => self.workspace.clone(),
         };
-        let spec = ProcessSpec::new(command.program())
+        let program = match program_path(command.program(), &self.search) {
+            Some(program) => program,
+            None => return Box::pin(async { CommandRan::not_started() }),
+        };
+        let spec = ProcessSpec::new(program)
             .args(command.argv()[1..].iter().map(|argument| &**argument))
             .cwd(cwd)
             .env(EnvPolicy::Clear(self.environment.clone()))
@@ -139,6 +165,50 @@ impl CommandRunner for ShepherdCommands {
             ran
         })
     }
+}
+
+/// The directories of `path` a bare program name may be found in: only
+/// absolute ones, and none in `workspace`, so neither an empty entry, `.`,
+/// nor a directory the agent can write to finds a file it wrote there.
+pub(super) fn trusted_search(path: Option<&OsStr>, workspace: &Path) -> Vec<PathBuf> {
+    let workspace = workspace
+        .canonicalize()
+        .unwrap_or_else(|_| workspace.to_path_buf());
+    path.map(std::env::split_paths)
+        .into_iter()
+        .flatten()
+        .filter(|directory| directory.is_absolute())
+        .filter(|directory| {
+            let resolved = directory
+                .canonicalize()
+                .unwrap_or_else(|_| directory.clone());
+            !resolved.starts_with(&workspace) && !directory.starts_with(&workspace)
+        })
+        .collect()
+}
+
+/// What runs for `program`: a path as given, or a bare name as the first
+/// executable file of that name in `search`; `None` when there is none.
+pub(super) fn program_path(program: &str, search: &[PathBuf]) -> Option<PathBuf> {
+    if program.contains('/') {
+        return Some(PathBuf::from(program));
+    }
+    search
+        .iter()
+        .map(|directory| directory.join(program))
+        .find(|candidate| executable(candidate))
+}
+
+#[cfg(unix)]
+fn executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path)
+        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn executable(path: &Path) -> bool {
+    path.is_file()
 }
 
 /// How an exit the command came to by itself reads.

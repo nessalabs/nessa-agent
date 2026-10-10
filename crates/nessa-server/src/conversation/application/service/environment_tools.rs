@@ -304,9 +304,10 @@ impl ConversationService {
             ),
             cleanup: result.cleanup,
         };
-        // Recorded while its parent is still the conversation's latest lease;
-        // once a later agent lease replaced it, the parent's own end accounts
-        // for the command, and its exit is only logged.
+        // Recorded while its parent is still the conversation's latest lease.
+        // Once a later agent lease replaced it, the stream's lease is that
+        // later one and cannot take it: the parent's own end ended the
+        // command, and this end is answered unrecorded and logged in full.
         let parent_for_end = parent.clone();
         let committed = manager
             .record_lease(move |current| {
@@ -314,21 +315,33 @@ impl ConversationService {
                     .and_then(CurrentLease::held)
                     .is_some_and(|held| held.id() == &parent_for_end)
                 {
-                    (vec![ended], ())
+                    (vec![ended], true)
                 } else {
-                    (Vec::new(), ())
+                    (Vec::new(), false)
                 }
             })
             .await;
-        // An end the records do not hold is not answered as if they did: one
-        // more save is tried, then the answer says it is unsaved.
+        // An end the records do not hold is not answered as if they did: an
+        // unsaved one is saved once more, then the answer says it is not.
         let recorded = match &committed {
+            Ok(commit) if !commit.decided => false,
             Ok(commit) if commit.saved.is_ok() => true,
             Ok(_) => manager.save_retained_lease_records().await.is_ok(),
             Err(_) => false,
         };
         if !recorded {
-            tracing::error!(conversation_id = %id, lease = lease.as_str(), exit = ?result.exit, "a command's end could not be recorded");
+            tracing::error!(
+                conversation_id = %id,
+                lease = lease.as_str(),
+                parent = parent.as_str(),
+                exit = ?result.exit,
+                cleanup = ?result.cleanup,
+                stdout_bytes = result.stdout.len(),
+                stderr_bytes = result.stderr.len(),
+                dropped_bytes = result.dropped_bytes,
+                replaced = matches!(&committed, Ok(commit) if !commit.decided),
+                "a command's end could not be recorded"
+            );
         }
         Ok(CommandAnswer::Ran {
             lease,

@@ -676,6 +676,8 @@ together.
 | C7 | The connection lost while a command runs | The host stops it as lost and records it; the gateway answers `unanswered` | adapter `a_command_whose_connection_is_lost_is_unanswered_with_what_the_host_recorded` |
 | C8 | A granted command never run | Its End reaches the host, which ends it | adapter `a_granted_command_never_run_is_ended_on_the_host` |
 | C9 | A command's end, or its issue, cannot be saved | An unsaved issue never runs and never counts; an unsaved end is answered `recorded: false` and saved by the next save | service `a_command_whose_issue_cannot_be_saved_never_runs_and_never_counts`, `a_command_whose_end_cannot_be_saved_says_so_and_its_end_is_saved_later` |
+| C10 | A command ends after its agent lease ended | Recorded beside the final parent as late evidence; an end whose parent a later lease replaced is answered `recorded: false` and logged in full | service `a_command_that_ends_after_its_agent_lease_ended_is_recorded_as_late_evidence` |
+| C11 | A bare program name, with the workspace, `.` or an empty entry on the host's `PATH` | Looked up only in absolute `PATH` directories outside the workspace, and run by that path; not found is `not_started` | host `a_file_written_in_the_workspace_is_never_run_under_a_bare_name`, `a_bare_name_is_searched_for_only_outside_the_workspace_in_absolute_directories` |
 
 **Not in slice C.** Commands here, on a paired peer or a worker;
 receipts for a command that outlives its call; the `environment.list` and

@@ -232,3 +232,68 @@ fn an_exit_reads_as_its_code_or_its_signal() {
     }
     assert_eq!(ended(&exit(None, None)), CommandEnd::Unknown);
 }
+
+#[cfg(unix)]
+#[test]
+fn a_bare_name_is_searched_for_only_outside_the_workspace_in_absolute_directories() {
+    let workspace = tempfile::tempdir().unwrap();
+    let inside = workspace.path().join("bin");
+    std::fs::create_dir(&inside).unwrap();
+    let path = std::env::join_paths([
+        PathBuf::from("/usr/bin"),
+        PathBuf::new(),
+        PathBuf::from("."),
+        PathBuf::from("relative/bin"),
+        inside,
+        workspace.path().to_path_buf(),
+        PathBuf::from("/bin"),
+    ])
+    .unwrap();
+    assert_eq!(
+        trusted_search(Some(&path), workspace.path()),
+        [PathBuf::from("/usr/bin"), PathBuf::from("/bin")]
+    );
+    assert!(trusted_search(None, workspace.path()).is_empty());
+    assert_eq!(program_path("./tool", &[]), Some(PathBuf::from("./tool")));
+    assert_eq!(
+        program_path("no-such-program-anywhere", &[PathBuf::from("/usr/bin")]),
+        None
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_file_written_in_the_workspace_is_never_run_under_a_bare_name() {
+    use std::os::unix::fs::PermissionsExt;
+    let workspace = tempfile::tempdir().unwrap();
+    // A program the agent wrote in the workspace, under a name a policy
+    // might allow, with the workspace and `.` first on the host's PATH.
+    let planted = workspace.path().join("true");
+    std::fs::write(&planted, "#!/bin/sh\necho planted\n").unwrap();
+    std::fs::set_permissions(&planted, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut path = OsString::from(workspace.path());
+    path.push(":.:");
+    path.push(std::env::var_os("PATH").unwrap_or_default());
+    let runner = ShepherdCommands::new(
+        SupervisorBuilder::new().build(),
+        workspace.path().to_path_buf(),
+        vec![("PATH".into(), path)],
+    );
+    let (_stop, stopped) = not_stopped();
+    let ran = runner.run(command(&["true"], None, 10_000), stopped).await;
+    assert_eq!(ran.end, CommandEnd::Exited { code: 0 });
+    assert!(
+        ran.stdout.is_empty(),
+        "{:?}",
+        String::from_utf8_lossy(&ran.stdout)
+    );
+    // A name found nowhere it may be looked for runs nothing.
+    let (_stop, stopped) = not_stopped();
+    let ran = runner
+        .run(
+            command(&["no-such-program-anywhere"], None, 10_000),
+            stopped,
+        )
+        .await;
+    assert_eq!(ran.end, CommandEnd::NotStarted);
+}
