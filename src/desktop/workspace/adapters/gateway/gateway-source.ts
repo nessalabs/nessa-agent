@@ -1499,6 +1499,7 @@ function reasonFor(
     case ConversationErrorCode.ConversationsNotConfigured:
     case ConversationErrorCode.EnvironmentNotConfigured:
     case ConversationErrorCode.EnvironmentVersionMismatch:
+    case ConversationErrorCode.EnvironmentPlatformUnsupported:
     case ConversationErrorCode.LinkedFileUnreachable:
     case ConversationErrorCode.ModelUnavailable:
     case ConversationErrorCode.ImageInputUnsupported:
@@ -1525,6 +1526,7 @@ function reasonFor(
     case ConversationErrorCode.AgentStartupDeadline:
     case ConversationErrorCode.SandboxUnavailable:
     case ConversationErrorCode.EnvironmentUnavailable:
+    case ConversationErrorCode.EnvironmentInstallFailed:
     case ConversationErrorCode.AgentOperationFailed:
     case ConversationErrorCode.AttachmentNotFound:
     case ConversationErrorCode.AttachmentUnavailable:

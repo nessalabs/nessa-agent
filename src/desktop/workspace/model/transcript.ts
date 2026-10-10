@@ -146,6 +146,8 @@ export interface TranscriptLease {
     | "environment_unreachable"
     | "environment_version_mismatch"
     | "environment_busy"
+    | "environment_platform_unsupported"
+    | "environment_install_failed"
     | "agent_unavailable"
 }
 

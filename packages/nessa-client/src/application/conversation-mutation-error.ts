@@ -51,7 +51,11 @@ const REFUSALS: Partial<Record<ConversationErrorCode, string>> = {
   environment_unavailable:
     "The SSH host this conversation runs on could not be reached, is serving another gateway, or cannot run its agent, so nothing was sent. Retry once the host is reachable.",
   environment_version_mismatch:
-    "The SSH host this conversation runs on has another version of Nessa than this gateway, so nothing was sent to it. Install this version there.",
+    "The copy of Nessa on the SSH host this conversation runs on is not the one this gateway installs there, so nothing was sent to it.",
+  environment_platform_unsupported:
+    "The SSH host this conversation runs on has a different operating system or processor than this computer, so Nessa could not install itself there and nothing was sent.",
+  environment_install_failed:
+    "Nessa could not install itself on the SSH host this conversation runs on: the copy did not verify, did not run there, or could not be stored, so nothing was sent. Retry; the gateway's environment audit says which.",
   linked_file_unreachable:
     "This conversation runs on an SSH host, which cannot read files on this computer, so the message was not sent. Remove the linked files, or attach images, whose bytes are sent with them.",
 }
@@ -129,6 +133,8 @@ export function rejectedBeforeDispatch(code: ConversationErrorCode): boolean {
     case ConversationErrorCode.EnvironmentNotConfigured:
     case ConversationErrorCode.EnvironmentUnavailable:
     case ConversationErrorCode.EnvironmentVersionMismatch:
+    case ConversationErrorCode.EnvironmentPlatformUnsupported:
+    case ConversationErrorCode.EnvironmentInstallFailed:
       return true
     // Refused before anything of the message was recorded or sent: the
     // conversation's environment cannot read a path on this machine.

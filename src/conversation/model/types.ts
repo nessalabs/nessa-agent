@@ -66,6 +66,8 @@ export type ConversationLease = {
     | "environment_unreachable"
     | "environment_version_mismatch"
     | "environment_busy"
+    | "environment_platform_unsupported"
+    | "environment_install_failed"
     | "agent_unavailable"
   droppedEvents: number
   /** Commands the agent started under a live or ending lease that are still running. */
@@ -167,8 +169,21 @@ export type CommandFailure =
   | "environment-not-configured"
   /** Its SSH host could not be reached, is busy, or cannot run its agent. */
   | "environment-unavailable"
-  /** Its SSH host runs another Nessa build; nothing was sent there. */
+  /**
+   * Its SSH host's copy of this build, where the gateway installs it, speaks
+   * another lease protocol; nothing was sent there.
+   */
   | "environment-version-mismatch"
+  /**
+   * Its SSH host had no copy of this build, and runs on a system or processor
+   * this build cannot run on; nothing was installed or sent there.
+   */
+  | "environment-platform-unsupported"
+  /**
+   * Its SSH host had no copy of this build, and installing one failed: it did
+   * not verify, did not run there, or could not be stored. Nothing was sent.
+   */
+  | "environment-install-failed"
   /**
    * The message links a file by its path on this machine, and the
    * conversation runs on an SSH host, which cannot read it. Nothing was sent.

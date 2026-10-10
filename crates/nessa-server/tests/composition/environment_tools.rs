@@ -162,6 +162,8 @@ fn every_refusal_has_its_own_code() {
         CommandRefusal::Environment(LeaseRefusal::EnvironmentUnreachable),
         CommandRefusal::Environment(LeaseRefusal::EnvironmentVersionMismatch),
         CommandRefusal::Environment(LeaseRefusal::EnvironmentBusy),
+        CommandRefusal::Environment(LeaseRefusal::EnvironmentPlatformUnsupported),
+        CommandRefusal::Environment(LeaseRefusal::EnvironmentInstallFailed),
         CommandRefusal::Environment(LeaseRefusal::AgentUnavailable),
         CommandRefusal::EnvironmentNotGranted,
         CommandRefusal::CommandDenied,

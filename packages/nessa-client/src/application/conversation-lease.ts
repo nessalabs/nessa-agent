@@ -57,6 +57,10 @@ export function conversationLeaseStatus(
           return "Couldn't start: host is serving another gateway"
         case "agent_unavailable":
           return "Couldn't start: host can't run this agent"
+        case "environment_platform_unsupported":
+          return "Couldn't start: Nessa can't install itself on this host's system"
+        case "environment_install_failed":
+          return "Couldn't start: installing Nessa on the host failed"
         case undefined:
           return "Couldn't start"
         default: {

@@ -276,6 +276,12 @@ fn refusal_code(refusal: CommandRefusal) -> &'static str {
             "environment_version_mismatch"
         }
         CommandRefusal::Environment(LeaseRefusal::EnvironmentBusy) => "environment_busy",
+        CommandRefusal::Environment(LeaseRefusal::EnvironmentPlatformUnsupported) => {
+            "environment_platform_unsupported"
+        }
+        CommandRefusal::Environment(LeaseRefusal::EnvironmentInstallFailed) => {
+            "environment_install_failed"
+        }
         CommandRefusal::Environment(LeaseRefusal::AgentUnavailable) => "agent_unavailable",
         CommandRefusal::EnvironmentNotGranted => "environment_not_granted",
         CommandRefusal::CommandDenied => "command_denied",
@@ -297,6 +303,12 @@ fn refusal_message(refusal: CommandRefusal) -> &'static str {
         }
         CommandRefusal::Environment(LeaseRefusal::EnvironmentBusy) => {
             "the host is serving another gateway"
+        }
+        CommandRefusal::Environment(LeaseRefusal::EnvironmentPlatformUnsupported) => {
+            "the host has no copy of Nessa, and runs on a system this build cannot run on"
+        }
+        CommandRefusal::Environment(LeaseRefusal::EnvironmentInstallFailed) => {
+            "the host had no copy of Nessa, and installing one failed"
         }
         CommandRefusal::Environment(LeaseRefusal::AgentUnavailable) => "the host cannot run this",
         CommandRefusal::EnvironmentNotGranted => {
