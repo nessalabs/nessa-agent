@@ -1997,6 +1997,57 @@ export const PairingErrorCode = {
   PairingUnavailable: "pairing_unavailable",
 } as const
 export type PairingErrorCode = (typeof PairingErrorCode)[keyof typeof PairingErrorCode]
+/** Wire input for peer.enroll. This gateway enrolls with its own native key, so the peer knows it as one principal however often it is enrolled. */
+export interface PeerEnrollParams {
+  /** The peer gateway's native listen address, as an IP address and port (`192.0.2.7:7443`, `[2001:db8::7]:7443`). No name is resolved. */
+  address: string
+  /** The one-time code the peer's owner was shown for a gateway invitation, in its grouped display form. */
+  code: string
+}
+/** Wire input for peer.forget: the peer to forget, named by its key. */
+export interface PeerForgetParams {
+  /** The peer's key, as peer.list shows it. */
+  peerKey: number[]
+}
+/** Where this gateway's enrollment with a peer stands, as this gateway last heard. pending: claimed, waiting on the peer's owner to approve, or not yet confirmed. active: the peer issued this gateway a credential. unreadable: the peer's record is there but this build cannot read it, or it was made with a key that is no longer this gateway's; only peer.forget helps. */
+export const PeerPhase = {
+  Pending: "pending",
+  Active: "active",
+  Unreadable: "unreadable",
+} as const
+export type PeerPhase = (typeof PeerPhase)[keyof typeof PeerPhase]
+/** One peer gateway this gateway enrolled into. Result of peer.enroll and peer.forget. */
+export interface PeerGateway {
+  /** The peer's key: what identifies the peer, whatever address it answers at. Its TLS key is pinned to exactly this. */
+  peerKey: number[]
+  phase: PeerPhase
+  /** The address that last answered as this peer. Absent when the record is unreadable. */
+  address?: string
+  /** The credential the peer issued this gateway, once active. An identifier, not a secret. */
+  credentialId?: string
+  /** The receiver the peer paired with that credential, once active. */
+  receiverId?: string
+}
+/** Result of peer.list. */
+export interface PeerListResult {
+  /** Every peer this gateway keeps, by key. */
+  items: PeerGateway[]
+}
+/** Why the gateway refused a peer method it dispatched. peer_not_configured: native pairing is off in this gateway's configuration, so it has no key to enroll with. peer_not_found: no peer with that key. peer_exists: a record for that peer is already kept; forget it first. peer_capacity: this gateway keeps as many peers as it may. peer_busy: an enrollment or a forget is running; another waits for it. peer_unreachable: nothing answered at the address, the connection failed, or what answered is not a gateway enrolling peers; an open port is not told from a closed one. peer_invitation_refused: the peer refused the code: no open invitation, or an expired, used or wrong code; it does not say which. peer_wrong_invitation: the code is for a device, not a gateway. peer_own_gateway: the address is this gateway's own. peer_unavailable: storage, the key or a worker failed; retry later. peer_audit_unavailable: the command's audit record could not be kept; if that was before its effect nothing changed, and if after, the effect stands and peer.list shows it. */
+export const PeerErrorCode = {
+  PeerNotConfigured: "peer_not_configured",
+  PeerNotFound: "peer_not_found",
+  PeerExists: "peer_exists",
+  PeerCapacity: "peer_capacity",
+  PeerBusy: "peer_busy",
+  PeerUnreachable: "peer_unreachable",
+  PeerInvitationRefused: "peer_invitation_refused",
+  PeerWrongInvitation: "peer_wrong_invitation",
+  PeerOwnGateway: "peer_own_gateway",
+  PeerUnavailable: "peer_unavailable",
+  PeerAuditUnavailable: "peer_audit_unavailable",
+} as const
+export type PeerErrorCode = (typeof PeerErrorCode)[keyof typeof PeerErrorCode]
 /** Opaque current-connection watch identity. It grants no permission, is not a source position, and must be discarded on connection replacement. */
 export type ChangeWatchId = string
 /** Register catalogue interest before the final authorized head recheck. Acknowledgement precedes notices; no head or source read is performed. */
@@ -2187,7 +2238,7 @@ export const mcpServerRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 58,
+  maxReadyMethods: 61,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -2295,6 +2346,9 @@ export const ProductMethod = {
   PairingApprove: "pairing.approve",
   PairingDeny: "pairing.deny",
   PairingCancel: "pairing.cancel",
+  PeerEnroll: "peer.enroll",
+  PeerList: "peer.list",
+  PeerForget: "peer.forget",
   ConversationWatchRecords: "conversation.watchRecords",
   ConversationWatchCatalogue: "conversation.watchCatalogue",
   ConversationUnwatch: "conversation.unwatch",
@@ -2364,6 +2418,9 @@ export const productReadyMethods = [
   "pairing.approve",
   "pairing.deny",
   "pairing.cancel",
+  "peer.enroll",
+  "peer.list",
+  "peer.forget",
   "conversation.watchRecords",
   "conversation.watchCatalogue",
   "conversation.unwatch",
@@ -2426,6 +2483,9 @@ export const productMethodGrants = {
   "pairing.approve": "credential.manage",
   "pairing.deny": "credential.manage",
   "pairing.cancel": "credential.manage",
+  "peer.enroll": "credential.manage",
+  "peer.list": "credential.manage",
+  "peer.forget": "credential.manage",
   "conversation.watchRecords": null,
   "conversation.watchCatalogue": null,
   "conversation.unwatch": null,

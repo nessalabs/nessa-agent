@@ -235,7 +235,9 @@ pub(super) async fn product_state(
                     policy: policy.clone(),
                     receivers: receivers.clone(),
                     clock: Arc::new(SystemClock),
+                    deadline_clock: uptime.clone(),
                     gateway: Resource::new(organization.clone(), gateway.clone()),
+                    audience: audience.clone(),
                 },
             )
             .await?,
@@ -338,8 +340,10 @@ pub(super) async fn product_state(
     }
     product.browser_http_allowed = config.browser_http_allowed();
     let native = match native {
-        Some((prepared, commands)) => {
-            product = product.with_pairing(Arc::new(commands));
+        Some((prepared, commands, peers)) => {
+            product = product
+                .with_pairing(Arc::new(commands))
+                .with_peers(Arc::new(peers));
             Some(prepared)
         }
         None => None,

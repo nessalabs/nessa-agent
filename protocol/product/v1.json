@@ -216,7 +216,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 58,
+          "maxItems": 61,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -4794,6 +4794,114 @@
         "pairing_unavailable"
       ],
       "description": "Why the gateway refused a pairing method it dispatched. pairing_not_configured: native pairing is off in this gateway's configuration. pairing_not_found: no such invitation. pairing_slot_occupied: an invitation is already open; cancel it first. pairing_capacity: too many unfinished enrollments. pairing_conflict: the request names a different key or outcome than the one recorded. pairing_ineligible: the enrollment cannot take this step now (expired, ended, or not yet claimed). pairing_busy: another create is running. pairing_unavailable: storage or a worker failed; retry later."
+    },
+    "PeerEnrollParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "address": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "The peer gateway's native listen address, as an IP address and port (`192.0.2.7:7443`, `[2001:db8::7]:7443`). No name is resolved."
+        },
+        "code": {
+          "x-pairing-manual-code": "display",
+          "description": "The one-time code the peer's owner was shown for a gateway invitation, in its grouped display form.",
+          "type": "string",
+          "maxLength": 9,
+          "minLength": 9
+        }
+      },
+      "required": ["address", "code"],
+      "description": "Wire input for peer.enroll. This gateway enrolls with its own native key, so the peer knows it as one principal however often it is enrolled."
+    },
+    "PeerForgetParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "peerKey": {
+          "x-pairing-byte-array": "DeviceKey",
+          "description": "The peer's key, as peer.list shows it.",
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+          "maxItems": 32,
+          "minItems": 32
+        }
+      },
+      "required": ["peerKey"],
+      "description": "Wire input for peer.forget: the peer to forget, named by its key."
+    },
+    "PeerPhase": {
+      "type": "string",
+      "enum": ["pending", "active", "unreadable"],
+      "description": "Where this gateway's enrollment with a peer stands, as this gateway last heard. pending: claimed, waiting on the peer's owner to approve, or not yet confirmed. active: the peer issued this gateway a credential. unreadable: the peer's record is there but this build cannot read it, or it was made with a key that is no longer this gateway's; only peer.forget helps."
+    },
+    "PeerGateway": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "peerKey": {
+          "x-pairing-byte-array": "DeviceKey",
+          "description": "The peer's key: what identifies the peer, whatever address it answers at. Its TLS key is pinned to exactly this.",
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+          "maxItems": 32,
+          "minItems": 32
+        },
+        "phase": { "$ref": "#/$defs/PeerPhase" },
+        "address": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "The address that last answered as this peer. Absent when the record is unreadable."
+        },
+        "credentialId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "The credential the peer issued this gateway, once active. An identifier, not a secret."
+        },
+        "receiverId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "The receiver the peer paired with that credential, once active."
+        }
+      },
+      "required": ["peerKey", "phase"],
+      "description": "One peer gateway this gateway enrolled into. Result of peer.enroll and peer.forget."
+    },
+    "PeerListResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/PeerGateway" },
+          "maxItems": 64,
+          "description": "Every peer this gateway keeps, by key."
+        }
+      },
+      "required": ["items"],
+      "description": "Result of peer.list."
+    },
+    "PeerErrorCode": {
+      "type": "string",
+      "enum": [
+        "peer_not_configured",
+        "peer_not_found",
+        "peer_exists",
+        "peer_capacity",
+        "peer_busy",
+        "peer_unreachable",
+        "peer_invitation_refused",
+        "peer_wrong_invitation",
+        "peer_own_gateway",
+        "peer_unavailable",
+        "peer_audit_unavailable"
+      ],
+      "description": "Why the gateway refused a peer method it dispatched. peer_not_configured: native pairing is off in this gateway's configuration, so it has no key to enroll with. peer_not_found: no peer with that key. peer_exists: a record for that peer is already kept; forget it first. peer_capacity: this gateway keeps as many peers as it may. peer_busy: an enrollment or a forget is running; another waits for it. peer_unreachable: nothing answered at the address, the connection failed, or what answered is not a gateway enrolling peers; an open port is not told from a closed one. peer_invitation_refused: the peer refused the code: no open invitation, or an expired, used or wrong code; it does not say which. peer_wrong_invitation: the code is for a device, not a gateway. peer_own_gateway: the address is this gateway's own. peer_unavailable: storage, the key or a worker failed; retry later. peer_audit_unavailable: the command's audit record could not be kept; if that was before its effect nothing changed, and if after, the effect stands and peer.list shows it."
     },
     "ChangeWatchId": {
       "type": "string",
