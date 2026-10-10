@@ -225,6 +225,18 @@
     "conversation.unsubscribe": {
       "params": "ConversationUnsubscribeParams",
       "grant": "conversation.write"
+    },
+    "conversation.share": {
+      "params": "ConversationShareParams",
+      "grant": "credential.manage"
+    },
+    "conversation.unshare": {
+      "params": "ConversationShareParams",
+      "grant": "credential.manage"
+    },
+    "conversation.shares": {
+      "params": "ConversationSharesParams",
+      "grant": "credential.manage"
     }
   },
   "events": {

@@ -72,7 +72,7 @@ pub(super) async fn serve(
         ConversationDependencies {
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage: producer.clone(),
-            metadata,
+            metadata: metadata.clone(),
             mode_audit: Arc::new(AcceptingModeAudit),
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
@@ -105,6 +105,7 @@ pub(super) async fn serve(
         )
         .await
         .unwrap();
+    super::gateway::share_with_devices(metadata.as_ref(), &id, setup).await;
     service
         .submit(
             id.clone(),

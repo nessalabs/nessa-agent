@@ -189,6 +189,9 @@ const failures: Partial<Record<ConversationErrorCode, CommandFailure>> = {
   conversation_state_unreadable: "conversation-state-unreadable",
   invalid_request: "invalid-request",
   conversation_deleted: "conversation-deleted",
+  // Answers only `conversation.share`, which the panel never sends; one that
+  // met a command would be a request this panel had no business making.
+  share_target_not_paired: "invalid-request",
 }
 
 /**
@@ -267,6 +270,8 @@ const readFailures: Record<ConversationErrorCode, ReadFailure> = {
   submission_unresolved: "unavailable",
   temporarily_unavailable: "unavailable",
   unknown_method: "unavailable",
+  // A share is never a read; a read that met it would be no answer it knows.
+  share_target_not_paired: "unavailable",
   model_unavailable: "unavailable",
   approval_mode_unavailable: "unavailable",
   approval_mode_not_applied: "unavailable",

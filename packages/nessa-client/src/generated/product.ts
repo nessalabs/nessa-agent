@@ -867,6 +867,34 @@ export interface ConversationDeleteParams {
   /** Stable action identifier retained for retries of one logical command. */
   requestId: string
 }
+/** Grant (conversation.share) or revoke (conversation.unshare) one paired device Read on one of the caller's conversations. Nothing is granted by default or by list: a paired device sees only the conversations granted to it, one grant per conversation, and an ungranted one is not listed, not readable and not watchable. A grant is refused share_target_not_paired unless the credential is an active paired device of the conversation's owner, and conversation_deleted on a deleted conversation; a revoke needs only ownership. Revoking ends the device's next read; a read already admitted may finish. applied is false when nothing changed: granting a grant already held, or revoking one not held. A conversation holds at most 64 grants; one more is refused invalid_request. A retried requestId answers what it answered the first time, so a share retried after a later unshare grants nothing; the same requestId naming another device or the other change is refused invalid_request. A retried share is checked like a new one first, so once the conversation is deleted or the device unpaired it is refused conversation_deleted or share_target_not_paired and changes nothing. */
+export interface ConversationShareParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** The paired device's credential, as credential.list names it. */
+  credentialId: string
+}
+/** List the paired devices one of the caller's conversations is granted to. */
+export interface ConversationSharesParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+}
+/** One Read grant on a conversation. */
+export interface ConversationShare {
+  /** The paired device's credential, as credential.list names it. */
+  credentialId: string
+  /** What the grant allows. Read: the device may list, read and watch the conversation's records. */
+  role: "read"
+  /** When the grant was made, Unix milliseconds. */
+  grantedAtMs: number
+}
+/** Result of conversation.shares: the conversation's grants, oldest first. */
+export interface ConversationSharesResult {
+  /** Every grant on the conversation; a conversation holds at most 64. */
+  items: ConversationShare[]
+}
 /** Stable acknowledgement of one submitted input. */
 export interface ConversationReceipt {
   /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
@@ -1404,7 +1432,7 @@ export const McpServersErrorCode = {
 } as const
 export type McpServersErrorCode =
   (typeof McpServersErrorCode)[keyof typeof McpServersErrorCode]
-/** Typed rejection code carried by a conversation command the gateway dispatched and refused. Branch on these instead of message text. These are not every code a conversation request can receive: access and routing failures are answered by the session before a conversation command is dispatched, and carry their own codes. agent_startup_deadline means the agent was still starting when its budget expired, so nothing reached the provider and the same command is safe to repeat; it normally succeeds once the runtime is warm, but a launch whose process could not be confirmed stopped keeps that conversation blocked. invalid_request and agent_not_configured reject the command until their cause is addressed. agent_not_configured, agent_unsupported and conversations_not_configured are three different situations and only one of them is fixed by configuring an agent: the gateway runs no conversations at all, it names no runtime under the agent this conversation asked for, or no build here can open that conversation's agent. sandbox_unavailable means no lease could be granted to run the agent because the sandbox it asks for is not one both its agent binding and the place it would run can enforce; nothing ran, the refusal is in the conversation's records, and repeating the command fails the same way until that configuration changes. environment_not_configured is a create naming an SSH destination config.json does not name, or a conversation created on one it no longer names; nothing ran. environment_unavailable is an SSH environment that could not be reached, is serving another connection, or cannot run this conversation's agent: no lease was granted, the refusal is in the conversation's records, and the same command may succeed once the environment is reachable. environment_version_mismatch is an SSH environment running another Nessa build than this gateway: nothing was sent to it, and the fix is to install this build there. linked_file_unreachable is a message linking a file by its path on this machine, sent to a conversation that runs on an SSH host: the host cannot read this machine's files and would read whatever it has at that path, so nothing was recorded or sent; send the message without it, or attach an image, whose bytes travel with it. The image codes answer `attachment.begin` and a message naming uploads: image_input_unsupported is a model that takes no images, so no ticket and no message with one will ever be taken; attachment_not_found is an image this conversation does not hold — never uploaded into it, expired, or released when it closed; attachment_unavailable is one it holds but could not read; attachment_capacity is no room for another upload right now; attachment_storage_unavailable is the gateway unable to keep the bytes. attachment_cleanup_unavailable is a close that did happen, whose release of this conversation's uploads did not, and is the one image code that is not a refusal of the command. conversation_deleted refuses every command its owner sends on a conversation somebody deleted, except deleting it again; anyone else is told conversation_not_found. Its identity is never reused, so a surface still holding it should let it go. conversation_erasure_incomplete is a delete that did happen — the conversation is gone and every command on it is refused — whose erasure of stored data did not finish; repeating the delete, and each gateway start, tries again, but an agent that keeps refusing to delete its own session, or a damaged history, needs the operator. The mcp_ codes refuse an MCP App's request (mcp.callTool, mcp.readResource, mcp.sendMessage, mcp.updateModelContext): mcp_app_unknown, the app is not an MCP tool call with a UI in this conversation, or the resource is not an app's; mcp_server_mismatch, it names another server than the app's; mcp_tool_not_for_app, the tool is not listed with visibility including app; mcp_session_unavailable, the conversation has no open session of that server, or it ended; mcp_approval_denied and mcp_approval_expired, the person refused, or did not answer within x-mcpAppCallTiming.reviewDeadlineMs; mcp_cancelled, the review was withdrawn because the request was cancelled, the app was torn down, or the conversation ended, or, with no review withdrawn, the app's mount was released or the opening it was drawn in ended (closed, deleted, stopped, another begun, or the gateway stopping) before the request took effect, which for mcp.sendMessage sends nothing and opens nothing; mcp_request_too_large and mcp_result_too_large, past a request's bound (the arguments' 32 KiB, a message's input bound or its review's room, a context's 8 KiB) and a result's 56 KiB; turn_running also refuses an app's message while a turn runs or input waits; mcp_timed_out, the server did not answer in time; mcp_remote_error, the server answered with a JSON-RPC error (McpRemoteErrorDetails), or with something that is no MCP answer (no details). mcp_unauthorized, the remote endpoint refused the caller and the tool was not run; the answer carries no token. mcp_unreachable, the remote endpoint could not be reached and nothing was retained. mcp_insufficient_scope, the caller's scope was not enough and the call was not retried. These three are not mcp_session_unavailable: the session was not reported as ended. */
+/** Typed rejection code carried by a conversation command the gateway dispatched and refused. Branch on these instead of message text. These are not every code a conversation request can receive: access and routing failures are answered by the session before a conversation command is dispatched, and carry their own codes. agent_startup_deadline means the agent was still starting when its budget expired, so nothing reached the provider and the same command is safe to repeat; it normally succeeds once the runtime is warm, but a launch whose process could not be confirmed stopped keeps that conversation blocked. invalid_request and agent_not_configured reject the command until their cause is addressed. agent_not_configured, agent_unsupported and conversations_not_configured are three different situations and only one of them is fixed by configuring an agent: the gateway runs no conversations at all, it names no runtime under the agent this conversation asked for, or no build here can open that conversation's agent. sandbox_unavailable means no lease could be granted to run the agent because the sandbox it asks for is not one both its agent binding and the place it would run can enforce; nothing ran, the refusal is in the conversation's records, and repeating the command fails the same way until that configuration changes. environment_not_configured is a create naming an SSH destination config.json does not name, or a conversation created on one it no longer names; nothing ran. environment_unavailable is an SSH environment that could not be reached, is serving another connection, or cannot run this conversation's agent: no lease was granted, the refusal is in the conversation's records, and the same command may succeed once the environment is reachable. environment_version_mismatch is an SSH environment running another Nessa build than this gateway: nothing was sent to it, and the fix is to install this build there. linked_file_unreachable is a message linking a file by its path on this machine, sent to a conversation that runs on an SSH host: the host cannot read this machine's files and would read whatever it has at that path, so nothing was recorded or sent; send the message without it, or attach an image, whose bytes travel with it. The image codes answer `attachment.begin` and a message naming uploads: image_input_unsupported is a model that takes no images, so no ticket and no message with one will ever be taken; attachment_not_found is an image this conversation does not hold — never uploaded into it, expired, or released when it closed; attachment_unavailable is one it holds but could not read; attachment_capacity is no room for another upload right now; attachment_storage_unavailable is the gateway unable to keep the bytes. attachment_cleanup_unavailable is a close that did happen, whose release of this conversation's uploads did not, and is the one image code that is not a refusal of the command. conversation_deleted refuses every command its owner sends on a conversation somebody deleted, except deleting it again; anyone else is told conversation_not_found. Its identity is never reused, so a surface still holding it should let it go. conversation_erasure_incomplete is a delete that did happen — the conversation is gone and every command on it is refused — whose erasure of stored data did not finish; repeating the delete, and each gateway start, tries again, but an agent that keeps refusing to delete its own session, or a damaged history, needs the operator. The mcp_ codes refuse an MCP App's request (mcp.callTool, mcp.readResource, mcp.sendMessage, mcp.updateModelContext): mcp_app_unknown, the app is not an MCP tool call with a UI in this conversation, or the resource is not an app's; mcp_server_mismatch, it names another server than the app's; mcp_tool_not_for_app, the tool is not listed with visibility including app; mcp_session_unavailable, the conversation has no open session of that server, or it ended; mcp_approval_denied and mcp_approval_expired, the person refused, or did not answer within x-mcpAppCallTiming.reviewDeadlineMs; mcp_cancelled, the review was withdrawn because the request was cancelled, the app was torn down, or the conversation ended, or, with no review withdrawn, the app's mount was released or the opening it was drawn in ended (closed, deleted, stopped, another begun, or the gateway stopping) before the request took effect, which for mcp.sendMessage sends nothing and opens nothing; mcp_request_too_large and mcp_result_too_large, past a request's bound (the arguments' 32 KiB, a message's input bound or its review's room, a context's 8 KiB) and a result's 56 KiB; turn_running also refuses an app's message while a turn runs or input waits; mcp_timed_out, the server did not answer in time; mcp_remote_error, the server answered with a JSON-RPC error (McpRemoteErrorDetails), or with something that is no MCP answer (no details). mcp_unauthorized, the remote endpoint refused the caller and the tool was not run; the answer carries no token. mcp_unreachable, the remote endpoint could not be reached and nothing was retained. mcp_insufficient_scope, the caller's scope was not enough and the call was not retried. These three are not mcp_session_unavailable: the session was not reported as ended. share_target_not_paired: conversation.share named a credential that is not an active paired device of the conversation's owner. */
 export const ConversationErrorCode = {
   AgentNotConfigured: "agent_not_configured",
   AgentUnsupported: "agent_unsupported",
@@ -1457,6 +1485,7 @@ export const ConversationErrorCode = {
   McpUnauthorized: "mcp_unauthorized",
   McpUnreachable: "mcp_unreachable",
   McpInsufficientScope: "mcp_insufficient_scope",
+  ShareTargetNotPaired: "share_target_not_paired",
 } as const
 export type ConversationErrorCode =
   (typeof ConversationErrorCode)[keyof typeof ConversationErrorCode]
@@ -2145,7 +2174,7 @@ export const mcpServerRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 55,
+  maxReadyMethods: 58,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -2259,6 +2288,9 @@ export const ProductMethod = {
   ConversationSubscribe: "conversation.subscribe",
   ConversationSubscribeList: "conversation.subscribeList",
   ConversationUnsubscribe: "conversation.unsubscribe",
+  ConversationShare: "conversation.share",
+  ConversationUnshare: "conversation.unshare",
+  ConversationShares: "conversation.shares",
 } as const
 export const ProductEvent = {
   SessionChallenge: "session.challenge",
@@ -2325,6 +2357,9 @@ export const productReadyMethods = [
   "conversation.subscribe",
   "conversation.subscribeList",
   "conversation.unsubscribe",
+  "conversation.share",
+  "conversation.unshare",
+  "conversation.shares",
 ] as const
 /** The grant each product method asks Cedar for, generated from protocol/product/manifest.json. null means another owner admits the method: the handshake, auth.session, or a watch. Writing to a conversation — an answer, an upload, an app's calls — asks for conversation.write; reading its records or catalogue asks for conversation.read; running a configured server, or enrolling a device, asks for credential.manage. */
 export const productMethodGrants = {
@@ -2384,6 +2419,9 @@ export const productMethodGrants = {
   "conversation.subscribe": "conversation.write",
   "conversation.subscribeList": "conversation.write",
   "conversation.unsubscribe": "conversation.write",
+  "conversation.share": "credential.manage",
+  "conversation.unshare": "credential.manage",
+  "conversation.shares": "credential.manage",
 } as const
 export const catalogueWireSchemas = {
   RecordScope: {
