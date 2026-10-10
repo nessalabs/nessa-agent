@@ -2838,6 +2838,28 @@ fn held_calls(
         .collect()
 }
 
+async fn held_initialized_control() -> (Connection, Arc<HttpSession>, Arc<Peer>, Arc<Gate>) {
+    let gate = Arc::new(Gate::default());
+    let peer = Arc::new(Peer::new());
+    peer.controls
+        .lock()
+        .unwrap()
+        .push_back((202, Some(gate.clone())));
+    let (session, incoming) = transport(peer.clone(), Arc::default());
+    let connection =
+        Connection::open_http(session.clone(), incoming, Arc::new(RuntimeClock::new()));
+    bounded(connection.call("initialize", None))
+        .await
+        .unwrap()
+        .unwrap();
+    connection
+        .notify("notifications/cancelled", Some(json!({"requestId": 1})))
+        .await
+        .unwrap();
+    gate.reached().await;
+    (connection, session, peer, gate)
+}
+
 async fn held_recovery(
     status: u16,
 ) -> (
@@ -3114,11 +3136,23 @@ async fn j23_terminal_admission_wakes_physical_waiters_and_refuses_ended_notific
 
 #[tokio::test]
 async fn j23_closed_control_queue_is_explicit() {
-    // A panicked custom exchange records ServerGone through the writer watch.
-    // A later close keeps that cause. Recovery has no claimed id to DELETE.
+    // Aborting the writer closes its queue and records nothing. The recovery
+    // body is still reading, so the next peer request hits the closed-queue
+    // arm, ends with ServerGone, and cleanup DELETEs the id that request claimed.
     let (connection, session, peer, probe, gate, _) = held_recovery(202).await;
-    peer.control_panic.store(true, Ordering::SeqCst);
-    gate.release();
+    connection.abort_http_writer_for_test();
+    bounded(async {
+        while !connection.http_writer_watch_finished() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    assert_eq!(connection.end_cause(), None);
+    assert_eq!(
+        peer.count(|request| request.method == HttpMethod::Delete),
+        0
+    );
+    probe.event(json!({"id":70,"method":"ping"}));
     assert_eq!(bounded(connection.ended()).await, McpError::ServerGone);
     assert_eq!(
         bounded(connection.notify("notifications/test", None))
@@ -3128,14 +3162,19 @@ async fn j23_closed_control_queue_is_explicit() {
     );
     connection.close(McpError::Closed);
     stop(&session).await;
+    probe.released().await;
+    gate.release();
     assert_eq!(connection.end_cause(), Some(McpError::ServerGone));
-    // Recovery already released the previous id and has not claimed the next,
-    // so the panic's cleanup does not DELETE.
     assert_eq!(
-        peer.count(|request| request.method == HttpMethod::Delete),
+        peer.count(|request| serde_json::from_slice::<Value>(&request.body)
+            .ok()
+            .is_some_and(|message| message["id"] == 70)),
         0
     );
-    probe.released().await;
+    assert_eq!(
+        peer.count(|request| request.method == HttpMethod::Delete),
+        1
+    );
 
     let (queue, frames) = OutgoingQueue::new(1, 1);
     drop(frames);
@@ -3247,35 +3286,6 @@ async fn j27_writer_panic_ends_without_later_input() {
         1
     );
     probe.released().await;
-
-    let gate = Arc::new(Gate::default());
-    let peer = Arc::new(Peer::new());
-    peer.controls
-        .lock()
-        .unwrap()
-        .push_back((202, Some(gate.clone())));
-    let (session, incoming) = transport(peer.clone(), Arc::default());
-    let connection =
-        Connection::open_http(session.clone(), incoming, Arc::new(RuntimeClock::new()));
-    bounded(connection.call("initialize", None))
-        .await
-        .unwrap()
-        .unwrap();
-    connection
-        .notify("notifications/cancelled", Some(json!({"requestId": 1})))
-        .await
-        .unwrap();
-    gate.reached().await;
-    let mut finished = session.finished();
-    connection.close(McpError::Closed);
-    bounded(finished.wait_for(|done| *done)).await.unwrap();
-    peer.control_panic.store(true, Ordering::SeqCst);
-    gate.release();
-    assert_eq!(connection.end_cause(), Some(McpError::Closed));
-    assert_eq!(
-        peer.count(|request| request.method == HttpMethod::Delete),
-        1
-    );
 }
 
 #[tokio::test]
@@ -3321,6 +3331,52 @@ async fn j27_cancelled_writer_does_not_record_an_end() {
     gate.release();
     stop(&session).await;
     assert_eq!(connection.end_cause(), None);
+}
+
+#[tokio::test]
+async fn j27_drop_releases_a_held_writer_and_deletes_once() {
+    let (connection, session, peer, _gate) = held_initialized_control().await;
+    let mut finished = session.finished();
+    let weak = Arc::downgrade(&session);
+    drop(connection);
+    drop(session);
+    bounded(finished.wait_for(|done| *done)).await.unwrap();
+    assert!(weak.upgrade().is_none());
+    assert_eq!(
+        peer.count(|request| request.method == HttpMethod::Delete),
+        1
+    );
+}
+
+#[tokio::test]
+async fn j27_close_releases_a_held_writer_and_deletes_once() {
+    let (connection, session, peer, gate) = held_initialized_control().await;
+    let mut finished = session.finished();
+    connection.close(McpError::Closed);
+    bounded(finished.wait_for(|done| *done)).await.unwrap();
+    // The test and the connection still hold the session. The writer and its
+    // watch must have dropped theirs.
+    bounded(async {
+        while Arc::strong_count(&session) > 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    assert_eq!(Arc::strong_count(&session), 2);
+    assert_eq!(connection.end_cause(), Some(McpError::Closed));
+    assert_eq!(
+        peer.count(|request| request.method == HttpMethod::Delete),
+        1
+    );
+    gate.release();
+    for _ in 0..8 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(Arc::strong_count(&session), 2);
+    assert_eq!(
+        peer.count(|request| request.method == HttpMethod::Delete),
+        1
+    );
 }
 
 #[tokio::test]

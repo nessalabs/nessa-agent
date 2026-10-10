@@ -15,7 +15,8 @@
 //! cause, and every pending call gets that cause; a call admitted after the
 //! end gets it too, because admission and the end share one lock. A panicked
 //! HTTP writer asks that same owner for [`McpError::ServerGone`] after the
-//! session fences new posts (`j27_writer_panic_ends_without_later_input`).
+//! session fences new posts. Drop and close abort that writer before its
+//! watch, so an exchange still in flight cannot retain the session.
 use super::framing::{self, FrameEnd, Frames, MAX_FRAME_BYTES};
 use super::http::{HttpSession, SendOutcome};
 use super::McpError;
@@ -217,10 +218,11 @@ pub(crate) struct Connection {
     shared: Arc<Shared>,
     outgoing: OutgoingQueue,
     clock: Arc<dyn Clock>,
-    writer: JoinHandle<()>,
-    /// Aborts the HTTP writer the watch is joining. Absent for stdio, where
-    /// `writer` is that task.
-    stop_writer: Option<AbortHandle>,
+    /// For stdio, the writer task. For HTTP, the watch joined to [`Self::http_writer`].
+    writer_watch: JoinHandle<()>,
+    /// Abort handle of the HTTP writer the watch joins. `None` for stdio,
+    /// where [`Self::writer_watch`] is the writer.
+    http_writer: Option<AbortHandle>,
     reader: JoinHandle<()>,
     /// Set for a remote session, so close can DELETE its upstream id once.
     http: Option<Arc<HttpSession>>,
@@ -248,7 +250,7 @@ impl Connection {
             next_id: AtomicU64::new(1),
         });
         let (outgoing, mut frames) = OutgoingQueue::new(OUTGOING_FRAMES, 0);
-        let writer = tokio::spawn({
+        let writer_watch = tokio::spawn({
             let shared = shared.clone();
             async move {
                 while let Some(frame) = frames.recv().await {
@@ -271,8 +273,8 @@ impl Connection {
             shared,
             outgoing,
             clock,
-            writer,
-            stop_writer: None,
+            writer_watch,
+            http_writer: None,
             reader,
             http: None,
         }
@@ -321,16 +323,16 @@ impl Connection {
                             }
                         }
                         SendOutcome::End(error) => {
-                            session.shutdown();
-                            shared.end(error);
+                            shutdown_and_end(&session, &shared, error);
                             return;
                         }
                     }
                 }
             }
         });
-        let stop_writer = writing.abort_handle();
-        let writer = tokio::spawn(watch_http_writer(writing, shared.clone(), session.clone()));
+        let http_writer = writing.abort_handle();
+        let writer_watch =
+            tokio::spawn(watch_http_writer(writing, shared.clone(), session.clone()));
         let reader = tokio::spawn(read_messages(
             incoming,
             shared.clone(),
@@ -341,8 +343,8 @@ impl Connection {
             shared,
             outgoing,
             clock,
-            writer,
-            stop_writer: Some(stop_writer),
+            writer_watch,
+            http_writer: Some(http_writer),
             reader,
             http: Some(session),
         }
@@ -475,48 +477,53 @@ impl Connection {
     /// waiting on it get `cause`.
     pub(crate) fn close(&self, cause: McpError) {
         if let Some(http) = &self.http {
-            http.shutdown();
+            shutdown_and_end(http, &self.shared, cause);
+        } else {
+            self.shared.end(cause);
         }
-        self.shared.end(cause);
         self.abort_writer();
     }
 
-    /// Stop the frame writer. For HTTP this aborts the task the watch is
-    /// joining before aborting the watch, so the writer cannot keep posting
-    /// after the watch handle is dropped.
+    /// Stop the frame writer. For HTTP this aborts the writer before the
+    /// watch, so dropping the watch cannot leave that writer holding the session.
     fn abort_writer(&self) {
-        if let Some(stop_writer) = &self.stop_writer {
-            stop_writer.abort();
+        if let Some(http_writer) = &self.http_writer {
+            http_writer.abort();
         }
-        self.writer.abort();
+        self.writer_watch.abort();
     }
 
     /// Abort the HTTP writer and leave its watch running, so a test can see
     /// that cancellation does not record an end.
     #[cfg(test)]
     pub(crate) fn abort_http_writer_for_test(&self) {
-        self.stop_writer.as_ref().expect("http writer").abort();
+        self.http_writer.as_ref().expect("http writer").abort();
     }
 
     /// Whether the HTTP writer watch has finished joining that task.
     #[cfg(test)]
     pub(crate) fn http_writer_watch_finished(&self) -> bool {
-        self.writer.is_finished()
+        self.writer_watch.is_finished()
     }
 }
 
-/// Join the HTTP writer. A panic is not a second end owner: fence admission
-/// through [`HttpSession::shutdown`], then record [`McpError::ServerGone`]
-/// through [`Shared::end`]. A cancellation records nothing.
-/// `j27_writer_panic_ends_without_later_input` and
-/// `j27_cancelled_writer_does_not_record_an_end`.
+/// Fence new HTTP posts, then record `cause` once. The fence is first so a
+/// wake inside [`Shared::end`] already sees it.
+fn shutdown_and_end(session: &HttpSession, shared: &Shared, cause: McpError) {
+    session.shutdown();
+    shared.end(cause);
+}
+
+/// Join the HTTP writer. A panic is not a second end owner: log it, then
+/// [`shutdown_and_end`] with [`McpError::ServerGone`]. A cause already
+/// recorded stays. A cancellation records nothing.
 async fn watch_http_writer(writer: JoinHandle<()>, shared: Arc<Shared>, session: Arc<HttpSession>) {
     let Err(error) = writer.await else {
         return;
     };
     if error.is_panic() {
-        session.shutdown();
-        shared.end(McpError::ServerGone);
+        tracing::error!(error = %error, "the HTTP MCP writer panicked");
+        shutdown_and_end(&session, &shared, McpError::ServerGone);
     }
 }
 
@@ -698,9 +705,10 @@ async fn read_messages(
         }
     };
     if let Some(session) = session.upgrade() {
-        session.shutdown();
+        shutdown_and_end(&session, &shared, cause);
+    } else {
+        shared.end(cause);
     }
-    shared.end(cause);
 }
 
 #[cfg(all(test, unix))]

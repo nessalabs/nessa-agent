@@ -6,8 +6,8 @@
 //! stand_in -> McpSession::serve -> Connection -> fixture
 //! forwarded -> McpSession::serve -> ForwardedResults (the grant's)
 //! sessions -> McpServers::open / tool_ui / stop -> FixtureLauncher
-//! connection_end -> Connection-private State/watch -> retained snapshot during paused publication (ADR392 J23)
-//! http_progress -> Connection / McpServers -> gated JSON/initialization/recovery, captured replies and POST policy (ADR 392 J1–J27)
+//! connection_end -> Connection-private Shared / watch_http_writer -> retained snapshot during paused publication, and a panicked writer that keeps a prior close and fences before that record (ADR392 J23, J27)
+//! http_progress -> Connection / McpServers -> gated JSON/initialization/recovery, captured replies, POST policy, and held-writer release (ADR 392 J1–J27)
 //! post_body -> controlled chunks/destruction shared by HTTP regressions
 //! post_streams -> HttpSession / Connection -> gated HttpChunks (ADR 392 P1–P14)
 //! process  -> McpServers -> ProcessLauncher -> fixtures/server.py

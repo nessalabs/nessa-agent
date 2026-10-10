@@ -17,8 +17,10 @@
 //!
 //! Connection: framing (bounded newline JSON-RPC) ─ wire (MCP JSON → domain)
 //! Remote: HttpExchange (injected) ─ HttpSession (owned JSON/SSE bodies and recovery) ─ the same Connection
-//! RecoveryReady / captured peer reply ──bounded FIFO with control reserve──▶ Connection writer
+//! RecoveryReady / captured peer reply ──bounded FIFO with control reserve──▶ HTTP writer
 //! HttpSession owns binding claims and the shared authorized modern POST policy.
+//! A panicked HTTP writer is joined by its watch, which shuts the session down
+//! and then records the connection end.
 //! ```
 //!
 //! Arrows are calls. `McpServers` owns the configured set, which a host
