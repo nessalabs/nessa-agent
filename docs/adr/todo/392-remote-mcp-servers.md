@@ -536,9 +536,11 @@ Peer replies never await queue capacity in the reader. A full HTTP control
 admission ends with typed `TooLarge("queued MCP control frames")`; a closed
 writer ends with its retained terminal cause or `ServerGone`. The existing
 reader shutdown fence and connection end owner retain the first cause and one
-cleanup. `RecoveryReady` still awaits FIFO admission and completion under the
-remaining initialization budget. Direct local cancellation remains independent
-of its best-effort remote notification. The HTTP owner remains the authority
+cleanup. A panicked HTTP writer does not wait for that later read: its watch
+asks the same owner, after the same fence (J27). `RecoveryReady` still awaits
+FIFO admission and completion under the remaining initialization budget.
+Direct local cancellation remains independent of its best-effort remote
+notification. The HTTP owner remains the authority
 for captured binding, recovery admission, deadlines and close.
 
 | Row | Trigger/order | Required outcome and ownership | Enforcer |
@@ -549,6 +551,7 @@ for captured binding, recovery admission, deadlines and close.
 | J24 | Ordinary sender waits for capacity and is dropped; dequeue retains returned frame; receiver is dropped | No permit leak; dequeue releases ordinary capacity before dispatch completion; later frames progress; closed receiver rejects remaining sends. Canceling terminal Connection admission drops pending send permits/envelopes without inventing a second terminal owner | `j24_ordinary_capacity_releases_on_dequeue_and_cancellation`, `j23_terminal_admission_wakes_physical_waiters_and_refuses_ended_notifications` |
 | J25 | Recovery budget expires while early answer or handoff waits behind writer pressure | Timeout remains authoritative; queued reply/initialized cannot dispatch or reopen admission after expiry; provisional claim remains close-owned | `j25_deadline_refuses_queued_saturated_reply`, existing J9/J11 handoff expiry tests |
 | J26 | Explicit close or control POST failure wins before queued saturated answer dispatch | No downstream answer/initialized effect; explicit HTTP close raises its existing shutdown fence before committing the first Shared end cause, then publishes watch outside State before waking responses. Later competing causes cannot replace the first commit. Admission checked open before that commit may race queue insertion, but HTTP effects remain fenced | `j26_close_or_writer_failure_refuses_queued_saturated_reply`, `j26_close_fences_http_and_publishes_before_response_wakes`, existing J19 close-fence tests |
+| J27 | A custom HTTP exchange panics the writer, or that task is aborted, while a call and recovery are in flight. No later inbound message is required. An explicit close may commit before the panic or after it | The watch is not an end owner. On panic it raises the existing HTTP shutdown fence, which refuses new posts, joins body readers, and DELETEs a claimed id once, then asks `Shared.end` for `ServerGone`. Pending calls wake with that cause. A later close cannot replace it. A close that already committed stays `Closed`. Joining a cancellation does not fence the session or record a cause. Recovery that has released its previous id and not claimed the next does not DELETE | `j27_writer_panic_ends_without_later_input`, `j27_cancelled_writer_does_not_record_an_end` |
 
 J4/J5/J10's no-claim requirements describe bodies without an early claim for a peer answer.
 An already answered request may own provisional cleanup but cannot validate

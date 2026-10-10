@@ -13,7 +13,9 @@
 //! Arrows are frames. Ids are this connection's own, so callers with ids of
 //! their own (stand-ins) cannot collide. The connection ends once, with one
 //! cause, and every pending call gets that cause; a call admitted after the
-//! end gets it too, because admission and the end share one lock.
+//! end gets it too, because admission and the end share one lock. A panicked
+//! HTTP writer asks that same owner for [`McpError::ServerGone`] after the
+//! session fences new posts (`j27_writer_panic_ends_without_later_input`).
 use super::framing::{self, FrameEnd, Frames, MAX_FRAME_BYTES};
 use super::http::{HttpSession, SendOutcome};
 use super::McpError;
@@ -40,7 +42,7 @@ use tokio::{
         },
         oneshot, watch, OwnedSemaphorePermit, Semaphore,
     },
-    task::JoinHandle,
+    task::{AbortHandle, JoinHandle},
 };
 
 /// The most calls waiting on one server at a time.
@@ -216,13 +218,16 @@ pub(crate) struct Connection {
     outgoing: OutgoingQueue,
     clock: Arc<dyn Clock>,
     writer: JoinHandle<()>,
+    /// Aborts the HTTP writer the watch is joining. Absent for stdio, where
+    /// `writer` is that task.
+    stop_writer: Option<AbortHandle>,
     reader: JoinHandle<()>,
     /// Set for a remote session, so close can DELETE its upstream id once.
     http: Option<Arc<HttpSession>>,
 }
 impl Drop for Connection {
     fn drop(&mut self) {
-        self.writer.abort();
+        self.abort_writer();
         self.reader.abort();
     }
 }
@@ -267,6 +272,7 @@ impl Connection {
             outgoing,
             clock,
             writer,
+            stop_writer: None,
             reader,
             http: None,
         }
@@ -292,7 +298,7 @@ impl Connection {
         });
         let (outgoing, mut frames) = OutgoingQueue::new(OUTGOING_FRAMES, HTTP_CONTROL_RESERVE);
         session.set_writer(outgoing.clone(), clock.clone());
-        let writer = tokio::spawn({
+        let writing = tokio::spawn({
             let shared = shared.clone();
             let session = session.clone();
             async move {
@@ -323,6 +329,8 @@ impl Connection {
                 }
             }
         });
+        let stop_writer = writing.abort_handle();
+        let writer = tokio::spawn(watch_http_writer(writing, shared.clone(), session.clone()));
         let reader = tokio::spawn(read_messages(
             incoming,
             shared.clone(),
@@ -334,6 +342,7 @@ impl Connection {
             outgoing,
             clock,
             writer,
+            stop_writer: Some(stop_writer),
             reader,
             http: Some(session),
         }
@@ -469,7 +478,45 @@ impl Connection {
             http.shutdown();
         }
         self.shared.end(cause);
+        self.abort_writer();
+    }
+
+    /// Stop the frame writer. For HTTP this aborts the task the watch is
+    /// joining before aborting the watch, so the writer cannot keep posting
+    /// after the watch handle is dropped.
+    fn abort_writer(&self) {
+        if let Some(stop_writer) = &self.stop_writer {
+            stop_writer.abort();
+        }
         self.writer.abort();
+    }
+
+    /// Abort the HTTP writer and leave its watch running, so a test can see
+    /// that cancellation does not record an end.
+    #[cfg(test)]
+    pub(crate) fn abort_http_writer_for_test(&self) {
+        self.stop_writer.as_ref().expect("http writer").abort();
+    }
+
+    /// Whether the HTTP writer watch has finished joining that task.
+    #[cfg(test)]
+    pub(crate) fn http_writer_watch_finished(&self) -> bool {
+        self.writer.is_finished()
+    }
+}
+
+/// Join the HTTP writer. A panic is not a second end owner: fence admission
+/// through [`HttpSession::shutdown`], then record [`McpError::ServerGone`]
+/// through [`Shared::end`]. A cancellation records nothing.
+/// `j27_writer_panic_ends_without_later_input` and
+/// `j27_cancelled_writer_does_not_record_an_end`.
+async fn watch_http_writer(writer: JoinHandle<()>, shared: Arc<Shared>, session: Arc<HttpSession>) {
+    let Err(error) = writer.await else {
+        return;
+    };
+    if error.is_panic() {
+        session.shutdown();
+        shared.end(McpError::ServerGone);
     }
 }
 

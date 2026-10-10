@@ -1,4 +1,4 @@
-//! ADR 392 J1–J26: JSON/initialization progress and replacement cleanup ownership.
+//! ADR 392 J1–J27: JSON/initialization progress and replacement cleanup ownership.
 use super::super::connection::{
     Connection, Outgoing, OutgoingQueue, Reply, HTTP_CONTROL_RESERVE, OUTGOING_FRAMES,
 };
@@ -3114,36 +3114,28 @@ async fn j23_terminal_admission_wakes_physical_waiters_and_refuses_ended_notific
 
 #[tokio::test]
 async fn j23_closed_control_queue_is_explicit() {
-    // A custom exchange can unwind the writer before it publishes an end.
-    // Prove a subsequent peer request turns actual receiver loss into ServerGone.
+    // A panicked custom exchange records ServerGone through the writer watch.
+    // A later close keeps that cause. Recovery has no claimed id to DELETE.
     let (connection, session, peer, probe, gate, _) = held_recovery(202).await;
     peer.control_panic.store(true, Ordering::SeqCst);
     gate.release();
-    bounded(async {
-        loop {
-            if let Err(error) = connection.notify("notifications/test", None).await {
-                assert_eq!(error, McpError::ServerGone);
-                break;
-            }
-        }
-    })
-    .await;
-    assert_eq!(connection.end_cause(), None);
-    probe.event(json!({"id":70,"method":"ping"}));
     assert_eq!(bounded(connection.ended()).await, McpError::ServerGone);
+    assert_eq!(
+        bounded(connection.notify("notifications/test", None))
+            .await
+            .unwrap_err(),
+        McpError::ServerGone
+    );
     connection.close(McpError::Closed);
     stop(&session).await;
     assert_eq!(connection.end_cause(), Some(McpError::ServerGone));
+    // Recovery already released the previous id and has not claimed the next,
+    // so the panic's cleanup does not DELETE.
     assert_eq!(
         peer.count(|request| request.method == HttpMethod::Delete),
-        1
-    );
-    assert_eq!(
-        peer.count(|request| serde_json::from_slice::<Value>(&request.body)
-            .ok()
-            .is_some_and(|message| message["id"] == 70)),
         0
     );
+    probe.released().await;
 
     let (queue, frames) = OutgoingQueue::new(1, 1);
     drop(frames);
@@ -3155,6 +3147,180 @@ async fn j23_closed_control_queue_is_explicit() {
         }),
         Err(TrySendError::Closed(_))
     ));
+}
+
+#[tokio::test]
+async fn j27_writer_panic_ends_without_later_input() {
+    let (connection, session, peer, probe, gate, _) = held_recovery(202).await;
+    let mut pending_call = Box::pin(connection.call("tools/list", None));
+    pending(pending_call.as_mut()).await;
+    let mut finished = session.finished();
+    peer.control_panic.store(true, Ordering::SeqCst);
+    gate.release();
+    assert_eq!(bounded(connection.ended()).await, McpError::ServerGone);
+    assert_eq!(
+        bounded(pending_call).await.unwrap_err(),
+        McpError::ServerGone
+    );
+    assert_eq!(
+        bounded(connection.notify("notifications/test", None))
+            .await
+            .unwrap_err(),
+        McpError::ServerGone
+    );
+    assert_eq!(
+        bounded(connection.call("tools/list", None))
+            .await
+            .unwrap_err(),
+        McpError::ServerGone
+    );
+    assert!(matches!(
+        bounded(session.dispatch(br#"{"method":"notifications/direct"}"#)).await,
+        SendOutcome::End(McpError::Closed)
+    ));
+    assert_eq!(
+        peer.count(|request| {
+            method_of(request, "notifications/direct")
+                || method_of(request, "notifications/test")
+                || method_of(request, "notifications/initialized")
+        }),
+        0
+    );
+    assert_eq!(peer.count(|request| method_of(request, "tools/list")), 1);
+    bounded(finished.wait_for(|done| *done)).await.unwrap();
+    connection.close(McpError::Closed);
+    assert_eq!(connection.end_cause(), Some(McpError::ServerGone));
+    // The failed call released the previous id. The replacement is not claimed,
+    // so neither the panic nor the later close sends a DELETE.
+    assert_eq!(
+        peer.count(|request| request.method == HttpMethod::Delete),
+        0
+    );
+    probe.released().await;
+
+    let (probe, body) = Probe::body();
+    let gate = Arc::new(Gate::default());
+    let mut peer = Peer::new();
+    peer.call_sse = true;
+    peer.bodies.lock().unwrap().push_back(body);
+    peer.controls
+        .lock()
+        .unwrap()
+        .push_back((202, Some(gate.clone())));
+    let peer = Arc::new(peer);
+    let (session, incoming) = transport(peer.clone(), Arc::default());
+    let connection =
+        Connection::open_http(session.clone(), incoming, Arc::new(RuntimeClock::new()));
+    bounded(connection.call("initialize", None))
+        .await
+        .unwrap()
+        .unwrap();
+    let mut pending_call = Box::pin(connection.call("tools/list", None));
+    pending(pending_call.as_mut()).await;
+    probe.polled(1).await;
+    connection
+        .notify("notifications/cancelled", Some(json!({"requestId": 1})))
+        .await
+        .unwrap();
+    gate.reached().await;
+    let mut finished = session.finished();
+    peer.control_panic.store(true, Ordering::SeqCst);
+    gate.release();
+    assert_eq!(bounded(connection.ended()).await, McpError::ServerGone);
+    assert_eq!(
+        bounded(pending_call).await.unwrap_err(),
+        McpError::ServerGone
+    );
+    assert!(matches!(
+        bounded(session.dispatch(br#"{"method":"notifications/direct"}"#)).await,
+        SendOutcome::End(McpError::Closed)
+    ));
+    assert_eq!(
+        peer.count(|request| method_of(request, "notifications/direct")),
+        0
+    );
+    bounded(finished.wait_for(|done| *done)).await.unwrap();
+    connection.close(McpError::Closed);
+    assert_eq!(connection.end_cause(), Some(McpError::ServerGone));
+    assert_eq!(
+        peer.count(|request| request.method == HttpMethod::Delete),
+        1
+    );
+    probe.released().await;
+
+    let gate = Arc::new(Gate::default());
+    let peer = Arc::new(Peer::new());
+    peer.controls
+        .lock()
+        .unwrap()
+        .push_back((202, Some(gate.clone())));
+    let (session, incoming) = transport(peer.clone(), Arc::default());
+    let connection =
+        Connection::open_http(session.clone(), incoming, Arc::new(RuntimeClock::new()));
+    bounded(connection.call("initialize", None))
+        .await
+        .unwrap()
+        .unwrap();
+    connection
+        .notify("notifications/cancelled", Some(json!({"requestId": 1})))
+        .await
+        .unwrap();
+    gate.reached().await;
+    let mut finished = session.finished();
+    connection.close(McpError::Closed);
+    bounded(finished.wait_for(|done| *done)).await.unwrap();
+    peer.control_panic.store(true, Ordering::SeqCst);
+    gate.release();
+    assert_eq!(connection.end_cause(), Some(McpError::Closed));
+    assert_eq!(
+        peer.count(|request| request.method == HttpMethod::Delete),
+        1
+    );
+}
+
+#[tokio::test]
+async fn j27_cancelled_writer_does_not_record_an_end() {
+    let gate = Arc::new(Gate::default());
+    let peer = Arc::new(Peer::new());
+    peer.controls
+        .lock()
+        .unwrap()
+        .push_back((202, Some(gate.clone())));
+    let (session, incoming) = transport(peer.clone(), Arc::default());
+    let connection =
+        Connection::open_http(session.clone(), incoming, Arc::new(RuntimeClock::new()));
+    bounded(connection.call("initialize", None))
+        .await
+        .unwrap()
+        .unwrap();
+    connection
+        .notify("notifications/cancelled", Some(json!({"requestId": 1})))
+        .await
+        .unwrap();
+    gate.reached().await;
+    connection.abort_http_writer_for_test();
+    bounded(async {
+        while !connection.http_writer_watch_finished() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    assert_eq!(connection.end_cause(), None);
+    assert!(matches!(
+        bounded(session.dispatch(br#"{"method":"notifications/direct"}"#)).await,
+        SendOutcome::Done
+    ));
+    assert_eq!(
+        peer.count(|request| method_of(request, "notifications/direct")),
+        1
+    );
+    assert_eq!(
+        peer.count(|request| request.method == HttpMethod::Delete),
+        0
+    );
+    gate.release();
+    stop(&session).await;
+    assert_eq!(connection.end_cause(), None);
 }
 
 #[tokio::test]
