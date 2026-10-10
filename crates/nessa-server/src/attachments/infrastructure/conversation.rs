@@ -103,6 +103,7 @@ impl ConversationAttachments for ConversationHolds {
                 requested_by,
                 file,
                 bytes,
+                record,
             } = published;
             // What the host said, read as this context reads any file: a
             // name for what it is, never trusted for what its bytes are.
@@ -132,7 +133,7 @@ impl ConversationAttachments for ConversationHolds {
                 bytes,
                 failure: failure.clone(),
             });
-            match self.service.keep_published(published, body).await {
+            match self.service.keep_published(published, body, record).await {
                 Ok(PublishKept::Held(_)) => Ok(ArtifactKept::Held),
                 Ok(PublishKept::AlreadyHeld(_)) => Ok(ArtifactKept::AlreadyHeld),
                 Err(error) => {

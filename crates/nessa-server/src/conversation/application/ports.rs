@@ -567,8 +567,9 @@ pub trait ConversationAttachments: Send + Sync {
     fn release(&self, release: AttachmentRelease) -> ConversationFuture<'_, ()>;
     /// Keep a file an environment published under a lease (issue #701):
     /// held as the conversation's once its bytes are exactly what the host
-    /// published, with the lease as its cause; nothing is read when the
-    /// conversation already holds that file. A refusal leaves no hold.
+    /// published and the conversation recorded it, with the lease as its
+    /// cause; nothing is read when the conversation already holds that
+    /// file. A refusal leaves no hold.
     fn keep_published(
         &self,
         published: PublishedArtifact,
@@ -587,7 +588,15 @@ pub struct PublishedArtifact {
     pub file: StagedArtifact,
     /// Its bytes, read only if they are needed.
     pub bytes: Box<dyn ArtifactBytes>,
+    /// Asked once, after the bytes are checked and before anything says the
+    /// file is kept: whether the conversation recorded it under the lease.
+    /// `false`, and the file is not kept.
+    pub record: ArtifactRecordGate,
 }
+
+/// Whether the conversation recorded a published file under its lease.
+pub type ArtifactRecordGate =
+    Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = bool> + Send>> + Send>;
 
 /// What keeping a published file found.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

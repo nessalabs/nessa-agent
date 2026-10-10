@@ -1,9 +1,10 @@
 use super::{
     AttachmentAudit, AttachmentAuditRecord, AttachmentStore, AuditDelivery, AuditUnavailable,
     BeginError, Confirmation, ConversationOwnership, Discard, HoldClaim, ImageNormalizer, Kept,
-    NormalizeError, Ownership, OwnershipUnavailable, PublishKept, PublishedFile, ReceivedBytes,
-    ReleaseCause, ReleaseError, ReleaseEvidence, RetirementEvidence, RevertCause, StagedUpload,
-    StoreUnavailable, TicketSecret, TicketSecrets, UploadBody, UploadError, UploadRejection,
+    NormalizeError, Ownership, OwnershipUnavailable, PublishKept, PublishRecord, PublishedFile,
+    ReceivedBytes, ReleaseCause, ReleaseError, ReleaseEvidence, RetirementEvidence, RevertCause,
+    StagedUpload, StoreUnavailable, TicketSecret, TicketSecrets, UploadBody, UploadError,
+    UploadRejection,
 };
 use crate::attachments::domain::{
     Attachment, Caller, Hold, MediaType, Redemption, RetiredFrom, TicketBook, TicketLifetime,
@@ -798,7 +799,7 @@ impl AttachmentService {
                     AuditDelivery::Unavailable => Err(UploadError::AuditUnavailable),
                 }
             }
-            Ok(Kept::Pending(claim)) => self.record_then_confirm(hold, claim, pending).await,
+            Ok(Kept::Pending(claim)) => self.record_then_confirm(hold, claim, None, pending).await,
         }
     }
 
@@ -814,15 +815,23 @@ impl AttachmentService {
         &self,
         hold: Hold,
         claim: HoldClaim,
+        recorded: Option<PublishRecord>,
         pending: &PendingHold,
     ) -> Result<Attachment, UploadError> {
         *lock(pending) = Some((hold.clone(), claim.clone()));
-        let settled = self.settle(hold, claim).await;
+        let settled = self.settle(hold, claim, recorded).await;
         *lock(pending) = None;
         settled
     }
 
-    async fn settle(&self, hold: Hold, claim: HoldClaim) -> Result<Attachment, UploadError> {
+    /// `recorded`, for a published file, is asked last before the hold is
+    /// made usable: the conversation's record of it is what says it may be.
+    async fn settle(
+        &self,
+        hold: Hold,
+        claim: HoldClaim,
+        recorded: Option<PublishRecord>,
+    ) -> Result<Attachment, UploadError> {
         let created = AttachmentAuditRecord::HoldCreated { hold: hold.clone() };
         if self.audit(created).await == AuditDelivery::Unavailable {
             self.take_back(&hold, &claim, RevertCause::AuditUnconfirmed)
@@ -859,6 +868,13 @@ impl AttachmentService {
                 return Err(UploadError::NotKept);
             }
             Err(OwnershipUnavailable) => return Err(self.not_confirmed(&hold, &claim).await),
+        }
+        if let Some(recorded) = recorded {
+            if !recorded().await {
+                self.take_back(&hold, &claim, RevertCause::NotRecorded)
+                    .await;
+                return Err(UploadError::NotKept);
+            }
         }
         match self.inner.store.confirm(&hold, &claim).await {
             Ok(Confirmation::Confirmed | Confirmation::AlreadyKept) => Ok(hold.stored().clone()),
@@ -1071,9 +1087,11 @@ impl AttachmentService {
     /// only when the conversation does not already keep exactly that file.
     /// The bytes are staged and must be exactly the size and digest the
     /// environment offered; only then is a hold written, pending, its
-    /// creation recorded with the lease as cause, and the hold made usable —
-    /// the one creation order every hold has. A transfer that breaks or
-    /// differs leaves nothing visible, and its refusal is recorded.
+    /// creation recorded with the lease as cause, `recorded` asked, and only
+    /// then the hold made usable: the one creation order every hold has,
+    /// with the conversation's record as the last word. A transfer that
+    /// breaks or differs, or a file the conversation did not record, leaves
+    /// nothing visible; a refused transfer is audited.
     ///
     /// The work runs in its own task, so a caller that goes away cannot take
     /// a half-written hold's evidence with it.
@@ -1081,6 +1099,7 @@ impl AttachmentService {
         &self,
         published: PublishedFile,
         body: Box<dyn UploadBody>,
+        recorded: PublishRecord,
     ) -> Result<PublishKept, UploadError> {
         let published = published.offered_at(self.inner.clock.unix_milliseconds());
         let existing = self
@@ -1096,14 +1115,7 @@ impl AttachmentService {
         // bytes: an upload kept normalized does not hold what was published.
         let existing = existing.map(|found| found.filter(|hold| hold.stored() == published.file()));
         match existing {
-            Ok(Some(hold)) => {
-                let stored = hold.stored().clone();
-                let record = AttachmentAuditRecord::AlreadyPublished { published, hold };
-                return match self.audit(record).await {
-                    AuditDelivery::Recorded => Ok(PublishKept::AlreadyHeld(stored)),
-                    AuditDelivery::Unavailable => Err(UploadError::AuditUnavailable),
-                };
-            }
+            Ok(Some(hold)) => return self.already_published(published, hold, recorded).await,
             Ok(None) => {}
             Err(StoreUnavailable) => {
                 return Err(self
@@ -1123,7 +1135,9 @@ impl AttachmentService {
         let offer = published.clone();
         let work = tokio::spawn(async move {
             let _permit = permit;
-            service.receive_published(offer, body, &written).await
+            service
+                .receive_published(offer, body, recorded, &written)
+                .await
         });
         match work.await {
             Ok(outcome) => outcome,
@@ -1143,6 +1157,7 @@ impl AttachmentService {
         &self,
         published: PublishedFile,
         mut body: Box<dyn UploadBody>,
+        recorded: PublishRecord,
         pending: &PendingHold,
     ) -> Result<PublishKept, UploadError> {
         let file = published.file().clone();
@@ -1187,20 +1202,32 @@ impl AttachmentService {
                 .reject_published(published, UploadRejection::StorageUnavailable)
                 .await),
             Ok(Kept::Existing(existing)) => {
-                let stored = existing.stored().clone();
-                let record = AttachmentAuditRecord::AlreadyPublished {
-                    published,
-                    hold: *existing,
-                };
-                match self.audit(record).await {
-                    AuditDelivery::Recorded => Ok(PublishKept::AlreadyHeld(stored)),
-                    AuditDelivery::Unavailable => Err(UploadError::AuditUnavailable),
-                }
+                self.already_published(published, *existing, recorded).await
             }
             Ok(Kept::Pending(claim)) => self
-                .record_then_confirm(hold, claim, pending)
+                .record_then_confirm(hold, claim, Some(recorded), pending)
                 .await
                 .map(PublishKept::Held),
+        }
+    }
+
+    /// The conversation already keeps exactly the published file: recorded
+    /// under this lease too, and the publish's finding audited, it is
+    /// already held.
+    async fn already_published(
+        &self,
+        published: PublishedFile,
+        hold: Hold,
+        recorded: PublishRecord,
+    ) -> Result<PublishKept, UploadError> {
+        if !recorded().await {
+            return Err(UploadError::NotKept);
+        }
+        let stored = hold.stored().clone();
+        let record = AttachmentAuditRecord::AlreadyPublished { published, hold };
+        match self.audit(record).await {
+            AuditDelivery::Recorded => Ok(PublishKept::AlreadyHeld(stored)),
+            AuditDelivery::Unavailable => Err(UploadError::AuditUnavailable),
         }
     }
 

@@ -302,6 +302,7 @@ fn offer(
             end,
             read: read.clone(),
         }),
+        record: Box::new(|| Box::pin(async { true })),
     };
     (published, read)
 }

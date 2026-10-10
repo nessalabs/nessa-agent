@@ -186,16 +186,17 @@ pub(crate) use placement::Environments;
 #[cfg(any(unix, test))]
 pub(crate) use placement::{ConversationPlacements, PlacementError};
 pub use ports::{
-    ArtifactKept, AttachmentRelease, AttachmentReleaseCause, ConversationAttachments,
-    ConversationCreation, ConversationCreationAudit, ConversationCreationAuditRecord,
-    ConversationCreationCause, ConversationCreationDisposition, ConversationDeletionAudit,
-    ConversationDeletionAuditRecord, ConversationDeletionCause, ConversationFileLinkAudit,
-    ConversationFileLinkAuditRecord, ConversationFileLinkCause, ConversationFileLinkState,
-    ConversationFuture, ConversationListing, ConversationModeApplication, ConversationModeAudit,
-    ConversationModeAuditPhase, ConversationModeRequest, ConversationModeRequestState,
-    ConversationOwnershipState, ConversationRepository, ConversationSummaries, ListedConversation,
-    ListedConversations, ObservationCursor, ObservedConversations, PublishedArtifact,
-    RuntimeReadiness, SubmittedFile, SubmittedImage, SubmittedMessage, UnfinishedDeletions,
+    ArtifactKept, ArtifactRecordGate, AttachmentRelease, AttachmentReleaseCause,
+    ConversationAttachments, ConversationCreation, ConversationCreationAudit,
+    ConversationCreationAuditRecord, ConversationCreationCause, ConversationCreationDisposition,
+    ConversationDeletionAudit, ConversationDeletionAuditRecord, ConversationDeletionCause,
+    ConversationFileLinkAudit, ConversationFileLinkAuditRecord, ConversationFileLinkCause,
+    ConversationFileLinkState, ConversationFuture, ConversationListing,
+    ConversationModeApplication, ConversationModeAudit, ConversationModeAuditPhase,
+    ConversationModeRequest, ConversationModeRequestState, ConversationOwnershipState,
+    ConversationRepository, ConversationSummaries, ListedConversation, ListedConversations,
+    ObservationCursor, ObservedConversations, PublishedArtifact, RuntimeReadiness, SubmittedFile,
+    SubmittedImage, SubmittedMessage, UnfinishedDeletions,
 };
 pub use provider_sessions::{
     ProviderSessionEraser, ProviderSessionErasers, ProviderSessionHandler,

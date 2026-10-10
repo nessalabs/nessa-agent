@@ -8,7 +8,8 @@
 //! service.close / stop ─▶ LiveLease::close ─▶ Ending ─▶ Agent::close ─▶ Ended | Interrupted
 //! ```
 use super::{
-    ConversationAgent, ConversationAgents, ConversationCaller, ConversationDeletionBudgets,
+    ArtifactAnswer, ArtifactBytes, ArtifactChunk, ArtifactOffer, ConversationAgent,
+    ConversationAgents, ConversationAttachments, ConversationCaller, ConversationDeletionBudgets,
     ConversationDependencies, ConversationError, ConversationLimits, ConversationService,
     Environment, EnvironmentDeclaration, EnvironmentFuture, EnvironmentLease, Environments,
     LeaseHold, LeaseRelease, RequestedConversation, SubmissionMode, SubmittedFile,
@@ -20,7 +21,8 @@ use crate::conversation::infrastructure::{
     LocalConversationStore,
 };
 use crate::conversation_test_support::{
-    claude_erasers, AcceptingModeAudit, Provider, ProviderFactory, TestClock, DELETION_BUDGETS,
+    claude_erasers, AcceptingModeAudit, MemoryAttachments, Provider, ProviderFactory, TestClock,
+    DELETION_BUDGETS,
 };
 use nessa_auth::application::ports::Clock;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
@@ -28,6 +30,7 @@ use nessa_protocol::conversation::view::{
     ConversationLeaseCause, ConversationLeaseCleanup, ConversationLeaseEnvironment,
     ConversationLeaseSandbox, ConversationLeaseState, ConversationMessageStatus,
 };
+use nessa_protocol::lease::{Collection, StagedArtifact};
 use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_protocol::{agents::AgentId, conversation::domain::ConversationId};
 use nessa_sdk::application::agent_execution::{
@@ -255,7 +258,7 @@ fn harness_in(
     provider: Arc<ProviderFactory>,
     binding: Arc<dyn AgentProvider>,
 ) -> Harness {
-    harness_working_in(root, environment, stop, provider, binding, None)
+    harness_working_in(root, environment, stop, provider, binding, None, None)
 }
 
 /// [`harness_in`], with the gateway's own workspace.
@@ -266,6 +269,7 @@ fn harness_working_in(
     provider: Arc<ProviderFactory>,
     binding: Arc<dyn AgentProvider>,
     workspace: Option<String>,
+    attachments: Option<Arc<dyn ConversationAttachments>>,
 ) -> Harness {
     let clock: Arc<dyn Clock> = Arc::new(TestClock);
     let agents = ConversationAgents::new(
@@ -313,7 +317,7 @@ fn harness_working_in(
                 )
                 .unwrap(),
             ),
-            attachments: None,
+            attachments,
             summaries: metadata.clone(),
             listing: metadata,
             provider_sessions: claude_erasers(),
@@ -1366,6 +1370,10 @@ struct Host {
     opened: AtomicUsize,
     lose: tokio::sync::watch::Sender<bool>,
     release: Mutex<Option<LeaseCleanup>>,
+    /// What the first lease opened here publishes.
+    offers: Mutex<Option<tokio::sync::mpsc::Receiver<ArtifactOffer>>>,
+    /// Told once a lease's end is asked here, which is after it is on record.
+    ending: Arc<tokio::sync::Notify>,
 }
 impl Host {
     fn new() -> Self {
@@ -1373,7 +1381,17 @@ impl Host {
             opened: AtomicUsize::new(0),
             lose: tokio::sync::watch::channel(false).0,
             release: Mutex::new(Some(LeaseCleanup::Confirmed { forced: false })),
+            offers: Mutex::new(None),
+            ending: Arc::default(),
         }
+    }
+
+    /// A host whose first lease publishes what is sent here.
+    fn publishing() -> (Self, tokio::sync::mpsc::Sender<ArtifactOffer>) {
+        let (publish, offers) = tokio::sync::mpsc::channel(4);
+        let host = Self::new();
+        *host.offers.lock().unwrap() = Some(offers);
+        (host, publish)
     }
 }
 impl Environment for Host {
@@ -1393,6 +1411,8 @@ impl Environment for Host {
         let hold = Arc::new(HostHold {
             lost: self.lose.subscribe(),
             release: *self.release.lock().unwrap(),
+            offers: Mutex::new(self.offers.lock().unwrap().take()),
+            ending: self.ending.clone(),
         });
         Box::pin(async move {
             Ok(EnvironmentLease {
@@ -1409,8 +1429,13 @@ impl Environment for Host {
 struct HostHold {
     lost: tokio::sync::watch::Receiver<bool>,
     release: Option<LeaseCleanup>,
+    offers: Mutex<Option<tokio::sync::mpsc::Receiver<ArtifactOffer>>>,
+    ending: Arc<tokio::sync::Notify>,
 }
 impl LeaseHold for HostHold {
+    fn artifacts(&self) -> Option<tokio::sync::mpsc::Receiver<ArtifactOffer>> {
+        self.offers.lock().unwrap().take()
+    }
     fn lost(&self) -> Option<EnvironmentFuture<'static, ()>> {
         let mut lost = self.lost.clone();
         Some(Box::pin(async move {
@@ -1418,6 +1443,7 @@ impl LeaseHold for HostHold {
         }))
     }
     fn end(&self, _cause: LeaseEndCause) -> EnvironmentFuture<'_, LeaseRelease> {
+        self.ending.notify_one();
         let release = self.release;
         Box::pin(async move {
             match release {
@@ -1445,6 +1471,147 @@ fn with_host(root: &Path, here: Arc<Substitute>, host: Option<Arc<Host>>) -> Har
         provider,
         binding,
     )
+}
+
+/// A gateway configured with `devbox` only, keeping what it publishes in
+/// `attachments`.
+fn with_publishing_host(
+    root: &Path,
+    host: Arc<Host>,
+    attachments: Arc<MemoryAttachments>,
+) -> Harness {
+    let hosts: BTreeMap<String, Arc<dyn Environment>> =
+        BTreeMap::from([("devbox".into(), host as _)]);
+    let placements =
+        Arc::new(FilePlacements::new(root.join("conversations").join("placements")).unwrap());
+    let provider = Arc::new(ProviderFactory::default());
+    let binding = Arc::new(Provider::new(provider.clone()));
+    harness_working_in(
+        root,
+        Environments::new(
+            Arc::new(Substitute::new(SandboxProfiles::HARNESS_DEFAULT)),
+            hosts,
+            placements,
+        ),
+        DELETION_BUDGETS.stop,
+        provider,
+        binding,
+        None,
+        Some(attachments),
+    )
+}
+
+/// Bytes a host published: one chunk.
+struct Published(Option<Vec<u8>>);
+impl ArtifactBytes for Published {
+    fn next(&mut self) -> ArtifactChunk<'_> {
+        let chunk = self.0.take();
+        Box::pin(async move { Ok(chunk) })
+    }
+}
+
+/// Publish `name` on `publish` and say what the gateway answered.
+async fn publish(
+    publish: &tokio::sync::mpsc::Sender<ArtifactOffer>,
+    name: &str,
+) -> oneshot::Receiver<Collection> {
+    let (answered, answer) = oneshot::channel();
+    let bytes = b"a disk image".to_vec();
+    publish
+        .send(ArtifactOffer {
+            file: StagedArtifact {
+                name: name.into(),
+                media_type: "application/x-apple-diskimage".into(),
+                size: bytes.len() as u64,
+                digest: "ab".repeat(32),
+                path: format!("/srv/work/.nessa/{name}"),
+            },
+            bytes: Box::new(Published(Some(bytes))),
+            answer: ArtifactAnswer::new(move |outcome| {
+                let _ = answered.send(outcome);
+            }),
+        })
+        .await
+        .unwrap();
+    answer
+}
+
+/// A file a host publishes under a live lease is kept, recorded under that
+/// lease, and answered as held.
+#[tokio::test]
+async fn d_a_file_published_on_a_host_is_held_recorded_and_answered() {
+    let root = tempfile::tempdir().unwrap();
+    let (host, publisher) = Host::publishing();
+    let attachments = Arc::new(MemoryAttachments::default());
+    let harness = with_publishing_host(root.path(), Arc::new(host), attachments.clone());
+    harness.create_on("devbox").await.unwrap();
+    harness.turn("turn-1").await;
+    let answer = publish(&publisher, "build.dmg").await;
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), answer)
+            .await
+            .unwrap(),
+        Ok(Collection::Held)
+    );
+    let lease = attachments.published.lock().unwrap()[0].0.clone();
+    harness
+        .service
+        .close(harness.id.clone(), caller("close"))
+        .await
+        .unwrap();
+    let snapshot = harness.snapshot().await;
+    let [artifact] = snapshot.artifacts.as_slice() else {
+        panic!("one artifact recorded, got {:?}", snapshot.artifacts)
+    };
+    assert_eq!(artifact.lease.as_str(), lease);
+    assert_eq!(artifact.name.as_str(), "build.dmg");
+}
+
+/// A file whose bytes were read while its lease was live, but whose lease
+/// ended before the conversation recorded it, is not kept and not recorded,
+/// and the host is told so.
+#[tokio::test]
+async fn d_a_file_its_lease_ended_before_recording_is_not_kept() {
+    let root = tempfile::tempdir().unwrap();
+    let (host, publisher) = Host::publishing();
+    let attachments = Arc::new(MemoryAttachments::default());
+    let (release, wait) = oneshot::channel();
+    *attachments.hold_record.lock().unwrap() = Some(wait);
+    let host = Arc::new(host);
+    let harness = with_publishing_host(root.path(), host.clone(), attachments.clone());
+    harness.create_on("devbox").await.unwrap();
+    harness.turn("turn-1").await;
+    let entered = attachments.record_entered.notified();
+    let answer = publish(&publisher, "build.dmg").await;
+    tokio::time::timeout(Duration::from_secs(5), entered)
+        .await
+        .expect("the bytes were read");
+    let closing = {
+        let service = harness.service.clone();
+        let id = harness.id.clone();
+        tokio::spawn(async move { service.close(id, caller("close")).await })
+    };
+    // The lease's end is on record, and asked of the host, before the
+    // file is asked to be recorded.
+    tokio::time::timeout(Duration::from_secs(5), host.ending.notified())
+        .await
+        .expect("the lease began ending");
+    release.send(()).unwrap();
+    let answered = tokio::time::timeout(Duration::from_secs(5), answer)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(answered, Collection::Refused { .. }),
+        "{answered:?}"
+    );
+    tokio::time::timeout(Duration::from_secs(5), closing)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(attachments.published.lock().unwrap().is_empty());
+    assert!(harness.snapshot().await.artifacts.is_empty());
 }
 
 fn placement_file(root: &Path) -> std::path::PathBuf {
@@ -1568,6 +1735,7 @@ async fn b_a_conversation_on_a_host_shows_the_hosts_workspace() {
             provider,
             binding,
             Some(gateway.clone()),
+            None,
         );
         match host {
             Some(host) => harness.create_on(host).await.unwrap(),

@@ -881,8 +881,9 @@ sequenceDiagram
     S->>G: pull the bytes
     G->>E: sftp over the lease's own SSH connection (ControlMaster), 32 KiB reads
     Note over G,E: a channel that fails is reopened, reading on from the offset reached
-    S->>S: size and digest equal? pending hold, HoldCreated (cause: the lease), confirm
-    G->>G: SessionChange::Artifact in the conversation's stream
+    S->>S: size and digest equal? pending hold, HoldCreated (cause: the lease)
+    S->>G: recorded? SessionChange::Artifact in the conversation's stream
+    S->>S: recorded: confirm; refused: taken back (not_recorded)
     G->>E: Collected{lease, artifact, outcome}
     E->>E: delete the staged copy
     E->>A: Held{digest, size}, or the typed refusal
@@ -917,7 +918,11 @@ sequenceDiagram
 - **Records.** A kept file is a `SessionChange::Artifact` in the
   conversation's stream naming its lease, the turn running when it was
   kept, its name and the lease's issuer; the conversation view lists the
-  newest. Its hold is the conversation's, released with its other files.
+  newest. The record is the last word before the hold is usable: a lease
+  that began ending, or a conversation with no room left, refuses it, and
+  the pending hold is taken back, so no file is held that the conversation
+  did not record. Its hold is the conversation's, released with its other
+  files.
 
 ## Previews: a port, not a file
 

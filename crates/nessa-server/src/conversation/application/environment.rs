@@ -288,11 +288,11 @@ impl LeaseFence {
             state.phase = FencePhase::Ending;
         }
     }
-    /// The lease ended or was interrupted: no event is accepted any more.
     /// Whether the lease is still Live: not ending, not closed.
     pub(crate) fn is_live(&self) -> bool {
         self.state().phase == FencePhase::Live
     }
+    /// The lease ended or was interrupted: no event is accepted any more.
     pub(crate) fn close(&self) {
         self.state().phase = FencePhase::Closed;
     }

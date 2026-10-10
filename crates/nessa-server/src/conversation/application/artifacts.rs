@@ -7,19 +7,23 @@
 //!   over the lease's budget? ──▶ refused budgetExceeded, nothing read
 //!   no room for its record? ──▶ refused budgetExceeded, nothing read
 //!   name or type unreadable? ──▶ refused invalid, nothing read
-//!   ConversationAttachments::keep_published(file, bytes)
-//!     the conversation already holds it ──▶ alreadyHeld, nothing read
-//!     else bytes pulled ──▶ size and digest checked ──▶ held under the lease
-//!     interrupted, mismatched, or the lease ended ──▶ refused, no hold
-//!   SessionManager::record_artifact ──▶ the conversation's record of it
+//!   ConversationAttachments::keep_published(file, bytes, record)
+//!     the conversation already holds it ──▶ record ──▶ alreadyHeld, nothing read
+//!     else bytes pulled ──▶ size and digest checked ──▶ pending hold, audited
+//!       ──▶ record: SessionManager::record_artifact ──▶ the hold made usable
+//!     interrupted, mismatched, lease ended, or not recorded ──▶ refused, no hold
 //!   answer ──▶ the host lets go of its staged copy
 //! ```
 //!
 //! Arrows are steps, in order. Nothing is kept from bytes not checked
 //! against the digest the host published, and a hold is made only once
-//! its bytes are; a record is made only for a file the conversation holds.
+//! its bytes are. The conversation's record is the last word before a file
+//! is usable: no file is kept that the conversation did not record.
 //! Every offer is answered, by its answer's drop if by nothing else.
-use super::{environment::LiveLease, ArtifactKept, ConversationAttachments, PublishedArtifact};
+use super::{
+    environment::LiveLease, ArtifactKept, ArtifactRecordGate, ConversationAttachments,
+    PublishedArtifact,
+};
 use nessa_auth::domain::OrganizationId;
 use nessa_protocol::{
     conversation::domain::ConversationId,
@@ -34,7 +38,11 @@ use nessa_sdk::domain::{
     agent_execution::leases::LeaseId,
     common::value_objects::{MediaType, Sha256Digest},
 };
-use std::{future::Future, pin::Pin, sync::Arc};
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::{Arc, Mutex, PoisonError},
+};
 
 /// One file the host published under a lease, offered to be kept.
 pub struct ArtifactOffer {
@@ -213,6 +221,18 @@ impl ArtifactCollector {
             None => return Err(CollectionRefusal::LeaseEnded),
         }
         let size = file.size;
+        let refused = Arc::new(Mutex::new(None));
+        let record = self.record_gate(
+            ArtifactRecord {
+                lease: self.lease.clone(),
+                turn: None,
+                name,
+                file: published,
+                actor: self.issuer.clone(),
+            },
+            agent.clone(),
+            refused.clone(),
+        );
         let kept = attachments
             .keep_published(PublishedArtifact {
                 organization_id: self.organization_id.clone(),
@@ -221,8 +241,22 @@ impl ArtifactCollector {
                 requested_by: self.issuer.clone(),
                 file,
                 bytes,
+                record,
             })
-            .await?;
+            .await
+            .map_err(|refusal| {
+                // Not recorded: the record's refusal is what the host hears.
+                match refused
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .take()
+                {
+                    Some(ArtifactRecordError::Full) => CollectionRefusal::BudgetExceeded,
+                    Some(ArtifactRecordError::NotThisLease) => CollectionRefusal::LeaseEnded,
+                    Some(_) => CollectionRefusal::NotKept,
+                    None => refusal,
+                }
+            })?;
         // Every file kept counts toward the lease's files, one already held
         // too; only bytes read count toward its bytes.
         let read = match kept {
@@ -230,34 +264,50 @@ impl ArtifactCollector {
             ArtifactKept::AlreadyHeld => 0,
         };
         self.spent = (files.saturating_add(1), spent.saturating_add(read));
-        let record = |turn| ArtifactRecord {
-            lease: self.lease.clone(),
-            turn,
-            name: name.clone(),
-            file: published.clone(),
-            actor: self.issuer.clone(),
-        };
-        let mut recorded = manager
-            .record_artifact(record(agent.active_execution_id()))
-            .await;
-        // A turn the conversation has not yet taken in: the file is still
-        // the lease's, recorded without one.
-        if recorded == Err(ArtifactRecordError::UnknownTurn) {
-            recorded = manager.record_artifact(record(None)).await;
-        }
-        match recorded {
-            Ok(()) => Ok(kept),
-            // Retained, and written with the next save, as a lease record
-            // is: the record stands.
-            Err(ArtifactRecordError::Storage(error)) => {
-                tracing::error!(conversation_id = %self.conversation_id, %error, "an artifact record was retained but not yet saved");
-                Ok(kept)
-            }
-            // The file stays held until the conversation lets go of its
-            // files; the host is told it was not kept for this lease.
-            Err(ArtifactRecordError::Full) => Err(CollectionRefusal::BudgetExceeded),
-            Err(ArtifactRecordError::NotThisLease) => Err(CollectionRefusal::LeaseEnded),
-            Err(_) => Err(CollectionRefusal::NotKept),
-        }
+        Ok(kept)
+    }
+
+    /// The conversation's record of a published file, asked for by whoever
+    /// keeps it once its bytes are checked and before the file is usable,
+    /// so a file is never kept that the conversation did not record: a
+    /// lease that ended meanwhile, or a conversation with no room left, is
+    /// a refusal, stashed in `refused` for the host to be told.
+    fn record_gate(
+        &self,
+        record: ArtifactRecord,
+        agent: Agent,
+        refused: Arc<Mutex<Option<ArtifactRecordError>>>,
+    ) -> ArtifactRecordGate {
+        let conversation_id = self.conversation_id.clone();
+        Box::new(move || {
+            Box::pin(async move {
+                let manager = agent.session_manager();
+                let turn = agent.active_execution_id();
+                let mut recorded = manager
+                    .record_artifact(ArtifactRecord {
+                        turn,
+                        ..record.clone()
+                    })
+                    .await;
+                // A turn the conversation has not yet taken in: the file is
+                // still the lease's, recorded without one.
+                if recorded == Err(ArtifactRecordError::UnknownTurn) {
+                    recorded = manager.record_artifact(record).await;
+                }
+                match recorded {
+                    Ok(()) => true,
+                    // Retained, and written with the next save, as a lease
+                    // record is: the record stands.
+                    Err(ArtifactRecordError::Storage(error)) => {
+                        tracing::error!(%conversation_id, %error, "an artifact record was retained but not yet saved");
+                        true
+                    }
+                    Err(error) => {
+                        *refused.lock().unwrap_or_else(PoisonError::into_inner) = Some(error);
+                        false
+                    }
+                }
+            })
+        })
     }
 }

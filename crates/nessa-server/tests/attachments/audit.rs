@@ -265,6 +265,7 @@ fn every_record_names_its_target_transition_cause_initiator_and_request() {
         (RevertCause::UploadUnresolved, "upload_unresolved"),
         (RevertCause::ConversationDeleted, "conversation_deleted"),
         (RevertCause::ConversationNotFound, "conversation_not_found"),
+        (RevertCause::NotRecorded, "not_recorded"),
     ] {
         let value = record_value(&AttachmentAuditRecord::HoldReverted {
             hold: hold(),

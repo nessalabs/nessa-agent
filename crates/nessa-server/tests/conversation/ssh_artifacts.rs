@@ -446,6 +446,7 @@ async fn leased(host: &Arc<Host>, fixture: &Fixture) -> Leased {
                     requested_by: issuer(),
                     file,
                     bytes,
+                    record: Box::new(|| Box::pin(async { true })),
                 })
                 .await;
             answer.answer(match result {

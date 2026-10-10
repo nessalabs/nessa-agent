@@ -328,6 +328,7 @@ pub(super) enum StoredRevertCause {
     UploadUnresolved,
     ConversationDeleted,
     ConversationNotFound,
+    NotRecorded,
 }
 impl From<RevertCause> for StoredRevertCause {
     fn from(cause: RevertCause) -> Self {
@@ -338,6 +339,7 @@ impl From<RevertCause> for StoredRevertCause {
             RevertCause::UploadUnresolved => Self::UploadUnresolved,
             RevertCause::ConversationDeleted => Self::ConversationDeleted,
             RevertCause::ConversationNotFound => Self::ConversationNotFound,
+            RevertCause::NotRecorded => Self::NotRecorded,
         }
     }
 }
@@ -350,6 +352,7 @@ impl From<StoredRevertCause> for RevertCause {
             StoredRevertCause::UploadUnresolved => Self::UploadUnresolved,
             StoredRevertCause::ConversationDeleted => Self::ConversationDeleted,
             StoredRevertCause::ConversationNotFound => Self::ConversationNotFound,
+            StoredRevertCause::NotRecorded => Self::NotRecorded,
         }
     }
 }

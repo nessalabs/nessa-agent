@@ -757,6 +757,10 @@ pub(crate) struct MemoryAttachments {
     pub(crate) release_entered: Notify,
     /// Every published file kept: its lease, name and bytes.
     pub(crate) published: Mutex<Vec<(String, String, Vec<u8>)>>,
+    /// When set, `keep_published` notifies [`Self::record_entered`] once
+    /// the bytes are read and waits for this before it asks for the record.
+    pub(crate) hold_record: Mutex<Option<oneshot::Receiver<()>>>,
+    pub(crate) record_entered: Notify,
 }
 impl ConversationAttachments for MemoryAttachments {
     fn holds<'a>(
@@ -809,6 +813,14 @@ impl ConversationAttachments for MemoryAttachments {
                 .map_err(|failure| failure.refusal())?
             {
                 bytes.extend(chunk);
+            }
+            let wait = self.hold_record.lock().unwrap().take();
+            if let Some(wait) = wait {
+                self.record_entered.notify_one();
+                let _ = wait.await;
+            }
+            if !(published.record)().await {
+                return Err(nessa_protocol::lease::CollectionRefusal::NotKept);
             }
             self.published
                 .lock()

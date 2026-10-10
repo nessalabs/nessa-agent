@@ -459,6 +459,9 @@ pub enum RevertCause {
     /// Kept apart from a deletion, which leaves a tombstone saying who and
     /// when; this says only that ownership could not be found.
     ConversationNotFound,
+    /// Its creation was recorded, but the conversation did not record the
+    /// published file under its lease, so it never was usable.
+    NotRecorded,
 }
 
 /// One consequential transition. Each variant carries the whole value it
@@ -526,6 +529,12 @@ pub enum AttachmentAuditRecord {
 pub trait AttachmentAudit: Send + Sync {
     fn record(&self, record: AttachmentAuditRecord) -> PortFuture<'_, (), AuditUnavailable>;
 }
+
+/// Asked once, after a published file's bytes are checked and before
+/// anything says the conversation keeps it: whether the conversation
+/// recorded the file under its lease. `false`, and nothing is kept, so a
+/// published file is never usable without its record.
+pub type PublishRecord = Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = bool> + Send>> + Send>;
 
 /// One file an environment offered by digest under a lease, for the
 /// conversation that lease runs (issue #701). Built by the conversation
