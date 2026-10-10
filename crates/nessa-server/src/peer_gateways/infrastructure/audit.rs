@@ -167,7 +167,8 @@ impl DurablePeerAudit {
 
     /// Close, and wait for the writer to write what was queued, until the
     /// injected clock has moved `limit` past now. `true` once the writer
-    /// thread has ended. Past the limit the records still queued are not
+    /// thread has ended normally; `false` when it panicked (the records it
+    /// had not handled are logged by sequence). Past the limit the records still queued are not
     /// written (logged by sequence), the writer is left to finish the write
     /// it is in or end with the process, and this answers `false`.
     pub async fn drained(&self, limit: Duration) -> bool {
@@ -180,21 +181,21 @@ impl DurablePeerAudit {
         loop {
             if *finished.borrow_and_update() {
                 let writer = self.lock_writer().take();
-                if let Some(writer) = writer {
-                    // It has returned from its loop; the join only reaps it.
-                    let _ = tokio::task::spawn_blocking(move || writer.join()).await;
+                let Some(writer) = writer else {
+                    return true;
+                };
+                // It has left its loop; the join reaps it and says whether
+                // it ended by panicking, leaving what was queued unwritten.
+                let joined = tokio::task::spawn_blocking(move || writer.join()).await;
+                if matches!(joined, Ok(Ok(()))) {
+                    return true;
                 }
-                return true;
+                self.unwritten("peer gateway audit writer failed; records not written");
+                return false;
             }
             if self.clock.elapsed_ms() >= deadline {
                 self.shared.abandoned.store(true, Ordering::SeqCst);
-                let last = self.lock_queue().next.saturating_sub(1);
-                let handled = self.shared.handled.load(Ordering::SeqCst);
-                tracing::error!(
-                    first = handled.saturating_add(1),
-                    last,
-                    "peer gateway audit records not written before shutdown"
-                );
+                self.unwritten("peer gateway audit records not written before shutdown");
                 drop(self.lock_writer().take());
                 return false;
             }
@@ -203,6 +204,13 @@ impl DurablePeerAudit {
                 () = tokio::time::sleep(WAKE_TICK) => {}
             }
         }
+    }
+
+    /// Log the records numbered but not handled by the writer.
+    fn unwritten(&self, message: &'static str) {
+        let last = self.lock_queue().next.saturating_sub(1);
+        let handled = self.shared.handled.load(Ordering::SeqCst);
+        tracing::error!(first = handled.saturating_add(1), last, "{message}");
     }
 
     /// Whether the writer thread has ended.

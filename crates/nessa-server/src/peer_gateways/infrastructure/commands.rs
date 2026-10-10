@@ -179,7 +179,7 @@ pub struct PeerCommands {
     syncs: Mutex<HashMap<DeviceKey, PeerSync>>,
     /// Owner commands between their intent and their outcome: shutdown waits
     /// for them before it closes the audit.
-    running: watch::Sender<usize>,
+    running: watch::Sender<Admission>,
 }
 
 /// Ends one poller cycle: its read's sockets are shut, and its waits woken.
@@ -240,12 +240,22 @@ pub(super) enum OwnerTurn {
     Closed,
 }
 
+/// Whether owner commands are still admitted, and how many are between
+/// their intent and their outcome: one value, so a command is either
+/// counted before shutdown closes them or refused after, never neither.
+#[derive(Clone, Copy, Default)]
+struct Admission {
+    closed: bool,
+    running: usize,
+}
+
 /// One owner command counted as running until it is dropped.
-struct Running<'a>(&'a watch::Sender<usize>);
+struct Running<'a>(&'a watch::Sender<Admission>);
 impl Drop for Running<'_> {
     fn drop(&mut self) {
-        self.0
-            .send_modify(|running| *running = running.saturating_sub(1));
+        self.0.send_modify(|admission| {
+            admission.running = admission.running.saturating_sub(1);
+        });
     }
 }
 impl PeerCommands {
@@ -269,7 +279,7 @@ impl PeerCommands {
             turn: Arc::new(Semaphore::new(1)),
             cycle: Mutex::new(None),
             syncs: Mutex::new(HashMap::new()),
-            running: watch::channel(0).0,
+            running: watch::channel(Admission::default()).0,
         }
     }
     /// The records these commands are over.
@@ -326,24 +336,28 @@ impl PeerCommands {
             }
         }
     }
-    /// Close the commands for shutdown, once the poller is joined: no owner
-    /// command takes the turn from now (it answers `peer_unavailable`, its
-    /// outcome kept, before any effect), and every command already between
+    /// Close the commands for shutdown, once the poller is joined: a command
+    /// asked from now is refused `peer_unavailable` before its intent; one
+    /// already past its intent no longer takes the turn (it answers
+    /// `peer_unavailable`, its outcome kept, before any effect); and every
+    /// command already between
     /// its intent and its outcome is waited for, until the injected clock
     /// has moved `limit` past now, so its outcome reaches the audit before
     /// the audit closes. `true` when none was left running.
     pub async fn close(&self, limit: Duration) -> bool {
+        self.running
+            .send_modify(|admission| admission.closed = true);
         self.turn.close();
         let mut running = self.running.subscribe();
         let finished = self
             .within(limit, || async move {
-                let _ = running.wait_for(|running| *running == 0).await;
+                let _ = running.wait_for(|admission| admission.running == 0).await;
             })
             .await
             .is_some();
         if !finished {
             tracing::error!(
-                running = *self.running.borrow(),
+                running = self.running.borrow().running,
                 "peer commands still running at shutdown; their outcomes may not be audited"
             );
         }
@@ -603,8 +617,22 @@ impl PeerCommands {
         turn: impl Future<Output = (Result<T, PeerError>, Evidence)>,
     ) -> Result<T, PeerError> {
         // Counted from before the intent until the outcome is kept, so
-        // shutdown closes the audit only after both.
-        self.running.send_modify(|running| *running += 1);
+        // shutdown closes the audit only after both; once shutdown has
+        // closed the commands, refused before any intent, so no intent is
+        // left without its outcome when the audit closes. One update decides
+        // both, so no command is between.
+        let admitted = self.running.send_if_modified(|admission| {
+            if admission.closed {
+                return false;
+            }
+            admission.running += 1;
+            true
+        });
+        if !admitted {
+            tracing::warn!(command = command.name(), target = %command.target(),
+                initiator = initiator.as_str(), "peer command refused: shutting down");
+            return Err(PeerError::Unavailable);
+        }
         let _running = Running(&self.running);
         let operation = Uuid::new_v4();
         let requested = match command {

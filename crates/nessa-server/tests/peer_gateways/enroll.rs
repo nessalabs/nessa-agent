@@ -525,8 +525,23 @@ async fn peer_routes_refuse_before_any_effect() {
     assert!(dialing.files().is_empty());
 }
 
-/// A's owner cancels invitation `id`.
+/// Wait until A has ended every attempt on invitation `id`. A wrong code
+/// fails at B before B sends its proof, so B answers its owner while A has yet
+/// to write that attempt's end. Until then a new attempt is refused, and an
+/// owner decision admitted before the write is refused as stale.
+async fn attempts_ended(fixture: &Fixture, id: nessa_auth::domain::pairing::InvitationId) {
+    tokio::time::timeout(WAIT, async {
+        while fixture.registry.read_pairing(id).unwrap().attempt_pending() {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("A ends the attempt");
+}
+
+/// A's owner cancels invitation `id`, once no attempt on it is still ending.
 async fn cancel(fixture: &Fixture, id: nessa_auth::domain::pairing::InvitationId) {
+    attempts_ended(fixture, id).await;
     fixture
         .gateway
         .decide(&fixture.session, id, OwnerDecision::Cancel)
@@ -1228,6 +1243,7 @@ async fn every_peer_command_answer_keeps_one_intent_and_one_outcome() {
         commands.enroll(native, parse(wrong), &owner).await,
         enroll("peer_enroll", Some("peer_invitation_refused"), native, None)
     );
+    attempts_ended(&fixture, id).await;
     row!(
         dialing,
         commands.enroll(native, parse(&code), &owner).await,

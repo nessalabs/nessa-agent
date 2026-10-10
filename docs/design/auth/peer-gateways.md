@@ -270,14 +270,17 @@ sequenceDiagram
   writer thread writes the queue in that order. A full queue refuses the
   record at once rather than wait; a refused record uses up its sequence,
   so a gap in the files is a refusal the log names. Stopping native pairing
-  first joins the poller, then closes the peer commands: none takes the
-  turn from then (it answers `peer_unavailable`, its outcome kept, before
-  any effect), and those already between intent and outcome are waited for,
-  within `PREEMPT` on the injected clock, so no effect is left without its
-  outcome. Only then is the audit closed (a command from then on is refused
+  first joins the poller, then closes the peer commands, in one step with
+  the count of those running: a command asked from then is refused
+  `peer_unavailable` before its intent, one already past its intent no
+  longer takes the turn (`peer_unavailable`, its outcome kept, before any
+  effect), and those running are waited for, within `PREEMPT` on the
+  injected clock, so no effect is left without its outcome (see Known
+  limits for one that outlasts it). Only then is the audit closed (a command from then on is refused
   before its intent) and its writer waited for, within one `AUDIT_DEADLINE`;
   records still queued past it are logged by sequence and not written, and
-  a writer that panics counts as ended. An intent that is
+  a writer that panics ends the drain at once, its unwritten records logged
+  by sequence. An intent that is
   not kept refuses the command before anything is dialed or removed; an
   outcome that is not kept answers `peer_audit_unavailable` while the effect
   stands, so the owner never sees success without its evidence. A process
@@ -515,8 +518,8 @@ sequenceDiagram
 | R20 | A status step whose write fails after it began, or lands before the status fails; a cycle giving back the turn as an owner command asks; a read whose worker panics after a withdrawal | Named by the transition begun (`peer_ended` after a failed ending, `peer_approved` after a failed save), its outcome the store's (refused when the write failed, succeeded when it landed, whatever the status said); the owner command finds the turn free or a cycle to stop, never `peer_busy`; the withdrawal is still reported and audited | `a_slot_names_the_transition_a_status_began_whatever_storage_did`, `a_status_change_is_named_by_the_transition_its_store_began`, `a_status_change_outcome_is_what_its_store_did`, `a_cycle_gives_back_the_turn_as_it_clears_itself`, `a_read_that_panics_still_reports_what_it_withdrew` |
 | R21 | A walk cut short after its catalogue pass (A unshared Y, the pass reached A's new head, Y not yet asked), then a restart, at A's unchanged head | No walk is noted, so the next read walks every cached conversation and withdraws Y, audited; `synced` only after that, holding nothing; a note that cannot be written fails the read as the cache's failure, backed off | `a_peer_reads_only_what_it_is_granted_and_stops_at_revocation` (the cache put back as the cut walk left it), `a_cache_without_the_walk_marker_is_walked_at_an_unchanged_head`, `a_marker_that_cannot_be_written_fails_the_read`, `a_walk_marker_is_kept_per_catalogue_and_goes_with_a_purge` |
 | R22 | The audit queue is full (the store fell behind) | Answered at once, no wait: `peer.enroll` and `peer.forget` are `peer_audit_unavailable` with nothing dialed or removed; a poller change lands and its record is logged as not kept, never written; each refusal uses up its sequence, so the next kept record follows a gap | `a_full_queue_refuses_the_owner_and_drops_the_poller_record` |
-| R23 | Native pairing stops with records queued and the store stalled; or its writer panics | The audit is closed and drained within one `AUDIT_DEADLINE` on the injected clock: records before the stall are written, the rest are logged and not, and the writer ends once the stalled write returns; a writer that panicked ends the drain at once | `close_drains_within_one_deadline`, `a_writer_that_panics_does_not_hold_the_drain` |
-| R24 | Native pairing stops while an enroll and a forget have handed over their intents | The peer commands are closed before the audit: both are waited for, find the turn closed, and answer `peer_unavailable` with their outcomes kept, having read, dialed and removed nothing; never an effect without its outcome | `a_command_admitted_before_shutdown_ends_with_its_outcome_and_no_effect` |
+| R23 | Native pairing stops with records queued and the store stalled; or its writer panics | The audit is closed and drained within one `AUDIT_DEADLINE` on the injected clock: records before the stall are written, the rest are logged and not, and the writer ends once the stalled write returns; a writer that panicked ends the drain at once, reported as not drained, its unwritten records logged | `close_drains_within_one_deadline`, `a_writer_that_panics_does_not_hold_the_drain` |
+| R24 | Native pairing stops while an enroll and a forget have handed over their intents; while a command holds the turn; or a command is asked after | The peer commands are closed before the audit. The first two are waited for, find the turn closed, and answer `peer_unavailable` with their outcomes kept, having read, dialed and removed nothing. A command holding the turn is waited for, within `PREEMPT`, and its outcome kept before the audit closes (past `PREEMPT`, see Known limits). One asked after is refused `peer_unavailable` before its intent, leaving no record | `a_command_admitted_before_shutdown_ends_with_its_outcome_and_no_effect`, `close_waits_for_a_command_holding_the_turn_and_keeps_its_outcome`, `a_command_asked_after_close_is_refused_before_its_intent` |
 | R25 | One read finds more conversations withdrawn than `WITHDRAWN_PER_READ` | It withdraws that many and ends incomplete; the next cycle withdraws the rest; one cycle's records stay within about half the audit's queue | `a_read_withdraws_at_most_its_cap_and_ends_incomplete`; the bound on a cycle's records is a compile-time assertion beside `WITHDRAWN_PER_READ` |
 | R17 | The wait after each cycle | The interval when settled or pending; an eighth of it when incomplete or stopped; doubling from the interval on each failure in a row; spread 80 to 120 percent; never past the cap; a failing entropy source draws the middle | `failures_double_the_wait_up_to_the_cap`, `jitter_spreads_a_wait_over_80_to_120_percent_and_the_cap_still_holds` and the other tests in `tests/peer_gateways/poller.rs` |
 
@@ -548,12 +551,14 @@ the client and gives the head an access path by receiver
   `pending`; the poller's next pinned status settles it, and
   `peer.forget` removes it. Enrolling into the same peer again is
   `peer_exists` until then.
-- **Shutdown waits for an enrollment only so long.** Closing the peer
-  commands waits for those already running within `PREEMPT`; an enrollment
-  still in its exchange past that (its own deadlines are longer) goes on
-  until its enrollment deadline or the process ends, and its outcome may
-  find the audit closed, which is logged. Its intent is kept, and what it
-  saved by then is a record like any other.
+- **Shutdown waits for a running command only so long.** Closing the peer
+  commands waits within `PREEMPT` for every command already past its
+  intent. Any command still holding the turn past that, an enrollment in
+  its exchange (its own deadlines are longer) or a forget whose storage
+  stalls, goes on until it ends or the process does, and its effect may
+  land after the audit has closed, its outcome then not kept; that is
+  logged with how many were still running. Its intent is kept, and the
+  peer record on disk says what it came to.
 
 - **The grantor's liveness is not a read check.** The grantor of a pairing
   is its initiator: an active admin holding `credential.manage` when it

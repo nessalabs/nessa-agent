@@ -160,7 +160,8 @@ async fn an_unpolled_poller_record_is_still_written() {
 }
 
 /// A writer that panics still ends as finished: the drain returns at once,
-/// on a clock that never moves, and the record it was writing is not kept.
+/// on a clock that never moves, reporting that it did not write what was
+/// queued, and the record it was writing is not kept.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_writer_that_panics_does_not_hold_the_drain() {
     let root = tempfile::tempdir().unwrap();
@@ -179,6 +180,6 @@ async fn a_writer_that_panics_does_not_hold_the_drain() {
     )
     .await
     .expect("the drain does not wait on a writer that is gone");
-    assert!(drained);
+    assert!(!drained, "a writer that panicked did not drain");
     assert!(written(&directory).is_empty());
 }

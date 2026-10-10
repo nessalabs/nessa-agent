@@ -220,3 +220,117 @@ async fn a_command_admitted_before_shutdown_ends_with_its_outcome_and_no_effect(
     assert_eq!(enroll.await.unwrap().err(), Some(PeerError::Unavailable));
     assert_eq!(dials.0.load(Ordering::SeqCst), 0, "nothing dialed");
 }
+
+/// A command asked once the commands are closed is refused before its
+/// intent: it leaves no record at all, so no intent can be left without its
+/// outcome when the audit closes after.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_command_asked_after_close_is_refused_before_its_intent() {
+    let directory = tempfile::tempdir().unwrap();
+    let audit = Arc::new(Gated {
+        records: Mutex::new(Vec::new()),
+        open: watch::channel(true).0,
+    });
+    let dials = Arc::new(Dials(0.into()));
+    let commands = commands_with(&directory.path().join("root"), audit.clone(), dials.clone());
+    assert!(commands.close(Duration::from_secs(5)).await);
+    let owner = PrincipalId::new("owner").unwrap();
+    assert_eq!(
+        commands.forget(DeviceKey::new([5; 32]), &owner).await.err(),
+        Some(PeerError::Unavailable)
+    );
+    let code = nessa_auth::adapters::pairing::ManualCode::parse(b"ABCD-2345").unwrap();
+    assert_eq!(
+        commands
+            .enroll("127.0.0.1:9".parse().unwrap(), code, &owner)
+            .await
+            .err(),
+        Some(PeerError::Unavailable)
+    );
+    assert!(audit.records.lock().unwrap().is_empty(), "no intent kept");
+    assert_eq!(dials.0.load(Ordering::SeqCst), 0);
+}
+
+/// A connect that answers, refused, only once the test opens it.
+struct HeldDial {
+    dialed: AtomicBool,
+    open: watch::Sender<bool>,
+}
+impl PeerConnector for HeldDial {
+    fn connect(&self, _: SocketAddr) -> PeerConnectFuture<'_> {
+        self.dialed.store(true, Ordering::SeqCst);
+        let mut open = self.open.subscribe();
+        Box::pin(async move {
+            let _ = open.wait_for(|open| *open).await;
+            Err(io::ErrorKind::ConnectionRefused.into())
+        })
+    }
+}
+
+/// A command already holding the turn when the commands close is waited
+/// for: its outcome is kept before `close` returns, here when it ends well
+/// within `PREEMPT` (the test's clock never moves).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn close_waits_for_a_command_holding_the_turn_and_keeps_its_outcome() {
+    let directory = tempfile::tempdir().unwrap();
+    let audit = Arc::new(Gated {
+        records: Mutex::new(Vec::new()),
+        open: watch::channel(true).0,
+    });
+    let dial = Arc::new(HeldDial {
+        dialed: AtomicBool::new(false),
+        open: watch::channel(false).0,
+    });
+    let commands = commands_with(&directory.path().join("root"), audit.clone(), dial.clone());
+    let enroll = tokio::spawn({
+        let commands = commands.clone();
+        async move {
+            let code = nessa_auth::adapters::pairing::ManualCode::parse(b"ABCD-2345").unwrap();
+            commands
+                .enroll(
+                    "127.0.0.1:9".parse().unwrap(),
+                    code,
+                    &PrincipalId::new("owner").unwrap(),
+                )
+                .await
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while !dial.dialed.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    // The enrollment holds the turn and is dialing.
+    let close = tokio::spawn({
+        let commands = commands.clone();
+        async move { commands.close(PREEMPT).await }
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        !close.is_finished(),
+        "close waits for the command holding the turn"
+    );
+    dial.open.send_replace(true);
+    assert!(tokio::time::timeout(Duration::from_secs(30), close)
+        .await
+        .unwrap()
+        .unwrap());
+    let outcomes: Vec<_> = audit
+        .records
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|record| match record {
+            PeerAuditRecord::EnrollFinished { outcome, .. } => Some(*outcome),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        outcomes,
+        [Err("peer_unreachable")],
+        "kept before close returned"
+    );
+    assert_eq!(enroll.await.unwrap().err(), Some(PeerError::Unreachable));
+}
