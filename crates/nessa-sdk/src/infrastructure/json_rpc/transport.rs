@@ -1,6 +1,7 @@
 use super::{envelope::MAX_JSON_ITEMS, parse_within, protocol, Envelope};
 use crate::application::agent_execution::agents::AgentError;
 use crate::infrastructure::clock::{Clock, ClockInstant};
+use crate::infrastructure::process::ProcessOutput;
 use event_stream::ingestion::{
     CrLfPolicy, DecodeBudget, DecodeState, FinalLinePolicy, IncrementalDecoder, NewlineFramer,
     NewlineFramerConfig,
@@ -11,7 +12,11 @@ use std::time::Duration;
 use std::{io, os::fd::AsRawFd};
 #[cfg(windows)]
 use std::{io, os::windows::io::AsRawHandle, ptr};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use std::{
+    pin::Pin,
+    task::{Context, Poll, Waker},
+};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 #[cfg(windows)]
 use windows_sys::Win32::System::Pipes::PeekNamedPipe;
 
@@ -142,24 +147,55 @@ impl<R: AsyncRead + Unpin> Reader<R> {
     }
 }
 
-impl Reader<tokio::process::ChildStdout> {
-    /// Read bytes already present in the provider pipe without depending on the
-    /// async reactor having delivered its readiness notification yet.
-    #[cfg(unix)]
+impl Reader<ProcessOutput> {
+    /// Read bytes already present in the provider's output without depending
+    /// on the async reactor having delivered its readiness notification yet:
+    /// from the OS pipe of a local child, or whatever a host's stream already
+    /// holds.
     pub(crate) fn read_ready_os_bytes(&mut self) -> Result<bool, AgentError> {
         if self.offset != self.length {
             return Ok(true);
         }
+        match &self.input {
+            ProcessOutput::Local(_) => self.read_ready_pipe_bytes(),
+            ProcessOutput::Remote(_) => self.read_ready_stream_bytes(),
+        }
+    }
+
+    /// One poll of a host's stream that does not register to be woken: a
+    /// stream's read leaves nothing behind when it is not ready, and the next
+    /// awaited read registers the real waker again.
+    fn read_ready_stream_bytes(&mut self) -> Result<bool, AgentError> {
+        let mut context = Context::from_waker(Waker::noop());
+        let mut buffer = ReadBuf::new(&mut self.bytes);
+        match Pin::new(&mut self.input).poll_read(&mut context, &mut buffer) {
+            Poll::Pending => Ok(false),
+            Poll::Ready(Ok(())) if buffer.filled().is_empty() => {
+                let error = AgentError::Transport("provider stdout closed".into());
+                self.failure = Some(error.clone());
+                Err(error)
+            }
+            Poll::Ready(Ok(())) => {
+                self.offset = 0;
+                self.length = buffer.filled().len();
+                self.frame_in_progress = true;
+                Ok(true)
+            }
+            Poll::Ready(Err(_)) => Err(AgentError::Transport("stdout read failed".into())),
+        }
+    }
+
+    #[cfg(unix)]
+    fn read_ready_pipe_bytes(&mut self) -> Result<bool, AgentError> {
+        let ProcessOutput::Local(pipe) = &self.input else {
+            unreachable!("only a local child's pipe is probed here")
+        };
+        let descriptor = pipe.as_raw_fd();
         loop {
             // SAFETY: `bytes` is writable for its full declared length and the
             // borrowed child stdout descriptor remains open for this call.
-            let read = unsafe {
-                libc::read(
-                    self.input.as_raw_fd(),
-                    self.bytes.as_mut_ptr().cast(),
-                    self.bytes.len(),
-                )
-            };
+            let read =
+                unsafe { libc::read(descriptor, self.bytes.as_mut_ptr().cast(), self.bytes.len()) };
             if read > 0 {
                 self.offset = 0;
                 self.length = read as usize;
@@ -186,16 +222,16 @@ impl Reader<tokio::process::ChildStdout> {
     /// does not consume them; marking the frame in progress makes the worker await
     /// the continuously owned async read before dispatch.
     #[cfg(windows)]
-    pub(crate) fn read_ready_os_bytes(&mut self) -> Result<bool, AgentError> {
-        if self.offset != self.length {
-            return Ok(true);
-        }
+    fn read_ready_pipe_bytes(&mut self) -> Result<bool, AgentError> {
+        let ProcessOutput::Local(pipe) = &self.input else {
+            unreachable!("only a local child's pipe is probed here")
+        };
         let mut available = 0;
         // SAFETY: the child stdout handle remains owned by `self.input`; every
         // optional output pointer except `available` is intentionally null.
         let result = unsafe {
             PeekNamedPipe(
-                self.input.as_raw_handle().cast(),
+                pipe.as_raw_handle().cast(),
                 ptr::null_mut(),
                 0,
                 ptr::null_mut(),

@@ -29,6 +29,7 @@ export const css = {
 
   // The details sheet's lease fixture: one published lease per page
   leaseFixture: "[data-lease-fixture]",
+  runOnFixture: "[data-run-on-fixture]",
 
   // The window
   ambientGrain: ".desktop-grain", // class: the tiled, baked noise over the ambient light

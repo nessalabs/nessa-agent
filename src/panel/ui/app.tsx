@@ -32,6 +32,7 @@ import {
   Transcript,
   useConversation,
   toEditor,
+  linksFilesHere,
 } from "../../conversation"
 import { host, startResizeFromLeftEdge, type CompositorKind } from "../../host"
 import { useSession } from "../../session"
@@ -169,6 +170,7 @@ export function App({
     serverConversationId: chat.active.serverConversationId,
     agent: selectedAgent?.agent,
     model: selectedModel?.modelId,
+    environments: choices?.catalog.environments,
     setSelection: chat.setSelection,
   })
   const selection = chat.active.selection
@@ -799,8 +801,29 @@ export function App({
                 <ComposerTray
                   disabled={attachments.reading}
                   onChoose={attachments.chooseFiles}
+                  linksFiles={linksFilesHere(chat.active)}
                   onSignOut={onSignOut}
                   agentInstallations={agentInstallations}
+                  // Where a new conversation runs: offered only when the
+                  // gateway names an SSH host, and only before it exists.
+                  environment={
+                    !chat.active.serverConversationId &&
+                    selectedAgent &&
+                    selectedModel &&
+                    choices?.catalog.environments.length
+                      ? {
+                          host: selection?.environment,
+                          hosts: choices.catalog.environments,
+                          onChange: (environment) =>
+                            chat.setSelection(chat.active.id, {
+                              agent: selectedAgent.agent,
+                              model: selectedModel.modelId,
+                              approvalMode: selectedApprovalMode,
+                              environment,
+                            }),
+                        }
+                      : undefined
+                  }
                   approval={
                     !chat.active.serverConversationId && selectedAgent && selectedModel
                       ? {
@@ -811,6 +834,7 @@ export function App({
                               agent: selectedAgent.agent,
                               model: selectedModel.modelId,
                               approvalMode,
+                              environment: selection?.environment,
                             }),
                         }
                       : chat.active.serverConversationId &&

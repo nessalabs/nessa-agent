@@ -103,6 +103,7 @@ mod gateway {
         state.verifier = authority;
         state.with_agents_catalog(
             serde_json::from_value(serde_json::json!({
+                "environments": [],
                 "agents": [{
                     "agent": "claude",
                     "defaultModel": "test",
@@ -486,7 +487,7 @@ mod gateway {
                 deletion_budgets: conversation_support::DELETION_BUDGETS,
                 message_commit_clock: Arc::new(nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new()),
                 clock: Arc::new(conversation_support::TestClock),
-                environment: crate::conversation::infrastructure::in_process_environment(),
+                environment: crate::conversation::infrastructure::in_process_environment().into(),
             },
             ConversationLimits::default(),
             Some("/workspace".into()),
@@ -1106,6 +1107,24 @@ mod gateway {
             .await
             .ok
         );
+        // A creation's receipt is read with the hints it was asked with,
+        // its environment among them: another is another request.
+        let created = chat_request(
+            &state,
+            &session,
+            "conversation.receipt",
+            json!({"conversationId":id,"requestId":"create","operation":"create"}),
+        )
+        .await;
+        assert_eq!(created.payload.as_ref().unwrap()["found"], true, "{created:?}");
+        let elsewhere = chat_request(
+            &state,
+            &session,
+            "conversation.receipt",
+            json!({"conversationId":id,"requestId":"create","operation":"create","environment":"devbox"}),
+        )
+        .await;
+        assert!(!elsewhere.ok, "{elsewhere:?}");
         let (release, gate) = oneshot::channel();
         *provider.execution_gate.lock().unwrap() = Some(gate);
         assert!(
@@ -1127,6 +1146,17 @@ mod gateway {
         .await;
         assert!(looked_up.ok, "{looked_up:?}");
         assert_eq!(looked_up.payload.as_ref().unwrap()["found"], true);
+        // An environment is a creation's hint: on any other operation's
+        // receipt it is malformed, never quietly left out of the lookup.
+        for receipt in [
+            json!({"conversationId":id,"requestId":"running","operation":"submit","executionId":"running","text":"running","environment":"devbox"}),
+            json!({"conversationId":id,"requestId":"running","operation":"steer","executionId":"running","text":"running","environment":"devbox"}),
+            json!({"conversationId":id,"requestId":"running","operation":"stop","executionId":"running","environment":"devbox"}),
+        ] {
+            let refused = chat_request(&state, &session, "conversation.receipt", receipt).await;
+            assert!(!refused.ok, "{refused:?}");
+            assert_eq!(refused.error.unwrap().code, "invalid_request");
+        }
         timeout(
             Duration::from_secs(1),
             provider.execution_started.notified(),

@@ -11,7 +11,7 @@ use nessa_sdk::domain::agent_execution::{
     leases::{
         AgentWork, CleanupDecision, EndDecision, EnvironmentRef, Lease, LeaseCleanup,
         LeaseDeadline, LeaseEndCause, LeaseError, LeaseGrants, LeaseId, LeasePhase, LeaseRefusal,
-        LeaseRevision, LeaseTerms, LeaseWork, SandboxProfile, SandboxProfiles,
+        LeaseRevision, LeaseTerms, LeaseWork, SandboxProfile, SandboxProfiles, SshDestination,
     },
     ExecutionError,
 };
@@ -344,6 +344,33 @@ fn lease_values_refuse_what_no_record_may_carry() {
         AgentWork::new("a", "m".repeat(AgentWork::MAX_MODEL_BYTES + 1)),
         Err(ExecutionError::ValueTooLong { .. })
     ));
+}
+
+#[test]
+fn an_ssh_destination_can_never_be_read_as_an_option_or_a_second_word() {
+    for refused in [
+        "-oProxyCommand=sh",
+        "-",
+        "@devbox",
+        "host name",
+        "host;rm",
+        "$(id)",
+        "host\nx",
+        "a`b`",
+        "[::1]",
+        "",
+    ] {
+        assert_eq!(
+            SshDestination::new(refused),
+            Err(ExecutionError::InvalidSshDestination),
+            "{refused:?}"
+        );
+    }
+    for accepted in ["devbox", "me@host.example", "dev-box_2", "100.64.0.1"] {
+        assert_eq!(SshDestination::new(accepted).unwrap().as_str(), accepted);
+    }
+    assert!(SshDestination::new("a".repeat(SshDestination::MAX_BYTES)).is_ok());
+    assert!(SshDestination::new("a".repeat(SshDestination::MAX_BYTES + 1)).is_err());
 }
 
 #[test]

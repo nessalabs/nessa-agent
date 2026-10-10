@@ -452,6 +452,21 @@ pub struct AcpConfig {
     pub clock: Arc<dyn Clock>,
 }
 impl AcpConfig {
+    /// This configuration for a harness a host starts, working in `workspace`
+    /// there. What names this machine is left behind: its account's variables,
+    /// its credentials and the MCP servers whose stand-ins reach this process.
+    /// The host supplies its own executable, variables and credentials, so
+    /// `executable` and `arguments` are never launched from here.
+    pub(crate) fn on_host(&self, workspace: PathBuf) -> Self {
+        Self {
+            environment: BTreeMap::new(),
+            credential_environment: BTreeMap::new(),
+            workspace,
+            mcp_servers: McpServerList::none(),
+            stand_ins: StandInSessions::none(),
+            ..self.clone()
+        }
+    }
     /// The most bytes, beyond what its sender wrote, that one message takes
     /// of a frame when it is as large as `UserMessage` allows: the request
     /// around it (about 2 KiB) and every block's keys, quotes and braces —

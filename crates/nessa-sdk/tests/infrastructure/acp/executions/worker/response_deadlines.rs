@@ -63,6 +63,7 @@ async fn blocked_worker(
             .stdin
             .as_ref()
             .unwrap()
+            .local()
             .as_fd()
             .try_clone_to_owned()
             .unwrap(),

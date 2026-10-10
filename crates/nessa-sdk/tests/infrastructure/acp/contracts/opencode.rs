@@ -65,7 +65,11 @@ impl HarnessSupervisor {
                 panic!("could not start Python Opencode harness: {cause}");
             }
         };
-        let stdout = scope.stdout.take().expect("harness stdout is piped");
+        let stdout = scope
+            .stdout
+            .take()
+            .expect("harness stdout is piped")
+            .into_local();
         Self {
             scope,
             root,

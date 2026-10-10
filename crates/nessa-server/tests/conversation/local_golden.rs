@@ -154,7 +154,7 @@ async fn run_local_conversation(root: &Path) -> Evidence {
             deletion_budgets: DELETION_BUDGETS,
             message_commit_clock: Arc::new(RuntimeMessageCommitClock::new()),
             clock,
-            environment: crate::conversation::infrastructure::in_process_environment(),
+            environment: crate::conversation::infrastructure::in_process_environment().into(),
         },
         ConversationLimits::default(),
         None,

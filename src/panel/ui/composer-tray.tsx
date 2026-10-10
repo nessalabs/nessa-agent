@@ -14,7 +14,54 @@ export interface TrayApproval {
   status?: string
 }
 
-type Page = "root" | "approval" | "confirm-full" | "agents"
+/**
+ * Where a new conversation's agent runs: this computer, or one of the SSH
+ * hosts the gateway names. Offered only before the conversation exists, since
+ * it runs there for its whole life.
+ */
+export interface TrayEnvironment {
+  /** The chosen host; absent is this computer. */
+  host?: string
+  /** What the gateway names under `environments`. The tray offers nothing else. */
+  hosts: readonly string[]
+  onChange: (host: string | undefined) => void
+}
+
+type Page = "root" | "approval" | "confirm-full" | "agents" | "environment"
+
+/** The tray's name for where a conversation runs. */
+export function environmentLabel(host: string | undefined): string {
+  return host ?? "This computer"
+}
+
+/**
+ * Arrows move between a page's offered choices, as a radio group's do;
+ * choosing stays an explicit Enter or Space, since a choice leaves the page.
+ */
+function moveBetweenRadios(event: React.KeyboardEvent<HTMLElement>) {
+  const step =
+    event.key === "ArrowDown" || event.key === "ArrowRight"
+      ? 1
+      : event.key === "ArrowUp" || event.key === "ArrowLeft"
+        ? -1
+        : 0
+  if (!step && event.key !== "Home" && event.key !== "End") return
+  const radios = [
+    ...event.currentTarget.querySelectorAll<HTMLButtonElement>(
+      "[role=radio]:not(:disabled)",
+    ),
+  ]
+  if (!radios.length) return
+  event.preventDefault()
+  const at = radios.indexOf(document.activeElement as HTMLButtonElement)
+  const next =
+    event.key === "Home"
+      ? 0
+      : event.key === "End"
+        ? radios.length - 1
+        : (at + step + radios.length) % radios.length
+  radios[next]?.focus()
+}
 
 export function approvalLabel(mode: ApprovalMode): string {
   switch (mode) {
@@ -131,15 +178,25 @@ function useTrayPlacement(
 export function ComposerTray({
   disabled,
   onChoose,
+  linksFiles = true,
   onSignOut,
   approval,
+  environment,
   agentInstallations,
 }: {
   /** Files cannot be added while earlier ones are still being read. */
   disabled: boolean
   onChoose: () => void
+  /**
+   * Whether a file that is not an image can be added, linked by its path on
+   * this machine. Not for a conversation on an SSH host: it is offered images
+   * alone, which carry their bytes.
+   */
+  linksFiles?: boolean
   onSignOut?: () => void
   approval?: TrayApproval
+  /** Absent when the gateway names no host, or the conversation exists. */
+  environment?: TrayEnvironment
   agentInstallations?: AgentInstallations
 }) {
   const [open, setOpen] = React.useState(false)
@@ -156,9 +213,13 @@ export function ComposerTray({
   const shown: Page =
     page === "agents" && agentInstallations
       ? "agents"
-      : approval && approval.modes.length > 1
-        ? page
-        : "root"
+      : page === "environment"
+        ? environment && environment.hosts.length > 0
+          ? "environment"
+          : "root"
+        : approval && approval.modes.length > 1
+          ? page
+          : "root"
 
   const go = React.useCallback((next: Page, focus?: string) => {
     setPage(next)
@@ -191,6 +252,7 @@ export function ComposerTray({
       event.preventDefault()
       if (shown === "confirm-full") go("approval", "mode-full")
       else if (shown === "agents") go("root", "agents-row")
+      else if (shown === "environment") go("root", "environment-row")
       else if (shown === "approval") go("root", "approval-row")
       else close(true)
     }
@@ -203,7 +265,9 @@ export function ComposerTray({
   }, [open, shown, close, go])
 
   const label =
-    onSignOut || approval || agentInstallations ? "More options" : "Add attachment"
+    onSignOut || approval || environment || agentInstallations
+      ? "More options"
+      : "Add attachment"
   return (
     <div
       ref={root}
@@ -223,7 +287,9 @@ export function ComposerTray({
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-controls={open ? trayId : undefined}
-        disabled={disabled && !onSignOut && !approval && !agentInstallations}
+        disabled={
+          disabled && !onSignOut && !approval && !environment && !agentInstallations
+        }
         onClick={() => (open ? close(false) : setOpen(true))}
       >
         <Plus
@@ -255,7 +321,7 @@ export function ComposerTray({
                   onChoose()
                 }}
               >
-                <span className="flex-1">Add files</span>
+                <span className="flex-1">{linksFiles ? "Add files" : "Add images"}</span>
               </button>
               {approval && approval.modes.length > 1 ? (
                 <button
@@ -286,6 +352,28 @@ export function ComposerTray({
                   <ChevronRight
                     aria-hidden="true"
                     className="size-4 text-muted-foreground"
+                  />
+                </button>
+              ) : null}
+              {environment && environment.hosts.length > 0 ? (
+                <button
+                  type="button"
+                  data-tray-focus="environment-row"
+                  className={ROW}
+                  onClick={() =>
+                    go(
+                      "environment",
+                      `host-${environment.hosts.indexOf(environment.host ?? "") + 1}`,
+                    )
+                  }
+                >
+                  <span className="flex-1">Run on</span>
+                  <span className="truncate text-muted-foreground">
+                    {environmentLabel(environment.host)}
+                  </span>
+                  <ChevronRight
+                    aria-hidden="true"
+                    className="size-4 shrink-0 text-muted-foreground"
                   />
                 </button>
               ) : null}
@@ -328,6 +416,54 @@ export function ComposerTray({
               </button>
               <AgentDownloads source={agentInstallations} />
             </div>
+          ) : shown === "environment" && environment ? (
+            <div key="environment" className="nessa-composer-tray-page flex flex-col">
+              <button
+                type="button"
+                aria-label="Back from Run on"
+                onClick={() => go("root", "environment-row")}
+                className={`flex items-center gap-1 self-start rounded-[12px] px-2 py-2 nessa-text-3 text-muted-foreground transition-colors hover:text-foreground focus-visible:text-foreground ${FOCUS_RING}`}
+              >
+                <ChevronLeft aria-hidden="true" className="size-4" />
+                Run on
+              </button>
+              <div
+                role="radiogroup"
+                aria-label="Run on"
+                className="flex flex-col"
+                onKeyDown={moveBetweenRadios}
+              >
+                {/* This computer first, as position 0; each host after it. */}
+                {[undefined, ...environment.hosts].map((host, index) => {
+                  const chosen = environment.host === host
+                  return (
+                    <button
+                      key={host ?? ""}
+                      type="button"
+                      role="radio"
+                      aria-checked={chosen}
+                      data-tray-focus={`host-${index}`}
+                      tabIndex={chosen ? 0 : -1}
+                      className={ROW}
+                      onClick={() => {
+                        go("root", "environment-row")
+                        if (!chosen) environment.onChange(host)
+                      }}
+                    >
+                      <span className="flex flex-1 flex-col">
+                        <span className="break-all">{environmentLabel(host)}</span>
+                        {host ? (
+                          <span className="nessa-text-2 text-muted-foreground">SSH</span>
+                        ) : null}
+                      </span>
+                      {chosen ? (
+                        <Check aria-hidden="true" className="size-4 text-foreground" />
+                      ) : null}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
           ) : shown === "approval" && approval ? (
             <div key="approval" className="nessa-composer-tray-page flex flex-col">
               <button
@@ -343,33 +479,7 @@ export function ComposerTray({
                 role="radiogroup"
                 aria-label="Tool approval"
                 className="flex flex-col"
-                onKeyDown={(event) => {
-                  // Arrows move between the offered modes, as a radio group's
-                  // do; choosing stays an explicit Enter or Space, since a
-                  // choice here leaves the page.
-                  const step =
-                    event.key === "ArrowDown" || event.key === "ArrowRight"
-                      ? 1
-                      : event.key === "ArrowUp" || event.key === "ArrowLeft"
-                        ? -1
-                        : 0
-                  if (!step && event.key !== "Home" && event.key !== "End") return
-                  const radios = [
-                    ...event.currentTarget.querySelectorAll<HTMLButtonElement>(
-                      "[role=radio]:not(:disabled)",
-                    ),
-                  ]
-                  if (!radios.length) return
-                  event.preventDefault()
-                  const at = radios.indexOf(document.activeElement as HTMLButtonElement)
-                  const next =
-                    event.key === "Home"
-                      ? 0
-                      : event.key === "End"
-                        ? radios.length - 1
-                        : (at + step + radios.length) % radios.length
-                  radios[next]?.focus()
-                }}
+                onKeyDown={moveBetweenRadios}
               >
                 {approval.modes.map((choice) => {
                   const chosen = approval.mode === choice.id

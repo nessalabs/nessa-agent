@@ -153,7 +153,7 @@ impl Fixture {
                     nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
                 ),
                 clock: Arc::new(TestClock),
-                environment: crate::conversation::infrastructure::in_process_environment(),
+                environment: crate::conversation::infrastructure::in_process_environment().into(),
             },
             ConversationLimits::default(),
             None,

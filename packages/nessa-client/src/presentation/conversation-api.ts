@@ -76,6 +76,11 @@ export type ConversationCreateOptions = ConversationActionOptions & {
   model?: string
   /** Initial provider preset; omitted selects ask. */
   approvalMode?: ApprovalMode
+  /** The SSH destination this conversation's agent runs on for its whole
+   * life: one `agents.list` returned under `environments`. Omitted runs it on
+   * the gateway's own machine. One the gateway does not name is refused as
+   * `environment_not_configured`, with `uncertain` false. */
+  environment?: string
 }
 /** Message admission receipt with the client-owned action identity. */
 export type ConversationSubmission = ConversationReceipt & {
@@ -374,9 +379,18 @@ export function createConversationApi(
       const model = options.model === undefined ? {} : { model: options.model }
       const approvalMode =
         options.approvalMode === undefined ? {} : { approvalMode: options.approvalMode }
+      const environment =
+        options.environment === undefined ? {} : { environment: options.environment }
       return mutate(
         ProductMethod.ConversationCreate,
-        { conversationId: id, requestId, ...agent, ...model, ...approvalMode },
+        {
+          conversationId: id,
+          requestId,
+          ...agent,
+          ...model,
+          ...approvalMode,
+          ...environment,
+        },
         (value) => conversationId(value, id),
       )
     },

@@ -19,7 +19,8 @@ use crate::{
     attachments::infrastructure::ModelImageNormalizer,
     conversation::{
         application::{
-            ConversationAgents, ConversationDependencies, ConversationLimits, McpAppPorts,
+            ConversationAgents, ConversationDependencies, ConversationLimits, Environments,
+            McpAppPorts,
         },
         infrastructure::{
             DurableConversationCreationAudit, DurableConversationDeletionAudit,
@@ -74,6 +75,7 @@ use nessa_protocol::{
     agents::AgentId,
     conversation::tool_uis::{McpToolUis, NoMcpToolUis},
 };
+use nessa_sdk::domain::agent_execution::leases::SshDestination;
 #[cfg(unix)]
 use nessa_sdk::infrastructure::session_storage::{InMemoryStorage, RecordStorage};
 #[cfg(unix)]
@@ -86,7 +88,7 @@ use nessa_sdk::{
 };
 use nessa_sync::replication::domain::Id as RecordId;
 #[cfg(unix)]
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::{
     collections::HashMap,
     io,
@@ -263,7 +265,10 @@ pub(super) async fn product_state(
                 agent_credentials.clone(),
                 packaged_agents,
                 record_origin.clone(),
-                limits.read_work_budget(),
+                ConversationSettings {
+                    read_work_budget: limits.read_work_budget(),
+                    ssh_hosts: settings.ssh_hosts()?,
+                },
             )
             .await?;
             (
@@ -464,6 +469,16 @@ struct BuiltConversations {
     resource_route: Option<(Arc<ResourceTicketStore>, Arc<dyn McpAppAudit>)>,
 }
 
+/// What `config.json` says about conversations besides their agents.
+// Read only where conversations run: Unix process supervision.
+#[cfg_attr(not(unix), allow(dead_code))]
+struct ConversationSettings {
+    /// How much work one passive read may do.
+    read_work_budget: std::time::Duration,
+    /// The SSH hosts a conversation may be created on.
+    ssh_hosts: Vec<SshDestination>,
+}
+
 #[cfg(not(unix))]
 async fn conversations(
     _agents: &AgentsConfig,
@@ -472,7 +487,7 @@ async fn conversations(
     _credentials: Arc<dyn AgentCredentialSource>,
     _packaged_agents: bool,
     _record_origin: RecordId,
-    _read_work_budget: std::time::Duration,
+    _settings: ConversationSettings,
 ) -> Result<BuiltConversations, RunError> {
     Err(RunError::Agent(
         "ACP agents require Unix process supervision".into(),
@@ -775,8 +790,12 @@ async fn conversations(
     credentials: Arc<dyn AgentCredentialSource>,
     packaged_agents: bool,
     record_origin: RecordId,
-    read_work_budget: std::time::Duration,
+    settings: ConversationSettings,
 ) -> Result<BuiltConversations, RunError> {
+    let ConversationSettings {
+        read_work_budget,
+        ssh_hosts,
+    } = settings;
     let mut warm_ups = Vec::new();
     // The gateway holds the one connection to each MCP server (ADR 344), so
     // every agent below is built with stand-ins in their place.
@@ -1023,7 +1042,7 @@ async fn conversations(
         configured.insert(AgentId::Opencode);
     }
     configured.extend(managed_adapters.iter().copied());
-    let agents_catalog = agent_catalog(agents, &configured, opencode.configured())?;
+    let agents_catalog = agent_catalog(agents, &configured, opencode.configured(), &ssh_hosts)?;
     let resolver = Arc::new(CurrentAgentResolver::new(CurrentAgentResolverInput {
         fixed: built.providers,
         managed_adapters,
@@ -1074,8 +1093,8 @@ async fn conversations(
         message_commit_clock: Arc::new(
             nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
         ),
-        clock,
-        environment: crate::conversation::infrastructure::in_process_environment(),
+        clock: clock.clone(),
+        environment: environments(&root, &ssh_hosts, clock.clone())?,
     };
     let workspace = Some(agents.workspace.to_string_lossy().into_owned());
     // With MCP servers, an app's calls go through the conversation's own
@@ -1134,10 +1153,53 @@ fn setup_error(error: impl std::fmt::Display) -> RunError {
 }
 
 #[cfg(unix)]
+/// Where conversations run: here, and each configured SSH host. A gateway
+/// that names no host builds nothing of the SSH adapter, so no conversation
+/// reaches it; placements are kept either way, so a conversation placed on
+/// a host since removed from the configuration is refused rather than run
+/// here.
+fn environments(
+    root: &Path,
+    hosts: &[SshDestination],
+    clock: Arc<dyn Clock>,
+) -> Result<Environments, RunError> {
+    use crate::conversation::infrastructure::{
+        ssh_environment::{DurableEnvironmentAudit, OpenSshConnector, SshEnvironment, SshTimings},
+        FilePlacements,
+    };
+    let placements = FilePlacements::new(root.join("placements"))
+        .map_err(|error| RunError::Agent(error.to_string()))?;
+    let mut environments: BTreeMap<String, Arc<dyn crate::conversation::application::Environment>> =
+        BTreeMap::new();
+    if !hosts.is_empty() {
+        let audit = DurableEnvironmentAudit::new(root.join("audit").join("environments"), clock)
+            .map_err(|error| RunError::Agent(error.to_string()))?;
+        let connector = Arc::new(OpenSshConnector);
+        for host in hosts {
+            environments.insert(
+                host.as_str().to_owned(),
+                Arc::new(SshEnvironment::new(
+                    host.clone(),
+                    connector.clone(),
+                    audit.clone(),
+                    SshTimings::default(),
+                )),
+            );
+        }
+    }
+    Ok(Environments::new(
+        crate::conversation::infrastructure::in_process_environment(),
+        environments,
+        Arc::new(placements),
+    ))
+}
+
+#[cfg(unix)]
 fn agent_catalog(
     config: &AgentsConfig,
     configured: &HashSet<AgentId>,
     opencode: Option<&OpenCodeProfile>,
+    hosts: &[SshDestination],
 ) -> Result<AgentsListResult, RunError> {
     let models = load_catalog(
         std::fs::File::open(&config.catalog)
@@ -1196,7 +1258,10 @@ fn agent_catalog(
             })
         })
         .collect::<Result<Vec<_>, RunError>>()?;
-    Ok(AgentsListResult { agents })
+    Ok(AgentsListResult {
+        agents,
+        environments: hosts.iter().map(|host| host.as_str().to_owned()).collect(),
+    })
 }
 
 #[cfg(unix)]

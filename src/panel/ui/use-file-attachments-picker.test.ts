@@ -548,3 +548,45 @@ it("says the same thing when the draft goes while its images are being read", as
   expect(hook.refusal).toEqual({ reason: "conversation-closed" })
   expect(draftFiles()).toHaveLength(0)
 })
+
+it("refuses a file linked by path for a conversation that runs on an SSH host, and keeps taking images", async () => {
+  await act(async () => {
+    chat.setSelection(chat.active.id, {
+      agent: "claude",
+      model: "sonnet",
+      approvalMode: "ask",
+      environment: "devbox",
+    })
+  })
+  chooseAttachmentFiles.mockResolvedValue([
+    {
+      path: "/Users/ada/notes.md",
+      name: "notes.md",
+      size: 10,
+      mimeType: "text/markdown",
+      ticket: `k${ticketCount++}`,
+    },
+  ])
+  await act(async () => {
+    await hook.chooseFiles()
+  })
+  // The host has files of its own: this path would name nothing there, or
+  // something else. Nothing is attached, and the person is told why.
+  expect(draftFiles()).toHaveLength(0)
+  expect(hook.refusal).toEqual({ reason: "file-not-on-host", name: "notes.md" })
+
+  chooseAttachmentFiles.mockResolvedValue([
+    {
+      path: "/Users/ada/shot.png",
+      name: "shot.png",
+      size: 4,
+      mimeType: "image/png",
+      ticket: `k${ticketCount++}`,
+    },
+  ])
+  await act(async () => {
+    await hook.chooseFiles()
+  })
+  expect(draftFiles()).toMatchObject([{ name: "shot.png" }])
+  expect(hook.refusal).toBeNull()
+})

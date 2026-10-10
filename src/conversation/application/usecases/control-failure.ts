@@ -119,6 +119,12 @@ function nothingWasDone(
       return "This gateway is not set up to run conversations, so nothing was done. Configure an agent and restart it."
     case "sandbox-unavailable":
       return "The gateway could not give this conversation's agent the sandbox it runs in, so the agent did not start and nothing was done."
+    case "environment-not-configured":
+      return 'This conversation runs on an SSH host the gateway\'s config.json no longer names under "sshHosts", so nothing was done.'
+    case "environment-unavailable":
+      return "The SSH host this conversation runs on could not be reached, is serving another gateway, or cannot run its agent, so nothing was done. Try again once it is reachable."
+    case "environment-version-mismatch":
+      return "The SSH host this conversation runs on has another version of Nessa than this gateway, so nothing was sent to it. Install this version there."
     case "conversation-not-found":
       return "The gateway no longer has this conversation, so nothing was done."
     case "conversation-state-unreadable":
@@ -148,6 +154,7 @@ function nothingWasDone(
     case "image-input-unsupported":
     case "attachment-not-found":
     case "attachment-unavailable":
+    case "linked-file-unreachable":
     case "invalid-request":
     case undefined:
       return "The gateway would not take this action, so nothing was done."

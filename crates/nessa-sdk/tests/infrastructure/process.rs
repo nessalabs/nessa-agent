@@ -187,7 +187,7 @@ async fn spawn_failure_retains_directory_until_failed_release_is_retried() {
 async fn dropping_an_unconfirmed_process_retains_its_private_directory() {
     let (scope, directory) =
         ProcessScope::spawn_with_private_directory(|_| waiting_command()).unwrap();
-    let group = scope.group;
+    let group = scope.group();
     drop(scope);
     assert!(directory.is_dir());
     tokio::time::timeout(Duration::from_secs(2), async {
@@ -230,7 +230,7 @@ async fn signalling_an_exited_unreaped_group_is_not_a_cleanup_failure() {
     let waited = unsafe {
         libc::waitid(
             libc::P_PID,
-            scope.group as libc::id_t,
+            scope.group() as libc::id_t,
             &mut info,
             libc::WEXITED | libc::WNOWAIT,
         )
@@ -238,15 +238,15 @@ async fn signalling_an_exited_unreaped_group_is_not_a_cleanup_failure() {
     assert_eq!(waited, 0);
     if cfg!(target_os = "macos") {
         assert_eq!(
-            signal_group(scope.group, false),
+            signal_group(scope.group(), false),
             Ok(SignalDelivery::NotDelivered)
         );
         assert_eq!(
-            signal_group(scope.group, true),
+            signal_group(scope.group(), true),
             Ok(SignalDelivery::NotDelivered)
         );
     } else {
-        assert!(signal_group(scope.group, false).is_ok());
+        assert!(signal_group(scope.group(), false).is_ok());
     }
     assert_eq!(
         scope.cleanup(Duration::ZERO, Duration::from_secs(2)).await,

@@ -22,6 +22,7 @@ mod configuration;
 mod deletion;
 mod effort;
 mod executions;
+mod harness_host;
 mod identity;
 mod images;
 mod live;

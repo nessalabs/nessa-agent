@@ -32,13 +32,20 @@ export function useConversationChoices(
   return choices
 }
 
-/** Creation reads the stored draft choice, so bind the catalog choice shown by the panel. */
+/**
+ * Creation reads the stored draft choice, so bind the catalog choice shown by
+ * the panel. The catalog is what the gateway offers now: a draft that names a
+ * host it no longer offers (`environments`, once the catalog is known) drops
+ * that host and runs here, as "Run on" then shows, rather than keep a choice
+ * nobody can see and every send would be refused for.
+ */
 export function useBindCatalogFallback({
   id,
   selection,
   serverConversationId,
   agent,
   model,
+  environments,
   setSelection,
 }: {
   id: string
@@ -46,11 +53,22 @@ export function useBindCatalogFallback({
   serverConversationId?: string
   agent?: string
   model?: string
+  environments?: readonly string[]
   setSelection: (id: string, selection: ConversationSelection) => void
 }): void {
   React.useLayoutEffect(() => {
-    if (!selection && !serverConversationId && agent && model) {
-      setSelection(id, { agent, model, approvalMode: "ask" })
+    if (serverConversationId) return
+    if (!selection) {
+      if (agent && model) setSelection(id, { agent, model, approvalMode: "ask" })
+      return
     }
-  }, [id, selection, serverConversationId, agent, model, setSelection])
+    if (
+      selection.environment !== undefined &&
+      environments &&
+      !environments.includes(selection.environment)
+    ) {
+      const { environment: _unoffered, ...offered } = selection
+      setSelection(id, offered)
+    }
+  }, [id, selection, serverConversationId, agent, model, environments, setSelection])
 }

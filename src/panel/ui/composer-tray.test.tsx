@@ -463,3 +463,51 @@ it("names and exposes agent downloads without approval or sign-out controls", as
   key("Escape")
   expect(row("Agent downloads")).toBe(document.activeElement)
 })
+
+it("offers where a new conversation runs only when the gateway names a host", () => {
+  render({ environment: { hosts: [], onChange: vi.fn() } })
+  click(plus())
+  expect(() => row("Run on")).toThrow()
+  click(plus())
+  const onChange = vi.fn()
+  render({ environment: { hosts: ["devbox", "me@build"], onChange } })
+  click(plus())
+  expect(row("Run on").textContent).toContain("This computer")
+  click(row("Run on"))
+  const radios = [...container.querySelectorAll<HTMLButtonElement>("[role=radio]")]
+  expect(radios.map((radio) => radio.textContent)).toEqual([
+    "This computer",
+    "devboxSSH",
+    "me@buildSSH",
+  ])
+  expect(radios[0].getAttribute("aria-checked")).toBe("true")
+  expect(document.activeElement).toBe(radios[0])
+  click(radios[1])
+  expect(onChange).toHaveBeenCalledWith("devbox")
+  // Back on the first page, focus on the row it came from.
+  expect(document.activeElement).toBe(row("Run on"))
+})
+
+it("shows the chosen host, and choosing this computer again names no host", () => {
+  const onChange = vi.fn()
+  render({ environment: { host: "devbox", hosts: ["devbox"], onChange } })
+  click(plus())
+  expect(row("Run on").textContent).toContain("devbox")
+  click(row("Run on"))
+  const radios = [...container.querySelectorAll<HTMLButtonElement>("[role=radio]")]
+  expect(radios[1].getAttribute("aria-checked")).toBe("true")
+  expect(document.activeElement).toBe(radios[1])
+  key("Escape")
+  expect(document.activeElement).toBe(row("Run on"))
+  click(row("Run on"))
+  click(container.querySelectorAll<HTMLButtonElement>("[role=radio]")[0])
+  expect(onChange).toHaveBeenCalledWith(undefined)
+})
+
+it("offers images alone for a conversation that cannot take a file linked by path", () => {
+  const { onChoose } = render({ linksFiles: false })
+  click(plus())
+  expect(tray()?.textContent).not.toContain("Add files")
+  click(row("Add images"))
+  expect(onChoose).toHaveBeenCalledOnce()
+})

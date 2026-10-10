@@ -3,10 +3,10 @@
 use crate::domain::agent_execution::permissions::{PermissionAuthority, PermissionAuthorityError};
 
 use super::{
-    CleanupFuture, ProviderExecutionFuture, ProviderIdentity, ProviderObservationFuture,
-    ProviderOpenRequest, ProviderOperationCapabilities, ProviderOperationFailure,
-    ProviderOperationFuture, ProviderSession, ProviderSessionState, SessionCloseRequest,
-    SteeringOutcome,
+    CleanupFuture, HarnessHost, ProviderExecutionFuture, ProviderIdentity,
+    ProviderObservationFuture, ProviderOpenRequest, ProviderOperationCapabilities,
+    ProviderOperationFailure, ProviderOperationFuture, ProviderSession, ProviderSessionState,
+    SessionCloseRequest, SteeringOutcome,
 };
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::providers::ProviderOpenFuture;
@@ -19,6 +19,7 @@ use crate::application::agent_execution::{
 };
 use crate::domain::agent_execution::executions::ExecutionId;
 use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
+use std::sync::Arc;
 
 /// Confirmed cleanup of the provider attachment, independent of saved history.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -244,4 +245,20 @@ pub trait AgentProvider: Send + Sync {
     /// A panic without a returned cleanup handle leaves cleanup unprovable; Agent
     /// retains the protective storage lease for the process lifetime in that case.
     fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_>;
+    /// The same factory, starting its harness on `host` rather than as a
+    /// child of this process: the binding, its permissions, its audit and
+    /// its events stay here, and only the harness's standard streams cross.
+    /// What only this machine has is left behind — its account's
+    /// variables, its credentials, its workspace and the Nessa tool servers
+    /// whose stand-ins reach this process — and the host supplies its own.
+    /// The default cannot move.
+    ///
+    /// # Errors
+    /// [`AgentError::Unsupported`] when this binding cannot run its harness
+    /// elsewhere; nothing is started either way.
+    fn on_host(&self, _host: Arc<dyn HarnessHost>) -> Result<Arc<dyn AgentProvider>, AgentError> {
+        Err(AgentError::Unsupported(
+            "this agent's binding cannot start its harness on another machine".into(),
+        ))
+    }
 }

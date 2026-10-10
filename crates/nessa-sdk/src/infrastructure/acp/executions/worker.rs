@@ -61,7 +61,7 @@ use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
 use crate::infrastructure::clock::{within, Clock, ClockInstant, ClockSleep};
 use crate::infrastructure::{
     json_rpc::{self, Envelope, Reader, RpcError, RpcId},
-    process::ProcessScope,
+    process::{ProcessOutput, ProcessScope},
 };
 use serde_json::{json, Value};
 use std::{
@@ -298,7 +298,7 @@ struct Worker<P> {
     audit: Arc<dyn ExecutionAudit>,
     cancellation_cause: Option<(PermissionCancellationReason, CancellationOrigin)>,
     scope: ProcessScope,
-    reader: Reader<tokio::process::ChildStdout>,
+    reader: Reader<ProcessOutput>,
     config: AcpConfig,
     capabilities: EffectiveCapabilities,
     commands: mpsc::Receiver<Command>,

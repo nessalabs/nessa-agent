@@ -4,6 +4,7 @@ import {
   isImageFile,
   linkablePath,
   linkedFile,
+  linksFilesHere,
   MAX_ATTACHMENT_BYTES,
   MAX_DRAFT_ATTACHMENT_BYTES,
   MAX_DRAFT_ATTACHMENTS,
@@ -453,6 +454,16 @@ export function useFileAttachments(
     const unusable = linked.find((file) => !linkablePath(file.path))
     if (unusable) {
       refuse({ reason: "file-not-linkable", name: unusable.name }, targetId)
+      return
+    }
+    // A conversation on an SSH host reads that host's files: a path on this
+    // machine would name nothing there, or something else. Images carry
+    // their bytes and still go.
+    const target = conversationsRef.current.find(
+      (conversation) => conversation.id === targetId,
+    )
+    if (linked.length && target && !linksFilesHere(target)) {
+      refuse({ reason: "file-not-on-host", name: linked[0].name }, targetId)
       return
     }
     if (!images.length) {

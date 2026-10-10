@@ -10,7 +10,7 @@ import type { ConversationLease } from "../generated/product.js"
  * about it.
  */
 export function conversationLeaseStatus(
-  lease: Pick<ConversationLease, "state" | "cause" | "refusal">,
+  lease: Pick<ConversationLease, "state" | "cause" | "refusal" | "environment">,
 ): string {
   switch (lease.state) {
     // Granted, not a claim that the harness is up: nothing moves a lease when
@@ -27,8 +27,12 @@ export function conversationLeaseStatus(
           return "Access withdrawn"
         case "expired":
           return "Timed out"
+        // The environment no longer held it: an SSH host's connection went
+        // away, or this gateway started again.
         case "lost":
-          return "Ended when Nessa restarted"
+          return lease.environment === "ssh"
+            ? "Ended when the connection to its host was lost"
+            : "Ended when Nessa restarted"
         case "stopped":
           return "Stopped"
         // No cause recorded: ended, and nothing more is claimed.
@@ -42,13 +46,49 @@ export function conversationLeaseStatus(
     case "interrupted":
       return "Cleanup not confirmed"
     case "refused":
-      return lease.refusal === "sandbox_unavailable"
-        ? "Couldn't start: sandbox not available"
-        : "Couldn't start"
+      switch (lease.refusal) {
+        case "sandbox_unavailable":
+          return "Couldn't start: sandbox not available"
+        case "environment_unreachable":
+          return "Couldn't start: host not reachable"
+        case "environment_version_mismatch":
+          return "Couldn't start: host runs another version of Nessa"
+        case "environment_busy":
+          return "Couldn't start: host is serving another gateway"
+        case "agent_unavailable":
+          return "Couldn't start: host can't run this agent"
+        case undefined:
+          return "Couldn't start"
+        default: {
+          const exhaustive: never = lease.refusal
+          return exhaustive
+        }
+      }
     case "unreadable":
       return "Not known"
     default: {
       const exhaustive: never = lease.state
+      return exhaustive
+    }
+  }
+}
+
+/**
+ * Which machine a lease names, in a person's words: this one, or the SSH
+ * destination it runs on; nothing when the lease does not say.
+ */
+export function conversationLeasePlace(
+  lease: Pick<ConversationLease, "environment" | "host">,
+): string | undefined {
+  switch (lease.environment) {
+    case "here":
+      return "This computer"
+    case "ssh":
+      return lease.host
+    case undefined:
+      return undefined
+    default: {
+      const exhaustive: never = lease.environment
       return exhaustive
     }
   }

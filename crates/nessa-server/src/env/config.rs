@@ -26,3 +26,37 @@ pub mod default {
 
 /// Crate version from `Cargo.toml`. Sole `env!` usage in this crate.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Name the lease protocol by the sources that define it, listed once: the
+/// names for checking the list, the fingerprint for the hello.
+macro_rules! lease_protocol {
+    ($($source:literal),+ $(,)?) => {
+        /// The sources [`LEASE_PROTOCOL`] is taken over, relative to this file.
+        #[cfg(all(test, unix))]
+        pub(crate) const LEASE_PROTOCOL_SOURCES: &[&str] = &[$($source),+];
+        const LEASE_PROTOCOL_DIGITS: [u8; 16] =
+            nessa_protocol::lease::fingerprint(&[$(include_bytes!($source) as &[u8]),+]);
+    };
+}
+
+// The frames, their framing, and both ends that write, read and act on them.
+// Every source naming a lease frame is here
+// (`every_source_speaking_lease_frames_names_the_protocol`).
+lease_protocol!(
+    "../../../nessa-protocol/src/lease.rs",
+    "../../../nessa-protocol/src/pairing/frames.rs",
+    "../env_serve/application/serve.rs",
+    "../env_serve/application/wire.rs",
+    "../conversation/infrastructure/ssh_environment/link.rs",
+    "../conversation/infrastructure/ssh_environment/environment.rs",
+);
+
+/// The lease protocol this build speaks: a fingerprint of its sources, taken
+/// when they are compiled. Any change to the frames or to how either end
+/// reads them changes it, with nothing to bump; a gateway speaks only to an
+/// environment saying the same in its hello. Not [`VERSION`], which every
+/// revision shares.
+pub const LEASE_PROTOCOL: &str = match std::str::from_utf8(&LEASE_PROTOCOL_DIGITS) {
+    Ok(protocol) => protocol,
+    Err(_) => panic!("a fingerprint is hex digits"),
+};

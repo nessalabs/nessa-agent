@@ -39,11 +39,14 @@
 //! correlation, deadlines, resume, and cleanup; every deadline is a moment on
 //! the injected `clock`. The domain owns invariants.
 //! Composition supplies concrete dependencies and the permission audit sink.
+//! `harness_process` is the other side of a binding's `HarnessHost`: the
+//! process scope an environment supervises for a binding that runs elsewhere.
 
 pub mod acp;
 pub mod claude_acp;
 pub mod clock;
 pub mod codex_acp;
+pub mod harness_process;
 pub mod mcp;
 pub mod model_metadata_json;
 pub mod opencode_acp;

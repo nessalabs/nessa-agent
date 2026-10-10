@@ -136,10 +136,17 @@ export function optionOf(
  */
 export interface TranscriptLease {
   readonly state: "live" | "ending" | "ended" | "interrupted" | "refused" | "unreadable"
-  /** `here` is the gateway's own machine. */
-  readonly environment?: "here"
+  /** `here` is the gateway's own machine; `ssh` a host reached over SSH. */
+  readonly environment?: "here" | "ssh"
+  /** The SSH destination, exactly when `environment` is `ssh`. */
+  readonly host?: string
   readonly cause?: "stopped" | "closed" | "revoked" | "expired" | "lost"
-  readonly refusal?: "sandbox_unavailable"
+  readonly refusal?:
+    | "sandbox_unavailable"
+    | "environment_unreachable"
+    | "environment_version_mismatch"
+    | "environment_busy"
+    | "agent_unavailable"
 }
 
 /** What a running agent is doing, and since when; absent while its reply streams in. */

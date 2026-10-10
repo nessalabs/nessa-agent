@@ -47,9 +47,13 @@
 //! `audit_context_drops` is the one recorder of every held MCP App context
 //! dropped unsent: the conversations' apps report each drop to it, through a
 //! channel, as they make it, and it writes the record on a task of its own.
-//! `InProcessEnvironment` is the one `Environment`: agents run as children of
-//! this gateway, and of a lease it is asked about after a restart it can say
-//! only that it holds nothing for it.
+//! `InProcessEnvironment` is the `Environment` every conversation runs in
+//! unless it was placed on an SSH host: agents run as children of this
+//! gateway, and of a lease it is asked about after a restart it can say only
+//! that it holds nothing for it. `ssh_environment::SshEnvironment` is the
+//! other, one per host `config.json` names (#699): the harness runs on the
+//! host under `nessa env serve`, the binding stays here. `FilePlacements`
+//! keeps which conversations were placed on which host.
 mod change_watch;
 pub use change_watch::{NessaRecordWatches, UuidWatchNamespaces};
 // Composed only by the Unix gateway (`composition/local_auth.rs`), as
@@ -58,8 +62,16 @@ pub use change_watch::{NessaRecordWatches, UuidWatchNamespaces};
 mod environment;
 #[cfg(any(unix, test))]
 pub(crate) use environment::in_process as in_process_environment;
+#[cfg(any(unix, test))]
+mod placements;
+#[cfg(any(unix, test))]
+pub(crate) use placements::FilePlacements;
 mod catalogue_changes;
 mod receiver_authority;
+// Only the Unix gateway composes it, and only a Unix host serves it: it is
+// built, tests included, where both ends exist.
+#[cfg(unix)]
+pub(crate) mod ssh_environment;
 mod store;
 pub use catalogue_changes::MAX_CATALOGUE_CHANGE_WATCHES;
 pub use receiver_authority::{LocalReceiverAuthority, ReceiverChangeError};

@@ -658,7 +658,7 @@ const leaseValues = {
     refused: true,
     unreadable: true,
   } satisfies Record<ConversationLease["state"], true>,
-  environment: { here: true } satisfies Record<
+  environment: { here: true, ssh: true } satisfies Record<
     NonNullable<ConversationLease["environment"]>,
     true
   >,
@@ -677,10 +677,13 @@ const leaseValues = {
     NonNullable<ConversationLease["cleanup"]>,
     true
   >,
-  refusal: { sandbox_unavailable: true } satisfies Record<
-    NonNullable<ConversationLease["refusal"]>,
-    true
-  >,
+  refusal: {
+    sandbox_unavailable: true,
+    environment_unreachable: true,
+    environment_version_mismatch: true,
+    environment_busy: true,
+    agent_unavailable: true,
+  } satisfies Record<NonNullable<ConversationLease["refusal"]>, true>,
 }
 
 type LeaseField = "required" | "optional" | "absent"
@@ -741,6 +744,7 @@ function lease(value: unknown) {
     "state",
     "revision",
     "environment",
+    "host",
     "sandbox",
     "cause",
     "cleanup",
@@ -775,6 +779,9 @@ function lease(value: unknown) {
   }
   if (!shape.dropped && item.droppedEvents !== 0)
     throw new Error("Invalid conversation lease droppedEvents")
+  // The SSH destination, exactly when the lease names an SSH environment.
+  if (item.environment === "ssh") text(item, "host", 253, false)
+  else if (item.host !== undefined) throw new Error("Invalid conversation lease host")
 }
 
 export function conversationReorder(

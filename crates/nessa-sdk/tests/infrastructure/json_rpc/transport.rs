@@ -36,7 +36,10 @@ async fn provider_pipe_probe_reads_flushed_bytes_before_reactor_notification() {
         ])
         .stdout(Stdio::piped());
     let mut child = command.spawn().unwrap();
-    let mut reader = Reader::new(child.stdout.take().unwrap(), 256);
+    let mut reader = Reader::new(
+        crate::infrastructure::process::ProcessOutput::Local(child.stdout.take().unwrap()),
+        256,
+    );
     while !marker.exists() {
         tokio::task::yield_now().await;
     }
