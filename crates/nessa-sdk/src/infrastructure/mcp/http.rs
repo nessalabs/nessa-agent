@@ -1017,84 +1017,103 @@ impl HttpSession {
             if registration.await.is_err() {
                 return;
             }
+            enum Startup {
+                Done(Result<(), McpError>),
+                WriterDropped,
+            }
             let startup = async {
-                let body = serde_json::to_vec(&json!({
-                    "jsonrpc": "2.0", "id": 0, "method": "initialize",
-                    "params": wire::initialize_params(),
-                }))
-                .unwrap_or_default();
-                let attempt = match authorized_modern_post(
-                    &weak,
-                    exchange,
-                    authorization,
-                    server,
-                    &body,
-                    PostPurpose::RecoveryInitialize,
-                )
-                .await?
-                {
-                    Modern::Response(attempt) => attempt,
-                    Modern::Accepted => return Err(McpError::SessionExpired),
-                    Modern::Legacy => {
-                        return Err(McpError::Malformed(
-                            "recovery initialize selected legacy transport".into(),
-                        ))
+                let ready = async {
+                    let body = serde_json::to_vec(&json!({
+                        "jsonrpc": "2.0", "id": 0, "method": "initialize",
+                        "params": wire::initialize_params(),
+                    }))
+                    .unwrap_or_default();
+                    let attempt = match authorized_modern_post(
+                        &weak,
+                        exchange,
+                        authorization,
+                        server,
+                        &body,
+                        PostPurpose::RecoveryInitialize,
+                    )
+                    .await?
+                    {
+                        Modern::Response(attempt) => attempt,
+                        Modern::Accepted => return Err(McpError::SessionExpired),
+                        Modern::Legacy => {
+                            return Err(McpError::Malformed(
+                                "recovery initialize selected legacy transport".into(),
+                            ))
+                        }
+                    };
+                    if let Some(error) = attempt.failure {
+                        return Err(error);
                     }
-                };
-                if let Some(error) = attempt.failure {
-                    return Err(error);
-                }
-                let response = attempt.response;
-                let origin = attempt.origin;
-                let content_type = response.header("content-type");
-                let event_stream = sse::is_event_stream(content_type);
-                if !event_stream && content_type.is_some() && !sse::is_json(content_type) {
-                    return Err(McpError::SessionExpired);
-                }
-                if !consume_body(
-                    response,
-                    event_stream,
-                    BodyPurpose::RecoveryInitialize,
-                    &weak,
-                    &inbound,
-                    &origin,
-                )
-                .await
-                .map_err(|error| match error {
-                    McpError::Unconfirmed => McpError::SessionExpired,
-                    other => other,
-                })? {
-                    return Err(McpError::SessionExpired);
-                }
-                {
-                    let session = weak.upgrade().ok_or(McpError::Closed)?;
-                    let _readers = session.readers.lock().expect("http readers");
-                    if session.closing.load(Ordering::SeqCst) {
-                        return Err(McpError::Closed);
+                    let response = attempt.response;
+                    let origin = attempt.origin;
+                    let content_type = response.header("content-type");
+                    let event_stream = sse::is_event_stream(content_type);
+                    if !event_stream && content_type.is_some() && !sse::is_json(content_type) {
+                        return Err(McpError::SessionExpired);
                     }
-                    session.phase.lock().expect("http phase").recovery = Recovery::ReadyForWriter;
-                }
-                let (completed, completion) = oneshot::channel();
-                writer
-                    .send(Outgoing::RecoveryReady {
-                        deadline,
-                        completed,
-                    })
+                    if !consume_body(
+                        response,
+                        event_stream,
+                        BodyPurpose::RecoveryInitialize,
+                        &weak,
+                        &inbound,
+                        &origin,
+                    )
                     .await
-                    .map_err(|_| McpError::Unconfirmed)?;
-                match completion.await {
-                    Ok(result) => result,
-                    // The writer owned this sender. Its drop is not itself
-                    // Unconfirmed: the writer's settlement decides.
-                    Err(_) => {
+                    .map_err(|error| match error {
+                        McpError::Unconfirmed => McpError::SessionExpired,
+                        other => other,
+                    })? {
+                        return Err(McpError::SessionExpired);
+                    }
+                    {
                         let session = weak.upgrade().ok_or(McpError::Closed)?;
-                        Err(session.dropped_writer_sender().await)
+                        let _readers = session.readers.lock().expect("http readers");
+                        if session.closing.load(Ordering::SeqCst) {
+                            return Err(McpError::Closed);
+                        }
+                        session.phase.lock().expect("http phase").recovery =
+                            Recovery::ReadyForWriter;
+                    }
+                    let (completed, completion) = oneshot::channel();
+                    writer
+                        .send(Outgoing::RecoveryReady {
+                            deadline,
+                            completed,
+                        })
+                        .await
+                        .map_err(|_| McpError::Unconfirmed)?;
+                    Ok(completion)
+                };
+                match ready.await {
+                    Err(error) => Startup::Done(Err(error)),
+                    Ok(completion) => match completion.await {
+                        Ok(result) => Startup::Done(result),
+                        // The writer owned this sender. Settlement is read
+                        // after the deadline, below.
+                        Err(_) => Startup::WriterDropped,
+                    },
+                }
+            };
+            let result = match within(&*clock, deadline, startup).await {
+                None => Err(McpError::Timeout),
+                Some(Startup::Done(result)) => result,
+                Some(Startup::WriterDropped) => {
+                    // Outside the deadline. A deadline that is already due
+                    // would otherwise win while this wait is still pending.
+                    // The wait stays bounded: the writer settles right after
+                    // catching the panic, and shutdown aborts this recovery.
+                    match weak.upgrade() {
+                        Some(session) => Err(session.dropped_writer_sender().await),
+                        None => Err(McpError::Closed),
                     }
                 }
             };
-            let result = within(&*clock, deadline, startup)
-                .await
-                .unwrap_or(Err(McpError::Timeout));
             if let Err(error) = result {
                 let result = weak
                     .upgrade()

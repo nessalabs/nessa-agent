@@ -99,9 +99,8 @@ impl Clock for ManualClock {
     }
     fn sleep_until(&self, deadline: ClockInstant) -> ClockSleep {
         let mut now = self.now.subscribe();
-        let started_at = *now.borrow();
         self.waits.lock().unwrap().push(Wait {
-            started: started_at,
+            started: *now.borrow(),
             deadline,
         });
         self.started.send_modify(|started| *started += 1);

@@ -19,12 +19,14 @@
 //! Remote: HttpExchange (injected) ─ HttpSession (owned JSON/SSE bodies and recovery) ─ the same Connection
 //! RecoveryReady / captured peer reply ──bounded FIFO with control reserve──▶ HTTP writer
 //! HttpSession owns binding claims and the shared authorized modern POST policy.
-//! A panicked HTTP writer settles that outcome, records ServerGone, and a
-//! recovery completion it drops waits for the settlement before choosing an
-//! end cause. Request and response debug output keeps scheme, host, an
+//! A panicked HTTP writer settles that outcome, records ServerGone, then logs
+//! the marker. A recovery completion it drops waits for the settlement, outside
+//! the recovery deadline, before choosing an end cause. Request and response
+//! debug output keeps scheme, host, an
 //! explicit port, header names, and a body length. An adapter's own panic
 //! string is the host app's responsibility.
-//! Its watch joins a panic that still fails the task and asks that same owner.
+//! Its watch joins a panic that still fails the task, asks that same owner,
+//! and then logs the same marker.
 //! Shutdown releases a claimed session id even when DELETE panics.
 //! ```
 //!

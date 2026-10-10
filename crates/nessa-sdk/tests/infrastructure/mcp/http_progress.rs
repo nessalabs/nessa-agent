@@ -14,7 +14,6 @@ use crate::infrastructure::clock::{
 };
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::future::{poll_fn, Future};
 use std::pin::Pin;
@@ -3435,113 +3434,12 @@ async fn j27_delete_panic_releases_the_claim_for_reuse() {
     stop(&session).await;
 }
 
-/// Test gate. The writer logs `custom HTTP writer panicked` after it settles
-/// and before it records `ServerGone`. A subscriber on the runtime's workers
-/// blocks inside that event until the connection has ended, so recovery
-/// publishes the settlement. Production records as soon as the log returns.
-struct PanicLogHold {
-    ready: Mutex<bool>,
-    cv: Condvar,
-}
-impl PanicLogHold {
-    fn wait(&self) {
-        let mut ready = self.ready.lock().expect("panic log hold");
-        while !*ready {
-            ready = self.cv.wait(ready).expect("panic log hold");
-        }
-    }
-    fn release(&self) {
-        *self.ready.lock().expect("panic log hold") = true;
-        self.cv.notify_all();
-    }
-}
-struct ReleasePanicLogHold(Arc<PanicLogHold>);
-impl Drop for ReleasePanicLogHold {
-    fn drop(&mut self) {
-        self.0.release();
-    }
-}
-
-struct PanicLogSubscriber {
-    hold: Arc<PanicLogHold>,
-}
-impl tracing::Subscriber for PanicLogSubscriber {
-    fn register_callsite(
-        &self,
-        _metadata: &'static tracing::Metadata<'static>,
-    ) -> tracing::subscriber::Interest {
-        tracing::subscriber::Interest::sometimes()
-    }
-    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
-        metadata.target() == "nessa_sdk::infrastructure::mcp::connection"
-            && *metadata.level() == tracing::Level::ERROR
-    }
-    fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
-        tracing::span::Id::from_u64(1)
-    }
-    fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
-    fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
-    fn event(&self, event: &tracing::Event<'_>) {
-        let mut message = String::new();
-        event.record(&mut PanicLogMessage(&mut message));
-        if message.contains("custom HTTP writer panicked") {
-            tokio::task::block_in_place(|| self.hold.wait());
-        }
-    }
-    fn enter(&self, _span: &tracing::span::Id) {}
-    fn exit(&self, _span: &tracing::span::Id) {}
-}
-struct PanicLogMessage<'a>(&'a mut String);
-impl tracing::field::Visit for PanicLogMessage<'_> {
-    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
-        if field.name() == "message" {
-            self.0.push_str(value);
-        }
-    }
-    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-        if field.name() == "message" && self.0.is_empty() {
-            self.0.push_str(&format!("{value:?}"));
-        }
-    }
-}
-
-thread_local! {
-    static PANIC_LOG_SUBSCRIBER: RefCell<Option<tracing::subscriber::DefaultGuard>> =
-        const { RefCell::new(None) };
-}
-
-fn writer_panic_runtime(hold: Arc<PanicLogHold>) -> tokio::runtime::Runtime {
-    tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .enable_all()
-        .on_thread_start(move || {
-            let subscriber = PanicLogSubscriber {
-                hold: Arc::clone(&hold),
-            };
-            let guard = tracing::subscriber::set_default(subscriber);
-            tracing::callsite::rebuild_interest_cache();
-            PANIC_LOG_SUBSCRIBER.with(|slot| *slot.borrow_mut() = Some(guard));
-        })
-        .build()
-        .expect("writer panic runtime")
-}
-
-fn hold_writer_until_ended(connection: &Connection, hold: &Arc<PanicLogHold>) {
-    let ended = connection.ended();
-    let hold = Arc::clone(hold);
-    tokio::spawn(async move {
-        let _cause = ended.await;
-        hold.release();
-    });
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn j27_queued_recovery_keeps_the_writer_panic() {
     // A queued completion stays in the writer until that task returns, which
-    // is after it has recorded ServerGone. Holding the panic log would keep
-    // the sender alive, so recovery would never run. The in-flight sender in
-    // j27_finish_recovery_panic_defers_to_the_writer drops on the panic, and
-    // that test holds the writer.
+    // is after it has recorded ServerGone. The in-flight sender drops when
+    // finish_recovery panics. The settlement-versus-deadline ordering is
+    // j27_due_recovery_deadline_defers_to_the_writer.
     let (connection, session, peer, probe, gate, _) = held_recovery(202).await;
     probe.event(json!({"id":0,"result":{"protocolVersion":"2025-06-18"}}));
     probe.released().await;
@@ -3567,71 +3465,105 @@ async fn j27_queued_recovery_keeps_the_writer_panic() {
     );
 }
 
-#[test]
-fn j27_finish_recovery_panic_defers_to_the_writer() {
-    // The subscriber blocks the writer after settlement, on its panic log,
-    // until the connection has ended. Recovery publishes that settlement.
-    let hold = Arc::new(PanicLogHold {
-        ready: Mutex::new(false),
-        cv: Condvar::new(),
-    });
-    let runtime = writer_panic_runtime(Arc::clone(&hold));
-    runtime.block_on(async move {
-        let _release = ReleasePanicLogHold(Arc::clone(&hold));
-        let cancelled = Arc::new(Gate::default());
-        let initialized = Arc::new(Gate::default());
-        let (probe, body) = Probe::body();
-        let mut peer = Peer::new();
-        *peer.replacement.lock().unwrap() = Some(body);
-        peer.initialized_headers = Some(initialized.clone());
-        peer.controls
-            .lock()
-            .unwrap()
-            .push_back((202, Some(cancelled.clone())));
-        let peer = Arc::new(peer);
-        let (session, incoming) = transport(peer.clone(), Arc::default());
-        let connection =
-            Connection::open_http(session.clone(), incoming, Arc::new(RuntimeClock::new()));
-        bounded(connection.call("initialize", None))
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn j27_finish_recovery_panic_defers_to_the_writer() {
+    // The initialized POST panics while it owns the completion sender. The
+    // writer records ServerGone. Which cause recovery itself resolves, when
+    // the deadline is already due, is j27_due_recovery_deadline_defers_to_the_writer.
+    let cancelled = Arc::new(Gate::default());
+    let initialized = Arc::new(Gate::default());
+    let (probe, body) = Probe::body();
+    let mut peer = Peer::new();
+    *peer.replacement.lock().unwrap() = Some(body);
+    peer.initialized_headers = Some(initialized.clone());
+    peer.controls
+        .lock()
+        .unwrap()
+        .push_back((202, Some(cancelled.clone())));
+    let peer = Arc::new(peer);
+    let (session, incoming) = transport(peer.clone(), Arc::default());
+    let connection =
+        Connection::open_http(session.clone(), incoming, Arc::new(RuntimeClock::new()));
+    bounded(connection.call("initialize", None))
+        .await
+        .unwrap()
+        .unwrap();
+    peer.expire.store(true, Ordering::SeqCst);
+    assert_eq!(
+        bounded(connection.call("tools/list", None))
             .await
-            .unwrap()
-            .unwrap();
-        peer.expire.store(true, Ordering::SeqCst);
-        assert_eq!(
-            bounded(connection.call("tools/list", None))
-                .await
-                .unwrap_err(),
-            McpError::SessionExpired
-        );
-        probe.polled(1).await;
-        connection
-            .notify("notifications/cancelled", Some(json!({"requestId": 9999})))
-            .await
-            .unwrap();
-        cancelled.reached().await;
-        probe.event(json!({"id":0,"result":{"protocolVersion":"2025-06-18"}}));
-        probe.released().await;
-        bounded(async {
-            while connection.outgoing_queued_for_test() == 0 {
-                tokio::task::yield_now().await;
+            .unwrap_err(),
+        McpError::SessionExpired
+    );
+    probe.polled(1).await;
+    connection
+        .notify("notifications/cancelled", Some(json!({"requestId": 9999})))
+        .await
+        .unwrap();
+    cancelled.reached().await;
+    probe.event(json!({"id":0,"result":{"protocolVersion":"2025-06-18"}}));
+    probe.released().await;
+    bounded(async {
+        while connection.outgoing_queued_for_test() == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    cancelled.release();
+    initialized.reached().await;
+    assert_eq!(connection.outgoing_queued_for_test(), 0);
+    peer.initialized_panic.store(true, Ordering::SeqCst);
+    let mut finished = session.finished();
+    initialized.release();
+    assert_eq!(bounded(connection.ended()).await, McpError::ServerGone);
+    assert_eq!(connection.end_cause(), Some(McpError::ServerGone));
+    assert_eq!(
+        peer.count(|request| method_of(request, "notifications/initialized")),
+        1
+    );
+    bounded(finished.wait_for(|done| *done)).await.unwrap();
+}
+
+#[tokio::test]
+async fn j27_due_recovery_deadline_defers_to_the_writer() {
+    // The test owns the completion sender. Dropping it is the panic drop.
+    // The deadline is already due before recovery polls that drop, and
+    // settlement is published only after that poll. Recovery's own error on
+    // the existing inbound channel is the observation.
+    let clock = Arc::new(ManualClock::default());
+    let peer = Arc::new(Peer::new());
+    let (session, mut incoming) = transport(peer.clone(), Arc::default());
+    let (writer, mut queue) = OutgoingQueue::new(1, 0);
+    session.set_writer(writer, clock.clone());
+    initialize(&session).await;
+    peer.expire.store(true, Ordering::SeqCst);
+    let _ = call(&session, 2).await;
+    let Outgoing::RecoveryReady {
+        deadline,
+        completed,
+    } = bounded(queue.recv()).await.unwrap()
+    else {
+        panic!("recovery handoff");
+    };
+    drop(completed);
+    clock.advance(INITIALIZE_TIMEOUT);
+    assert!(clock.now() >= deadline);
+    // Recovery must observe the drop while the deadline is ready and before
+    // settlement. Those turns are the poll where `within` would choose Timeout.
+    for _ in 0..8 {
+        tokio::task::yield_now().await;
+    }
+    session.settle_writer(true);
+    let cause = bounded(async {
+        loop {
+            if let Some(Err(error)) = incoming.recv().await {
+                break error;
             }
-        })
-        .await;
-        cancelled.release();
-        initialized.reached().await;
-        assert_eq!(connection.outgoing_queued_for_test(), 0);
-        hold_writer_until_ended(&connection, &hold);
-        peer.initialized_panic.store(true, Ordering::SeqCst);
-        let mut finished = session.finished();
-        initialized.release();
-        assert_eq!(bounded(connection.ended()).await, McpError::ServerGone);
-        assert_eq!(connection.end_cause(), Some(McpError::ServerGone));
-        assert_eq!(
-            peer.count(|request| method_of(request, "notifications/initialized")),
-            1
-        );
-        bounded(finished.wait_for(|done| *done)).await.unwrap();
-    });
+        }
+    })
+    .await;
+    assert_eq!(cause, McpError::ServerGone);
+    stop(&session).await;
 }
 
 #[tokio::test]

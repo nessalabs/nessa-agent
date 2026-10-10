@@ -1,5 +1,5 @@
 //! ADR392 J23 and J27: retained admission snapshot, and the HTTP writer watch.
-use super::{watch_http_writer, Connection, Shared, State, NOTICES};
+use super::{record_writer_panic, watch_http_writer, Connection, Shared, State, NOTICES};
 use crate::infrastructure::clock::RuntimeClock;
 use crate::infrastructure::mcp::http::{HttpSession, SendOutcome};
 use crate::infrastructure::mcp::{
@@ -13,7 +13,7 @@ use std::{
     future::Future,
     io::Write,
     sync::{
-        atomic::AtomicU64,
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{sync_channel, SyncSender},
         Arc, Condvar, Mutex,
     },
@@ -231,6 +231,82 @@ async fn closed_cause_survives_a_panicked_writer() {
             .count(),
         1
     );
+}
+
+/// Sees the panic marker only after [`record_writer_panic`] has stored
+/// `ServerGone`. A log that runs first leaves this false.
+struct EndBeforeLog {
+    shared: Arc<Shared>,
+    saw_recorded_end: Arc<AtomicBool>,
+}
+impl tracing::Subscriber for EndBeforeLog {
+    fn register_callsite(
+        &self,
+        _metadata: &'static tracing::Metadata<'static>,
+    ) -> tracing::subscriber::Interest {
+        tracing::subscriber::Interest::sometimes()
+    }
+    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+        metadata.target() == "nessa_sdk::infrastructure::mcp::connection"
+            && *metadata.level() == tracing::Level::ERROR
+    }
+    fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+    fn event(&self, event: &tracing::Event<'_>) {
+        let mut message = String::new();
+        event.record(&mut PanicMarker(&mut message));
+        if message.contains("custom HTTP writer panicked") {
+            self.saw_recorded_end.store(
+                recorded_cause(&self.shared) == Some(McpError::ServerGone),
+                Ordering::SeqCst,
+            );
+        }
+    }
+    fn enter(&self, _span: &tracing::span::Id) {}
+    fn exit(&self, _span: &tracing::span::Id) {}
+}
+struct PanicMarker<'a>(&'a mut String);
+impl tracing::field::Visit for PanicMarker<'_> {
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        if field.name() == "message" {
+            self.0.push_str(value);
+        }
+    }
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        if field.name() == "message" && self.0.is_empty() {
+            self.0.push_str(&format!("{value:?}"));
+        }
+    }
+}
+
+#[tokio::test]
+async fn writer_panic_log_follows_the_recorded_end() {
+    let exchange = Arc::new(RecordedExchange {
+        methods: Mutex::new(vec![]),
+    });
+    let (session, _incoming) = open_session(exchange);
+    let shared = open_state();
+    let saw_recorded_end = Arc::new(AtomicBool::new(false));
+    let subscriber = EndBeforeLog {
+        shared: Arc::clone(&shared),
+        saw_recorded_end: Arc::clone(&saw_recorded_end),
+    };
+    let _guard = tracing::subscriber::set_default(subscriber);
+    tracing::callsite::rebuild_interest_cache();
+    let mut finished = session.finished();
+    record_writer_panic(&session, &shared);
+    assert!(
+        saw_recorded_end.load(Ordering::SeqCst),
+        "panic log ran before ServerGone was recorded"
+    );
+    assert_eq!(recorded_cause(&shared), Some(McpError::ServerGone));
+    timeout(BOUND, finished.wait_for(|done| *done))
+        .await
+        .expect("delete finishes")
+        .expect("finished watch");
 }
 
 struct HoldWake {

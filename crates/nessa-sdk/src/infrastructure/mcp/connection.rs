@@ -15,16 +15,18 @@
 //! cause, and every pending call gets that cause; a call admitted after the
 //! end gets it too, because admission and the end share one lock. A panicked
 //! HTTP writer catches that panic on every await it performs, discards the
-//! payload, and settles the writer as panicked. It then logs a fixed marker
-//! and the server id and asks the same owner for [`McpError::ServerGone`]. A
-//! recovery completion the writer drops waits for that settlement: panic
-//! resolves [`McpError::ServerGone`], and a clean finish or cancellation
-//! resolves [`McpError::Unconfirmed`]. The watch still joins a panic that
-//! escapes the writer and asks for the same cause. The tracing record does
-//! not include the panic message. The default panic hook can still print that
-//! message. Request and response debug output keeps the method,
-//! `scheme://host` and a port when the URL has one, header names, and the
-//! body length. An adapter's own panic string is the host app's
+//! payload, and settles the writer as panicked. It then asks the same owner
+//! for [`McpError::ServerGone`] and, after that record, logs a fixed marker
+//! and the server id. A recovery completion the writer drops waits for that
+//! settlement outside the recovery deadline: panic resolves
+//! [`McpError::ServerGone`], and a clean finish or cancellation resolves
+//! [`McpError::Unconfirmed`]. An already-due deadline does not replace that
+//! settlement with a timeout. The watch still joins a panic that escapes the
+//! writer, settles that outcome, and asks for the same cause before the same
+//! log. The tracing record does not include the panic message. The default
+//! panic hook can still print that message. Request and response debug output
+//! keeps the method, `scheme://host` and a port when the URL has one, header
+//! names, and the body length. An adapter's own panic string is the host app's
 //! responsibility. Drop and close abort that writer before its watch, so an
 //! exchange still in flight cannot retain the session.
 use super::framing::{self, FrameEnd, Frames, MAX_FRAME_BYTES};
@@ -358,6 +360,7 @@ impl Connection {
                 // A completion still sitting in the queue stays in this task
                 // until it returns, which is after ServerGone is recorded.
                 // Recovery waits for the settlement instead of deciding.
+                // The log follows the record, so a subscriber cannot hold the fence.
                 session.settle_writer(true);
                 record_writer_panic(&session, &shared);
             }
@@ -572,13 +575,15 @@ fn catch_writer_panic<F: Future>(future: F) -> impl Future<Output = Result<F::Ou
     })
 }
 
-/// Log a fixed marker and the server id, then [`shutdown_and_end`] with
-/// [`McpError::ServerGone`]. The tracing record does not include the panic
-/// message. The default panic hook can still print that message. An adapter's
-/// own panic string is the host app's responsibility.
+/// [`shutdown_and_end`] with [`McpError::ServerGone`], then log a fixed marker
+/// and the server id. The fence and the end are recorded before the log, so a
+/// subscriber that blocks or panics on the event cannot leave the session
+/// unfenced. The tracing record does not include the panic message. The
+/// default panic hook can still print that message. An adapter's own panic
+/// string is the host app's responsibility.
 fn record_writer_panic(session: &HttpSession, shared: &Shared) {
-    tracing::error!(server = %session.server(), "custom HTTP writer panicked");
     shutdown_and_end(session, shared, McpError::ServerGone);
+    tracing::error!(server = %session.server(), "custom HTTP writer panicked");
 }
 
 /// First settlement wins. A caught panic settles itself as panicked before
@@ -592,14 +597,16 @@ impl Drop for SettleWriter<'_> {
 }
 
 /// Join the HTTP writer. A panic that still fails the task is not a second
-/// end owner: [`record_writer_panic`]. An exchange panic is caught in the
-/// writer, which settles that outcome and records [`McpError::ServerGone`].
-/// A cause already recorded stays. A cancellation records nothing.
+/// end owner: settle, then [`record_writer_panic`]. An exchange panic is
+/// caught in the writer, which settles that outcome and records
+/// [`McpError::ServerGone`] before its log. A cause already recorded stays.
+/// A cancellation records nothing.
 async fn watch_http_writer(writer: JoinHandle<()>, shared: Arc<Shared>, session: Arc<HttpSession>) {
     let Err(error) = writer.await else {
         return;
     };
     if error.is_panic() {
+        session.settle_writer(true);
         record_writer_panic(&session, &shared);
     }
 }
