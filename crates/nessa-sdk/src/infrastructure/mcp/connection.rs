@@ -13,7 +13,22 @@
 //! Arrows are frames. Ids are this connection's own, so callers with ids of
 //! their own (stand-ins) cannot collide. The connection ends once, with one
 //! cause, and every pending call gets that cause; a call admitted after the
-//! end gets it too, because admission and the end share one lock.
+//! end gets it too, because admission and the end share one lock. A panicked
+//! HTTP writer catches that panic on every await it performs, discards the
+//! payload, and settles the writer as panicked. It then asks the same owner
+//! for [`McpError::ServerGone`] and, after that record, logs a fixed marker
+//! and the server id. A recovery completion the writer drops waits for that
+//! settlement outside the recovery deadline: panic resolves
+//! [`McpError::ServerGone`], and a clean finish or cancellation resolves
+//! [`McpError::Unconfirmed`]. An already-due deadline does not replace that
+//! settlement with a timeout. The watch still joins a panic that escapes the
+//! writer, settles that outcome, and asks for the same cause before the same
+//! log. The tracing record does not include the panic message. The default
+//! panic hook can still print that message. Request and response debug output
+//! keeps the method, `scheme://host` and a port when the URL has one, header
+//! names, and the body length. An adapter's own panic string is the host app's
+//! responsibility. Drop and close abort that writer before its watch, so an
+//! exchange still in flight cannot retain the session.
 use super::framing::{self, FrameEnd, Frames, MAX_FRAME_BYTES};
 use super::http::{HttpSession, SendOutcome};
 use super::McpError;
@@ -21,10 +36,13 @@ use crate::infrastructure::clock::{within, Clock, ClockInstant};
 use serde_json::{json, Value};
 use std::{
     collections::HashMap,
+    future::Future,
+    panic::AssertUnwindSafe,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex, Weak,
     },
+    task::Poll,
     time::Duration,
 };
 #[cfg(all(test, unix))]
@@ -40,7 +58,7 @@ use tokio::{
         },
         oneshot, watch, OwnedSemaphorePermit, Semaphore,
     },
-    task::JoinHandle,
+    task::{AbortHandle, JoinHandle},
 };
 
 /// The most calls waiting on one server at a time.
@@ -215,14 +233,18 @@ pub(crate) struct Connection {
     shared: Arc<Shared>,
     outgoing: OutgoingQueue,
     clock: Arc<dyn Clock>,
-    writer: JoinHandle<()>,
+    /// For stdio, the writer task. For HTTP, the watch joined to [`Self::http_writer`].
+    writer_watch: JoinHandle<()>,
+    /// Abort handle of the HTTP writer the watch joins. `None` for stdio,
+    /// where [`Self::writer_watch`] is the writer.
+    http_writer: Option<AbortHandle>,
     reader: JoinHandle<()>,
     /// Set for a remote session, so close can DELETE its upstream id once.
     http: Option<Arc<HttpSession>>,
 }
 impl Drop for Connection {
     fn drop(&mut self) {
-        self.writer.abort();
+        self.abort_writer();
         self.reader.abort();
     }
 }
@@ -243,7 +265,7 @@ impl Connection {
             next_id: AtomicU64::new(1),
         });
         let (outgoing, mut frames) = OutgoingQueue::new(OUTGOING_FRAMES, 0);
-        let writer = tokio::spawn({
+        let writer_watch = tokio::spawn({
             let shared = shared.clone();
             async move {
                 while let Some(frame) = frames.recv().await {
@@ -266,7 +288,8 @@ impl Connection {
             shared,
             outgoing,
             clock,
-            writer,
+            writer_watch,
+            http_writer: None,
             reader,
             http: None,
         }
@@ -292,37 +315,59 @@ impl Connection {
         });
         let (outgoing, mut frames) = OutgoingQueue::new(OUTGOING_FRAMES, HTTP_CONTROL_RESERVE);
         session.set_writer(outgoing.clone(), clock.clone());
-        let writer = tokio::spawn({
+        let writing = tokio::spawn({
             let shared = shared.clone();
             let session = session.clone();
             async move {
-                while let Some(frame) = frames.recv().await {
-                    let outcome = match frame {
-                        Outgoing::Frame(frame) => session.dispatch(&frame).await,
-                        Outgoing::PeerReply { frame, context } => {
-                            session.dispatch_reply(&frame, context).await
-                        }
-                        Outgoing::RecoveryReady {
-                            deadline,
-                            completed,
-                        } => session.finish_recovery(deadline, completed).await,
-                    };
-                    match outcome {
-                        SendOutcome::Done => {}
-                        SendOutcome::FailCall { id, error } => {
-                            if let Some(id) = id {
-                                shared.fail_one(id, error);
+                // A caught panic settles itself before this drops. The first
+                // settlement sticks, so this drop does not overwrite it.
+                let _settle = SettleWriter(&session);
+                // Every await the writer performs is inside this catch:
+                // the queue recv, dispatch, dispatch_reply, and
+                // finish_recovery (including the initialized POST).
+                let panicked = catch_writer_panic(async {
+                    while let Some(frame) = frames.recv().await {
+                        let outcome = match frame {
+                            Outgoing::Frame(frame) => session.dispatch(&frame).await,
+                            Outgoing::PeerReply { frame, context } => {
+                                session.dispatch_reply(&frame, context).await
+                            }
+                            Outgoing::RecoveryReady {
+                                deadline,
+                                completed,
+                            } => session.finish_recovery(deadline, completed).await,
+                        };
+                        match outcome {
+                            SendOutcome::Done => {}
+                            SendOutcome::FailCall { id, error } => {
+                                if let Some(id) = id {
+                                    shared.fail_one(id, error);
+                                }
+                            }
+                            SendOutcome::End(error) => {
+                                shutdown_and_end(&session, &shared, error);
+                                return;
                             }
                         }
-                        SendOutcome::End(error) => {
-                            session.shutdown();
-                            shared.end(error);
-                            return;
-                        }
                     }
+                })
+                .await
+                .is_err();
+                if !panicked {
+                    return;
                 }
+                // finish_recovery's completion sender drops with this panic.
+                // A completion still sitting in the queue stays in this task
+                // until it returns, which is after ServerGone is recorded.
+                // Recovery waits for the settlement instead of deciding.
+                // The log follows the record, so a subscriber cannot hold the fence.
+                session.settle_writer(true);
+                record_writer_panic(&session, &shared);
             }
         });
+        let http_writer = writing.abort_handle();
+        let writer_watch =
+            tokio::spawn(watch_http_writer(writing, shared.clone(), session.clone()));
         let reader = tokio::spawn(read_messages(
             incoming,
             shared.clone(),
@@ -333,7 +378,8 @@ impl Connection {
             shared,
             outgoing,
             clock,
-            writer,
+            writer_watch,
+            http_writer: Some(http_writer),
             reader,
             http: Some(session),
         }
@@ -466,10 +512,102 @@ impl Connection {
     /// waiting on it get `cause`.
     pub(crate) fn close(&self, cause: McpError) {
         if let Some(http) = &self.http {
-            http.shutdown();
+            shutdown_and_end(http, &self.shared, cause);
+        } else {
+            self.shared.end(cause);
         }
-        self.shared.end(cause);
-        self.writer.abort();
+        self.abort_writer();
+    }
+
+    /// Stop the frame writer. For HTTP this aborts the writer before the
+    /// watch, so dropping the watch cannot leave that writer holding the session.
+    fn abort_writer(&self) {
+        if let Some(http_writer) = &self.http_writer {
+            http_writer.abort();
+        }
+        self.writer_watch.abort();
+    }
+
+    /// Abort the HTTP writer and leave its watch running, so a test can see
+    /// that cancellation does not record an end. The callers are the Unix
+    /// MCP fixtures.
+    #[cfg(all(test, unix))]
+    pub(crate) fn abort_http_writer_for_test(&self) {
+        self.http_writer.as_ref().expect("http writer").abort();
+    }
+
+    /// Whether the HTTP writer watch has finished joining that task.
+    #[cfg(all(test, unix))]
+    pub(crate) fn http_writer_watch_finished(&self) -> bool {
+        self.writer_watch.is_finished()
+    }
+
+    /// Frames waiting in the writer queue, not the one the writer already
+    /// dequeued. Unix MCP fixtures use this to see a `RecoveryReady` arrive
+    /// before the writer panics.
+    #[cfg(all(test, unix))]
+    pub(crate) fn outgoing_queued_for_test(&self) -> usize {
+        self.outgoing
+            .sender
+            .max_capacity()
+            .saturating_sub(self.outgoing.sender.capacity())
+    }
+}
+
+/// Fence new HTTP posts, then record `cause` once. The fence is first so a
+/// wake inside [`Shared::end`] already sees it.
+fn shutdown_and_end(session: &HttpSession, shared: &Shared, cause: McpError) {
+    session.shutdown();
+    shared.end(cause);
+}
+
+/// Poll `future` and discard a panic payload. The future is not resumed after
+/// that panic. The caller settles the writer after this await returns, which
+/// drops `future` and any sender it still owns.
+fn catch_writer_panic<F: Future>(future: F) -> impl Future<Output = Result<F::Output, ()>> {
+    let mut future = Box::pin(future);
+    std::future::poll_fn(move |context| {
+        match std::panic::catch_unwind(AssertUnwindSafe(|| future.as_mut().poll(context))) {
+            Ok(Poll::Pending) => Poll::Pending,
+            Ok(Poll::Ready(value)) => Poll::Ready(Ok(value)),
+            Err(_) => Poll::Ready(Err(())),
+        }
+    })
+}
+
+/// [`shutdown_and_end`] with [`McpError::ServerGone`], then log a fixed marker
+/// and the server id. The fence and the end are recorded before the log, so a
+/// subscriber that blocks or panics on the event cannot leave the session
+/// unfenced. The tracing record does not include the panic message. The
+/// default panic hook can still print that message. An adapter's own panic
+/// string is the host app's responsibility.
+fn record_writer_panic(session: &HttpSession, shared: &Shared) {
+    shutdown_and_end(session, shared, McpError::ServerGone);
+    tracing::error!(server = %session.server(), "custom HTTP writer panicked");
+}
+
+/// First settlement wins. A caught panic settles itself as panicked before
+/// this drop. Cancellation and a clean exit settle as not panicked.
+struct SettleWriter<'a>(&'a HttpSession);
+
+impl Drop for SettleWriter<'_> {
+    fn drop(&mut self) {
+        self.0.settle_writer(std::thread::panicking());
+    }
+}
+
+/// Join the HTTP writer. A panic that still fails the task is not a second
+/// end owner: settle, then [`record_writer_panic`]. An exchange panic is
+/// caught in the writer, which settles that outcome and records
+/// [`McpError::ServerGone`] before its log. A cause already recorded stays.
+/// A cancellation records nothing.
+async fn watch_http_writer(writer: JoinHandle<()>, shared: Arc<Shared>, session: Arc<HttpSession>) {
+    let Err(error) = writer.await else {
+        return;
+    };
+    if error.is_panic() {
+        session.settle_writer(true);
+        record_writer_panic(&session, &shared);
     }
 }
 
@@ -651,9 +789,10 @@ async fn read_messages(
         }
     };
     if let Some(session) = session.upgrade() {
-        session.shutdown();
+        shutdown_and_end(&session, &shared, cause);
+    } else {
+        shared.end(cause);
     }
-    shared.end(cause);
 }
 
 #[cfg(all(test, unix))]
