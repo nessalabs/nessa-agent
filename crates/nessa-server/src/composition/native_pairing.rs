@@ -26,6 +26,7 @@ use crate::device_pairing::infrastructure::{
     NativeEnrollmentConnections, NativeEnrollmentListener, PairingOwnerCommands,
     PairingRuntimeDependencies, TcpEnrollmentAccept,
 };
+use crate::peer_gateways::application::EnrollmentEntropy;
 use crate::peer_gateways::infrastructure::{
     DurablePeerAudit, PeerCommands, PeerRecords, TcpPeerConnector,
 };
@@ -146,6 +147,7 @@ pub(super) async fn prepare(
             inputs.clock.clone(),
         )),
         Arc::new(TcpPeerConnector),
+        Arc::new(|| Box::new(OsEntropy) as Box<dyn EnrollmentEntropy>),
     );
     let gateway = Arc::new(
         GatewayPairing::open(PairingRuntimeDependencies {

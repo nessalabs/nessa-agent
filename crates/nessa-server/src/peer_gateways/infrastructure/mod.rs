@@ -6,7 +6,7 @@ mod commands;
 mod connector;
 mod records;
 pub use audit::DurablePeerAudit;
-pub use commands::{PeerCommands, PeerError, CONNECT};
+pub use commands::{PeerCommands, PeerError, AUDIT_DEADLINE, CONNECT};
 pub use connector::TcpPeerConnector;
 pub use records::{
     PeerEntry, PeerPhase, PeerRecord, PeerRecords, PeerSlot, SlotFound, SlotRefusal, SlotSave,

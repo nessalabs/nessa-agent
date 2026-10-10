@@ -1,7 +1,7 @@
 //! The dialing side of a peer gateway over the real `/session` route, Cedar,
 //! and a real peer: gateway B enrolls, with its own native key, into gateway
 //! A's peer invitation, keeping a reference to that key and never a copy.
-//! Rows P1–P14 in `docs/design/auth/peer-gateways.md` ("The dialing side").
+//! Rows P1–P16 in `docs/design/auth/peer-gateways.md` ("The dialing side").
 use super::product_client::ProductClient;
 use super::support::{private_root, Fixture, Time, WAIT};
 use base64::{engine::general_purpose::STANDARD, Engine};
@@ -35,12 +35,12 @@ use nessa_server::{
     app::dependencies::RuntimeDependencies,
     peer_gateways::{
         application::{
-            PeerAudit, PeerAuditFuture, PeerAuditRecord, PeerAuditUnavailable, PeerConnectFuture,
-            PeerConnector,
+            EnrollmentEntropy, EnrollmentEntropySource, PeerAudit, PeerAuditFuture,
+            PeerAuditRecord, PeerAuditUnavailable, PeerConnectFuture, PeerConnector,
         },
         infrastructure::{
             DurablePeerAudit, PeerCommands, PeerEntry, PeerError, PeerPhase, PeerRecords,
-            SlotRefusal, TcpPeerConnector, CONNECT,
+            SlotRefusal, TcpPeerConnector, AUDIT_DEADLINE, CONNECT,
         },
     },
     product::{ProductDependencies, ProductRouteState},
@@ -74,6 +74,10 @@ struct Audit {
     durable: DurablePeerAudit,
     directory: PathBuf,
     refuse: Mutex<Option<&'static str>>,
+    /// Records of this kind are never answered.
+    hang: Mutex<Option<&'static str>>,
+    /// A record was left unanswered.
+    hung: std::sync::atomic::AtomicBool,
 }
 impl Audit {
     /// Refuse every record of `kind` (`peer_enroll_requested`, ...) from now.
@@ -92,6 +96,11 @@ impl Audit {
         records
     }
 }
+/// The operating system's generator, as composition supplies it.
+fn os_entropy() -> EnrollmentEntropySource {
+    Arc::new(|| Box::new(OsEntropy) as Box<dyn EnrollmentEntropy>)
+}
+
 fn kind(record: &PeerAuditRecord) -> &'static str {
     match record {
         PeerAuditRecord::EnrollRequested { .. } => "peer_enroll_requested",
@@ -104,6 +113,10 @@ impl PeerAudit for Audit {
     fn record(&self, record: PeerAuditRecord) -> PeerAuditFuture<'_> {
         if *self.refuse.lock().unwrap() == Some(kind(&record)) {
             return Box::pin(async { Err(PeerAuditUnavailable) });
+        }
+        if *self.hang.lock().unwrap() == Some(kind(&record)) {
+            self.hung.store(true, std::sync::atomic::Ordering::SeqCst);
+            return Box::pin(std::future::pending());
         }
         self.durable.record(record)
     }
@@ -154,6 +167,8 @@ impl Dialing {
             ),
             directory: root.join("peer-gateways-audit"),
             refuse: Mutex::new(None),
+            hang: Mutex::new(None),
+            hung: false.into(),
         });
         let product = serve(
             fixture,
@@ -162,6 +177,7 @@ impl Dialing {
                 RuntimeDependencies::default().clock,
                 audit.clone(),
                 Arc::new(TcpPeerConnector),
+                os_entropy(),
             )),
         )
         .await;
@@ -924,6 +940,7 @@ async fn a_connect_that_never_answers_ends_when_the_injected_clock_passes_its_de
             dialed: dialed.clone(),
             dropped: dropped.clone(),
         }),
+        os_entropy(),
     ));
     let address: SocketAddr = "192.0.2.1:7443".parse().unwrap();
     let mut enrolling = tokio::spawn({
@@ -1014,6 +1031,7 @@ async fn a_connect_completed_after_the_deadline_is_refused_and_closed() {
             release: Mutex::new(Some(released)),
             dialed: dialed.clone(),
         }),
+        os_entropy(),
     ));
     let enrolling = tokio::spawn({
         let commands = commands.clone();
@@ -1153,6 +1171,7 @@ async fn every_peer_command_answer_keeps_one_intent_and_one_outcome() {
             RuntimeDependencies::default().clock,
             dialing.audit.clone(),
             Arc::new(TcpPeerConnector),
+            os_entropy(),
         ))
     };
     let dialing = Dialing::new(&fixture).await;
@@ -1344,4 +1363,179 @@ async fn every_peer_command_answer_keeps_one_intent_and_one_outcome() {
 
 fn parse_code() -> nessa_auth::adapters::pairing::ManualCode {
     nessa_auth::adapters::pairing::ManualCode::parse(b"ABCD-2345").unwrap()
+}
+
+/// Entropy that is never available, as a failed operating-system generator.
+struct NoEntropy;
+impl nessa_auth::adapters::pairing::RngCore for NoEntropy {
+    fn next_u32(&mut self) -> u32 {
+        0
+    }
+    fn next_u64(&mut self) -> u64 {
+        0
+    }
+    fn fill_bytes(&mut self, bytes: &mut [u8]) {
+        bytes.fill(0);
+    }
+    fn try_fill_bytes(
+        &mut self,
+        _: &mut [u8],
+    ) -> Result<(), nessa_auth::adapters::pairing::rand::Error> {
+        use nessa_auth::adapters::pairing::rand::Error;
+        Err(Error::from(
+            std::num::NonZeroU32::new(Error::CUSTOM_START).unwrap(),
+        ))
+    }
+}
+impl nessa_auth::adapters::pairing::CryptoRng for NoEntropy {}
+
+/// Row P15: each enrollment takes its entropy from the injected source. One
+/// that fails ends the enrollment `peer_unavailable`, saving nothing, with
+/// its intent and outcome kept like any other.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_enrollment_whose_entropy_fails_is_unavailable_and_audited() {
+    use nessa_auth::{adapters::pairing::ManualCode, domain::PrincipalId};
+    let fixture = Fixture::new().await;
+    let (native, stop, listener, _) = fixture.listener().await;
+    let dialing = Dialing::new(&fixture).await;
+    let commands = PeerCommands::new(
+        dialing.records.clone(),
+        RuntimeDependencies::default().clock,
+        dialing.audit.clone(),
+        Arc::new(TcpPeerConnector),
+        Arc::new(|| Box::new(NoEntropy) as Box<dyn EnrollmentEntropy>),
+    );
+    let (code, id) = invite(&fixture, ConsentClass::PeerRead).await;
+    let owner = PrincipalId::new("owner").unwrap();
+    let answer = commands
+        .enroll(native, ManualCode::parse(code.as_bytes()).unwrap(), &owner)
+        .await;
+    assert_eq!(answer, Err(PeerError::Unavailable));
+    assert!(dialing.files().is_empty(), "nothing is saved");
+    let records = dialing.audit.records();
+    let operation = records[0]["operationId"].as_str().unwrap().to_owned();
+    assert_pair(
+        &records,
+        &operation,
+        &Expected {
+            command: "peer_enroll",
+            code: Some("peer_unavailable"),
+            address: Some(native.to_string()),
+            peer: None,
+        },
+    );
+    assert_eq!(records.len(), 2);
+    cancel(&fixture, id).await;
+    stop.send(()).unwrap();
+    listener.await.unwrap().unwrap();
+}
+
+/// Wait, bounded, until the audit has left a record unanswered.
+async fn until_hung(audit: &Audit) {
+    tokio::time::timeout(WAIT, async {
+        while !audit.hung.load(std::sync::atomic::Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the audit is handed the record");
+}
+
+/// Row P16: each audit record gets `AUDIT_DEADLINE` by the injected clock.
+/// An intent never acknowledged ends the call `peer_audit_unavailable` once
+/// the clock passes it, with nothing dialed; an outcome never acknowledged
+/// does the same while the effect stands.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_audit_that_never_answers_ends_the_call_at_its_deadline() {
+    use nessa_auth::{adapters::pairing::ManualCode, domain::PrincipalId};
+    use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
+    let fixture = Fixture::new().await;
+    let dialing = Dialing::new(&fixture).await;
+    let clock = Arc::new(Manual(1_000.into()));
+    let dialed = Arc::new(AtomicBool::new(false));
+    let commands = Arc::new(PeerCommands::new(
+        dialing.records.clone(),
+        clock.clone(),
+        dialing.audit.clone(),
+        Arc::new(Never {
+            dialed: dialed.clone(),
+            dropped: Arc::new(AtomicBool::new(false)),
+        }),
+        os_entropy(),
+    ));
+    let owner = PrincipalId::new("owner").unwrap();
+    let deadline = AUDIT_DEADLINE.as_millis() as u64;
+
+    // The intent: held while the clock stands, refused once it passes.
+    *dialing.audit.hang.lock().unwrap() = Some("peer_enroll_requested");
+    let mut enrolling = tokio::spawn({
+        let (commands, owner) = (commands.clone(), owner.clone());
+        async move {
+            commands
+                .enroll(
+                    "192.0.2.1:7443".parse().unwrap(),
+                    ManualCode::generate(&mut OsEntropy),
+                    &owner,
+                )
+                .await
+        }
+    });
+    until_hung(&dialing.audit).await;
+    clock.0.store(1_000 + deadline - 1, SeqCst);
+    let held = tokio::time::timeout(
+        nessa_protocol::pairing::socket::WAKE_TICK * 3,
+        &mut enrolling,
+    )
+    .await;
+    assert!(held.is_err(), "the call waits on its intent");
+    clock.0.store(1_000 + deadline, SeqCst);
+    let answer = tokio::time::timeout(WAIT, enrolling)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(answer, Err(PeerError::AuditUnavailable));
+    assert!(!dialed.load(SeqCst), "nothing is dialed without an intent");
+    assert!(dialing.audit.records().is_empty());
+
+    // The outcome: a kept peer is forgotten, and the answer refused at the
+    // deadline while the removal stands.
+    let intent = PublicIntent::new(
+        InvitationId::new([1; 16]),
+        AttemptId::new([2; 16]),
+        ConsentIntentId::new([3; 16]),
+        1,
+        1,
+        ConsentClass::PeerRead,
+    )
+    .unwrap();
+    let peer = NativeIdentity::generate(&mut OsEntropy).unwrap();
+    dialing
+        .records
+        .enrolling("127.0.0.1:7443".parse().unwrap())
+        .save_pending(
+            dialing.identity.key_material(),
+            &peer.public_spki(),
+            intent,
+            None,
+        )
+        .unwrap();
+    let key = DeviceKey::new(peer.public_spki()[12..].try_into().unwrap());
+    dialing.audit.hung.store(false, SeqCst);
+    *dialing.audit.hang.lock().unwrap() = Some("peer_forget_finished");
+    let forgetting = tokio::spawn({
+        let (commands, owner) = (commands.clone(), owner.clone());
+        async move { commands.forget(key, &owner).await }
+    });
+    until_hung(&dialing.audit).await;
+    let now = clock.0.load(SeqCst);
+    clock.0.store(now + deadline, SeqCst);
+    let answer = tokio::time::timeout(WAIT, forgetting)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(answer, Err(PeerError::AuditUnavailable));
+    assert!(dialing.files().is_empty(), "the removal stands");
+    let kept = dialing.audit.records();
+    assert_eq!(kept.len(), 1, "{kept:?}");
+    assert_eq!(kept[0]["kind"], "peer_forget_requested");
 }
