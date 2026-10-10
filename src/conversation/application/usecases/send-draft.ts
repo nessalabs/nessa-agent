@@ -156,6 +156,8 @@ export function submissionRefusalMessage(reason: CommandFailure): string | undef
     case "environment-not-configured":
     case "environment-unavailable":
     case "environment-version-mismatch":
+    case "environment-platform-unsupported":
+    case "environment-install-failed":
     case "approval-mode-unavailable":
     case "approval-mode-not-applied":
     case "approval-mode-uncertain":

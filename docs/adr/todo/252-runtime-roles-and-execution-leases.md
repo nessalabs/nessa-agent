@@ -172,8 +172,11 @@ Environments lane, in order:
   foundation; merged in [#715](https://github.com/nessalabs/nessa-agent/pull/715)). *Gate:*
   lagging-subscriber close, replay/live changeover, slow-client isolation,
   measured latency; polling deleted in the same change.
-- [ ] **F. First-use install over SSH** ([#703](https://github.com/nessalabs/nessa-agent/issues/703)), reusing the
-  verified download of [173](../done/173-fetch-agent-runtimes.md).
+- [x] **F. First-use install over SSH** ([#703](https://github.com/nessalabs/nessa-agent/issues/703); merged in
+  [#735](https://github.com/nessalabs/nessa-agent/pull/735)). The gateway sends its own build,
+  verified on the host, so only a host of its own platform is served; a
+  published build per platform, through the verified download of
+  [173](../done/173-fetch-agent-runtimes.md), is [#734](https://github.com/nessalabs/nessa-agent/issues/734).
   *Gate:* install refuses on fingerprint or version mismatch; macOS and
   Linux hosts verified.
 - [ ] **G. Per-conversation Read grants** ([#704](https://github.com/nessalabs/nessa-agent/issues/704)). A Cedar grant

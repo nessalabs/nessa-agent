@@ -30,7 +30,8 @@
 //! `tests::post_streams` and `tests::http_progress`).
 //!
 //! Dropping the session aborts its GET and POST streams and asks for the same single
-//! DELETE. The DELETE itself is best-effort and bounded by the exchange.
+//! DELETE. The DELETE itself is best-effort and bounded by the exchange. A panic
+//! in that DELETE still releases the claimed id and signals [`HttpSession::finished`].
 #![deny(missing_docs)]
 
 use super::authorization::{Bearer, RemoteAuthorization};
@@ -173,6 +174,10 @@ pub struct HttpSession {
     /// Becomes true once close has nothing left to wait for, including a
     /// DELETE that does not apply.
     finished: watch::Sender<bool>,
+    /// `None` while the HTTP writer task is running. `Some(true)` after it
+    /// panics. `Some(false)` after it finishes or is cancelled. A dropped
+    /// recovery completion waits for this instead of deciding an end cause.
+    writer_settled: watch::Sender<Option<bool>>,
 }
 
 #[derive(Clone)]
@@ -250,8 +255,51 @@ impl HttpSession {
             readers: Mutex::new(ReaderTasks::default()),
             post_capacity: Arc::new(Semaphore::new(MAX_POST_STREAMS)),
             finished: watch::channel(false).0,
+            writer_settled: watch::channel(None).0,
         });
         (session, incoming)
+    }
+
+    /// The configured server this session posts for. This is an identity, not
+    /// a credential or a request body.
+    pub(crate) fn server(&self) -> Uuid {
+        self.server
+    }
+
+    /// Record the HTTP writer task's outcome once. Later calls keep the first.
+    /// `panicked` is the writer's own result: a dropped recovery completion
+    /// resolves [`McpError::ServerGone`] from it, and a clean finish or
+    /// cancellation resolves [`McpError::Unconfirmed`].
+    pub(crate) fn settle_writer(&self, panicked: bool) {
+        self.writer_settled.send_if_modified(|current| {
+            if current.is_some() {
+                return false;
+            }
+            *current = Some(panicked);
+            true
+        });
+    }
+
+    /// The end cause for a recovery completion the writer dropped without
+    /// sending. Waits until [`Self::settle_writer`] so this task does not
+    /// decide ahead of the writer's outcome. Panic is [`McpError::ServerGone`].
+    /// A clean finish, a cancellation, or a closed watch is
+    /// [`McpError::Unconfirmed`].
+    async fn dropped_writer_sender(&self) -> McpError {
+        let mut settled = self.writer_settled.subscribe();
+        let panicked = loop {
+            if let Some(panicked) = *settled.borrow_and_update() {
+                break panicked;
+            }
+            if settled.changed().await.is_err() {
+                break false;
+            }
+        };
+        if panicked {
+            McpError::ServerGone
+        } else {
+            McpError::Unconfirmed
+        }
     }
 
     /// Resolves after shutdown joins owned readers and records its DELETE
@@ -262,6 +310,7 @@ impl HttpSession {
 
     /// Stop owned GET/POST streams and DELETE a claimed modern session id once.
     /// [`Self::finished`] observes completion after reader joins and DELETE.
+    /// A panic in that DELETE still releases the claim and signals finished.
     /// Legacy sessions and sessions with no id record that DELETE does not
     /// apply and do not send one.
     pub fn shutdown(&self) {
@@ -310,8 +359,17 @@ impl HttpSession {
                 finished.send_replace(true);
                 return;
             };
+            // Drop runs on success, on a DELETE panic, and if this task is
+            // aborted. The payload is not logged.
+            let _release = ReleaseClaimOnDrop {
+                claims,
+                url,
+                session_id: session_id.clone(),
+                local,
+                finished,
+            };
             let mut headers = vec![
-                ("Mcp-Session-Id".into(), session_id.clone()),
+                ("Mcp-Session-Id".into(), session_id),
                 (
                     "Accept".into(),
                     "application/json, text/event-stream".into(),
@@ -327,8 +385,6 @@ impl HttpSession {
                 body: Vec::new(),
             };
             let _ = exchange.exchange(request).await;
-            claims.release(&url, &session_id, local);
-            finished.send_replace(true);
         });
     }
 
@@ -961,76 +1017,103 @@ impl HttpSession {
             if registration.await.is_err() {
                 return;
             }
+            enum Startup {
+                Done(Result<(), McpError>),
+                WriterDropped,
+            }
             let startup = async {
-                let body = serde_json::to_vec(&json!({
-                    "jsonrpc": "2.0", "id": 0, "method": "initialize",
-                    "params": wire::initialize_params(),
-                }))
-                .unwrap_or_default();
-                let attempt = match authorized_modern_post(
-                    &weak,
-                    exchange,
-                    authorization,
-                    server,
-                    &body,
-                    PostPurpose::RecoveryInitialize,
-                )
-                .await?
-                {
-                    Modern::Response(attempt) => attempt,
-                    Modern::Accepted => return Err(McpError::SessionExpired),
-                    Modern::Legacy => {
-                        return Err(McpError::Malformed(
-                            "recovery initialize selected legacy transport".into(),
-                        ))
+                let ready = async {
+                    let body = serde_json::to_vec(&json!({
+                        "jsonrpc": "2.0", "id": 0, "method": "initialize",
+                        "params": wire::initialize_params(),
+                    }))
+                    .unwrap_or_default();
+                    let attempt = match authorized_modern_post(
+                        &weak,
+                        exchange,
+                        authorization,
+                        server,
+                        &body,
+                        PostPurpose::RecoveryInitialize,
+                    )
+                    .await?
+                    {
+                        Modern::Response(attempt) => attempt,
+                        Modern::Accepted => return Err(McpError::SessionExpired),
+                        Modern::Legacy => {
+                            return Err(McpError::Malformed(
+                                "recovery initialize selected legacy transport".into(),
+                            ))
+                        }
+                    };
+                    if let Some(error) = attempt.failure {
+                        return Err(error);
                     }
-                };
-                if let Some(error) = attempt.failure {
-                    return Err(error);
-                }
-                let response = attempt.response;
-                let origin = attempt.origin;
-                let content_type = response.header("content-type");
-                let event_stream = sse::is_event_stream(content_type);
-                if !event_stream && content_type.is_some() && !sse::is_json(content_type) {
-                    return Err(McpError::SessionExpired);
-                }
-                if !consume_body(
-                    response,
-                    event_stream,
-                    BodyPurpose::RecoveryInitialize,
-                    &weak,
-                    &inbound,
-                    &origin,
-                )
-                .await
-                .map_err(|error| match error {
-                    McpError::Unconfirmed => McpError::SessionExpired,
-                    other => other,
-                })? {
-                    return Err(McpError::SessionExpired);
-                }
-                {
-                    let session = weak.upgrade().ok_or(McpError::Closed)?;
-                    let _readers = session.readers.lock().expect("http readers");
-                    if session.closing.load(Ordering::SeqCst) {
-                        return Err(McpError::Closed);
+                    let response = attempt.response;
+                    let origin = attempt.origin;
+                    let content_type = response.header("content-type");
+                    let event_stream = sse::is_event_stream(content_type);
+                    if !event_stream && content_type.is_some() && !sse::is_json(content_type) {
+                        return Err(McpError::SessionExpired);
                     }
-                    session.phase.lock().expect("http phase").recovery = Recovery::ReadyForWriter;
-                }
-                let (completed, completion) = oneshot::channel();
-                writer
-                    .send(Outgoing::RecoveryReady {
-                        deadline,
-                        completed,
-                    })
+                    if !consume_body(
+                        response,
+                        event_stream,
+                        BodyPurpose::RecoveryInitialize,
+                        &weak,
+                        &inbound,
+                        &origin,
+                    )
                     .await
-                    .map_err(|_| McpError::Unconfirmed)?;
-                completion.await.map_err(|_| McpError::Unconfirmed)?
+                    .map_err(|error| match error {
+                        McpError::Unconfirmed => McpError::SessionExpired,
+                        other => other,
+                    })? {
+                        return Err(McpError::SessionExpired);
+                    }
+                    {
+                        let session = weak.upgrade().ok_or(McpError::Closed)?;
+                        let _readers = session.readers.lock().expect("http readers");
+                        if session.closing.load(Ordering::SeqCst) {
+                            return Err(McpError::Closed);
+                        }
+                        session.phase.lock().expect("http phase").recovery =
+                            Recovery::ReadyForWriter;
+                    }
+                    let (completed, completion) = oneshot::channel();
+                    writer
+                        .send(Outgoing::RecoveryReady {
+                            deadline,
+                            completed,
+                        })
+                        .await
+                        .map_err(|_| McpError::Unconfirmed)?;
+                    Ok(completion)
+                };
+                match ready.await {
+                    Err(error) => Startup::Done(Err(error)),
+                    Ok(completion) => match completion.await {
+                        Ok(result) => Startup::Done(result),
+                        // The writer owned this sender. Settlement is read
+                        // after the deadline, below.
+                        Err(_) => Startup::WriterDropped,
+                    },
+                }
             };
-            let result = within(&*clock, deadline, startup)
-                .await
-                .unwrap_or(Err(McpError::Timeout));
+            let result = match within(&*clock, deadline, startup).await {
+                None => Err(McpError::Timeout),
+                Some(Startup::Done(result)) => result,
+                Some(Startup::WriterDropped) => {
+                    // Outside the deadline. A deadline that is already due
+                    // would otherwise win while this wait is still pending.
+                    // The wait stays bounded: the writer settles right after
+                    // catching the panic, and shutdown aborts this recovery.
+                    match weak.upgrade() {
+                        Some(session) => Err(session.dropped_writer_sender().await),
+                        None => Err(McpError::Closed),
+                    }
+                }
+            };
             if let Err(error) = result {
                 let result = weak
                     .upgrade()
@@ -1166,6 +1249,24 @@ impl HttpSession {
 impl Drop for HttpSession {
     fn drop(&mut self) {
         self.shutdown();
+    }
+}
+
+/// Release one claimed session id and signal shutdown finished.
+/// Constructed after reader joins and before DELETE, so both happen when
+/// DELETE returns, panics, or the cleanup task is dropped.
+struct ReleaseClaimOnDrop {
+    claims: Arc<SessionClaims>,
+    url: String,
+    session_id: String,
+    local: u64,
+    finished: watch::Sender<bool>,
+}
+
+impl Drop for ReleaseClaimOnDrop {
+    fn drop(&mut self) {
+        self.claims.release(&self.url, &self.session_id, self.local);
+        self.finished.send_replace(true);
     }
 }
 

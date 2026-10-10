@@ -6,14 +6,17 @@
 //! launch(agent, binding variables) ──▶ LaunchSpec for agent (host config)
 //!     command = spec.executable spec.args, in workspace,
 //!     environment = accepted binding variables, then the host's own (host wins),
-//!                   then the lease's publish point (NESSA_ARTIFACTS), this side's
+//!                   then the lease's publish point (NESSA_ARTIFACTS), this side's,
+//!                   and this build's directory first on the host's PATH
 //!     ──▶ SupervisedHarness::start ──▶ HarnessProcess
 //! ```
 //!
 //! Arrows are calls, in order. The gateway sets only the variables the
 //! agent's binding declares it sets (`LAUNCH_VARIABLES`); any other name is
 //! refused, so a gateway cannot choose the executable, the search path, a
-//! preloaded library or a credential here.
+//! preloaded library or a credential here. A harness given a publish point
+//! finds `nessa` on its search path: the copy serving its lease, which a
+//! gateway installs where no search path looks (`env_serve::install`).
 use crate::env_serve::application::{HarnessLauncher, PUBLISH_POINT_VARIABLE};
 use nessa_protocol::agents::AgentId;
 use nessa_sdk::{
@@ -26,7 +29,7 @@ use nessa_sdk::{
 use std::{
     collections::{BTreeMap, HashMap},
     ffi::OsString,
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 use tokio::process::Command;
 
@@ -103,7 +106,31 @@ impl HarnessLauncher for ConfiguredLauncher {
             .envs(&spec.environment);
         if let Some(point) = publish_point {
             command.env(PUBLISH_POINT_VARIABLE, point);
+            let this_build = std::env::current_exe().ok();
+            let configured = spec.environment.get(&OsString::from("PATH"));
+            if let Some(path) = this_build
+                .as_deref()
+                .and_then(Path::parent)
+                .and_then(|directory| search_path(directory, configured.map(OsString::as_os_str)))
+            {
+                command.env("PATH", path);
+            }
         }
         SupervisedHarness::start(command)
     }
 }
+
+/// `directory` first, then the host's `configured` search path: what a
+/// harness that may publish runs as `nessa` is the build serving it. `None`
+/// when no search path can hold `directory`.
+pub(crate) fn search_path(
+    directory: &Path,
+    configured: Option<&std::ffi::OsStr>,
+) -> Option<OsString> {
+    let rest = configured.map(std::env::split_paths).into_iter().flatten();
+    std::env::join_paths(std::iter::once(directory.to_path_buf()).chain(rest)).ok()
+}
+
+#[cfg(test)]
+#[path = "../../../tests/env_serve/launcher.rs"]
+mod tests;

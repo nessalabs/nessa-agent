@@ -52,7 +52,12 @@ impl HttpMethod {
 
 /// One HTTP call. Header names are compared case-insensitively by the
 /// transport; the adapter sends them as given.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// `Debug` prints the method, `scheme://host` and a port when the URL has
+/// one, header names, and the body length. It does not print userinfo, the
+/// path, the query, the fragment, header values, or body bytes. An adapter's
+/// own panic string is the host app's responsibility.
+#[derive(Clone, PartialEq, Eq)]
 pub struct HttpRequest {
     /// `GET`, `POST`, or `DELETE`.
     pub method: HttpMethod,
@@ -65,13 +70,39 @@ pub struct HttpRequest {
     pub body: Vec<u8>,
 }
 
+impl fmt::Debug for HttpRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("HttpRequest")
+            .field("method", &self.method.as_str())
+            .field("url", &redacted_url(&self.url))
+            .field("header_names", &HeaderNames(&self.headers))
+            .field("body_len", &self.body.len())
+            .finish()
+    }
+}
+
 /// A response body: already bounded bytes, or a stream the caller reads
 /// under its own bound.
+///
+/// `Debug` prints a buffered length, or `Stream`. It does not print bytes.
 pub enum HttpBody {
     /// The whole body, already within the caller's bound.
     Buffered(Vec<u8>),
     /// Chunks as they arrive. `None` is the end.
     Stream(Box<dyn HttpChunks>),
+}
+
+impl fmt::Debug for HttpBody {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Buffered(bytes) => formatter
+                .debug_struct("Buffered")
+                .field("len", &bytes.len())
+                .finish(),
+            Self::Stream(_) => formatter.write_str("Stream"),
+        }
+    }
 }
 
 /// The next bytes of a response body.
@@ -82,6 +113,9 @@ pub trait HttpChunks: Send {
 }
 
 /// A status, its headers, and its body.
+///
+/// `Debug` prints the status, header names, and the body length or `Stream`.
+/// It does not print header values or body bytes.
 pub struct HttpResponse {
     /// The HTTP status code.
     pub status: u16,
@@ -89,6 +123,17 @@ pub struct HttpResponse {
     pub headers: Vec<(String, String)>,
     /// The body.
     pub body: HttpBody,
+}
+
+impl fmt::Debug for HttpResponse {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("HttpResponse")
+            .field("status", &self.status)
+            .field("header_names", &HeaderNames(&self.headers))
+            .field("body", &self.body)
+            .finish()
+    }
 }
 
 impl HttpResponse {
@@ -144,4 +189,29 @@ pub enum BodyRead {
 pub trait HttpExchange: Send + Sync {
     /// Perform `request`.
     async fn exchange(&self, request: HttpRequest) -> Result<HttpResponse, HttpFailure>;
+}
+
+/// URL for `Debug`: `scheme://host` and a port when one was written. Userinfo,
+/// path, query, and fragment stay out. A hosted server can put a secret in
+/// the path, and `@` in that path is not part of the authority.
+fn redacted_url(url: &str) -> String {
+    let Ok(parsed) = url::Url::parse(url) else {
+        return "<redacted>".to_owned();
+    };
+    match parsed.origin() {
+        url::Origin::Tuple(..) => parsed.origin().ascii_serialization(),
+        url::Origin::Opaque(_) => "<redacted>".to_owned(),
+    }
+}
+
+struct HeaderNames<'a>(&'a [(String, String)]);
+
+impl fmt::Debug for HeaderNames<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut list = formatter.debug_list();
+        for (name, _) in self.0 {
+            list.entry(name);
+        }
+        list.finish()
+    }
 }

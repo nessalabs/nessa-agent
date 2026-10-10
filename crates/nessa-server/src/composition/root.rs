@@ -92,6 +92,10 @@ impl CompositionRoot {
             Command::Doctor { credential_file } => super::cli::online(false, credential_file, None),
             Command::InstallAgent { agent } => super::install_command::execute(&agent).await,
             Command::Limits => print_limits(),
+            Command::EnvProtocol => {
+                writeln!(std::io::stdout(), "{}", crate::env::LEASE_PROTOCOL)?;
+                Ok(())
+            }
             #[cfg(unix)]
             Command::EnvServe => {
                 let served = super::env_serve_command::execute().await;

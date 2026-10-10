@@ -50,9 +50,18 @@ pub fn error_code(error: &ConversationError) -> ConversationErrorCode {
             | LeaseRefusal::EnvironmentBusy
             | LeaseRefusal::AgentUnavailable,
         ) => ConversationErrorCode::EnvironmentUnavailable,
-        // Fixed only by putting this build's `nessa` on the host.
+        // The host's copy of this build, where the gateway installs it,
+        // speaks another lease protocol: not one this gateway put there.
         ConversationError::LeaseRefused(LeaseRefusal::EnvironmentVersionMismatch) => {
             ConversationErrorCode::EnvironmentVersionMismatch
+        }
+        // No copy of this build there, and none installed: the host runs on
+        // something this build does not, or the install failed.
+        ConversationError::LeaseRefused(LeaseRefusal::EnvironmentPlatformUnsupported) => {
+            ConversationErrorCode::EnvironmentPlatformUnsupported
+        }
+        ConversationError::LeaseRefused(LeaseRefusal::EnvironmentInstallFailed) => {
+            ConversationErrorCode::EnvironmentInstallFailed
         }
         ConversationError::EnvironmentNotConfigured => {
             ConversationErrorCode::EnvironmentNotConfigured

@@ -754,6 +754,8 @@ pub enum ConversationLeaseRefusal {
     EnvironmentVersionMismatch,
     EnvironmentBusy,
     AgentUnavailable,
+    EnvironmentPlatformUnsupported,
+    EnvironmentInstallFailed,
 }
 
 /// One artifact the conversation recorded: a file its agent published under

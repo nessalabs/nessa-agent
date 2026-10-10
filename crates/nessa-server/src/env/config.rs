@@ -58,6 +58,7 @@ lease_protocol!(
     "../env_serve/infrastructure/ledger.rs",
     "../env_serve/infrastructure/lock.rs",
     "../env_serve/infrastructure/outbox.rs",
+    "../env_serve/install.rs",
     "../conversation/infrastructure/ssh_environment/link.rs",
     "../conversation/infrastructure/ssh_environment/environment.rs",
     "../conversation/infrastructure/ssh_environment/transfer.rs",

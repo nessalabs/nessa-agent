@@ -12,6 +12,7 @@ use super::{
     audit::{EnvironmentAudit, EnvironmentEvent},
     connector::{ArtifactChannel, ArtifactChannels, LeaseConnection, LeaseConnector},
     environment::{SshEnvironment, SshTimings},
+    install::{Build, BuildSource, HostInstaller, InstallTimings, RemoteShell, ShellFuture},
     sftp::tests::scripted::{ScriptedSftp, SftpScript},
 };
 use crate::attachments::application::{AttachmentAuditRecord, AttachmentLimits};
@@ -26,6 +27,7 @@ use crate::env_serve::application::{
     serve, HarnessLauncher, PublishAnswer, PublishRefusal, PublishRequest, ServeTimings,
 };
 use crate::env_serve::infrastructure::{FileLedger, FileOutbox};
+use crate::env_serve::install::Platform;
 use nessa_protocol::lease::{Collection, CollectionRefusal};
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
@@ -259,9 +261,41 @@ impl Host {
     }
 }
 
+/// The installer of a host that serves already: its probe finds this build,
+/// so nothing is ever sent.
+fn no_install() -> Arc<HostInstaller> {
+    struct Present;
+    impl RemoteShell for Present {
+        fn run<'a>(
+            &'a self,
+            _host: &'a SshDestination,
+            _command: String,
+            _input: Option<std::fs::File>,
+        ) -> ShellFuture<'a> {
+            Box::pin(async { Ok("present\n".to_owned()) })
+        }
+    }
+    struct Unread;
+    impl BuildSource for Unread {
+        fn open(&self) -> io::Result<Build> {
+            Ok(Build {
+                file: tempfile::tempfile()?,
+                digest: "0".repeat(64),
+            })
+        }
+    }
+    Arc::new(HostInstaller::new(
+        Arc::new(Present),
+        Arc::new(Unread),
+        Platform::this_build(),
+        LEASE_PROTOCOL,
+        InstallTimings::default(),
+    ))
+}
+
 struct Connector(Arc<Host>);
 impl LeaseConnector for Connector {
-    fn connect(&self, _host: &SshDestination) -> io::Result<LeaseConnection> {
+    fn connect(&self, _host: &SshDestination, _command: String) -> io::Result<LeaseConnection> {
         let host = &self.0;
         let (gateway, gateway_end) = duplex(1 << 20);
         let (host_end, served) = duplex(1 << 20);
@@ -405,6 +439,7 @@ async fn leased_pausing(
         devbox(),
         Arc::new(Connector(host.clone())),
         Arc::new(Audit::default()),
+        no_install(),
         SshTimings {
             connect: Duration::from_secs(5),
             answer: Duration::from_secs(5),
