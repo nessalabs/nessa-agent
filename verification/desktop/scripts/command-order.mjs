@@ -7,7 +7,7 @@ import { attempt, CannotRun, log, resultOfThrown } from "./lib/cli.mjs"
 import { openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
 import { content, css, keys, names } from "./lib/selectors.mjs"
-import { contentIs } from "./lib/workspace.mjs"
+import { contentIs, overviewListed } from "./lib/workspace.mjs"
 
 const tool = "send "
 const argument = "\u2028\u202Emoc.live@bob\u202C\u2029"
@@ -163,6 +163,7 @@ await main(meta, async ({ options, rep, url }) => {
 
         await page.keyboard.press(keys.overview)
         await contentIs(page, content.overview)
+        await overviewListed(page)
         const row = page.locator(css.overviewRequest, {
           hasText: names.commandOrderSession,
         })
@@ -254,6 +255,7 @@ await main(meta, async ({ options, rep, url }) => {
         if (cardOrder) failures.push(`the card ${cardOrder}`)
         await page.keyboard.press(keys.overview)
         await contentIs(page, content.overview)
+        await overviewListed(page)
         const row = page.locator(css.overviewRequest, {
           hasText: names.commandBaseSession,
         })
