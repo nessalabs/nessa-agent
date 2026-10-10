@@ -147,7 +147,8 @@ async fn two_receiver_processes_reopen_independent_durable_progress() {
             first = Some(id.clone());
         }
         let owner = if index < 600 { "alice" } else { "bob" };
-        store.create(conversation(id, owner)).await.unwrap();
+        store.create(conversation(id.clone(), owner)).await.unwrap();
+        share_with_both(&store, &id).await;
     }
     let left = directory.path().join("left.sqlite3");
     let right = directory.path().join("right.sqlite3");
@@ -198,6 +199,7 @@ async fn two_receiver_processes_reopen_independent_durable_progress() {
         .create(conversation(new_id.clone(), "alice"))
         .await
         .unwrap();
+    share_with_both(&store, &new_id).await;
     child(&source_path, &left, "receiver-left", false);
     assert_eq!(SqliteReceiver::open(&left).count(), 601);
     assert_eq!(
@@ -245,4 +247,11 @@ async fn two_receiver_processes_reopen_independent_durable_progress() {
         .cached_revision(&changed, &sid(&first.to_string()))
         .unwrap()
         .is_some());
+}
+
+/// Both receivers read what they were granted (read grants, issue 704).
+async fn share_with_both(store: &super::super::store::LocalConversationStore, id: &ConversationId) {
+    for receiver in ["receiver-left", "receiver-right"] {
+        crate::conversation_test_support::grant_read(store, id, receiver).await;
+    }
 }

@@ -142,6 +142,8 @@ async fn source_reads_owner_scoped_current_values_and_rejects_wrong_scope() {
     let bob_id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
     store.create(owned(&alice_id, "alice")).await.unwrap();
     store.create(owned(&bob_id, "bob")).await.unwrap();
+    // The scope's receiver reads what it was granted; the grant takes revision 2.
+    crate::conversation_test_support::grant_read(store.as_ref(), &alice_id, "receiver").await;
     let head = store
         .head(&caller().organization_id, &caller().principal_id)
         .await
@@ -162,11 +164,11 @@ async fn source_reads_owner_scoped_current_values_and_rejects_wrong_scope() {
             .await
             .unwrap()
             .unwrap(),
-        1
+        2
     );
 
     let request = ManifestRequest {
-        pass: pass(source.scope().clone(), 1),
+        pass: pass(source.scope().clone(), 2),
         max_entries: 10,
     };
     let mut blocking = source.clone();
@@ -283,6 +285,8 @@ async fn source_resolves_deletion_after_manifest_and_keeps_newer_revision() {
         .create(owned(&conversation_id, "alice"))
         .await
         .unwrap();
+    crate::conversation_test_support::grant_read(store.as_ref(), &conversation_id, "receiver")
+        .await;
     let head = store
         .head(&caller().organization_id, &caller().principal_id)
         .await

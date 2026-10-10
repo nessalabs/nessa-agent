@@ -870,6 +870,30 @@ pub struct ConversationDeleteParams {
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationShareParams {
+    pub conversation_id: String,
+    pub request_id: String,
+    pub credential_id: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationSharesParams {
+    pub conversation_id: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationShare {
+    pub credential_id: String,
+    pub role: String,
+    pub granted_at_ms: u64,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationSharesResult {
+    pub items: Vec<ConversationShare>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationReceipt {
     pub execution_id: String,
     pub disposition: ConversationDisposition,
@@ -2122,6 +2146,9 @@ pub mod product_method {
     pub const CONVERSATION_SUBSCRIBE: &str = "conversation.subscribe";
     pub const CONVERSATION_SUBSCRIBE_LIST: &str = "conversation.subscribeList";
     pub const CONVERSATION_UNSUBSCRIBE: &str = "conversation.unsubscribe";
+    pub const CONVERSATION_SHARE: &str = "conversation.share";
+    pub const CONVERSATION_UNSHARE: &str = "conversation.unshare";
+    pub const CONVERSATION_SHARES: &str = "conversation.shares";
 }
 pub mod product_event {
     pub const SESSION_CHALLENGE: &str = "session.challenge";
@@ -2310,7 +2337,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 55
+                items.len() <= 58
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -2390,6 +2417,9 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "conversation.subscribe",
     "conversation.subscribeList",
     "conversation.unsubscribe",
+    "conversation.share",
+    "conversation.unshare",
+    "conversation.shares",
 ];
 /// The grant Cedar is asked for before this method is dispatched.
 ///
@@ -2418,7 +2448,10 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "pairing.status"
         | "pairing.approve"
         | "pairing.deny"
-        | "pairing.cancel" => Some("credential.manage"),
+        | "pairing.cancel"
+        | "conversation.share"
+        | "conversation.unshare"
+        | "conversation.shares" => Some("credential.manage"),
         "conversation.create"
         | "conversation.read"
         | "conversation.list"

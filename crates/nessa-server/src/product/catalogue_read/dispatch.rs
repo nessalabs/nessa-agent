@@ -76,7 +76,7 @@ pub(in crate::product) async fn dispatch(
     };
     let (receiver, epoch, operation) = operation;
     let requested = operation.clone();
-    let (receivers, repository) = state
+    let (receivers, repository, read_grants) = state
         .passive_read
         .as_ref()
         .ok_or(CatalogueReadErrorCode::SourceUnavailable)?;
@@ -95,6 +95,7 @@ pub(in crate::product) async fn dispatch(
             receivers: receivers.as_ref(),
             conversations: repository.as_ref(),
             grants: &PUBLISHED_PASSIVE_READ_GRANTS,
+            read_grants: read_grants.as_ref(),
         },
         source: source.as_ref(),
     };

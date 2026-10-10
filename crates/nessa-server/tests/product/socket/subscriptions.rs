@@ -1657,3 +1657,349 @@ async fn measure_commit_to_frame_latency_on_the_largest_realistic_fixture() {
     client.close().await;
     watching.abort();
 }
+
+// Read grants on the socket (issue 704): rows G8, G11–G14 of
+// docs/design/read-grants.md.
+
+/// Receiver bindings by credential: what pairing would have written.
+struct Devices(std::collections::HashMap<&'static str, ReceiverBinding>);
+impl Devices {
+    fn new(entries: &[(&'static str, &str, &str, bool)]) -> Arc<Self> {
+        Arc::new(Self(
+            entries
+                .iter()
+                .map(|(credential, receiver, owner, active)| {
+                    (
+                        *credential,
+                        ReceiverBinding {
+                            receiver_id: (*receiver).into(),
+                            credential_id: CredentialId::new(*credential).unwrap(),
+                            organization_id: OrganizationId::new("organization").unwrap(),
+                            owner_id: PrincipalId::new(*owner).unwrap(),
+                            access_epoch: 1,
+                            active: *active,
+                        },
+                    )
+                })
+                .collect(),
+        ))
+    }
+}
+impl ReceiverAuthority for Devices {
+    fn resolve<'a>(
+        &'a self,
+        credential: &'a CredentialId,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<ReceiverBinding>, ReadRefusal>> + Send + 'a>>
+    {
+        let found = self.0.get(credential.as_str()).cloned();
+        Box::pin(async move { Ok(found) })
+    }
+}
+
+impl SubscriptionFixture {
+    /// Compose `devices` as the receiver authority and the fixture's store
+    /// as the grant table, as `composition::local_auth` does.
+    fn with_devices(mut self, devices: Arc<Devices>) -> Self {
+        let metadata = self.metadata.clone();
+        self.state = self
+            .state
+            .clone()
+            .with_passive_read(devices, metadata.clone(), metadata);
+        self
+    }
+
+    async fn grant_to(&self, transition: crate::conversation::application::ReadGrantTransition) {
+        use crate::conversation::application::{ReadGrantChange, ReadGrants};
+        assert!(self
+            .metadata
+            .change(ReadGrantChange {
+                transition,
+                conversation_id: self.id.clone(),
+                receiver_id: Some("receiver".into()),
+                credential_id: CredentialId::new("credential").unwrap(),
+                initiator: caller(&self.session, uuid::Uuid::new_v4().to_string()),
+                at_ms: 1,
+            })
+            .await
+            .unwrap());
+    }
+
+    async fn listed(&self) -> Vec<Value> {
+        let listed = self.call("conversation.list", json!({})).await;
+        assert_eq!(listed["ok"], true, "{listed}");
+        listed["payload"]["conversations"].as_array().unwrap().clone()
+    }
+
+    /// `conversation.list`, `.observe` and `.subscribeList` all answer
+    /// `forbidden`, so no list row or cursor reaches a device.
+    async fn assert_lists_refused(&self) {
+        for method in ["conversation.list", "conversation.observe"] {
+            let reply = self.call(method, json!({})).await;
+            assert_eq!(reply["error"]["code"], "forbidden", "{method}: {reply}");
+        }
+        // With the watch pool full, a refused subscribe answers `forbidden`,
+        // not `subscription_capacity`: it took no watch first (row S29).
+        let mut held = Vec::new();
+        loop {
+            match self.storage.watch_any_committed() {
+                Ok(watch) => held.push(watch),
+                Err(ChangeWatchError::Capacity) => break,
+                Err(error) => panic!("{error:?}"),
+            }
+        }
+        let mut client = self.connect();
+        client.send("list", "conversation.subscribeList", json!({}));
+        let (reply, _) = client.reply("list").await;
+        assert_eq!(reply["error"]["code"], "forbidden", "{reply}");
+        drop(held);
+        client.close().await;
+    }
+}
+
+/// This session's credential is a paired device bound to receiver `receiver`.
+fn this_device(active: bool) -> Arc<Devices> {
+    Devices::new(&[("credential", "receiver", "principal", active)])
+}
+
+/// Row G11: the owner's own surface reads, lists and subscribes as before,
+/// on a gateway that pairs nothing and on one that has paired devices.
+#[tokio::test]
+async fn an_owner_surface_reads_everything_it_owns() {
+    for paired in [false, true] {
+        let mut fixture = SubscriptionFixture::new().await;
+        // A list shows a conversation once it has a summary.
+        fixture.turn("first").await;
+        if paired {
+            fixture = fixture.with_devices(Devices::new(&[("phone", "phone", "principal", true)]));
+        }
+        let read = fixture
+            .call(
+                "conversation.read",
+                json!({"conversationId": fixture.id.to_string()}),
+            )
+            .await;
+        assert_eq!(read["ok"], true, "{read}");
+        assert_eq!(fixture.listed().await.len(), 1);
+        let mut client = fixture.connect();
+        client.subscribe("subscribe", &fixture.id).await;
+        client.close().await;
+    }
+}
+
+/// Row G12: a paired device on the socket sees only what it was granted.
+#[tokio::test]
+async fn a_paired_device_on_the_socket_sees_only_what_it_was_granted() {
+    let fixture = SubscriptionFixture::new().await;
+    // A list shows a conversation once it has a summary.
+    fixture.turn("first").await;
+    let fixture = fixture.with_devices(this_device(true));
+    let read = fixture
+        .call(
+            "conversation.read",
+            json!({"conversationId": fixture.id.to_string()}),
+        )
+        .await;
+    assert_eq!(read["error"]["code"], "conversation_not_found", "{read}");
+    // The socket's lists are the owner's: a device lists through its
+    // catalogue, so it is refused them, whatever it was granted.
+    fixture.assert_lists_refused().await;
+    let shared = fixture
+        .call(
+            "conversation.shares",
+            json!({"conversationId": fixture.id.to_string()}),
+        )
+        .await;
+    assert_eq!(shared["error"]["code"], "forbidden", "{shared}");
+    let mut client = fixture.connect();
+    client.send(
+        "view",
+        "conversation.subscribe",
+        json!({"conversationId": fixture.id.to_string()}),
+    );
+    let (reply, _) = client.reply("view").await;
+    assert_eq!(reply["error"]["code"], "conversation_not_found", "{reply}");
+    client.close().await;
+    fixture
+        .grant_to(crate::conversation::application::ReadGrantTransition::Grant)
+        .await;
+    let read = fixture
+        .call(
+            "conversation.read",
+            json!({"conversationId": fixture.id.to_string()}),
+        )
+        .await;
+    assert_eq!(read["ok"], true, "{read}");
+    fixture.assert_lists_refused().await;
+}
+
+/// Row G13: a revoke ends a device's subscription before its next batch.
+#[tokio::test]
+async fn a_revoke_ends_a_device_subscription_before_its_next_batch() {
+    let fixture = SubscriptionFixture::new()
+        .await
+        .with_devices(this_device(true));
+    fixture
+        .grant_to(crate::conversation::application::ReadGrantTransition::Grant)
+        .await;
+    let mut client = fixture.connect();
+    let id = client.subscribe("subscribe", &fixture.id).await;
+    client.next().await;
+    fixture
+        .grant_to(crate::conversation::application::ReadGrantTransition::Revoke)
+        .await;
+    fixture.turn("after-revoke").await;
+    let frames = client
+        .until(&id, |frame| frame["event"] == "conversation.subscriptionEnded")
+        .await;
+    assert_eq!(frames.len(), 1, "no frame read after the revoke");
+    assert_eq!(frames[0]["payload"]["reason"], "refused");
+    assert_eq!(frames[0]["payload"]["code"], "conversation_not_found");
+    client.close().await;
+}
+
+/// Receiver bindings that cannot be read for the next `failures` lookups,
+/// then show no device: an owner's surface on a gateway whose receiver
+/// store missed a beat.
+struct FlakyReceivers(std::sync::Mutex<u32>);
+impl ReceiverAuthority for FlakyReceivers {
+    fn resolve<'a>(
+        &'a self,
+        _credential: &'a CredentialId,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<ReceiverBinding>, ReadRefusal>> + Send + 'a>>
+    {
+        let failed = {
+            let mut left = self.0.lock().unwrap();
+            let failed = *left > 0;
+            *left = left.saturating_sub(1);
+            failed
+        };
+        Box::pin(async move {
+            if failed {
+                Err(ReadRefusal::Unverifiable)
+            } else {
+                Ok(None)
+            }
+        })
+    }
+}
+
+/// Row G11: one receiver lookup that cannot be verified is retried as a
+/// read slot is, so it does not end an owner's subscription.
+#[tokio::test]
+async fn an_owner_subscription_outlasts_one_failed_receiver_lookup() {
+    let receivers = Arc::new(FlakyReceivers(std::sync::Mutex::new(0)));
+    let mut fixture = SubscriptionFixture::new().await;
+    let metadata = fixture.metadata.clone();
+    fixture.state = fixture
+        .state
+        .clone()
+        .with_passive_read(receivers.clone(), metadata.clone(), metadata);
+    let mut client = fixture.connect();
+    let id = client.subscribe("subscribe", &fixture.id).await;
+    client.next().await;
+    *receivers.0.lock().unwrap() = 1;
+    fixture.turn("after-a-miss").await;
+    let frames = client
+        .until(&id, |frame| {
+            frame["event"] == "conversation.view"
+                || frame["event"] == "conversation.subscriptionEnded"
+        })
+        .await;
+    let last = frames.last().unwrap();
+    assert_eq!(last["event"], "conversation.view", "{last}");
+    assert_eq!(*receivers.0.lock().unwrap(), 0);
+    client.close().await;
+}
+
+/// Row G14: an unpaired device reads nothing, whatever it was granted.
+#[tokio::test]
+async fn an_unpaired_device_reads_nothing_whatever_it_was_granted() {
+    let fixture = SubscriptionFixture::new()
+        .await
+        .with_devices(this_device(false));
+    fixture
+        .grant_to(crate::conversation::application::ReadGrantTransition::Grant)
+        .await;
+    for (method, params) in [
+        (
+            "conversation.read",
+            json!({"conversationId": fixture.id.to_string()}),
+        ),
+        ("conversation.list", json!({})),
+    ] {
+        let answer = fixture.call(method, params).await;
+        assert_eq!(answer["error"]["code"], "unauthorized", "{method}: {answer}");
+    }
+}
+
+/// Row G8: share refuses what the owner cannot grant, and writes nothing.
+#[tokio::test]
+async fn share_refuses_what_the_owner_cannot_grant() {
+    let fixture = SubscriptionFixture::new().await.with_devices(Devices::new(&[
+        ("phone", "phone", "principal", true),
+        ("stranger", "stranger", "someone-else", true),
+        ("gone", "gone", "principal", false),
+    ]));
+    *fixture.authority.snapshot.lock().unwrap() =
+        snapshot(MembershipRole::Admin, MembershipStatus::Active);
+    grants(
+        &fixture.authority,
+        &["conversation.write", "server.read", "credential.manage"],
+    );
+    let share = |id: String, credential: &str| {
+        json!({"conversationId": id, "requestId": format!("share-{credential}"), "credentialId": credential})
+    };
+    for credential in ["stranger", "gone", "nobody"] {
+        let answer = fixture
+            .call(
+                "conversation.share",
+                share(fixture.id.to_string(), credential),
+            )
+            .await;
+        assert_eq!(
+            answer["error"]["code"], "share_target_not_paired",
+            "{credential}: {answer}"
+        );
+    }
+    let missing = Uuid::new_v4().to_string();
+    let answer = fixture
+        .call("conversation.share", share(missing, "phone"))
+        .await;
+    assert_eq!(answer["error"]["code"], "conversation_not_found", "{answer}");
+    let shares = fixture
+        .call(
+            "conversation.shares",
+            json!({"conversationId": fixture.id.to_string()}),
+        )
+        .await;
+    assert_eq!(shares["payload"]["items"], json!([]), "{shares}");
+    let answer = fixture
+        .call("conversation.share", share(fixture.id.to_string(), "phone"))
+        .await;
+    assert_eq!(answer["payload"]["applied"], true, "{answer}");
+    let shares = fixture
+        .call(
+            "conversation.shares",
+            json!({"conversationId": fixture.id.to_string()}),
+        )
+        .await;
+    assert_eq!(shares["payload"]["items"][0]["credentialId"], "phone");
+    assert_eq!(shares["payload"]["items"][0]["role"], "read");
+    let deleted = fixture
+        .call(
+            "conversation.delete",
+            json!({"conversationId": fixture.id.to_string(), "requestId": "delete"}),
+        )
+        .await;
+    assert_eq!(deleted["ok"], true, "{deleted}");
+    let answer = fixture
+        .call("conversation.share", share(fixture.id.to_string(), "phone"))
+        .await;
+    assert_eq!(answer["error"]["code"], "conversation_deleted", "{answer}");
+    // A new request: the share's own request id names the other change, so
+    // reusing it for the unshare is refused invalid_request (row G16).
+    let mut unshare = share(fixture.id.to_string(), "phone");
+    unshare["requestId"] = json!("unshare-phone");
+    let answer = fixture.call("conversation.unshare", unshare).await;
+    assert_eq!(answer["payload"]["applied"], true, "{answer}");
+}

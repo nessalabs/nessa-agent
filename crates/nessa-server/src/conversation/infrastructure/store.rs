@@ -1,4 +1,5 @@
 mod acquisition;
+mod read_grants;
 
 use super::catalogue_changes::CatalogueChanges;
 
@@ -8,7 +9,7 @@ use crate::conversation::application::{
     ConversationCreation, ConversationCreationDisposition, ConversationError, ConversationFuture,
     ConversationListing, ConversationModeApplication, ConversationModeRequest,
     ConversationModeRequestState, ConversationRepository, ConversationSummaries,
-    ListedConversation, ListedConversations, ObservationCursor, ObservedConversations,
+    ListedConversation, ListedConversations, ObservationCursor, ObservedConversations, Reader,
     UnfinishedDeletions, WatchCatalogue,
 };
 use crate::conversation::domain::{
@@ -176,6 +177,15 @@ fn time(value: i64) -> Option<u64> {
 }
 fn stored_time(value: u64) -> Result<i64, ConversationError> {
     i64::try_from(value).map_err(|_| ConversationError::Metadata)
+}
+
+/// The receiver a catalogue read is narrowed to, or `None` for the owner,
+/// who reads every row.
+fn granted_to(reader: &Reader) -> Option<String> {
+    match reader {
+        Reader::Owner => None,
+        Reader::PairedDevice { receiver_id } => Some(receiver_id.clone()),
+    }
 }
 
 /// The head and the latest retained row are one fact. No row for a new owner
@@ -1278,6 +1288,7 @@ impl ConversationListing for LocalConversationStore {
                 CataloguePageRequest {
                     organization: organization.clone(),
                     owner: owner.clone(),
+                    reader: Reader::Owner,
                     manifest: ManifestRequest {
                         pass: CataloguePass {
                             scope,
@@ -1312,6 +1323,7 @@ impl ConversationListing for LocalConversationStore {
                     self,
                     &organization,
                     &owner,
+                    &Reader::Owner,
                     head.incarnation.as_str(),
                     &entry.key.id,
                 )
@@ -1399,6 +1411,7 @@ impl ConversationCatalogue for LocalConversationStore {
         let CataloguePageRequest {
             organization,
             owner,
+            reader,
             manifest,
         } = request;
         if validate_manifest_request(&manifest, MAX_CATALOGUE_ENTRIES).is_err() {
@@ -1427,12 +1440,14 @@ impl ConversationCatalogue for LocalConversationStore {
                  FROM conversations WHERE organization = ?1 AND owner = ?2
                    AND creation_revision <= ?3 AND change_revision > ?4
                    AND (creation_revision > ?5 OR (creation_revision = ?5 AND id > ?6))
+                   AND (?8 IS NULL OR {})
                  ORDER BY creation_revision, id LIMIT ?7",
-                acquisition::conversation("")
+                acquisition::conversation(""),
+                read_grants::granted("conversations.id", "?8"),
             )).map_err(failed)?;
             let mut rows = statement.query(params![
                 organization.as_str(), owner.as_str(), boundary, completed,
-                cursor.unwrap_or(0), cursor_id, fetch,
+                cursor.unwrap_or(0), cursor_id, fetch, granted_to(&reader),
             ]).map_err(failed)?;
             let mut entries = Vec::with_capacity(limit + 1);
             while let Some(row) = rows.next().map_err(failed)? {
@@ -1450,6 +1465,7 @@ impl ConversationCatalogue for LocalConversationStore {
         &self,
         organization: &OrganizationId,
         owner: &PrincipalId,
+        reader: &Reader,
         incarnation: &str,
         id: &ConversationId,
     ) -> ConversationFuture<'_, Option<CatalogueValue>> {
@@ -1459,16 +1475,26 @@ impl ConversationCatalogue for LocalConversationStore {
         };
         let (organization, owner, incarnation, id) =
             (organization.clone(), owner.clone(), incarnation, id.clone());
+        let receiver = granted_to(reader);
         self.run(move |connection| {
             let transaction = connection.transaction().map_err(failed)?;
             catalogue_incarnation(&transaction, incarnation.as_str())?;
             owner_head(&transaction, &organization, &owner)?;
             let row = transaction
                 .query_row(
-                    "SELECT creation_revision, change_revision,
+                    &format!(
+                        "SELECT creation_revision, change_revision,
                         EXISTS (SELECT 1 FROM deletions WHERE conversation_id = ?1)
-                 FROM conversations WHERE id = ?1 AND organization = ?2 AND owner = ?3",
-                    params![id.to_string(), organization.as_str(), owner.as_str()],
+                 FROM conversations WHERE id = ?1 AND organization = ?2 AND owner = ?3
+                   AND (?4 IS NULL OR {})",
+                        read_grants::granted("conversations.id", "?4")
+                    ),
+                    params![
+                        id.to_string(),
+                        organization.as_str(),
+                        owner.as_str(),
+                        receiver
+                    ],
                     |row| {
                         Ok((
                             row.get::<_, i64>(0)?,

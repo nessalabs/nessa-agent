@@ -96,6 +96,10 @@ pub(super) async fn dispatch(
             "conversation.read" => {
                 let params = params!(ConversationReadParams);
                 let id = conversation_id(&params.conversation_id)?;
+                if let Err(code) = super::read_access::admit_conversation(state, session, &id).await
+                {
+                    return Ok(failure(&frame.id, code));
+                }
                 let (view, _) =
                     read_view(state, service, session, &id, &frame.id, ReadOpening::Open).await?;
                 Ok(success(&frame.id, &view))
@@ -127,12 +131,18 @@ pub(super) async fn dispatch(
             }
             "conversation.list" => {
                 let ConversationListParams { archived } = params!(ConversationListParams);
+                if let Err(code) = super::read_access::admit_list(state, session).await {
+                    return Ok(failure(&frame.id, code));
+                }
                 let listed =
                     read_list(service, session, archived.unwrap_or(false), &frame.id).await?;
                 Ok(success(&frame.id, &listed))
             }
             "conversation.observe" => {
                 let params = params!(ConversationObserveParams);
+                if let Err(code) = super::read_access::admit_list(state, session).await {
+                    return Ok(failure(&frame.id, code));
+                }
                 let cursor = match params.cursor {
                     Some(cursor) => Some(observation_cursor(cursor)?),
                     None => None,
@@ -456,7 +466,7 @@ pub(super) async fn read_view(
 }
 
 /// The list `conversation.list` answers; a list subscription's frame is this
-/// same read.
+/// same read. Its callers have asked `read_access::admit_list`.
 pub(super) async fn read_list(
     service: &ConversationService,
     session: &AuthenticatedSession,

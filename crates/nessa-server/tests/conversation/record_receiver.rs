@@ -208,7 +208,7 @@ async fn gateway_child() {
         Handle::current(),
     ));
     let state = state
-        .with_passive_read(Arc::new(Binding), conversations)
+        .with_passive_read(Arc::new(Binding), conversations, Arc::new(crate::conversation_test_support::EveryConversationGranted))
         .with_record_source(source);
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     println!(

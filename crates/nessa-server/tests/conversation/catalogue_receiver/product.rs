@@ -235,11 +235,12 @@ impl ConversationCatalogue for CountingCatalogue {
         &self,
         organization: &OrganizationId,
         owner: &PrincipalId,
+        reader: &crate::conversation::application::Reader,
         incarnation: &str,
         id: &ConversationId,
     ) -> ConversationFuture<'_, Option<CatalogueValue>> {
         self.counts.resolve.fetch_add(1, Ordering::SeqCst);
-        self.store.resolve(organization, owner, incarnation, id)
+        self.store.resolve(organization, owner, reader, incarnation, id)
     }
 }
 
@@ -263,6 +264,12 @@ async fn gateway_child() {
                 .is_none()
             {
                 store.create(conversation(id.clone(), owner)).await.unwrap();
+                crate::conversation_test_support::grant_read(
+                    store.as_ref(),
+                    &id,
+                    &format!("{owner}-receiver"),
+                )
+                .await;
                 if index % 10 == 0 {
                     store
                         .record(&id, ConversationSummary::new(None, None, 1, true).unwrap())
@@ -319,7 +326,7 @@ async fn gateway_child() {
     state.verifier = owners.clone();
     state.access = owners.clone();
     state = state
-        .with_passive_read(owners.clone(), store.clone())
+        .with_passive_read(owners.clone(), store.clone(), store.clone())
         .with_catalogue_source(source)
         .with_conversations(Arc::new(service));
     let capacity = state.record_reads.clone();
@@ -379,13 +386,17 @@ async fn gateway_child() {
                 }
                 "tick" => {
                     tick += 1;
+                    let created = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
                     mutate
-                        .create(conversation(
-                            ConversationId::new(&Uuid::new_v4().to_string()).unwrap(),
-                            owner,
-                        ))
+                        .create(conversation(created.clone(), owner))
                         .await
                         .unwrap();
+                    crate::conversation_test_support::grant_read(
+                        mutate.as_ref(),
+                        &created,
+                        &format!("{owner}-receiver"),
+                    )
+                    .await;
                     let id = cid(owner, 1);
                     mutate
                         .record(
