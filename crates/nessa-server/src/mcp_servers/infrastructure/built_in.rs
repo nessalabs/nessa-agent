@@ -199,3 +199,7 @@ async fn next_line(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/mcp_servers/built_in.rs"]
+mod tests;

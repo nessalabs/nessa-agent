@@ -8,6 +8,10 @@
 //! service.close / stop ─▶ LiveLease::close ─▶ Ending ─▶ Agent::close ─▶ Ended | Interrupted
 //! ```
 use super::{
+    CommandAnswer, CommandCall, CommandCallError, CommandEnvironment, CommandHold, CommandResult,
+    EnvironmentListing, HERE,
+};
+use super::{
     ConversationAgent, ConversationAgents, ConversationCaller, ConversationDeletionBudgets,
     ConversationDependencies, ConversationError, ConversationLimits, ConversationService,
     Environment, EnvironmentDeclaration, EnvironmentFuture, EnvironmentLease, Environments,
@@ -42,6 +46,10 @@ use nessa_sdk::application::agent_execution::{
     },
 };
 use nessa_sdk::domain::agent_execution::executions::MessageChunk;
+use crate::conversation::domain::CommandPolicy;
+use nessa_sdk::domain::agent_execution::leases::{
+    CommandExit, CommandRefusal, CommandWork, Lease,
+};
 use nessa_sdk::domain::agent_execution::leases::{
     AgentWork, EnvironmentRef, LeaseCleanup, LeaseDeadline, LeaseEndCause, LeaseGrants, LeaseId,
     LeaseRefusal, LeaseRevision, LeaseTerms, LeaseWork, SandboxProfile, SandboxProfiles,
@@ -141,7 +149,12 @@ struct Records {
     inner: RecordStorage,
     fail_issue: Arc<AtomicBool>,
     failing: FailingRecords,
+    /// Every lease record handed to a save, in order.
+    saved: SavedRecords,
 }
+
+/// Every lease record a store was handed to save.
+type SavedRecords = Arc<Mutex<Vec<LeaseRecord>>>;
 impl SessionStorage for Records {
     fn read_committed(&self, id: SessionId) -> StorageFuture<'_, Option<CommittedSession>> {
         self.inner.read_committed(id)
@@ -152,12 +165,14 @@ impl SessionStorage for Records {
     fn open(&self, id: SessionId) -> StorageFuture<'_, Box<dyn SessionStorageLease>> {
         let fail_issue = self.fail_issue.clone();
         let failing = self.failing.clone();
+        let saved = self.saved.clone();
         Box::pin(async move {
             let inner = self.inner.open(id).await?;
             Ok(Box::new(RecordsLease {
                 inner,
                 fail_issue,
                 failing,
+                saved,
             }) as Box<dyn SessionStorageLease>)
         })
     }
@@ -167,12 +182,14 @@ impl SessionStorage for Records {
     ) -> StorageFuture<'_, Option<Box<dyn SessionStorageLease>>> {
         let fail_issue = self.fail_issue.clone();
         let failing = self.failing.clone();
+        let saved = self.saved.clone();
         Box::pin(async move {
             Ok(self.inner.open_existing(id).await?.map(|inner| {
                 Box::new(RecordsLease {
                     inner,
                     fail_issue,
                     failing,
+                    saved,
                 }) as Box<dyn SessionStorageLease>
             }))
         })
@@ -182,6 +199,7 @@ pub(super) struct RecordsLease {
     inner: Box<dyn SessionStorageLease>,
     fail_issue: Arc<AtomicBool>,
     failing: FailingRecords,
+    saved: SavedRecords,
 }
 impl RecordsLease {
     /// `inner`, refusing every save holding a record `failing` names while
@@ -191,6 +209,7 @@ impl RecordsLease {
             inner,
             fail_issue: Arc::new(AtomicBool::new(false)),
             failing,
+            saved: SavedRecords::default(),
         }
     }
 }
@@ -223,6 +242,15 @@ impl SessionStorageLease for RecordsLease {
         if refused || (issues && self.fail_issue.swap(false, Ordering::SeqCst)) {
             return Box::pin(async { Err(StorageError::Io("the disk went away".into())) });
         }
+        self.saved.lock().unwrap().extend(
+            units
+                .iter()
+                .flat_map(SessionSaveUnit::changes)
+                .filter_map(|change| match change {
+                    SessionChange::Lease(record) => Some(record.clone()),
+                    _ => None,
+                }),
+        );
         self.inner.save_changes(binding, snapshot, units)
     }
     fn erase(&self) -> StorageFuture<'_, ()> {
@@ -292,6 +320,7 @@ fn harness_working_in(
         inner: RecordStorage::new(root.join("sessions")).unwrap(),
         fail_issue: Arc::new(AtomicBool::new(false)),
         failing: Arc::new(Mutex::new(None)),
+        saved: SavedRecords::default(),
     });
     let service = ConversationService::new(
         ConversationDependencies {
@@ -1799,4 +1828,458 @@ async fn b_gate2_a_lost_connection_stops_the_conversation_and_ends_its_lease_as_
         assert!(actor.is_some_and(|actor| actor.starts_with("lost-")));
         assert_eq!(harness.provider.close_calls.load(Ordering::SeqCst), 1);
     }
+}
+
+// Command leases (rows L14, L15; issue #700): the agent's `run` through the
+// service, on a configured host whose commands a fake answers.
+
+/// A host that runs commands: each grant is answered with `refusal` when
+/// set, and each command waits for `finish`, or its stop, and answers so.
+struct CommandHost {
+    refusal: Mutex<Option<CommandRefusal>>,
+    granted: AtomicUsize,
+    finish: tokio::sync::watch::Sender<Option<CommandExit>>,
+    stopped: Arc<Mutex<Vec<LeaseEndCause>>>,
+}
+impl CommandHost {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            refusal: Mutex::new(None),
+            granted: AtomicUsize::new(0),
+            finish: tokio::sync::watch::channel(None).0,
+            stopped: Arc::default(),
+        })
+    }
+}
+impl Environment for CommandHost {
+    fn declaration(&self) -> EnvironmentDeclaration {
+        EnvironmentDeclaration {
+            environment: EnvironmentRef::Ssh(SshDestination::new("devbox").unwrap()),
+            sandbox: SandboxProfiles::HARNESS_DEFAULT,
+        }
+    }
+    fn open<'a>(
+        &'a self,
+        _lease: &'a LeaseId,
+        _grant: &'a LeaseTerms,
+        _binding: Arc<dyn AgentProvider>,
+    ) -> EnvironmentFuture<'a, Result<EnvironmentLease, LeaseRefusal>> {
+        Box::pin(async { Err(LeaseRefusal::AgentUnavailable) })
+    }
+    fn account<'a>(&'a self, _lease: &'a LeaseId) -> EnvironmentFuture<'a, Option<LeaseCleanup>> {
+        Box::pin(async { Some(LeaseCleanup::NotHeld) })
+    }
+    fn commands(&self) -> Option<&dyn CommandEnvironment> {
+        Some(self)
+    }
+}
+impl CommandEnvironment for CommandHost {
+    fn reachable(&self) -> Option<bool> {
+        Some(true)
+    }
+    fn grant<'a>(
+        &'a self,
+        _lease: &'a LeaseId,
+        _command: &'a CommandWork,
+    ) -> EnvironmentFuture<'a, Result<Box<dyn CommandHold>, CommandRefusal>> {
+        let refusal = *self.refusal.lock().unwrap();
+        Box::pin(async move {
+            if let Some(refusal) = refusal {
+                return Err(refusal);
+            }
+            self.granted.fetch_add(1, Ordering::SeqCst);
+            Ok(Box::new(FakeCommand {
+                finish: self.finish.subscribe(),
+                stopped: self.stopped.clone(),
+            }) as Box<dyn CommandHold>)
+        })
+    }
+}
+struct FakeCommand {
+    finish: tokio::sync::watch::Receiver<Option<CommandExit>>,
+    stopped: Arc<Mutex<Vec<LeaseEndCause>>>,
+}
+impl CommandHold for FakeCommand {
+    fn run(
+        self: Box<Self>,
+        mut stop: tokio::sync::watch::Receiver<Option<LeaseEndCause>>,
+    ) -> EnvironmentFuture<'static, CommandResult> {
+        let mut finish = self.finish.clone();
+        let stopped = self.stopped.clone();
+        Box::pin(async move {
+            let exit = tokio::select! {
+                Ok(exit) = finish.wait_for(Option::is_some) => exit.unwrap(),
+                Ok(cause) = stop.wait_for(Option::is_some) => {
+                    let cause = cause.unwrap();
+                    stopped.lock().unwrap().push(cause);
+                    CommandExit::Stopped { cause }
+                }
+            };
+            CommandResult {
+                exit,
+                stdout: b"out\n".to_vec(),
+                stderr: Vec::new(),
+                dropped_bytes: 0,
+                cleanup: Some(LeaseCleanup::Confirmed { forced: false }),
+            }
+        })
+    }
+}
+
+/// A gateway with `devbox`, which runs commands as `host` says, under
+/// `policy`, and an agent that runs here.
+fn with_command_host(root: &Path, host: Arc<CommandHost>, policy: Option<CommandPolicy>) -> Harness {
+    let mut hosts: BTreeMap<String, Arc<dyn Environment>> = BTreeMap::new();
+    hosts.insert("devbox".into(), host);
+    let placements =
+        Arc::new(FilePlacements::new(root.join("conversations").join("placements")).unwrap());
+    let provider = Arc::new(ProviderFactory::default());
+    let binding = Arc::new(Provider::new(provider.clone()));
+    let environments = Environments::new(in_process_environment(), hosts, placements);
+    let environments = match policy {
+        Some(policy) => environments.with_commands(policy),
+        None => environments,
+    };
+    harness_in(root, environments, DELETION_BUDGETS.stop, provider, binding)
+}
+
+fn devbox_policy() -> CommandPolicy {
+    CommandPolicy::new(["devbox".to_owned()], None, vec!["rm".to_owned()])
+}
+
+fn command(environment: &str, argv: &[&str], call: &str) -> CommandCall {
+    CommandCall {
+        environment: environment.into(),
+        argv: argv.iter().map(|argument| (*argument).to_owned()).collect(),
+        cwd: None,
+        timeout_ms: 10_000,
+        sandbox: SandboxProfile::None,
+        call: call.into(),
+    }
+}
+
+impl Harness {
+    /// Start a turn whose agent waits until `go` is sent.
+    async fn running_turn(&self) -> oneshot::Sender<()> {
+        let (go, gate) = oneshot::channel();
+        *self.provider.execution_gate.lock().unwrap() = Some(gate);
+        self.service
+            .submit(
+                self.id.clone(),
+                caller("turn-1"),
+                "turn-1".into(),
+                SubmittedMessage {
+                    text: "hello".into(),
+                    images: Vec::new(),
+                    files: Vec::new(),
+                },
+                SubmissionMode::Queue,
+            )
+            .await
+            .unwrap();
+        self.provider.execution_started.notified().await;
+        go
+    }
+
+    fn saved_commands(&self) -> Vec<LeaseRecord> {
+        self.storage
+            .saved
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|record| {
+                matches!(
+                    record,
+                    LeaseRecord::CommandIssued { .. }
+                        | LeaseRecord::CommandRefused { .. }
+                        | LeaseRecord::CommandEnded { .. }
+                )
+            })
+            .cloned()
+            .collect()
+    }
+
+    async fn run(&self, call: CommandCall) -> Result<CommandAnswer, CommandCallError> {
+        let (_caller, stop) = tokio::sync::watch::channel(false);
+        self.service.run_command(&self.id, call, stop).await
+    }
+}
+
+/// Who a command record says it runs for.
+fn command_actor(record: &LeaseRecord) -> Option<&ActionContext> {
+    match record {
+        LeaseRecord::CommandIssued { actor, .. } | LeaseRecord::CommandRefused { actor, .. } => {
+            Some(actor)
+        }
+        _ => None,
+    }
+}
+
+#[tokio::test]
+async fn l14_a_command_runs_for_the_persons_turn_under_its_agent_lease_and_its_end_is_recorded() {
+    let root = tempfile::tempdir().unwrap();
+    let host = CommandHost::new();
+    let harness = with_command_host(root.path(), host.clone(), Some(devbox_policy()));
+    harness.create().await;
+    let go = harness.running_turn().await;
+
+    let service = harness.service.clone();
+    let id = harness.id.clone();
+    let running = tokio::spawn(async move {
+        let (_caller, stop) = tokio::sync::watch::channel(false);
+        service
+            .run_command(&id, command("devbox", &["echo", "hi"], "call-1"), stop)
+            .await
+    });
+    // While it runs, the agent lease shows it.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let view = harness
+                .service
+                .read(harness.id.clone(), caller("read"))
+                .await
+                .unwrap();
+            if view.lease.as_ref().and_then(|lease| lease.commands) == Some(1) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the running command shows on its agent lease");
+    host.finish.send_replace(Some(CommandExit::Exited { code: 0 }));
+    let answer = running.await.unwrap().unwrap();
+    let CommandAnswer::Ran { lease, result } = answer else {
+        panic!("it ran: {answer:?}");
+    };
+    assert_eq!(result.exit, CommandExit::Exited { code: 0 });
+    assert_eq!(result.stdout, b"out\n");
+
+    let saved = harness.saved_commands();
+    assert_eq!(saved.len(), 2, "{saved:?}");
+    let LeaseRecord::CommandIssued {
+        lease: issued,
+        terms,
+        actor,
+        ..
+    } = &saved[0]
+    else {
+        panic!("issued first: {saved:?}");
+    };
+    assert_eq!(issued, &lease);
+    assert_eq!(
+        terms.environment,
+        EnvironmentRef::Ssh(SshDestination::new("devbox").unwrap())
+    );
+    // The person whose turn asked, with the tool call as the request.
+    assert_eq!(actor.principal_id(), "person");
+    assert_eq!(actor.surface_id(), "desktop");
+    assert_eq!(actor.request_id(), "call-1");
+    assert!(matches!(
+        &saved[1],
+        LeaseRecord::CommandEnded { lease: ended, exit: CommandExit::Exited { code: 0 }, cleanup: Some(LeaseCleanup::Confirmed { forced: false }), .. }
+            if ended == &lease
+    ));
+    go.send(()).unwrap();
+}
+
+#[tokio::test]
+async fn l14_each_refusal_is_typed_recorded_for_the_turns_person_and_runs_nothing() {
+    let root = tempfile::tempdir().unwrap();
+    let host = CommandHost::new();
+    let harness = with_command_host(root.path(), host.clone(), Some(devbox_policy()));
+    harness.create().await;
+    let go = harness.running_turn().await;
+
+    let refused = |answer: Result<CommandAnswer, CommandCallError>| match answer.unwrap() {
+        CommandAnswer::Refused(refusal) => refusal,
+        ran => panic!("refused: {ran:?}"),
+    };
+    // No grant on an environment this gateway does not name.
+    assert_eq!(
+        refused(harness.run(command("elsewhere", &["ls"], "c1")).await),
+        CommandRefusal::EnvironmentNotGranted
+    );
+    // Here runs no commands: its are the agent's own shell's.
+    assert_eq!(
+        refused(harness.run(command(HERE, &["ls"], "c2")).await),
+        CommandRefusal::CommandsUnavailable
+    );
+    // The caller's tool policy.
+    assert_eq!(
+        refused(harness.run(command("devbox", &["/bin/rm", "-rf", "x"], "c3")).await),
+        CommandRefusal::CommandDenied
+    );
+    // A sandbox a command's environment cannot enforce.
+    let mut sandboxed = command("devbox", &["ls"], "c4");
+    sandboxed.sandbox = SandboxProfile::HarnessDefault;
+    assert_eq!(
+        refused(harness.run(sandboxed).await),
+        CommandRefusal::Environment(LeaseRefusal::SandboxUnavailable)
+    );
+    // An unreachable host.
+    *host.refusal.lock().unwrap() =
+        Some(CommandRefusal::Environment(LeaseRefusal::EnvironmentUnreachable));
+    assert_eq!(
+        refused(harness.run(command("devbox", &["ls"], "c5")).await),
+        CommandRefusal::Environment(LeaseRefusal::EnvironmentUnreachable)
+    );
+    *host.refusal.lock().unwrap() = None;
+    // Past the budget: as many running as a lease holds.
+    let mut running = Vec::new();
+    for index in 0..Lease::MAX_LIVE_COMMANDS {
+        let service = harness.service.clone();
+        let id = harness.id.clone();
+        let call = command("devbox", &["sleep", "1"], &format!("held-{index}"));
+        running.push(tokio::spawn(async move {
+            let (_caller, stop) = tokio::sync::watch::channel(false);
+            service.run_command(&id, call, stop).await
+        }));
+    }
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while host.granted.load(Ordering::SeqCst) < Lease::MAX_LIVE_COMMANDS
+            || harness.saved_commands().len() < 5 + Lease::MAX_LIVE_COMMANDS
+        {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the budget fills");
+    assert_eq!(
+        refused(harness.run(command("devbox", &["ls"], "c6")).await),
+        CommandRefusal::BudgetExceeded
+    );
+    host.finish.send_replace(Some(CommandExit::Exited { code: 0 }));
+    for running in running {
+        assert!(matches!(
+            running.await.unwrap().unwrap(),
+            CommandAnswer::Ran { .. }
+        ));
+    }
+
+    let refusals: Vec<(CommandRefusal, String)> = harness
+        .saved_commands()
+        .iter()
+        .filter_map(|record| match record {
+            LeaseRecord::CommandRefused { refusal, actor, .. } => {
+                assert_eq!(actor.principal_id(), "person");
+                Some((*refusal, actor.request_id().to_owned()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        refusals,
+        [
+            (CommandRefusal::EnvironmentNotGranted, "c1".into()),
+            (CommandRefusal::CommandsUnavailable, "c2".into()),
+            (CommandRefusal::CommandDenied, "c3".into()),
+            (
+                CommandRefusal::Environment(LeaseRefusal::SandboxUnavailable),
+                "c4".into()
+            ),
+            (
+                CommandRefusal::Environment(LeaseRefusal::EnvironmentUnreachable),
+                "c5".into()
+            ),
+            (CommandRefusal::BudgetExceeded, "c6".into()),
+        ]
+    );
+    // Only the four that fit were granted by the host.
+    assert_eq!(host.granted.load(Ordering::SeqCst), Lease::MAX_LIVE_COMMANDS);
+    assert!(harness
+        .saved_commands()
+        .iter()
+        .filter_map(command_actor)
+        .all(|actor| actor.principal_id() == "person"));
+    go.send(()).unwrap();
+}
+
+#[tokio::test]
+async fn l15_a_command_whose_caller_went_away_is_stopped_and_its_end_recorded() {
+    let root = tempfile::tempdir().unwrap();
+    let host = CommandHost::new();
+    let harness = with_command_host(root.path(), host.clone(), Some(devbox_policy()));
+    harness.create().await;
+    let go = harness.running_turn().await;
+    let (caller_gone, stop) = tokio::sync::watch::channel(false);
+    let service = harness.service.clone();
+    let id = harness.id.clone();
+    let running = tokio::spawn(async move {
+        service
+            .run_command(&id, command("devbox", &["sleep", "60"], "call"), stop)
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while host.granted.load(Ordering::SeqCst) == 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    caller_gone.send_replace(true);
+    let CommandAnswer::Ran { result, .. } = running.await.unwrap().unwrap() else {
+        panic!("it ran");
+    };
+    let stopped = CommandExit::Stopped {
+        cause: LeaseEndCause::Closed,
+    };
+    assert_eq!(result.exit, stopped);
+    assert_eq!(*host.stopped.lock().unwrap(), [LeaseEndCause::Closed]);
+    assert!(matches!(
+        harness.saved_commands().last(),
+        Some(LeaseRecord::CommandEnded { exit, .. }) if *exit == stopped
+    ));
+    go.send(()).unwrap();
+}
+
+#[tokio::test]
+async fn a_command_with_no_turn_running_or_no_tools_configured_records_nothing() {
+    let root = tempfile::tempdir().unwrap();
+    let host = CommandHost::new();
+    let harness = with_command_host(root.path(), host.clone(), Some(devbox_policy()));
+    harness.create().await;
+    harness.turn("turn-1").await;
+    assert_eq!(
+        harness.run(command("devbox", &["ls"], "call")).await,
+        Err(CommandCallError::NoTurn)
+    );
+    assert!(harness.saved_commands().is_empty());
+
+    let root = tempfile::tempdir().unwrap();
+    let harness = with_command_host(root.path(), host.clone(), None);
+    harness.create().await;
+    assert!(!harness.service.environment_tools_enabled());
+    assert_eq!(
+        harness.run(command("devbox", &["ls"], "call")).await,
+        Err(CommandCallError::NotConfigured)
+    );
+    assert_eq!(host.granted.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn environments_list_says_where_the_agent_runs_and_where_it_may_run_commands() {
+    let root = tempfile::tempdir().unwrap();
+    let harness = with_command_host(root.path(), CommandHost::new(), Some(devbox_policy()));
+    harness.create().await;
+    let listed = harness.service.list_environments(&harness.id).await.unwrap();
+    assert_eq!(
+        listed,
+        [
+            EnvironmentListing {
+                name: HERE.into(),
+                here: true,
+                reachable: Some(true),
+                commands: false,
+                current: true,
+            },
+            EnvironmentListing {
+                name: "devbox".into(),
+                here: false,
+                reachable: Some(true),
+                commands: true,
+                current: false,
+            },
+        ]
+    );
 }

@@ -149,8 +149,11 @@ Environments lane, in order:
   conversation runs on a named host; Stop, close and connection loss end
   the lease with cleanup evidence; late events dropped; no host named, no
   code reached.
-- [ ] **C. `environments.list` and `run` in `nessa-mcp`**
+- [x] **C. `environments.list` and `run` in `nessa-mcp`**
   ([#700](https://github.com/nessalabs/nessa-agent/issues/700)). A lease whose work is one bounded command; typed refusals.
+  Served by the gateway itself rather than `nessa-mcp`, as
+  `environments_list` and `run`; why, and the command contract it settled,
+  are in the design doc's "Slice C".
   *Gate:* the agent runs a command on the SSH host under the person's
   approval cards; refused by an absent grant and by tool policy with the
   caller as initiator; absent from the profile until enabled.

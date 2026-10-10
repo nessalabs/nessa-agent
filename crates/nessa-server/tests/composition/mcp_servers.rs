@@ -49,6 +49,32 @@ fn agents(servers: Vec<StdioMcpServer>) -> AgentsConfig {
 }
 
 #[test]
+fn the_built_in_server_is_handed_over_beside_the_configured_and_takes_its_name() {
+    let tools = super::super::environment_tools::EnvironmentTools::new(
+        &crate::conversation::domain::CommandPolicy::new(["devbox".to_owned()], None, Vec::new()),
+    );
+    let name = super::super::environment_tools::SERVER_NAME;
+    let configured = launches(&[server("mcptest", &["/s.mjs"]), server(name, &["/own.mjs"])]);
+    let key = ConfigurationKey::new([7; 32]);
+    let handed = stand_ins(&live_of(&configured), "/bundle/nessa", "/s.sock", &key, Some(tools.as_ref()));
+    let names: Vec<&str> = handed.iter().map(|stand_in| stand_in.name.as_str()).collect();
+    assert_eq!(names, ["mcptest", name]);
+    assert_eq!(
+        handed[1].args,
+        [
+            "mcp-relay",
+            "/s.sock",
+            name,
+            crate::mcp_servers::infrastructure::built_in_digest(&key, tools.as_ref()).as_str(),
+        ]
+    );
+    // Without it, the configured server of that name is handed over again.
+    let handed = stand_ins(&live_of(&configured), "/bundle/nessa", "/s.sock", &key, None);
+    assert_eq!(handed.len(), 2);
+    assert_eq!(handed[1].args[3], launch_digest(&key, &configured[1]));
+}
+
+#[test]
 fn each_server_is_handed_over_as_a_relay_under_its_own_name() {
     let configured = vec![
         server("mcptest", &["/s.mjs"]),

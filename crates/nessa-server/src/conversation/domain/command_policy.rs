@@ -73,3 +73,7 @@ impl CommandPolicy {
 fn program_name(program: &str) -> &str {
     program.rsplit('/').next().unwrap_or(program)
 }
+
+#[cfg(test)]
+#[path = "../../../tests/conversation/command_policy.rs"]
+mod tests;
