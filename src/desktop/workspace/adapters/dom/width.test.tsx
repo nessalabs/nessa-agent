@@ -5,14 +5,27 @@
  */
 import { act, useRef } from "react"
 import { createRoot } from "react-dom/client"
-import { afterEach, beforeEach, expect, it } from "vitest"
+import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { useAtLeastWide } from "./width"
 
+const frames = new Map<number, FrameRequestCallback>()
+let frameId = 0
+const paint = () => {
+  const pending = [...frames.values()]
+  frames.clear()
+  for (const callback of pending) callback(0)
+}
 let host: HTMLDivElement
 let report: (width: number) => void = () => {}
 
 beforeEach(() => {
   ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    const id = ++frameId
+    frames.set(id, callback)
+    return id
+  })
+  vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id))
   class Observer {
     constructor(callback: ResizeObserverCallback) {
       report = (width) =>
@@ -29,7 +42,11 @@ beforeEach(() => {
   document.body.append(host)
 })
 
-afterEach(() => host.remove())
+afterEach(() => {
+  host.remove()
+  frames.clear()
+  vi.unstubAllGlobals()
+})
 
 let renders = 0
 function Surface() {
@@ -45,12 +62,24 @@ it("follows the observer, and draws again only when the answer changes", async (
   await act(async () => root.render(<Surface />))
   expect(host.querySelector("[data-wide]")).toBeNull()
   await act(async () => report(1200))
+  expect(host.querySelector("[data-wide]")).toBeNull()
+  await act(paint)
   expect(host.querySelector("[data-wide]")).not.toBeNull()
   const drawn = renders
   await act(async () => report(1300))
+  await act(paint)
   expect(renders).toBe(drawn)
   await act(async () => report(700))
+  await act(paint)
   expect(host.querySelector("[data-wide]")).toBeNull()
   expect(renders).toBe(drawn + 1)
+  await act(async () => report(1200))
+  await act(async () => report(700))
+  await act(paint)
+  expect(renders).toBe(drawn + 1)
+  await act(async () => report(1200))
+  expect(frames.size).toBe(1)
   await act(async () => root.unmount())
+  expect(frames.size).toBe(0)
+  await act(paint)
 })

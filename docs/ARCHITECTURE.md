@@ -246,7 +246,12 @@ the quick switcher included. Titlebar content starts at the one safe area,
 nothing draws under the window's controls. A column's title sits inline in
 the titlebar row, after the controls, where it fits, and on its own row below
 where it does not (`src/desktop/ui/column-header.tsx`, the same head for the
-session list, the sidebar and Settings' page).
+session list, the sidebar and Settings' page). ResizeObserver reports update
+its width measurements only. One animation-frame callback applies the latest
+placement before the next paint, so moving the title cannot resize neighboring
+panes within that observer broadcast (#693). The overview's width observer also
+commits its arrangement in an animation frame, avoiding a synchronous React
+flush that could mount pending neighboring observers during delivery.
 
 The **Agents overview** (`ui/overview/`, ⌘0 or "Agents" at the top of the
 sidebar, in every layout but Classic, with nothing to turn on) takes the

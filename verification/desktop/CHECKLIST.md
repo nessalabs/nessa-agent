@@ -129,6 +129,8 @@ controls — text, icons, images, code, or decorative art — in any frame.
 - [ ] **Column titles sit inline after the controls when they fit, below when
   they do not**, and an inline title never overlaps a titlebar control.
   _ADR 238 › The titlebar's safe area_ (`titlePlacement`).
+  ResizeObserver delivery measures only; the latest placement commits before
+  the next paint, with no ResizeObserver loop error (#693).
   _Check:_ `responsive.mjs --only column-title`; drag a column edge slowly
   across the flip point by hand and watch for a flicker (the 12px hold).
 - [ ] **A column's titlebar action hides at once as it folds, shows once it
