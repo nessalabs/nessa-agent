@@ -53,10 +53,10 @@ impl HttpMethod {
 /// One HTTP call. Header names are compared case-insensitively by the
 /// transport; the adapter sends them as given.
 ///
-/// `Debug` prints the method, the URL without userinfo or a query, header
-/// names, and the body length. It does not print header values or body bytes,
-/// so a panic that formats this request cannot carry a bearer or a JSON-RPC
-/// body into the default panic hook.
+/// `Debug` prints the method, `scheme://host` and a port when the URL has
+/// one, header names, and the body length. It does not print userinfo, the
+/// path, the query, the fragment, header values, or body bytes. An adapter's
+/// own panic string is the host app's responsibility.
 #[derive(Clone, PartialEq, Eq)]
 pub struct HttpRequest {
     /// `GET`, `POST`, or `DELETE`.
@@ -191,26 +191,17 @@ pub trait HttpExchange: Send + Sync {
     async fn exchange(&self, request: HttpRequest) -> Result<HttpResponse, HttpFailure>;
 }
 
-/// URL for `Debug`: scheme, host, and path. Userinfo, query, and fragment
-/// stay out, because a query or userinfo can carry a token.
+/// URL for `Debug`: `scheme://host` and a port when one was written. Userinfo,
+/// path, query, and fragment stay out. A hosted server can put a secret in
+/// the path, and `@` in that path is not part of the authority.
 fn redacted_url(url: &str) -> String {
-    let without_fragment = url.split_once('#').map(|(head, _)| head).unwrap_or(url);
-    let without_query = without_fragment
-        .split_once('?')
-        .map(|(head, _)| head)
-        .unwrap_or(without_fragment);
-    let Some(scheme_end) = without_query.find("://") else {
-        return without_query.to_owned();
+    let Ok(parsed) = url::Url::parse(url) else {
+        return "<redacted>".to_owned();
     };
-    let after_scheme = &without_query[scheme_end + 3..];
-    let Some(at) = after_scheme.find('@') else {
-        return without_query.to_owned();
-    };
-    format!(
-        "{}://{}",
-        &without_query[..scheme_end],
-        &after_scheme[at + 1..]
-    )
+    match parsed.origin() {
+        url::Origin::Tuple(..) => parsed.origin().ascii_serialization(),
+        url::Origin::Opaque(_) => "<redacted>".to_owned(),
+    }
 }
 
 struct HeaderNames<'a>(&'a [(String, String)]);

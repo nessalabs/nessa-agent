@@ -5,7 +5,6 @@
 //! checks can be cut short by a slow machine. Waiting on a real process is
 //! still bounded in real time by the test itself.
 use super::{Clock, ClockInstant, ClockSleep};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::{sync::Mutex, time::Duration};
 use tokio::sync::watch;
 
@@ -29,11 +28,6 @@ pub(crate) struct ManualClock {
     /// Every wait started, in order.
     waits: Mutex<Vec<Wait>>,
     started: watch::Sender<usize>,
-    /// When set, a sleep whose deadline has already arrived waits until
-    /// [`Self::hold_already_due`] is cleared. The HTTP writer uses that sleep
-    /// after it settles, so a test can let recovery publish first.
-    hold_due: AtomicBool,
-    hold_released: watch::Sender<u64>,
 }
 impl Default for ManualClock {
     fn default() -> Self {
@@ -41,21 +35,10 @@ impl Default for ManualClock {
             now: watch::channel(ClockInstant::from_origin(Duration::ZERO)).0,
             waits: Mutex::default(),
             started: watch::channel(0).0,
-            hold_due: AtomicBool::new(false),
-            hold_released: watch::channel(0).0,
         }
     }
 }
 impl ManualClock {
-    /// Hold or release sleeps that are already due. The writer's post-settlement
-    /// sleep is one of those. Other deadlines keep their own time.
-    pub fn hold_already_due(&self, hold: bool) {
-        self.hold_due.store(hold, Ordering::SeqCst);
-        if !hold {
-            self.hold_released
-                .send_modify(|generation| *generation = generation.wrapping_add(1));
-        }
-    }
     /// Move the clock `by` forward, ending every wait whose deadline that
     /// reaches.
     pub fn advance(&self, by: Duration) {
@@ -122,19 +105,6 @@ impl Clock for ManualClock {
             deadline,
         });
         self.started.send_modify(|started| *started += 1);
-        if self.hold_due.load(Ordering::SeqCst) && deadline <= started_at {
-            let mut released = self.hold_released.subscribe();
-            let seen = *released.borrow_and_update();
-            return Box::pin(async move {
-                if released
-                    .wait_for(|generation| *generation != seen)
-                    .await
-                    .is_err()
-                {
-                    std::future::pending::<()>().await;
-                }
-            });
-        }
         Box::pin(async move {
             // A clock nobody holds any more never moves again.
             if now.wait_for(|now| *now >= deadline).await.is_err() {

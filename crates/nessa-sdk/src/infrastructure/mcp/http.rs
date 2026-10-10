@@ -280,29 +280,25 @@ impl HttpSession {
         });
     }
 
-    /// The end cause already stored by [`Self::settle_writer`]. Panic is
-    /// [`McpError::ServerGone`]. A clean finish, a cancellation, or a writer
-    /// that has not settled is [`McpError::Unconfirmed`].
-    pub(crate) fn writer_settlement_cause(&self) -> McpError {
-        if matches!(*self.writer_settled.borrow(), Some(true)) {
+    /// The end cause for a recovery completion the writer dropped without
+    /// sending. Waits until [`Self::settle_writer`] so this task does not
+    /// decide ahead of the writer's outcome. Panic is [`McpError::ServerGone`].
+    /// A clean finish, a cancellation, or a closed watch is
+    /// [`McpError::Unconfirmed`].
+    async fn dropped_writer_sender(&self) -> McpError {
+        let mut settled = self.writer_settled.subscribe();
+        let panicked = loop {
+            if let Some(panicked) = *settled.borrow_and_update() {
+                break panicked;
+            }
+            if settled.changed().await.is_err() {
+                break false;
+            }
+        };
+        if panicked {
             McpError::ServerGone
         } else {
             McpError::Unconfirmed
-        }
-    }
-
-    /// The end cause for a recovery completion the writer dropped without
-    /// sending. Waits until [`Self::settle_writer`] so this task does not
-    /// decide ahead of the writer's outcome.
-    async fn dropped_writer_sender(&self) -> McpError {
-        let mut settled = self.writer_settled.subscribe();
-        loop {
-            if settled.borrow_and_update().is_some() {
-                return self.writer_settlement_cause();
-            }
-            if settled.changed().await.is_err() {
-                return McpError::Unconfirmed;
-            }
         }
     }
 
