@@ -35,12 +35,13 @@ use nessa_server::{
     app::dependencies::RuntimeDependencies,
     peer_gateways::{
         application::{
-            EnrollmentEntropy, EnrollmentEntropySource, PeerAudit, PeerAuditFuture,
-            PeerAuditRecord, PeerAuditUnavailable, PeerConnectFuture, PeerConnector,
+            PeerAudit, PeerAuditFuture, PeerAuditRecord, PeerAuditUnavailable, PeerConnectFuture,
+            PeerConnector,
         },
         infrastructure::{
-            DurablePeerAudit, PeerCommands, PeerEntry, PeerError, PeerPhase, PeerRecords,
-            SlotRefusal, TcpPeerConnector, AUDIT_DEADLINE, CONNECT,
+            DurablePeerAudit, EnrollmentEntropy, EnrollmentEntropySource, PeerCommands, PeerEntry,
+            PeerError, PeerPhase, PeerRecords, SlotRefusal, TcpPeerConnector, AUDIT_DEADLINE,
+            CONNECT,
         },
     },
     product::{ProductDependencies, ProductRouteState},

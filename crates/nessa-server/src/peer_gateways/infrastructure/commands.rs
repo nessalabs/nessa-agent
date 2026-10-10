@@ -16,10 +16,7 @@
 use super::records::{
     PeerEntry, PeerPhase, PeerRecords, PeerSlot, SlotFound, SlotRefusal, SlotSave,
 };
-use crate::peer_gateways::application::{
-    EnrollmentEntropy, EnrollmentEntropySource, PeerAudit, PeerAuditRecord, PeerConnector,
-    PeerState,
-};
+use crate::peer_gateways::application::{PeerAudit, PeerAuditRecord, PeerConnector, PeerState};
 use nessa_auth::{
     adapters::pairing::{rand, CryptoRng, ManualCode, PairingCryptoError, RngCore},
     application::pairing::PrivateStateError,
@@ -40,6 +37,14 @@ use std::{
 };
 use tokio::sync::Semaphore;
 use uuid::Uuid;
+
+/// Entropy for one enrollment: its attempt id and its key exchange.
+pub trait EnrollmentEntropy: RngCore + CryptoRng + Send + 'static {}
+impl<T: RngCore + CryptoRng + Send + 'static> EnrollmentEntropy for T {}
+
+/// Where each enrollment's entropy comes from; composition supplies the
+/// operating system's generator, a test one that fails.
+pub type EnrollmentEntropySource = Arc<dyn Fn() -> Box<dyn EnrollmentEntropy> + Send + Sync>;
 
 /// How long a TCP connect to a peer may take, by the injected deadline clock.
 pub const CONNECT: Duration = Duration::from_secs(5);

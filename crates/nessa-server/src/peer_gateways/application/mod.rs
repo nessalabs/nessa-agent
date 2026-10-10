@@ -7,11 +7,7 @@
 //! correlated by one operation id. No intent, no effect: a command whose
 //! intent cannot be kept changes nothing. An outcome that cannot be kept
 //! turns the answer into a refusal, while the effect it describes stays.
-use nessa_auth::{
-    adapters::pairing::{CryptoRng, RngCore},
-    domain::{pairing::DeviceKey, PrincipalId},
-};
-use std::sync::Arc;
+use nessa_auth::domain::{pairing::DeviceKey, PrincipalId};
 use std::{
     future::Future,
     io,
@@ -111,11 +107,3 @@ pub type PeerConnectFuture<'a> = Pin<Box<dyn Future<Output = io::Result<TcpStrea
 pub trait PeerConnector: Send + Sync {
     fn connect(&self, address: SocketAddr) -> PeerConnectFuture<'_>;
 }
-
-/// Entropy for one enrollment: its attempt id and its key exchange.
-pub trait EnrollmentEntropy: RngCore + CryptoRng + Send + 'static {}
-impl<T: RngCore + CryptoRng + Send + 'static> EnrollmentEntropy for T {}
-
-/// Where each enrollment's entropy comes from; composition supplies the
-/// operating system's generator, a test one that fails.
-pub type EnrollmentEntropySource = Arc<dyn Fn() -> Box<dyn EnrollmentEntropy> + Send + Sync>;
