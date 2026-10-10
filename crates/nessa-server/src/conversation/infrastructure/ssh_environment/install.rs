@@ -3,7 +3,7 @@
 //! and if it is not, puts it there before connecting again.
 //!
 //! ```text
-//! ensure(host)
+//! ensure(host, lease)            every record names the host and the lease
 //!   ──▶ probe ──▶ present ──▶ Present: nothing written (the host's own trouble)
 //!             ──▶ no answer ──▶ refused environment_unreachable
 //!             ──▶ absent <platform> ──▶ this build runs there?
@@ -180,13 +180,14 @@ impl HostInstaller {
         )
     }
 
-    /// Make sure this build is installed on `host`.
+    /// Make sure this build is installed on `host`, for `lease`.
     ///
     /// # Errors
     /// The typed refusal; each install refused is recorded in `audit`.
     pub(crate) async fn ensure(
         &self,
         host: &SshDestination,
+        lease: &str,
         audit: &dyn EnvironmentAudit,
     ) -> Result<Installation, LeaseRefusal> {
         let name = host.as_str();
@@ -199,6 +200,7 @@ impl HostInstaller {
             refused(
                 audit,
                 name,
+                lease,
                 InstallRefusal::Platform,
                 Some(platform.to_string()),
             );
@@ -213,12 +215,13 @@ impl HostInstaller {
             Ok(build) => build,
             Err(error) => {
                 tracing::error!(%error, "this build's executable could not be read to install it");
-                refused(audit, name, InstallRefusal::Source, None);
+                refused(audit, name, lease, InstallRefusal::Source, None);
                 return Err(LeaseRefusal::EnvironmentInstallFailed);
             }
         };
         let started = EnvironmentEvent::InstallStarted {
             host: name.into(),
+            lease: lease.into(),
             protocol: self.protocol.into(),
             digest: digest.clone(),
         };
@@ -251,6 +254,7 @@ impl HostInstaller {
         if answer.is_none() && self.probe(host).await == Some(Probe::Present) {
             let found = EnvironmentEvent::InstallFound {
                 host: name.into(),
+                lease: lease.into(),
                 protocol: self.protocol.into(),
             };
             if let Err(error) = audit.record(&found) {
@@ -263,6 +267,7 @@ impl HostInstaller {
             Some(Upload::Installed) => {
                 let installed = EnvironmentEvent::Installed {
                     host: name.into(),
+                    lease: lease.into(),
                     protocol: self.protocol.into(),
                     digest,
                 };
@@ -303,7 +308,7 @@ impl HostInstaller {
                 LeaseRefusal::EnvironmentUnreachable,
             ),
         };
-        refused(audit, name, reason, seen);
+        refused(audit, name, lease, reason, seen);
         Err(refusal)
     }
 }
@@ -339,15 +344,23 @@ impl HostInstaller {
 
 /// Record an install refused; a record that fails is logged, as the refusal
 /// stands either way.
-fn refused(audit: &dyn EnvironmentAudit, host: &str, reason: InstallRefusal, seen: Option<String>) {
+fn refused(
+    audit: &dyn EnvironmentAudit,
+    host: &str,
+    lease: &str,
+    reason: InstallRefusal,
+    seen: Option<String>,
+) {
     tracing::warn!(
         host,
+        lease,
         ?reason,
         ?seen,
         "this build was not installed on the host"
     );
     let event = EnvironmentEvent::InstallRefused {
         host: host.into(),
+        lease: lease.into(),
         reason,
         seen,
     };

@@ -5,7 +5,7 @@
 //! ```text
 //! open(lease, grant, binding)
 //!   ──▶ link (one per host: connect, hello, this build?)
-//!         the stream ended with nothing said ──▶ installer.ensure(host)
+//!         the stream ended with nothing said ──▶ installer.ensure(host, lease)
 //!           installed, or present already ──▶ connect once more
 //!         (an account of a lost lease connects only: it never installs)
 //!   ──▶ binding.on_host(LeaseHost) ──▶ the same binding, starting its harness there
@@ -113,30 +113,34 @@ impl SshEnvironment {
 
 /// Whether opening a connection may install this build on the host first.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Install {
-    /// For a lease: a host with no copy of this build gets one.
-    IfAbsent,
+enum Install<'a> {
+    /// For this lease: a host with no copy of this build gets one, and the
+    /// install's records name the lease, so they join its issuance.
+    IfAbsent(&'a str),
     /// For an account of a lease already held: a copy installed now could
     /// answer only that it holds nothing, so none is installed.
     Never,
 }
 
 impl Inner {
-    async fn link(&self, install: Install) -> Result<Arc<HostLink>, LeaseRefusal> {
+    async fn link(&self, install: Install<'_>) -> Result<Arc<HostLink>, LeaseRefusal> {
         let mut held = self.link.lock().await;
         if let Some(link) = held.as_ref().filter(|link| link.is_open()) {
             return Ok(link.clone());
         }
         *held = None;
         let link = match self.open().await {
-            Err(Opening::NotServed) if install == Install::IfAbsent => {
+            Err(Opening::NotServed) => match install {
                 // Present already: another gateway of this build may have
                 // just put it there, so it is asked once more either way.
-                self.installer
-                    .ensure(&self.host, self.audit.as_ref())
-                    .await?;
-                self.open().await
-            }
+                Install::IfAbsent(lease) => {
+                    self.installer
+                        .ensure(&self.host, lease, self.audit.as_ref())
+                        .await?;
+                    self.open().await
+                }
+                Install::Never => Err(Opening::NotServed),
+            },
             opened => opened,
         };
         let link = link.map_err(|opening| match opening {
@@ -194,7 +198,7 @@ impl Environment for SshEnvironment {
     ) -> EnvironmentFuture<'a, Result<EnvironmentLease, LeaseRefusal>> {
         Box::pin(async move {
             let LeaseWork::Agent(work) = &grant.work;
-            let link = self.inner.link(Install::IfAbsent).await?;
+            let link = self.inner.link(Install::IfAbsent(lease.as_str())).await?;
             let host = Arc::new(LeaseHost {
                 link: link.clone(),
                 lease: lease.as_str().into(),

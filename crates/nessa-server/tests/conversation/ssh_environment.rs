@@ -1534,9 +1534,10 @@ fn installing(connector: Arc<Connector>, shell: Arc<Shell>, audit: Arc<Audit>) -
     )
 }
 
-fn refused(reason: InstallRefusal, seen: Option<&str>) -> EnvironmentEvent {
+fn refused(lease: &LeaseId, reason: InstallRefusal, seen: Option<&str>) -> EnvironmentEvent {
     EnvironmentEvent::InstallRefused {
         host: "devbox".into(),
+        lease: lease.as_str().into(),
         reason,
         seen: seen.map(Into::into),
     }
@@ -1576,8 +1577,9 @@ async fn a_host_without_this_build_gets_it_installed_and_then_serves() {
     let audit = Arc::new(Audit::default());
     let environment = installing(connector.clone(), shell.clone(), audit.clone());
     let (binding, _host) = binding(true);
+    let lease = lease();
     environment
-        .open(&lease(), &terms("claude"), binding)
+        .open(&lease, &terms("claude"), binding)
         .await
         .map(|_| ())
         .unwrap();
@@ -1600,15 +1602,17 @@ async fn a_host_without_this_build_gets_it_installed_and_then_serves() {
     assert_eq!(connector.connects.load(Ordering::SeqCst), 2);
     let installed = |started: bool| {
         let (protocol, digest) = (LEASE_PROTOCOL.to_owned(), this_digest());
-        let host = "devbox".to_owned();
+        let (host, lease) = ("devbox".to_owned(), lease.as_str().to_owned());
         match started {
             true => EnvironmentEvent::InstallStarted {
                 host,
+                lease,
                 protocol,
                 digest,
             },
             false => EnvironmentEvent::Installed {
                 host,
+                lease,
                 protocol,
                 digest,
             },
@@ -1635,9 +1639,10 @@ async fn a_host_this_build_cannot_run_on_is_refused_and_sent_nothing() {
     let shell = Shell::new("absent Darwin arm64 other", "installed", connector.clone());
     let audit = Arc::new(Audit::default());
     let environment = installing(connector.clone(), shell.clone(), audit.clone());
+    let lease = lease();
     assert_eq!(
         environment
-            .open(&lease(), &terms("claude"), binding_only())
+            .open(&lease, &terms("claude"), binding_only())
             .await
             .err(),
         Some(LeaseRefusal::EnvironmentPlatformUnsupported)
@@ -1646,6 +1651,7 @@ async fn a_host_this_build_cannot_run_on_is_refused_and_sent_nothing() {
     assert_eq!(
         audit.events(),
         vec![refused(
+            &lease,
             InstallRefusal::Platform,
             Some("macos aarch64 other")
         )]
@@ -1661,42 +1667,43 @@ async fn an_install_the_host_refuses_is_refused_with_its_reason() {
         (
             "refused fingerprint 00ff",
             LeaseRefusal::EnvironmentInstallFailed,
-            refused(InstallRefusal::Fingerprint, Some("00ff")),
+            (InstallRefusal::Fingerprint, Some("00ff")),
         ),
         (
             "refused version fedcba9876543210",
             LeaseRefusal::EnvironmentVersionMismatch,
-            refused(InstallRefusal::Version, Some("fedcba9876543210")),
+            (InstallRefusal::Version, Some("fedcba9876543210")),
         ),
         (
             "refused unrunnable",
             LeaseRefusal::EnvironmentInstallFailed,
-            refused(InstallRefusal::Unrunnable, None),
+            (InstallRefusal::Unrunnable, None),
         ),
         (
             "refused digest_tool",
             LeaseRefusal::EnvironmentInstallFailed,
-            refused(InstallRefusal::DigestTool, None),
+            (InstallRefusal::DigestTool, None),
         ),
         (
             "failed publish",
             LeaseRefusal::EnvironmentInstallFailed,
-            refused(InstallRefusal::Failed, Some("publish")),
+            (InstallRefusal::Failed, Some("publish")),
         ),
         (
             "Connection closed by remote host",
             LeaseRefusal::EnvironmentUnreachable,
-            refused(InstallRefusal::Unanswered, None),
+            (InstallRefusal::Unanswered, None),
         ),
     ];
-    for (answer, refusal, event) in cases {
+    for (answer, refusal, (reason, seen)) in cases {
         let connector = Connector::new(Reach::Silent);
         let shell = Shell::new("absent Linux x86_64 gnu", answer, connector.clone());
         let audit = Arc::new(Audit::default());
         let environment = installing(connector.clone(), shell.clone(), audit.clone());
+        let lease = lease();
         assert_eq!(
             environment
-                .open(&lease(), &terms("claude"), binding_only())
+                .open(&lease, &terms("claude"), binding_only())
                 .await
                 .err(),
             Some(refusal),
@@ -1705,10 +1712,10 @@ async fn an_install_the_host_refuses_is_refused_with_its_reason() {
         assert_eq!(connector.connects.load(Ordering::SeqCst), 1, "{answer}");
         let events = audit.events();
         assert!(
-            matches!(events[0], EnvironmentEvent::InstallStarted { .. }),
+            matches!(&events[0], EnvironmentEvent::InstallStarted { lease: started, .. } if started == lease.as_str()),
             "{answer}"
         );
-        assert_eq!(events[1..], [event], "{answer}");
+        assert_eq!(events[1..], [refused(&lease, reason, seen)], "{answer}");
     }
 }
 

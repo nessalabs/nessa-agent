@@ -47,27 +47,37 @@ pub(crate) enum EnvironmentEvent {
     },
     /// This build is about to be sent to a host that has no copy of it,
     /// to be installed under `protocol` if its SHA-256 there is `digest`.
-    /// Recorded before a byte is sent.
+    /// Recorded before a byte is sent. `lease` is the lease whose opening
+    /// found no copy, in every install record: it joins them to its
+    /// issuance and its actor, and pairs this start with its outcome, as a
+    /// lease opens at most one install.
     InstallStarted {
         host: String,
+        lease: String,
         protocol: String,
         digest: String,
     },
     /// It verified on the host and is in place.
     Installed {
         host: String,
+        lease: String,
         protocol: String,
         digest: String,
     },
     /// The upload's answer was lost, and the host's probe then found a copy
     /// of this protocol in place: this upload's or another gateway's of the
     /// same protocol, so no digest is claimed for it.
-    InstallFound { host: String, protocol: String },
+    InstallFound {
+        host: String,
+        lease: String,
+        protocol: String,
+    },
     /// Nothing was installed, and why; `seen` is what the host said, where
     /// that is the reason (its platform, the digest it saw, the protocol the
     /// copy spoke).
     InstallRefused {
         host: String,
+        lease: String,
         reason: InstallRefusal,
         seen: Option<String>,
     },
