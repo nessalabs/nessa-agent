@@ -220,13 +220,13 @@ fn catalogue() -> &'static [Limit] {
             id: "peer.poll_backoff_cap",
             tier: "fixed",
             owner: "POLL_BACKOFF_CAP in crates/nessa-server/src/peer_gateways/infrastructure/poller.rs",
-            meaning: "the longest any peer waits between reads, jitter included; a peer that keeps failing waits twice as long each time, from the interval up to this",
+            meaning: "the longest wait a peer is scheduled for between reads, jitter included; a peer that keeps failing waits twice as long each time, from the interval up to this; peers are read one at a time, so reads of other peers ahead of it can add to it",
         },
         Limit {
             id: "peer.read_budget",
             tier: "fixed",
             owner: "READ_BUDGET in crates/nessa-server/src/peer_gateways/infrastructure/poller.rs",
-            meaning: "the longest one read of a peer gateway runs; a read that reaches it having saved something ends incomplete and continues on the next cycle, and one that saved nothing is unreachable and backs off, so a slow peer cannot hold the peer commands or the other peers",
+            meaning: "the longest one read of a peer gateway runs; a read that reaches it having saved something ends incomplete and continues on the next cycle, and one that saved nothing is unreachable and backs off, so a slow peer cannot hold the peer commands, and holds the other peers, read one at a time, at most this long per read",
         },
         Limit {
             id: "peer.preempt",

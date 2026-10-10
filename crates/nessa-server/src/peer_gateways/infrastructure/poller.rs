@@ -65,7 +65,8 @@ use tokio::{
 
 /// How often each peer is read once it is up to date.
 pub const POLL_INTERVAL: Duration = Duration::from_secs(30);
-/// The longest a peer waits between reads, failing or not, jitter included.
+/// The longest wait a peer is scheduled for between reads, failing or not,
+/// jitter included. Reads of other peers ahead of it can add to it.
 pub const POLL_BACKOFF_CAP: Duration = Duration::from_secs(15 * 60);
 /// The longest one read of a peer runs before it ends incomplete.
 pub const READ_BUDGET: Duration = Duration::from_secs(60);
@@ -723,7 +724,7 @@ enum Pace {
 /// The wait after `pace`, with `failures` failures in a row before it, and
 /// the failures in a row after it. `draw` spreads it over 80%–120%, so peers
 /// read together drift apart; then it is held to the cap, so the cap is the
-/// longest any peer waits.
+/// longest wait any peer is scheduled for.
 fn next_wait(policy: &PollPolicy, pace: Pace, failures: u32, draw: u32) -> (Duration, u32) {
     let (base, failures) = match pace {
         Pace::Settled | Pace::Waiting | Pace::Gone => (policy.interval, 0),

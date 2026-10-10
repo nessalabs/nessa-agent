@@ -479,8 +479,10 @@ sequenceDiagram
   came to, as an owner command's outcome does.
 - **Cadence.** Each peer is read every `POLL_INTERVAL` (30 s), spread 80 to
   120 percent, and after a failure after a backoff that doubles; every wait,
-  jitter included, is held to `POLL_BACKOFF_CAP` (15 min). A read stopped
-  at a bound, or by an owner command, continues sooner. Every wait is on the
+  jitter included, is held to `POLL_BACKOFF_CAP` (15 min). That is the wait
+  a peer is scheduled for; reads of other peers ahead of it can add to it
+  (see Known limits). A read stopped at a bound, or by an owner command,
+  continues sooner. Every wait is on the
   injected monotonic clock and the jitter is drawn from injected entropy.
   `POLL_INTERVAL`, `POLL_BACKOFF_CAP`, `READ_BUDGET` and `PREEMPT` are rows of
   [`limits.md`](../../limits.md).
@@ -546,6 +548,16 @@ the client and gives the head an access path by receiver
 
 ## Known limits
 
+- **Peers are read one at a time.** A read runs up to `READ_BUDGET` (60 s),
+  and every other peer waits for it, so each peer that answers slowly
+  lengthens a pass by up to that much. With several such peers, every peer
+  is read about once per their combined budgets rather than every
+  `POLL_INTERVAL`, and a grant withdrawn or a credential revoked on any peer
+  is seen that much later. A slow peer that saves nothing within its budget
+  backs off, so it costs this once per backoff; one that keeps saving a
+  little continues on the next pass and costs it every pass. The owner's
+  commands are not held: they stop the read and take the turn. Reading
+  peers side by side, each with its own turn, is not built.
 - **An enrollment that loses its last reply can leave a pending record.** B
   saves its record before it confirms, as a device does, so a connection
   that fails after that save answers `peer_unreachable` or
