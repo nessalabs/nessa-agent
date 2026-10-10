@@ -1,6 +1,7 @@
 use crate::attachments::domain::{Attachment, Caller, UploadTicket};
 use nessa_auth::domain::OrganizationId;
 use nessa_protocol::conversation::domain::ConversationId;
+use nessa_sdk::domain::agent_execution::leases::LeaseId;
 
 /// Whether a conversation held a stored file before or after a transition.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -109,7 +110,8 @@ impl Hold {
     /// so what was offered and what is stored are one file. `published_by`
     /// is who asked for the work the lease runs; `offered_at_ms` is when the
     /// environment's offer arrived, and `kept_at_ms` when its bytes were
-    /// verified. `None` for a lease id no record could carry.
+    /// verified. `None` for a lease id no record could carry: one
+    /// [`LeaseId::new`] refuses.
     pub fn published(
         organization_id: OrganizationId,
         conversation_id: ConversationId,
@@ -119,7 +121,7 @@ impl Hold {
         offered_at_ms: u64,
         kept_at_ms: u64,
     ) -> Option<Self> {
-        (!lease.trim().is_empty() && lease.len() <= Caller::MAX_BYTES).then(|| Self {
+        LeaseId::new(lease).is_ok().then(|| Self {
             organization_id,
             conversation_id,
             uploaded: file.clone(),

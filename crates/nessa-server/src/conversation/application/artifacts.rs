@@ -28,7 +28,7 @@ use super::{
 use nessa_auth::domain::OrganizationId;
 use nessa_protocol::{
     conversation::domain::ConversationId,
-    lease::{Collection, CollectionRefusal, StagedArtifact},
+    lease::{Collection, CollectionRefusal, StagedArtifact, MAX_ARTIFACT_PATH_BYTES},
 };
 use nessa_sdk::application::agent_execution::{
     agents::Agent,
@@ -208,6 +208,11 @@ impl ArtifactCollector {
             .attachments
             .clone()
             .ok_or(CollectionRefusal::ChannelUnavailable)?;
+        // The path is the environment's to name and the protocol's to bound;
+        // a channel is never opened for one past that bound.
+        if !file.path.starts_with('/') || file.path.len() > MAX_ARTIFACT_PATH_BYTES {
+            return Err(CollectionRefusal::Invalid);
+        }
         let name = ArtifactName::new(file.name.clone()).map_err(|_| CollectionRefusal::Invalid)?;
         let published = Sha256Digest::parse(&format!("sha256:{}", file.digest))
             .ok()

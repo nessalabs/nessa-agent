@@ -1,7 +1,7 @@
 use crate::attachments::domain::{Attachment, Caller, Hold, HoldState, RetiredFrom, UploadTicket};
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::domain::ConversationId;
-use nessa_sdk::domain::common::value_objects::Sha256Digest;
+use nessa_sdk::domain::{agent_execution::leases::LeaseId, common::value_objects::Sha256Digest};
 use std::{future::Future, pin::Pin};
 
 /// A boxed port future with a typed failure.
@@ -551,7 +551,8 @@ pub struct PublishedFile {
     offered_at_ms: u64,
 }
 impl PublishedFile {
-    /// `None` for a lease id no record could carry.
+    /// `None` for a lease id no record could carry: one [`LeaseId::new`]
+    /// refuses.
     pub fn new(
         organization_id: OrganizationId,
         conversation_id: ConversationId,
@@ -559,7 +560,7 @@ impl PublishedFile {
         caller: Caller,
         lease: &str,
     ) -> Option<Self> {
-        (!lease.trim().is_empty() && lease.len() <= Caller::MAX_BYTES).then(|| Self {
+        LeaseId::new(lease).is_ok().then(|| Self {
             organization_id,
             conversation_id,
             file,

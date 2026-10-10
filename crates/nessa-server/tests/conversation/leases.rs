@@ -30,7 +30,9 @@ use nessa_protocol::conversation::view::{
     ConversationLeaseCause, ConversationLeaseCleanup, ConversationLeaseEnvironment,
     ConversationLeaseSandbox, ConversationLeaseState, ConversationMessageStatus,
 };
-use nessa_protocol::lease::{Collection, StagedArtifact};
+use nessa_protocol::lease::{
+    Collection, CollectionRefusal, StagedArtifact, MAX_ARTIFACT_PATH_BYTES,
+};
 use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_protocol::{agents::AgentId, conversation::domain::ConversationId};
 use nessa_sdk::application::agent_execution::{
@@ -1515,6 +1517,15 @@ async fn publish(
     publish: &tokio::sync::mpsc::Sender<ArtifactOffer>,
     name: &str,
 ) -> oneshot::Receiver<Collection> {
+    publish_at(publish, name, format!("/srv/work/.nessa/{name}")).await
+}
+
+/// Publish `name`, staged at `path`, on `publish`.
+async fn publish_at(
+    publish: &tokio::sync::mpsc::Sender<ArtifactOffer>,
+    name: &str,
+    path: String,
+) -> oneshot::Receiver<Collection> {
     let (answered, answer) = oneshot::channel();
     let bytes = b"a disk image".to_vec();
     publish
@@ -1524,7 +1535,7 @@ async fn publish(
                 media_type: "application/x-apple-diskimage".into(),
                 size: bytes.len() as u64,
                 digest: "ab".repeat(32),
-                path: format!("/srv/work/.nessa/{name}"),
+                path,
             },
             bytes: Box::new(Published(Some(bytes))),
             answer: ArtifactAnswer::new(move |outcome| {
@@ -1565,6 +1576,32 @@ async fn d_a_file_published_on_a_host_is_held_recorded_and_answered() {
     };
     assert_eq!(artifact.lease.as_str(), lease);
     assert_eq!(artifact.name.as_str(), "build.dmg");
+}
+
+/// A file staged at a path the protocol does not allow is refused invalid,
+/// unread and not held: the gateway opens no channel for it.
+#[tokio::test]
+async fn d_a_file_staged_at_a_path_past_its_bound_is_refused_invalid() {
+    let root = tempfile::tempdir().unwrap();
+    let (host, publisher) = Host::publishing();
+    let attachments = Arc::new(MemoryAttachments::default());
+    let harness = with_publishing_host(root.path(), Arc::new(host), attachments.clone());
+    harness.create_on("devbox").await.unwrap();
+    harness.turn("turn-1").await;
+    let long = format!("/{}", "a".repeat(MAX_ARTIFACT_PATH_BYTES));
+    for path in [long, String::new(), "relative/build.dmg".to_owned()] {
+        let answer = publish_at(&publisher, "build.dmg", path.clone()).await;
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(5), answer)
+                .await
+                .unwrap(),
+            Ok(Collection::Refused {
+                reason: CollectionRefusal::Invalid
+            }),
+            "{path}"
+        );
+    }
+    assert!(attachments.published.lock().unwrap().is_empty());
 }
 
 /// A file whose bytes were read while its lease was live, but whose lease
