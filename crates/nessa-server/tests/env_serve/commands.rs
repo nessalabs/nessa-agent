@@ -191,22 +191,36 @@ async fn at_most_one_frame_of_output_is_kept_the_newest() {
 
 #[test]
 fn collected_output_past_a_frame_is_dropped_from_the_start() {
-    let collected = bounded(Collected {
-        stdout: vec![b'o'; MAX_DATA_BYTES],
-        stderr: b"err".to_vec(),
-        dropped_bytes: 5,
-    });
+    use OutputStream::{Stderr, Stdout};
+    // The oldest bytes go first, whichever stream wrote them: older stderr
+    // goes before newer stdout.
+    let collected = bounded(
+        vec![
+            (Stderr, b"err".to_vec()),
+            (Stdout, vec![b'o'; MAX_DATA_BYTES]),
+        ],
+        5,
+    );
+    assert!(collected.stderr.is_empty());
+    assert_eq!(collected.stdout.len(), MAX_DATA_BYTES);
+    assert_eq!(collected.dropped_bytes, 8);
+    let collected = bounded(
+        vec![
+            (Stdout, vec![b'o'; MAX_DATA_BYTES]),
+            (Stderr, b"err".to_vec()),
+        ],
+        0,
+    );
     assert_eq!(collected.stdout.len(), MAX_DATA_BYTES - 3);
     assert_eq!(collected.stderr, b"err");
-    assert_eq!(collected.dropped_bytes, 8);
-    let collected = bounded(Collected {
-        stdout: b"ab".to_vec(),
-        stderr: vec![b'e'; MAX_DATA_BYTES],
-        dropped_bytes: 0,
-    });
-    assert!(collected.stdout.is_empty());
-    assert_eq!(collected.stderr.len(), MAX_DATA_BYTES);
-    assert_eq!(collected.dropped_bytes, 2);
+    assert_eq!(collected.dropped_bytes, 3);
+    // Within the bound nothing is dropped.
+    let collected = bounded(vec![(Stdout, b"a".to_vec()), (Stderr, b"b".to_vec())], 0);
+    assert_eq!(
+        (collected.stdout, collected.stderr),
+        (b"a".to_vec(), b"b".to_vec())
+    );
+    assert_eq!(collected.dropped_bytes, 0);
 }
 
 #[test]

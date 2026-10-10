@@ -127,12 +127,14 @@ impl CommandRunner for ShepherdCommands {
                     let output = scope.take_output(pid);
                     let deadline = tokio::time::Instant::now() + timeout;
                     let end = tokio::select! {
+                        // An exit it already came to wins over a stop asked
+                        // for after it: that is how it ended.
                         biased;
-                        _ = stop.wait_for(Option::is_some) => CommandEnd::Stopped,
                         exit = scope.wait(pid) => match exit {
                             Ok(exit) => ended(&exit),
                             Err(_) => CommandEnd::Unknown,
                         },
+                        _ = stop.wait_for(Option::is_some) => CommandEnd::Stopped,
                         () = tokio::time::sleep_until(deadline) => CommandEnd::TimedOut,
                     };
                     (end, output, true)
@@ -238,47 +240,48 @@ struct Collected {
 }
 
 /// Drain `read` until both streams have closed, or `wait` has passed, and
-/// keep at most [`MAX_DATA_BYTES`] of both streams together: what is past it
-/// is dropped from each stream's start, as the capture drops its oldest.
-/// Each read consumes its chunks; the dropped count is cumulative, so the
-/// last snapshot's is the total.
+/// keep at most [`MAX_DATA_BYTES`] of both streams together: the newest, in
+/// the order they were written, as the capture drops its oldest. Each read
+/// consumes its chunks; the dropped count is cumulative, so the last
+/// snapshot's is the total.
 async fn collect(mut read: impl FnMut() -> OutputSnapshot, wait: Duration) -> Collected {
     let deadline = tokio::time::Instant::now() + wait;
-    let mut collected = Collected {
-        stdout: Vec::new(),
-        stderr: Vec::new(),
-        dropped_bytes: 0,
-    };
+    let mut chunks = Vec::new();
     loop {
         let snapshot = read();
-        for chunk in snapshot.chunks {
-            match chunk.stream {
-                OutputStream::Stdout => collected.stdout.extend(chunk.bytes),
-                OutputStream::Stderr => collected.stderr.extend(chunk.bytes),
-            }
-        }
-        collected.dropped_bytes = snapshot.dropped_bytes;
+        chunks.extend(
+            snapshot
+                .chunks
+                .into_iter()
+                .map(|chunk| (chunk.stream, chunk.bytes)),
+        );
         let open = !snapshot.stdout_closed || !snapshot.stderr_closed;
         if !open || tokio::time::Instant::now() >= deadline {
-            return bounded(collected);
+            return bounded(chunks, snapshot.dropped_bytes);
         }
         tokio::time::sleep(OUTPUT_POLL).await;
     }
 }
 
-/// `collected` with at most [`MAX_DATA_BYTES`] kept: bytes read after the
-/// capture's own bound was met are dropped from the start of standard output
-/// first, then of standard error.
-fn bounded(mut collected: Collected) -> Collected {
-    let kept = collected.stdout.len() + collected.stderr.len();
+/// `chunks`, oldest first, with at most [`MAX_DATA_BYTES`] of them kept: the
+/// oldest bytes past it are dropped, whichever stream wrote them, and counted
+/// beside the `dropped_bytes` the capture already dropped.
+fn bounded(chunks: Vec<(OutputStream, Vec<u8>)>, dropped_bytes: u64) -> Collected {
+    let kept: usize = chunks.iter().map(|(_, bytes)| bytes.len()).sum();
     let mut excess = kept.saturating_sub(MAX_DATA_BYTES);
-    collected.dropped_bytes = collected
-        .dropped_bytes
-        .saturating_add(u64::try_from(excess).unwrap_or(u64::MAX));
-    for stream in [&mut collected.stdout, &mut collected.stderr] {
-        let cut = excess.min(stream.len());
-        stream.drain(..cut);
+    let mut collected = Collected {
+        stdout: Vec::new(),
+        stderr: Vec::new(),
+        dropped_bytes: dropped_bytes.saturating_add(u64::try_from(excess).unwrap_or(u64::MAX)),
+    };
+    for (stream, bytes) in chunks {
+        let cut = excess.min(bytes.len());
         excess -= cut;
+        let kept = &bytes[cut..];
+        match stream {
+            OutputStream::Stdout => collected.stdout.extend_from_slice(kept),
+            OutputStream::Stderr => collected.stderr.extend_from_slice(kept),
+        }
     }
     collected
 }
