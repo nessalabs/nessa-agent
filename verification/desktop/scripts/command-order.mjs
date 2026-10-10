@@ -163,7 +163,8 @@ await main(meta, async ({ options, rep, url }) => {
 
         await page.keyboard.press(keys.overview)
         await contentIs(page, content.overview)
-        await overviewListed(page)
+        if (!(await overviewListed(page)))
+          throw new CannotRun("the overview did not publish its complete list")
         const row = page.locator(css.overviewRequest, {
           hasText: names.commandOrderSession,
         })
@@ -255,7 +256,8 @@ await main(meta, async ({ options, rep, url }) => {
         if (cardOrder) failures.push(`the card ${cardOrder}`)
         await page.keyboard.press(keys.overview)
         await contentIs(page, content.overview)
-        await overviewListed(page)
+        if (!(await overviewListed(page)))
+          throw new CannotRun("the overview did not publish its complete list")
         const row = page.locator(css.overviewRequest, {
           hasText: names.commandBaseSession,
         })
