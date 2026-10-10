@@ -38,8 +38,11 @@
 //! its validated snapshot. Pending operations retain the lease until
 //! they finish. Erasing a session resets its stream under that lease. `paths`
 //! identifies stale JSONL history so the record adapter refuses it unchanged.
+//! Unmarked record fixtures and the append that plants them compile with the
+//! `test-support` feature, or with this crate's own tests.
 
 mod creation;
+#[cfg(any(test, feature = "test-support"))]
 mod fixtures;
 mod memory;
 mod message_commit_clock;
@@ -56,6 +59,7 @@ mod save_group;
 mod snapshot;
 mod stream_fact;
 mod terminal_discovery;
+#[cfg(any(test, feature = "test-support"))]
 pub use fixtures::{UNMARKED_SESSION_BATCH, UNMARKED_SESSION_CHECKPOINT};
 pub use memory::InMemoryStorage;
 pub use message_commit_clock::RuntimeMessageCommitClock;
