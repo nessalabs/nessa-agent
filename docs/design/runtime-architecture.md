@@ -645,7 +645,7 @@ machine's own `sh` with its own tools, so on Linux and macOS in CI) and
 | F5 | A copy speaking another protocol | Refused `environment_version_mismatch` with the protocol it said; nothing left | `a_copy_speaking_another_protocol_is_refused_and_nothing_is_left` |
 | F6 | A copy that does not run, no digest tool, a step that fails | Refused `environment_install_failed` with its reason | `a_copy_that_does_not_run_there_is_refused`, `a_home_that_cannot_hold_it_is_a_failed_step` |
 | F7 | The probe says present, yet nothing served | Refused `environment_unreachable`; nothing written | `a_host_that_has_this_build_and_does_not_serve_is_unreachable_and_untouched` |
-| F8 | The install cannot be recorded | Nothing sent; `environment_install_failed` | `an_install_that_cannot_be_recorded_sends_nothing` |
+| F8 | The install, or its outcome, cannot be recorded | Its start unrecorded: nothing sent. Its `Installed` or `InstallFound` unrecorded: not used, `environment_install_failed`; the verified copy stays and serves the next lease, recorded `Connected` | `an_install_that_cannot_be_recorded_sends_nothing`, `an_install_whose_outcome_cannot_be_recorded_is_not_used` |
 | F9 | A command reaching a login shell other than `sh` | Passed to `sh` whole | `every_command_survives_any_login_shell`, `every_command_runs_the_same_through_each_login_shell_here` (each of bash, zsh, fish, tcsh, dash and ksh the machine has), and over real `ssh` below |
 | F10 | A home whose path has spaces | Used as it is | `a_home_with_spaces_in_its_path_is_used_as_it_is` |
 | F11 | The upload's answer lost after the copy was placed | Probed again; found, so recorded `InstallFound` and served | `an_upload_whose_answer_was_lost_is_found_installed_by_the_probe` |

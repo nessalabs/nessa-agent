@@ -11,10 +11,12 @@
 //!   ──▶ this build's executable, opened, and its SHA-256
 //!   ──▶ InstallStarted recorded (or nothing is sent)
 //!   ──▶ upload ──▶ installed ──▶ Installed recorded ──▶ Installed
+//!                                 (unrecorded ──▶ environment_install_failed)
 //!              ──▶ refused fingerprint | unrunnable | digest tool | failed
 //!                     ──▶ InstallRefused ──▶ environment_install_failed
 //!              ──▶ refused version ──▶ InstallRefused ──▶ environment_version_mismatch
 //!              ──▶ no answer ──▶ probe again: present ──▶ InstallFound ──▶ Installed
+//!                                           (unrecorded ──▶ environment_install_failed)
 //!                                           otherwise ──▶ InstallRefused{unanswered}
 //!                                                         ──▶ environment_unreachable
 //! ```
@@ -27,6 +29,11 @@
 //! host's verdicts — the digest, then the protocol the copy itself states —
 //! are taken there before the copy is put where it is found
 //! (`env_serve::install`), and the hello after it is checked as any other.
+//!
+//! An install whose outcome cannot be recorded is not used, as a connection
+//! that cannot be recorded is not: the lease is refused. The copy stays on
+//! the host, verified, so the next lease is served by it and recorded
+//! `Connected`; the audit keeps the `InstallStarted` with no outcome.
 use super::audit::{EnvironmentAudit, EnvironmentEvent, InstallRefusal};
 use crate::env::LEASE_PROTOCOL;
 use crate::env_serve::install::{
@@ -247,7 +254,8 @@ impl HostInstaller {
                 protocol: self.protocol.into(),
             };
             if let Err(error) = audit.record(&found) {
-                tracing::error!(%error, "a copy found after a lost answer could not be recorded");
+                tracing::error!(%error, "a copy found after a lost answer could not be recorded; it is not used");
+                return Err(LeaseRefusal::EnvironmentInstallFailed);
             }
             return Ok(Installation::Installed);
         }
@@ -259,7 +267,8 @@ impl HostInstaller {
                     digest,
                 };
                 if let Err(error) = audit.record(&installed) {
-                    tracing::error!(%error, "a finished install could not be recorded");
+                    tracing::error!(%error, "a finished install could not be recorded; it is not used");
+                    return Err(LeaseRefusal::EnvironmentInstallFailed);
                 }
                 return Ok(Installation::Installed);
             }

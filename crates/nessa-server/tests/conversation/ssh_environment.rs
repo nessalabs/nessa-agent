@@ -317,11 +317,14 @@ impl LeaseConnector for Connector {
     }
 }
 
+/// Records events; fails every record once its flag is set, or once it holds
+/// as many as its limit (zero: no limit).
 #[derive(Default)]
-struct Audit(Mutex<Vec<EnvironmentEvent>>, AtomicBool);
+struct Audit(Mutex<Vec<EnvironmentEvent>>, AtomicBool, AtomicUsize);
 impl EnvironmentAudit for Audit {
     fn record(&self, event: &EnvironmentEvent) -> io::Result<()> {
-        if self.1.load(Ordering::SeqCst) {
+        let limit = self.2.load(Ordering::SeqCst);
+        if self.1.load(Ordering::SeqCst) || (limit > 0 && self.0.lock().unwrap().len() >= limit) {
             return Err(io::Error::other("audit disk full"));
         }
         self.0.lock().unwrap().push(event.clone());
@@ -1744,6 +1747,42 @@ async fn an_install_that_cannot_be_recorded_sends_nothing() {
         Some(LeaseRefusal::EnvironmentInstallFailed)
     );
     assert_eq!(shell.runs().len(), 1, "probed, and nothing uploaded");
+}
+
+/// An install whose outcome cannot be recorded is not used: the lease is
+/// refused, whether the host said installed or the copy was found after a
+/// lost answer, and nothing past the start is recorded.
+#[tokio::test]
+async fn an_install_whose_outcome_cannot_be_recorded_is_not_used() {
+    for (probes, upload) in [
+        (&["absent Linux x86_64 gnu"][..], "installed"),
+        (
+            &["absent Linux x86_64 gnu", "present"][..],
+            "Connection to devbox closed by remote host.",
+        ),
+    ] {
+        let connector = Connector::new(Reach::Silent);
+        let shell = Shell::answering(probes, upload, connector.clone());
+        let audit = Arc::new(Audit::default());
+        audit.2.store(1, Ordering::SeqCst);
+        let environment = installing(connector.clone(), shell.clone(), audit.clone());
+        assert_eq!(
+            environment
+                .open(&lease(), &terms("claude"), binding_only())
+                .await
+                .err(),
+            Some(LeaseRefusal::EnvironmentInstallFailed),
+            "{upload}"
+        );
+        assert_eq!(
+            connector.connects.load(Ordering::SeqCst),
+            1,
+            "not served again"
+        );
+        let events = audit.events();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0], EnvironmentEvent::InstallStarted { .. }));
+    }
 }
 
 /// An upload whose answer is lost after the host put the copy in place is
