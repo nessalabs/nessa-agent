@@ -6,6 +6,7 @@
 //! Unix only: the process is stopped with SIGTERM, as launchd stops it.
 use super::product_client::ProductClient;
 use super::support::{pending, WAIT};
+use base64::{engine::general_purpose::STANDARD, Engine};
 use nessa_auth::{
     adapters::{
         cedar::CedarPolicyEvaluator,
@@ -852,4 +853,87 @@ fn refused_authentication(address: SocketAddr, credential: &str) -> (Value, u16)
             _ => continue,
         }
     }
+}
+
+/// The public half of a composed gateway's own native key, from its key file
+/// (the key's magic, then its seed), and the seed itself.
+fn native_key(gateway: &Gateway) -> ([u8; 44], [u8; 32]) {
+    let bytes = gateway.key();
+    let seed: [u8; 32] = bytes[4..].try_into().unwrap();
+    let identity = NativeIdentity::restore(
+        nessa_auth::application::pairing::PrivateKeyMaterial::new(zeroize::Zeroizing::new(seed)),
+    )
+    .unwrap();
+    (identity.public_spki(), seed)
+}
+
+/// Rows P1, P2 and P5 between two composed processes: gateway B's owner
+/// enrolls B into gateway A's peer invitation with `peer.enroll`. A device
+/// invitation is refused first and leaves nothing. A sees B's own native key
+/// claim; B's record pins A's key and holds no copy of B's private key; B
+/// lists the peer and forgets it locally.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_composed_gateway_enrolls_into_another_with_its_own_key() {
+    let a = Gateway::new(true);
+    let b = Gateway::new(true);
+    let native = a.native.unwrap().to_string();
+    let server_a = tokio::task::block_in_place(|| a.start());
+    let server_b = tokio::task::block_in_place(|| b.start());
+    let (a_pin, _) = native_key(&a);
+    let (b_pin, b_seed) = native_key(&b);
+    let records = b.root.path().join("data/ci/peer-gateways");
+    tokio::task::block_in_place(|| {
+        let mut owner_a = a.owner();
+        let mut owner_b = b.owner();
+        let device = owner_a.ok("pairing.create", json!({}));
+        assert_eq!(
+            owner_b.refused(
+                "peer.enroll",
+                json!({"address": native, "code": device["code"]})
+            ),
+            "peer_wrong_invitation"
+        );
+        assert_eq!(std::fs::read_dir(&records).unwrap().count(), 0);
+        owner_a.ok(
+            "pairing.cancel",
+            json!({"invitationId": invitation(&device["status"])}),
+        );
+
+        let created = owner_a.ok("pairing.create", json!({"enrollee": "gateway"}));
+        let enrolled = owner_b.ok(
+            "peer.enroll",
+            json!({"address": native, "code": created["code"]}),
+        );
+        assert_eq!(enrolled["phase"], "pending", "{enrolled}");
+        assert_eq!(enrolled["peerKey"], json!(&a_pin[12..]));
+        let status = owner_a.ok(
+            "pairing.status",
+            json!({"invitationId": invitation(&created["status"])}),
+        );
+        assert_eq!(status["phase"], "claimed");
+        assert_eq!(status["claimedDeviceKey"], json!(&b_pin[12..]));
+
+        let hex: String = a_pin[12..]
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        let bytes = std::fs::read(records.join(format!("{hex}.json"))).unwrap();
+        let record: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(record["pin"], STANDARD.encode(a_pin));
+        assert_eq!(record["gatewayKey"], STANDARD.encode(b_pin));
+        assert!(
+            !bytes.windows(32).any(|window| window == b_seed)
+                && !String::from_utf8_lossy(&bytes).contains(&STANDARD.encode(b_seed)),
+            "B's record holds no copy of B's private key"
+        );
+
+        let listed = owner_b.ok("peer.list", json!({}));
+        assert_eq!(listed["items"].as_array().unwrap().len(), 1, "{listed}");
+        assert_eq!(listed["items"][0]["address"], native);
+        owner_b.ok("peer.forget", json!({"peerKey": &a_pin[12..]}));
+        assert_eq!(owner_b.ok("peer.list", json!({}))["items"], json!([]));
+        assert_eq!(std::fs::read_dir(&records).unwrap().count(), 0);
+    });
+    assert!(tokio::task::block_in_place(|| server_b.stop()).success());
+    assert!(tokio::task::block_in_place(|| server_a.stop()).success());
 }

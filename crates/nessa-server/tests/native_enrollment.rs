@@ -14,6 +14,8 @@ mod listener;
 mod mounted;
 #[path = "device_pairing/owner_routes.rs"]
 mod owner_routes;
+#[path = "peer_gateways/enroll.rs"]
+mod peer_enroll;
 #[path = "device_pairing/product_client.rs"]
 mod product_client;
 #[path = "device_pairing/infrastructure/protected.rs"]

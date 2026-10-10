@@ -1951,6 +1951,82 @@ impl PairingErrorCode {
         }
     }
 }
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PeerEnrollParams {
+    pub address: String,
+    pub code: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PeerForgetParams {
+    pub peer_key: [u8; DeviceKey::LENGTH],
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PeerPhase {
+    Pending,
+    Active,
+    Unreadable,
+}
+impl PeerPhase {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Active => "active",
+            Self::Unreadable => "unreadable",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PeerGateway {
+    pub peer_key: [u8; DeviceKey::LENGTH],
+    pub phase: PeerPhase,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiver_id: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PeerListResult {
+    pub items: Vec<PeerGateway>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PeerErrorCode {
+    PeerNotConfigured,
+    PeerNotFound,
+    PeerExists,
+    PeerCapacity,
+    PeerBusy,
+    PeerUnreachable,
+    PeerInvitationRefused,
+    PeerWrongInvitation,
+    PeerOwnGateway,
+    PeerUnavailable,
+    PeerAuditUnavailable,
+}
+impl PeerErrorCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::PeerNotConfigured => "peer_not_configured",
+            Self::PeerNotFound => "peer_not_found",
+            Self::PeerExists => "peer_exists",
+            Self::PeerCapacity => "peer_capacity",
+            Self::PeerBusy => "peer_busy",
+            Self::PeerUnreachable => "peer_unreachable",
+            Self::PeerInvitationRefused => "peer_invitation_refused",
+            Self::PeerWrongInvitation => "peer_wrong_invitation",
+            Self::PeerOwnGateway => "peer_own_gateway",
+            Self::PeerUnavailable => "peer_unavailable",
+            Self::PeerAuditUnavailable => "peer_audit_unavailable",
+        }
+    }
+}
 pub type ChangeWatchId = String;
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -2088,6 +2164,7 @@ pub const MAX_PRINCIPAL_CHANGE_WATCHES: usize = 8;
 pub const MAX_CONNECTION_RECORD_WATCHES: usize = 1;
 pub const MAX_CONNECTION_CATALOGUE_WATCHES: usize = 1;
 pub const MAX_CONNECTION_CHANGE_WATCHES: usize = 2;
+pub const MAX_PEERS: usize = 64;
 pub const MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS: usize = 8;
 pub const MAX_CONNECTION_LIST_SUBSCRIPTIONS: usize = 1;
 pub const SUBSCRIPTION_DELIVERY_TIMEOUT_MS: u64 = 10000;
@@ -2174,6 +2251,9 @@ pub mod product_method {
     pub const PAIRING_APPROVE: &str = "pairing.approve";
     pub const PAIRING_DENY: &str = "pairing.deny";
     pub const PAIRING_CANCEL: &str = "pairing.cancel";
+    pub const PEER_ENROLL: &str = "peer.enroll";
+    pub const PEER_LIST: &str = "peer.list";
+    pub const PEER_FORGET: &str = "peer.forget";
     pub const CONVERSATION_WATCH_RECORDS: &str = "conversation.watchRecords";
     pub const CONVERSATION_WATCH_CATALOGUE: &str = "conversation.watchCatalogue";
     pub const CONVERSATION_UNWATCH: &str = "conversation.unwatch";
@@ -2371,7 +2451,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 58
+                items.len() <= 61
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -2445,6 +2525,9 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "pairing.approve",
     "pairing.deny",
     "pairing.cancel",
+    "peer.enroll",
+    "peer.list",
+    "peer.forget",
     "conversation.watchRecords",
     "conversation.watchCatalogue",
     "conversation.unwatch",
@@ -2483,6 +2566,9 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "pairing.approve"
         | "pairing.deny"
         | "pairing.cancel"
+        | "peer.enroll"
+        | "peer.list"
+        | "peer.forget"
         | "conversation.share"
         | "conversation.unshare"
         | "conversation.shares" => Some("credential.manage"),

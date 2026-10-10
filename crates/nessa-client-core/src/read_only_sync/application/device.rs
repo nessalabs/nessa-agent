@@ -91,6 +91,9 @@ impl PurgeBeforeEnd {
     }
 }
 impl ClientPendingStore for PurgeBeforeEnd {
+    fn enrollment_key(&self) -> Result<Option<PrivateKeyMaterial>, PrivateStateError> {
+        self.store.enrollment_key()
+    }
     fn load_pending(&self) -> Result<Option<PendingEnrollment>, PrivateStateError> {
         self.store.load_pending()
     }

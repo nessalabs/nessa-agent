@@ -38,8 +38,13 @@ pub enum NativeClientError {
     NoPending,
     /// Physical private-state failure, preserved beyond PAKE's redacted callback error.
     Storage(PrivateStateError),
-    /// Selected crypto/TLS operation failed.
+    /// Selected crypto operation failed after the TLS handshake: a wrong
+    /// code fails the gateway's PAKE proof (`InvalidProof`).
     Crypto(PairingCryptoError),
+    /// The TLS handshake did not complete: what answered is not a native
+    /// gateway, closed, or presented another key than the pinned one. Kept
+    /// apart from `Crypto` so a failed handshake is never read as a wrong code.
+    Handshake(PairingCryptoError),
     /// Actual bounded wire refused the peer representation.
     Wire(NativeWireError),
     /// Peer phase/operation was not the expected canonical enrollment exchange.
@@ -127,6 +132,7 @@ impl NativeEnrollmentClient {
     }
     /// Enroll once using address+code, committing pending seed/pin/context before KE3.
     /// A lost reply remains recoverable through `status` using the exact saved identity.
+    /// The key is the store's `enrollment_key` when it names one, else a new one.
     pub async fn enroll<R: RngCore + CryptoRng + Send + 'static>(
         &self,
         stream: TcpStream,
@@ -153,12 +159,20 @@ impl NativeEnrollmentClient {
                 return Err(NativeClientError::Enrolled);
             }
             let mut entropy = entropy;
-            let identity =
-                NativeIdentity::generate(&mut entropy).map_err(NativeClientError::Crypto)?;
+            // A store that refers to a key it does not own names that key;
+            // otherwise this enrollment's key is new.
+            let identity = match pending
+                .enrollment_key()
+                .map_err(NativeClientError::Storage)?
+            {
+                Some(key) => NativeIdentity::restore(key),
+                None => NativeIdentity::generate(&mut entropy),
+            }
+            .map_err(NativeClientError::Crypto)?;
             stream.blocking().map_err(physical_error)?;
             let channel =
                 NativeTransport::connect(stream, &identity, GatewayTrust::ManualBootstrap)
-                    .map_err(NativeClientError::Crypto)?;
+                    .map_err(NativeClientError::Handshake)?;
             let mut channel = EnrollmentChannel::new(channel);
             begin_enrollment_phase(&deadline).map_err(physical_error)?;
             complete_enrollment(
@@ -202,7 +216,7 @@ impl NativeEnrollmentClient {
                     .map_err(physical_error)?;
             stream.blocking().map_err(physical_error)?;
             let channel = NativeTransport::connect(stream, &identity, GatewayTrust::Pinned(pin))
-                .map_err(NativeClientError::Crypto)?;
+                .map_err(NativeClientError::Handshake)?;
             let mut channel = EnrollmentChannel::new(channel);
             begin_enrollment_phase(&deadline).map_err(physical_error)?;
             send(&mut channel, NativePairingRequest::Status(public))?;
@@ -217,7 +231,7 @@ impl NativeEnrollmentClient {
                 DeadlineStream::new(retry_stream, clock, retry_endpoint).map_err(physical_error)?;
             stream.blocking().map_err(physical_error)?;
             let channel = NativeTransport::connect(stream, &identity, GatewayTrust::Pinned(pin))
-                .map_err(NativeClientError::Crypto)?;
+                .map_err(NativeClientError::Handshake)?;
             let mut channel = EnrollmentChannel::new(channel);
             begin_enrollment_phase(&deadline).map_err(physical_error)?;
             let mut entropy = entropy;
@@ -272,7 +286,7 @@ impl NativeEnrollmentClient {
             let identity = NativeIdentity::restore(key).map_err(NativeClientError::Crypto)?;
             stream.blocking().map_err(physical_error)?;
             let channel = NativeTransport::connect(stream, &identity, GatewayTrust::Pinned(pin))
-                .map_err(NativeClientError::Crypto)?;
+                .map_err(NativeClientError::Handshake)?;
             let mut channel = EnrollmentChannel::new(channel);
             begin_enrollment_phase(&deadline).map_err(physical_error)?;
             send(&mut channel, NativePairingRequest::Status(public))?;
