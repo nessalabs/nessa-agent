@@ -1,0 +1,68 @@
+{
+  "check": "command-order",
+  "ok": true,
+  "started": "2026-10-10T17:37:08.601Z",
+  "finished": "2026-10-10T17:37:19.147Z",
+  "target": {
+    "url": "http://127.0.0.1:1438/desktop.html",
+    "mode": "dev"
+  },
+  "results": [
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "command"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "direction"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "command"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "direction"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "layout": "columns",
+      "name": "command"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "layout": "columns",
+      "name": "direction"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "layout": "sidebar",
+      "name": "command"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "layout": "sidebar",
+      "name": "direction"
+    }
+  ]
+}

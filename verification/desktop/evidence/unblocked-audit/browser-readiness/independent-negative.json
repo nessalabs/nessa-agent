@@ -1,0 +1,30 @@
+{
+  "check": "command-order",
+  "ok": false,
+  "started": "2026-10-10T17:41:36.250Z",
+  "finished": "2026-10-10T17:41:40.644Z",
+  "target": {
+    "url": "http://127.0.0.1:1438/desktop.html",
+    "mode": "dev"
+  },
+  "results": [
+    {
+      "ok": false,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "command",
+      "cannotRun": true,
+      "error": "could not run: the overview did not publish its complete list"
+    },
+    {
+      "ok": false,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "direction",
+      "cannotRun": true,
+      "error": "could not run: the overview did not publish its complete list"
+    }
+  ]
+}

@@ -15,3 +15,9 @@ The screenshots show the actual unavailable state with retained draft and disabl
 
 ![Chromium unavailable draft](mode-publication/unavailable-chromium.png)
 ![WebKit unavailable draft](mode-publication/unavailable-webkit.png)
+
+## Necessary follow-up source corrections
+
+The initial pushed CI failed on all three platforms for the native test fixture's deprecated atomic helper. [Native compatibility correction](native-ci-compatibility/report.md) preserves Rust 1.85 and original fault-counter behavior, with independent source review, full host checks and a failing semantic removal probe. Its production prefix is unchanged.
+
+The initial complete functional run at9c1 remains FAILED978/990; it is not relabelled. [Readiness author evidence](browser-readiness/author-report.md), [round1 P2 finding](browser-readiness/round1-review.md) and [fresh round2 closure](browser-readiness/round2-review.md) cover only three verification scripts and their existing sampling table. The scripts consume already-owned list/recorded-ghost/frame publication before unchanged geometry, bidi, focus and residue assertions. Targeted default matrices pass8+8+12; counts are separate from the old whole run. Final whole verification/current-head CI are still separate gates, and the 50ms performance gate remains failed33/35.
