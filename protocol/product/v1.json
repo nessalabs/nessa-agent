@@ -175,7 +175,7 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 256,
-          "description": "Authenticated human, integration, or agent identity."
+          "description": "Authenticated human, integration, agent, or paired peer gateway identity."
         },
         "organizationId": {
           "type": "string",
@@ -251,7 +251,7 @@
       },
       "required": ["id", "kind"],
       "x-rust-type": "nessa_auth::application::dto::PrincipalInputDto",
-      "description": "Identity that acts in the product: a human, integration, or agent. A principal needs an active organization membership and an appropriate credential to access the gateway."
+      "description": "Identity that acts in the product: a human, integration, agent, or paired peer gateway. A principal needs an active organization membership and an appropriate credential to access the gateway."
     },
     "ProductMembership": {
       "type": "object",

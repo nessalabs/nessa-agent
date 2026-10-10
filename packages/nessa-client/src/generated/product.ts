@@ -53,7 +53,7 @@ export interface ProductSessionReady {
   version: 1
   /** Identifier of the connected gateway. */
   gatewayId: string
-  /** Authenticated human, integration, or agent identity. */
+  /** Authenticated human, integration, agent, or paired peer gateway identity. */
   principalId: string
   /** Organization in which this session operates. */
   organizationId: string
@@ -70,7 +70,7 @@ export interface ProductSessionReady {
   /** Registered product methods; permission is checked for every command. */
   methods: string[]
 }
-/** Identity that acts in the product: a human, integration, or agent. A principal needs an active organization membership and an appropriate credential to access the gateway. */
+/** Identity that acts in the product: a human, integration, agent, or paired peer gateway. A principal needs an active organization membership and an appropriate credential to access the gateway. */
 export interface ProductPrincipal {
   /** Stable identifier for this identity. */
   id: string

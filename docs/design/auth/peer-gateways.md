@@ -60,15 +60,23 @@ handed a peer's code does not become a gateway principal.
   may hold `conversation.read` and nothing else. In particular it can never
   hold `conversation.write` (admitting commands into a conversation and
   answering its approvals) or `credential.manage` (holding credentials and
-  pairing). Those are the conversation authority's, and the gateway that owns
-  a conversation keeps them. Whatever a peer is later allowed to run for a
-  conversation (slice I's environment grants), it therefore cannot also be
-  that conversation's authority.
+  pairing, which also admits every grant-management method). Those are the
+  conversation authority's, listed once in `CONVERSATION_AUTHORITY_ACTIONS`,
+  and the gateway that owns a conversation keeps them. Slice I will widen the
+  peer's allowlist to the environment-grant actions; the authority's actions
+  stay excluded, and `may_hold` refuses them before it consults the
+  allowlist, so a widening cannot admit one by mistake. Whatever a peer is
+  later allowed to run for a conversation, it therefore cannot also be that
+  conversation's authority.
 - **That the registry agrees** is `validate_principal_kind`, run by
   `validate_registry` on open and before every write. A gateway principal's
   credential must be pairing-bound, its membership a member's, and its grants
-  ones the kind may hold. `credential.issue` refuses a gateway principal up
-  front: pairing is the only way one is made.
+  ones the kind may hold. A pairing-bound credential names a gateway
+  principal exactly when its pairing's class is a peer's, and a principal's
+  id starts with `gateway:` exactly when its kind is a gateway.
+  `credential.issue` refuses a gateway principal, and any principal id with
+  that prefix whatever kind it claims, up front: pairing is the only way one
+  is made.
 - **Which class an enrollment is** is stored with it (`class: "peer"` in the
   registry's pairing record; absent means a device, so every existing registry
   reads unchanged) and in the client's private record (a separate pair of
@@ -138,10 +146,18 @@ rest, proposed as the next part of #705 and the slices it names:
   the next part decides whether the enrollment client moves to a crate both
   may use (`nessa-protocol` or `nessa-auth`) or the server gets its own.
 - **Reading what it is granted.** Slice G (#704) names a grantee by its
-  receiver binding. A peer's session principal is not the owner its binding
-  reads for, so G's admission must compare the binding's credential with the
-  session's rather than its owner with the session's principal. That lands
-  with G, or after it, never before: until then a peer reads nothing.
+  receiver binding. The binding's `owner_id` is the **grantor**: the owner
+  whose conversations the receiver reads, who paired it. It is never the
+  reader and must never be read as one; for a peer the reader is the
+  session's `gateway` principal. Today admission refuses a session whose
+  principal is not the binding's owner, which is what keeps a peer from
+  reading anything. That check may be replaced by comparing the binding's
+  credential with the session's **only in the same change that puts every
+  peer read path behind G's grant filter**: the catalogue page, resolve and
+  head, record head and pages, and catalogue and record watches. Relaxing it
+  first would hand a peer the owner's whole catalogue. Whatever records a
+  peer's read (audit, journal, logs) names the session's principal, never the
+  binding's owner.
 - **The peer table's last addresses and local discovery.** The issue lists
   them; the ADR places local discovery in slice I, and the map leaves "whether
   to announce at all, and what it reveals" unresolved. This side's peer table
@@ -157,3 +173,8 @@ rest, proposed as the next part of #705 and the slices it names:
 - **The owner's Settings › Linked devices lists a peer's credential** among
   the devices, since both are pairing-bound credentials. Telling them apart
   in the list is part of the desktop control above.
+- **Linked devices also shows a claimed peer invitation as an ordinary device
+  awaiting approval**, with no class shown. This is a labelling gap, not a
+  security one: the class is fixed when the invitation is created and bound
+  into the exchange, so approving it yields only the read-only gateway
+  credential, never a device credential that names the owner.
