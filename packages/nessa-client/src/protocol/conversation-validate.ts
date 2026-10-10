@@ -783,7 +783,8 @@ function lease(value: unknown) {
   // At most the four commands a lease lets run at once.
   if (item.commands !== undefined) {
     count("commands", 1)
-    if ((item.commands as number) > 4) throw new Error("Invalid conversation lease commands")
+    if ((item.commands as number) > 4)
+      throw new Error("Invalid conversation lease commands")
   }
   const shape: LeaseShape = leaseShapes[item.state as ConversationLease["state"]]
   for (const key of [
