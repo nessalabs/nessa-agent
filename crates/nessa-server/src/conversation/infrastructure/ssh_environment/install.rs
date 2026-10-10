@@ -89,34 +89,68 @@ pub(crate) trait BuildSource: Send + Sync {
     fn open(&self) -> io::Result<Build>;
 }
 
-/// This process's own executable.
-pub(crate) struct OwnExecutable;
+/// This process's own executable, opened when the gateway starts: what an
+/// update or removal later puts at its path is never what is measured or
+/// sent. On Linux it is `/proc/self/exe`, the running file itself; elsewhere
+/// the file `current_exe` names at start, which this handle keeps even once
+/// the path names another.
+pub(crate) struct OwnExecutable {
+    held: Option<File>,
+}
 
-impl BuildSource for OwnExecutable {
-    fn open(&self) -> io::Result<Build> {
-        // On Linux the running file itself, even once its path was replaced
-        // by an update or removed: `current_exe` would name whatever is at
-        // the path now.
-        if cfg!(target_os = "linux") {
-            return open_build(Path::new("/proc/self/exe"));
+impl OwnExecutable {
+    /// Open it now.
+    pub(crate) fn opened_now() -> Self {
+        let path = if cfg!(target_os = "linux") {
+            Ok(Path::new("/proc/self/exe").to_path_buf())
+        } else {
+            std::env::current_exe()
+        };
+        match path {
+            Ok(path) => Self::opened_at(&path),
+            Err(error) => Self::held(Err(error)),
         }
-        open_build(&std::env::current_exe()?)
+    }
+
+    /// The build at `path`, opened now.
+    pub(crate) fn opened_at(path: &Path) -> Self {
+        Self::held(File::open(path))
+    }
+
+    fn held(opened: io::Result<File>) -> Self {
+        if let Err(error) = &opened {
+            tracing::error!(%error, "this build's executable could not be opened; no host gets it");
+        }
+        Self { held: opened.ok() }
     }
 }
 
-/// The build at `path`, opened, and its SHA-256.
-///
-/// # Errors
-/// It could not be read.
-pub(crate) fn open_build(path: &Path) -> io::Result<Build> {
-    let mut file = File::open(path)?;
-    let mut hasher = Sha256::new();
-    io::copy(&mut file, &mut hasher)?;
-    file.seek(SeekFrom::Start(0))?;
-    Ok(Build {
-        file,
-        digest: format!("{:x}", hasher.finalize()),
-    })
+impl BuildSource for OwnExecutable {
+    fn open(&self) -> io::Result<Build> {
+        let held = self
+            .held
+            .as_ref()
+            .ok_or_else(|| io::Error::other("this build's executable was not opened at start"))?;
+        // Measured by position, so the shared offset is left for the send;
+        // the installer sends one copy at a time.
+        let mut hasher = Sha256::new();
+        let mut buffer = vec![0; 1 << 16];
+        let mut at = 0;
+        loop {
+            let read = std::os::unix::fs::FileExt::read_at(held, &mut buffer, at)?;
+            if read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..read]);
+            at += read as u64;
+        }
+        let mut file = held.try_clone()?;
+        file.seek(SeekFrom::Start(0))?;
+        Ok(Build {
+            file,
+            digest: format!("{:x}", hasher.finalize()),
+        })
+    }
 }
 
 /// How long a host's answers may take.
@@ -155,6 +189,9 @@ pub(crate) struct HostInstaller {
     timings: InstallTimings,
     /// This build's SHA-256, taken once: where its copy is kept on a host.
     digest: tokio::sync::OnceCell<String>,
+    /// Held from opening this build to the end of its upload, so one copy is
+    /// sent at a time: the copies opened share where the executable is read.
+    sending: tokio::sync::Mutex<()>,
 }
 
 impl HostInstaller {
@@ -172,6 +209,7 @@ impl HostInstaller {
             protocol,
             timings,
             digest: tokio::sync::OnceCell::new(),
+            sending: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -179,7 +217,7 @@ impl HostInstaller {
     pub(crate) fn this_build(shell: Arc<dyn RemoteShell>) -> Self {
         Self::new(
             shell,
-            Arc::new(OwnExecutable),
+            Arc::new(OwnExecutable::opened_now()),
             Platform::this_build(),
             LEASE_PROTOCOL,
             InstallTimings::default(),
@@ -250,6 +288,7 @@ impl HostInstaller {
         // for (on macOS the path can name a newer executable than the one
         // running).
         let expected = self.digest().await?;
+        let sending = self.sending.lock().await;
         let build = self.build.clone();
         let opened = tokio::task::spawn_blocking(move || build.open())
             .await
@@ -292,6 +331,7 @@ impl HostInstaller {
                 .run(host, upload_command(self.protocol, &digest), Some(file)),
         )
         .await;
+        drop(sending);
         let answer = match uploaded {
             Ok(Ok(output)) => Upload::parse(&output),
             Ok(Err(error)) => {

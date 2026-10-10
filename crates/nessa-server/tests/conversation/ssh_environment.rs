@@ -8,7 +8,7 @@ use super::{
     connector::{ssh_arguments, LeaseConnection, LeaseConnector},
     environment::{SshEnvironment, SshTimings},
     install::{
-        open_build, Build, BuildSource, HostInstaller, InstallTimings, RemoteShell, ShellFuture,
+        Build, BuildSource, HostInstaller, InstallTimings, OwnExecutable, RemoteShell, ShellFuture,
     },
     open_ssh::OpenSshConnector,
 };
@@ -1920,6 +1920,28 @@ async fn an_upload_neither_answered_nor_found_is_unsettled_not_refused() {
     }
 }
 
+/// The executable is the one opened at start: an update that puts another
+/// file at its path afterwards changes neither what is measured nor what is
+/// sent, each send reading it from its start.
+#[test]
+fn an_executable_replaced_at_its_path_is_still_the_one_measured_and_sent() {
+    use sha2::Digest;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("nessa");
+    std::fs::write(&path, THIS_BUILD).unwrap();
+    let executable = OwnExecutable::opened_at(&path);
+    let replacement = directory.path().join("nessa.new");
+    std::fs::write(&replacement, b"a later build").unwrap();
+    std::fs::rename(&replacement, &path).unwrap();
+    for _ in 0..2 {
+        let Build { mut file, digest } = executable.open().unwrap();
+        assert_eq!(digest, format!("{:x}", sha2::Sha256::digest(THIS_BUILD)));
+        let mut sent = Vec::new();
+        std::io::Read::read_to_end(&mut file, &mut sent).unwrap();
+        assert_eq!(sent, THIS_BUILD);
+    }
+}
+
 /// An upload whose answer is lost after the host put the copy in place is
 /// asked of the host again: found there, it is recorded found (no digest
 /// claimed, as another gateway of this protocol may have put it there) and
@@ -2005,12 +2027,6 @@ async fn an_account_never_installs() {
 #[tokio::test]
 #[ignore = "needs real hosts: NESSA_SSH_FIRST_USE_HOSTS and NESSA_SSH_FIRST_USE_BUILD"]
 async fn first_use_over_real_ssh() {
-    struct File(std::path::PathBuf);
-    impl BuildSource for File {
-        fn open(&self) -> io::Result<Build> {
-            open_build(&self.0)
-        }
-    }
     async fn open(host: &SshDestination, installer: Arc<HostInstaller>, audit: Arc<Audit>) {
         let environment = SshEnvironment::new(
             host.clone(),
@@ -2035,7 +2051,7 @@ async fn first_use_over_real_ssh() {
         let host = SshDestination::new(host).unwrap();
         let installer = Arc::new(HostInstaller::new(
             Arc::new(OpenSshConnector),
-            Arc::new(File(build.clone())),
+            Arc::new(OwnExecutable::opened_at(&build)),
             Platform::this_build(),
             LEASE_PROTOCOL,
             InstallTimings::default(),
