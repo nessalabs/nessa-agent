@@ -621,6 +621,10 @@ pub trait SessionStorage: Send + Sync {
     /// default refuses, so an adapter that can hold that history must
     /// override it or the delete stays incomplete. The record adapter drops
     /// a legacy journal if one is there and resets the stream without replay.
+    /// After that reset is acknowledged it publishes to the session's
+    /// committed-change watches, then releases the writer reservation. Lease
+    /// records in the refused stream are not read. A reservation already held
+    /// for the session refuses the reset and publishes nothing.
     ///
     /// # Errors
     /// The default returns [`StorageError::Corrupt`]. [`StorageError::Busy`]

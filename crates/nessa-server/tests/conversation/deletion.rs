@@ -2972,18 +2972,40 @@ async fn deleting_a_conversation_that_never_opened_creates_no_history_lock() {
 
 /// A chat whose only history is a batch main wrote, with no `schemaVersion`,
 /// cannot be read or attached, and can be deleted. A sibling written by this
-/// build still opens.
+/// build still opens, and its read grant stays. Deleting the unmarked chat
+/// resets its stream and wakes a record subscription on it.
 #[tokio::test]
 async fn an_unmarked_chat_cannot_be_read_and_can_be_deleted() {
     use crate::conversation::application::error_code::error_code;
+    use crate::conversation::application::{ReadGrantChange, ReadGrantTransition, ReadGrants};
     use nessa_protocol::product_contract::generated::ConversationErrorCode;
-    use nessa_sdk::application::agent_execution::sessions::StorageError;
+    use nessa_sdk::application::agent_execution::sessions::{
+        ChangeWatchState, CommittedChangeWatch, StorageError,
+    };
     use nessa_sdk::infrastructure::session_storage::UNMARKED_SESSION_BATCH;
+    use std::task::{Context, Poll, Waker};
+
+    fn notice(watch: &mut CommittedChangeWatch) -> ChangeWatchState {
+        let mut wait = Box::pin(watch.changed());
+        match wait.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
+            Poll::Ready(state) => state,
+            Poll::Pending => panic!("expected a committed record notice"),
+        }
+    }
+    fn quiet(watch: &mut CommittedChangeWatch) {
+        let mut wait = Box::pin(watch.changed());
+        assert!(matches!(
+            wait.as_mut().poll(&mut Context::from_waker(Waker::noop())),
+            Poll::Pending
+        ));
+    }
 
     let root = tempfile::tempdir().unwrap();
     let root = root.path();
-    let repository = Arc::new(MemoryRepository::default());
-    let summaries = Arc::new(MemorySummaries::default());
+    nessa_local_storage::create_directory(&root.join("conversations")).unwrap();
+    let metadata = Arc::new(
+        LocalConversationStore::open(&root.join("conversations").join("metadata.sqlite3")).unwrap(),
+    );
     let storage = Arc::new(RecordStorage::new(root.join("sessions")).unwrap());
     storage.initialize().await.unwrap();
     let service = ConversationService::new(
@@ -2992,23 +3014,21 @@ async fn an_unmarked_chat_cannot_be_read_and_can_be_deleted() {
                 Arc::new(ProviderFactory::default()),
             ))),
             storage: storage.clone(),
-            metadata: repository.clone(),
+            metadata: metadata.clone(),
             mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             deletion_audit: Arc::new(RecordingDeletionAudit::default()),
             attachments: None,
-            summaries: summaries.clone(),
-            listing: Arc::new(MemoryListing {
-                repository: repository.clone(),
-                summaries: summaries.clone(),
-            }),
+            summaries: metadata.clone(),
+            listing: metadata.clone(),
             provider_sessions: claude_erasers(),
             deletion_budgets: DELETION_BUDGETS,
             message_commit_clock: Arc::new(
                 nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
             ),
             clock: Arc::new(TestClock),
+            environment: crate::conversation::infrastructure::in_process_environment().into(),
         },
         ConversationLimits::default(),
         None,
@@ -3047,6 +3067,38 @@ async fn an_unmarked_chat_cannot_be_read_and_can_be_deleted() {
         storage.read_committed(session(&id)).await,
         Err(StorageError::AnotherVersion { found: None })
     ));
+    let sibling_history = storage
+        .read_committed(session(&sibling))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        sibling_history.snapshot().unwrap().lease.is_some(),
+        "the sibling's lease survives discarding the other chat"
+    );
+    let grant = |id: &ConversationId, action: &str| {
+        let metadata = metadata.clone();
+        let id = id.clone();
+        let action = action.to_owned();
+        async move {
+            assert!(metadata
+                .change(ReadGrantChange {
+                    transition: ReadGrantTransition::Grant,
+                    conversation_id: id,
+                    receiver_id: Some("phone".into()),
+                    credential_id: nessa_auth::domain::CredentialId::new("phone-credential")
+                        .unwrap(),
+                    initiator: caller(&action),
+                    at_ms: 7,
+                })
+                .await
+                .unwrap());
+        }
+    };
+    grant(&sibling, "grant-sibling").await;
+    grant(&id, "grant-unmarked").await;
+    assert!(metadata.is_granted(&sibling, "phone").await.unwrap());
+    assert!(metadata.is_granted(&id, "phone").await.unwrap());
 
     let read = service.read(id.clone(), caller("read")).await.unwrap_err();
     assert!(
@@ -3083,8 +3135,19 @@ async fn an_unmarked_chat_cannot_be_read_and_can_be_deleted() {
         .read(sibling.clone(), caller("read-sibling-again"))
         .await
         .is_ok());
+    // Armed after the reads: opening the sibling records its lease and would
+    // otherwise be the notice this delete is checked against.
+    let mut unmarked_watch = storage.watch_committed(&session(&id)).unwrap();
+    let mut sibling_watch = storage.watch_committed(&session(&sibling)).unwrap();
+    let mut any_watch = storage.watch_any_committed().unwrap();
+    quiet(&mut unmarked_watch);
+    quiet(&mut sibling_watch);
+    quiet(&mut any_watch);
 
     assert!(service.delete(id.clone(), caller("delete")).await.unwrap());
+    assert_eq!(notice(&mut unmarked_watch), ChangeWatchState::Dirty);
+    assert_eq!(notice(&mut any_watch), ChangeWatchState::Dirty);
+    quiet(&mut sibling_watch);
     assert!(matches!(
         service.read(id.clone(), caller("read-deleted")).await,
         Err(ConversationError::Deleted)
@@ -3093,6 +3156,14 @@ async fn an_unmarked_chat_cannot_be_read_and_can_be_deleted() {
         .read(sibling.clone(), caller("read-sibling-after"))
         .await
         .is_ok());
+    assert!(metadata.is_granted(&sibling, "phone").await.unwrap());
+    assert!(metadata.is_granted(&id, "phone").await.unwrap());
+    let sibling_after = storage
+        .read_committed(session(&sibling))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(sibling_after.snapshot().unwrap().lease.is_some());
     let lease = storage.open_existing(session(&id)).await.unwrap().unwrap();
     assert!(lease.load().await.unwrap().snapshot().is_none());
     drop(lease);
