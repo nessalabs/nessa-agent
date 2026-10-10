@@ -1,7 +1,7 @@
 //! Two composed gateways in one process: B enrolls into A as a peer, A's
 //! owner approves, and B's poller reads what A grants it into B's retained
 //! cache, follows A's shares and unshares, and stops at A's revocation.
-//! Rows R1–R4 in `docs/design/auth/peer-gateways.md` ("Reading a peer").
+//! Rows R1–R5 in `docs/design/auth/peer-gateways.md` ("Reading a peer").
 use crate::app::dependencies::RuntimeDependencies;
 use crate::composition::local_auth::SystemClock;
 use crate::composition::native_pairing::{bind, prepare, start, NativeInputs, RunningNative};
@@ -370,7 +370,7 @@ fn synced_since(since: u64) -> impl Fn(&PeerEntry, Option<&PeerSync>) -> bool {
     }
 }
 
-/// Rows R1–R4: the two-gateway read, end to end.
+/// Rows R1–R5: the two-gateway read, end to end.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_peer_reads_only_what_it_is_granted_and_stops_at_revocation() {
     let directory = tempfile::tempdir().unwrap();
@@ -428,7 +428,27 @@ async fn a_peer_reads_only_what_it_is_granted_and_stops_at_revocation() {
     assert_eq!(b.peer().await.1.unwrap().conversations, Some(1));
     assert_eq!(b.cached(&key, &reader.0), vec![y.to_string()]);
 
-    // R4: A's owner revokes B's credential. B's next read is refused, its
+    // R4: B's cache records more of A's catalogue than A now serves, as
+    // after A is restored from an older copy. The cache cannot continue
+    // (ResetRequired), so B empties it and reads again on its own. A read
+    // that did not reset would fail on every poll and never be `synced`.
+    let hex: String = key
+        .bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    nessa_local_database::rusqlite::Connection::open(b.directory.join(format!("{hex}.sqlite3")))
+        .unwrap()
+        .execute(
+            "UPDATE catalogue_progress SET completed = x'7fffffffffffffff'",
+            [],
+        )
+        .unwrap();
+    let since = SystemClock.unix_milliseconds();
+    b.poll_until(synced_since(since)).await;
+    assert_eq!(b.cached(&key, &reader.0), vec![y.to_string()]);
+
+    // R5: A's owner revokes B's credential. B's next read is refused, its
     // pinned status says the enrollment ended, and B marks the record
     // revoked, removes the cache, and reads A no more.
     a.auth

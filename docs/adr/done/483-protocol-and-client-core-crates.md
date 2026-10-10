@@ -96,7 +96,9 @@ gateway builds the client without `cli`, so the example's command line is
 not in its build. What changes: the client crate is now upstream of the
 gateway's build, which the first alternative below was rejected partly for.
 The phone still links the client without the gateway, which is what this
-record is for.
+record is for. The `cli` feature gates only the example's entrypoint; the
+reading core it composes is always built, and the gateway reaches it through
+one public module, `retained`, which exposes only what the peer poller calls.
 
 ## Policy and test ownership
 

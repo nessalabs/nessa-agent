@@ -303,6 +303,15 @@ impl RetainedCache {
             (Some(Err(error)), None) => return Err(failure(error)),
             (None, None) => return Err(ReadFailure::Protocol),
         };
+        // The cache holds one catalogue per receiver: the scope it first
+        // read. A peer cannot name the owner whose catalogue it is answered,
+        // so an answer naming another stream or origin does not continue it.
+        if self
+            .catalogue_scope(&receiver)?
+            .is_some_and(|kept| kept != scope)
+        {
+            return Err(ReadFailure::ResetRequired);
+        }
         let saved = self
             .cache
             .retained_catalogue_progress(&receiver, scope.origin(), scope.stream())

@@ -225,7 +225,7 @@ sequenceDiagram
   peer).
 - **What the owner is told.** `peer.enroll` returns the pending record;
   approval happens on A. The credential reaches the record when B next reads
-  its pinned status, which the next part's poller does. `peer.list` shows
+  its pinned status, which the poller does ("Reading a peer", below). `peer.list` shows
   every kept peer; `peer.forget` removes B's record only.
 - **It dials what the owner names.** `peer.enroll` connects from this
   gateway's host to whatever IP address and port the owner gives, which is
@@ -290,16 +290,92 @@ sequenceDiagram
 | P15 | The injected entropy for an enrollment fails | `peer_unavailable`, nothing saved, its intent and outcome kept | `an_enrollment_whose_entropy_fails_is_unavailable_and_audited` |
 | P16 | The audit never acknowledges an intent, or an outcome | Held while the injected clock stands; once it passes `AUDIT_DEADLINE`, `peer_audit_unavailable`: no intent, nothing dialed; no outcome, the effect stands | `an_audit_that_never_answers_ends_the_call_at_its_deadline` |
 
+## Reading a peer
+
+Part 2b-3 reads what each peer granted. One task per gateway,
+`PeerPoller`, started and joined with native pairing, walks the kept peers
+one at a time; each read holds the peer commands' turn, so `peer.enroll` and
+`peer.forget` answer `peer_busy` while it runs.
+
+```mermaid
+sequenceDiagram
+    participant P as B's poller
+    participant R as B's peer records
+    participant A as Gateway A (native listener)
+    participant C as B's retained cache of A
+    P->>R: list kept peers (pending or active; revoked: drop its cache)
+    P->>A: pinned status, through PeerConnector under the deadline clock
+    A-->>P: Pending / Claimed / Approved: wait an interval
+    A-->>P: Terminal or Unclaimed: the record is marked revoked, cache removed, A not read again
+    A-->>P: Active {receiver, epoch}: the credential is saved into the record
+    P->>A: openProduct with B's own key and the issued credential
+    P->>A: catalogueHead (unchanged and settled: done)
+    P->>A: catalogue manifest pass and resolve
+    P->>C: what A grants, by its owner's catalogue stream
+    P->>A: recordsHead for each cached conversation
+    A-->>P: wrong_owner: no longer granted
+    P->>C: withdraw it (entry and transcript)
+    P->>A: record pages for the rest
+    A-->>P: openProduct refused (redacted)
+    P->>A: pinned status again; only Terminal ends the enrollment
+```
+
+- **Status first, every time.** No read happens without a fresh Active
+  status, and nothing is removed without a Terminal one: a refused
+  `openProduct` is redacted, so a revoked credential and a full session pool
+  look alike until the status is asked, as a device does.
+- **The core is the device's.** `nessa-client-core::retained` is the one
+  public entry the gateway calls: open a cache, read into it, count what it
+  holds. It composes the same engine, cache and gateway session the device
+  example uses; the crate's `cli` feature now gates only that example's
+  entrypoint, not the reading core ([ADR 483](../../adr/done/483-protocol-and-client-core-crates.md),
+  amended).
+- **Whose catalogue.** A device's session principal owns the catalogue it
+  reads, so it checks the answered scope names exactly that owner. A peer
+  signs in as itself and reads an owner it cannot name, the one A bound its
+  receiver to, so it checks what it can: the catalogue schema, an owner
+  stream's shape, its receiver and its epoch
+  (`check_granted_catalogue_scope`). The cache keeps the stream it first
+  read, one per receiver; an answer naming another is `ResetRequired`.
+- **An unshare withdraws.** A's catalogue answers only rows B is granted, so
+  an unshared conversation is absent from the pass, not deleted in it. Each
+  read therefore asks every cached conversation's record head, and A's
+  `wrong_owner` removes that conversation's entry and transcript together.
+- **ResetRequired resets.** A cache that cannot continue against what A now
+  serves (another scope or incarnation, or a head behind what it completed)
+  is deleted and read again from nothing, logged as a warning.
+- **Revocation ends reading.** A Terminal status marks the record `revoked`
+  rather than deleting it, so the owner sees what happened; its cache is
+  removed and the peer is not read again. `peer.forget` removes the record.
+- **Cadence.** Each peer is read every `POLL_INTERVAL` (30 s), spread 80 to
+  120 percent, and after a failure after a backoff that doubles up to
+  `POLL_BACKOFF_CAP` (15 min); a read stopped at its page bound continues
+  sooner. Both are rows of [`limits.md`](../../limits.md).
+- **`peer.list` shows the reading.** Beside each pending or active peer:
+  `sync.state` (`waiting`, `synced`, `syncing`, `unreachable`, `failed`), the
+  wall time the last read finished and how many conversations the cache
+  holds. It is what this process saw since it started; nothing persists it.
+- **Shutdown leaves nothing running.** Stopping native pairing stops the
+  poller first: its wait ends, a status read is dropped, and a read in
+  progress has its sockets shut; `join` returns once its blocking worker has.
+
+| Row | Situation | Expected | Test |
+| --- | --- | --- | --- |
+| R1 | B enrolls into A and A's owner approves | B's poller reads Active, saves the credential and reads; `peer.list` shows `active`, `synced`, no conversations | `a_peer_reads_only_what_it_is_granted_and_stops_at_revocation` |
+| R2 | A shares X and not Y with B | B's cache holds X only | same |
+| R3 | A shares Y and unshares X | The next read takes both: B's cache holds Y only | same |
+| R4 | B's cache records more of A's catalogue than A serves | `ResetRequired`: B deletes the cache, logs it, and reads again from nothing; `synced`, holding Y | same |
+| R5 | A's owner revokes B's credential | B's read is refused, its status is Terminal; the record lists `revoked`, the cache is removed, A is not read again | same |
+| R6 | A device reads its owner's catalogue; a peer reads a granted one | The device refuses another owner's stream; the peer accepts any owner stream for its receiver and epoch and refuses another receiver, epoch or a stream that is not an owner's | `a_catalogue_scope_is_checked_as_its_reader_can`, `every_owner_stream_has_the_shape_a_non_owner_reader_checks` |
+
 ## What this part does not do
 
 H as a whole is larger than one change. Part 1 (#725) is the granting side;
 part 2a puts a peer's reads behind its grants; part 2b-1 lets the gateway link
 the client and gives the head an access path by receiver
-(`read_grant_changes_by_receiver`); part 2b-2 enrolls (above). The rest:
+(`read_grant_changes_by_receiver`); part 2b-2 enrolls and part 2b-3 reads
+(above). The rest:
 
-- **The peer reading.** Polling each active peer's head, reading what it
-  granted into a retained cache, reading the pinned status of a pending one,
-  and handling `ResetRequired`.
 - **The peer table's last addresses and local discovery.** The issue lists
   them; the ADR places local discovery in slice I, and the map leaves "whether
   to announce at all, and what it reveals" unresolved. This side's peer table
@@ -317,7 +393,7 @@ the client and gives the head an access path by receiver
   saves its record before it confirms, as a device does, so a connection
   that fails after that save answers `peer_unreachable` or
   `peer_unavailable` while A may have recorded the claim. The record lists
-  `pending`; reading the pinned status (the next part) settles it, and
+  `pending`; the poller's next pinned status settles it, and
   `peer.forget` removes it. Enrolling into the same peer again is
   `peer_exists` until then.
 - **Shutdown does not wait for an enrollment.** Nothing holds a
@@ -346,6 +422,13 @@ the client and gives the head an access path by receiver
   by itself, so the device's catalogue cache needs an explicit reset once.
   Changing the scope or incarnation such a reader sees would hit the same
   refusal (a scope mismatch is also `ResetRequired`), so it is not done.
+- **A peer read's connect is not bounded by the injected clock.** The status
+  read goes through `PeerConnector` under the deadline clock; the read itself
+  uses the device's gateway session, whose connect is an operating-system
+  connect bounded by its handshake budget. A stop shuts the sockets a read
+  has open, not one still connecting, so `join` can wait for that budget.
+- **Reading holds the turn.** A read of a large grant can keep `peer.enroll`
+  and `peer.forget` answering `peer_busy` until it reaches its page bound.
 - **A peer has no catalogue watch.** It polls its catalogue head. A watch
   that wakes only on changes to its own granted rows needs per-receiver
   notices, which nothing builds yet.
