@@ -62,6 +62,8 @@ pub struct CommandResult {
 
 impl CommandResult {
     /// The answer for a command whose environment said nothing.
+    // Its callers are the SSH adapter's, which is Unix only.
+    #[cfg_attr(not(unix), allow(dead_code))]
     pub(crate) fn unanswered() -> Self {
         Self {
             exit: CommandExit::Unanswered,

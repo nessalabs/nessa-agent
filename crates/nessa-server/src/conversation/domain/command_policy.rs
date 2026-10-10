@@ -9,7 +9,7 @@
 //!
 //! Arrows are checks, in order. A program is matched by its file name, the
 //! part after its last `/`, so `/usr/bin/rm` is `rm`. A denial wins over an
-//! allowance. This is the gateway's tool policy, not a sandbox: an allowed
+//! allowance, and with an allow-list only a bare name is allowed. This is the gateway's tool policy, not a sandbox: an allowed
 //! program can still run any other it is given as an argument.
 use nessa_sdk::domain::agent_execution::leases::CommandRefusal;
 use std::collections::BTreeSet;
@@ -65,7 +65,13 @@ impl CommandPolicy {
             return Err(CommandRefusal::EnvironmentNotGranted);
         }
         let name = program_name(program);
-        let allowed = self.allow.as_ref().is_none_or(|allow| allow.contains(name));
+        // With an allow-list, a program is named bare and found on the
+        // host's search path, so a file the agent wrote under an allowed
+        // name elsewhere is not run.
+        let allowed = self
+            .allow
+            .as_ref()
+            .is_none_or(|allow| name == program && allow.contains(name));
         if !allowed || self.deny.contains(name) {
             return Err(CommandRefusal::CommandDenied);
         }

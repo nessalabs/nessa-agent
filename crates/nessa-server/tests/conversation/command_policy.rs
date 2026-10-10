@@ -27,8 +27,17 @@ fn a_program_is_matched_by_its_file_name_and_a_denial_wins() {
         names(&["rm"]),
     );
     assert_eq!(policy.admit("devbox", "cargo"), Ok(()));
-    assert_eq!(policy.admit("devbox", "/home/me/.cargo/bin/cargo"), Ok(()));
-    for denied in ["rm", "/bin/rm", "./rm", "sh", "cargo-ext"] {
+    // With an allow-list, only the bare name: not a file of that name
+    // anywhere else.
+    for denied in [
+        "rm",
+        "/bin/rm",
+        "./rm",
+        "sh",
+        "cargo-ext",
+        "/tmp/x/cargo",
+        "./cargo",
+    ] {
         assert_eq!(
             policy.admit("devbox", denied),
             Err(CommandRefusal::CommandDenied),

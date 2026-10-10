@@ -29,7 +29,8 @@ pub(super) struct RuntimeConfig {
     /// names none, and no conversation reaches a host (issue #699).
     pub ssh_hosts: Vec<String>,
     /// What `nessa env serve` on this host offers a gateway beyond agents.
-    /// Absent offers nothing more.
+    /// Absent offers nothing more. Read only where `env serve` runs: Unix.
+    #[cfg_attr(not(unix), allow(dead_code))]
     pub env_serve: EnvServeConfig,
     /// The agent's environment tools, `environments_list` and `run`
     /// (issue #700). Absent or `null` grants neither: the agent sees no such
@@ -62,6 +63,7 @@ pub(super) struct EnvServeConfig {
     /// Whether a gateway may run commands here under command leases
     /// (issue #700). Off unless set: a command runs as this account with
     /// nothing enclosing it.
+    #[cfg_attr(not(unix), allow(dead_code))]
     pub commands: bool,
 }
 

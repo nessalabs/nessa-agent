@@ -283,6 +283,19 @@ impl CommandHold for SshCommand {
         Box::pin(async move {
             // The host answers within the command's timeout and what stopping
             // it takes; a stop asked shortens nothing the host already owes.
+            // Stopped before it was run: it is never run, and its lease ends.
+            if stop.borrow().is_some() {
+                let ended =
+                    tokio::time::timeout(self.inner.timings.answer, self.link.end(&self.lease))
+                        .await
+                        .ok()
+                        .flatten();
+                return CommandResult {
+                    exit: CommandExit::NotStarted,
+                    cleanup: ended.and_then(evidence),
+                    ..CommandResult::unanswered()
+                };
+            }
             let bound = self.timeout + COMMAND_STOP_WAIT + self.inner.timings.answer;
             let mut stopped = None;
             let answer = tokio::time::timeout(bound, async {
@@ -290,12 +303,13 @@ impl CommandHold for SshCommand {
                 tokio::pin!(run);
                 loop {
                     tokio::select! {
-                        answer = &mut run => break answer,
+                        biased;
                         Ok(cause) = stop.wait_for(Option::is_some), if stopped.is_none() => {
                             stopped = *cause;
                             // Its End stops it; its Ran still answers.
                             self.link.abandon_lease(&self.lease);
                         }
+                        answer = &mut run => break answer,
                     }
                 }
             })

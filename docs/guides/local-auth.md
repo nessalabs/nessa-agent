@@ -319,7 +319,8 @@ Both are off until set. A command runs as the host's account, in its workspace,
 with nothing enclosing it, so the person's approval card is the check. The
 gateway's tool policy matches each program by its file name; `denyPrograms`
 wins over `allowPrograms`, and omitting `allowPrograms` allows every other
-program. Limits are in [docs/limits.md](../limits.md) (`command.*`).
+program. With `allowPrograms`, a program must be named bare (`cargo`, found on
+the host's `PATH`), never by a path. Limits are in [docs/limits.md](../limits.md) (`command.*`).
 
 ```json
 {

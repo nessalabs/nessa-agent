@@ -45,6 +45,10 @@ pub(crate) async fn serve(
     mut output: impl AsyncWrite + Unpin,
 ) {
     let mut revocations = grants.revocations();
+    // Revoked between its admission and this watch: served nothing.
+    if grants.owner(&token).is_none() {
+        return;
+    }
     let (answers, mut answered) = mpsc::channel::<(String, Value)>(MAX_BUILT_IN_CALLS);
     // Each running call's stop, by its request id as JSON.
     let mut calls: HashMap<String, watch::Sender<bool>> = HashMap::new();
@@ -97,6 +101,13 @@ fn handle(
     let Ok(message) = serde_json::from_slice::<Value>(message) else {
         return Some(error(Value::Null, -32700, "the message is not JSON"));
     };
+    if !message.is_object() {
+        return Some(error(
+            Value::Null,
+            -32600,
+            "one request a message; batches are not served",
+        ));
+    }
     let method = message.get("method").and_then(Value::as_str);
     let params = message.get("params").cloned().unwrap_or(Value::Null);
     let Some(id) = message.get("id").cloned() else {

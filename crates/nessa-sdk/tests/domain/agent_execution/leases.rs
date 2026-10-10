@@ -452,10 +452,10 @@ fn l14_only_a_live_lease_admits_a_command_and_its_end_ends_them_all() {
     with_command.interrupt().unwrap();
     assert!(with_command.commands().is_empty());
     lease.interrupt().unwrap();
-    assert_eq!(
-        lease.end_command(&command("cmd-0")),
-        Err(LeaseError::UnknownCommand)
-    );
+    // A command's end after its parent's is late evidence: accepted, and it
+    // changes nothing, since the parent's end already ended it.
+    assert_eq!(lease.end_command(&command("cmd-0")), Ok(()));
+    assert!(lease.commands().is_empty());
 }
 
 #[test]

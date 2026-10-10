@@ -88,6 +88,8 @@ pub enum CommandCallError {
     Unrecorded,
     /// This gateway grants no commands.
     NotConfigured,
+    /// Its caller went away before anything was asked of an environment.
+    Cancelled,
 }
 
 impl ConversationService {
@@ -153,9 +155,17 @@ impl ConversationService {
             running_turn(&snapshot, &call.call).ok_or(CommandCallError::NoTurn)?;
         let lease = LeaseId::new(uuid::Uuid::new_v4().to_string())
             .expect("a UUID is a portable lease identity");
-        let host = (call.environment != HERE)
-            .then(|| SshDestination::new(call.environment.clone()).ok())
-            .flatten();
+        // A name that is no host is not recorded as one: nothing names it.
+        let host = match call.environment.as_str() {
+            HERE => None,
+            named => Some(SshDestination::new(named).map_err(|_| {
+                CommandCallError::Invalid(format!("{named:?} names no environment"))
+            })?),
+        };
+        // A caller already gone is asked nothing.
+        if *stop.borrow() {
+            return Err(CommandCallError::Cancelled);
+        }
         let terms = CommandTerms {
             environment: host
                 .clone()
@@ -216,22 +226,40 @@ impl ConversationService {
         let committed = manager
             .record_lease(move |current| {
                 if has_room(current, &parent_for_check) {
-                    (vec![issued], true)
+                    (vec![issued], Issuance::Issued)
+                } else if live_parent(current, &parent_for_check) {
+                    (Vec::new(), Issuance::Full)
                 } else {
-                    (Vec::new(), false)
+                    (Vec::new(), Issuance::NotLive)
                 }
             })
             .await;
         match committed {
-            Ok(commit) if commit.decided && commit.saved.is_ok() => {}
-            Ok(commit) if !commit.decided => {
+            Ok(commit) if commit.decided == Issuance::Issued && commit.saved.is_ok() => {}
+            Ok(commit) if commit.decided == Issuance::Full => {
                 drop(hold);
                 return self
                     .refuse(&live, &refused, CommandRefusal::BudgetExceeded)
                     .await;
             }
+            // Its turn's lease ended while the host was asked: nobody to run
+            // it for, as if no turn had been running.
+            Ok(commit) if commit.decided == Issuance::NotLive => {
+                return Err(CommandCallError::NoTurn);
+            }
             Ok(commit) => {
+                // Folded and kept for a later save: its end is kept beside
+                // it, so the lease never counts a command that never ran.
+                drop(hold);
                 tracing::error!(error = ?commit.saved, conversation_id = %id, "a command lease could not be saved; it does not run");
+                let ended = LeaseRecord::CommandEnded {
+                    lease: lease.clone(),
+                    parent: parent.clone(),
+                    exit: CommandExit::NotStarted,
+                    output: CommandOutput::new(0, 0, 0, "", ""),
+                    cleanup: None,
+                };
+                let _ = manager.record_lease(move |_| (vec![ended], ())).await;
                 return Err(CommandCallError::Unrecorded);
             }
             Err(error) => {
@@ -239,7 +267,9 @@ impl ConversationService {
                 return Err(CommandCallError::Unrecorded);
             }
         }
-        let (stopping, stopped) = watch::channel(None);
+        // A caller gone during the grant stops it before it starts.
+        let gone = *stop.borrow();
+        let (stopping, stopped) = watch::channel(gone.then_some(LeaseEndCause::Closed));
         let mut caller = stop;
         let mut ran = hold.run(stopped);
         let result = loop {
@@ -272,7 +302,8 @@ impl ConversationService {
             cleanup: result.cleanup,
         };
         // Recorded while its parent is still the conversation's latest lease;
-        // past it, the parent's own end already accounts for the command.
+        // once a later agent lease replaced it, the parent's own end accounts
+        // for the command, and its exit is only logged.
         let parent_for_end = parent.clone();
         let committed = manager
             .record_lease(move |current| {
@@ -287,7 +318,7 @@ impl ConversationService {
             })
             .await;
         if !matches!(&committed, Ok(commit) if commit.saved.is_ok()) {
-            tracing::error!(conversation_id = %id, lease = lease.as_str(), "a command's end could not be recorded");
+            tracing::error!(conversation_id = %id, lease = lease.as_str(), exit = ?result.exit, "a command's end could not be recorded");
         }
         Ok(CommandAnswer::Ran { lease, result })
     }
@@ -301,6 +332,7 @@ impl ConversationService {
     ) -> Result<CommandAnswer, CommandCallError> {
         self.record_command(
             live,
+            refused.parent,
             LeaseRecord::CommandRefused {
                 lease: refused.lease.clone(),
                 parent: refused.parent.clone(),
@@ -313,18 +345,32 @@ impl ConversationService {
         .map(|()| CommandAnswer::Refused(refusal))
     }
 
-    /// Record one command lease record for `live`'s conversation.
+    /// Record one command record for `live`'s conversation, while its parent
+    /// is still the conversation's latest lease; [`CommandCallError::NoTurn`]
+    /// once another replaced it.
     async fn record_command(
         &self,
         live: &LiveConversation,
+        parent: &LeaseId,
         record: LeaseRecord,
     ) -> Result<(), CommandCallError> {
+        let parent = parent.clone();
         let committed = live
             .agent
             .session_manager()
-            .record_lease(move |_| (vec![record], ()))
+            .record_lease(move |current| {
+                if current
+                    .and_then(CurrentLease::held)
+                    .is_some_and(|held| held.id() == &parent)
+                {
+                    (vec![record], true)
+                } else {
+                    (Vec::new(), false)
+                }
+            })
             .await;
         match committed {
+            Ok(commit) if !commit.decided => Err(CommandCallError::NoTurn),
             Ok(commit) if commit.saved.is_ok() => Ok(()),
             _ => Err(CommandCallError::Unrecorded),
         }
@@ -398,6 +444,23 @@ fn running_turn(snapshot: &SessionSnapshot, call: &str) -> Option<(LeaseId, Acti
     let actor = &turn.actor;
     let actor = ActionContext::new(actor.principal_id(), actor.surface_id(), call).ok()?;
     Some((parent, actor))
+}
+
+/// What issuing a granted command came to, under the lock.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Issuance {
+    Issued,
+    /// Its parent is Live, with as many commands as it holds.
+    Full,
+    /// Its parent is no longer Live, or no longer the latest lease.
+    NotLive,
+}
+
+/// Whether `parent` is the conversation's latest lease, and Live.
+fn live_parent(current: Option<&CurrentLease>, parent: &LeaseId) -> bool {
+    current
+        .and_then(CurrentLease::held)
+        .is_some_and(|lease| lease.id() == parent && lease.phase() == LeasePhase::Live)
 }
 
 /// Whether `parent`, the conversation's latest lease, is Live with room for

@@ -305,6 +305,7 @@ fn call_error(error: &CommandCallError) -> &str {
         CommandCallError::NoTurn => "no turn of this conversation is running to run it for",
         CommandCallError::Unrecorded => "the command could not be recorded, so it did not run",
         CommandCallError::NotConfigured => "this gateway grants no commands",
+        CommandCallError::Cancelled => "the call was cancelled before the command was asked for",
     }
 }
 

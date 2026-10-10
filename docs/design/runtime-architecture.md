@@ -602,7 +602,7 @@ as before any other, and `run` is marked `destructiveHint`.
 
 | What | Settled as | Why |
 | --- | --- | --- |
-| Lifetime | Bounded by its tool call. A command is stopped when its timeout passes, when its call is cancelled or its stand-in goes, when its conversation's grant is revoked, or when its parent agent lease ends (L15); its end is recorded either way. No receipt to poll | A command outliving its call needs a receipt and a store the person can read later; that is a later slice, if any. A long build fits a long timeout |
+| Lifetime | Bounded by its tool call. A command is stopped when its timeout passes, when its call is cancelled or its stand-in goes, when its conversation's grant is revoked, or when its parent agent lease ends (L15); its end is recorded while that agent lease is still the conversation's latest, and only logged once a later one replaced it, whose predecessor's end already accounts for it. No receipt to poll | A command outliving its call needs a receipt and a store the person can read later; that is a later slice, if any. A long build fits a long timeout |
 | Timeout | 120 s when the call names none; at most 1 h. A host stops a command past it and answers `timed_out` | |
 | Output | The host keeps the newest 64 KiB of both streams together (one frame) and counts what it dropped; the record keeps the newest 2 KiB of each, as text, with both streams' sizes and the dropped count | output is evidence, bounded like every record; the agent's answer carries the 64 KiB |
 | Artifacts | None: a command publishes nothing. Naming and fetching files is the artifact channel's (`artifacts.publish`), not `run`'s | |
@@ -611,7 +611,7 @@ as before any other, and `run` is marked `destructiveHint`.
 | Its environment | The host's account, with its variables cleared to `PATH`, `HOME`, `USER`, `LOGNAME`, `TMPDIR`, `LANG` and `LC_ALL`; nothing encloses it (sandbox `none`). A host serves commands only when its own `config.json` says `envServe.commands: true` | a command does not inherit what the host's harnesses are started with; a host owner opts in |
 | Who it runs for | The person whose turn is running, with the tool call as the request (`ActionContext`); a call with no turn running is not decided and nothing is recorded | the audit names the caller as initiator |
 | Where | An SSH host the gateway names in `environmentTools.commandHosts`, each also in `sshHosts`. `here` runs no commands: the agent's own shell tool is its way to run one here | the gateway's tool policy is per host |
-| Tool policy | `allowPrograms` (when given) and `denyPrograms`, each a program's file name; a denial wins. It is a policy, not a sandbox: an allowed program can run another | |
+| Tool policy | `allowPrograms` (when given) and `denyPrograms`, each a program's file name; a denial wins, and with `allowPrograms` only a bare name (found on the host's `PATH`) is allowed, so a file the agent wrote under an allowed name is not run. It is a policy, not a sandbox: an allowed program can run another | |
 | Stopping | The gateway ends the command lease; the host stops the command (2 s grace, then forced, then the last of its output), answers `Ran`, then `Ended`. The gateway waits at most the command's timeout, 10 s for its stop (`COMMAND_STOP_WAIT`), and an answer's 15 s, then calls it unanswered and asks the host what it recorded | |
 
 ```mermaid
@@ -649,9 +649,13 @@ sequenceDiagram
 actor) and `command_ended` (exit, output and cleanup). Only an issued,
 unended command is kept in the saved lease, so a reader sees what runs
 now and the view shows its count; the rest stay in the stream as evidence.
-A `command_ended` that arrives after its parent is final is accepted as
-late evidence. A command refused before it reaches a host is still
-recorded, with who asked.
+A `command_ended` that arrives after its parent is final, while that
+parent is still the latest lease, is accepted as late evidence. A command
+refused before it reaches a host is still recorded, with who asked. A
+`command_issued` that could not be saved is kept with a `command_ended`
+(`not_started`) beside it, so a later save never shows a command that ran
+forever. A call cancelled before its grant asks nothing of the host; one
+cancelled during the grant is issued, never run, and ended.
 
 **Orderings slice C meets.**
 

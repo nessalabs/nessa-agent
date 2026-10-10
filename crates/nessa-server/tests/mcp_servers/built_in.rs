@@ -186,6 +186,10 @@ async fn a_built_in_server_answers_mcp_for_the_conversation_its_grant_names() {
         client.next().await.unwrap()
     };
     assert_eq!(garbled["error"]["code"], -32700);
+    let batch = client
+        .ask(json!([{"jsonrpc": "2.0", "id": 4, "method": "ping"}]))
+        .await;
+    assert_eq!(batch["error"]["code"], -32600);
 }
 
 #[tokio::test]

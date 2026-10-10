@@ -350,6 +350,20 @@ pub(super) async fn compose(
     } else {
         tracing::error!("remote MCP is unreachable this run: the HTTP client could not be built");
     }
+    if let Some(server) = &built_in {
+        let named = |name: &str| name == server.name();
+        if servers
+            .configured()
+            .iter()
+            .any(|launch| named(&launch.server.name))
+            || servers
+                .configured_remotes()
+                .iter()
+                .any(|remote| named(remote.name()))
+        {
+            tracing::warn!(server = server.name(), "a configured MCP server has the name of one the gateway serves itself; it is not offered while that one is");
+        }
+    }
     let Some(key) = configuration_key(&OsTokens) else {
         tracing::error!(
             "MCP servers are off this run: no key for their configuration digests could be drawn"

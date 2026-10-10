@@ -2299,3 +2299,62 @@ async fn environments_list_says_where_the_agent_runs_and_where_it_may_run_comman
         ]
     );
 }
+
+#[tokio::test]
+async fn a_command_whose_caller_is_gone_first_asks_nothing_of_the_host() {
+    let root = tempfile::tempdir().unwrap();
+    let host = CommandHost::new();
+    let harness = with_command_host(root.path(), host.clone(), Some(devbox_policy()));
+    harness.create().await;
+    let go = harness.running_turn().await;
+    let (_caller, stop) = tokio::sync::watch::channel(true);
+    assert_eq!(
+        harness
+            .service
+            .run_command(&harness.id, command("devbox", &["ls"], "call"), stop)
+            .await,
+        Err(CommandCallError::Cancelled)
+    );
+    assert_eq!(host.granted.load(Ordering::SeqCst), 0);
+    assert!(harness.saved_commands().is_empty());
+    go.send(()).unwrap();
+}
+
+#[tokio::test]
+async fn a_command_whose_issue_cannot_be_saved_never_runs_and_never_counts() {
+    let root = tempfile::tempdir().unwrap();
+    let host = CommandHost::new();
+    let harness = with_command_host(root.path(), host.clone(), Some(devbox_policy()));
+    harness.create().await;
+    let go = harness.running_turn().await;
+    *harness.storage.failing.lock().unwrap() =
+        Some(|record| matches!(record, LeaseRecord::CommandIssued { .. }));
+    assert_eq!(
+        harness.run(command("devbox", &["ls"], "call")).await,
+        Err(CommandCallError::Unrecorded)
+    );
+    *harness.storage.failing.lock().unwrap() = None;
+    // Its end was kept beside it: once storage recovers, both are saved
+    // and the lease counts nothing running.
+    host.finish
+        .send_replace(Some(CommandExit::Exited { code: 0 }));
+    assert!(matches!(
+        harness.run(command("devbox", &["ls"], "next")).await,
+        Ok(CommandAnswer::Ran { .. })
+    ));
+    let saved = harness.saved_commands();
+    assert!(saved.iter().any(|record| matches!(
+        record,
+        LeaseRecord::CommandEnded {
+            exit: CommandExit::NotStarted,
+            ..
+        }
+    )));
+    let view = harness
+        .service
+        .read(harness.id.clone(), caller("read"))
+        .await
+        .unwrap();
+    assert_eq!(view.lease.and_then(|lease| lease.commands), None);
+    go.send(()).unwrap();
+}
