@@ -123,6 +123,9 @@ struct MemoryLedger {
     failing: AtomicBool,
     /// A collection takes a while to be recorded.
     slow_collections: AtomicBool,
+    /// A publish takes a while to be recorded, and says when it starts.
+    slow_publishes: AtomicBool,
+    publishing: tokio::sync::Notify,
 }
 
 impl MemoryLedger {
@@ -139,6 +142,12 @@ impl LeaseLedger for MemoryLedger {
         if matches!(entry, LedgerEntry::Collected { .. })
             && self.slow_collections.load(Ordering::SeqCst)
         {
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        if matches!(entry, LedgerEntry::Published { .. })
+            && self.slow_publishes.load(Ordering::SeqCst)
+        {
+            self.publishing.notify_one();
             std::thread::sleep(Duration::from_millis(200));
         }
         self.entries.lock().unwrap().push(entry.clone());
@@ -1558,6 +1567,43 @@ async fn a_collection_just_before_the_end_is_recorded_before_it() {
         answer_of(answered).await,
         crate::env_serve::application::PublishAnswer::Held { .. }
     ));
+}
+
+/// A lease that ends while a publish is being recorded settles it only
+/// once it is on record: the ledger never holds a publish's collection
+/// before the publish. On two threads, so the end runs meanwhile.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_lease_ending_while_a_publish_is_recorded_settles_it_after() {
+    let (mut gateway, outbox) = Gateway::publishing();
+    gateway.started(LEASE).await;
+    gateway.ledger.slow_publishes.store(true, Ordering::SeqCst);
+    let publishing = gateway.ledger.publishing.notified();
+    let answered = publish(&outbox, LEASE).await;
+    tokio::time::timeout(Duration::from_secs(5), publishing)
+        .await
+        .expect("the publish is being recorded");
+    gateway
+        .send(ToEnvironment::End {
+            lease: LEASE.into(),
+        })
+        .await;
+    let answer = answer_of(answered).await;
+    let entries = gateway.ledger.entries();
+    let published = entries
+        .iter()
+        .position(|entry| matches!(entry, LedgerEntry::Published { .. }))
+        .expect("the publish is on record");
+    let collected = entries
+        .iter()
+        .position(|entry| matches!(entry, LedgerEntry::Collected { .. }))
+        .expect("and so is its settlement");
+    assert!(published < collected, "{entries:?}");
+    assert_eq!(
+        answer,
+        crate::env_serve::application::PublishAnswer::Refused {
+            reason: nessa_protocol::lease::CollectionRefusal::LeaseEnded,
+        }
+    );
 }
 
 /// A publish the gateway never answered before its connection was lost is

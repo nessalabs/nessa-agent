@@ -386,30 +386,35 @@ impl Publisher {
             Ok(Err(reason)) => return refused(reason),
             Err(_) => return refused(PublishRefusal::StagingFailed),
         };
-        // Waiting before it is recorded: a lease that ended while the copy
-        // was staged records no publish, and one that ends from here on
-        // answers it, so every publish on record has its collection too.
+        // Recorded under the same lock as the end's check, so an end settles
+        // only a publish already on record, and records nothing before it.
         let (sender, answer) = oneshot::channel();
-        {
+        let recorded = {
             let mut in_flight = lock(&self.in_flight);
             if in_flight.ended {
-                drop(in_flight);
-                self.outbox.discard(lease, artifact);
-                return refused(PublishRefusal::LeaseEnded);
+                Err(PublishRefusal::LeaseEnded)
+            } else {
+                let entry = LedgerEntry::Published {
+                    lease: lease.to_owned(),
+                    artifact,
+                    digest: staged.digest.clone(),
+                    size: staged.size,
+                };
+                match self.ledger.record(&entry) {
+                    Ok(()) => {
+                        in_flight.waiting.insert(artifact, sender);
+                        Ok(())
+                    }
+                    Err(error) => {
+                        tracing::error!(lease, artifact, %error, "a publish could not be recorded; it is not sent");
+                        Err(PublishRefusal::AuditUnavailable)
+                    }
+                }
             }
-            in_flight.waiting.insert(artifact, sender);
-        }
-        let entry = LedgerEntry::Published {
-            lease: lease.to_owned(),
-            artifact,
-            digest: staged.digest.clone(),
-            size: staged.size,
         };
-        if let Err(error) = self.ledger.record(&entry) {
-            tracing::error!(lease, artifact, %error, "a publish could not be recorded; it is not sent");
-            lock(&self.in_flight).waiting.remove(&artifact);
+        if let Err(reason) = recorded {
             self.outbox.discard(lease, artifact);
-            return refused(PublishRefusal::AuditUnavailable);
+            return refused(reason);
         }
         let (digest, size) = (staged.digest.clone(), staged.size);
         let frame = FromEnvironment::Published {
