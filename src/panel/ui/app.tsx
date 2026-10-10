@@ -32,6 +32,7 @@ import {
   Transcript,
   useConversation,
   toEditor,
+  linksFilesHere,
 } from "../../conversation"
 import { host, startResizeFromLeftEdge, type CompositorKind } from "../../host"
 import { useSession } from "../../session"
@@ -800,6 +801,7 @@ export function App({
                 <ComposerTray
                   disabled={attachments.reading}
                   onChoose={attachments.chooseFiles}
+                  linksFiles={linksFilesHere(chat.active)}
                   onSignOut={onSignOut}
                   agentInstallations={agentInstallations}
                   // Where a new conversation runs: offered only when the

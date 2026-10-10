@@ -19,6 +19,7 @@
 //! no longer names is refused the same way, never run somewhere else.
 use super::{ConversationError, Environment, EnvironmentFuture};
 use nessa_protocol::conversation::domain::ConversationId;
+use nessa_sdk::domain::agent_execution::leases::EnvironmentRef;
 use std::{collections::BTreeMap, sync::Arc};
 
 /// Why a placement could not be read or written.
@@ -145,6 +146,20 @@ impl Environments {
                 .cloned()
                 .ok_or(ConversationError::EnvironmentNotConfigured),
         }
+    }
+
+    /// Whether `conversation` runs where this machine's files are its own,
+    /// so a path on this machine names the same file there: only here. A
+    /// host has files of its own, and would read whatever it has at that
+    /// path, or nothing.
+    pub(crate) async fn reads_this_machine(
+        &self,
+        conversation: &ConversationId,
+    ) -> Result<bool, ConversationError> {
+        Ok(matches!(
+            self.of(conversation).await?.declaration().environment,
+            EnvironmentRef::Here
+        ))
     }
 
     /// Forget where `conversation` ran.

@@ -146,6 +146,8 @@ export function submissionRefusalMessage(reason: CommandFailure): string | undef
       return "This conversation was deleted, so the message was not sent. It is back in the draft; start a new conversation to send it."
     case "model-unavailable":
       return "This gateway cannot run the model selected for this conversation. The message is back in the draft; choose an available model in a new conversation."
+    case "linked-file-unreachable":
+      return "This conversation runs on an SSH host, which cannot read files on this computer, so the message was not sent. It is back in the draft; remove the linked files to send it. Images are sent with their bytes and can stay."
     case "agent-not-configured":
     case "agent-unsupported":
     case "conversations-not-configured":

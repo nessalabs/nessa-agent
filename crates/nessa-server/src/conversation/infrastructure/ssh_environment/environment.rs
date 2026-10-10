@@ -169,8 +169,10 @@ impl Environment for SshEnvironment {
             let gone = link
                 .grant(lease.as_str(), work.agent(), self.inner.timings.answer)
                 .await?;
+            let workspace = Some(link.workspace().to_string_lossy().into_owned());
             Ok(EnvironmentLease {
                 provider,
+                workspace,
                 hold: Arc::new(SshHold {
                     inner: self.inner.clone(),
                     link,

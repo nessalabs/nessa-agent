@@ -1499,6 +1499,7 @@ function reasonFor(
     case ConversationErrorCode.ConversationsNotConfigured:
     case ConversationErrorCode.EnvironmentNotConfigured:
     case ConversationErrorCode.EnvironmentVersionMismatch:
+    case ConversationErrorCode.LinkedFileUnreachable:
     case ConversationErrorCode.ModelUnavailable:
     case ConversationErrorCode.ImageInputUnsupported:
     case ConversationErrorCode.ApprovalModeUnavailable:

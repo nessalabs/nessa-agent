@@ -178,6 +178,7 @@ function useTrayPlacement(
 export function ComposerTray({
   disabled,
   onChoose,
+  linksFiles = true,
   onSignOut,
   approval,
   environment,
@@ -186,6 +187,12 @@ export function ComposerTray({
   /** Files cannot be added while earlier ones are still being read. */
   disabled: boolean
   onChoose: () => void
+  /**
+   * Whether a file that is not an image can be added, linked by its path on
+   * this machine. Not for a conversation on an SSH host: it is offered images
+   * alone, which carry their bytes.
+   */
+  linksFiles?: boolean
   onSignOut?: () => void
   approval?: TrayApproval
   /** Absent when the gateway names no host, or the conversation exists. */
@@ -314,7 +321,7 @@ export function ComposerTray({
                   onChoose()
                 }}
               >
-                <span className="flex-1">Add files</span>
+                <span className="flex-1">{linksFiles ? "Add files" : "Add images"}</span>
               </button>
               {approval && approval.modes.length > 1 ? (
                 <button

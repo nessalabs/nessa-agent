@@ -541,6 +541,7 @@ describe("why something was not attached", () => {
       "file-not-nameable": { reason: "file-not-nameable", name: "rep?rt.pdf" },
       "file-unreadable": { reason: "file-unreadable", name: "a.png" },
       "file-not-linkable": { reason: "file-not-linkable", name: "report.pdf" },
+      "file-not-on-host": { reason: "file-not-on-host", name: "notes.md" },
       "file-not-a-file": { reason: "file-not-a-file", name: "pipe" },
       "file-unresponsive": { reason: "file-unresponsive", name: "on-a-mount.pdf" },
       "file-must-be-chosen-again": { reason: "file-must-be-chosen-again" },

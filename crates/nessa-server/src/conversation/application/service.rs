@@ -1561,7 +1561,14 @@ impl ConversationService {
                                 approval_mode: record.approval_mode(),
                             });
                             projection.lifecycle(lifecycle_view(&agent));
-                            if let Some(workspace) = &service.inner.workspace {
+                            // Where its agent works: what its environment
+                            // reported (a host's own directory), else this
+                            // gateway's.
+                            let workspace = opening
+                                .workspace
+                                .as_ref()
+                                .or(service.inner.workspace.as_ref());
+                            if let Some(workspace) = workspace {
                                 let identity = configured.provider.identity();
                                 projection.view.runtime = Some(ConversationRuntime {
                                     model: identity.model_id().into(),
@@ -2372,6 +2379,21 @@ impl ConversationService {
         Ok((execution, message))
     }
 
+    /// Refuse a message linking files by path for a conversation that runs
+    /// where this machine's files are not its own (an SSH host): before
+    /// anything of it is recorded or sent, so the same request, corrected,
+    /// can be sent again. Images carry their bytes and are not refused here.
+    async fn refuse_linked_files_elsewhere(
+        &self,
+        id: &ConversationId,
+        links_files: bool,
+    ) -> Result<(), ConversationError> {
+        if links_files && !self.inner.environment.reads_this_machine(id).await? {
+            return Err(ConversationError::LinkedFileUnreachable);
+        }
+        Ok(())
+    }
+
     /// Admit one SDK-owned queued/steering input. Its completion outlives this call and its socket.
     pub async fn submit(
         &self,
@@ -2473,6 +2495,9 @@ impl ConversationService {
                 &execution_id,
                 message,
             )?;
+            service
+                .refuse_linked_files_elsewhere(&id, !message.files().is_empty())
+                .await?;
             // An app's message is for a live opening, and opens none: one
             // ended by the desktop stopping the agent is refused below, not
             // opened again for it.

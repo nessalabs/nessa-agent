@@ -68,6 +68,10 @@ fn an_ssh_hosts_refusals_are_the_hosts_and_never_this_gateways_configuration() {
         error_code(&ConversationError::EnvironmentNotConfigured),
         ConversationErrorCode::EnvironmentNotConfigured
     );
+    assert_eq!(
+        error_code(&ConversationError::LinkedFileUnreachable),
+        ConversationErrorCode::LinkedFileUnreachable
+    );
     // Where it runs cannot be read: the same as any unreadable saved state.
     assert_eq!(
         error_code(&ConversationError::PlacementUnreadable),

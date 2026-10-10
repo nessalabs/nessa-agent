@@ -52,6 +52,8 @@ const REFUSALS: Partial<Record<ConversationErrorCode, string>> = {
     "The SSH host this conversation runs on could not be reached, is serving another gateway, or cannot run its agent, so nothing was sent. Retry once the host is reachable.",
   environment_version_mismatch:
     "The SSH host this conversation runs on has another version of Nessa than this gateway, so nothing was sent to it. Install this version there.",
+  linked_file_unreachable:
+    "This conversation runs on an SSH host, which cannot read files on this computer, so the message was not sent. Remove the linked files, or attach images, whose bytes are sent with them.",
 }
 
 /**
@@ -127,6 +129,10 @@ export function rejectedBeforeDispatch(code: ConversationErrorCode): boolean {
     case ConversationErrorCode.EnvironmentNotConfigured:
     case ConversationErrorCode.EnvironmentUnavailable:
     case ConversationErrorCode.EnvironmentVersionMismatch:
+      return true
+    // Refused before anything of the message was recorded or sent: the
+    // conversation's environment cannot read a path on this machine.
+    case ConversationErrorCode.LinkedFileUnreachable:
       return true
     // The gateway could not read what it saved for this conversation. It caches
     // that and answers every later command from it without opening an agent, so

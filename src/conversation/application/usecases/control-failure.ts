@@ -154,6 +154,7 @@ function nothingWasDone(
     case "image-input-unsupported":
     case "attachment-not-found":
     case "attachment-unavailable":
+    case "linked-file-unreachable":
     case "invalid-request":
     case undefined:
       return "The gateway would not take this action, so nothing was done."

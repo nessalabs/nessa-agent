@@ -185,6 +185,7 @@ const failures: Partial<Record<ConversationErrorCode, CommandFailure>> = {
   environment_not_configured: "environment-not-configured",
   environment_unavailable: "environment-unavailable",
   environment_version_mismatch: "environment-version-mismatch",
+  linked_file_unreachable: "linked-file-unreachable",
   conversation_state_unreadable: "conversation-state-unreadable",
   invalid_request: "invalid-request",
   conversation_deleted: "conversation-deleted",
@@ -247,6 +248,8 @@ const readFailures: Record<ConversationErrorCode, ReadFailure> = {
   environment_not_configured: "unavailable",
   environment_unavailable: "unavailable",
   environment_version_mismatch: "unavailable",
+  // A message's refusal; no read is ever answered with it.
+  linked_file_unreachable: "unavailable",
   attachment_capacity: "unavailable",
   attachment_cleanup_unavailable: "unavailable",
   attachment_not_found: "unavailable",

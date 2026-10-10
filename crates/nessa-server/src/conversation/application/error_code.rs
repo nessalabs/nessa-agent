@@ -56,6 +56,7 @@ pub fn error_code(error: &ConversationError) -> ConversationErrorCode {
         ConversationError::EnvironmentNotConfigured => {
             ConversationErrorCode::EnvironmentNotConfigured
         }
+        ConversationError::LinkedFileUnreachable => ConversationErrorCode::LinkedFileUnreachable,
         // Saved state this build cannot read and never will: the same answer
         // as an unreadable history, which no retry changes.
         ConversationError::LeaseUnreadable | ConversationError::PlacementUnreadable => {

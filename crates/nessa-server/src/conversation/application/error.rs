@@ -62,6 +62,11 @@ pub enum ConversationError {
     /// is not an SSH host this gateway's `config.json` names. Nothing was
     /// created or opened; adding the host to the configuration fixes it.
     EnvironmentNotConfigured,
+    /// The message links a file by its path on this machine, and the
+    /// conversation runs somewhere that cannot read this machine's files (an
+    /// SSH host). Nothing was recorded or sent; images carry their bytes and
+    /// are taken.
+    LinkedFileUnreachable,
     /// The conversation's placement record exists but this build cannot read
     /// it, so where it runs is not known and it is not opened anywhere
     /// (ADR 202, record scope).

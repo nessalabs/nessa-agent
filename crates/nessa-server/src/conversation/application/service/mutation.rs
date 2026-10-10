@@ -55,6 +55,9 @@ impl ConversationService {
         refuse_deleted(self, &id, &caller)
             .await
             .map_err(MutationFailure::Target)?;
+        self.refuse_linked_files_elsewhere(&id, !message.files.is_empty())
+            .await
+            .map_err(MutationFailure::Target)?;
         let service = self.clone();
         let delivery = Arc::new(Mutex::new(None));
         let captured = delivery.clone();

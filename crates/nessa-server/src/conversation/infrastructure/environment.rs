@@ -44,6 +44,8 @@ impl Environment for InProcessEnvironment {
             Ok(EnvironmentLease {
                 provider: binding,
                 hold: Arc::new(InProcessHold),
+                // The gateway's own, which it already knows.
+                workspace: None,
             })
         })
     }

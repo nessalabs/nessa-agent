@@ -89,6 +89,24 @@ export type ConversationSelection = {
   environment?: string
 }
 
+/**
+ * Whether a file on this machine can be linked into the conversation by its
+ * path: only when its agent runs here. One placed on an SSH host — chosen for
+ * this tab, or named by its lease — reads that host's files, where this
+ * machine's path names nothing, or something else. The gateway refuses such a
+ * message (`linked_file_unreachable`); this is the panel's early word for it.
+ * Images travel with their bytes and are unaffected.
+ */
+export function linksFilesHere(conversation: {
+  selection?: ConversationSelection
+  remote?: { lease?: { environment?: "here" | "ssh" } }
+}): boolean {
+  return (
+    !conversation.selection?.environment &&
+    conversation.remote?.lease?.environment !== "ssh"
+  )
+}
+
 /** Creation fixes the selection before the first send or attachment upload. */
 export function conversationSelectionOpen(conversation: {
   serverConversationId?: string
@@ -148,6 +166,11 @@ export type CommandFailure =
   | "environment-unavailable"
   /** Its SSH host runs another Nessa build; nothing was sent there. */
   | "environment-version-mismatch"
+  /**
+   * The message links a file by its path on this machine, and the
+   * conversation runs on an SSH host, which cannot read it. Nothing was sent.
+   */
+  | "linked-file-unreachable"
   | "conversation-state-unreadable"
   | "invalid-request"
   /**

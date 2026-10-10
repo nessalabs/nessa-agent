@@ -96,10 +96,15 @@ pub(crate) trait Environment: Send + Sync {
 }
 
 /// A lease an environment admitted: the provider that reaches the agent
-/// there, and the environment's hold on the lease.
+/// there, the environment's hold on the lease, and where the agent works
+/// there.
 pub(crate) struct EnvironmentLease {
     pub(crate) provider: Arc<dyn AgentProvider>,
     pub(crate) hold: Arc<dyn LeaseHold>,
+    /// The directory the agent works in, as the environment reported it:
+    /// `None` for this gateway's own machine, whose workspace the gateway
+    /// already knows; a host's own (its hello's) otherwise.
+    pub(crate) workspace: Option<String>,
 }
 
 /// An environment's side of one Live lease. Dropping the last handle without
@@ -149,6 +154,8 @@ pub(crate) struct LeaseOpening {
     pub(crate) refusal: Option<LeaseRefusal>,
     pub(crate) fence: Arc<LeaseFence>,
     pub(crate) hold: Option<Arc<dyn LeaseHold>>,
+    /// See [`EnvironmentLease::workspace`]; `None` when refused.
+    pub(crate) workspace: Option<String>,
 }
 
 /// Decide `request` against `environment` and, when admitted, open it there.
@@ -189,6 +196,7 @@ pub(crate) async fn open_lease(
             terms,
             refusal: None,
             hold: Some(opened.hold),
+            workspace: opened.workspace,
         },
         Err(refusal) => LeaseOpening {
             fence: LeaseFence::new(lease.clone(), binding, FencePhase::Closed),
@@ -196,6 +204,7 @@ pub(crate) async fn open_lease(
             terms: terms(request.sandbox),
             refusal: Some(refusal),
             hold: None,
+            workspace: None,
         },
     }
 }

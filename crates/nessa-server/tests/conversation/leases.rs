@@ -11,7 +11,8 @@ use super::{
     ConversationAgent, ConversationAgents, ConversationCaller, ConversationDeletionBudgets,
     ConversationDependencies, ConversationError, ConversationLimits, ConversationService,
     Environment, EnvironmentDeclaration, EnvironmentFuture, EnvironmentLease, Environments,
-    LeaseHold, LeaseRelease, RequestedConversation, SubmissionMode, SubmittedMessage,
+    LeaseHold, LeaseRelease, RequestedConversation, SubmissionMode, SubmittedFile,
+    SubmittedMessage,
 };
 use crate::conversation::infrastructure::{
     in_process_environment, DurableConversationCreationAudit, DurableConversationDeletionAudit,
@@ -108,6 +109,7 @@ impl Environment for Substitute {
             Ok(EnvironmentLease {
                 provider,
                 hold: Arc::new(AgentCloseHold),
+                workspace: None,
             })
         })
     }
@@ -253,6 +255,18 @@ fn harness_in(
     provider: Arc<ProviderFactory>,
     binding: Arc<dyn AgentProvider>,
 ) -> Harness {
+    harness_working_in(root, environment, stop, provider, binding, None)
+}
+
+/// [`harness_in`], with the gateway's own workspace.
+fn harness_working_in(
+    root: &Path,
+    environment: Environments,
+    stop: Duration,
+    provider: Arc<ProviderFactory>,
+    binding: Arc<dyn AgentProvider>,
+    workspace: Option<String>,
+) -> Harness {
     let clock: Arc<dyn Clock> = Arc::new(TestClock);
     let agents = ConversationAgents::new(
         HashMap::from([(
@@ -312,7 +326,7 @@ fn harness_in(
             clock,
         },
         ConversationLimits::default(),
-        None,
+        workspace,
     )
     .unwrap();
     Harness {
@@ -1384,6 +1398,7 @@ impl Environment for Host {
             Ok(EnvironmentLease {
                 provider: binding,
                 hold,
+                workspace: Some("/srv/work".into()),
             })
         })
     }
@@ -1527,6 +1542,117 @@ async fn b_a_reopen_keeps_the_host_the_conversation_was_created_on() {
 /// which answers a close that could not confirm its own cleanup, and
 /// nothing else: a close that failed for any other reason (its audit, its
 /// settlement) keeps that failure.
+/// A conversation on a host is shown working where the host said it works,
+/// never in the gateway's own workspace; one run here is shown in the
+/// gateway's.
+#[tokio::test]
+async fn b_a_conversation_on_a_host_shows_the_hosts_workspace() {
+    let gateway = "/Users/me/project".to_string();
+    for (host, expected) in [(Some("devbox"), "/srv/work"), (None, gateway.as_str())] {
+        let root = tempfile::tempdir().unwrap();
+        let mut hosts: BTreeMap<String, Arc<dyn Environment>> = BTreeMap::new();
+        hosts.insert("devbox".into(), Arc::new(Host::new()));
+        let placements = Arc::new(
+            FilePlacements::new(root.path().join("conversations").join("placements")).unwrap(),
+        );
+        let provider = Arc::new(ProviderFactory::default());
+        let binding = Arc::new(Provider::new(provider.clone()));
+        let harness = harness_working_in(
+            root.path(),
+            Environments::new(
+                Arc::new(Substitute::new(SandboxProfiles::HARNESS_DEFAULT)),
+                hosts,
+                placements,
+            ),
+            DELETION_BUDGETS.stop,
+            provider,
+            binding,
+            Some(gateway.clone()),
+        );
+        match host {
+            Some(host) => harness.create_on(host).await.unwrap(),
+            None => harness.create().await,
+        }
+        harness.turn("turn-1").await;
+        let view = harness
+            .service
+            .read(harness.id.clone(), caller("read"))
+            .await
+            .unwrap();
+        assert_eq!(
+            view.runtime.map(|runtime| runtime.workspace).as_deref(),
+            Some(expected),
+            "{host:?}"
+        );
+        harness
+            .service
+            .close(harness.id.clone(), caller("close"))
+            .await
+            .unwrap();
+    }
+}
+
+/// A file linked by path names a file on this machine. A conversation that
+/// runs on a host cannot read it there, and would read whatever that host
+/// has at the same path, so the message is refused before anything is
+/// recorded or sent; the same message is taken by a conversation run here.
+#[tokio::test]
+async fn b_a_file_linked_by_path_is_refused_for_a_conversation_on_a_host() {
+    let linking = |execution: &str| SubmittedMessage {
+        text: "read this".into(),
+        images: Vec::new(),
+        files: vec![SubmittedFile {
+            path: format!("/Users/me/{execution}.txt"),
+        }],
+    };
+    let root = tempfile::tempdir().unwrap();
+    let here = Arc::new(Substitute::new(SandboxProfiles::HARNESS_DEFAULT));
+    let host = Arc::new(Host::new());
+    let harness = with_host(root.path(), here.clone(), Some(host.clone()));
+    harness.create_on("devbox").await.unwrap();
+    let refused = harness
+        .service
+        .submit(
+            harness.id.clone(),
+            caller("turn-1"),
+            "turn-1".into(),
+            linking("turn-1"),
+            SubmissionMode::Queue,
+        )
+        .await;
+    assert!(
+        matches!(refused, Err(ConversationError::LinkedFileUnreachable)),
+        "{refused:?}"
+    );
+    // Refused, not spent: the conversation still takes a message without one.
+    harness.turn("turn-2").await;
+    harness
+        .service
+        .close(harness.id.clone(), caller("close"))
+        .await
+        .unwrap();
+
+    let root = tempfile::tempdir().unwrap();
+    let harness = with_host(root.path(), here, Some(host));
+    harness.create().await;
+    harness
+        .service
+        .submit(
+            harness.id.clone(),
+            caller("turn-1"),
+            "turn-1".into(),
+            linking("turn-1"),
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    harness
+        .service
+        .close(harness.id.clone(), caller("close"))
+        .await
+        .unwrap();
+}
+
 #[tokio::test]
 async fn b_a_hosts_confirmed_release_answers_only_cleanup_uncertainty() {
     let settlement = || AgentError::Transport("settlement".into());

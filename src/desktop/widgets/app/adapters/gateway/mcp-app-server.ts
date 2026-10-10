@@ -115,6 +115,7 @@ const outcomes: Readonly<Record<ConversationErrorCode, Outcome>> = {
   [ConversationErrorCode.EnvironmentNotConfigured]: "failed",
   [ConversationErrorCode.EnvironmentUnavailable]: "failed",
   [ConversationErrorCode.EnvironmentVersionMismatch]: "failed",
+  [ConversationErrorCode.LinkedFileUnreachable]: "failed",
   [ConversationErrorCode.AgentOperationFailed]: "failed",
   [ConversationErrorCode.ImageInputUnsupported]: "failed",
   [ConversationErrorCode.AttachmentNotFound]: "failed",

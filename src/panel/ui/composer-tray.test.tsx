@@ -503,3 +503,11 @@ it("shows the chosen host, and choosing this computer again names no host", () =
   click(container.querySelectorAll<HTMLButtonElement>("[role=radio]")[0])
   expect(onChange).toHaveBeenCalledWith(undefined)
 })
+
+it("offers images alone for a conversation that cannot take a file linked by path", () => {
+  const { onChoose } = render({ linksFiles: false })
+  click(plus())
+  expect(tray()?.textContent).not.toContain("Add files")
+  click(row("Add images"))
+  expect(onChoose).toHaveBeenCalledOnce()
+})
