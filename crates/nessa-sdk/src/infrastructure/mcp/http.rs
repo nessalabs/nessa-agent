@@ -174,6 +174,10 @@ pub struct HttpSession {
     /// Becomes true once close has nothing left to wait for, including a
     /// DELETE that does not apply.
     finished: watch::Sender<bool>,
+    /// `None` while the HTTP writer task is running. `Some(true)` after it
+    /// panics. `Some(false)` after it finishes or is cancelled. A dropped
+    /// recovery completion waits for this instead of deciding an end cause.
+    writer_settled: watch::Sender<Option<bool>>,
 }
 
 #[derive(Clone)]
@@ -251,6 +255,7 @@ impl HttpSession {
             readers: Mutex::new(ReaderTasks::default()),
             post_capacity: Arc::new(Semaphore::new(MAX_POST_STREAMS)),
             finished: watch::channel(false).0,
+            writer_settled: watch::channel(None).0,
         });
         (session, incoming)
     }
@@ -259,6 +264,40 @@ impl HttpSession {
     /// a credential or a request body.
     pub(crate) fn server(&self) -> Uuid {
         self.server
+    }
+
+    /// Record the HTTP writer task's outcome once. Later calls keep the first.
+    /// `panicked` is the writer's own result: a dropped recovery completion
+    /// resolves [`McpError::ServerGone`] from it, and a clean finish or
+    /// cancellation resolves [`McpError::Unconfirmed`].
+    pub(crate) fn settle_writer(&self, panicked: bool) {
+        self.writer_settled.send_if_modified(|current| {
+            if current.is_some() {
+                return false;
+            }
+            *current = Some(panicked);
+            true
+        });
+    }
+
+    /// The end cause for a recovery completion the writer dropped without
+    /// sending. Waits until [`Self::settle_writer`] so this task does not
+    /// decide ahead of the writer's outcome.
+    async fn dropped_writer_sender(&self) -> McpError {
+        let mut settled = self.writer_settled.subscribe();
+        let panicked = loop {
+            if let Some(panicked) = *settled.borrow_and_update() {
+                break panicked;
+            }
+            if settled.changed().await.is_err() {
+                break false;
+            }
+        };
+        if panicked {
+            McpError::ServerGone
+        } else {
+            McpError::Unconfirmed
+        }
     }
 
     /// Resolves after shutdown joins owned readers and records its DELETE
@@ -1041,7 +1080,15 @@ impl HttpSession {
                     })
                     .await
                     .map_err(|_| McpError::Unconfirmed)?;
-                completion.await.map_err(|_| McpError::Unconfirmed)?
+                match completion.await {
+                    Ok(result) => result,
+                    // The writer owned this sender. Its drop is not itself
+                    // Unconfirmed: the writer's settlement decides.
+                    Err(_) => {
+                        let session = weak.upgrade().ok_or(McpError::Closed)?;
+                        Err(session.dropped_writer_sender().await)
+                    }
+                }
             };
             let result = within(&*clock, deadline, startup)
                 .await

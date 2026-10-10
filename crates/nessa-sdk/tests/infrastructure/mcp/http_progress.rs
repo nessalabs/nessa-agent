@@ -115,6 +115,7 @@ struct Peer {
     recovery_exchange_failure: AtomicBool,
     control_panic: AtomicBool,
     delete_panic: AtomicBool,
+    initialized_panic: AtomicBool,
 }
 impl Peer {
     fn new() -> Self {
@@ -140,6 +141,7 @@ impl Peer {
             recovery_exchange_failure: AtomicBool::new(false),
             control_panic: AtomicBool::new(false),
             delete_panic: AtomicBool::new(false),
+            initialized_panic: AtomicBool::new(false),
         }
     }
     async fn observed(&self, predicate: impl Fn(&HttpRequest) -> bool) {
@@ -289,6 +291,10 @@ impl HttpExchange for Peer {
                         if let Some(gate) = &self.initialized_headers {
                             gate.enter().await;
                         }
+                        assert!(
+                            !self.initialized_panic.swap(false, Ordering::SeqCst),
+                            "injected initialized panic"
+                        );
                         if let Some(clock) = &self.initialized_expiry {
                             clock.advance(INITIALIZE_TIMEOUT);
                         }
@@ -3435,6 +3441,13 @@ impl Drop for ClearPanicDelay {
     }
 }
 
+struct ClearSettlementDelay;
+impl Drop for ClearSettlementDelay {
+    fn drop(&mut self) {
+        super::super::connection::delay_writer_settlement_for_test(false);
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn j27_queued_recovery_keeps_the_writer_panic() {
     // Ask the watch to wait. A panic that escapes the writer then loses to
@@ -3464,6 +3477,66 @@ async fn j27_queued_recovery_keeps_the_writer_panic() {
         peer.count(|request| request.method == HttpMethod::Delete),
         1
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn j27_finish_recovery_panic_defers_to_the_writer() {
+    // The caught future drops the completion sender before the writer
+    // settles. Waiting here lets an immediate Unconfirmed reach the end owner.
+    super::super::connection::delay_writer_settlement_for_test(true);
+    let _clear = ClearSettlementDelay;
+    let cancelled = Arc::new(Gate::default());
+    let initialized = Arc::new(Gate::default());
+    let (probe, body) = Probe::body();
+    let mut peer = Peer::new();
+    *peer.replacement.lock().unwrap() = Some(body);
+    peer.initialized_headers = Some(initialized.clone());
+    peer.controls
+        .lock()
+        .unwrap()
+        .push_back((202, Some(cancelled.clone())));
+    let peer = Arc::new(peer);
+    let (session, incoming) = transport(peer.clone(), Arc::default());
+    let connection =
+        Connection::open_http(session.clone(), incoming, Arc::new(RuntimeClock::new()));
+    bounded(connection.call("initialize", None))
+        .await
+        .unwrap()
+        .unwrap();
+    peer.expire.store(true, Ordering::SeqCst);
+    assert_eq!(
+        bounded(connection.call("tools/list", None))
+            .await
+            .unwrap_err(),
+        McpError::SessionExpired
+    );
+    probe.polled(1).await;
+    connection
+        .notify("notifications/cancelled", Some(json!({"requestId": 9999})))
+        .await
+        .unwrap();
+    cancelled.reached().await;
+    probe.event(json!({"id":0,"result":{"protocolVersion":"2025-06-18"}}));
+    probe.released().await;
+    bounded(async {
+        while connection.outgoing_queued_for_test() == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    cancelled.release();
+    initialized.reached().await;
+    assert_eq!(connection.outgoing_queued_for_test(), 0);
+    peer.initialized_panic.store(true, Ordering::SeqCst);
+    let mut finished = session.finished();
+    initialized.release();
+    assert_eq!(bounded(connection.ended()).await, McpError::ServerGone);
+    assert_eq!(connection.end_cause(), Some(McpError::ServerGone));
+    assert_eq!(
+        peer.count(|request| method_of(request, "notifications/initialized")),
+        1
+    );
+    bounded(finished.wait_for(|done| *done)).await.unwrap();
 }
 
 #[tokio::test]

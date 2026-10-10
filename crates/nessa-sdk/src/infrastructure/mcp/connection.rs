@@ -14,12 +14,14 @@
 //! their own (stand-ins) cannot collide. The connection ends once, with one
 //! cause, and every pending call gets that cause; a call admitted after the
 //! end gets it too, because admission and the end share one lock. A panicked
-//! HTTP writer catches that panic, discards the payload, and asks that same
-//! owner for [`McpError::ServerGone`] after the session fences new posts and
-//! before its queue drops. A later report from a dropped recovery completion
-//! cannot replace that cause. The watch still joins a panic that escapes the
-//! writer and asks the same owner. Drop and close abort that writer before
-//! its watch, so an exchange still in flight cannot retain the session.
+//! HTTP writer catches that panic on every await it performs, discards the
+//! payload, and settles the writer as panicked. A recovery completion the
+//! writer drops waits for that settlement: panic resolves
+//! [`McpError::ServerGone`], and a clean finish or cancellation resolves
+//! [`McpError::Unconfirmed`]. The same owner records the panic. The watch
+//! still joins a panic that escapes the writer. Drop and close abort that
+//! writer before its watch, so an exchange still in flight cannot retain the
+//! session.
 use super::framing::{self, FrameEnd, Frames, MAX_FRAME_BYTES};
 use super::http::{HttpSession, SendOutcome};
 use super::McpError;
@@ -312,13 +314,15 @@ impl Connection {
             let shared = shared.clone();
             let session = session.clone();
             async move {
-                while let Some(frame) = frames.recv().await {
-                    // Catch inside this task, while `frames` is still alive.
-                    // A panic otherwise drops the queue during unwind, and a
-                    // queued recovery completion can record Unconfirmed before
-                    // the watch records the panic.
-                    let outcome = match catch_writer_panic(async {
-                        match frame {
+                // A caught panic settles itself before this drops. The first
+                // settlement sticks, so this drop does not overwrite it.
+                let _settle = SettleWriter(&session);
+                // Every await the writer performs is inside this catch:
+                // the queue recv, dispatch, dispatch_reply, and
+                // finish_recovery (including the initialized POST).
+                let panicked = catch_writer_panic(async {
+                    while let Some(frame) = frames.recv().await {
+                        let outcome = match frame {
                             Outgoing::Frame(frame) => session.dispatch(&frame).await,
                             Outgoing::PeerReply { frame, context } => {
                                 session.dispatch_reply(&frame, context).await
@@ -327,29 +331,35 @@ impl Connection {
                                 deadline,
                                 completed,
                             } => session.finish_recovery(deadline, completed).await,
-                        }
-                    })
-                    .await
-                    {
-                        Ok(outcome) => outcome,
-                        Err(()) => {
-                            record_writer_panic(&session, &shared);
-                            return;
-                        }
-                    };
-                    match outcome {
-                        SendOutcome::Done => {}
-                        SendOutcome::FailCall { id, error } => {
-                            if let Some(id) = id {
-                                shared.fail_one(id, error);
+                        };
+                        match outcome {
+                            SendOutcome::Done => {}
+                            SendOutcome::FailCall { id, error } => {
+                                if let Some(id) = id {
+                                    shared.fail_one(id, error);
+                                }
+                            }
+                            SendOutcome::End(error) => {
+                                shutdown_and_end(&session, &shared, error);
+                                return;
                             }
                         }
-                        SendOutcome::End(error) => {
-                            shutdown_and_end(&session, &shared, error);
-                            return;
-                        }
                     }
+                })
+                .await
+                .is_err();
+                if !panicked {
+                    return;
                 }
+                // The caught future, including a completion sender owned by
+                // finish_recovery or still queued, drops when the await
+                // finishes. Recovery waits for settlement instead of deciding.
+                #[cfg(all(test, unix))]
+                if DELAY_WRITER_SETTLEMENT.load(Ordering::SeqCst) {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+                session.settle_writer(true);
+                record_writer_panic(&session, &shared);
             }
         });
         let http_writer = writing.abort_handle();
@@ -549,8 +559,8 @@ fn shutdown_and_end(session: &HttpSession, shared: &Shared, cause: McpError) {
 }
 
 /// Poll `future` and discard a panic payload. The future is not resumed after
-/// that panic. [`Shared::end`] stays the only end owner: the caller records
-/// [`McpError::ServerGone`] before the writer queue drops.
+/// that panic. The caller settles the writer after this await returns, which
+/// drops `future` and any sender it still owns.
 fn catch_writer_panic<F: Future>(future: F) -> impl Future<Output = Result<F::Output, ()>> {
     let mut future = Box::pin(future);
     std::future::poll_fn(move |context| {
@@ -583,10 +593,32 @@ pub(crate) fn delay_panicked_writer_record_for_test(delay: bool) {
     DELAY_PANICKED_WRITER_RECORD.store(delay, Ordering::SeqCst);
 }
 
+/// When set, a caught writer panic waits after its future drops and before
+/// it settles. The finish-recovery test uses this so a completion that
+/// decides `Unconfirmed` immediately can reach the end owner first.
+#[cfg(all(test, unix))]
+static DELAY_WRITER_SETTLEMENT: AtomicBool = AtomicBool::new(false);
+
+/// Open that wait. Unix MCP fixtures only.
+#[cfg(all(test, unix))]
+pub(crate) fn delay_writer_settlement_for_test(delay: bool) {
+    DELAY_WRITER_SETTLEMENT.store(delay, Ordering::SeqCst);
+}
+
+/// First settlement wins. A caught panic settles itself as panicked before
+/// this drop. Cancellation and a clean exit settle as not panicked.
+struct SettleWriter<'a>(&'a HttpSession);
+
+impl Drop for SettleWriter<'_> {
+    fn drop(&mut self) {
+        self.0.settle_writer(std::thread::panicking());
+    }
+}
+
 /// Join the HTTP writer. A panic that still fails the task is not a second
 /// end owner: [`record_writer_panic`]. An exchange panic is caught in the
-/// writer before this join, so the queue is still held when the cause is
-/// recorded. A cause already recorded stays. A cancellation records nothing.
+/// writer, which settles that outcome itself. A cause already recorded stays.
+/// A cancellation records nothing.
 async fn watch_http_writer(writer: JoinHandle<()>, shared: Arc<Shared>, session: Arc<HttpSession>) {
     let Err(error) = writer.await else {
         return;

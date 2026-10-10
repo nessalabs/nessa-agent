@@ -19,7 +19,8 @@
 //! Remote: HttpExchange (injected) ─ HttpSession (owned JSON/SSE bodies and recovery) ─ the same Connection
 //! RecoveryReady / captured peer reply ──bounded FIFO with control reserve──▶ HTTP writer
 //! HttpSession owns binding claims and the shared authorized modern POST policy.
-//! A panicked HTTP writer records the connection end before its queue drops.
+//! A panicked HTTP writer settles that outcome, and a recovery completion it
+//! drops waits for the settlement before choosing an end cause.
 //! Its watch joins a panic that still fails the task and asks that same owner.
 //! Shutdown releases a claimed session id even when DELETE panics.
 //! ```
