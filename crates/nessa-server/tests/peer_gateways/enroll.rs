@@ -300,7 +300,8 @@ async fn a_gateway_enrolls_into_a_peer_with_its_own_key_and_keeps_only_a_referen
         .collect();
     assert_eq!(name, &format!("{hex}.json"));
     let record: Value = serde_json::from_slice(bytes).unwrap();
-    assert_eq!(record["schemaVersion"], 1);
+    assert_eq!(record["schemaVersion"], 2);
+    assert_eq!(record["revoked"], false);
     assert_eq!(record["pin"], STANDARD.encode(peer_key));
     assert_eq!(
         record["gatewayKey"],
@@ -352,6 +353,28 @@ async fn a_gateway_enrolls_into_a_peer_with_its_own_key_and_keeps_only_a_referen
     assert!(
         matches!(record.phase(), PeerPhase::Active { credential: saved, .. } if saved == credential)
     );
+
+    // The same record at version 1, before `revoked` was kept, does not
+    // read: one shape per version, and no default fills the gap.
+    let (_, current) = dialing.files().pop().unwrap();
+    let mut older: Value = serde_json::from_slice(&current).unwrap();
+    older["schemaVersion"] = json!(1);
+    older.as_object_mut().unwrap().remove("revoked");
+    let rewrite = |bytes: &[u8]| {
+        let mut file = nessa_local_storage::open(
+            &dialing.directory.join(format!("{hex}.json")),
+            nessa_local_storage::OpenMode::ReadWrite,
+        )
+        .unwrap();
+        file.set_len(0).unwrap();
+        std::io::Write::write_all(&mut file, bytes).unwrap();
+    };
+    rewrite(&serde_json::to_vec(&older).unwrap());
+    assert_eq!(
+        dialing.records.get(&peer).unwrap(),
+        Some(PeerEntry::Unreadable(peer))
+    );
+    rewrite(&current);
 
     blocking(|| {
         let mut owner = ProductClient::connect(dialing.product, &token);

@@ -173,7 +173,8 @@ impl Poller {
     async fn run(mut self) {
         while !self.stopping() {
             let now = self.now();
-            for key in self.peers().await {
+            let listed = self.peers().await;
+            for key in listed.iter().flatten().copied() {
                 if self.stopping() {
                     return;
                 }
@@ -189,16 +190,12 @@ impl Poller {
                 };
                 self.reschedule(key, pace);
             }
-            let next = self
-                .due
-                .values()
-                .map(|due| due.at)
-                .min()
-                .unwrap_or(u64::MAX)
-                .min(
-                    self.now()
-                        .saturating_add(millis(self.inputs.policy.interval)),
-                );
+            let next = next_wake(
+                listed.is_some(),
+                self.due.values().map(|due| due.at),
+                self.now(),
+                self.inputs.policy.interval,
+            );
             if !self.wait_until(next).await {
                 return;
             }
@@ -221,14 +218,15 @@ impl Poller {
         }
     }
 
-    /// The peers to schedule: those whose records read and are not revoked.
-    /// Who is read is decided again under the turn.
-    async fn peers(&mut self) -> Vec<DeviceKey> {
+    /// The peers to schedule: those whose records read and are not revoked;
+    /// `None` when the records could not be listed. Who is read is decided
+    /// again under the turn.
+    async fn peers(&mut self) -> Option<Vec<DeviceKey>> {
         let records = self.commands.records().clone();
         let listed = tokio::task::spawn_blocking(move || records.list()).await;
         let Ok(Ok(entries)) = listed else {
             tracing::warn!("peer gateway records could not be listed");
-            return Vec::new();
+            return None;
         };
         let live: Vec<DeviceKey> = entries
             .iter()
@@ -241,7 +239,7 @@ impl Poller {
             .collect();
         self.due.retain(|key, _| live.contains(key));
         self.commands.keep_syncs(&live);
-        live
+        Some(live)
     }
 
     fn reschedule(&mut self, key: DeviceKey, pace: Pace) {
@@ -753,6 +751,18 @@ fn draw(entropy: &EnrollmentEntropySource) -> u32 {
         Ok(()) => u32::from_le_bytes(bytes),
         Err(_) => 200,
     }
+}
+
+/// When the poller next wakes, on the injected clock: the soonest peer due,
+/// and never later than one interval from `now`. When the records could not
+/// be listed, no peer was read, so a due already past would wake it at once,
+/// again and again; it waits the interval instead.
+fn next_wake(listed: bool, due: impl Iterator<Item = u64>, now: u64, interval: Duration) -> u64 {
+    let latest = now.saturating_add(millis(interval));
+    if !listed {
+        return latest;
+    }
+    due.min().unwrap_or(u64::MAX).min(latest)
 }
 
 fn millis(wait: Duration) -> u64 {

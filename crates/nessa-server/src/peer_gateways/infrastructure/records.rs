@@ -44,7 +44,7 @@ use subtle::ConstantTimeEq;
 
 /// The shape of a peer record. Bumped only when that shape changes
 /// (docs/adr/todo/202-versioned-local-datasets.md, rule 1).
-const SCHEMA_VERSION: u32 = 1;
+const SCHEMA_VERSION: u32 = 2;
 /// Largest record read: identifiers are bounded by their owners, so a real
 /// record is well under this.
 const RECORD_BYTES: usize = 4 * 1024;
@@ -772,11 +772,7 @@ struct Stored {
     expiry_ms: u64,
     credential: Option<StoredCredential>,
     /// The peer ended the enrollment; never with a credential.
-    #[serde(default, skip_serializing_if = "is_false")]
     revoked: bool,
-}
-fn is_false(value: &bool) -> bool {
-    !*value
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]

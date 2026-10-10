@@ -75,6 +75,33 @@ fn jitter_spreads_a_wait_over_80_to_120_percent_and_the_cap_still_holds() {
 }
 
 #[test]
+fn the_poller_wakes_for_the_soonest_peer_due_and_within_the_interval() {
+    let interval = POLICY.interval.as_millis() as u64;
+    assert_eq!(
+        next_wake(true, [5_000, 3_000].into_iter(), 1_000, POLICY.interval),
+        3_000
+    );
+    assert_eq!(
+        next_wake(true, std::iter::empty(), 1_000, POLICY.interval),
+        1_000 + interval
+    );
+    // A peer already past due is read at once.
+    assert_eq!(
+        next_wake(true, [500].into_iter(), 1_000, POLICY.interval),
+        500
+    );
+}
+
+#[test]
+fn records_that_cannot_be_listed_wait_the_interval_not_a_due_already_past() {
+    let interval = POLICY.interval.as_millis() as u64;
+    assert_eq!(
+        next_wake(false, [500].into_iter(), 1_000, POLICY.interval),
+        1_000 + interval
+    );
+}
+
+#[test]
 fn a_failing_entropy_source_draws_the_middle() {
     struct Failing;
     impl nessa_auth::adapters::pairing::RngCore for Failing {
