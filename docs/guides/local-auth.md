@@ -322,7 +322,11 @@ wins over `allowPrograms`, and omitting `allowPrograms` allows every other
 program. With `allowPrograms`, a program must be named bare (`cargo`), never
 by a path. The host looks a bare name up only in the absolute directories of
 its `PATH` that are outside its workspace, so a file the agent wrote in the
-workspace is never run under an allowed name. Limits are in [docs/limits.md](../limits.md) (`command.*`).
+workspace is never run under an allowed name. The allow-list is a tool
+policy, not a sandbox: an approved command that writes a program into another
+directory on the host's `PATH`, such as `~/.local/bin`, can plant one there, and
+any allowed program that runs code it is given (`cargo`, `make`) runs whatever
+that code says. Limits are in [docs/limits.md](../limits.md) (`command.*`).
 
 ```json
 {

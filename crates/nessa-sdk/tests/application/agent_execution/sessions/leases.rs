@@ -412,16 +412,31 @@ fn l14_the_parent_end_ends_its_commands_and_a_later_command_end_is_late_evidence
 
     let current = CurrentLease::apply(Some(&current), &ended("a")).unwrap();
     assert!(current.held().unwrap().commands().is_empty());
+    // Its issuance is kept, so a saved lease still says its end is owed.
     assert_eq!(
         current.records(),
+        [
+            issued("a", 1),
+            command_issued("c1", "a"),
+            ending("a", LeaseEndCause::Stopped),
+            ended("a")
+        ]
+    );
+    let resumed = CurrentLease::resume(Some(LeaseRevision::FIRST), current.records()).unwrap();
+    assert_eq!(resumed, current);
+    // Its late end is accepted once, and settles what was owed.
+    let late = CurrentLease::apply(Some(&resumed), &command_ended("c1", "a")).unwrap();
+    assert_eq!(
+        late.records(),
         [
             issued("a", 1),
             ending("a", LeaseEndCause::Stopped),
             ended("a")
         ]
     );
-    let late = CurrentLease::apply(Some(&current), &command_ended("c1", "a")).unwrap();
-    assert_eq!(late, current);
+    assert!(CurrentLease::apply(Some(&late), &command_ended("c1", "a")).is_err());
+    // A command never issued under it has no end to arrive.
+    assert!(CurrentLease::apply(Some(&current), &command_ended("c9", "a")).is_err());
 
     let interrupted = fold(&[
         issued("a", 1),
@@ -431,10 +446,7 @@ fn l14_the_parent_end_ends_its_commands_and_a_later_command_end_is_late_evidence
     ])
     .unwrap();
     assert!(interrupted.held().unwrap().commands().is_empty());
-    assert!(!interrupted
-        .records()
-        .iter()
-        .any(|record| matches!(record, LeaseRecord::CommandIssued { .. })));
+    assert!(CurrentLease::apply(Some(&interrupted), &command_ended("c1", "a")).is_ok());
 }
 
 #[test]

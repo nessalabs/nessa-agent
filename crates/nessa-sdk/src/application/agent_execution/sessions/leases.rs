@@ -273,13 +273,12 @@ impl CurrentLease {
     }
 
     /// Keep `record`, just folded onto a held lease, among the records saved
-    /// for it. A command lease's issuance is kept only while it is live, so a
-    /// saved lease still says which commands run under it; its end and a
-    /// refusal change nothing saved, and stay in the stream alone. Once the
-    /// lease is final no command runs under it, and none is kept.
+    /// for it. A command lease's issuance is kept until its end arrives, so a
+    /// saved lease still says which commands run under it and, once the lease
+    /// is final, which ends are still owed as late evidence; its end and a
+    /// refusal change nothing else saved, and stay in the stream alone.
     fn keep_commands(&mut self, record: &LeaseRecord) -> Result<(), StorageError> {
         match record {
-            LeaseRecord::CommandIssued { .. } => self.push(record),
             LeaseRecord::CommandRefused { .. } => Ok(()),
             LeaseRecord::CommandEnded { lease: ended, .. } => {
                 self.records.retain(|kept| {
@@ -287,13 +286,7 @@ impl CurrentLease {
                 });
                 Ok(())
             }
-            record => {
-                if self.held().is_some_and(|lease| lease.phase().is_final()) {
-                    self.records
-                        .retain(|kept| !matches!(kept, LeaseRecord::CommandIssued { .. }));
-                }
-                self.push(record)
-            }
+            record => self.push(record),
         }
     }
 

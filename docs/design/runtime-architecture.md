@@ -650,7 +650,10 @@ actor) and `command_ended` (exit, output and cleanup). Only an issued,
 unended command is kept in the saved lease, so a reader sees what runs
 now and the view shows its count; the rest stay in the stream as evidence.
 A `command_ended` that arrives after its parent is final, while that
-parent is still the latest lease, is accepted as late evidence. A command
+parent is still the latest lease, is accepted as late evidence, once, and
+only for a command that was live when the parent ended: its `command_issued`
+stays in the saved lease until that end arrives, so a resumed lease still
+knows which ends are owed. A command
 refused before it reaches a host is still recorded, with who asked. A
 `command_issued` that could not be saved is kept with a `command_ended`
 (`not_started`) beside it, so a later save never shows a command that ran

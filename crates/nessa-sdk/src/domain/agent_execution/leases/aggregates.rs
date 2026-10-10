@@ -129,6 +129,9 @@ pub struct Lease {
     dropped_events: u64,
     /// The command leases live under it, oldest first (row L14).
     commands: Vec<LeaseId>,
+    /// The commands its own end ended whose end is still owed: each may
+    /// still arrive once, as late evidence.
+    owed_ends: Vec<LeaseId>,
 }
 impl Lease {
     /// Most command leases live under one lease at once.
@@ -160,6 +163,7 @@ impl Lease {
             phase: LeasePhase::Live,
             dropped_events: 0,
             commands: Vec::new(),
+            owed_ends: Vec::new(),
         }
     }
     /// Its identity.
@@ -212,7 +216,7 @@ impl Lease {
             LeasePhase::Live => Err(LeaseError::NotEnding),
             LeasePhase::Ending { cause } => {
                 self.phase = LeasePhase::Ended { cause, cleanup };
-                self.commands.clear();
+                self.owed_ends.append(&mut self.commands);
                 Ok(CleanupDecision::Ended)
             }
             LeasePhase::Ended { .. } => Err(LeaseError::Final),
@@ -238,7 +242,7 @@ impl Lease {
                     cause,
                     late_cleanup: None,
                 };
-                self.commands.clear();
+                self.owed_ends.append(&mut self.commands);
                 Ok(())
             }
             LeasePhase::Live => Err(LeaseError::NotEnding),
@@ -294,19 +298,21 @@ impl Lease {
         Ok(())
     }
     /// `command` ended: with its command, its timeout, or a stop (rows L14,
-    /// L15). While this lease is Live or Ending only a command lease live
-    /// under it can end. Once this lease is final its end already ended every
-    /// command, so a command's end that arrives after it is late evidence and
-    /// changes nothing.
+    /// L15). Only a command lease live under it can end. Once this lease is
+    /// final its end already ended every command, so the end of one that was
+    /// live then is late evidence, accepted once; any other is unknown.
     pub fn end_command(&mut self, command: &LeaseId) -> Result<(), LeaseError> {
-        match self.commands.iter().position(|live| live == command) {
-            Some(at) => {
-                self.commands.remove(at);
-                Ok(())
-            }
-            None if self.phase.is_final() => Ok(()),
-            None => Err(LeaseError::UnknownCommand),
-        }
+        let pending = if self.phase.is_final() {
+            &mut self.owed_ends
+        } else {
+            &mut self.commands
+        };
+        let at = pending
+            .iter()
+            .position(|live| live == command)
+            .ok_or(LeaseError::UnknownCommand)?;
+        pending.remove(at);
+        Ok(())
     }
     /// Count one event that arrived after the lease stopped accepting them
     /// (row L9). Refused while events are still accepted. The count stops at
