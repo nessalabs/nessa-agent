@@ -241,6 +241,10 @@ fn probes_and_uploads_read_only_their_own_answers() {
             libc: "gnu".into(),
         }))
     );
+    assert_eq!(
+        Probe::parse("Welcome to the box\npresent\n"),
+        Some(Probe::Present)
+    );
     for other in ["", "Welcome to the box", "absent Linux", "present twice"] {
         assert_eq!(Probe::parse(other), None, "{other}");
     }
@@ -285,4 +289,86 @@ fn a_build_runs_only_on_its_own_system_and_processor() {
     let mac = platform("macos", "aarch64", "other");
     assert!(mac.runs_on(&platform("macos", "aarch64", "other")));
     assert!(!mac.runs_on(&platform("macos", "x86_64", "other")));
+}
+
+/// A copy that is there but no longer runs, or says another protocol, is
+/// absent to the probe, so it is installed again.
+#[test]
+fn a_copy_that_no_longer_runs_or_speaks_another_protocol_is_absent() {
+    let home = tempfile::tempdir().unwrap();
+    let source = tempfile::tempdir().unwrap();
+    for (protocol, runs) in [(PROTOCOL, false), ("fedcba9876543210", true)] {
+        let (path, _) = build(source.path(), protocol, runs);
+        std::fs::create_dir_all(installed(home.path()).parent().unwrap()).unwrap();
+        std::fs::copy(&path, installed(home.path())).unwrap();
+        std::fs::set_permissions(
+            installed(home.path()),
+            std::fs::Permissions::from_mode(0o700),
+        )
+        .unwrap();
+        assert!(matches!(
+            Probe::parse(&on_host(home.path(), &probe_command(PROTOCOL), None)),
+            Some(Probe::Absent(_))
+        ));
+    }
+    let (path, digest) = build(source.path(), PROTOCOL, true);
+    let answer = on_host(home.path(), &upload_command(PROTOCOL, &digest), Some(&path));
+    assert_eq!(Upload::parse(&answer), Some(Upload::Installed));
+    assert_eq!(
+        Probe::parse(&on_host(home.path(), &probe_command(PROTOCOL), None)),
+        Some(Probe::Present)
+    );
+}
+
+/// Each command reaches `sh` whole through every login shell this machine
+/// has, as `sshd` hands it over: `<shell> -c <command>`. On Linux and macOS
+/// CI that is bash, and zsh and tcsh where installed (macOS has both).
+#[test]
+fn every_command_runs_the_same_through_each_login_shell_here() {
+    let shells: Vec<_> = ["bash", "zsh", "fish", "tcsh", "dash", "ksh"]
+        .iter()
+        .flat_map(|shell| ["/bin", "/usr/bin"].map(|directory| Path::new(directory).join(shell)))
+        .filter(|path| path.exists())
+        .collect();
+    assert!(!shells.is_empty());
+    let source = tempfile::tempdir().unwrap();
+    let (path, digest) = build(source.path(), PROTOCOL, true);
+    for shell in shells {
+        let home = tempfile::tempdir().unwrap();
+        let run = |command: &str, input: Option<&Path>| {
+            let stdin = match input {
+                Some(path) => Stdio::from(std::fs::File::open(path).unwrap()),
+                None => Stdio::null(),
+            };
+            let output = Command::new(&shell)
+                .arg("-c")
+                .arg(command)
+                .env_clear()
+                .env("HOME", home.path())
+                .env("PATH", std::env::var_os("PATH").unwrap())
+                .stdin(stdin)
+                .output()
+                .unwrap();
+            String::from_utf8(output.stdout).unwrap()
+        };
+        let shown = shell.display();
+        assert!(
+            matches!(
+                Probe::parse(&run(&probe_command(PROTOCOL), None)),
+                Some(Probe::Absent(_))
+            ),
+            "{shown}"
+        );
+        let answer = run(&upload_command(PROTOCOL, &digest), Some(&path));
+        assert_eq!(
+            Upload::parse(&answer),
+            Some(Upload::Installed),
+            "{shown}: {answer}"
+        );
+        assert_eq!(
+            Probe::parse(&run(&probe_command(PROTOCOL), None)),
+            Some(Probe::Present),
+            "{shown}"
+        );
+    }
 }

@@ -44,14 +44,18 @@ pub fn serve_command(protocol: &str) -> String {
     format!("sh -c 'exec \"$HOME/{INSTALL_DIRECTORY}/{protocol}/nessa\" env serve'")
 }
 
-/// The command that says whether this build is installed on a host, and if
-/// not, what the host runs on.
+/// The command that says whether this build is installed on a host — a copy
+/// there that runs and says it speaks `protocol` — and if not, what the host
+/// runs on. A copy that no longer runs (the host's C library changed, its
+/// home is now mounted without execution) is absent, so it is installed
+/// again or refused with the reason.
 #[must_use]
 pub fn probe_command(protocol: &str) -> String {
     hex(protocol);
     format!(
         "sh -c '\
-if [ -x \"$HOME/{INSTALL_DIRECTORY}/{protocol}/nessa\" ]; then echo present; else \
+p=\"$HOME/{INSTALL_DIRECTORY}/{protocol}/nessa\"; \
+if [ -x \"$p\" ] && [ \"$(\"$p\" env protocol 2>/dev/null)\" = \"{protocol}\" ]; then echo present; else \
 if getconf GNU_LIBC_VERSION >/dev/null 2>&1; then l=gnu; else l=other; fi; \
 echo \"absent $(uname -s) $(uname -m) $l\"; fi'"
     )
@@ -175,10 +179,11 @@ pub enum Probe {
 }
 
 impl Probe {
-    /// The probe's answer, from its output; `None` for anything else.
+    /// The probe's answer, from the last line of its output (a login
+    /// shell's own greeting may come before it); `None` for anything else.
     #[must_use]
     pub fn parse(output: &str) -> Option<Self> {
-        let line = output.lines().find(|line| !line.trim().is_empty())?;
+        let line = output.lines().rev().find(|line| !line.trim().is_empty())?;
         match line.split_whitespace().collect::<Vec<_>>()[..] {
             ["present"] => Some(Self::Present),
             ["absent", os, arch, libc] => Some(Self::Absent(Platform::from_probe(os, arch, libc))),

@@ -71,7 +71,14 @@ impl RemoteShell for OpenSshConnector {
         input: Option<File>,
     ) -> ShellFuture<'a> {
         Box::pin(async move {
+            // A build sent is compressed on the way: it is most of what
+            // first use waits for.
+            let compress: &[&str] = match input {
+                Some(_) => &["-o", "Compression=yes"],
+                None => &[],
+            };
             let mut child = Command::new("ssh")
+                .args(compress)
                 .args(ssh_arguments(host, command))
                 .stdin(input.map_or_else(Stdio::null, Stdio::from))
                 .stdout(Stdio::piped())

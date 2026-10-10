@@ -1,11 +1,13 @@
 //! The SSH environment: a conversation's agent runs on a host this gateway
-//! reaches with `ssh <host> nessa env serve`, under a lease the host admits.
+//! reaches with `ssh <host>`, running the copy of this build installed there
+//! (`env serve`), under a lease the host admits.
 //!
 //! ```text
 //! open(lease, grant, binding)
 //!   ──▶ link (one per host: connect, hello, this build?)
 //!         the stream ended with nothing said ──▶ installer.ensure(host)
-//!           installed now ──▶ connect once more; present already ──▶ unreachable
+//!           installed, or present already ──▶ connect once more
+//!         (an account of a lost lease connects only: it never installs)
 //!   ──▶ binding.on_host(LeaseHost) ──▶ the same binding, starting its harness there
 //!   ──▶ link.grant(lease, agent) ──▶ EnvironmentLease { provider, SshHold }
 //! binding opens a session ──▶ LeaseHost::start ──▶ Start{lease, channel}
@@ -26,7 +28,7 @@
 use super::{
     audit::EnvironmentAudit,
     connector::LeaseConnector,
-    install::{HostInstaller, Installation},
+    install::HostInstaller,
     link::{HostLink, Opening, StartError},
 };
 use crate::conversation::application::{
@@ -109,24 +111,31 @@ impl SshEnvironment {
     }
 }
 
+/// Whether opening a connection may install this build on the host first.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Install {
+    /// For a lease: a host with no copy of this build gets one.
+    IfAbsent,
+    /// For an account of a lease already held: a copy installed now could
+    /// answer only that it holds nothing, so none is installed.
+    Never,
+}
+
 impl Inner {
-    async fn link(&self) -> Result<Arc<HostLink>, LeaseRefusal> {
+    async fn link(&self, install: Install) -> Result<Arc<HostLink>, LeaseRefusal> {
         let mut held = self.link.lock().await;
         if let Some(link) = held.as_ref().filter(|link| link.is_open()) {
             return Ok(link.clone());
         }
         *held = None;
         let link = match self.open().await {
-            Err(Opening::NotServed) => {
-                match self
-                    .installer
+            Err(Opening::NotServed) if install == Install::IfAbsent => {
+                // Present already: another gateway of this build may have
+                // just put it there, so it is asked once more either way.
+                self.installer
                     .ensure(&self.host, self.audit.as_ref())
-                    .await?
-                {
-                    // Installed, so the stream ended for another reason.
-                    Installation::Present => return Err(LeaseRefusal::EnvironmentUnreachable),
-                    Installation::Installed => self.open().await,
-                }
+                    .await?;
+                self.open().await
             }
             opened => opened,
         };
@@ -152,7 +161,7 @@ impl Inner {
     /// What the host recorded of `lease`, asked on the connection there is
     /// now: the evidence for a lease whose own connection was lost.
     async fn account(&self, lease: &str) -> Option<LeaseCleanup> {
-        let link = self.link().await.ok()?;
+        let link = self.link(Install::Never).await.ok()?;
         let cleanup = tokio::time::timeout(self.timings.answer, link.account(lease))
             .await
             .ok()??;
@@ -185,7 +194,7 @@ impl Environment for SshEnvironment {
     ) -> EnvironmentFuture<'a, Result<EnvironmentLease, LeaseRefusal>> {
         Box::pin(async move {
             let LeaseWork::Agent(work) = &grant.work;
-            let link = self.inner.link().await?;
+            let link = self.inner.link(Install::IfAbsent).await?;
             let host = Arc::new(LeaseHost {
                 link: link.clone(),
                 lease: lease.as_str().into(),

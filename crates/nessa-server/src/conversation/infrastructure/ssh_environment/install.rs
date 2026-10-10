@@ -82,6 +82,12 @@ pub(crate) struct OwnExecutable;
 
 impl BuildSource for OwnExecutable {
     fn open(&self) -> io::Result<Build> {
+        // On Linux the running file itself, even once its path was replaced
+        // by an update or removed: `current_exe` would name whatever is at
+        // the path now.
+        if cfg!(target_os = "linux") {
+            return open_build(Path::new("/proc/self/exe"));
+        }
         open_build(&std::env::current_exe()?)
     }
 }
@@ -175,28 +181,10 @@ impl HostInstaller {
         audit: &dyn EnvironmentAudit,
     ) -> Result<Installation, LeaseRefusal> {
         let name = host.as_str();
-        let probed = tokio::time::timeout(
-            self.timings.probe,
-            self.shell.run(host, probe_command(self.protocol), None),
-        )
-        .await;
-        let platform = match probed {
-            Ok(Ok(output)) => match Probe::parse(&output) {
-                Some(Probe::Present) => return Ok(Installation::Present),
-                Some(Probe::Absent(platform)) => platform,
-                None => {
-                    tracing::warn!(host = name, "the host's probe said something else");
-                    return Err(LeaseRefusal::EnvironmentUnreachable);
-                }
-            },
-            Ok(Err(error)) => {
-                tracing::warn!(host = name, %error, "the host could not be probed");
-                return Err(LeaseRefusal::EnvironmentUnreachable);
-            }
-            Err(_) => {
-                tracing::warn!(host = name, "the host's probe did not answer in time");
-                return Err(LeaseRefusal::EnvironmentUnreachable);
-            }
+        let platform = match self.probe(host).await {
+            Some(Probe::Present) => return Ok(Installation::Present),
+            Some(Probe::Absent(platform)) => platform,
+            None => return Err(LeaseRefusal::EnvironmentUnreachable),
         };
         if !self.platform.runs_on(&platform) {
             refused(
@@ -246,6 +234,15 @@ impl HostInstaller {
                 None
             }
         };
+        // An answer lost after the host put the copy in place (the
+        // connection dropped, or the deadline passed, between its rename
+        // and its word) is asked of the host again rather than recorded as
+        // refused: a copy the probe finds there runs and speaks this
+        // protocol.
+        let answer = match answer {
+            None if self.probe(host).await == Some(Probe::Present) => Some(Upload::Installed),
+            answer => answer,
+        };
         let (reason, seen, refusal) = match answer {
             Some(Upload::Installed) => {
                 let installed = EnvironmentEvent::Installed {
@@ -291,6 +288,35 @@ impl HostInstaller {
         };
         refused(audit, name, reason, seen);
         Err(refusal)
+    }
+}
+
+impl HostInstaller {
+    /// What the host's probe says; `None` when it said nothing this reads.
+    async fn probe(&self, host: &SshDestination) -> Option<Probe> {
+        let name = host.as_str();
+        let probed = tokio::time::timeout(
+            self.timings.probe,
+            self.shell.run(host, probe_command(self.protocol), None),
+        )
+        .await;
+        match probed {
+            Ok(Ok(output)) => {
+                let probe = Probe::parse(&output);
+                if probe.is_none() {
+                    tracing::warn!(host = name, "the host's probe said something else");
+                }
+                probe
+            }
+            Ok(Err(error)) => {
+                tracing::warn!(host = name, %error, "the host could not be probed");
+                None
+            }
+            Err(_) => {
+                tracing::warn!(host = name, "the host's probe did not answer in time");
+                None
+            }
+        }
     }
 }
 

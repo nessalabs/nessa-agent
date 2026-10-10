@@ -1382,17 +1382,33 @@ async fn a_loss_whose_audit_fails_leaves_the_lease_unanswered() {
 /// upload answered `installed` makes the host serve from then on, as the
 /// copy it put in place would. Keeps every command and what was sent.
 struct Shell {
-    probe: String,
+    /// The probe's answers in turn, the last one kept.
+    probes: Mutex<Vec<String>>,
     upload: String,
+    /// Each command is never answered.
+    hangs: bool,
     connector: Arc<Connector>,
     runs: Mutex<Vec<(String, Option<Vec<u8>>)>>,
 }
 
 impl Shell {
     fn new(probe: &str, upload: &str, connector: Arc<Connector>) -> Arc<Self> {
+        Self::answering(&[probe], upload, connector)
+    }
+    fn answering(probes: &[&str], upload: &str, connector: Arc<Connector>) -> Arc<Self> {
         Arc::new(Self {
-            probe: probe.into(),
+            probes: Mutex::new(probes.iter().map(|probe| (*probe).to_owned()).collect()),
             upload: upload.into(),
+            hangs: false,
+            connector,
+            runs: Mutex::new(Vec::new()),
+        })
+    }
+    fn hanging(connector: Arc<Connector>) -> Arc<Self> {
+        Arc::new(Self {
+            probes: Mutex::new(vec!["absent Linux x86_64 gnu".into()]),
+            upload: "installed".into(),
+            hangs: true,
             connector,
             runs: Mutex::new(Vec::new()),
         })
@@ -1417,8 +1433,22 @@ impl RemoteShell for Shell {
             });
             let upload = sent.is_some();
             self.runs.lock().unwrap().push((command, sent));
+            if self.hangs {
+                std::future::pending::<()>().await;
+            }
             if !upload {
-                return Ok(self.probe.clone());
+                let mut probes = self.probes.lock().unwrap();
+                let answer = if probes.len() > 1 {
+                    probes.remove(0)
+                } else {
+                    probes[0].clone()
+                };
+                // A copy found after an upload is the one it put there.
+                let uploaded = self.runs.lock().unwrap().iter().any(|run| run.1.is_some());
+                if uploaded && answer.trim() == "present" {
+                    *self.connector.reach.lock().unwrap() = Reach::Serving;
+                }
+                return Ok(answer);
             }
             if self.upload.trim() == "installed" {
                 *self.connector.reach.lock().unwrap() = Reach::Serving;
@@ -1450,6 +1480,10 @@ fn this_digest() -> String {
 }
 
 fn installer(shell: Arc<dyn RemoteShell>) -> Arc<HostInstaller> {
+    installer_within(shell, Duration::from_secs(5))
+}
+
+fn installer_within(shell: Arc<dyn RemoteShell>, bound: Duration) -> Arc<HostInstaller> {
     Arc::new(HostInstaller::new(
         shell,
         Arc::new(Built),
@@ -1460,8 +1494,8 @@ fn installer(shell: Arc<dyn RemoteShell>) -> Arc<HostInstaller> {
         },
         LEASE_PROTOCOL,
         InstallTimings {
-            probe: Duration::from_secs(5),
-            upload: Duration::from_secs(5),
+            probe: bound,
+            upload: bound,
         },
     ))
 }
@@ -1710,6 +1744,80 @@ async fn an_install_that_cannot_be_recorded_sends_nothing() {
         Some(LeaseRefusal::EnvironmentInstallFailed)
     );
     assert_eq!(shell.runs().len(), 1, "probed, and nothing uploaded");
+}
+
+/// An upload whose answer is lost after the host put the copy in place is
+/// asked of the host again: found there, it is recorded installed and
+/// served, never recorded refused.
+#[tokio::test]
+async fn an_upload_whose_answer_was_lost_is_found_installed_by_the_probe() {
+    let connector = Connector::new(Reach::Silent);
+    let shell = Shell::answering(
+        &["absent Linux x86_64 gnu", "present"],
+        "Connection to devbox closed by remote host.",
+        connector.clone(),
+    );
+    let audit = Arc::new(Audit::default());
+    let environment = installing(connector.clone(), shell.clone(), audit.clone());
+    let opened = environment
+        .open(&lease(), &terms("claude"), binding_only())
+        .await;
+    assert!(opened.is_ok());
+    assert_eq!(shell.runs().len(), 3, "probe, upload, probe");
+    let kinds: Vec<_> = audit
+        .events()
+        .iter()
+        .map(|event| match event {
+            EnvironmentEvent::InstallStarted { .. } => "started",
+            EnvironmentEvent::Installed { .. } => "installed",
+            EnvironmentEvent::Connected { .. } => "connected",
+            _ => "other",
+        })
+        .collect();
+    assert_eq!(kinds, ["started", "installed", "connected"]);
+}
+
+/// A host that answers neither the probe nor the upload in time is
+/// unreachable; neither wait is left open.
+#[tokio::test]
+async fn a_probe_or_upload_not_answered_in_time_is_unreachable() {
+    let connector = Connector::new(Reach::Silent);
+    let shell = Shell::hanging(connector.clone());
+    let audit = Arc::new(Audit::default());
+    let environment = SshEnvironment::new(
+        devbox(),
+        connector.clone(),
+        audit.clone(),
+        installer_within(shell.clone(), Duration::from_millis(50)),
+        SshTimings {
+            connect: Duration::from_secs(5),
+            answer: Duration::from_secs(5),
+            ..SshTimings::default()
+        },
+    );
+    let refused = tokio::time::timeout(
+        Duration::from_secs(5),
+        environment.open(&lease(), &terms("claude"), binding_only()),
+    )
+    .await
+    .expect("bounded by the install's own timings");
+    assert_eq!(refused.err(), Some(LeaseRefusal::EnvironmentUnreachable));
+    assert_eq!(shell.runs().len(), 1, "the probe, unanswered: nothing sent");
+    assert!(audit.events().is_empty());
+}
+
+/// Accounting for a lease asks the host what it recorded; a host with no
+/// copy of this build could answer only that it holds nothing, so none is
+/// installed for it.
+#[tokio::test]
+async fn an_account_never_installs() {
+    let connector = Connector::new(Reach::Silent);
+    let shell = Shell::new("absent Linux x86_64 gnu", "installed", connector.clone());
+    let audit = Arc::new(Audit::default());
+    let environment = installing(connector.clone(), shell.clone(), audit.clone());
+    assert_eq!(environment.account(&lease()).await, None);
+    assert!(shell.runs().is_empty());
+    assert!(audit.events().is_empty());
 }
 
 /// First use over a real `ssh` and real hosts, run by hand where there are
