@@ -18,7 +18,11 @@ export function openConversation(
   }
 }
 
-/** A model choice changes an unsent draft, or starts a separate conversation. */
+/**
+ * A model choice changes an unsent draft, or starts a separate conversation.
+ * An unsent draft keeps the host it was to run on: choosing a model is not
+ * choosing a machine.
+ */
 export function chooseModel(
   tabs: LocalTabs,
   selection: ConversationSelection,
@@ -29,7 +33,15 @@ export function chooseModel(
   return {
     ...tabs,
     conversations: tabs.conversations.map((item) =>
-      item.id === tabs.activeId ? { ...item, selection } : item,
+      item.id === tabs.activeId
+        ? {
+            ...item,
+            selection: {
+              ...selection,
+              environment: selection.environment ?? item.selection?.environment,
+            },
+          }
+        : item,
     ),
   }
 }

@@ -141,6 +141,7 @@ mod live_changes;
 mod locks;
 mod mcp_apps;
 mod passive_read;
+mod placement;
 mod ports;
 mod provider_sessions;
 mod read_grants;
@@ -157,9 +158,11 @@ pub use catalogue_read::{
     CatalogueReadError, CatalogueReadFuture, CatalogueReadOperation, CatalogueReadResponse,
     CatalogueReadSource, CatalogueReadValue, ReadCatalogue,
 };
-// For the adapter, which only the Unix gateway composes (`infrastructure`).
+// The port itself, which placement and the service use on every host.
+pub(crate) use environment::{Environment, EnvironmentFuture};
+// For the adapters, which only the Unix gateway composes (`infrastructure`).
 #[cfg(any(unix, test))]
-pub(crate) use environment::{Environment, EnvironmentDeclaration, EnvironmentFuture};
+pub(crate) use environment::{EnvironmentDeclaration, EnvironmentLease, LeaseHold, LeaseRelease};
 pub use error::{ConversationError, DeletionFailures, StopFailure};
 pub use error_code::error_code;
 pub use live_changes::{LiveChangePublisher, LiveChanges};
@@ -171,6 +174,11 @@ pub use mcp_apps::{
 };
 pub(crate) use passive_read::access_refusal;
 pub use passive_read::{AdmitPassiveRead, PassiveRead, PassiveReadGrants, ReceiverAuthority};
+// Composed only by the Unix gateway (`composition/local_auth.rs`).
+#[cfg(any(unix, test))]
+pub(crate) use placement::Environments;
+#[cfg(any(unix, test))]
+pub(crate) use placement::{ConversationPlacements, PlacementError};
 pub use ports::{
     AttachmentRelease, AttachmentReleaseCause, ConversationAttachments, ConversationCreation,
     ConversationCreationAudit, ConversationCreationAuditRecord, ConversationCreationCause,

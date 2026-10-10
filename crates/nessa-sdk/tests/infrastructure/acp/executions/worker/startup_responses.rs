@@ -105,6 +105,7 @@ async fn nested_startup_response_writes_observe_remaining_rpc_deadline() {
                         .stdin
                         .as_ref()
                         .unwrap()
+                        .local()
                         .as_fd()
                         .try_clone_to_owned()
                         .unwrap(),

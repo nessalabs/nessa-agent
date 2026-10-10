@@ -66,7 +66,7 @@ use crate::infrastructure::acp::{
 use crate::infrastructure::{
     clock::ClockInstant,
     json_rpc::{self, Reader, RpcId},
-    process::ProcessScope,
+    process::{ProcessOutput, ProcessScope},
 };
 use serde_json::{json, Value};
 use std::sync::{
@@ -74,7 +74,6 @@ use std::sync::{
     Arc,
 };
 use tokio::{
-    process::ChildStdout,
     sync::{oneshot, Notify},
     time::timeout,
 };
@@ -351,7 +350,7 @@ fn advertises(init: &Value, name: &str) -> bool {
 
 struct Connection<'a> {
     scope: &'a mut ProcessScope,
-    reader: Reader<ChildStdout>,
+    reader: Reader<ProcessOutput>,
     config: &'a AcpConfig,
     sequence: i64,
 }

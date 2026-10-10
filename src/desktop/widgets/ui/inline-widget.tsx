@@ -12,7 +12,7 @@ import { AppView } from "../app/ui/app-view"
 import { hostDraws } from "../model/host-table"
 import type { WidgetRef } from "../model/widget-ref"
 import type { WidgetAnswer } from "../model/widget-state"
-import type { WidgetHost, WidgetPlugin } from "./plugin"
+import { readsHostSize, type WidgetHost, type WidgetPlugin } from "./plugin"
 import { offeredBy, WidgetAnswerOf } from "./widget-answer"
 import { WidgetLine, WidgetWaiting } from "./widget-line"
 import "./widgets.css"
@@ -39,8 +39,8 @@ function InlineCard({
   host: WidgetHost
 }) {
   const card = useRef<HTMLDivElement>(null)
-  const context = useHostContext(card)
   const draws = hostDraws("inline", answer, offeredBy(plugin))
+  const context = useHostContext(card, draws.kind === "view" && readsHostSize(plugin))
   const View = plugin?.kind === "native" ? plugin.views.inline : undefined
   return (
     <div ref={card} className="widget-inline" data-widget-inline={draws.kind}>

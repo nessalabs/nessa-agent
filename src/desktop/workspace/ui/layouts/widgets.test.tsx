@@ -187,6 +187,19 @@ describe("a card in a message", () => {
 })
 
 describe("the widget pane", () => {
+  it("opens a pane whose body is the widget", async () => {
+    const store = await render()
+    await act(async () => {
+      void store.dispatch(
+        openWidget({ widget: sampleWidgets.trail, place: "pane", origin: "a" }),
+      )
+    })
+    const pane = host.querySelector("[data-widget-pane]")
+    expect(pane?.querySelector("nav")?.textContent).toBe("Session aSample trail")
+    await frames()
+    expect(pane?.querySelector("[data-widget-body]")).not.toBeNull()
+  })
+
   it("goes back to its conversation: focusing the pane showing it, or opening it beside", async () => {
     const store = await render()
     const pane = await openTrailBeside(store)
@@ -296,6 +309,16 @@ describe("the session's header", () => {
 })
 
 describe("the window", () => {
+  it("opens its body with the window", async () => {
+    const store = await render()
+    await act(async () => {
+      void store.dispatch(
+        openWidget({ widget: sampleWidgets.trail, place: "window", origin: "a" }),
+      )
+    })
+    expect(windowShown()?.querySelector("[data-widget-body]")).not.toBeNull()
+  })
+
   async function openWindow(store: Store) {
     const pane = await openTrailBeside(store)
     await click(button(pane, "Open in Window"))

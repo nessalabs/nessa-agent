@@ -279,6 +279,7 @@
     ]
   },
   "AgentsListResult": {
+    "environments": ["devbox"],
     "agents": [
       {
         "agent": "claude",

@@ -26,7 +26,9 @@ mod stage;
 mod stage_port;
 
 pub use config::key::{HOST, PORT, STAGE};
-pub use config::VERSION;
+#[cfg(all(test, unix))]
+pub(crate) use config::LEASE_PROTOCOL_SOURCES;
+pub use config::{LEASE_PROTOCOL, VERSION};
 pub use environment::Environment;
 pub use error::EnvironmentError;
 pub use source::MockEnv;

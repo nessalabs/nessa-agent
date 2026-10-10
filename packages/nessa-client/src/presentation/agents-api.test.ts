@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest"
 import { createAgentsApi } from "./agents-api.js"
 
 const offered = {
+  environments: ["devbox", "me@build.example"],
   agents: [
     {
       agent: "claude",
@@ -47,6 +48,13 @@ describe("authenticated agent choices", () => {
       ],
     },
     { ...offered, agents: [...offered.agents, offered.agents[0]] },
+    // The SSH hosts: each named once, each a destination's text, at most 16.
+    { ...offered, environments: undefined },
+    { ...offered, environments: ["devbox", "devbox"] },
+    { ...offered, environments: [""] },
+    { ...offered, environments: [7] },
+    { ...offered, environments: ["d".repeat(254)] },
+    { ...offered, environments: Array.from({ length: 17 }, (_, n) => `host-${n}`) },
   ])("rejects contradictory catalog facts before display", async (invalid) => {
     const api = createAgentsApi({ request: vi.fn().mockResolvedValue(invalid) })
     await expect(api.list()).rejects.toThrow()
@@ -99,7 +107,9 @@ it("enforces the schema-owned configured-agent count for unique valid rows", asy
     ...offered.agents[0],
     agent: `agent-${index}`,
   }))
-  const api = createAgentsApi({ request: vi.fn().mockResolvedValue({ agents }) })
+  const api = createAgentsApi({
+    request: vi.fn().mockResolvedValue({ agents, environments: [] }),
+  })
   expect((await api.list()).agents).toHaveLength(bounds.maxConfiguredAgents)
   agents.push({ ...offered.agents[0], agent: "one-too-many" })
   await expect(api.list()).rejects.toThrow("Invalid configured agents")

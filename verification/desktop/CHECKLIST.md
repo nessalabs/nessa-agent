@@ -527,6 +527,9 @@ on.
   overlapping, and the title keeps a positive width inside the header.
   A production Chromium run fails when the open's longest frame exceeds
   50 ms. _Check:_ `subagents.mjs --only narrow` (1000 × 560).
+- [ ] **The card's Open is measured the same way.** A production Chromium
+  run at the same size fails when that click's longest frame exceeds
+  50 ms. _Check:_ `subagents.mjs --only card-open` (1000 × 560).
 
 ## MCP Apps
 
@@ -1286,12 +1289,20 @@ says why where the conversations would be.
 - [ ] **The details sheet says where the agent runs and the lease's status, for
   every lease state the gateway publishes, read in full.**
   _Check:_ `lease-details.mjs` mounts the production details sheet over each
-  published lease (none, live, ending, ended, interrupted, refused, unreadable),
-  decoded by the actual client validator, at 360, 600 and 1440 px. It asserts
-  the "Where it runs" rows in order (a refused lease shows only its status; an
-  unreadable one claims nothing known), that no value is cut short, and that
-  the section stays inside the viewport. Fixture map:
-  [conversation verification](../conversation/README.md).
+  published lease (none, live, ending, ended, interrupted, refused, unreadable,
+  and live, lost and refused on an SSH host), decoded by the actual client
+  validator, at 360, 600 and 1440 px. It asserts the "Where it runs" rows in
+  order (a refused lease shows only its status, and the SSH host it was asked
+  of; an unreadable one claims nothing known; an SSH host is named in full),
+  that no value is cut short, and that the section stays inside the viewport.
+  Fixture map: [conversation verification](../conversation/README.md).
+- [ ] **A new conversation can be put on an SSH host the gateway names, and
+  only then.** _Check:_ `lease-details.mjs` (`run-on-none`, `run-on-hosts`)
+  mounts the production composer tray: with no host there is no "Run on" row;
+  with hosts it lists this computer (checked and focused) and each host in
+  full, a choice is reported and shown on the row, and nothing scrolls
+  sideways. The tray is the only place a host is chosen; the gateway refuses a
+  host its `config.json` does not name.
 
 ## Committed transcript controls
 

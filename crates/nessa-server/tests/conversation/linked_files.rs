@@ -71,7 +71,7 @@ async fn conversation() -> (
                 nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
             ),
             clock: Arc::new(TestClock),
-            environment: crate::conversation::infrastructure::in_process_environment(),
+            environment: crate::conversation::infrastructure::in_process_environment().into(),
         },
         ConversationLimits::default(),
         // The launch workspace. Every path below is outside it on purpose.
@@ -495,7 +495,7 @@ async fn a_second_attempt_at_one_submission_is_not_evidence_against_the_first() 
                 nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
             ),
             clock: Arc::new(TestClock),
-            environment: crate::conversation::infrastructure::in_process_environment(),
+            environment: crate::conversation::infrastructure::in_process_environment().into(),
         },
         ConversationLimits::default(),
         Some("/workspace".into()),

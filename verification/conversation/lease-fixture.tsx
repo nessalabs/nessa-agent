@@ -28,6 +28,31 @@ const leaseCases: Record<string, Record<string, unknown> | undefined> = {
     droppedEvents: 0,
   },
   unreadable: { state: "unreadable", droppedEvents: 0 },
+  // On an SSH host the gateway names: the host is said wherever it runs.
+  "ssh-live": {
+    state: "live",
+    ...terms,
+    environment: "ssh",
+    host: "me@build-01.internal.example.com",
+    droppedEvents: 0,
+  },
+  "ssh-lost": {
+    state: "ended",
+    ...terms,
+    environment: "ssh",
+    host: "devbox",
+    cause: "lost",
+    cleanup: "confirmed",
+    droppedEvents: 0,
+  },
+  "ssh-refused": {
+    state: "refused",
+    ...terms,
+    environment: "ssh",
+    host: "devbox",
+    refusal: "environment_unreachable",
+    droppedEvents: 0,
+  },
 }
 
 function withLease(lease: Record<string, unknown> | undefined): Conversation {

@@ -65,6 +65,23 @@ fn fixture(
     Arc<RecordStorage>,
     Arc<LocalConversationStore>,
 ) {
+    fixture_in(
+        root,
+        provider,
+        crate::conversation::infrastructure::in_process_environment().into(),
+    )
+}
+
+/// [`fixture`], with every environment its conversations may run in.
+fn fixture_in(
+    root: &Path,
+    provider: Arc<ProviderFactory>,
+    environment: crate::conversation::application::Environments,
+) -> (
+    ConversationService,
+    Arc<RecordStorage>,
+    Arc<LocalConversationStore>,
+) {
     nessa_local_storage::create_directory(root).unwrap();
     let storage = Arc::new(RecordStorage::new(root.join("records")).unwrap());
     let metadata = Arc::new(LocalConversationStore::open(&root.join("metadata.sqlite3")).unwrap());
@@ -84,7 +101,7 @@ fn fixture(
             deletion_budgets: DELETION_BUDGETS,
             message_commit_clock: Arc::new(RuntimeMessageCommitClock::new()),
             clock: Arc::new(TestClock),
-            environment: crate::conversation::infrastructure::in_process_environment(),
+            environment,
         },
         ConversationLimits::default(),
         None,
@@ -1129,4 +1146,97 @@ async fn wait_marker(root: &Path, name: &str, child: &mut ChildOwner, log: &Path
     })
     .await
     .unwrap();
+}
+
+/// An environment that runs elsewhere and is never reached: what a
+/// conversation placed on an SSH host refuses before it opens.
+struct Elsewhere;
+
+impl crate::conversation::application::Environment for Elsewhere {
+    fn declaration(&self) -> crate::conversation::application::EnvironmentDeclaration {
+        crate::conversation::application::EnvironmentDeclaration {
+            environment: nessa_sdk::domain::agent_execution::leases::EnvironmentRef::Ssh(
+                nessa_sdk::domain::agent_execution::leases::SshDestination::new("devbox").unwrap(),
+            ),
+            sandbox: nessa_sdk::domain::agent_execution::leases::SandboxProfiles::HARNESS_DEFAULT,
+        }
+    }
+    fn open<'a>(
+        &'a self,
+        _lease: &'a nessa_sdk::domain::agent_execution::leases::LeaseId,
+        _grant: &'a nessa_sdk::domain::agent_execution::leases::LeaseTerms,
+        _binding: Arc<dyn nessa_sdk::application::agent_execution::providers::AgentProvider>,
+    ) -> crate::conversation::application::EnvironmentFuture<
+        'a,
+        Result<
+            crate::conversation::application::EnvironmentLease,
+            nessa_sdk::domain::agent_execution::leases::LeaseRefusal,
+        >,
+    > {
+        Box::pin(async {
+            Err(nessa_sdk::domain::agent_execution::leases::LeaseRefusal::EnvironmentUnreachable)
+        })
+    }
+    fn account<'a>(
+        &'a self,
+        _lease: &'a nessa_sdk::domain::agent_execution::leases::LeaseId,
+    ) -> crate::conversation::application::EnvironmentFuture<
+        'a,
+        Option<nessa_sdk::domain::agent_execution::leases::LeaseCleanup>,
+    > {
+        Box::pin(async { None })
+    }
+}
+
+/// The wire's submit refuses a file linked by path for a conversation on a
+/// host before its command is staged, so the corrected request can be sent
+/// again under the same identity.
+#[tokio::test]
+async fn a_submit_linking_a_file_is_refused_on_a_host_before_it_is_staged() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    nessa_local_storage::create_directory(&root).unwrap();
+    let placements = Arc::new(
+        crate::conversation::infrastructure::FilePlacements::new(root.join("placements")).unwrap(),
+    );
+    let environments = crate::conversation::application::Environments::new(
+        crate::conversation::infrastructure::in_process_environment(),
+        std::collections::BTreeMap::from([(
+            "devbox".to_string(),
+            Arc::new(Elsewhere) as Arc<dyn crate::conversation::application::Environment>,
+        )]),
+        placements,
+    );
+    let (service, storage, metadata) = fixture_in(&root, provider.clone(), environments);
+    let target = id();
+    service
+        .inner
+        .environment
+        .place(&target, Some("devbox"))
+        .await
+        .unwrap();
+    let mut linking = message("read this");
+    linking.files = vec![crate::conversation::application::SubmittedFile {
+        path: "/Users/me/notes.txt".into(),
+    }];
+    let refused = service
+        .submit_command(
+            storage.clone(),
+            target,
+            caller("submit"),
+            "turn".into(),
+            linking,
+            SubmissionMode::Queue,
+        )
+        .await;
+    assert!(matches!(
+        refused,
+        Err(MutationFailure::Target(
+            ConversationError::LinkedFileUnreachable
+        ))
+    ));
+    assert_eq!(command_rows(&root), 0);
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
+    retire(service, storage, metadata).await;
 }

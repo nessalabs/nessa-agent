@@ -93,6 +93,24 @@ impl CompositionRoot {
             Command::InstallAgent { agent } => super::install_command::execute(&agent).await,
             Command::Limits => print_limits(),
             #[cfg(unix)]
+            Command::EnvServe => {
+                let served = super::env_serve_command::execute().await;
+                // Exits here rather than returning, as the relay below does:
+                // standard input is read on a blocking thread the runtime
+                // would otherwise wait for on the way out.
+                std::process::exit(match served {
+                    Ok(()) => 0,
+                    Err(failure) => {
+                        tracing::error!(%failure, "nessa env serve ended without serving");
+                        1
+                    }
+                })
+            }
+            #[cfg(not(unix))]
+            Command::EnvServe => Err(RunError::Agent(
+                "nessa env serve requires Unix process supervision".into(),
+            )),
+            #[cfg(unix)]
             Command::McpRelay {
                 socket,
                 server,

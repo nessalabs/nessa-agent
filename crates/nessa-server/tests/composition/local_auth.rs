@@ -96,6 +96,7 @@ fn agent_catalog_uses_binding_choices_for_each_catalog_model() {
         &config,
         &HashSet::from([AgentId::Claude, AgentId::Codex]),
         None,
+        &[],
     )
     .unwrap();
     assert_eq!(offered.agents.len(), 2);

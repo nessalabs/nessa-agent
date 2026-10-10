@@ -116,8 +116,8 @@ export function imageRefusalMessage(
  *
  * Some answer undefined, and the panel shows the client's own message instead.
  * For `agent-not-configured`, `agent-unsupported`,
- * `conversations-not-configured`, `agent-startup-deadline` and
- * `sandbox-unavailable` that message
+ * `conversations-not-configured`, `agent-startup-deadline`,
+ * `sandbox-unavailable` and the three `environment-` reasons that message
  * names the remedy at length — unlike a control, a refused message does get a
  * sentence of its own from the client. `invalid-request` has nothing better to
  * say than the client already did about the arguments it refused. And
@@ -146,11 +146,16 @@ export function submissionRefusalMessage(reason: CommandFailure): string | undef
       return "This conversation was deleted, so the message was not sent. It is back in the draft; start a new conversation to send it."
     case "model-unavailable":
       return "This gateway cannot run the model selected for this conversation. The message is back in the draft; choose an available model in a new conversation."
+    case "linked-file-unreachable":
+      return "This conversation runs on an SSH host, which cannot read files on this computer, so the message was not sent. It is back in the draft; remove the linked files to send it. Images are sent with their bytes and can stay."
     case "agent-not-configured":
     case "agent-unsupported":
     case "conversations-not-configured":
     case "agent-startup-deadline":
     case "sandbox-unavailable":
+    case "environment-not-configured":
+    case "environment-unavailable":
+    case "environment-version-mismatch":
     case "approval-mode-unavailable":
     case "approval-mode-not-applied":
     case "approval-mode-uncertain":

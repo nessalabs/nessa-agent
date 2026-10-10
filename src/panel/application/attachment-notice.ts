@@ -116,6 +116,12 @@ export type AttachmentRefusal =
    * while the file can still be swapped, rather than at send.
    */
   | { reason: "file-not-linkable"; name: string }
+  /**
+   * A file that is not an image, chosen for a conversation that runs on an
+   * SSH host: it would be linked by its path on this machine, which the host
+   * cannot read. Refused here rather than at send.
+   */
+  | { reason: "file-not-on-host"; name: string }
   /** What was picked is not a file: a directory, a package, a pipe, a device. */
   | { reason: "file-not-a-file"; name: string | null }
   /** The filesystem did not answer about it in time. */
@@ -320,6 +326,12 @@ export function refusalNotice(
       return say(
         "File can't be sent from there",
         `"${refusal.name}" is in a folder Nessa cannot describe to the agent — a name that is only dots, or one with a control character in it. Move it somewhere else and choose it again.`,
+        { kind: "choose-files" },
+      )
+    case "file-not-on-host":
+      return say(
+        "File can't be sent to an SSH host",
+        `"${refusal.name}" would be sent as a path on this computer, and this conversation runs on an SSH host, which cannot read it. Images can be attached; put other files on the host and mention their path there.`,
         { kind: "choose-files" },
       )
     // A macOS package is the ordinary way to meet this: `.key`, `.app` and

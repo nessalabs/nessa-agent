@@ -61,6 +61,19 @@ pub enum ConversationError {
     /// agent is not opened under a new one (row L21): it may be a later
     /// build's lease still running, and this build will never read it.
     LeaseUnreadable,
+    /// The environment asked for, or the one the conversation was placed in,
+    /// is not an SSH host this gateway's `config.json` names. Nothing was
+    /// created or opened; adding the host to the configuration fixes it.
+    EnvironmentNotConfigured,
+    /// The message links a file by its path on this machine, and the
+    /// conversation runs somewhere that cannot read this machine's files (an
+    /// SSH host). Nothing was recorded or sent; images carry their bytes and
+    /// are taken.
+    LinkedFileUnreachable,
+    /// The conversation's placement record exists but this build cannot read
+    /// it, so where it runs is not known and it is not opened anywhere
+    /// (ADR 202, record scope).
+    PlacementUnreadable,
     /// A v1 ownership row has not yet been assigned a model from verified
     /// saved-session evidence or a recorded prospective default.
     /// The selected or saved model cannot be run by this agent on this gateway.

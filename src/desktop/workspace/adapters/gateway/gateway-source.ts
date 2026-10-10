@@ -1489,13 +1489,17 @@ function reasonFor(
     // The review was answered, withdrawn, or never asked.
     case ConversationErrorCode.StalePermission:
       return "not-waiting"
-    // Refused for good, whatever the timing: the gateway cannot do this here,
+    // Refused for good, whatever the timing: the gateway cannot do this here
+    // (an SSH host it does not name, or one running another build, included),
     // this window asked it wrongly, or it cannot read this conversation's
     // saved state or its configuration changed under it — asking again
     // changes nothing.
     case ConversationErrorCode.AgentNotConfigured:
     case ConversationErrorCode.AgentUnsupported:
     case ConversationErrorCode.ConversationsNotConfigured:
+    case ConversationErrorCode.EnvironmentNotConfigured:
+    case ConversationErrorCode.EnvironmentVersionMismatch:
+    case ConversationErrorCode.LinkedFileUnreachable:
     case ConversationErrorCode.ModelUnavailable:
     case ConversationErrorCode.ImageInputUnsupported:
     case ConversationErrorCode.ApprovalModeUnavailable:
@@ -1520,6 +1524,7 @@ function reasonFor(
     case ConversationErrorCode.SubmissionUnresolved:
     case ConversationErrorCode.AgentStartupDeadline:
     case ConversationErrorCode.SandboxUnavailable:
+    case ConversationErrorCode.EnvironmentUnavailable:
     case ConversationErrorCode.AgentOperationFailed:
     case ConversationErrorCode.AttachmentNotFound:
     case ConversationErrorCode.AttachmentUnavailable:

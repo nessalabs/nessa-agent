@@ -38,6 +38,48 @@ fn configuration_mismatch_is_not_a_transient_outage() {
 }
 
 #[test]
+fn an_ssh_hosts_refusals_are_the_hosts_and_never_this_gateways_configuration() {
+    use nessa_sdk::domain::agent_execution::leases::LeaseRefusal;
+    for (refusal, code) in [
+        (
+            LeaseRefusal::EnvironmentUnreachable,
+            ConversationErrorCode::EnvironmentUnavailable,
+        ),
+        (
+            LeaseRefusal::EnvironmentBusy,
+            ConversationErrorCode::EnvironmentUnavailable,
+        ),
+        (
+            LeaseRefusal::AgentUnavailable,
+            ConversationErrorCode::EnvironmentUnavailable,
+        ),
+        (
+            LeaseRefusal::EnvironmentVersionMismatch,
+            ConversationErrorCode::EnvironmentVersionMismatch,
+        ),
+        (
+            LeaseRefusal::SandboxUnavailable,
+            ConversationErrorCode::SandboxUnavailable,
+        ),
+    ] {
+        assert_eq!(error_code(&ConversationError::LeaseRefused(refusal)), code);
+    }
+    assert_eq!(
+        error_code(&ConversationError::EnvironmentNotConfigured),
+        ConversationErrorCode::EnvironmentNotConfigured
+    );
+    assert_eq!(
+        error_code(&ConversationError::LinkedFileUnreachable),
+        ConversationErrorCode::LinkedFileUnreachable
+    );
+    // Where it runs cannot be read: the same as any unreadable saved state.
+    assert_eq!(
+        error_code(&ConversationError::PlacementUnreadable),
+        ConversationErrorCode::ConversationStateUnreadable
+    );
+}
+
+#[test]
 fn startup_deadline_is_distinguished_from_other_agent_failures() {
     for phase in [
         AgentStartupPhase::Initialize,

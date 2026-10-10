@@ -74,6 +74,17 @@ it("passes a fixed model and initial mode only on creation", async () => {
   })
 })
 
+it("passes the SSH host a conversation runs on only when one is named", async () => {
+  const request = vi.fn().mockResolvedValue({ conversationId })
+  const api = createConversationApi({ request }, () => "generated")
+  await api.create({ conversationId, requestId: "create-here" })
+  await api.create({ conversationId, requestId: "create-there", environment: "devbox" })
+  expect(request.mock.calls.map(([, params]) => params)).toEqual([
+    { conversationId, requestId: "create-here" },
+    { conversationId, requestId: "create-there", environment: "devbox" },
+  ])
+})
+
 it("correlates an acknowledged mode change and rejects a mismatched reply", async () => {
   const request = vi.fn().mockResolvedValue({ requestId: "mode-1", mode: "auto" })
   const api = createConversationApi({ request }, () => "generated")

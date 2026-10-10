@@ -59,6 +59,7 @@ pub fn lease_view(current: &CurrentLease) -> ConversationLeaseView {
         // fold keeps the one before an unreadable lease for itself.
         revision: None,
         environment: None,
+        host: None,
         sandbox: None,
         cause: None,
         cleanup: None,
@@ -71,6 +72,14 @@ pub fn lease_view(current: &CurrentLease) -> ConversationLeaseView {
             view.state = ConversationLeaseState::Refused;
             view.refusal = Some(match refusal {
                 LeaseRefusal::SandboxUnavailable => ConversationLeaseRefusal::SandboxUnavailable,
+                LeaseRefusal::EnvironmentUnreachable => {
+                    ConversationLeaseRefusal::EnvironmentUnreachable
+                }
+                LeaseRefusal::EnvironmentVersionMismatch => {
+                    ConversationLeaseRefusal::EnvironmentVersionMismatch
+                }
+                LeaseRefusal::EnvironmentBusy => ConversationLeaseRefusal::EnvironmentBusy,
+                LeaseRefusal::AgentUnavailable => ConversationLeaseRefusal::AgentUnavailable,
             });
             current.records().first().and_then(|record| match record {
                 LeaseRecord::Refused { terms, .. } => Some(terms),
@@ -112,8 +121,12 @@ pub fn lease_view(current: &CurrentLease) -> ConversationLeaseView {
     };
     view.revision = current.revision().map(LeaseRevision::get);
     if let Some(terms) = terms {
-        view.environment = Some(match terms.environment {
+        view.environment = Some(match &terms.environment {
             EnvironmentRef::Here => ConversationLeaseEnvironment::Here,
+            EnvironmentRef::Ssh(host) => {
+                view.host = Some(host.as_str().to_owned());
+                ConversationLeaseEnvironment::Ssh
+            }
         });
         view.sandbox = Some(match terms.sandbox {
             SandboxProfile::HarnessDefault => ConversationLeaseSandbox::HarnessDefault,

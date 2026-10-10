@@ -18,6 +18,7 @@ use crate::{
         leases::{
             AgentWork, EnvironmentRef, LeaseCleanup, LeaseDeadline, LeaseEndCause, LeaseGrants,
             LeaseId, LeaseRefusal, LeaseRevision, LeaseTerms, LeaseWork, SandboxProfile,
+            SshDestination,
         },
     },
 };
@@ -69,6 +70,12 @@ impl SavedLease {
 
 const ISSUED: &str = "issued";
 const REFUSED: &str = "refused";
+/// An issuance whose terms or refusal slice A's shape cannot hold: an
+/// environment other than this process, or a refusal other than the sandbox.
+/// A new kind rather than a wider body, so a build that knows only the first
+/// shape reads it as unreadable (row L21) instead of corrupt.
+const ISSUED_V2: &str = "issued_v2";
+const REFUSED_V2: &str = "refused_v2";
 const ENDING: &str = "ending";
 const ENDED: &str = "ended";
 const INTERRUPTED: &str = "interrupted";
@@ -123,6 +130,7 @@ struct Terms {
 #[derive(Serialize, Deserialize)]
 enum Environment {
     Here,
+    Ssh(String),
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -159,13 +167,18 @@ enum Cleanup {
 #[derive(Serialize, Deserialize)]
 enum Refusal {
     SandboxUnavailable,
+    EnvironmentUnreachable,
+    EnvironmentVersionMismatch,
+    EnvironmentBusy,
+    AgentUnavailable,
 }
 
 impl From<&LeaseTerms> for Terms {
     fn from(value: &LeaseTerms) -> Self {
         Self {
-            environment: match value.environment {
+            environment: match &value.environment {
                 EnvironmentRef::Here => Environment::Here,
+                EnvironmentRef::Ssh(host) => Environment::Ssh(host.as_str().into()),
             },
             work: match &value.work {
                 LeaseWork::Agent(work) => Work::Agent {
@@ -191,6 +204,9 @@ impl Terms {
         Ok(LeaseTerms {
             environment: match self.environment {
                 Environment::Here => EnvironmentRef::Here,
+                Environment::Ssh(host) => {
+                    EnvironmentRef::Ssh(SshDestination::new(host).map_err(corrupt)?)
+                }
             },
             work: match self.work {
                 Work::Agent { agent, model } => {
@@ -252,6 +268,10 @@ impl From<LeaseRefusal> for Refusal {
     fn from(value: LeaseRefusal) -> Self {
         match value {
             LeaseRefusal::SandboxUnavailable => Self::SandboxUnavailable,
+            LeaseRefusal::EnvironmentUnreachable => Self::EnvironmentUnreachable,
+            LeaseRefusal::EnvironmentVersionMismatch => Self::EnvironmentVersionMismatch,
+            LeaseRefusal::EnvironmentBusy => Self::EnvironmentBusy,
+            LeaseRefusal::AgentUnavailable => Self::AgentUnavailable,
         }
     }
 }
@@ -259,7 +279,24 @@ impl From<Refusal> for LeaseRefusal {
     fn from(value: Refusal) -> Self {
         match value {
             Refusal::SandboxUnavailable => Self::SandboxUnavailable,
+            Refusal::EnvironmentUnreachable => Self::EnvironmentUnreachable,
+            Refusal::EnvironmentVersionMismatch => Self::EnvironmentVersionMismatch,
+            Refusal::EnvironmentBusy => Self::EnvironmentBusy,
+            Refusal::AgentUnavailable => Self::AgentUnavailable,
         }
+    }
+}
+
+/// The kind an issuance or refusal is stored under: slice A's while its shape
+/// holds the record, the second one otherwise.
+fn issuance_kind(terms: &LeaseTerms, refusal: Option<LeaseRefusal>) -> &'static str {
+    let first_shape = terms.environment == EnvironmentRef::Here
+        && matches!(refusal, None | Some(LeaseRefusal::SandboxUnavailable));
+    match (first_shape, refusal) {
+        (true, None) => ISSUED,
+        (true, Some(_)) => REFUSED,
+        (false, None) => ISSUED_V2,
+        (false, Some(_)) => REFUSED_V2,
     }
 }
 
@@ -293,7 +330,7 @@ impl From<&LeaseRecord> for WireLease {
                 terms,
                 actor,
             } => text(
-                ISSUED,
+                issuance_kind(terms, None),
                 &Issuance {
                     lease: lease.as_str().into(),
                     revision: revision.get(),
@@ -309,7 +346,7 @@ impl From<&LeaseRecord> for WireLease {
                 refusal,
                 actor,
             } => text(
-                REFUSED,
+                issuance_kind(terms, Some(*refusal)),
                 &Issuance {
                     lease: lease.as_str().into(),
                     revision: revision.get(),
@@ -376,24 +413,30 @@ impl WireLease {
             return Err(corrupt("a lease record exceeds its stored bound"));
         }
         Ok(match self.kind.as_str() {
-            ISSUED | REFUSED => {
+            ISSUED | REFUSED | ISSUED_V2 | REFUSED_V2 => {
                 let saved: Issuance = body(&self.body)?;
                 let lease = lease(saved.lease)?;
                 let revision = revision(saved.revision)?;
                 let terms = saved.terms.decode()?;
                 let actor = saved.actor.decode()?;
-                match (self.kind.as_str(), saved.refusal) {
-                    (ISSUED, None) => LeaseRecord::Issued {
+                let refusal = saved.refusal.map(LeaseRefusal::from);
+                // Each shape holds only what it was written with: the first
+                // kinds never name another environment or a newer refusal.
+                if issuance_kind(&terms, refusal) != self.kind {
+                    return Err(corrupt("a lease issuance is stored under the wrong kind"));
+                }
+                match (refusal, self.kind.as_str()) {
+                    (None, ISSUED | ISSUED_V2) => LeaseRecord::Issued {
                         lease,
                         revision,
                         terms,
                         actor,
                     },
-                    (REFUSED, Some(refusal)) => LeaseRecord::Refused {
+                    (Some(refusal), REFUSED | REFUSED_V2) => LeaseRecord::Refused {
                         lease,
                         revision,
                         terms,
-                        refusal: refusal.into(),
+                        refusal,
                         actor,
                     },
                     _ => return Err(corrupt("a lease issuance and its refusal disagree")),
@@ -585,6 +628,95 @@ mod tests {
         for (kind, body) in cases {
             assert!(corrupt_batch(&batch(kind, body)), "{kind} {body}");
         }
+    }
+
+    #[test]
+    fn an_issuance_slice_a_cannot_hold_is_kept_under_a_kind_a_slice_a_build_does_not_read() {
+        let on_host = LeaseTerms {
+            environment: EnvironmentRef::Ssh(SshDestination::new("me@devbox").unwrap()),
+            ..terms(LeaseDeadline::UntilEnded)
+        };
+        let cases = [
+            (
+                LeaseRecord::Issued {
+                    lease: id("lease-1"),
+                    revision: LeaseRevision::FIRST,
+                    terms: on_host.clone(),
+                    actor: actor(),
+                },
+                ISSUED_V2,
+            ),
+            (
+                LeaseRecord::Refused {
+                    lease: id("lease-1"),
+                    revision: LeaseRevision::FIRST,
+                    terms: on_host,
+                    refusal: LeaseRefusal::EnvironmentVersionMismatch,
+                    actor: actor(),
+                },
+                REFUSED_V2,
+            ),
+            (
+                // Here, with a refusal only a host gives.
+                LeaseRecord::Refused {
+                    lease: id("lease-1"),
+                    revision: LeaseRevision::FIRST,
+                    terms: terms(LeaseDeadline::UntilEnded),
+                    refusal: LeaseRefusal::AgentUnavailable,
+                    actor: actor(),
+                },
+                REFUSED_V2,
+            ),
+        ];
+        for (record, kind) in cases {
+            let wire = WireLease::from(&record);
+            assert_eq!(wire.kind, kind);
+            // Read back exactly.
+            assert_eq!(
+                WireLease {
+                    kind: wire.kind.clone(),
+                    body: wire.body.clone(),
+                }
+                .decode()
+                .unwrap(),
+                record
+            );
+            // Under the first kinds it is corrupt, never a lease here.
+            let first = if kind == ISSUED_V2 { ISSUED } else { REFUSED };
+            assert!(matches!(
+                WireLease {
+                    kind: first.into(),
+                    body: wire.body,
+                }
+                .decode(),
+                Err(StorageError::Corrupt(_))
+            ));
+        }
+        // What slice A wrote is still written and read as it was.
+        assert_eq!(WireLease::from(&every_kind()[0]).kind, ISSUED);
+        assert_eq!(WireLease::from(&every_kind()[1]).kind, REFUSED);
+    }
+
+    #[test]
+    fn a_stored_host_that_is_not_a_destination_is_corrupt() {
+        let record = LeaseRecord::Issued {
+            lease: id("lease-1"),
+            revision: LeaseRevision::FIRST,
+            terms: LeaseTerms {
+                environment: EnvironmentRef::Ssh(SshDestination::new("devbox").unwrap()),
+                ..terms(LeaseDeadline::UntilEnded)
+            },
+            actor: actor(),
+        };
+        let wire = WireLease::from(&record);
+        assert!(matches!(
+            WireLease {
+                kind: wire.kind,
+                body: wire.body.replace("devbox", "-oProxyCommand=x"),
+            }
+            .decode(),
+            Err(StorageError::Corrupt(_))
+        ));
     }
 
     #[test]

@@ -10,12 +10,14 @@
 use super::{
     ConversationAgent, ConversationAgents, ConversationCaller, ConversationDeletionBudgets,
     ConversationDependencies, ConversationError, ConversationLimits, ConversationService,
-    Environment, EnvironmentDeclaration, EnvironmentFuture, RequestedConversation, SubmissionMode,
+    Environment, EnvironmentDeclaration, EnvironmentFuture, EnvironmentLease, Environments,
+    LeaseHold, LeaseRelease, RequestedConversation, SubmissionMode, SubmittedFile,
     SubmittedMessage,
 };
 use crate::conversation::infrastructure::{
     in_process_environment, DurableConversationCreationAudit, DurableConversationDeletionAudit,
-    DurableConversationFileLinkAudit, DurableExecutionAudit, LocalConversationStore,
+    DurableConversationFileLinkAudit, DurableExecutionAudit, FilePlacements,
+    LocalConversationStore,
 };
 use crate::conversation_test_support::{
     claude_erasers, AcceptingModeAudit, Provider, ProviderFactory, TestClock, DELETION_BUDGETS,
@@ -23,8 +25,8 @@ use crate::conversation_test_support::{
 use nessa_auth::application::ports::Clock;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::view::{
-    ConversationLeaseCause, ConversationLeaseEnvironment, ConversationLeaseSandbox,
-    ConversationLeaseState, ConversationMessageStatus,
+    ConversationLeaseCause, ConversationLeaseCleanup, ConversationLeaseEnvironment,
+    ConversationLeaseSandbox, ConversationLeaseState, ConversationMessageStatus,
 };
 use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_protocol::{agents::AgentId, conversation::domain::ConversationId};
@@ -43,11 +45,12 @@ use nessa_sdk::domain::agent_execution::executions::MessageChunk;
 use nessa_sdk::domain::agent_execution::leases::{
     AgentWork, EnvironmentRef, LeaseCleanup, LeaseDeadline, LeaseEndCause, LeaseGrants, LeaseId,
     LeaseRefusal, LeaseRevision, LeaseTerms, LeaseWork, SandboxProfile, SandboxProfiles,
+    SshDestination,
 };
 use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use nessa_sdk::infrastructure::session_storage::{RecordStorage, RuntimeMessageCommitClock};
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     path::Path,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -94,17 +97,36 @@ impl Environment for Substitute {
             sandbox: self.sandbox,
         }
     }
-    fn open(
-        &self,
-        _grant: &LeaseTerms,
+    fn open<'a>(
+        &'a self,
+        _lease: &'a LeaseId,
+        _grant: &'a LeaseTerms,
         binding: Arc<dyn AgentProvider>,
-    ) -> Result<Arc<dyn AgentProvider>, LeaseRefusal> {
+    ) -> EnvironmentFuture<'a, Result<EnvironmentLease, LeaseRefusal>> {
         self.opened.fetch_add(1, Ordering::SeqCst);
-        Ok(self.wrapped.clone().unwrap_or(binding))
+        let provider = self.wrapped.clone().unwrap_or(binding);
+        Box::pin(async move {
+            Ok(EnvironmentLease {
+                provider,
+                hold: Arc::new(AgentCloseHold),
+                workspace: None,
+            })
+        })
     }
-    fn account<'a>(&'a self, lease: &'a LeaseId) -> EnvironmentFuture<'a, LeaseCleanup> {
+    fn account<'a>(&'a self, lease: &'a LeaseId) -> EnvironmentFuture<'a, Option<LeaseCleanup>> {
         self.accounted.lock().unwrap().push(lease.clone());
-        Box::pin(async { LeaseCleanup::NotHeld })
+        Box::pin(async { Some(LeaseCleanup::NotHeld) })
+    }
+}
+
+/// A hold whose Agent's close is the evidence, as in process.
+struct AgentCloseHold;
+impl LeaseHold for AgentCloseHold {
+    fn lost(&self) -> Option<EnvironmentFuture<'static, ()>> {
+        None
+    }
+    fn end(&self, _cause: LeaseEndCause) -> EnvironmentFuture<'_, LeaseRelease> {
+        Box::pin(async { LeaseRelease::ByAgentClose })
     }
 }
 
@@ -222,6 +244,29 @@ fn harness(
     provider: Arc<ProviderFactory>,
     binding: Arc<dyn AgentProvider>,
 ) -> Harness {
+    harness_in(root, environment.into(), stop, provider, binding)
+}
+
+/// [`harness`], with every environment its conversations may run in.
+fn harness_in(
+    root: &Path,
+    environment: Environments,
+    stop: Duration,
+    provider: Arc<ProviderFactory>,
+    binding: Arc<dyn AgentProvider>,
+) -> Harness {
+    harness_working_in(root, environment, stop, provider, binding, None)
+}
+
+/// [`harness_in`], with the gateway's own workspace.
+fn harness_working_in(
+    root: &Path,
+    environment: Environments,
+    stop: Duration,
+    provider: Arc<ProviderFactory>,
+    binding: Arc<dyn AgentProvider>,
+    workspace: Option<String>,
+) -> Harness {
     let clock: Arc<dyn Clock> = Arc::new(TestClock);
     let agents = ConversationAgents::new(
         HashMap::from([(
@@ -281,7 +326,7 @@ fn harness(
             clock,
         },
         ConversationLimits::default(),
-        None,
+        workspace,
     )
     .unwrap();
     Harness {
@@ -802,7 +847,7 @@ async fn a_latest_lease_this_build_cannot_read_is_never_issued_over(profiles: Sa
     // which may still be Live there.
     let session = SessionId::new(harness.id.to_string()).unwrap();
     let later = LeaseRecord::Unreadable {
-        kind: "issued_v2".into(),
+        kind: "issued_v9".into(),
         body: r#"{"lease":"later","revision":2}"#.into(),
     };
     {
@@ -1312,4 +1357,443 @@ async fn the_view_of_an_ended_lease_says_why_it_ended() {
     let view = nessa_protocol::conversation::projection::lease_view(&harness.lease().await);
     assert_eq!(view.state, ConversationLeaseState::Ended);
     assert_eq!(view.cause, Some(ConversationLeaseCause::Closed));
+}
+
+/// A configured SSH host as the service sees it: declares the host, counts
+/// its openings, can lose its lease, and answers its end with `release`.
+/// What crosses the wire is the SSH adapter's own tests'.
+struct Host {
+    opened: AtomicUsize,
+    lose: tokio::sync::watch::Sender<bool>,
+    release: Mutex<Option<LeaseCleanup>>,
+}
+impl Host {
+    fn new() -> Self {
+        Self {
+            opened: AtomicUsize::new(0),
+            lose: tokio::sync::watch::channel(false).0,
+            release: Mutex::new(Some(LeaseCleanup::Confirmed { forced: false })),
+        }
+    }
+}
+impl Environment for Host {
+    fn declaration(&self) -> EnvironmentDeclaration {
+        EnvironmentDeclaration {
+            environment: EnvironmentRef::Ssh(SshDestination::new("devbox").unwrap()),
+            sandbox: SandboxProfiles::HARNESS_DEFAULT,
+        }
+    }
+    fn open<'a>(
+        &'a self,
+        _lease: &'a LeaseId,
+        _grant: &'a LeaseTerms,
+        binding: Arc<dyn AgentProvider>,
+    ) -> EnvironmentFuture<'a, Result<EnvironmentLease, LeaseRefusal>> {
+        self.opened.fetch_add(1, Ordering::SeqCst);
+        let hold = Arc::new(HostHold {
+            lost: self.lose.subscribe(),
+            release: *self.release.lock().unwrap(),
+        });
+        Box::pin(async move {
+            Ok(EnvironmentLease {
+                provider: binding,
+                hold,
+                workspace: Some("/srv/work".into()),
+            })
+        })
+    }
+    fn account<'a>(&'a self, _lease: &'a LeaseId) -> EnvironmentFuture<'a, Option<LeaseCleanup>> {
+        Box::pin(async { Some(LeaseCleanup::NotHeld) })
+    }
+}
+struct HostHold {
+    lost: tokio::sync::watch::Receiver<bool>,
+    release: Option<LeaseCleanup>,
+}
+impl LeaseHold for HostHold {
+    fn lost(&self) -> Option<EnvironmentFuture<'static, ()>> {
+        let mut lost = self.lost.clone();
+        Some(Box::pin(async move {
+            let _ = lost.wait_for(|lost| *lost).await;
+        }))
+    }
+    fn end(&self, _cause: LeaseEndCause) -> EnvironmentFuture<'_, LeaseRelease> {
+        let release = self.release;
+        Box::pin(async move {
+            match release {
+                Some(cleanup) => LeaseRelease::Released(cleanup),
+                None => LeaseRelease::Unanswered,
+            }
+        })
+    }
+}
+
+/// A gateway configured with `devbox`, keeping placements under `root`.
+fn with_host(root: &Path, here: Arc<Substitute>, host: Option<Arc<Host>>) -> Harness {
+    let mut hosts: BTreeMap<String, Arc<dyn Environment>> = BTreeMap::new();
+    if let Some(host) = host {
+        hosts.insert("devbox".into(), host);
+    }
+    let placements =
+        Arc::new(FilePlacements::new(root.join("conversations").join("placements")).unwrap());
+    let provider = Arc::new(ProviderFactory::default());
+    let binding = Arc::new(Provider::new(provider.clone()));
+    harness_in(
+        root,
+        Environments::new(here, hosts, placements),
+        DELETION_BUDGETS.stop,
+        provider,
+        binding,
+    )
+}
+
+fn placement_file(root: &Path) -> std::path::PathBuf {
+    root.join("conversations")
+        .join("placements")
+        .join(format!("{CONVERSATION}.json"))
+}
+
+impl Harness {
+    async fn create_on(&self, host: &str) -> Result<(), ConversationError> {
+        self.service
+            .create(
+                self.id.clone(),
+                caller("create"),
+                RequestedConversation {
+                    environment: Some(host.into()),
+                    ..RequestedConversation::default()
+                },
+            )
+            .await
+            .map(|_| ())
+    }
+}
+
+#[tokio::test]
+async fn b_a_conversation_created_on_a_host_runs_there_and_its_lease_names_the_host() {
+    let root = tempfile::tempdir().unwrap();
+    let here = Arc::new(Substitute::new(SandboxProfiles::HARNESS_DEFAULT));
+    let host = Arc::new(Host::new());
+    let harness = with_host(root.path(), here.clone(), Some(host.clone()));
+    harness.create_on("devbox").await.unwrap();
+    harness.turn("turn-1").await;
+    harness
+        .service
+        .close(harness.id.clone(), caller("close"))
+        .await
+        .unwrap();
+    assert_eq!(host.opened.load(Ordering::SeqCst), 1);
+    assert_eq!(here.opened.load(Ordering::SeqCst), 0);
+    let lease = harness.lease().await;
+    assert_eq!(kinds(&lease), ["issued", "ending", "ended"]);
+    let view = nessa_protocol::conversation::projection::lease_view(&lease);
+    assert_eq!(view.environment, Some(ConversationLeaseEnvironment::Ssh));
+    assert_eq!(view.host.as_deref(), Some("devbox"));
+    assert_eq!(view.cleanup, Some(ConversationLeaseCleanup::Confirmed));
+    // Deleting it forgets where it ran.
+    assert!(placement_file(root.path()).exists());
+    assert!(harness
+        .service
+        .delete(harness.id.clone(), caller("delete"))
+        .await
+        .unwrap());
+    assert!(!placement_file(root.path()).exists());
+}
+
+/// A conversation keeps the host it was created on: a later creation of
+/// the same identity, naming no host or another one, is its reopen and
+/// moves nothing (the environment is ignored on reopen).
+#[tokio::test]
+async fn b_a_reopen_keeps_the_host_the_conversation_was_created_on() {
+    let root = tempfile::tempdir().unwrap();
+    let here = Arc::new(Substitute::new(SandboxProfiles::HARNESS_DEFAULT));
+    let host = Arc::new(Host::new());
+    let harness = with_host(root.path(), here.clone(), Some(host.clone()));
+    harness.create_on("devbox").await.unwrap();
+    let placed = std::fs::read(placement_file(root.path())).unwrap();
+    harness
+        .service
+        .create(
+            harness.id.clone(),
+            caller("reopen"),
+            RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read(placement_file(root.path())).unwrap(), placed);
+    harness.service.shutdown().await.unwrap();
+    let harness = with_host(root.path(), here.clone(), Some(host.clone()));
+    harness
+        .service
+        .create(
+            harness.id.clone(),
+            caller("reopen-again"),
+            RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read(placement_file(root.path())).unwrap(), placed);
+    harness.turn("turn-1").await;
+    assert_eq!(here.opened.load(Ordering::SeqCst), 0);
+    assert!(host.opened.load(Ordering::SeqCst) >= 1);
+}
+
+/// A host's confirmed release proves the harness's process tree is gone,
+/// which answers a close that could not confirm its own cleanup, and
+/// nothing else: a close that failed for any other reason (its audit, its
+/// settlement) keeps that failure.
+/// A conversation on a host is shown working where the host said it works,
+/// never in the gateway's own workspace; one run here is shown in the
+/// gateway's.
+#[tokio::test]
+async fn b_a_conversation_on_a_host_shows_the_hosts_workspace() {
+    let gateway = "/Users/me/project".to_string();
+    for (host, expected) in [(Some("devbox"), "/srv/work"), (None, gateway.as_str())] {
+        let root = tempfile::tempdir().unwrap();
+        let mut hosts: BTreeMap<String, Arc<dyn Environment>> = BTreeMap::new();
+        hosts.insert("devbox".into(), Arc::new(Host::new()));
+        let placements = Arc::new(
+            FilePlacements::new(root.path().join("conversations").join("placements")).unwrap(),
+        );
+        let provider = Arc::new(ProviderFactory::default());
+        let binding = Arc::new(Provider::new(provider.clone()));
+        let harness = harness_working_in(
+            root.path(),
+            Environments::new(
+                Arc::new(Substitute::new(SandboxProfiles::HARNESS_DEFAULT)),
+                hosts,
+                placements,
+            ),
+            DELETION_BUDGETS.stop,
+            provider,
+            binding,
+            Some(gateway.clone()),
+        );
+        match host {
+            Some(host) => harness.create_on(host).await.unwrap(),
+            None => harness.create().await,
+        }
+        harness.turn("turn-1").await;
+        let view = harness
+            .service
+            .read(harness.id.clone(), caller("read"))
+            .await
+            .unwrap();
+        assert_eq!(
+            view.runtime.map(|runtime| runtime.workspace).as_deref(),
+            Some(expected),
+            "{host:?}"
+        );
+        harness
+            .service
+            .close(harness.id.clone(), caller("close"))
+            .await
+            .unwrap();
+    }
+}
+
+/// A file linked by path names a file on this machine. A conversation that
+/// runs on a host cannot read it there, and would read whatever that host
+/// has at the same path, so the message is refused before anything is
+/// recorded or sent; the same message is taken by a conversation run here.
+#[tokio::test]
+async fn b_a_file_linked_by_path_is_refused_for_a_conversation_on_a_host() {
+    let linking = |execution: &str| SubmittedMessage {
+        text: "read this".into(),
+        images: Vec::new(),
+        files: vec![SubmittedFile {
+            path: format!("/Users/me/{execution}.txt"),
+        }],
+    };
+    let root = tempfile::tempdir().unwrap();
+    let here = Arc::new(Substitute::new(SandboxProfiles::HARNESS_DEFAULT));
+    let host = Arc::new(Host::new());
+    let harness = with_host(root.path(), here.clone(), Some(host.clone()));
+    harness.create_on("devbox").await.unwrap();
+    let refused = harness
+        .service
+        .submit(
+            harness.id.clone(),
+            caller("turn-1"),
+            "turn-1".into(),
+            linking("turn-1"),
+            SubmissionMode::Queue,
+        )
+        .await;
+    assert!(
+        matches!(refused, Err(ConversationError::LinkedFileUnreachable)),
+        "{refused:?}"
+    );
+    // Refused, not spent: the conversation still takes a message without one.
+    harness.turn("turn-2").await;
+    harness
+        .service
+        .close(harness.id.clone(), caller("close"))
+        .await
+        .unwrap();
+
+    let root = tempfile::tempdir().unwrap();
+    let harness = with_host(root.path(), here, Some(host));
+    harness.create().await;
+    harness
+        .service
+        .submit(
+            harness.id.clone(),
+            caller("turn-1"),
+            "turn-1".into(),
+            linking("turn-1"),
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    harness
+        .service
+        .close(harness.id.clone(), caller("close"))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn b_a_hosts_confirmed_release_answers_only_cleanup_uncertainty() {
+    let settlement = || AgentError::Transport("settlement".into());
+    for (failure, kept) in [
+        (AgentError::CleanupUncertain, None),
+        (AgentError::AuditFailure, Some(AgentError::AuditFailure)),
+        (settlement(), Some(settlement())),
+        (
+            AgentError::AuditAndCleanupFailure,
+            Some(AgentError::AuditFailure),
+        ),
+        (
+            AgentError::OperationAndCleanupFailure {
+                operation_error: Box::new(settlement()),
+                cleanup_error: Box::new(AgentError::CleanupUncertain),
+            },
+            Some(settlement()),
+        ),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let here = Arc::new(Substitute::new(SandboxProfiles::HARNESS_DEFAULT));
+        let host = Arc::new(Host::new());
+        let harness = with_host(root.path(), here, Some(host.clone()));
+        harness.create_on("devbox").await.unwrap();
+        harness.turn("turn-1").await;
+        *harness.provider.close_failure.lock().unwrap() = Some(failure.clone());
+        let closed = harness
+            .service
+            .close(harness.id.clone(), caller("close"))
+            .await;
+        match &kept {
+            None => assert!(closed.is_ok(), "{failure:?}: {closed:?}"),
+            Some(kept) => assert!(
+                matches!(&closed, Err(ConversationError::Agent(error)) if error == kept),
+                "{failure:?}: {closed:?}"
+            ),
+        }
+    }
+}
+
+#[tokio::test]
+async fn b_gate5_a_conversation_naming_no_host_never_reaches_one() {
+    let root = tempfile::tempdir().unwrap();
+    let here = Arc::new(Substitute::new(SandboxProfiles::HARNESS_DEFAULT));
+    let host = Arc::new(Host::new());
+    let harness = with_host(root.path(), here.clone(), Some(host.clone()));
+    harness.create().await;
+    harness.turn("turn-1").await;
+    harness
+        .service
+        .close(harness.id.clone(), caller("close"))
+        .await
+        .unwrap();
+    assert_eq!(here.opened.load(Ordering::SeqCst), 1);
+    assert_eq!(host.opened.load(Ordering::SeqCst), 0);
+    assert!(!placement_file(root.path()).exists());
+    let view = nessa_protocol::conversation::projection::lease_view(&harness.lease().await);
+    assert_eq!(view.environment, Some(ConversationLeaseEnvironment::Here));
+    assert_eq!(view.host, None);
+}
+
+#[tokio::test]
+async fn b_a_host_the_configuration_does_not_name_is_refused_and_nothing_is_created() {
+    let root = tempfile::tempdir().unwrap();
+    let here = Arc::new(Substitute::new(SandboxProfiles::HARNESS_DEFAULT));
+    let harness = with_host(root.path(), here.clone(), Some(Arc::new(Host::new())));
+    assert!(matches!(
+        harness.create_on("elsewhere").await,
+        Err(ConversationError::EnvironmentNotConfigured)
+    ));
+    assert!(!placement_file(root.path()).exists());
+    assert!(harness
+        .service
+        .read(harness.id.clone(), caller("read"))
+        .await
+        .is_err());
+}
+
+#[tokio::test]
+async fn b_a_conversation_whose_host_is_no_longer_configured_is_refused_never_run_here() {
+    let root = tempfile::tempdir().unwrap();
+    let here = Arc::new(Substitute::new(SandboxProfiles::HARNESS_DEFAULT));
+    {
+        let harness = with_host(root.path(), here.clone(), Some(Arc::new(Host::new())));
+        harness.create_on("devbox").await.unwrap();
+        harness.service.shutdown().await.unwrap();
+    }
+    let harness = with_host(root.path(), here.clone(), None);
+    let refused = harness
+        .service
+        .submit(
+            harness.id.clone(),
+            caller("turn-1"),
+            "turn-1".into(),
+            SubmittedMessage {
+                text: "hello".into(),
+                images: Vec::new(),
+                files: Vec::new(),
+            },
+            SubmissionMode::Queue,
+        )
+        .await;
+    assert!(
+        matches!(refused, Err(ConversationError::EnvironmentNotConfigured)),
+        "{refused:?}"
+    );
+    assert_eq!(here.opened.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn b_gate2_a_lost_connection_stops_the_conversation_and_ends_its_lease_as_lost() {
+    for (release, ending) in [
+        (
+            Some(LeaseCleanup::Confirmed { forced: true }),
+            ["issued", "ending", "ended"],
+        ),
+        (None, ["issued", "ending", "interrupted"]),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let here = Arc::new(Substitute::new(SandboxProfiles::HARNESS_DEFAULT));
+        let host = Arc::new(Host::new());
+        *host.release.lock().unwrap() = release;
+        let harness = with_host(root.path(), here, Some(host.clone()));
+        harness.create_on("devbox").await.unwrap();
+        harness.turn("turn-1").await;
+        host.lose.send_replace(true);
+        let lease = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let lease = harness.lease().await;
+                if kinds(&lease).len() == 3 {
+                    break lease;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the lost lease ends");
+        assert_eq!(kinds(&lease), ending);
+        let (cause, actor) = ending_cause(&lease).unwrap();
+        assert_eq!(cause, LeaseEndCause::Lost);
+        assert!(actor.is_some_and(|actor| actor.starts_with("lost-")));
+        assert_eq!(harness.provider.close_calls.load(Ordering::SeqCst), 1);
+    }
 }

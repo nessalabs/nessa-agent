@@ -5,6 +5,7 @@ use crate::{
     product::{ConfiguredLimits, OperationalLimits, SessionSettings},
 };
 use nessa_auth::adapters::local::LocalStoreConfig;
+use nessa_sdk::domain::agent_execution::leases::SshDestination;
 use serde::Deserialize;
 use std::{io::Read, net::SocketAddr, path::Path, time::Duration};
 
@@ -22,7 +23,14 @@ pub(super) struct RuntimeConfig {
     pub agents: Option<AgentsConfig>,
     /// Native device pairing; absent or `null` keeps it off (design rows S1, S2).
     pub native: Option<NativeConfig>,
+    /// The SSH hosts a conversation may be created on, each an OpenSSH
+    /// destination (a `~/.ssh/config` alias or `user@host`). Absent or empty
+    /// names none, and no conversation reaches a host (issue #699).
+    pub ssh_hosts: Vec<String>,
 }
+
+/// Most SSH hosts the configuration may name: what `agents.list` carries.
+pub(super) const MAX_SSH_HOSTS: usize = 16;
 
 /// Where the native enrollment listener binds. The address is numeric: serde's
 /// standard `SocketAddr` parser, so no hostname is ever looked up.
@@ -115,7 +123,29 @@ impl RuntimeConfig {
         config.registry.validate().map_err(refused)?;
         config.session()?;
         config.limits()?;
+        config.ssh_hosts()?;
         Ok(config)
+    }
+
+    /// The configured SSH hosts, each read into its value object, which owns
+    /// what a destination may be: never an option to `ssh`, never a shell
+    /// word. A repeated or unreadable one refuses the configuration.
+    pub fn ssh_hosts(&self) -> Result<Vec<SshDestination>, RunError> {
+        if self.ssh_hosts.len() > MAX_SSH_HOSTS {
+            return Err(refused(format!(
+                "sshHosts names more than {MAX_SSH_HOSTS} hosts"
+            )));
+        }
+        let mut hosts: Vec<SshDestination> = Vec::with_capacity(self.ssh_hosts.len());
+        for host in &self.ssh_hosts {
+            let destination = SshDestination::new(host.as_str())
+                .map_err(|_| refused(format!("sshHosts: {host:?} is not an SSH destination")))?;
+            if hosts.contains(&destination) {
+                return Err(refused(format!("sshHosts names {host:?} twice")));
+            }
+            hosts.push(destination);
+        }
+        Ok(hosts)
     }
 
     pub fn session(&self) -> Result<SessionSettings, RunError> {
@@ -333,3 +363,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/composition/runtime_config.rs"]
+mod ssh_hosts_tests;

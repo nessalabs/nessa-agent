@@ -296,7 +296,7 @@ fn conversation_service(
                 nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
             ),
             clock: Arc::new(TestClock),
-            environment: crate::conversation::infrastructure::in_process_environment(),
+            environment: crate::conversation::infrastructure::in_process_environment().into(),
         },
         ConversationLimits::default(),
         None,
@@ -362,6 +362,7 @@ impl SubscriptionFixture {
             )
             .with_agents_catalog(
                 serde_json::from_value(json!({
+                    "environments": [],
                     "agents": [{
                         "agent": "claude",
                         "defaultModel": "test",

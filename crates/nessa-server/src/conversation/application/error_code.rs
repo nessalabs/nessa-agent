@@ -41,9 +41,28 @@ pub fn error_code(error: &ConversationError) -> ConversationErrorCode {
         ConversationError::LeaseRefused(LeaseRefusal::SandboxUnavailable) => {
             ConversationErrorCode::SandboxUnavailable
         }
+        // The host could not be reached, another gateway holds it, or it has
+        // no runtime for this conversation's agent: all the host's matter,
+        // worth asking again once the host is set right. Not
+        // `agent_not_configured`, which names this gateway's own config.json.
+        ConversationError::LeaseRefused(
+            LeaseRefusal::EnvironmentUnreachable
+            | LeaseRefusal::EnvironmentBusy
+            | LeaseRefusal::AgentUnavailable,
+        ) => ConversationErrorCode::EnvironmentUnavailable,
+        // Fixed only by putting this build's `nessa` on the host.
+        ConversationError::LeaseRefused(LeaseRefusal::EnvironmentVersionMismatch) => {
+            ConversationErrorCode::EnvironmentVersionMismatch
+        }
+        ConversationError::EnvironmentNotConfigured => {
+            ConversationErrorCode::EnvironmentNotConfigured
+        }
+        ConversationError::LinkedFileUnreachable => ConversationErrorCode::LinkedFileUnreachable,
         // Saved state this build cannot read and never will: the same answer
         // as an unreadable history, which no retry changes.
-        ConversationError::LeaseUnreadable => ConversationErrorCode::ConversationStateUnreadable,
+        ConversationError::LeaseUnreadable | ConversationError::PlacementUnreadable => {
+            ConversationErrorCode::ConversationStateUnreadable
+        }
         ConversationError::ModelUnavailable => ConversationErrorCode::ModelUnavailable,
         ConversationError::ApprovalModeUnavailable => {
             ConversationErrorCode::ApprovalModeUnavailable

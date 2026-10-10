@@ -43,13 +43,14 @@ fn events(fence: &LeaseFence, turns: &[&str]) -> FencedEvents {
     }
 }
 
-#[test]
-fn l1_the_in_process_environment_grants_the_harness_default_and_the_fence_is_live() {
+#[tokio::test]
+async fn l1_the_in_process_environment_grants_the_harness_default_and_the_fence_is_live() {
     let opening = open_lease(
         in_process_environment().as_ref(),
         request(SandboxProfiles::HARNESS_DEFAULT),
         binding(),
-    );
+    )
+    .await;
     assert_eq!(opening.refusal, None);
     assert_eq!(opening.terms.environment, EnvironmentRef::Here);
     assert_eq!(opening.terms.sandbox, SandboxProfile::HarnessDefault);
@@ -59,13 +60,14 @@ fn l1_the_in_process_environment_grants_the_harness_default_and_the_fence_is_liv
     assert_eq!(opening.fence.identity(), binding().identity());
 }
 
-#[test]
-fn l2_a_binding_that_declares_no_profile_is_refused_and_its_fence_opens_nothing() {
+#[tokio::test]
+async fn l2_a_binding_that_declares_no_profile_is_refused_and_its_fence_opens_nothing() {
     let opening = open_lease(
         in_process_environment().as_ref(),
         request(SandboxProfiles::NONE),
         binding(),
-    );
+    )
+    .await;
     assert_eq!(opening.refusal, Some(LeaseRefusal::SandboxUnavailable));
     assert_eq!(opening.terms.sandbox, SandboxProfile::HarnessDefault);
     assert_eq!(opening.fence.state().phase, FencePhase::Closed);
@@ -77,7 +79,8 @@ async fn l9_events_settle_while_ending_and_are_dropped_with_evidence_once_closed
         in_process_environment().as_ref(),
         request(SandboxProfiles::HARNESS_DEFAULT),
         binding(),
-    );
+    )
+    .await;
     let fence = &opening.fence;
     let mut stream = events(fence, &["t1", "t2", "t3", "t4"]);
     assert!(stream.next().await.unwrap().is_some());
@@ -112,7 +115,8 @@ async fn l9_a_cursor_counts_every_event_under_the_lease_across_its_sessions() {
         in_process_environment().as_ref(),
         request(SandboxProfiles::HARNESS_DEFAULT),
         binding(),
-    );
+    )
+    .await;
     let fence = &opening.fence;
     let mut first = events(fence, &["t1", "t2"]);
     assert!(first.next().await.unwrap().is_some());
@@ -138,7 +142,8 @@ async fn l9_drops_past_the_kept_bound_are_counted_and_not_kept_over_the_whole_le
         in_process_environment().as_ref(),
         request(SandboxProfiles::HARNESS_DEFAULT),
         binding(),
-    );
+    )
+    .await;
     let fence = &opening.fence;
     fence.close();
     let turns =
@@ -251,7 +256,7 @@ fn l11_l12_l16_a_lease_an_earlier_run_left_is_accounted_for_from_where_it_stood(
         let current = held(&records);
         let lease = current.held().unwrap();
         assert!(needs_accounting(lease));
-        let accounting = account_earlier(lease, LeaseCleanup::NotHeld);
+        let accounting = account_earlier(lease, Some(LeaseCleanup::NotHeld));
         assert_eq!(accounting.len(), added);
         let mut folded = Some(current.clone());
         for record in &accounting {
@@ -265,7 +270,7 @@ fn l11_l12_l16_a_lease_an_earlier_run_left_is_accounted_for_from_where_it_stood(
     }
     let live = held(&[issued("old", 1)]);
     assert_eq!(
-        account_earlier(live.held().unwrap(), LeaseCleanup::NotHeld)[0],
+        account_earlier(live.held().unwrap(), Some(LeaseCleanup::NotHeld))[0],
         LeaseRecord::Ending {
             lease: id(),
             cause: LeaseEndCause::Lost,
@@ -287,7 +292,7 @@ fn l11_l12_l16_a_lease_an_earlier_run_left_is_accounted_for_from_where_it_stood(
     ] {
         let current = held(&records);
         assert!(!needs_accounting(current.held().unwrap()));
-        assert!(account_earlier(current.held().unwrap(), LeaseCleanup::NotHeld).is_empty());
+        assert!(account_earlier(current.held().unwrap(), Some(LeaseCleanup::NotHeld)).is_empty());
         assert_eq!(next_revision(Some(&current), &[]).get(), 2);
     }
     assert_eq!(next_revision(None, &[]), LeaseRevision::FIRST);

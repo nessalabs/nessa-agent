@@ -14,6 +14,7 @@
 //! - `product`: the generated product DTOs, the handshake rules, and the read codecs.
 //! - `pairing`: native pairing framing, envelope codec, enrollment channel and socket.
 //! - `conversation`: the conversation read model, and `agents`, the agent names it uses.
+//! - `lease`: the lease frames a gateway and an environment (`nessa env serve`) exchange.
 //! - `clock`: the monotonic clock port the pairing socket's deadlines read.
 //!
 //! Admission rule: no process state and no runtime of its own. `pairing::socket`
@@ -22,6 +23,7 @@
 pub mod agents;
 pub mod clock;
 pub mod conversation;
+pub mod lease;
 pub mod pairing;
 pub mod product;
 pub mod product_contract;

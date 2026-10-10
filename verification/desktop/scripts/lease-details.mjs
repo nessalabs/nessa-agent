@@ -1,5 +1,10 @@
 #!/usr/bin/env node
-/** The details sheet's "Where it runs": each lease state the gateway publishes, in the production sheet. */
+/**
+ * Where an agent runs, as a person sees it: the details sheet's "Where it
+ * runs" for each lease state the gateway publishes, on this computer or an
+ * SSH host, and the composer tray's "Run on" choice of host for a new
+ * conversation, both production components.
+ */
 import { attempt, CannotRun } from "./lib/cli.mjs"
 import { openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
@@ -25,12 +30,113 @@ const expected = {
     ["Sandbox", "Not known"],
     ["Status", "Not known"],
   ],
+  // On an SSH host, the host is named in full in place of the computer.
+  "ssh-live": [
+    ["SSH host", "me@build-01.internal.example.com"],
+    ["Sandbox", "The agent's own"],
+    ["Status", "Allowed to run"],
+  ],
+  "ssh-lost": [
+    ["SSH host", "devbox"],
+    ["Sandbox", "The agent's own"],
+    ["Status", "Ended when the connection to its host was lost"],
+  ],
+  // Refused, it still names the host it was asked of: that is what to fix.
+  "ssh-refused": [
+    ["SSH host", "devbox"],
+    ["Status", "Couldn't start: host not reachable"],
+  ],
+}
+
+/**
+ * The composer tray's "Run on": offered only when the gateway names a host,
+ * listing this computer and each host in full, and showing the one chosen.
+ */
+async function runOn(browser, rep, url, engine, width) {
+  for (const name of ["none", "hosts"]) {
+    const pageUrl = new URL("/verification/conversation/run-on-fixture.html", url)
+    pageUrl.searchParams.set("case", name)
+    const opened = await openPage(browser, {
+      url: pageUrl.href,
+      readySelector: css.runOnFixture,
+      width,
+      mac: false,
+    })
+    try {
+      await attempt(rep, { engine, width, name: `run-on-${name}` }, async () => {
+        const { page } = opened
+        const failures = opened.errors.map((line) => `page error: ${line}`)
+        const plus = page.getByRole("button", { name: /More options|Add attachment/ })
+        await plus.click()
+        const row = page.getByRole("button", { name: /^Run on/ })
+        if (name === "none") {
+          const rows = await row.count()
+          return {
+            rows,
+            failures: [...(rows ? ["Run on is offered with no host"] : []), ...failures],
+          }
+        }
+        const before = (await row.textContent())?.trim()
+        if (before !== "Run onThis computer")
+          failures.push(`the row reads ${JSON.stringify(before)} before a choice`)
+        await row.click()
+        const group = page.getByRole("radiogroup", { name: "Run on", exact: true })
+        const radios = await group.getByRole("radio").evaluateAll((nodes) =>
+          nodes.map((node) => {
+            const name = node.firstElementChild?.firstElementChild
+            return {
+              text: node.textContent,
+              checked: node.getAttribute("aria-checked"),
+              focused: node === document.activeElement,
+              // A host cut short is not read in full.
+              cut: name ? name.scrollWidth > name.clientWidth + 1 : true,
+              right: node.getBoundingClientRect().right,
+            }
+          }),
+        )
+        const texts = radios.map((radio) => radio.text)
+        const wanted = [
+          "This computer",
+          "devboxSSH",
+          "me@build-01.internal.example.comSSH",
+        ]
+        if (JSON.stringify(texts) !== JSON.stringify(wanted))
+          failures.push(
+            `choices ${JSON.stringify(texts)}, expected ${JSON.stringify(wanted)}`,
+          )
+        if (radios[0]?.checked !== "true" || !radios[0]?.focused)
+          failures.push("this computer is not the checked, focused choice")
+        const viewport = await page.evaluate(() => document.documentElement.clientWidth)
+        for (const radio of radios) {
+          if (radio.cut) failures.push(`${radio.text} is cut short`)
+          if (radio.right > viewport + 1)
+            failures.push(`${radio.text} ends at ${radio.right}, past ${viewport}`)
+        }
+        await group.getByRole("radio", { name: /^me@build-01/ }).click()
+        const chosen = await page.locator(css.runOnFixture).getAttribute("data-chosen")
+        if (chosen !== "me@build-01.internal.example.com")
+          failures.push(`chose ${JSON.stringify(chosen)}`)
+        const after = (await row.textContent())?.trim()
+        if (after !== "Run onme@build-01.internal.example.com")
+          failures.push(`the row reads ${JSON.stringify(after)} after a choice`)
+        const overflow = await page.evaluate(
+          () =>
+            document.documentElement.scrollWidth > document.documentElement.clientWidth,
+        )
+        if (overflow) failures.push("the page scrolls horizontally")
+        return { texts, chosen, after, failures }
+      })
+    } finally {
+      await opened.close()
+    }
+  }
 }
 
 await main(
   {
     name: "lease-details",
-    summary: "the details sheet's Where it runs section for every published lease state",
+    summary:
+      "the details sheet's Where it runs section for every published lease state, here or on an SSH host, and the composer's Run on choice",
     defaults: { engine: "chromium,webkit" },
   },
   async ({ options, rep, url, mode }) => {
@@ -109,6 +215,7 @@ await main(
             await opened.close()
           }
         }
+        await runOn(browser, rep, url, engine, width)
       }
     })
   },

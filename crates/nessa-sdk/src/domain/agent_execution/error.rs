@@ -60,6 +60,8 @@ pub enum ExecutionError {
     InvalidLeaseId,
     /// A lease revision is zero, which names no issuance.
     InvalidLeaseRevision,
+    /// An SSH destination outside the portable alphabet or its bound.
+    InvalidSshDestination,
     /// This live attachment ended; restoration requires a fresh aggregate.
     SessionClosed,
     /// The live attachment already owns an active execution.
