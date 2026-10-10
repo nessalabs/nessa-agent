@@ -724,6 +724,19 @@ async fn supervised<T: Send + 'static>(
         .await
         .map_err(|_| ConversationError::Unavailable)?
 }
+/// Terminal settlement contains both polling faults and external panic payloads.
+/// Destructors are external code too: retain the caught payload rather than
+/// letting its destruction escape settlement
+/// (`terminal_panic_payload_ownership_preserves_settlement`).
+async fn contain_mode_terminal<T>(effect: impl Future<Output = T>) -> Result<T, ()> {
+    match AssertUnwindSafe(effect).catch_unwind().await {
+        Ok(value) => Ok(value),
+        Err(payload) => {
+            mem::forget(payload);
+            Err(())
+        }
+    }
+}
 /// Correlate a retained pending envelope with the loaded conversation, before
 /// it can authorize cleanup or be joined into a publication.
 /// `terminal_pending_query_is_correlated_before_cleanup_and_publication`.
@@ -2025,16 +2038,16 @@ impl ConversationService {
             };
             // Keep the admitted owner through invocation and polling faults:
             // a lost terminal acknowledgement still needs durable settlement.
-            let write = AssertUnwindSafe(async {
+            let write = contain_mode_terminal(async {
                 service.inner.metadata.finish_mode_change(
                     &id, &expected.request_id, ConversationModeRequestState::Applied,
                 ).await
-            }).catch_unwind().await;
+            }).await;
             let terminal = match write {
                 Ok(Ok(terminal)) => Some(terminal),
-                Ok(Err(_)) | Err(_) => AssertUnwindSafe(async {
+                Ok(Err(_)) | Err(_) => contain_mode_terminal(async {
                     service.inner.metadata.mode_change(&id, &expected.request_id).await
-                }).catch_unwind().await.ok().and_then(Result::ok).flatten(),
+                }).await.ok().and_then(Result::ok).flatten(),
             }.filter(|terminal| terminal == &expected);
             let Some(terminal) = terminal else {
                 drop(live);

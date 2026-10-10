@@ -1293,3 +1293,79 @@ async fn metadata_query_target_fences_publication_after_summary_await() {
         service.shutdown().await.unwrap();
     }
 }
+
+#[tokio::test]
+async fn terminal_panic_payload_ownership_preserves_settlement() {
+    let mut violations = Vec::new();
+    for payload_drop in [false, true] {
+        for stage in 0..4 {
+            let (service, provider, repository, id, _, actor) = ready_mode_case().await;
+            let mutations = provider.mode_updates.lock().unwrap().len();
+            let closes = provider.close_calls.load(Ordering::SeqCst);
+            repository
+                .mode_panic_payload_drop
+                .store(payload_drop, Ordering::SeqCst);
+            match stage {
+                0 => {
+                    *repository.mode_terminal_fault.lock().unwrap() =
+                        Some(ModeTerminalFault::InvokeAfter)
+                }
+                1 => {
+                    *repository.mode_terminal_fault.lock().unwrap() =
+                        Some(ModeTerminalFault::PollAfter)
+                }
+                2 | 3 => {
+                    repository
+                        .lose_mode_commit_ack
+                        .store(true, Ordering::SeqCst);
+                    *repository.mode_readback_fault.lock().unwrap() = Some(if stage == 2 {
+                        ModeReadbackFault::InvokePanic
+                    } else {
+                        ModeReadbackFault::PollPanic
+                    });
+                }
+                _ => unreachable!(),
+            }
+            let result = service
+                .set_approval_mode(id.clone(), actor, ConversationApprovalMode::Auto)
+                .await;
+            let settled = if stage < 2 {
+                matches!(result, Ok(ConversationApprovalMode::Auto))
+            } else {
+                matches!(result, Err(ConversationError::ApprovalModeUncertain))
+            };
+            let stored = repository.load(&id).await.unwrap().unwrap().approval_mode();
+            let view = current(&service, id.clone(), caller()).await.unwrap();
+            let shown = view.selection.unwrap().approval_mode;
+            let changes = provider.mode_updates.lock().unwrap().len();
+            let cleanups = provider.close_calls.load(Ordering::SeqCst);
+            let cleanup_owned = if stage < 2 {
+                cleanups == closes
+            } else {
+                cleanups == closes + 1
+            };
+            if !settled
+                || stored != ConversationApprovalMode::Auto
+                || shown != stored
+                || changes != mutations + 1
+                || !cleanup_owned
+                || view.approval_mode_change.is_some()
+            {
+                violations.push((
+                    payload_drop,
+                    stage,
+                    result,
+                    stored,
+                    shown,
+                    changes,
+                    cleanups,
+                ));
+            }
+            service.shutdown().await.unwrap();
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "terminal panic escaped owned settlement: {violations:?}"
+    );
+}

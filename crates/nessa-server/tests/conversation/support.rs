@@ -192,6 +192,7 @@ pub(crate) struct MemoryRepository {
     pub(crate) creation_race: Mutex<Option<Conversation>>,
     pub(crate) mode_pending_change: Mutex<Option<(ModeRecordChange, bool)>>,
     pub(crate) mode_readback_fault: Mutex<Option<ModeReadbackFault>>,
+    pub(crate) mode_panic_payload_drop: AtomicBool,
     pub(crate) mode_terminal_gate: Mutex<Option<(Arc<Notify>, Receiver<()>)>>,
     pub(crate) refuse_mode_commit_once: AtomicBool,
     /// Refuse to write a tombstone that says the deletion finished.
@@ -350,14 +351,17 @@ impl ConversationRepository for MemoryRepository {
         } else {
             None
         };
+        let payload_drop = self.mode_panic_payload_drop.load(Ordering::SeqCst);
         if matches!(fault, Some(ModeReadbackFault::InvokePanic)) {
-            panic!("mode readback invocation fault")
+            mode_panic(payload_drop, "mode readback invocation fault")
         }
         Box::pin(async move {
             match fault {
                 Some(ModeReadbackFault::Refuse) => Err(ConversationError::Metadata),
                 Some(ModeReadbackFault::Absent) => Ok(None),
-                Some(ModeReadbackFault::PollPanic) => panic!("mode readback polling fault"),
+                Some(ModeReadbackFault::PollPanic) => {
+                    mode_panic(payload_drop, "mode readback polling fault")
+                }
                 Some(ModeReadbackFault::Record(change)) => {
                     Ok(found.map(|record| change.changed(record)))
                 }
@@ -480,8 +484,9 @@ impl ConversationRepository for MemoryRepository {
         })();
         drop(requests);
         drop(records);
+        let payload_drop = self.mode_panic_payload_drop.load(Ordering::SeqCst);
         if matches!(fault, Some(ModeTerminalFault::InvokeAfter)) {
-            panic!("mode commit invocation fault after write")
+            mode_panic(payload_drop, "mode commit invocation fault after write")
         }
         let gate = self.mode_terminal_gate.lock().unwrap().take();
         Box::pin(async move {
@@ -491,7 +496,7 @@ impl ConversationRepository for MemoryRepository {
             }
             match fault {
                 Some(ModeTerminalFault::PollAfter) => {
-                    panic!("mode commit polling fault after write")
+                    mode_panic(payload_drop, "mode commit polling fault after write")
                 }
                 Some(ModeTerminalFault::Record(change)) => {
                     result.map(|record| change.changed(record))
@@ -1757,4 +1762,19 @@ pub(crate) async fn grant_read(
     )
     .await
     .unwrap();
+}
+
+// Custom repository payload deliberately violates safe destructor behavior.
+// Production containment must not call external payload destructors.
+struct ModePanicPayload;
+impl Drop for ModePanicPayload {
+    fn drop(&mut self) {
+        panic!("mode panic payload destructor");
+    }
+}
+fn mode_panic(payload_drop: bool, message: &'static str) -> ! {
+    if payload_drop {
+        std::panic::panic_any(ModePanicPayload);
+    }
+    panic!("{message}");
 }
