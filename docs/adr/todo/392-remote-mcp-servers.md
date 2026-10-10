@@ -537,13 +537,16 @@ admission ends with typed `TooLarge("queued MCP control frames")`; a closed
 writer ends with its retained terminal cause or `ServerGone`. The existing
 reader shutdown fence and connection end owner retain the first cause and one
 cleanup. A panicked HTTP writer does not wait for that later read. The writer
-catches that panic, discards the payload, logs a fixed marker and the server
-id, and asks the same owner, after the same fence, before its queue drops. A
-queued `RecoveryReady` whose completion sender is then dropped does not
-decide the end. It waits for the writer settlement: a panic resolves
-`ServerGone`, and a clean finish or cancellation resolves `Unconfirmed`.
-That covers every await the writer performs, including `finish_recovery`'s
-initialized POST, which owns the completion sender across that await. The watch remains
+catches that panic on every await it performs and discards the payload. The
+caught future drops when that await finishes, and that drop releases a
+completion sender the writer still owns. The writer then settles itself as
+panicked, logs a fixed marker and the server id, and asks the same owner,
+after the same fence. A `RecoveryReady` completion the writer drops, whether
+it is still queued or held by `finish_recovery`, does not decide the end. It
+waits for that settlement: a panic resolves `ServerGone`, and a clean finish
+or cancellation resolves `Unconfirmed`. That covers every await the writer
+performs, including `finish_recovery`'s initialized POST, which owns the
+completion sender across that await. The watch remains
 for a panic that still fails the task: it logs the same marker and asks the
 same owner. That fence runs before the record (J27). Shutdown releases a
 claimed session id and signals finished even when DELETE panics, so the id
