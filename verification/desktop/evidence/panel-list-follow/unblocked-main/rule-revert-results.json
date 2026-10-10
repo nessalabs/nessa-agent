@@ -1,0 +1,57 @@
+[
+  {
+    "rule": "initial-both",
+    "exit": 1,
+    "sourceChanged": true
+  },
+  {
+    "rule": "callback-generation",
+    "exit": 1,
+    "sourceChanged": true
+  },
+  {
+    "rule": "stale-half-notice",
+    "exit": 1,
+    "sourceChanged": true
+  },
+  {
+    "rule": "stop-both",
+    "exit": 1,
+    "sourceChanged": true
+  },
+  {
+    "rule": "fence-one-shot",
+    "exit": 1,
+    "sourceChanged": true
+  },
+  {
+    "rule": "command-refresh",
+    "exit": 1,
+    "sourceChanged": true
+  },
+  {
+    "rule": "incomplete-archive",
+    "exit": 1,
+    "sourceChanged": true
+  },
+  {
+    "rule": "ignore-stopped-failure",
+    "exit": 1,
+    "sourceChanged": true
+  },
+  {
+    "rule": "terminal-frame-fence",
+    "exit": 1,
+    "sourceChanged": true
+  },
+  {
+    "rule": "lagging-immediate",
+    "exit": 1,
+    "sourceChanged": true
+  },
+  {
+    "rule": "abort-pending-list",
+    "exit": 1,
+    "sourceChanged": true
+  }
+]

@@ -1,0 +1,168 @@
+{
+  "check": "panel-list-follow",
+  "ok": true,
+  "started": "2026-10-10T08:39:11.142Z",
+  "finished": "2026-10-10T08:39:24.362Z",
+  "target": {
+    "url": "http://127.0.0.1:60077/desktop.html",
+    "mode": "dev"
+  },
+  "results": [
+    {
+      "ok": true,
+      "failures": [],
+      "name": "console",
+      "harmless": [
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:60077/favicon.ico)"
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "external-catalogue-and-cleanup",
+      "engine": "chromium",
+      "detail": {
+        "initial": {
+          "rows": [],
+          "archivedIds": [],
+          "failure": null,
+          "following": true,
+          "requestId": "0niWjsvQbk4OV1sVnAhzM",
+          "oneShotReads": 0,
+          "opens": 2,
+          "stops": 0
+        },
+        "live": {
+          "rows": ["d02bb43f-9abf-4a92-8af2-ddc2d17958d5"],
+          "archivedIds": [],
+          "failure": null,
+          "following": true,
+          "requestId": "0niWjsvQbk4OV1sVnAhzM",
+          "oneShotReads": 0,
+          "opens": 2,
+          "stops": 0
+        },
+        "archived": {
+          "rows": [],
+          "archivedIds": ["d02bb43f-9abf-4a92-8af2-ddc2d17958d5"],
+          "failure": null,
+          "following": true,
+          "requestId": "0niWjsvQbk4OV1sVnAhzM",
+          "oneShotReads": 0,
+          "opens": 2,
+          "stops": 0
+        },
+        "controlledArchivedPortFailure": {
+          "rows": ["b329281c-9982-49d8-ab68-6857897b556b"],
+          "archivedIds": [],
+          "failure": "unavailable",
+          "following": true,
+          "requestId": "0niWjsvQbk4OV1sVnAhzM",
+          "oneShotReads": 0,
+          "opens": 2,
+          "stops": 0
+        },
+        "hidden": {
+          "rows": ["b329281c-9982-49d8-ab68-6857897b556b"],
+          "archivedIds": [],
+          "failure": "unavailable",
+          "following": false,
+          "requestId": null,
+          "oneShotReads": 0,
+          "opens": 2,
+          "stops": 2
+        },
+        "restored": {
+          "rows": [
+            "6b299b02-bb26-4ffd-a2bc-1be9aade8825",
+            "b329281c-9982-49d8-ab68-6857897b556b"
+          ],
+          "archivedIds": [],
+          "failure": null,
+          "following": true,
+          "requestId": "L8Jfv_tcyMn_QoN0Jh0hy",
+          "oneShotReads": 0,
+          "opens": 4,
+          "stops": 2
+        },
+        "externalCaller": true,
+        "provider": "scripted",
+        "catalogueHalvesAtomic": false
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "external-catalogue-and-cleanup",
+      "engine": "webkit",
+      "detail": {
+        "initial": {
+          "rows": [],
+          "archivedIds": [],
+          "failure": null,
+          "following": true,
+          "requestId": "MyAiggJh3cnPyuDnhZoln",
+          "oneShotReads": 0,
+          "opens": 2,
+          "stops": 0
+        },
+        "live": {
+          "rows": ["2cc55848-7fcb-476f-879b-08f25bd64974"],
+          "archivedIds": [],
+          "failure": null,
+          "following": true,
+          "requestId": "MyAiggJh3cnPyuDnhZoln",
+          "oneShotReads": 0,
+          "opens": 2,
+          "stops": 0
+        },
+        "archived": {
+          "rows": [],
+          "archivedIds": ["2cc55848-7fcb-476f-879b-08f25bd64974"],
+          "failure": null,
+          "following": true,
+          "requestId": "MyAiggJh3cnPyuDnhZoln",
+          "oneShotReads": 0,
+          "opens": 2,
+          "stops": 0
+        },
+        "controlledArchivedPortFailure": {
+          "rows": ["f76552a7-7a20-42f6-b7fa-9d1473451f82"],
+          "archivedIds": [],
+          "failure": "unavailable",
+          "following": true,
+          "requestId": "MyAiggJh3cnPyuDnhZoln",
+          "oneShotReads": 0,
+          "opens": 2,
+          "stops": 0
+        },
+        "hidden": {
+          "rows": ["f76552a7-7a20-42f6-b7fa-9d1473451f82"],
+          "archivedIds": [],
+          "failure": "unavailable",
+          "following": false,
+          "requestId": null,
+          "oneShotReads": 0,
+          "opens": 2,
+          "stops": 2
+        },
+        "restored": {
+          "rows": [
+            "6e80e632-2842-448b-9d90-d641f28e6310",
+            "f76552a7-7a20-42f6-b7fa-9d1473451f82"
+          ],
+          "archivedIds": [],
+          "failure": null,
+          "following": true,
+          "requestId": "9bH8m2_4jcFTJMm87aA0W",
+          "oneShotReads": 0,
+          "opens": 4,
+          "stops": 2
+        },
+        "externalCaller": true,
+        "provider": "scripted",
+        "catalogueHalvesAtomic": false
+      }
+    }
+  ]
+}
