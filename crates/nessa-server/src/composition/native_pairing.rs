@@ -27,9 +27,9 @@ use crate::device_pairing::infrastructure::{
     NativeEnrollmentConnections, NativeEnrollmentListener, PairingOwnerCommands,
     PairingRuntimeDependencies, TcpEnrollmentAccept,
 };
-use crate::peer_gateways::application::EnrollmentEntropy;
 use crate::peer_gateways::infrastructure::{
-    DurablePeerAudit, PeerCommands, PeerPoller, PeerRecords, PollPolicy, TcpPeerConnector,
+    DurablePeerAudit, EnrollmentEntropy, PeerCommands, PeerPoller, PeerRecords, PollPolicy,
+    TcpPeerConnector,
 };
 use crate::product::{DeviceCredentials, NativeSessions, ProductRouteState};
 use nessa_auth::{
