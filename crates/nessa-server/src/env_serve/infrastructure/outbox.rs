@@ -123,7 +123,9 @@ impl FileOutbox {
         if !resolved.starts_with(&self.workspace) {
             return Err(PublishRefusal::OutsideWorkspace);
         }
-        let name = resolved
+        // The agent's own name for the file, not its link target's: the
+        // resolved path is only for containment and opening.
+        let name = requested
             .file_name()
             .and_then(|name| name.to_str())
             .filter(|name| shown(name))

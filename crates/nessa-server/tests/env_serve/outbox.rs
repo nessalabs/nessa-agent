@@ -116,6 +116,21 @@ fn nothing_outside_the_workspace_is_staged_even_through_a_link() {
 }
 
 #[test]
+fn a_file_published_through_a_link_keeps_the_name_it_was_asked_by() {
+    let fixture = fixture();
+    let build = fixture.workspace.join("build");
+    fs::create_dir(&build).unwrap();
+    let output = build.join("output");
+    fs::write(&output, b"%PDF bytes").unwrap();
+    let link = fixture.workspace.join("report.pdf");
+    symlink(&output, &link).unwrap();
+    let staged = fixture.outbox.stage("lease", 1, &request(&link)).unwrap();
+    assert_eq!(staged.name, "report.pdf");
+    assert_eq!(staged.media_type, "application/pdf");
+    assert_eq!(fs::read(&staged.path).unwrap(), b"%PDF bytes");
+}
+
+#[test]
 fn an_empty_or_missing_file_is_refused() {
     let fixture = fixture();
     let empty = fixture.workspace.join("empty");
