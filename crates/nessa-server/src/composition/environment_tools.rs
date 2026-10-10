@@ -213,7 +213,10 @@ fn answered(answer: &CommandAnswer) -> Value {
             result: ran,
             recorded,
         } => {
-            let succeeded = ran.exit == CommandExit::Exited { code: 0 } && *recorded;
+            // A success is an exit 0 whose end is recorded here and whose
+            // cleanup the host confirmed; anything less is said as an error.
+            let succeeded =
+                ran.exit == CommandExit::Exited { code: 0 } && *recorded && ran.cleanup.is_some();
             result(
                 json!({
                     "lease": lease.as_str(),

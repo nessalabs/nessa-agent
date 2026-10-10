@@ -1064,23 +1064,26 @@ impl Served {
                 None => CommandRan::not_started(),
             };
             let lost = *stopped.borrow() == Some(CommandStop::Lost);
-            let entries = [
-                LedgerEntry::CommandRan {
-                    lease: lease.clone(),
-                    end: outcome.end,
-                    dropped_bytes: outcome.dropped_bytes,
-                },
-                LedgerEntry::Ended {
-                    lease: lease.clone(),
-                    cleanup: outcome.cleanup,
-                    lost,
-                },
-            ];
-            for entry in &entries {
-                if let Err(error) = ledger.record(entry) {
-                    tracing::error!(lease, %error, "a command's end could not be recorded");
-                    outcome.cleanup = Cleanup::Uncertain;
-                }
+            // Its end is written after its exit, and says uncertain once the
+            // exit could not be written, so the ledger never reads confirmed
+            // over a missing record.
+            let ran_entry = LedgerEntry::CommandRan {
+                lease: lease.clone(),
+                end: outcome.end,
+                dropped_bytes: outcome.dropped_bytes,
+            };
+            if let Err(error) = ledger.record(&ran_entry) {
+                tracing::error!(lease, %error, "a command's exit could not be recorded");
+                outcome.cleanup = Cleanup::Uncertain;
+            }
+            let ended_entry = LedgerEntry::Ended {
+                lease: lease.clone(),
+                cleanup: outcome.cleanup,
+                lost,
+            };
+            if let Err(error) = ledger.record(&ended_entry) {
+                tracing::error!(lease, %error, "a command's end could not be recorded");
+                outcome.cleanup = Cleanup::Uncertain;
             }
             let cleanup = outcome.cleanup;
             // Its answer goes before anything that waits for its end, so a

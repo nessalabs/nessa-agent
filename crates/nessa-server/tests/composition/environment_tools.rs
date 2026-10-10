@@ -147,6 +147,8 @@ fn an_answer_says_how_the_command_ended_or_why_it_was_refused() {
     assert_eq!(unrecorded["isError"], true);
     assert_eq!(unrecorded["structuredContent"]["recorded"], false);
     assert_eq!(unrecorded["structuredContent"]["stdout"], "out");
+    // Nor one whose cleanup the host could not confirm.
+    assert_eq!(ran(CommandExit::Exited { code: 0 }, None)["isError"], true);
 }
 
 #[test]

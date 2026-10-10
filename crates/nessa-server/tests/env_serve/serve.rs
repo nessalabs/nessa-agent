@@ -151,6 +151,8 @@ impl CommandRunner for FakeCommands {
 struct MemoryLedger {
     entries: Mutex<Vec<LedgerEntry>>,
     failing: AtomicBool,
+    /// Refuses only a command's exit, as a disk that went away for one write.
+    failing_command_ran: AtomicBool,
 }
 
 impl MemoryLedger {
@@ -161,7 +163,10 @@ impl MemoryLedger {
 
 impl LeaseLedger for MemoryLedger {
     fn record(&self, entry: &LedgerEntry) -> io::Result<()> {
-        if self.failing.load(Ordering::SeqCst) {
+        if self.failing.load(Ordering::SeqCst)
+            || (matches!(entry, LedgerEntry::CommandRan { .. })
+                && self.failing_command_ran.load(Ordering::SeqCst))
+        {
             return Err(io::Error::other("disk gone"));
         }
         self.entries.lock().unwrap().push(entry.clone());
@@ -1404,4 +1409,42 @@ async fn a_lost_connection_stops_running_commands_and_records_them_lost() {
         cleanup: Cleanup::NotHeld,
         lost: true,
     }));
+}
+
+#[tokio::test]
+async fn a_command_whose_exit_cannot_be_recorded_ends_uncertain_in_the_ledger_too() {
+    let mut gateway = Gateway::start();
+    assert_eq!(gateway.next().await, hello());
+    gateway
+        .send(grant_command(COMMAND, &["echo", "a", "b"], None))
+        .await;
+    assert_eq!(
+        gateway.next().await,
+        FromEnvironment::Granted {
+            lease: COMMAND.into()
+        }
+    );
+    gateway
+        .ledger
+        .failing_command_ran
+        .store(true, Ordering::SeqCst);
+    gateway
+        .send(ToEnvironment::Run {
+            lease: COMMAND.into(),
+        })
+        .await;
+    let FromEnvironment::Ran { cleanup, .. } = gateway.next().await else {
+        panic!("its ran is answered");
+    };
+    assert_eq!(cleanup, Cleanup::Uncertain);
+    // The end written after the missing exit says so, and nothing reads
+    // confirmed later.
+    assert!(gateway.ledger.entries().iter().any(|entry| matches!(
+        entry,
+        LedgerEntry::Ended { lease, cleanup: Cleanup::Uncertain, .. } if lease == COMMAND
+    )));
+    assert_eq!(
+        gateway.ledger.accounted(COMMAND).unwrap(),
+        Cleanup::Uncertain
+    );
 }
