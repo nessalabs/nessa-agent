@@ -100,7 +100,7 @@ async fn a_kept_upload_is_held_found_and_read_and_survives_a_restart() {
     let another = hold_for("org", CONVERSATION, b"another original", b"what is kept");
     assert_eq!(
         keep(&store, &another, b"what is kept").await,
-        Kept::Existing(hold.clone())
+        Kept::Existing(Box::new(hold.clone()))
     );
     drop(store);
 

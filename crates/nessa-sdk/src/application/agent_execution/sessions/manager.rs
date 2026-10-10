@@ -1,9 +1,10 @@
 use super::{
-    app_sources, attachment::AttachmentLease, steering_position::SteeringPosition, CurrentLease,
-    InvocationCancellationEvent, InvocationRecord, InvocationSchedulingEvent, LeaseRecord,
-    MessageCommitClock, ProviderContext, QueueHistoryRecord, SessionChange, SessionLoadState,
-    SessionSaveGeneration, SessionSaveUnit, SessionSnapshot, SessionStorage, SessionStorageLease,
-    StorageError, StorageFuture, SubmissionAcknowledgement,
+    app_sources, artifacts::ArtifactRefusal, attachment::AttachmentLease,
+    steering_position::SteeringPosition, ArtifactRecord, CurrentLease, InvocationCancellationEvent,
+    InvocationRecord, InvocationSchedulingEvent, LeaseRecord, MessageCommitClock, ProviderContext,
+    QueueHistoryRecord, SessionChange, SessionLoadState, SessionSaveGeneration, SessionSaveUnit,
+    SessionSnapshot, SessionStorage, SessionStorageLease, StorageError, StorageFuture,
+    SubmissionAcknowledgement,
 };
 use crate::application::agent_execution::{
     agents::AgentError,
@@ -104,6 +105,43 @@ impl fmt::Display for LeaseRecordError {
     }
 }
 impl std::error::Error for LeaseRecordError {}
+
+/// Why [`SessionManager::record_artifact`] did not record an artifact, or did
+/// not yet save it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ArtifactRecordError {
+    /// The manager has not loaded the conversation: no Agent has prepared it.
+    NotLoaded,
+    /// The conversation already records
+    /// [`ArtifactRecord::MAX_PER_CONVERSATION`] artifacts. Nothing was
+    /// retained.
+    Full,
+    /// The record's lease is not the conversation's latest, is not live, or
+    /// was not issued by the record's actor; or the latest lease cannot be
+    /// read, so which it is cannot be told. Nothing was retained.
+    NotThisLease,
+    /// The record names a turn the conversation did not accept. Nothing was
+    /// retained.
+    UnknownTurn,
+    /// The record was retained but writing it failed; the next save writes it.
+    Storage(StorageError),
+}
+impl fmt::Display for ArtifactRecordError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotLoaded => formatter.write_str("the conversation is not loaded"),
+            Self::Full => formatter.write_str("the conversation records its most artifacts"),
+            Self::NotThisLease => {
+                formatter.write_str("the artifact's lease is not the conversation's live lease")
+            }
+            Self::UnknownTurn => {
+                formatter.write_str("the artifact names a turn the conversation did not accept")
+            }
+            Self::Storage(error) => write!(formatter, "artifact record not saved: {error}"),
+        }
+    }
+}
+impl std::error::Error for ArtifactRecordError {}
 
 /// Owns the local conversation key, its exclusive storage lease, and saved evidence.
 /// Provider-private model/tool state is restored by the selected provider.
@@ -339,6 +377,7 @@ impl SessionManager {
         let mut snapshot = compacted.unwrap_or_else(|| SessionSnapshot {
             queue_history: Vec::new(),
             lease: None,
+            artifacts: Vec::new(),
             id: self.id.clone(),
             provider: identity,
             provider_context: ProviderContext::Absent,
@@ -1066,6 +1105,71 @@ impl SessionManager {
             decided,
             saved: saved.map_err(LeaseRecordError::Storage),
         })
+    }
+    /// How many more artifacts the conversation can record:
+    /// [`ArtifactRecord::MAX_PER_CONVERSATION`] less those it records,
+    /// including any retained but not yet saved. `None` before
+    /// [`Agent::prepare`] has loaded the conversation.
+    ///
+    /// Read under the lock [`Self::record_artifact`] takes, but not held after
+    /// it returns: room seen here can be taken by another record before this
+    /// caller's, which [`Self::record_artifact`] then refuses as
+    /// [`ArtifactRecordError::Full`].
+    ///
+    /// [`Agent::prepare`]: crate::application::agent_execution::agents::Agent::prepare
+    pub async fn artifact_room(&self) -> Option<usize> {
+        let evidence = self.evidence.lock().await;
+        evidence.observed.as_ref().map(|snapshot| {
+            ArtifactRecord::MAX_PER_CONVERSATION.saturating_sub(snapshot.artifacts.len())
+        })
+    }
+    /// Record that the conversation holds an artifact, under the same lock as
+    /// [`Self::record_lease`], so a lease cannot end between the check and the
+    /// record (row L5).
+    ///
+    /// The record is checked against the conversation's current lease as
+    /// observed, including facts retained but not yet durable: `record.lease`
+    /// must be the latest lease, still live, and `record.actor` the one who
+    /// asked for it; `record.turn`, when given, a turn the conversation
+    /// accepted. The same rule reads the record back. A record refused
+    /// retains nothing. A retained record is written at once, and a write
+    /// that fails leaves it retained for the next save, as a lease record is:
+    /// [`ArtifactRecordError::Storage`].
+    ///
+    /// # Errors
+    /// [`ArtifactRecordError::NotLoaded`] before [`Agent::prepare`] has loaded
+    /// the conversation; [`ArtifactRecordError::Full`],
+    /// [`ArtifactRecordError::NotThisLease`] or
+    /// [`ArtifactRecordError::UnknownTurn`] when refused;
+    /// [`ArtifactRecordError::Storage`] when retained but not saved.
+    ///
+    /// [`Agent::prepare`]: crate::application::agent_execution::agents::Agent::prepare
+    pub async fn record_artifact(&self, record: ArtifactRecord) -> Result<(), ArtifactRecordError> {
+        let mut evidence = self.evidence.lock().await;
+        let snapshot = evidence
+            .observed
+            .as_mut()
+            .ok_or(ArtifactRecordError::NotLoaded)?;
+        let accepted = |turn: &ExecutionId| {
+            snapshot
+                .invocations
+                .iter()
+                .any(|invocation| &invocation.request.execution_id == turn)
+        };
+        record
+            .admit(snapshot, accepted)
+            .map_err(|refusal| match refusal {
+                ArtifactRefusal::Full => ArtifactRecordError::Full,
+                ArtifactRefusal::NotThisLease | ArtifactRefusal::LeaseUnreadable => {
+                    ArtifactRecordError::NotThisLease
+                }
+                ArtifactRefusal::UnknownTurn => ArtifactRecordError::UnknownTurn,
+            })?;
+        snapshot.artifacts.push(record.clone());
+        evidence.append_unit(vec![SessionChange::Artifact(record)]);
+        self.save_observed(&mut evidence)
+            .await
+            .map_err(ArtifactRecordError::Storage)
     }
     /// Write the lease records, and any other evidence, that an earlier
     /// [`Self::record_lease`] retained but could not save

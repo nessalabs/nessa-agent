@@ -1439,6 +1439,12 @@
           "$ref": "#/$defs/ConversationLease",
           "description": "The conversation's latest lease: where its agent runs and under what limits, or why it could not. Absent before any lease was recorded."
         },
+        "artifacts": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ConversationArtifact" },
+          "maxItems": 64,
+          "description": "Files the conversation holds that its agent published under a lease, the newest 64 in the order they were recorded; empty before any was. An older one is left out of the list, not out of the conversation, and the list may give up its oldest entries to bound the response."
+        },
         "title": {
           "type": ["string", "null"],
           "minLength": 1,
@@ -1481,9 +1487,59 @@
         "transcriptState",
         "title",
         "questions",
+        "artifacts",
         "approvalMode",
         "approvalModes"
       ]
+    },
+    "ConversationArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One file the conversation holds that its agent published under a lease: read from the environment, verified by its digest, and recorded with the lease as its cause. The bytes are never in the view.",
+      "properties": {
+        "executionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The turn that was running when it was recorded; absent when none was."
+        },
+        "lease": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "x-utf8MaxBytes": 128,
+          "description": "The lease it was published under. Which identities are valid is the SDK domain's rule (LeaseId); only its byte bound is repeated here."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "x-utf8MaxBytes": 255,
+          "description": "The file name it was published under, for people only: it names no place on any machine. Which names are valid is the SDK's rule (ArtifactName: no `/` and no control character); only its byte bound is repeated here."
+        },
+        "digest": {
+          "type": "string",
+          "minLength": 71,
+          "maxLength": 71,
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "description": "SHA-256 of its bytes: `sha256:` and 64 lowercase hexadecimal digits."
+        },
+        "mimeType": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 127,
+          "x-utf8MaxBytes": 127,
+          "description": "The media type it was declared as, lowercase without parameters. Which types are valid is the SDK domain's rule (MediaType); only its byte bound is repeated here."
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 67108864,
+          "description": "Its length in bytes, at most 64 MiB."
+        }
+      },
+      "required": ["lease", "name", "digest", "mimeType", "size"]
     },
     "ConversationCreateParams": {
       "type": "object",

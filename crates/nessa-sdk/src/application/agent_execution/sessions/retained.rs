@@ -1,6 +1,6 @@
 //! Conservatively account owned continuation allocations, using payload owners' byte accounting.
 use super::{
-    CurrentLease, CurrentLeaseState, InvocationCancellationEvent, InvocationRecord,
+    ArtifactRecord, CurrentLease, CurrentLeaseState, InvocationCancellationEvent, InvocationRecord,
     InvocationSchedulingEvent, LeaseRecord, QueueHistoryRecord, SessionChange, SessionSnapshot,
     StorageError, SubmissionAcknowledgement,
 };
@@ -43,7 +43,22 @@ pub(super) fn snapshot(value: &SessionSnapshot) -> usize {
     for entry in &value.queue_history {
         bytes = bytes.saturating_add(queue_entry(entry));
     }
+    for record in &value.artifacts {
+        bytes = bytes.saturating_add(artifact(record));
+    }
     bytes.saturating_add(lease(value.lease.as_ref()))
+}
+
+/// One artifact record's payload beyond its slot in the list.
+pub(super) fn artifact(record: &ArtifactRecord) -> usize {
+    record
+        .lease
+        .as_str()
+        .len()
+        .saturating_add(record.turn.as_ref().map_or(0, |turn| turn.as_str().len()))
+        .saturating_add(record.name.as_str().len())
+        .saturating_add(record.file.media_type().as_str().len())
+        .saturating_add(actor(&record.actor))
 }
 
 /// The latest lease and its records, which a lease change replaces whole.
@@ -136,6 +151,12 @@ fn snapshot_slots(value: &SessionSnapshot) -> usize {
                 .queue_history
                 .capacity()
                 .saturating_mul(size_of::<QueueHistoryRecord>()),
+        )
+        .saturating_add(
+            value
+                .artifacts
+                .capacity()
+                .saturating_mul(size_of::<ArtifactRecord>()),
         )
 }
 
@@ -302,6 +323,7 @@ pub(super) fn touched(
             .map_or(0, |id| id.as_str().len()),
         SessionChange::QueueDecision(_) => 0,
         SessionChange::Lease(_) => lease(snapshot.lease.as_ref()),
+        SessionChange::Artifact(_) => 0,
     })
 }
 pub(super) fn append_payload(change: &SessionChange) -> usize {
@@ -309,6 +331,7 @@ pub(super) fn append_payload(change: &SessionChange) -> usize {
         SessionChange::QueueDecision(entry) => queue_entry(entry),
         SessionChange::SchedulingTransition { event, .. } => scheduling_payload(event),
         SessionChange::ProviderObservation(event) => observation_payload(event),
+        SessionChange::Artifact(record) => artifact(record),
         _ => 0,
     }
 }

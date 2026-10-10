@@ -106,6 +106,7 @@ async fn exact_admitted_scope_reads_committed_frames_and_joins_before_shutdown()
                 invocations: Vec::new(),
                 queue_history: Vec::new(),
                 lease: None,
+                artifacts: Vec::new(),
             },
             vec![SessionSaveUnit::new(vec![SessionChange::Opened {
                 id: session.clone(),
@@ -352,6 +353,7 @@ async fn small_saves(directory: &std::path::Path, session: &SessionId, saves: us
         invocations: Vec::new(),
         queue_history: Vec::new(),
         lease: None,
+        artifacts: Vec::new(),
     };
     let mut binding = writer.load().await.unwrap().binding().clone();
     binding = writer

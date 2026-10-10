@@ -1,6 +1,6 @@
 //! What each committed record says, and that it is committed privately.
 use super::*;
-use crate::attachments::application::{RemovedBlob, RetiredHold, RetirementEvidence};
+use crate::attachments::application::{PublishedFile, RemovedBlob, RetiredHold, RetirementEvidence};
 use crate::attachments::domain::{RetiredFrom, TicketLifetime};
 use crate::attachments_test_support::{
     attachment, conversation, digest_of, organization, principal, ManualClock, CONVERSATION,
@@ -526,5 +526,92 @@ fn substitutable_retirement_reports_refuse_contradictory_inputs() {
         let other = RetiredHold::new(other, was, RetirementEvidence::Release(release())).unwrap();
         assert!(RemovedBlob::new(vec![valid.clone(), other.clone()]).is_none());
         assert!(RemovedBlob::new(vec![other, valid]).is_none());
+    }
+}
+
+/// A hold an environment published is created by the lease's caller, for
+/// the lease, and says so; so does a publish that found the file already
+/// held, or became no hold.
+#[test]
+fn a_published_hold_names_its_lease_as_cause() {
+    let requester = Caller::new(principal("owner"), "phone", "request-1").unwrap();
+    let published_hold = Hold::published(
+        organization("org"),
+        conversation(CONVERSATION),
+        attachment(b"sent", "image/heic"),
+        requester.clone(),
+        "lease-1",
+        1_000,
+        2_000,
+    )
+    .unwrap();
+    let offer = PublishedFile::new(
+        organization("org"),
+        conversation(CONVERSATION),
+        attachment(b"sent", "image/heic"),
+        requester,
+        "lease-1",
+    )
+    .unwrap()
+    .offered_at(1_500);
+    let requested = json!({"kind": "caller", "principalId": "owner", "surfaceId": "phone"});
+    let mut kept_as_sent = target(false);
+    kept_as_sent["stored"] = kept_as_sent["uploaded"].clone();
+    for (record, expected) in [
+        (
+            AttachmentAuditRecord::HoldCreated {
+                hold: published_hold,
+            },
+            json!({
+                "kind": "attachment_hold_created",
+                "target": kept_as_sent,
+                "transition": {"before": "absent", "after": "held"},
+                "cause": "lease_published",
+                "lease": "lease-1",
+                "initiator": requested,
+                "correlationId": "request-1",
+                "requestedAtMs": 1_000,
+                "uploadedAtMs": 2_000,
+            }),
+        ),
+        (
+            AttachmentAuditRecord::AlreadyPublished {
+                published: offer.clone(),
+                hold: hold(),
+            },
+            json!({
+                "kind": "attachment_already_held",
+                "target": already_held_target(),
+                "transition": {"before": "held", "after": "held"},
+                "cause": "lease_published",
+                "lease": "lease-1",
+                "initiator": requested,
+                "correlationId": "request-1",
+                "requestedAtMs": 1_500,
+                "heldSinceMs": 2_000,
+            }),
+        ),
+        (
+            AttachmentAuditRecord::PublishRejected {
+                published: offer,
+                reason: UploadRejection::DigestMismatch,
+            },
+            json!({
+                "kind": "attachment_publish_rejected",
+                "target": {
+                    "organizationId": "org",
+                    "conversationId": CONVERSATION,
+                    "uploaded": target(false)["uploaded"],
+                },
+                "transition": {"before": "offered", "after": "not_held"},
+                "cause": "digest_mismatch",
+                "lease": "lease-1",
+                "initiator": requested,
+                "correlationId": "request-1",
+                "requestedAtMs": 1_500,
+            }),
+        ),
+    ] {
+        assert_eq!(record_value(&record), expected, "{record:?}");
     }
 }

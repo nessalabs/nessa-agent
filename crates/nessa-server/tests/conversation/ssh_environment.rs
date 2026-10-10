@@ -77,6 +77,7 @@ impl HarnessLauncher for Echo {
         &self,
         _agent: &str,
         _environment: &BTreeMap<String, String>,
+        _publish_point: Option<&str>,
     ) -> Result<HarnessProcess, AgentError> {
         let (input, mut harness_in) = duplex(4096);
         let (mut harness_out, output) = duplex(4096);
@@ -233,6 +234,7 @@ impl LeaseConnector for Connector {
                     LEASE_PROTOCOL,
                     self.launcher.clone(),
                     self.ledger.clone(),
+                    Arc::new(NoOutbox),
                     ServeTimings {
                         grace: Duration::from_millis(10),
                         kill: Duration::from_millis(100),
@@ -303,7 +305,16 @@ impl LeaseConnector for Connector {
             from_environment: Box::new(from_environment),
             to_environment: Box::new(to_environment),
             keep: Box::new(()),
+            artifacts: Arc::new(NoChannels),
         })
+    }
+}
+
+/// A connection with no artifact channel to offer.
+struct NoChannels;
+impl super::connector::ArtifactChannels for NoChannels {
+    fn open(&self) -> io::Result<super::connector::ArtifactChannel> {
+        Err(io::Error::other("no artifact channels"))
     }
 }
 
@@ -1212,6 +1223,7 @@ async fn a_stop_is_waited_for_through_every_step_the_host_takes() {
             &self,
             _agent: &str,
             _environment: &BTreeMap<String, String>,
+            _publish_point: Option<&str>,
         ) -> Result<HarnessProcess, AgentError> {
             let (input, _harness_in) = duplex(64);
             let (harness_out, output) = duplex(64);
@@ -1357,4 +1369,23 @@ async fn a_loss_whose_audit_fails_leaves_the_lease_unanswered() {
         opened.hold.end(LeaseEndCause::Lost).await,
         LeaseRelease::Unanswered
     );
+}
+
+/// A host that stages nothing: its leases run without a publish point.
+pub(crate) struct NoOutbox;
+impl crate::env_serve::application::ArtifactOutbox for NoOutbox {
+    fn open(&self, _lease: &str) -> std::io::Result<crate::env_serve::application::PublishPoint> {
+        Err(std::io::Error::other("no outbox"))
+    }
+    fn stage(
+        &self,
+        _lease: &str,
+        _artifact: u32,
+        _request: &crate::env_serve::application::PublishRequest,
+    ) -> Result<nessa_protocol::lease::StagedArtifact, crate::env_serve::application::PublishRefusal>
+    {
+        Err(crate::env_serve::application::PublishRefusal::StagingFailed)
+    }
+    fn discard(&self, _lease: &str, _artifact: u32) {}
+    fn close(&self, _lease: &str) {}
 }

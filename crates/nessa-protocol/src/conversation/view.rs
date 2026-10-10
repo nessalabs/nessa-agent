@@ -9,7 +9,7 @@ use nessa_sdk::{
             PermissionDenialCapability, PolicyCloseSessionCapability, PolicyEndTurnCapability,
             PreToolPolicyCapability,
         },
-        sessions::CommittedViewState,
+        sessions::{ArtifactRecord, CommittedViewState},
     },
     domain::agent_execution::{
         permissions::PermissionEffect,
@@ -63,6 +63,10 @@ pub struct ConversationView {
     /// limits, or why it could not. Absent before any lease was recorded.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lease: Option<ConversationLeaseView>,
+    /// Artifacts the conversation holds, the newest
+    /// [`MAX_VIEW_ARTIFACTS`](super::projection::MAX_VIEW_ARTIFACTS) in the
+    /// order they were recorded. Empty before any was recorded.
+    pub artifacts: Vec<ConversationArtifact>,
 }
 /// Product status of the last physical committed read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -747,6 +751,38 @@ pub enum ConversationLeaseRefusal {
     EnvironmentVersionMismatch,
     EnvironmentBusy,
     AgentUnavailable,
+}
+
+/// One artifact the conversation holds: a file its agent published under a
+/// lease, collected and verified by its digest.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationArtifact {
+    /// The turn that was running when it was recorded, if one was.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub execution_id: Option<String>,
+    /// The lease it was published under.
+    pub lease: String,
+    /// The name it was published under, for people only.
+    pub name: String,
+    /// SHA-256 of its bytes: `sha256:` and 64 lowercase hexadecimal digits.
+    pub digest: String,
+    /// What it was declared as.
+    pub mime_type: String,
+    /// Its length in bytes.
+    pub size: u64,
+}
+impl From<&ArtifactRecord> for ConversationArtifact {
+    fn from(record: &ArtifactRecord) -> Self {
+        Self {
+            execution_id: record.turn.as_ref().map(|turn| turn.as_str().into()),
+            lease: record.lease.as_str().into(),
+            name: record.name.as_str().into(),
+            digest: record.file.digest().to_string(),
+            mime_type: record.file.media_type().as_str().into(),
+            size: record.file.size(),
+        }
+    }
 }
 
 /// Non-secret runtime facts selected by server composition.

@@ -32,6 +32,13 @@ Each row is a limit the gateway names when a refusal or a silent close hits it. 
 | conversation.catalogue_watches | fixed | 64 | MAX_CATALOGUE_CHANGE_WATCHES in crates/nessa-server/src/conversation/infrastructure/catalogue_changes.rs | the catalogue watches every socket shares; a list subscription holds one beside its record watch, as a device's catalogue watch does; past this one is refused subscription_capacity |
 | conversation.read_grants | fixed | 64 | MAX_READ_GRANTS_PER_CONVERSATION in crates/nessa-server/src/conversation/application/read_grants.rs, the schema's ConversationSharesResult maxItems | the paired devices one conversation is shared with; one more conversation.share is refused invalid_request, so a conversation.shares answer always fits one frame |
 | record.read_work_budget | configured | 200 | config.json limits.readWorkBudgetMs | a cold read still preparing at this budget answers that it is preparing |
+| artifact.max_file_bytes | fixed | 67108864 | nessa_protocol::lease MAX_ARTIFACT_BYTES | a host refuses to publish a larger file, and the gateway to keep one |
+| artifact.host_in_flight | fixed | 4 | nessa_protocol::lease MAX_ARTIFACTS_IN_FLIGHT | a publish past this many unanswered under one lease is answered busy |
+| artifact.lease_files | fixed | 64 | conversation ArtifactBudget::LEASE.files | a file one lease publishes past this many kept is refused unread |
+| artifact.lease_bytes | fixed | 1073741824 | conversation ArtifactBudget::LEASE.bytes | a file that would take one lease's kept files past this is refused unread |
+| artifact.conversation_records | fixed | 1024 | nessa-sdk ArtifactRecord::MAX_PER_CONVERSATION | a file published once a conversation records this many is refused unread |
+| artifact.read_resumes | fixed | 3 | conversation ARTIFACT_READ_RESUMES | a read whose channel fails more often than this is refused channelUnavailable |
+| artifact.publish_deadline | fixed | 900000 | attachments AttachmentLimits::publish_deadline | a published file not read and checked by then is refused, and nothing held |
 | record.discovery_steps | fixed | 128 | record read DISCOVERY_STEPS_PER_READ | a cold read that uses every discovery step answers that the source is preparing |
 
 | client.preparing_attempts | client | the client's own | `PREPARING_ATTEMPTS` in `crates/nessa-client-core/src/read_only_sync/application/watch.rs` | how many times a preparing read is asked again |

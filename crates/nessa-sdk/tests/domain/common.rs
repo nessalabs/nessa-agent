@@ -1,6 +1,6 @@
 use nessa_sdk::domain::common::value_objects::{
-    Date, ImageMediaType, ImageMediaTypeError, Sha256Digest, Sha256DigestError, TokenLimits,
-    TokenLimitsError, Url,
+    Date, ImageMediaType, ImageMediaTypeError, MediaType, MediaTypeError, Sha256Digest,
+    Sha256DigestError, TokenLimits, TokenLimitsError, Url,
 };
 
 #[test]
@@ -187,4 +187,51 @@ fn image_media_types_are_a_closed_exact_set() {
             "{rejected:?}"
         );
     }
+}
+
+#[test]
+fn media_types_are_accepted_exactly_as_declared() {
+    let longest = format!("application/{}", "x".repeat(MediaType::MAX_BYTES - 12));
+    for accepted in [
+        "text/plain",
+        "application/vnd.api+json",
+        "image/svg+xml",
+        "3d/x-model_v1.2!#$&^",
+        longest.as_str(),
+    ] {
+        let parsed = MediaType::parse(accepted).unwrap();
+        assert_eq!(parsed.as_str(), accepted);
+        assert_eq!(parsed.to_string(), accepted);
+    }
+    assert_eq!(
+        MediaType::of_image(ImageMediaType::Webp),
+        MediaType::parse("image/webp").unwrap()
+    );
+    let too_long = format!("{longest}x");
+    for rejected in [
+        "",
+        "text",
+        "text/",
+        "/plain",
+        "Text/plain",
+        "text/Plain",
+        "text/plain; charset=utf-8",
+        " text/plain",
+        "text/plain/x",
+        "-text/plain",
+        "text/.plain",
+        "text/pl\u{e9}in",
+        too_long.as_str(),
+    ] {
+        assert_eq!(
+            MediaType::parse(rejected),
+            Err(MediaTypeError),
+            "{rejected:?}"
+        );
+    }
+    assert_eq!(
+        MediaTypeError.to_string(),
+        "media type must be a lowercase `type/subtype` of at most 127 bytes"
+    );
+    assert!(std::error::Error::source(&MediaTypeError).is_none());
 }

@@ -38,10 +38,10 @@ pub use error::{AuditDelivery, BeginError, ReleaseError, UploadError};
 pub use ports::{
     AttachmentAudit, AttachmentAuditRecord, AttachmentStore, AuditUnavailable, Confirmation,
     ConversationOwnership, Discard, HoldClaim, ImageNormalizer, Kept, NormalizeError,
-    NormalizeFuture, NormalizedImage, Ownership, OwnershipUnavailable, PortFuture, ReceivedBytes,
-    ReleaseCause, ReleaseEvidence, ReleaseReport, RemovedBlob, RetiredHold, RetirementEvidence,
-    RevertCause, SecretsUnavailable, StagedUpload, StoreUnavailable, TicketSecrets, UploadBody,
-    UploadInterrupted, UploadRejection,
+    NormalizeFuture, NormalizedImage, Ownership, OwnershipUnavailable, PortFuture, PublishKept,
+    PublishedFile, ReceivedBytes, ReleaseCause, ReleaseEvidence, ReleaseReport, RemovedBlob,
+    RetiredHold, RetirementEvidence, RevertCause, SecretsUnavailable, StagedUpload,
+    StoreUnavailable, TicketSecrets, UploadBody, UploadInterrupted, UploadRejection,
 };
 pub use service::{
     AttachmentCaller, AttachmentDependencies, AttachmentLimits, AttachmentService, BeginOutcome,

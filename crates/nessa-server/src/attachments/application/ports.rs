@@ -43,7 +43,7 @@ pub enum Kept {
     Pending(HoldClaim),
     /// The conversation already keeps exactly this stored file. Nothing
     /// changed; the hold is returned as it stands.
-    Existing(Hold),
+    Existing(Box<Hold>),
 }
 
 /// What confirming a claim found.
@@ -502,6 +502,17 @@ pub enum AttachmentAuditRecord {
         was: HoldState,
         release: ReleaseEvidence,
     },
+    /// A file an environment published under a lease arrived at a file the
+    /// conversation already keeps. Nothing was read; `hold` is unchanged.
+    AlreadyPublished {
+        published: PublishedFile,
+        hold: Hold,
+    },
+    /// A file an environment published under a lease became no hold.
+    PublishRejected {
+        published: PublishedFile,
+        reason: UploadRejection,
+    },
     /// Unheld bytes were removed after the original retirement.
     /// Carries its actual predecessor and release-or-reversal evidence.
     BlobRemoved { removed: RemovedBlob },
@@ -514,6 +525,74 @@ pub enum AttachmentAuditRecord {
 /// drops the call.
 pub trait AttachmentAudit: Send + Sync {
     fn record(&self, record: AttachmentAuditRecord) -> PortFuture<'_, (), AuditUnavailable>;
+}
+
+/// One file an environment offered by digest under a lease, for the
+/// conversation that lease runs (issue #701). Built by the conversation
+/// context from the lease's own record: who asked for its work, and which
+/// lease it is. Nothing here was checked against the bytes yet.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PublishedFile {
+    organization_id: OrganizationId,
+    conversation_id: ConversationId,
+    file: Attachment,
+    caller: Caller,
+    lease: Box<str>,
+    offered_at_ms: u64,
+}
+impl PublishedFile {
+    /// `None` for a lease id no record could carry.
+    pub fn new(
+        organization_id: OrganizationId,
+        conversation_id: ConversationId,
+        file: Attachment,
+        caller: Caller,
+        lease: &str,
+    ) -> Option<Self> {
+        (!lease.trim().is_empty() && lease.len() <= Caller::MAX_BYTES).then(|| Self {
+            organization_id,
+            conversation_id,
+            file,
+            caller,
+            lease: lease.into(),
+            offered_at_ms: 0,
+        })
+    }
+    /// The same offer, as offered at `now_ms`: stamped by the service that
+    /// keeps it, on its own clock.
+    pub(crate) fn offered_at(mut self, now_ms: u64) -> Self {
+        self.offered_at_ms = now_ms;
+        self
+    }
+    pub fn organization_id(&self) -> &OrganizationId {
+        &self.organization_id
+    }
+    pub fn conversation_id(&self) -> &ConversationId {
+        &self.conversation_id
+    }
+    /// What the environment said the file is.
+    pub fn file(&self) -> &Attachment {
+        &self.file
+    }
+    /// Who asked for the work the lease runs.
+    pub fn caller(&self) -> &Caller {
+        &self.caller
+    }
+    pub fn lease(&self) -> &str {
+        &self.lease
+    }
+    pub fn offered_at_ms(&self) -> u64 {
+        self.offered_at_ms
+    }
+}
+
+/// What keeping a published file found.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PublishKept {
+    /// Read, verified, and now held under the lease that published it.
+    Held(Attachment),
+    /// The conversation already kept exactly this file; nothing was read.
+    AlreadyHeld(Attachment),
 }
 
 /// The transfer ended early.

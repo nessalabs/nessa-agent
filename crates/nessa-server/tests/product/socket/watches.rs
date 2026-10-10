@@ -215,6 +215,7 @@ impl WatchFixture {
                     invocations: Vec::new(),
                     queue_history: Vec::new(),
                     lease: None,
+                    artifacts: Vec::new(),
                 },
                 vec![SessionSaveUnit::new(changes).unwrap()],
             )

@@ -111,6 +111,18 @@ impl CompositionRoot {
                 "nessa env serve requires Unix process supervision".into(),
             )),
             #[cfg(unix)]
+            Command::ArtifactPublish { path, media_type } => {
+                let published = super::artifact_command::execute(&path, media_type).await?;
+                if !published {
+                    std::process::exit(1);
+                }
+                Ok(())
+            }
+            #[cfg(not(unix))]
+            Command::ArtifactPublish { .. } => Err(RunError::Agent(
+                "nessa artifact publish runs only on a host serving nessa env serve".into(),
+            )),
+            #[cfg(unix)]
             Command::McpRelay {
                 socket,
                 server,

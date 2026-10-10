@@ -13,6 +13,9 @@
 //! gateway ── End{lease} ──▶ environment ── Ended{cleanup} ──▶ gateway
 //! gateway ── Account{lease} ──▶ environment ── Accounted{cleanup} ──▶ gateway
 //! gateway ── Keepalive ──▶ environment   (every KEEPALIVE_INTERVAL, always)
+//! environment ── Published{lease, artifact, file} ──▶ gateway   (no bytes)
+//!   gateway ── sftp read of the file's outbox path ──▶ environment   (the artifact channel)
+//! gateway ── Collected{lease, artifact, outcome} ──▶ environment
 //! ```
 //!
 //! Arrows are frames, in the order the two ends exchange them. Every frame
@@ -33,6 +36,13 @@
 //! On the wire each frame is [`crate::pairing::encode_frame`]'s four-byte
 //! big-endian length and a JSON body of at most [`MAX_FRAME_BYTES`]. A
 //! harness's bytes travel base64-encoded, at most [`MAX_DATA_BYTES`] a frame.
+//!
+//! A published artifact's bytes never ride these frames. [`FromEnvironment::Published`]
+//! says only which file, by digest, size and the path the environment staged
+//! it under; the gateway reads that path over the artifact channel beside
+//! this stream (sftp on the same SSH connection) and verifies what it read
+//! against the digest, then answers [`ToEnvironment::Collected`], after which
+//! the environment lets the staged copy go.
 //!
 //! The hello is read by [`read_hello`], which looks only at its `type`,
 //! `build` and `protocol`: an environment speaking another protocol is
@@ -71,6 +81,19 @@ pub const MAX_STOP_WAIT: Duration = Duration::from_secs(60);
 pub fn stop_steps(grace: Duration, kill: Duration) -> Duration {
     grace.min(MAX_STOP_WAIT) * 2 + kill.min(MAX_STOP_WAIT) * 4
 }
+
+/// Most bytes one published artifact may have: the most the gateway's
+/// storage keeps of one file. The environment refuses a larger file before
+/// staging any of it, and the gateway refuses a
+/// [`FromEnvironment::Published`] naming more.
+pub const MAX_ARTIFACT_BYTES: u64 = 64 * 1024 * 1024;
+/// Most artifacts one lease may have published and not yet collected; the
+/// environment refuses another until one is answered.
+pub const MAX_ARTIFACTS_IN_FLIGHT: usize = 4;
+/// Longest artifact name, in bytes: a file name, for people only.
+pub const MAX_ARTIFACT_NAME_BYTES: usize = 255;
+/// Longest path of a staged artifact on the environment, in bytes.
+pub const MAX_ARTIFACT_PATH_BYTES: usize = 1024;
 
 /// A harness's bytes, base64 on the wire.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -148,6 +171,62 @@ pub enum StartFailure {
     /// The environment could not record the start in its own audit, so it
     /// started nothing.
     AuditUnavailable,
+}
+
+/// One file an environment staged for the gateway to collect: what it is,
+/// and where the gateway reads it. Never its bytes.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StagedArtifact {
+    /// The file's name where it was published, for people only: no
+    /// directory, at most [`MAX_ARTIFACT_NAME_BYTES`].
+    pub name: String,
+    /// Its declared media type, lowercase `type/subtype`.
+    pub media_type: String,
+    /// Its length in bytes, at most [`MAX_ARTIFACT_BYTES`].
+    pub size: u64,
+    /// The SHA-256 of its bytes, lowercase hex.
+    pub digest: String,
+    /// The absolute path the environment staged it under, which the gateway
+    /// reads over the artifact channel; at most [`MAX_ARTIFACT_PATH_BYTES`].
+    pub path: String,
+}
+
+/// What became of one published artifact, as the gateway answers it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "outcome", rename_all = "camelCase", deny_unknown_fields)]
+pub enum Collection {
+    /// Read, verified by its digest, held by the conversation and recorded
+    /// in it with the lease as cause.
+    Held,
+    /// The conversation already held exactly this file; nothing was read,
+    /// and the publish is recorded.
+    AlreadyHeld,
+    /// Not kept: nothing of it is visible in the conversation.
+    Refused {
+        /// Why.
+        reason: CollectionRefusal,
+    },
+}
+
+/// Why a published artifact was not kept.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CollectionRefusal {
+    /// The lease's budget of artifact files or bytes would be passed.
+    BudgetExceeded,
+    /// What it says it is cannot be kept: a name, media type, size or digest
+    /// this build does not accept.
+    Invalid,
+    /// The artifact channel could not be opened, or broke more often than
+    /// the gateway retries.
+    ChannelUnavailable,
+    /// The bytes read were not the file described: another size or digest.
+    Mismatch,
+    /// The gateway could not keep the bytes, or record keeping them.
+    NotKept,
+    /// The lease ended before the artifact was collected.
+    LeaseEnded,
 }
 
 /// The first frame an environment sends.
@@ -233,6 +312,16 @@ pub enum ToEnvironment {
     },
     /// The gateway is still there; nothing else.
     Keepalive,
+    /// What became of the lease's published `artifact`: the environment
+    /// lets its staged copy go.
+    Collected {
+        /// The lease's id.
+        lease: String,
+        /// The environment's number for the artifact under the lease.
+        artifact: u32,
+        /// What became of it.
+        outcome: Collection,
+    },
 }
 
 /// What an environment sends a gateway after its [`Hello`].
@@ -318,6 +407,16 @@ pub enum FromEnvironment {
         /// Its cleanup, as the environment recorded it.
         cleanup: Cleanup,
     },
+    /// The lease's harness published a file, staged for the gateway to
+    /// collect over the artifact channel.
+    Published {
+        /// The lease's id.
+        lease: String,
+        /// The environment's number for the artifact under the lease.
+        artifact: u32,
+        /// What it is and where it is staged.
+        file: StagedArtifact,
+    },
 }
 
 impl FromEnvironment {
@@ -332,7 +431,8 @@ impl FromEnvironment {
             | Self::OutputClosed { lease, .. }
             | Self::Stopped { lease, .. }
             | Self::Ended { lease, .. }
-            | Self::Accounted { lease, .. } => Some(lease),
+            | Self::Accounted { lease, .. }
+            | Self::Published { lease, .. } => Some(lease),
         }
     }
 }
@@ -348,7 +448,8 @@ impl ToEnvironment {
             | Self::InputClosed { lease, .. }
             | Self::Stop { lease, .. }
             | Self::End { lease }
-            | Self::Account { lease } => Some(lease),
+            | Self::Account { lease }
+            | Self::Collected { lease, .. } => Some(lease),
         }
     }
 }

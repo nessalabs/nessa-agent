@@ -1,5 +1,6 @@
 //! Full semantic checkpoint mapping reuses storage field codecs and the shared validator.
 use super::{
+    artifacts::WireArtifact,
     leases::SavedLease,
     queue_order::QueueEvent,
     records::{Event, Metadata, Provider},
@@ -45,6 +46,11 @@ struct SnapshotCodec<I, Q> {
     /// written exactly as before leases existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     lease: Option<SavedLease>,
+    /// Absent before any artifact was recorded, so a checkpoint without one
+    /// is written exactly as before artifacts existed, and one written before
+    /// then reads back with none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    artifacts: Vec<WireArtifact>,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -71,6 +77,7 @@ impl Serialize for SnapshotRef<'_> {
             invocations: InvocationList(&value.invocations),
             queue_history: QueueList(&value.queue_history),
             lease: value.lease.as_ref().map(SavedLease::from),
+            artifacts: value.artifacts.iter().map(WireArtifact::from).collect(),
         }
         .serialize(serializer)
     }
@@ -157,6 +164,11 @@ impl Snapshot {
                 .map(QueueEvent::decode)
                 .collect::<Result<_, _>>()?,
             lease: value.lease.map(SavedLease::decode).transpose()?,
+            artifacts: value
+                .artifacts
+                .into_iter()
+                .map(WireArtifact::decode)
+                .collect::<Result<_, _>>()?,
         };
         super::validate(&snapshot)?;
         Ok(snapshot)
@@ -195,5 +207,6 @@ pub(crate) fn history_fixture(count: usize) -> SessionSnapshot {
         invocations,
         queue_history: Vec::new(),
         lease: None,
+        artifacts: Vec::new(),
     }
 }

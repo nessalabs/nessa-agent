@@ -858,6 +858,67 @@ file bytes. Artifact transfers are bounded per lease and per device
 build output is an artifact like any other; what differs is only the
 budget it is checked against.
 
+### Artifact channel bounds and resumption
+
+Settled by slice D ([#701](https://github.com/nessalabs/nessa-agent/issues/701))
+for SSH hosts. An agent on a host publishes a file with
+`nessa artifact publish <path>`, a shell command it runs like any other,
+under the person's approval. That command asks `nessa env serve` on a
+socket only that lease's harnesses are told of (`NESSA_ARTIFACTS`).
+
+```mermaid
+sequenceDiagram
+    participant A as Agent on the host
+    participant E as nessa env serve
+    participant G as Gateway (SSH adapter)
+    participant S as attachments
+    A->>E: publish /work/build/Nessa.dmg
+    E->>E: inside the workspace? copy to the outbox, hashing as it copies
+    E->>G: Published{lease, artifact, name, type, size, digest, path} (no bytes)
+    G->>G: under the lease's budget? room for its record?
+    G->>S: keep_published(file, bytes not yet read)
+    S->>S: the conversation already holds it? AlreadyHeld, nothing read
+    S->>G: pull the bytes
+    G->>E: sftp over the lease's own SSH connection (ControlMaster), 32 KiB reads
+    Note over G,E: a channel that fails is reopened, reading on from the offset reached
+    S->>S: size and digest equal? pending hold, HoldCreated (cause: the lease), confirm
+    G->>G: SessionChange::Artifact in the conversation's stream
+    G->>E: Collected{lease, artifact, outcome}
+    E->>E: delete the staged copy
+    E->>A: Held{digest, size}, or the typed refusal
+```
+
+- **No bytes on the control channel.** `Published` carries only what the
+  file is and where its staged copy lies. The bytes are read over the
+  `sftp` subsystem of the lease's own SSH connection, multiplexed by
+  OpenSSH's control socket, so nothing new is authenticated or reached; a
+  channel never falls back to a connection of its own.
+- **What the gateway reads is a snapshot.** The host copies the file into
+  its outbox when it is published and hashes what it copied. A file the
+  agent changes afterwards changes nothing the gateway receives, and the
+  digest the gateway checks against is the copy's.
+- **Bounds.** One file is at most `artifact.max_file_bytes` (64 MiB, the
+  attachment store's own bound); a lease keeps at most
+  `artifact.environment_files` files and `artifact.environment_bytes` bytes;
+  a host holds at most `artifact.host_in_flight` unanswered publishes per
+  lease; a conversation records at most `artifact.conversation_records`.
+  Past any of them the file is refused unread, never truncated. Reads are
+  32 KiB with at most 16 outstanding, so at most 512 KiB of a file is held
+  in memory, and the whole read is bounded by `artifact.publish_deadline`.
+  The values are in [docs/limits.md](../limits.md).
+- **Resumption.** Within a live lease, a channel that fails is reopened
+  and the read goes on from the offset already received, at most
+  `artifact.read_resumes` times; past that it is refused
+  `channelUnavailable`. A lease that ends or loses its connection mid-read
+  is refused `leaseEnded` at once: its staged copies go with it. Resuming
+  across leases is by digest: published again, a file the conversation
+  already holds answers `alreadyHeld` without a byte read. Whatever stops a
+  read, no hold is visible: one is written only after the bytes match.
+- **Records.** A kept file is a `SessionChange::Artifact` in the
+  conversation's stream naming its lease, the turn running when it was
+  kept, its name and the lease's issuer; the conversation view lists the
+  newest. Its hold is the conversation's, released with its other files.
+
 ## Previews: a port, not a file
 
 A dev server the agent started on an environment should open in the
@@ -1067,6 +1128,8 @@ needs them:
 | `environment.disk_pause_bytes` | Free space below which an environment freezes its workloads, keeps the gateway's history readable, and refuses new leases until space returns |
 | `artifact.lease_bytes` | Bytes one lease may fetch by digest |
 | `artifact.environment_bytes`, `artifact.environment_files` | Bytes and files one lease may publish to the gateway |
+| `artifact.max_file_bytes`, `artifact.host_in_flight`, `artifact.conversation_records` | One published file's size; publishes a host holds unanswered per lease; artifacts one conversation records |
+| `artifact.read_resumes`, `artifact.publish_deadline` | How often a failed artifact channel is reopened; how long reading and checking one file may take |
 | `share.grants_per_conversation` | Grants one conversation may hold |
 
 ## Performance
@@ -1262,9 +1325,6 @@ Named so they are not mistaken for settled:
   announcement reveals.
 - **Which tools a policy can gate, per binding.** The share dialog must
   say it; the answer comes from the #142 declaration and the 0014 survey.
-- **Artifact channel bounds and resumption.** Chunk size, per-lease
-  budgets, and resuming a large transfer by digest after a dropped SSH
-  connection.
 - **Command leases.** Output capture limits, how a command's artifacts
   are named, and whether a long command may outlive the tool call that
   started it (a receipt the agent polls) or must be bounded by it.

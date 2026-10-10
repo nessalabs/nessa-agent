@@ -5,7 +5,8 @@
 //! ```text
 //! launch(agent, binding variables) ──▶ LaunchSpec for agent (host config)
 //!     command = spec.executable spec.args, in workspace,
-//!     environment = accepted binding variables, then the host's own (host wins)
+//!     environment = accepted binding variables, then the host's own (host wins),
+//!                   then the lease's publish point (NESSA_ARTIFACTS), this side's
 //!     ──▶ SupervisedHarness::start ──▶ HarnessProcess
 //! ```
 //!
@@ -13,7 +14,7 @@
 //! agent's binding declares it sets (`LAUNCH_VARIABLES`); any other name is
 //! refused, so a gateway cannot choose the executable, the search path, a
 //! preloaded library or a credential here.
-use crate::env_serve::application::HarnessLauncher;
+use crate::env_serve::application::{HarnessLauncher, PUBLISH_POINT_VARIABLE};
 use nessa_protocol::agents::AgentId;
 use nessa_sdk::{
     application::agent_execution::{agents::AgentError, providers::HarnessProcess},
@@ -76,6 +77,7 @@ impl HarnessLauncher for ConfiguredLauncher {
         &self,
         agent: &str,
         environment: &BTreeMap<String, String>,
+        publish_point: Option<&str>,
     ) -> Result<HarnessProcess, AgentError> {
         let id = AgentId::parse(agent)
             .ok_or_else(|| AgentError::Unsupported(format!("no agent named {agent}")))?;
@@ -99,6 +101,9 @@ impl HarnessLauncher for ConfiguredLauncher {
             .env_clear()
             .envs(environment)
             .envs(&spec.environment);
+        if let Some(point) = publish_point {
+            command.env(PUBLISH_POINT_VARIABLE, point);
+        }
         SupervisedHarness::start(command)
     }
 }

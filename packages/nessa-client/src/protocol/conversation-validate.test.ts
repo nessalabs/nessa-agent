@@ -31,6 +31,7 @@ function view() {
     truncated: false,
     queueComplete: true,
     transcriptState: "complete",
+    artifacts: [],
     messages: [
       {
         executionId: "queued",
@@ -990,5 +991,68 @@ describe("the view's lease", () => {
     const served = protocolFile("samples/conversation-read.json")
     const parsed = conversationView(served, served.conversationId)
     expect(parsed.lease?.state).toBe("live")
+  })
+})
+
+describe("the view's artifacts", () => {
+  const artifact = {
+    executionId: "running",
+    lease: "lease-1",
+    name: "report.pdf",
+    digest: `sha256:${"0f".repeat(32)}`,
+    mimeType: "application/pdf",
+    size: 2048,
+  }
+  const withArtifacts = (artifacts: unknown) => ({ ...view(), artifacts })
+
+  it("accepts the published shape, the newest 64 at most", () => {
+    const listed = [
+      artifact,
+      { ...artifact, executionId: undefined },
+      { ...artifact, name: "😀".repeat(63) + "abc", size: 64 * 1024 * 1024 },
+    ]
+    expect(conversationView(withArtifacts(listed), "conversation").artifacts).toEqual(
+      listed,
+    )
+    expect(
+      conversationView(withArtifacts(Array(64).fill(artifact)), "conversation").artifacts,
+    ).toHaveLength(64)
+  })
+
+  it("refuses a view without its list, or a list past its bound", () => {
+    expect(() => conversationView(withArtifacts(undefined), "conversation")).toThrow(
+      /conversation artifacts/,
+    )
+    expect(() =>
+      conversationView(withArtifacts(Array(65).fill(artifact)), "conversation"),
+    ).toThrow(/conversation artifacts/)
+  })
+
+  it("refuses an artifact outside the published shape", () => {
+    const refused: [unknown, RegExp][] = [
+      ["report.pdf", /Invalid conversation response/],
+      [{ ...artifact, path: "/outbox/1" }, /unknown fields/],
+      [{ ...artifact, executionId: "" }, /executionId/],
+      [{ ...artifact, lease: undefined }, /lease/],
+      [{ ...artifact, lease: "l".repeat(129) }, /lease/],
+      [{ ...artifact, name: "" }, /name/],
+      [{ ...artifact, name: "😀".repeat(63) + "abcd" }, /name/],
+      [{ ...artifact, digest: `sha256:${"0F".repeat(32)}` }, /artifact digest/],
+      [{ ...artifact, mimeType: "Application/PDF" }, /artifact mimeType/],
+      [{ ...artifact, size: 0 }, /artifact size/],
+      [{ ...artifact, size: 64 * 1024 * 1024 + 1 }, /artifact size/],
+      [{ ...artifact, size: 1.5 }, /artifact size/],
+    ]
+    for (const [item, error] of refused)
+      expect(
+        () => conversationView(withArtifacts([item]), "conversation"),
+        JSON.stringify(item),
+      ).toThrow(error)
+  })
+
+  it("knows every field the schema gives an artifact", () => {
+    const defs = protocolFile("v1.json").$defs
+    const keys = Object.keys(defs.ConversationArtifact.properties).sort()
+    expect(keys).toEqual(Object.keys(artifact).sort())
   })
 })

@@ -85,6 +85,7 @@ export function view(
     pending: [],
     permissions: [],
     tools: [],
+    artifacts: [],
     capabilities: {
       queue: true,
       steer: true,

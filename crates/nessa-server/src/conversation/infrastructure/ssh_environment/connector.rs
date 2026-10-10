@@ -6,8 +6,13 @@
 //! OpenSshConnector::connect(host)
 //!   ──▶ ssh -T -o BatchMode=yes -o ForwardAgent=no -o ForwardX11=no
 //!          -o ClearAllForwardings=yes -o ServerAliveInterval=15
-//!          -o ServerAliveCountMax=3 -- <host> nessa env serve
-//!   ──▶ LeaseConnection { its stdout, its stdin, the child (killed on drop) }
+//!          -o ServerAliveCountMax=3 -o ControlMaster=yes -o ControlPersist=no
+//!          -S <control socket> -- <host> nessa env serve
+//!   ──▶ LeaseConnection { its stdout, its stdin, the child (killed on drop),
+//!                         its artifact channels }
+//! artifact channel (issue #701), on that same SSH connection:
+//!   ──▶ ssh -S <control socket> -o ControlMaster=no -o ProxyCommand=false
+//!          -o BatchMode=yes -T -s -- <host> sftp
 //! ```
 //!
 //! Arrows are what is run and what is handed back. The destination is an
@@ -19,7 +24,7 @@
 //! forwarding are never used, and the keep-alives bound how long a silent
 //! connection is believed.
 use nessa_sdk::domain::agent_execution::leases::SshDestination;
-use std::io;
+use std::{io, sync::Arc};
 use tokio::io::{AsyncRead, AsyncWrite};
 
 /// An open byte stream to a host's environment.
@@ -30,6 +35,30 @@ pub(crate) struct LeaseConnection {
     pub(crate) to_environment: Box<dyn AsyncWrite + Send + Unpin>,
     /// Whatever keeps the stream open; dropping it ends the connection.
     pub(crate) keep: Box<dyn Send>,
+    /// How artifact channels are opened on this same connection.
+    pub(crate) artifacts: Arc<dyn ArtifactChannels>,
+}
+
+/// One artifact channel: an sftp session's two directions, and whatever
+/// keeps it open.
+pub(crate) struct ArtifactChannel {
+    /// What the host's sftp server writes.
+    pub(crate) from_host: Box<dyn AsyncRead + Send + Unpin>,
+    /// What it reads.
+    pub(crate) to_host: Box<dyn AsyncWrite + Send + Unpin>,
+    /// Dropping it ends the channel, never the connection it rides on.
+    pub(crate) keep: Box<dyn Send>,
+}
+
+/// Opens artifact channels beside one connection's lease frames: sftp on
+/// the same SSH connection, so nothing more is authenticated or reached.
+pub(crate) trait ArtifactChannels: Send + Sync {
+    /// Open one. Answers at once; whether it is served is learned from what
+    /// arrives on it.
+    ///
+    /// # Errors
+    /// Nothing could be started at all.
+    fn open(&self) -> io::Result<ArtifactChannel>;
 }
 
 /// Opens connections to hosts' environments.
@@ -63,5 +92,44 @@ pub(crate) fn ssh_arguments(host: &SshDestination) -> Vec<&str> {
         "nessa",
         "env",
         "serve",
+    ]
+}
+
+/// The options that make the lease connection the master of its artifact
+/// channels, given before [`ssh_arguments`]: on the command line, so they
+/// override whatever the person's own configuration says of multiplexing,
+/// and with this gateway's own `control` socket, ended with the connection.
+pub(crate) fn master_arguments(control: &str) -> Vec<&str> {
+    vec![
+        "-o",
+        "ControlMaster=yes",
+        "-o",
+        "ControlPersist=no",
+        "-S",
+        control,
+    ]
+}
+
+/// The arguments one artifact channel to `host` is run with: the sftp
+/// subsystem over the lease connection's `control` socket, never a new
+/// connection of its own. `ssh` falls back to connecting directly when the
+/// socket does not answer; that fallback is made to fail (a proxy command
+/// that exits at once, given first so the person's own proxy settings do
+/// not replace it), so a channel is the lease connection's or nothing.
+pub(crate) fn channel_arguments<'a>(host: &'a SshDestination, control: &'a str) -> Vec<&'a str> {
+    vec![
+        "-S",
+        control,
+        "-o",
+        "ControlMaster=no",
+        "-o",
+        "ProxyCommand=false",
+        "-o",
+        "BatchMode=yes",
+        "-T",
+        "-s",
+        "--",
+        host.as_str(),
+        "sftp",
     ]
 }

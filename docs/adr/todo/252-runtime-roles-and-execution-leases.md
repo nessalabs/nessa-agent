@@ -158,6 +158,15 @@ Environments lane, in order:
   publishes files by digest; the transcript shows them; download verifies.
   *Gate:* a DMG and a screenshot built remotely arrive, verify and are
   audited with the lease as cause; the control channel carries no bytes.
+  Delivered in three parts:
+  - [x] **D1.** Publishing from the host (`nessa artifact publish`), the
+    sftp read with resumption, holds with the lease as cause, the
+    conversation's artifact record and view, and the budgets
+    ([Artifact channel bounds and resumption](../../design/runtime-architecture.md#artifact-channel-bounds-and-resumption)).
+  - [ ] **D2.** A verified download route, inline images in the
+    transcript, and the phone.
+  - [ ] **D3.** `artifacts.publish` and `artifacts.fetch` in `nessa-mcp`
+    once C lands, and a gateway-initiated publish.
 - [x] **E. Record subscriptions; desktop off polling** ([#702](https://github.com/nessalabs/nessa-agent/issues/702);
   bounded reads #296 and the one fold #277 are done and are its
   foundation; merged in [#715](https://github.com/nessalabs/nessa-agent/pull/715)). *Gate:*

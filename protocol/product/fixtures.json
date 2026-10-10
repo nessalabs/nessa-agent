@@ -119,6 +119,16 @@
     "truncated": false,
     "queueComplete": true,
     "transcriptState": "complete",
+    "artifacts": [
+      {
+        "executionId": "run-1",
+        "lease": "lease-1",
+        "name": "itinerary.pdf",
+        "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "mimeType": "application/pdf",
+        "size": 2048
+      }
+    ],
     "title": "Flights to Lisbon",
     "questions": [
       {

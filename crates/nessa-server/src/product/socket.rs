@@ -2786,6 +2786,7 @@ mod tests {
                     invocations: Vec::new(),
                     queue_history: Vec::new(),
                     lease: None,
+                    artifacts: Vec::new(),
                 },
                 vec![SessionSaveUnit::new(vec![SessionChange::Opened {
                     id: session_id.clone(),

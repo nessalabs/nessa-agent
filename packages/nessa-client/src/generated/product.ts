@@ -611,6 +611,8 @@ export interface ConversationView {
   runtime?: ConversationRuntime
   /** The conversation's latest lease: where its agent runs and under what limits, or why it could not. Absent before any lease was recorded. */
   lease?: ConversationLease
+  /** Files the conversation holds that its agent published under a lease, the newest 64 in the order they were recorded; empty before any was. An older one is left out of the list, not out of the conversation, and the list may give up its oldest entries to bound the response. */
+  artifacts: ConversationArtifact[]
   /** Name the gateway derived from the conversation's first message, the same one conversation.list shows; null before anything was said. */
   title: string | null
   /** Questions the agent is waiting on, oldest first. */
@@ -621,6 +623,21 @@ export interface ConversationView {
   approvalModes: ApprovalModeChoice[]
   /** Present while a change is in progress or recovery is required. */
   approvalModeChange?: ApprovalModeChange
+}
+/** One file the conversation holds that its agent published under a lease: read from the environment, verified by its digest, and recorded with the lease as its cause. The bytes are never in the view. */
+export interface ConversationArtifact {
+  /** The turn that was running when it was recorded; absent when none was. */
+  executionId?: string
+  /** The lease it was published under. Which identities are valid is the SDK domain's rule (LeaseId); only its byte bound is repeated here. */
+  lease: string
+  /** The file name it was published under, for people only: it names no place on any machine. Which names are valid is the SDK's rule (ArtifactName: no `/` and no control character); only its byte bound is repeated here. */
+  name: string
+  /** SHA-256 of its bytes: `sha256:` and 64 lowercase hexadecimal digits. */
+  digest: string
+  /** The media type it was declared as, lowercase without parameters. Which types are valid is the SDK domain's rule (MediaType); only its byte bound is repeated here. */
+  mimeType: string
+  /** Its length in bytes, at most 64 MiB. */
+  size: number
 }
 /** Idempotently create or reopen one named conversation. */
 export interface ConversationCreateParams {

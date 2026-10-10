@@ -5,10 +5,12 @@ use crate::application::agent_execution::executions::{
     ExecutionRequest,
 };
 use crate::application::agent_execution::sessions::{
-    CurrentLease, LeaseRecord as SavedLeaseRecord, QueueHistoryRecord, SessionSnapshot,
+    ArtifactName, ArtifactRecord, CurrentLease, LeaseRecord as SavedLeaseRecord,
+    QueueHistoryRecord, SessionSnapshot,
 };
 use crate::domain::agent_execution::{
     executions::{ExecutionId, QueueOrderChange},
+    leases::LeaseId,
     permissions::PermissionOption,
     prompts::{AppModelContext as DomainAppModelContext, LinkedFile, McpAppSource, UserMessage},
     questions::{
@@ -20,6 +22,7 @@ use crate::domain::agent_execution::{
         MAX_STRUCTURED_RESULT_BYTES,
     },
 };
+use crate::domain::common::value_objects::MediaType;
 use crate::infrastructure::session_storage::save_group::{
     GroupCheckpoint as CheckpointMetadata, MetadataValueKind, SaveIdentity as IdentityMetadata,
 };
@@ -60,6 +63,8 @@ pub(super) enum Shape {
     SnapshotLease,
     LeaseRecords,
     LeaseRecord,
+    Artifacts,
+    Artifact,
     Metadata,
     Images,
     Image,
@@ -147,6 +152,13 @@ impl Shape {
             (Semantic, "Lease") => LeaseRecord,
             (LeaseRecord, "kind") => Text(SavedLeaseRecord::MAX_UNREADABLE_KIND_BYTES),
             (LeaseRecord, "body") => Text(SavedLeaseRecord::MAX_UNREADABLE_BODY_BYTES),
+            (Snapshot, "artifacts") => Artifacts,
+            (Semantic, "Artifact") => Artifact,
+            (Artifact, "lease") => Text(LeaseId::MAX_BYTES),
+            (Artifact, "turn") => Text(ExecutionId::MAX_BYTES),
+            (Artifact, "name") => Text(ArtifactName::MAX_BYTES),
+            (Artifact, "digest") => Text(DIGEST_BYTES),
+            (Artifact, "media_type") => Text(MediaType::MAX_BYTES),
             (Invocation, "metadata") => Metadata,
             (Invocation, "scheduling") => Scheduling,
             (Invocation, "events") => Events,
@@ -280,6 +292,10 @@ impl Shape {
             McpTool => matches!(key, "server" | "tool"),
             SnapshotLease => matches!(key, "revision" | "records"),
             LeaseRecord => matches!(key, "kind" | "body"),
+            Artifact => matches!(
+                key,
+                "lease" | "turn" | "name" | "digest" | "media_type" | "size" | "actor"
+            ),
             ProviderError => matches!(key, "code" | "diagnostic"),
             AuthenticationError => key == "diagnostic",
             FailedAcknowledgement => matches!(key, "audit" | "storage"),
@@ -301,6 +317,7 @@ impl Shape {
             Self::AppModelContexts => Self::AppModelContext,
             Self::SemanticChanges => Self::Semantic,
             Self::LeaseRecords => Self::LeaseRecord,
+            Self::Artifacts => Self::Artifact,
             Self::FinalizedComponents => Self::FinalizedComponent,
             Self::Hooks => Self::Hook,
             Self::QueueEntries => Self::QueueEntry,
@@ -323,6 +340,7 @@ impl Shape {
             Self::SemanticChanges => 262_144 + 16 * 1024,
             Self::Hooks => 128,
             Self::LeaseRecords => CurrentLease::MAX_RECORDS,
+            Self::Artifacts => ArtifactRecord::MAX_PER_CONVERSATION,
             Self::QueueEntries | Self::QueueIds => QueueOrderChange::MAX_PENDING,
             // The message's own constructor refuses more; refuse them here
             // before the excess references are built.

@@ -118,6 +118,13 @@ pub(crate) trait LeaseHold: Send + Sync {
     /// running under it and answers what releasing it took. The caller bounds
     /// the wait.
     fn end(&self, cause: LeaseEndCause) -> EnvironmentFuture<'_, LeaseRelease>;
+    /// The files the environment publishes under the lease, each offered to
+    /// be kept (issue #701), handed out once: `None` for an environment that
+    /// publishes nothing, as in process, and for every ask after the first.
+    /// It ends once the lease is no longer held there.
+    fn artifacts(&self) -> Option<tokio::sync::mpsc::Receiver<super::ArtifactOffer>> {
+        None
+    }
 }
 
 /// What an environment answered when its lease was ended.
@@ -615,6 +622,16 @@ impl LiveLease {
     /// gateway itself.
     pub(crate) fn lost(&self) -> Option<EnvironmentFuture<'static, ()>> {
         self.hold.as_ref().and_then(|hold| hold.lost())
+    }
+
+    /// The files published under this lease, handed out once; see
+    /// [`LeaseHold::artifacts`].
+    pub(crate) fn artifacts(&self) -> Option<tokio::sync::mpsc::Receiver<super::ArtifactOffer>> {
+        self.hold.as_ref().and_then(|hold| hold.artifacts())
+    }
+
+    pub(crate) fn id(&self) -> &LeaseId {
+        &self.lease
     }
 
     /// Close `agent` under this lease for `cause`, asked by `actor`. The

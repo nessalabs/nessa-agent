@@ -8,6 +8,7 @@
 //! TokenLimits --> published model ceilings / configured execution budgets
 //! Sha256Digest --> content a user message refers to without carrying it
 //! ImageMediaType --> a user message's images / what a model is published to accept
+//! MediaType --> what a published file was declared as
 //! ```
 //! Arrows show uses. Each feature adds its own requirements around shared values.
 
@@ -25,3 +26,6 @@ pub use image_media_type::{ImageMediaType, ImageMediaTypeError};
 
 mod sha256_digest;
 pub use sha256_digest::{Sha256Digest, Sha256DigestError};
+
+mod media_type;
+pub use media_type::{MediaType, MediaTypeError};

@@ -59,6 +59,7 @@
 
 mod app_sources;
 pub use app_sources::UnknownApp;
+mod artifacts;
 pub(crate) mod attachment;
 pub(crate) mod committed_changes;
 mod leases;
@@ -81,9 +82,10 @@ pub use transcript::{
     CommittedViewState,
 };
 pub(crate) mod validation;
+pub use artifacts::{ArtifactName, ArtifactRecord, ArtifactValueError, PublishedFile};
 pub use leases::{CurrentLease, CurrentLeaseState, LeaseRecord};
+pub use manager::{ArtifactRecordError, LeaseCommit, LeaseRecordError, SessionManager};
 pub(crate) use manager::{AttachedProvider, AttachmentOpenFailureSource};
-pub use manager::{LeaseCommit, LeaseRecordError, SessionManager};
 pub use message_commit_clock::{MessageCommitClock, MessageCommitSleep};
 pub use storage::{
     CommittedSession, InvocationCancellationEvent, InvocationRecord, InvocationSchedulingEvent,

@@ -185,6 +185,7 @@ pub(super) async fn provider_agent_with_review(
             result: None,
         }],
         lease: None,
+        artifacts: Vec::new(),
     };
     let mut accepted = snapshot.invocations[0].clone();
     accepted.events.clear();

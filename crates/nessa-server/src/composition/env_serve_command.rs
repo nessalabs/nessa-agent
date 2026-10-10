@@ -5,6 +5,7 @@
 //! config.json "agents" ──▶ ConfiguredLauncher (workspace, each agent's command)
 //! <data>/environment/serve.lock ──▶ ServeLock (one serving process)
 //! <data>/environment/leases.jsonl ──▶ FileLedger
+//! <data>/environment/outbox/, a private temporary directory ──▶ FileOutbox
 //! stdin, stdout ──▶ serve(...) until the gateway's stream ends
 //! ```
 //!
@@ -16,8 +17,10 @@ use crate::{
     core::RunError,
     env::{Environment, LEASE_PROTOCOL, VERSION},
     env_serve::{
-        application::{refuse, serve, ServeTimings},
-        infrastructure::{ConfiguredLauncher, FileLedger, LaunchSpec, ServeLock, ServeLockError},
+        application::{refuse, serve, HarnessLauncher, ServeTimings},
+        infrastructure::{
+            ConfiguredLauncher, FileLedger, FileOutbox, LaunchSpec, ServeLock, ServeLockError,
+        },
     },
 };
 use nessa_protocol::{
@@ -51,6 +54,8 @@ pub(super) async fn execute() -> Result<(), RunError> {
     let Composed {
         launcher,
         ledger,
+        outbox,
+        sockets,
         lock,
     } = composed;
     serve(
@@ -60,9 +65,11 @@ pub(super) async fn execute() -> Result<(), RunError> {
         LEASE_PROTOCOL,
         launcher,
         ledger,
+        outbox,
         ServeTimings::default(),
     )
     .await;
+    let _ = std::fs::remove_dir_all(&sockets);
     drop(lock);
     Ok(())
 }
@@ -70,6 +77,9 @@ pub(super) async fn execute() -> Result<(), RunError> {
 struct Composed {
     launcher: Arc<ConfiguredLauncher>,
     ledger: Arc<FileLedger>,
+    outbox: Arc<FileOutbox>,
+    /// The publish points' directory, removed when serving ends.
+    sockets: std::path::PathBuf,
     lock: ServeLock,
 }
 
@@ -100,9 +110,24 @@ async fn compose() -> Result<Composed, (Unavailability, RunError)> {
     };
     let ledger = FileLedger::open(directory.join("leases.jsonl"))
         .map_err(|error| not_configured(RunError::Agent(error.to_string())))?;
+    // Short whatever the data directory is called: a socket's path is
+    // bounded (104 bytes on macOS), and the temporary directory is this
+    // user's.
+    let sockets = std::env::temp_dir().join(format!(
+        "nessa-env-{}",
+        &uuid::Uuid::new_v4().simple().to_string()[..8]
+    ));
+    let outbox = FileOutbox::open(
+        directory.join("outbox"),
+        sockets.clone(),
+        Path::new(launcher.workspace()),
+    )
+    .map_err(|error| not_configured(RunError::Agent(error.to_string())))?;
     Ok(Composed {
         launcher: Arc::new(launcher),
         ledger: Arc::new(ledger),
+        outbox: Arc::new(outbox),
+        sockets,
         lock,
     })
 }

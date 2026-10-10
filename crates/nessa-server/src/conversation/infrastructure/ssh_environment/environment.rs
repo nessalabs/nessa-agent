@@ -13,6 +13,9 @@
 //! LiveLease::close ──▶ SshHold::end ──▶ End ──▶ Ended{cleanup}
 //!   connection lost? ──▶ a new connection ──▶ Account ──▶ what the host recorded
 //! account(lease) ──▶ Account ──▶ Accounted{cleanup}
+//! Published{lease, artifact, file} ──▶ LeaseHold::artifacts ──▶ ArtifactOffer
+//!   its bytes ──▶ SftpBytes, over an artifact channel, only when pulled
+//!   its answer ──▶ Collected{lease, artifact, outcome}
 //! ```
 //!
 //! Arrows are calls and frames, in order. The binding — the agent protocol,
@@ -24,11 +27,12 @@
 use super::{
     audit::EnvironmentAudit,
     connector::LeaseConnector,
-    link::{HostLink, StartError},
+    link::{Granted, HostLink, Published, StartError},
+    transfer::SftpBytes,
 };
 use crate::conversation::application::{
-    Environment, EnvironmentDeclaration, EnvironmentFuture, EnvironmentLease, LeaseHold,
-    LeaseRelease,
+    ArtifactAnswer, ArtifactOffer, Environment, EnvironmentDeclaration, EnvironmentFuture,
+    EnvironmentLease, LeaseHold, LeaseRelease,
 };
 use nessa_protocol::lease::{Cleanup, KEEPALIVE_INTERVAL};
 use nessa_sdk::application::agent_execution::{
@@ -43,7 +47,7 @@ use nessa_sdk::domain::agent_execution::leases::{
     SandboxProfiles, SshDestination,
 };
 use std::{collections::BTreeMap, path::Path, sync::Arc, time::Duration};
-use tokio::sync::{watch, Mutex};
+use tokio::sync::{mpsc, watch, Mutex};
 
 /// How long reaching a host and its answers may take.
 #[derive(Clone, Copy, Debug)]
@@ -166,7 +170,7 @@ impl Environment for SshEnvironment {
                 tracing::warn!(agent = work.agent(), %error, "this agent's binding cannot start its harness on a host");
                 LeaseRefusal::AgentUnavailable
             })?;
-            let gone = link
+            let Granted { gone, published } = link
                 .grant(lease.as_str(), work.agent(), self.inner.timings.answer)
                 .await?;
             let workspace = Some(link.workspace().to_string_lossy().into_owned());
@@ -178,6 +182,7 @@ impl Environment for SshEnvironment {
                     link,
                     lease: lease.as_str().into(),
                     gone,
+                    published: std::sync::Mutex::new(Some(published)),
                 }),
             })
         })
@@ -196,6 +201,9 @@ struct SshHold {
     /// Closed once the lease is no longer routed on its connection: taken
     /// at its grant, so a loss before anyone asks is still seen.
     gone: watch::Receiver<()>,
+    /// The files published under it, until [`LeaseHold::artifacts`] takes
+    /// them.
+    published: std::sync::Mutex<Option<mpsc::Receiver<Published>>>,
 }
 
 impl LeaseHold for SshHold {
@@ -206,6 +214,42 @@ impl LeaseHold for SshHold {
             // a route already gone answers at once.
             while gone.changed().await.is_ok() {}
         }))
+    }
+
+    fn artifacts(&self) -> Option<mpsc::Receiver<ArtifactOffer>> {
+        let mut published = self
+            .published
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()?;
+        let (offers, taken) = mpsc::channel(1);
+        let link = self.link.clone();
+        let lease = self.lease.clone();
+        let gone = self.gone.clone();
+        // Ends with the lease's route: its offers' sender goes with it.
+        tokio::spawn(async move {
+            while let Some(Published { artifact, file }) = published.recv().await {
+                let answering = link.clone();
+                let answered = lease.clone();
+                let offer = ArtifactOffer {
+                    bytes: Box::new(SftpBytes::new(
+                        link.artifact_channels(),
+                        file.path.clone(),
+                        file.size,
+                        gone.clone(),
+                    )),
+                    file,
+                    answer: ArtifactAnswer::new(move |outcome| {
+                        answering.collected(&answered, artifact, outcome);
+                    }),
+                };
+                // Nobody takes them any more: its answer's drop says so.
+                if offers.send(offer).await.is_err() {
+                    break;
+                }
+            }
+        });
+        Some(taken)
     }
 
     fn end(&self, _cause: LeaseEndCause) -> EnvironmentFuture<'_, LeaseRelease> {

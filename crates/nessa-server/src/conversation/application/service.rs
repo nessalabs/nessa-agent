@@ -10,15 +10,15 @@ use super::{
     placement::Environments,
     provider_sessions::{ProviderSessionErasers, ProviderSessionHandler},
     retries::{Claim, DeletionRetries, Waiting},
-    AttachmentRelease, AttachmentReleaseCause, ConversationAttachments, ConversationCreationAudit,
-    ConversationDeletionAudit, ConversationDeletionAuditRecord, ConversationDeletionCause,
-    ConversationError, ConversationFileLinkAudit, ConversationFileLinkAuditRecord,
-    ConversationFileLinkCause, ConversationFileLinkState, ConversationListing,
-    ConversationModeApplication, ConversationModeAudit, ConversationModeAuditPhase,
-    ConversationModeRequest, ConversationModeRequestState, ConversationOwnershipState,
-    ConversationRepository, ConversationSummaries, DeletionFailures, ListedConversation,
-    ObservationCursor, ObservedConversations, RuntimeReadiness, StopFailure, SubmittedMessage,
-    UnfinishedDeletions,
+    ArtifactBudget, ArtifactCollector, ArtifactOffer, AttachmentRelease, AttachmentReleaseCause,
+    ConversationAttachments, ConversationCreationAudit, ConversationDeletionAudit,
+    ConversationDeletionAuditRecord, ConversationDeletionCause, ConversationError,
+    ConversationFileLinkAudit, ConversationFileLinkAuditRecord, ConversationFileLinkCause,
+    ConversationFileLinkState, ConversationListing, ConversationModeApplication,
+    ConversationModeAudit, ConversationModeAuditPhase, ConversationModeRequest,
+    ConversationModeRequestState, ConversationOwnershipState, ConversationRepository,
+    ConversationSummaries, DeletionFailures, ListedConversation, ObservationCursor,
+    ObservedConversations, RuntimeReadiness, StopFailure, SubmittedMessage, UnfinishedDeletions,
 };
 use crate::conversation::domain::{
     Conversation, ConversationDeletion, ProviderSessionErasure, ProviderSessionLink,
@@ -1535,7 +1535,7 @@ impl ConversationService {
                             }
                             let lease = LiveLease::new(&opening);
                             let authorization = agent
-                                .authorize_attachment(AttachmentRequest::CallerRequested(actor))
+                                .authorize_attachment(AttachmentRequest::CallerRequested(actor.clone()))
                                 .map_err(|error| OpeningFailure {
                                     cause: ConversationError::Agent(error),
                                     holds: true,
@@ -1627,6 +1627,22 @@ impl ConversationService {
                                 app_reviews,
                                 app_epoch,
                             });
+                            // What the host publishes under the lease is
+                            // kept for as long as the lease is held.
+                            if let Some(offers) = live.lease.artifacts() {
+                                service.collect_artifacts(
+                                    Arc::downgrade(&live),
+                                    offers,
+                                    ArtifactCollector::new(
+                                        record.organization().clone(),
+                                        id.clone(),
+                                        live.lease.id().clone(),
+                                        actor.clone(),
+                                        service.inner.attachments.clone(),
+                                        ArtifactBudget::LEASE,
+                                    ),
+                                );
+                            }
                             Ok(live)
                         };
                         match AssertUnwindSafe(preparation).catch_unwind().await {
@@ -1706,6 +1722,25 @@ impl ConversationService {
                 .await
             {
                 tracing::warn!(conversation_id = %id, ?stop, "a lost lease's stop did not confirm cleanup");
+            }
+        });
+    }
+    /// Keep each file published under a live conversation's lease, one at
+    /// a time, until the lease is no longer held and its offers end. An
+    /// offer that arrives once the conversation is let go is answered not
+    /// kept, by its answer's drop.
+    fn collect_artifacts(
+        &self,
+        live: std::sync::Weak<LiveConversation>,
+        mut offers: tokio::sync::mpsc::Receiver<ArtifactOffer>,
+        mut collector: ArtifactCollector,
+    ) {
+        tokio::spawn(async move {
+            while let Some(offer) = offers.recv().await {
+                let Some(live) = live.upgrade() else {
+                    continue;
+                };
+                collector.collect(offer, &live.agent).await;
             }
         });
     }

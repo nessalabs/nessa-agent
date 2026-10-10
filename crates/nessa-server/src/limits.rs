@@ -5,16 +5,21 @@
 //! [`OperationalLimits`], a fixed socket constant, or a bound the protocol
 //! schema publishes. `docs/limits.md` is that catalogue rendered, and the
 //! test beside this module refuses a copy that has drifted.
-use crate::conversation::application::MAX_READ_GRANTS_PER_CONVERSATION;
+use crate::attachments::application::AttachmentLimits;
+use crate::conversation::application::{
+    ArtifactBudget, ARTIFACT_READ_RESUMES, MAX_READ_GRANTS_PER_CONVERSATION,
+};
 use crate::conversation::infrastructure::{DISCOVERY_STEPS_PER_READ, MAX_CATALOGUE_CHANGE_WATCHES};
 use crate::product::passive_read::deadlines::RECORD_SEND_TIMEOUT;
 use crate::product::{OperationalLimits, SessionSettings, RECORD_LANE, RECORD_SLOT, REFUSAL_LANE};
+use nessa_protocol::lease::{MAX_ARTIFACTS_IN_FLIGHT, MAX_ARTIFACT_BYTES};
 use nessa_protocol::product::generated::{
     MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS, MAX_CONNECTION_LIST_SUBSCRIPTIONS,
     MAX_PRODUCT_CLIENT_ID_CHARACTERS, MAX_PRODUCT_SURFACE_INSTANCE_CHARACTERS,
     MAX_RECORD_RESPONSE_BYTES, SUBSCRIPTION_DELIVERY_TIMEOUT_MS,
 };
 use nessa_protocol::protocol::MAX_PAYLOAD_BYTES;
+use nessa_sdk::application::agent_execution::sessions::ArtifactRecord;
 use nessa_sdk::infrastructure::session_storage::MAX_RECORD_CHANGE_WATCHES;
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -201,6 +206,48 @@ fn catalogue() -> &'static [Limit] {
             meaning: "a cold read still preparing at this budget answers that it is preparing",
         },
         Limit {
+            id: "artifact.max_file_bytes",
+            tier: "fixed",
+            owner: "nessa_protocol::lease MAX_ARTIFACT_BYTES",
+            meaning: "a host refuses to publish a larger file, and the gateway to keep one",
+        },
+        Limit {
+            id: "artifact.host_in_flight",
+            tier: "fixed",
+            owner: "nessa_protocol::lease MAX_ARTIFACTS_IN_FLIGHT",
+            meaning: "a publish past this many unanswered under one lease is answered busy",
+        },
+        Limit {
+            id: "artifact.environment_files",
+            tier: "fixed",
+            owner: "conversation ArtifactBudget::LEASE.files",
+            meaning: "a file one lease publishes past this many kept is refused unread",
+        },
+        Limit {
+            id: "artifact.environment_bytes",
+            tier: "fixed",
+            owner: "conversation ArtifactBudget::LEASE.bytes",
+            meaning: "a file that would take one lease's kept files past this is refused unread",
+        },
+        Limit {
+            id: "artifact.conversation_records",
+            tier: "fixed",
+            owner: "nessa-sdk ArtifactRecord::MAX_PER_CONVERSATION",
+            meaning: "a file published once a conversation records this many is refused unread",
+        },
+        Limit {
+            id: "artifact.read_resumes",
+            tier: "fixed",
+            owner: "conversation ARTIFACT_READ_RESUMES",
+            meaning: "a read whose channel fails more often than this is refused channelUnavailable",
+        },
+        Limit {
+            id: "artifact.publish_deadline",
+            tier: "fixed",
+            owner: "attachments AttachmentLimits::publish_deadline",
+            meaning: "a published file not read and checked by then is refused, and nothing held",
+        },
+        Limit {
             id: "record.discovery_steps",
             tier: "fixed",
             owner: "record read DISCOVERY_STEPS_PER_READ",
@@ -286,6 +333,22 @@ pub(crate) fn effective_json(
     );
     put("record.read_work_budget", millis(limits.read_work_budget()));
     put("record.discovery_steps", count(DISCOVERY_STEPS_PER_READ));
+    put("artifact.max_file_bytes", MAX_ARTIFACT_BYTES);
+    put("artifact.host_in_flight", count(MAX_ARTIFACTS_IN_FLIGHT));
+    put(
+        "artifact.environment_files",
+        u64::from(ArtifactBudget::LEASE.files),
+    );
+    put("artifact.environment_bytes", ArtifactBudget::LEASE.bytes);
+    put(
+        "artifact.conversation_records",
+        count(ArtifactRecord::MAX_PER_CONVERSATION),
+    );
+    put("artifact.read_resumes", u64::from(ARTIFACT_READ_RESUMES));
+    put(
+        "artifact.publish_deadline",
+        millis(AttachmentLimits::default().publish_deadline),
+    );
     serde_json::Value::Object(values.into_iter().collect())
 }
 
