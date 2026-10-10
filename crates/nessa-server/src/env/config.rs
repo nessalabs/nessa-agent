@@ -39,16 +39,29 @@ macro_rules! lease_protocol {
     };
 }
 
-// The frames, their framing, and both ends that write, read and act on them.
-// Every source naming a lease frame is here
-// (`every_source_speaking_lease_frames_names_the_protocol`).
+// The frames, their framing, both ends that write, read and act on them, and
+// what the host's answers mean: how it launches a harness (with the variables
+// each agent's binding may set), records leases, and cleans a harness up.
+// Every source naming a lease frame, every source of `env serve`, and every
+// binding declaring launch variables is here
+// (`every_source_of_the_lease_contract_names_the_protocol`).
 lease_protocol!(
     "../../../nessa-protocol/src/lease.rs",
     "../../../nessa-protocol/src/pairing/frames.rs",
+    "../env_serve/mod.rs",
+    "../env_serve/application/mod.rs",
     "../env_serve/application/serve.rs",
     "../env_serve/application/wire.rs",
+    "../env_serve/infrastructure/mod.rs",
+    "../env_serve/infrastructure/launcher.rs",
+    "../env_serve/infrastructure/ledger.rs",
+    "../env_serve/infrastructure/lock.rs",
     "../conversation/infrastructure/ssh_environment/link.rs",
     "../conversation/infrastructure/ssh_environment/environment.rs",
+    "../../../nessa-sdk/src/infrastructure/claude_acp/sessions/binding.rs",
+    "../../../nessa-sdk/src/infrastructure/codex_acp/sessions/binding.rs",
+    "../../../nessa-sdk/src/infrastructure/harness_process.rs",
+    "../../../nessa-sdk/src/infrastructure/process.rs",
 );
 
 /// The lease protocol this build speaks: a fingerprint of its sources, taken
