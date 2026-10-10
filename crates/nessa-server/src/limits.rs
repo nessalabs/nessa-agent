@@ -180,7 +180,7 @@ fn catalogue() -> &'static [Limit] {
             id: "record.change_watches",
             tier: "fixed",
             owner: "MAX_RECORD_CHANGE_WATCHES in crates/nessa-sdk/src/infrastructure/session_storage/record_changes.rs",
-            meaning: "the record watches every socket shares, devices' and subscriptions' alike; past this a watch or subscription is refused subscription_capacity. A view subscription holds one and a list subscription one (any commit), so a desktop window following its limit (8 views and the list) holds 9, and about 7 such windows fill it",
+            meaning: "the record watches every socket shares, devices' and subscriptions' alike; past this a watch or subscription is refused subscription_capacity. A view subscription holds one record watch and each list subscription holds one (any commit); a connection consumes a watch for each followed target",
         },
         Limit {
             id: "conversation.catalogue_watches",
