@@ -1,0 +1,8 @@
+ℹ tests 279
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.16s
+test gateway::application::service::tests::an_unchanged_directory_save_holds_publication_ownership_until_it_is_durable ... ok
+test gateway::application::service::tests::an_identical_in_flight_directory_change_waits_for_that_attempt ... ok
+test gateway::application::service::tests::a_different_directory_waits_until_the_in_flight_attempt_finishes ... ok
+test result: ok. 705 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 14.19s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

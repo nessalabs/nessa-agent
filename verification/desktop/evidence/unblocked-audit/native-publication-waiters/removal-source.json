@@ -1,0 +1,11 @@
+{
+  "stage": "sole identical gate removal",
+  "sourceAsserted": true,
+  "from": "< 2",
+  "to": "== 0",
+  "changedOccurrences": 1,
+  "sameSchedulingScaffold": true,
+  "differentAndUnchangedGatesRemainFixed": true,
+  "beforeSha256": "ae2fa4d1f4e26a622a5d978fead61059d1c8fcb3e9f79441a922670890f37dc5",
+  "removedSha256": "2b3b8f71dac0820fa75e0a63290756014517533a41458f96dfeab2e10f30a1b5"
+}

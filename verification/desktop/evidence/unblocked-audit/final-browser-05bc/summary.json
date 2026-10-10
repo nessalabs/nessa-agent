@@ -1,0 +1,240 @@
+{
+  "head": "05bc3c6c3b1ab1a9148bfc45f7cb133cc6f855fe",
+  "clean": true,
+  "whole": {
+    "held": 990,
+    "total": 990,
+    "groupsHeld": 23,
+    "groupsTotal": 23,
+    "exit": 0,
+    "seconds": 3112.5,
+    "summary": [
+      {
+        "check": "smoke",
+        "status": "held",
+        "held": "32/32",
+        "seconds": 15
+      },
+      {
+        "check": "icon-buttons",
+        "status": "held",
+        "held": "12/12",
+        "seconds": 24
+      },
+      {
+        "check": "shared-controls",
+        "status": "held",
+        "held": "32/32",
+        "seconds": 78
+      },
+      {
+        "check": "focus",
+        "status": "held",
+        "held": "80/80",
+        "seconds": 294
+      },
+      {
+        "check": "drag",
+        "status": "held",
+        "held": "172/172",
+        "seconds": 739
+      },
+      {
+        "check": "responsive",
+        "status": "held",
+        "held": "34/34",
+        "seconds": 225
+      },
+      {
+        "check": "safe-area",
+        "status": "held",
+        "held": "90/90",
+        "seconds": 81
+      },
+      {
+        "check": "columns",
+        "status": "held",
+        "held": "84/84",
+        "seconds": 495
+      },
+      {
+        "check": "committed-transcript",
+        "status": "held",
+        "held": "114/114",
+        "seconds": 7
+      },
+      {
+        "check": "lease-details",
+        "status": "held",
+        "held": "72/72",
+        "seconds": 34
+      },
+      {
+        "check": "load-fallback",
+        "status": "held",
+        "held": "16/16",
+        "seconds": 6
+      },
+      {
+        "check": "gateway-states",
+        "status": "held",
+        "held": "14/14",
+        "seconds": 36
+      },
+      {
+        "check": "conversation-unread",
+        "status": "held",
+        "held": "4/4",
+        "seconds": 6
+      },
+      {
+        "check": "mode-publication",
+        "status": "held",
+        "held": "2/2",
+        "seconds": 11
+      },
+      {
+        "check": "panel-list-follow",
+        "status": "held",
+        "held": "2/2",
+        "seconds": 13
+      },
+      {
+        "check": "linked-devices",
+        "status": "held",
+        "held": "14/14",
+        "seconds": 24
+      },
+      {
+        "check": "settings-page",
+        "status": "held",
+        "held": "10/10",
+        "seconds": 58
+      },
+      {
+        "check": "widgets",
+        "status": "held",
+        "held": "48/48",
+        "seconds": 131
+      },
+      {
+        "check": "subagents",
+        "status": "held",
+        "held": "12/12",
+        "seconds": 128
+      },
+      {
+        "check": "mcp-apps",
+        "status": "held",
+        "held": "92/92",
+        "seconds": 412
+      },
+      {
+        "check": "app-review",
+        "status": "held",
+        "held": "32/32",
+        "seconds": 191
+      },
+      {
+        "check": "message-sync",
+        "status": "held",
+        "held": "14/14",
+        "seconds": 89
+      },
+      {
+        "check": "command-order",
+        "status": "held",
+        "held": "8/8",
+        "seconds": 12
+      }
+    ]
+  },
+  "delivery": [
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "runs": 3,
+      "activeMedianMs": 24.750000029802322,
+      "activeMaxMs": 39.59999996423721,
+      "heldMedianMs": 24.599999964237213,
+      "heldMaxMs": 31.200000047683716,
+      "maxFrameMs": 32.60000002384186,
+      "over50": 0
+    },
+    {
+      "engine": "chromium",
+      "layout": "sidebar",
+      "runs": 3,
+      "activeMedianMs": 24.94999995827675,
+      "activeMaxMs": 50.40000003576279,
+      "heldMedianMs": 24,
+      "heldMaxMs": 34.19999998807907,
+      "maxFrameMs": 34,
+      "over50": 0
+    },
+    {
+      "engine": "webkit",
+      "layout": "columns",
+      "runs": 3,
+      "activeMedianMs": 23.0,
+      "activeMaxMs": 33,
+      "heldMedianMs": 25,
+      "heldMaxMs": 34,
+      "maxFrameMs": 23,
+      "over50": 0
+    },
+    {
+      "engine": "webkit",
+      "layout": "sidebar",
+      "runs": 3,
+      "activeMedianMs": 24.0,
+      "activeMaxMs": 33,
+      "heldMedianMs": 25,
+      "heldMaxMs": 33,
+      "maxFrameMs": 21,
+      "over50": 0
+    }
+  ],
+  "retainedApp": {
+    "held": 4,
+    "total": 4,
+    "source": "9c1c672f",
+    "identity": "production source/fixture/helpers unchanged at05bc"
+  },
+  "scripted": {
+    "held": 37,
+    "total": 37,
+    "source": "9c1c672f",
+    "identity": "gateway/frontend/client/fixture/helpers unchanged at05bc"
+  },
+  "performance": {
+    "held": 33,
+    "total": 35,
+    "exit": 1,
+    "source": "9c1c672f",
+    "unchangedAt05bc": true,
+    "failedRows": [
+      {
+        "name": "overview-answer",
+        "layout": "columns",
+        "maxMs": 76.8,
+        "medianMs": 73.3,
+        "over50": 3
+      },
+      {
+        "name": "overview-answer",
+        "layout": "sidebar",
+        "maxMs": 72.7,
+        "medianMs": 65.5,
+        "over50": 3
+      }
+    ]
+  },
+  "baseline": {
+    "source": "88f34e4dabdeca46486dfbd5294e0a2a00a0a5fa",
+    "runs": 5,
+    "overviewAnswerFailedRuns": 10,
+    "laterCurrentMain": "2d2a7a714e053d25b7371d86ff53b8b77952a363",
+    "notRelabeledAsLatestMain": true
+  }
+}

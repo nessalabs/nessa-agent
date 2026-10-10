@@ -1,0 +1,9 @@
+{
+  "base": "05bc3c6c3b1ab1a9148bfc45f7cb133cc6f855fe",
+  "stage": "before controlled public schedule",
+  "sourceSha256": "2d4b376298ebf3ca991659c8d5f7ca58880379d0ea595ef5459be19ca43bc3d2",
+  "firstCounterObservation": "one existing first receipt",
+  "admissionBoundary": "test-local channel before second public call",
+  "onlyOriginalIdenticalGuard": "== 0",
+  "sharedTarget": false
+}
