@@ -75,6 +75,7 @@ import {
   residueFailures,
   settled,
   state,
+  until,
   zoneSays,
   hoverPeekEdge,
 } from "./lib/workspace.mjs"
@@ -1174,6 +1175,8 @@ Object.assign(checks, {
     const shapes = await recordShapes(page)
     const failures = []
     await lift(page, 0)
+    // The visible DOM can precede the recorder's next published frame.
+    await until(page, () => Boolean(window.__shapes?.at(-1)?.ghost))
     const first = await shapes.now()
     if (!first?.ghost) throw new CannotRun("no compact card was drawn")
     if (

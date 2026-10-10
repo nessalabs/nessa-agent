@@ -67,6 +67,102 @@ impl ExecutionAudit for AcceptingAudit {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum ModeRecordChange {
+    Conversation,
+    Organization,
+    Request,
+    Principal,
+    Surface,
+    Prior,
+    Requested,
+    Application,
+    Time,
+    State,
+}
+impl ModeRecordChange {
+    pub(crate) const ALL: [Self; 10] = [
+        Self::Conversation,
+        Self::Organization,
+        Self::Request,
+        Self::Principal,
+        Self::Surface,
+        Self::Prior,
+        Self::Requested,
+        Self::Application,
+        Self::Time,
+        Self::State,
+    ];
+    pub(crate) fn changed(self, record: ConversationModeRequest) -> ConversationModeRequest {
+        match self {
+            Self::Conversation => ConversationModeRequest {
+                conversation_id: ConversationId::new(&Uuid::from_u128(2).to_string()).unwrap(),
+                ..record
+            },
+            Self::Organization => ConversationModeRequest {
+                organization_id: OrganizationId::new("other-org").unwrap(),
+                ..record
+            },
+            Self::Request => ConversationModeRequest {
+                request_id: "other-request".into(),
+                ..record
+            },
+            Self::Principal => ConversationModeRequest {
+                initiator_principal_id: PrincipalId::new("other-person").unwrap(),
+                ..record
+            },
+            Self::Surface => ConversationModeRequest {
+                initiator_surface_id: "other-surface".into(),
+                ..record
+            },
+            Self::Prior => ConversationModeRequest {
+                prior: if record.prior == ConversationApprovalMode::Ask {
+                    ConversationApprovalMode::Auto
+                } else {
+                    ConversationApprovalMode::Ask
+                },
+                ..record
+            },
+            Self::Requested => ConversationModeRequest {
+                requested: if record.requested == ConversationApprovalMode::Auto {
+                    ConversationApprovalMode::Ask
+                } else {
+                    ConversationApprovalMode::Auto
+                },
+                ..record
+            },
+            Self::Application => ConversationModeRequest {
+                application: Some(ConversationModeApplication::Deferred),
+                ..record
+            },
+            Self::Time => ConversationModeRequest {
+                requested_at_ms: record.requested_at_ms + 1,
+                ..record
+            },
+            Self::State => ConversationModeRequest {
+                state: ConversationModeRequestState::NotApplied,
+                ..record
+            },
+        }
+    }
+}
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum ModeTerminalFault {
+    InvokeBefore,
+    PollBefore,
+    InvokeAfter,
+    PollAfter,
+    Record(ModeRecordChange),
+}
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum ModeReadbackFault {
+    Refuse,
+    Absent,
+    InvokePanic,
+    PollPanic,
+    Record(ModeRecordChange),
+}
+
 #[derive(Default)]
 pub(crate) struct MemoryRepository {
     pub(crate) records: Mutex<HashMap<ConversationId, Conversation>>,
@@ -85,6 +181,19 @@ pub(crate) struct MemoryRepository {
     pub(crate) mode_requests: Mutex<HashMap<(ConversationId, String), ConversationModeRequest>>,
     pub(crate) lose_mode_intent_ack: AtomicBool,
     pub(crate) lose_mode_commit_ack: AtomicBool,
+    pub(crate) mode_terminal_fault: Mutex<Option<ModeTerminalFault>>,
+    pub(crate) mode_intent_change: Mutex<Option<ModeRecordChange>>,
+    pub(crate) mode_application_change: Mutex<Option<ModeRecordChange>>,
+    pub(crate) mode_lookup_reply: Mutex<Option<ConversationModeRequest>>,
+    pub(crate) mode_loaded_reply: Mutex<Option<Conversation>>,
+    /// Override one create acknowledgement after its proposed target is stored.
+    pub(crate) creation_reply: Mutex<Option<ConversationCreation>>,
+    /// A concurrent creator establishes this row after the initial load, before create.
+    pub(crate) creation_race: Mutex<Option<Conversation>>,
+    pub(crate) mode_pending_change: Mutex<Option<(ModeRecordChange, bool)>>,
+    pub(crate) mode_readback_fault: Mutex<Option<ModeReadbackFault>>,
+    pub(crate) mode_panic_payload_drop: AtomicBool,
+    pub(crate) mode_terminal_gate: Mutex<Option<(Arc<Notify>, Receiver<()>)>>,
     pub(crate) refuse_mode_commit_once: AtomicBool,
     /// Refuse to write a tombstone that says the deletion finished.
     pub(crate) refuse_finishing: AtomicBool,
@@ -184,7 +293,10 @@ impl ConversationRepository for MemoryRepository {
                 Ok(request)
             }
         })();
-        Box::pin(async move { result })
+        let change = self.mode_intent_change.lock().unwrap().take();
+        Box::pin(async move {
+            result.map(|record| change.map_or(record.clone(), |change| change.changed(record)))
+        })
     }
     fn pending_mode_change(
         &self,
@@ -200,6 +312,16 @@ impl ConversationRepository for MemoryRepository {
                     && request.state == ConversationModeRequestState::Pending
             })
             .cloned();
+        let change = {
+            let mut next = self.mode_pending_change.lock().unwrap();
+            let change = next.as_ref().map(|(change, _)| *change);
+            if next.as_ref().is_some_and(|(_, persistent)| !persistent) {
+                next.take();
+            }
+            change
+        };
+        let found =
+            found.map(|record| change.map_or(record.clone(), |change| change.changed(record)));
         let gate = self.pending_gate.lock().unwrap().take();
         Box::pin(async move {
             if let Some((began, open)) = gate {
@@ -220,7 +342,32 @@ impl ConversationRepository for MemoryRepository {
             .unwrap()
             .get(&(id.clone(), request_id.to_owned()))
             .cloned();
-        Box::pin(async move { Ok(found) })
+        let found = self.mode_lookup_reply.lock().unwrap().take().or(found);
+        let fault = if found
+            .as_ref()
+            .is_some_and(|request| request.application.is_some())
+        {
+            self.mode_readback_fault.lock().unwrap().take()
+        } else {
+            None
+        };
+        let payload_drop = self.mode_panic_payload_drop.load(Ordering::SeqCst);
+        if matches!(fault, Some(ModeReadbackFault::InvokePanic)) {
+            mode_panic(payload_drop, "mode readback invocation fault")
+        }
+        Box::pin(async move {
+            match fault {
+                Some(ModeReadbackFault::Refuse) => Err(ConversationError::Metadata),
+                Some(ModeReadbackFault::Absent) => Ok(None),
+                Some(ModeReadbackFault::PollPanic) => {
+                    mode_panic(payload_drop, "mode readback polling fault")
+                }
+                Some(ModeReadbackFault::Record(change)) => {
+                    Ok(found.map(|record| change.changed(record)))
+                }
+                _ => Ok(found),
+            }
+        })
     }
     fn requires_mode_verification(&self, id: &ConversationId) -> ConversationFuture<'_, bool> {
         if self.verification_unreadable.load(Ordering::SeqCst) {
@@ -265,7 +412,10 @@ impl ConversationRepository for MemoryRepository {
             request.application = Some(application);
             Ok(request.clone())
         })();
-        Box::pin(async move { result })
+        let change = self.mode_application_change.lock().unwrap().take();
+        Box::pin(async move {
+            result.map(|record| change.map_or(record.clone(), |change| change.changed(record)))
+        })
     }
     fn finish_mode_change(
         &self,
@@ -273,6 +423,17 @@ impl ConversationRepository for MemoryRepository {
         request_id: &str,
         state: ConversationModeRequestState,
     ) -> ConversationFuture<'_, ConversationModeRequest> {
+        let fault = if state == ConversationModeRequestState::Applied {
+            self.mode_terminal_fault.lock().unwrap().take()
+        } else {
+            None
+        };
+        if matches!(fault, Some(ModeTerminalFault::InvokeBefore)) {
+            panic!("mode commit invocation fault before write")
+        }
+        if matches!(fault, Some(ModeTerminalFault::PollBefore)) {
+            return Box::pin(async { panic!("mode commit polling fault before write") });
+        }
         let mut records = self.records.lock().unwrap();
         let mut requests = self.mode_requests.lock().unwrap();
         let result = (|| {
@@ -321,10 +482,32 @@ impl ConversationRepository for MemoryRepository {
                 Ok(request.clone())
             }
         })();
-        Box::pin(async move { result })
+        drop(requests);
+        drop(records);
+        let payload_drop = self.mode_panic_payload_drop.load(Ordering::SeqCst);
+        if matches!(fault, Some(ModeTerminalFault::InvokeAfter)) {
+            mode_panic(payload_drop, "mode commit invocation fault after write")
+        }
+        let gate = self.mode_terminal_gate.lock().unwrap().take();
+        Box::pin(async move {
+            if let Some((began, open)) = gate {
+                began.notify_one();
+                let _ = open.await;
+            }
+            match fault {
+                Some(ModeTerminalFault::PollAfter) => {
+                    mode_panic(payload_drop, "mode commit polling fault after write")
+                }
+                Some(ModeTerminalFault::Record(change)) => {
+                    result.map(|record| change.changed(record))
+                }
+                _ => result,
+            }
+        })
     }
     fn load(&self, id: &ConversationId) -> ConversationFuture<'_, Option<Conversation>> {
         let value = self.records.lock().unwrap().get(id).cloned();
+        let value = self.mode_loaded_reply.lock().unwrap().take().or(value);
         Box::pin(async move { Ok(value) })
     }
     fn unfinished_deletions(&self) -> ConversationFuture<'_, UnfinishedDeletions> {
@@ -346,6 +529,9 @@ impl ConversationRepository for MemoryRepository {
     }
     fn create(&self, value: Conversation) -> ConversationFuture<'_, ConversationCreation> {
         let mut records = self.records.lock().unwrap();
+        if let Some(raced) = self.creation_race.lock().unwrap().take() {
+            records.insert(raced.id().clone(), raced);
+        }
         let (conversation, disposition) = match records.entry(value.id().clone()) {
             std::collections::hash_map::Entry::Occupied(entry) => (
                 entry.get().clone(),
@@ -356,12 +542,16 @@ impl ConversationRepository for MemoryRepository {
                 ConversationCreationDisposition::Created,
             ),
         };
-        Box::pin(async move {
-            Ok(ConversationCreation {
+        let reply = self
+            .creation_reply
+            .lock()
+            .unwrap()
+            .take()
+            .unwrap_or(ConversationCreation {
                 conversation,
                 disposition,
-            })
-        })
+            });
+        Box::pin(async move { Ok(reply) })
     }
     fn record_deletion(
         &self,
@@ -968,6 +1158,17 @@ pub(crate) fn mode_fixture() -> (
     Arc<RecordingModeExecutionAudit>,
     Arc<RecordingModeAudit>,
 ) {
+    mode_fixture_with_summaries(Arc::new(MemorySummaries::default()))
+}
+pub(crate) fn mode_fixture_with_summaries(
+    summaries: Arc<MemorySummaries>,
+) -> (
+    ConversationService,
+    Arc<ProviderFactory>,
+    Arc<MemoryRepository>,
+    Arc<RecordingModeExecutionAudit>,
+    Arc<RecordingModeAudit>,
+) {
     let provider = Arc::new(ProviderFactory::default());
     let repository = Arc::new(MemoryRepository::default());
     let storage = Arc::new(InMemoryStorage::new());
@@ -983,7 +1184,7 @@ pub(crate) fn mode_fixture() -> (
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             attachments: None,
-            summaries: Arc::new(MemorySummaries::default()),
+            summaries,
             listing: Arc::new(Unlisted),
             provider_sessions: claude_erasers(),
             deletion_budgets: DELETION_BUDGETS,
@@ -1561,4 +1762,19 @@ pub(crate) async fn grant_read(
     )
     .await
     .unwrap();
+}
+
+// Custom repository payload deliberately violates safe destructor behavior.
+// Production containment must not call external payload destructors.
+struct ModePanicPayload;
+impl Drop for ModePanicPayload {
+    fn drop(&mut self) {
+        panic!("mode panic payload destructor");
+    }
+}
+fn mode_panic(payload_drop: bool, message: &'static str) -> ! {
+    if payload_drop {
+        std::panic::panic_any(ModePanicPayload);
+    }
+    panic!("{message}");
 }

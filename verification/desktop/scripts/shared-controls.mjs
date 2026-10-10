@@ -6,7 +6,7 @@
  * that component's measured contract.
  */
 import { measureAdoptedPill, pressScale } from "./lib/adopted-pill.mjs"
-import { openPage, need, withEngines } from "./lib/browser.mjs"
+import { openPage, need, waitUntilSettled, withEngines } from "./lib/browser.mjs"
 import { attempt, chosen } from "./lib/cli.mjs"
 import { main } from "./lib/run.mjs"
 import { css, keys, names } from "./lib/selectors.mjs"
@@ -232,7 +232,7 @@ function measureIdentity([selector, sel]) {
 async function identityHover(page, scale, selector) {
   const button = page.locator(`${selector}:visible`).first()
   await button.hover()
-  await page.waitForTimeout(250)
+  await waitUntilSettled(page)
   const fill = await button.evaluate(
     (element) => getComputedStyle(element).backgroundColor,
   )

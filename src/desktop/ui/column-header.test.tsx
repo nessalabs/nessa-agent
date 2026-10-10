@@ -6,7 +6,7 @@
  */
 import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
-import { afterEach, beforeEach, expect, it } from "vitest"
+import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { titleBreathingRoom } from "../model/column-title"
 import { ColumnHeader } from "./column-header"
 
@@ -34,11 +34,25 @@ function layOut(next: { row: number; title: number; action: number }) {
     )
 }
 
+const frames = new Map<number, FrameRequestCallback>()
+let frameId = 0
+const paint = () => {
+  const pending = [...frames.values()]
+  frames.clear()
+  for (const callback of pending) callback(0)
+}
+
 let host: HTMLDivElement
 let root: Root
 
 beforeEach(() => {
   ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    const id = ++frameId
+    frames.set(id, callback)
+    return id
+  })
+  vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id))
   class Observer {
     private entry = {
       callback: (() => {}) as ResizeObserverCallback,
@@ -66,6 +80,8 @@ afterEach(() => {
   act(() => root.unmount())
   host.remove()
   widths.clear()
+  frames.clear()
+  vi.unstubAllGlobals()
 })
 
 const title = () =>
@@ -76,11 +92,13 @@ it("sits inline in the titlebar row when it fits, and below it when it does not"
     root.render(<ColumnHeader title="desktop-app" action={<button type="button" />} />),
   )
   act(() => layOut({ row: 300, title: 110, action: 28 }))
+  act(paint)
   expect(title()?.dataset.placement).toBe("inline")
   expect(title()?.parentElement?.classList.contains("desktop-column-bar")).toBe(true)
 
   // The sidebar folds: the row's content now starts after the window's controls.
   act(() => layOut({ row: 110, title: 110, action: 28 }))
+  act(paint)
   expect(title()?.dataset.placement).toBe("below")
   expect(title()?.previousElementSibling?.classList.contains("desktop-column-bar")).toBe(
     true,
@@ -88,6 +106,7 @@ it("sits inline in the titlebar row when it fits, and below it when it does not"
 
   // Room again, with room to breathe.
   act(() => layOut({ row: 110 + 28 + titleBreathingRoom, title: 110, action: 28 }))
+  act(paint)
   expect(title()?.dataset.placement).toBe("inline")
 })
 
@@ -100,4 +119,23 @@ it("draws one title, whichever row it is in, and a column without one measures n
   expect(host.querySelector(".desktop-column-bar")?.hasAttribute("data-title")).toBe(
     false,
   )
+})
+
+it("measures during observer delivery and commits only the latest widths before the next paint", () => {
+  act(() => root.render(<ColumnHeader title="desktop-app" />))
+  act(() => layOut({ row: 400, title: 110, action: 0 }))
+  expect(title()?.dataset.placement).toBe("below")
+  expect(frames.size).toBe(1)
+  act(() => layOut({ row: 100, title: 110, action: 0 }))
+  expect(frames.size).toBe(1)
+  act(paint)
+  expect(title()?.dataset.placement).toBe("below")
+  act(() => layOut({ row: 400, title: 110, action: 0 }))
+  act(paint)
+  expect(title()?.dataset.placement).toBe("inline")
+  act(() => layOut({ row: 100, title: 110, action: 0 }))
+  act(() => root.render(<ColumnHeader />))
+  expect(frames.size).toBe(0)
+  act(paint)
+  expect(host.querySelector("h2")).toBeNull()
 })

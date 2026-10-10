@@ -1,0 +1,7 @@
+{
+  "head": "9c1c672f2f20e39f63ff9745a32d6467259d328d",
+  "command": ["pnpm", "frontend:check"],
+  "exit": 0,
+  "seconds": 134.0,
+  "log": "/tmp/nessa-unblocked-audit/frontend-consumer-final/frontend.log"
+}

@@ -205,6 +205,15 @@ writing the full defaults on first launch is buying.
   selectors, not the cascade. It stays pure text because
   `check-architecture.mjs` runs on the Rust jobs with bare Node and no
   `node_modules`, where nothing may import a parser.
+The panel Messages list follows the explicit active and archived catalogues in
+`src/conversation/adapters/store/history.ts`, through the application-owned
+`ConversationEffects.followList` port and gateway/scenario adapters. Its
+paired publication and cleanup ordering is in
+[record subscriptions](design/record-subscriptions.md#panel-messages-list--issue-722).
+Feature tests live beside the history store, gateway adapter and list UI;
+`verification/desktop/scripts/panel-list-follow.mjs` drives the production panel
+against a private scripted gateway.
+
 - Product commands live in `src/conversation/application/usecases/`. The store
   is a projection: thunks call injected effects and reducers apply returned views.
   The shared tabs are `conversations` + `activeId`; beside them the
@@ -655,6 +664,8 @@ source permission or socket capacity. Its lifecycle tests live under
 `tests/core/read_workers.rs`; record-specific admission tests stay with their
 source adapter. Attachment adapters consume this owner when activated.
 
+`conversation/application/metadata_target.rs` correlates existing metadata loads and creation acknowledgements with the requested identity before ownership, selection, grant admission or effects. Created receipts additionally match the admitted full immutable proposal; Existing retains original creator evidence. Current mode intent/terminal/retirement tests live in `tests/conversation/approval_mode.rs`; creation receipt tests in `tests/conversation/creation_metadata.rs`. Projection owns selection/runtime replacements and their revision; no display-history or paging API is added.
+
 Named record-read owners: `conversation/application/record_read/read.rs` owns passive read orchestration and its port/types; `conversation/infrastructure/record_read/source.rs` owns tracked read lifecycle, `operation.rs` owns SDK physical execution; `product/record_read/dispatch.rs` owns routing and typed outcome presentation, with `wire.rs` the codec. Their mod.rs files contain module documentation/declarations/reexports. Infrastructure tests live under `tests/conversation/record_read/`.
 `product/change_watch/` owns live change hints on the product socket: `registration.rs` the watch identity and the one current-admission call (through `AdmitPassiveRead`), `connection.rs` a connection's two target positions and their authority tasks, `delivery.rs` the pending/in-flight notice positions the single writer in `socket.rs` takes from, and `owner.rs` the gateway-wide watch permits and first task fault. Producers are injected through `conversation/application/change_watch.rs` (`WatchRecords`, `WatchNamespaces`) with adapters in `conversation/infrastructure/change_watch.rs`; a watch never reads a head or takes a passive-read permit. The client side is `packages/nessa-client/src/presentation/change-watch-api.ts` and `protocol/change-watch-validate.ts`, through the existing dispatcher. The state and order table is in [committed change watches](design/committed-change-watches.md#298b-authorized-live-hints-over-the-product-socket); socket tests are `tests/product/socket/watches.rs`.
 `product/subscription/` owns replay-to-live view and list subscriptions on the product socket ([record subscriptions](design/record-subscriptions.md)): `connection.rs` a connection's subscriptions and their limits, `target.rs` one task per subscription — wake sources registered before each read, every batch admitted in `authorize_batch`, read through the same fold as `conversation.read` and `conversation.list`, `lagging` when a frame is not taken in time — and `delivery.rs` the frames the single writer in `socket.rs` takes, one in flight per subscription. `conversation/application/live_changes.rs` wakes a reader on live facts that are not records. The client side is `packages/nessa-client/src/presentation/subscription-api.ts` and `protocol/subscription-validate.ts`; socket tests are `tests/product/socket/subscriptions.rs`. The desktop workspace's gateway source (`src/desktop/workspace/adapters/gateway/gateway-source.ts`) follows these subscriptions and polls nothing.
@@ -896,6 +907,16 @@ permission decision, provider message, tool failure, or execution status.
 independently of whether that turn contains text.
 
 ### Packaged gateway lifecycle
+
+The shared LaunchAgents/systemd service directories retain their existing safe
+read/search modes while Nessa definition files remain private ([ADR 688](adr/688-shared-service-directory-permissions.md)).
+Claude directory saves share the gateway's serialized publication owner, including
+durable rollback. Its owned transaction retains `Arc<Gateway>` and the injected
+settings store through native receipt settlement even when command waiters drop;
+[publication regression corpus](../src-tauri/tests/gateway/application/claude_publication.rs)
+covers installed-command, durable, live and journal agreement. Linux replacement
+validates the actual prior configuration
+and reuses a generation only for the complete desired command ([ADR 689](adr/689-linux-service-definition-replacement.md)).
 
 - `scripts/desktop/native-window-smoke.mjs` owns the Linux WebKitGTK end-to-end
   boundary. Its adjacent `native-smoke-*` modules isolate executable discovery,

@@ -1,0 +1,12 @@
+{
+  "base": "05bc3c6c3b1ab1a9148bfc45f7cb133cc6f855fe",
+  "files": {
+    "src-tauri/tests/gateway/application.rs": "f2afceaf863adfc94731932e30deaba1ca26af934465eb26531d0c05b5eebd61",
+    "docs/adr/689-linux-service-definition-replacement.md": "27802751ccc2f45fed0b134a542f757e622e0b1e676970571a9c6ea9c1db6a4e"
+  },
+  "singleCallerGateUnchanged": true,
+  "allProductionSourceUnchanged": true,
+  "scratchSchedulingRemoved": true,
+  "head": "b323d2c4825f92b48cc927d09e93add338589ea0",
+  "clean": true
+}

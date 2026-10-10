@@ -1,0 +1,90 @@
+{
+  "base": "05bc3c6c3b1ab1a9148bfc45f7cb133cc6f855fe",
+  "regressionIntroducedBy": "68f53229ddd7a25b8b35d280892e5ca9ca12089d",
+  "boundary": "injected test-local schedule before second public API entry; actual public outcomes and original assertions",
+  "stages": [
+    {
+      "name": "before",
+      "exit": 101,
+      "selected": 1,
+      "passed": 0,
+      "first": {
+        "kind": "Gateway",
+        "cause": "Registration"
+      },
+      "second": {
+        "kind": "Ok"
+      },
+      "directory": "requested",
+      "attempts": 2,
+      "failure": "original second-error assertion"
+    },
+    {
+      "name": "fixed",
+      "exit": 0,
+      "selected": 1,
+      "passed": 1,
+      "first": {
+        "kind": "Gateway",
+        "cause": "Registration"
+      },
+      "second": {
+        "kind": "Gateway",
+        "cause": "Registration"
+      },
+      "directory": null,
+      "attempts": 1
+    },
+    {
+      "name": "removed",
+      "exit": 101,
+      "selected": 1,
+      "passed": 0,
+      "first": {
+        "kind": "Gateway",
+        "cause": "Registration"
+      },
+      "second": {
+        "kind": "Ok"
+      },
+      "directory": "requested",
+      "attempts": 2,
+      "failure": "original second-error assertion"
+    },
+    {
+      "name": "restored",
+      "exit": 0,
+      "selected": 1,
+      "passed": 1,
+      "first": {
+        "kind": "Gateway",
+        "cause": "Registration"
+      },
+      "second": {
+        "kind": "Gateway",
+        "cause": "Registration"
+      },
+      "directory": null,
+      "attempts": 1
+    }
+  ],
+  "zeroSelectedBinariesNotCounted": true,
+  "sharedRuleProvedBy": "actual failing identical-caller case",
+  "neighboringIndividualRemovals": "not attempted; no individual semantic-failure claim",
+  "canonicalServiceSuite": {
+    "passed": 61,
+    "failed": 0,
+    "ignored": 0,
+    "filtered": 645,
+    "seconds": 0.12,
+    "affectedIdenticalDifferentUnchangedCases": "all pass"
+  },
+  "nativeFormat": 0,
+  "ADRFormat": 0,
+  "clippy": {
+    "exit": 0,
+    "seconds": 57.95,
+    "selection": ["nessa-app", "--no-default-features", "--all-targets", "-D warnings"]
+  },
+  "head": "b323d2c4825f92b48cc927d09e93add338589ea0"
+}

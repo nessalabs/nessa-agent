@@ -38,5 +38,5 @@ pub use systemd::{
     SystemdEvidenceError, SystemdJobAttempt, SystemdJobMode, SystemdJobOperation,
     SystemdManagerIdentity, SystemdRuntimeObservation, SystemdUnitName, SystemdUnitState,
 };
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", all(test, target_os = "macos")))]
 pub use systemd::{SystemdJobConclusion, SystemdJobTerminal};

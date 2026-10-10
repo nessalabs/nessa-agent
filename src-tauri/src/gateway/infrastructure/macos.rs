@@ -1707,10 +1707,10 @@ fn register(
         }
     }
     let installation = (|| -> Result<ManagedRuntime, RegisterFailure> {
-        nessa_local_storage::create_private_directory_path(&agents)
+        nessa_local_storage::create_shared_directory_path(&agents)
             .map_err(|error| error.to_string())?;
         let agents_directory =
-            PrivateDirectory::open_path(&agents, &agents).map_err(|error| error.to_string())?;
+            PrivateDirectory::open_shared_path(&agents).map_err(|error| error.to_string())?;
         let logs = log.parent().ok_or("invalid log directory")?;
         nessa_local_storage::create_directory(logs).map_err(|e| e.to_string())?;
         // Reserve the log privately before launchd opens it.

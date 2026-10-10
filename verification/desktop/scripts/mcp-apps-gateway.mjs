@@ -598,8 +598,8 @@ async function windowOpened(page, stack, baseline, ms = 20_000) {
 /**
  * The app's message review: origin the app and `APP_TOOL`, the text it asked
  * to send, and the card whose head is the message ask. Allow is clicked only
- * when the origin is that tool. Returns the tool once a review is in hand, so
- * the label is checked against it, or null when no review opened.
+ * when the origin is that tool. Returns its tool and whether Allow was
+ * actually clicked, or null when no review opened.
  */
 async function messageReview(page, stack, baseline, failures) {
   const { app } = await appFrame(page, "inline")
@@ -628,6 +628,7 @@ async function messageReview(page, stack, baseline, failures) {
   if (review.argumentsJson !== MESSAGE_ARGUMENTS)
     failures.push(`the review shows ${review.argumentsJson}`)
   const shown = await reviewShown(stack, review)
+  let allowed = false
   if (!shown) failures.push("the window's approval is not the message review")
   // A message card's head names the ask, not the tool (`appAsksToMessage`).
   // The tool is the origin check above, so another tool cannot stand in for it.
@@ -653,11 +654,14 @@ async function messageReview(page, stack, baseline, failures) {
     )
     const label = offeredLabel(review.options, "allow")
     if (!label) failures.push("the review offers no allow")
-    else await visible.getByRole("button", { name: label, exact: true }).click()
-    const gone = await reviewGone(stack, review, 15_000)
-    if (!gone) failures.push("the message review is still pending after Allow")
+    else {
+      await visible.getByRole("button", { name: label, exact: true }).click()
+      allowed = true
+      const gone = await reviewGone(stack, review, 15_000)
+      if (!gone) failures.push("the message review is still pending after Allow")
+    }
   }
-  return APP_TOOL
+  return { tool: APP_TOOL, allowed }
 }
 
 /** How many of `locator` are shown once it has at least `least`, or the count when `timeout` runs out. */
@@ -923,7 +927,6 @@ const checks = {
 
   message: async (page, stack, shot) => {
     const failures = []
-    const { app } = await appFrame(page, "inline")
     const baseline = await settleEarlier(page, stack, failures)
     // The engines share one conversation and send the same text. What this
     // engine adds is the executionId that was not here before the click, and
@@ -940,11 +943,27 @@ const checks = {
       failures.push(
         `before this send the transcript shows ${shownBefore} messages saying "${MESSAGE_TEXT}" and the gateway has ${copiesBefore}`,
       )
+    const { app } = await appFrame(page, "inline")
+    const pointerMoves = await pointerOnto(page, app, "message")
+    if (!pointerMoves)
+      return {
+        seen: { pointerMoves, inputStarted: false },
+        failures: [...failures, "the inline message control did not receive the pointer"],
+      }
     await app.click(selectorFor.reviewControl("message"))
     const before = await said(app, "message")
+    if (before === "")
+      return {
+        seen: { before, pointerMoves, inputStarted: false },
+        failures: [
+          ...failures,
+          "the message click did not reach the app: its output never showed pending",
+        ],
+      }
     if (before !== "pending")
       failures.push(`the message was answered before its review: "${before}"`)
-    const tool = await messageReview(page, stack, baseline, failures)
+    const reviewed = await messageReview(page, stack, baseline, failures)
+    const tool = reviewed?.tool
     let labelled = null
     let arrived = []
     if (tool && shownBefore === copiesBefore) {
@@ -979,7 +998,12 @@ const checks = {
       }
     }
     const answer = await output(app, "message", 30_000)
-    if (answer !== "ok") failures.push(`after Allow the app shows "${answer}"`)
+    if (answer !== "ok")
+      failures.push(
+        reviewed?.allowed
+          ? `after Allow the app shows "${answer}"`
+          : `after the message review attempt the app shows "${answer}"`,
+      )
     if (tool) {
       arrived = await thisSend(stack.client, stack.conversationId, earlier)
       if (arrived.length !== 1)
@@ -998,6 +1022,9 @@ const checks = {
     return {
       seen: {
         before,
+        pointerMoves,
+        inputStarted: true,
+        allowed: reviewed?.allowed ?? false,
         tool,
         labelled,
         answer,

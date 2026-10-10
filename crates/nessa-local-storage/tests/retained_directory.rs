@@ -936,3 +936,56 @@ fn changed_origin_keeps_precedence_with_substituted_payload() {
         }
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn shared_service_directory_keeps_0755_and_publishes_only_private_files() {
+    let temporary = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let shared = temporary.path().join("LaunchAgents");
+    std::fs::create_dir(&shared).unwrap();
+    std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o755)).unwrap();
+    nessa_local_storage::create_shared_directory_path(&shared).unwrap();
+    let directory = PrivateDirectory::open_shared_path(&shared).unwrap();
+    let mut reserved = directory.reserve_temp().unwrap();
+    reserved.as_file_mut().write_all(b"private unit").unwrap();
+    reserved.as_file().sync_all().unwrap();
+    reserved.publish_new(OsStr::new("nessa.plist")).unwrap();
+    assert_eq!(
+        std::fs::metadata(&shared).unwrap().permissions().mode() & 0o777,
+        0o755
+    );
+    assert_eq!(
+        std::fs::metadata(shared.join("nessa.plist"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+    std::fs::set_permissions(
+        shared.join("nessa.plist"),
+        std::fs::Permissions::from_mode(0o644),
+    )
+    .unwrap();
+    assert!(directory
+        .open_file(OsStr::new("nessa.plist"), OpenMode::Read)
+        .is_err());
+    std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o775)).unwrap();
+    assert!(directory.verify_binding().is_err());
+    assert!(PrivateDirectory::open_shared_path(&shared).is_err());
+    assert!(nessa_local_storage::create_shared_directory_path(&shared).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn shared_service_directory_rejects_symlinks_and_changed_bindings() {
+    let temporary = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let shared = temporary.path().join("LaunchAgents");
+    nessa_local_storage::create_shared_directory_path(&shared).unwrap();
+    let directory = PrivateDirectory::open_shared_path(&shared).unwrap();
+    std::fs::rename(&shared, temporary.path().join("prior")).unwrap();
+    std::os::unix::fs::symlink(temporary.path().join("prior"), &shared).unwrap();
+    assert!(directory.verify_binding().is_err());
+    assert!(PrivateDirectory::open_shared_path(&shared).is_err());
+    assert!(nessa_local_storage::create_shared_directory_path(&shared).is_err());
+}

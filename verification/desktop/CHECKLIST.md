@@ -129,6 +129,8 @@ controls — text, icons, images, code, or decorative art — in any frame.
 - [ ] **Column titles sit inline after the controls when they fit, below when
   they do not**, and an inline title never overlaps a titlebar control.
   _ADR 238 › The titlebar's safe area_ (`titlePlacement`).
+  ResizeObserver delivery measures only; the latest placement commits before
+  the next paint, with no ResizeObserver loop error (#693).
   _Check:_ `responsive.mjs --only column-title`; drag a column edge slowly
   across the flip point by hand and watch for a flicker (the 12px hold).
 - [ ] **A column's titlebar action hides at once as it folds, shows once it
@@ -304,6 +306,10 @@ _ADR 238 › Focus follows the focused pane_; keys in
   ⌘\\ and a pick, ⇧⌘\\, ⌘1–4, ⇧⌘] and ⇧⌘[, and ⌘W. _Check:_ `focus.mjs` (`focus-panes`).
 - [ ] **Closing ⌘K without a pick, or Settings, gives focus back** to what
   opened it. _Check:_ `focus.mjs` (`focus-panes`).
+- [ ] **Replacing a workspace layout retires queued focus settlement**: deliver
+  held callbacks after the old workspace unmounts; they enqueue zero new frame
+  work, and the current layout still focuses its composer. _Check:_ `focus.mjs`
+  (`focus-retired-layout`); [frame lifetime](../../docs/design/ui-workspace-load.md#focus-frame-lifetime-730), #730.
 - [ ] **A burst of keys leaves a working window**: no error, a focused pane.
   _Check:_ `focus.mjs` (`focus-mash`).
 - [ ] **A pane command from the overview**: one that is a navigation leaves
@@ -317,6 +323,11 @@ _ADR 238 › Focus follows the focused pane_; keys in
   in dev, confirm with `--mode prod` before reporting.
 
 ## Agents overview
+
+Header and group measurements wait for the published `data-overview-listed`
+marker, including a reopened list; finite motion finishing does not mean its
+deferred rows have all mounted. The sampling order is in
+[UI workspace load](../../docs/design/ui-workspace-load.md#verification-sampling-order).
 
 _ADR 238 › What fills the content region_ (the overview is workspace state).
 
@@ -628,6 +639,10 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   built and the agent, `--agent claude|codex`, signed in on the machine). The
   refusal of the hidden tool that declares no UI depends on #412.
 - [ ] **An app's message and context, with no model key** (#550): with `--scripted`, the review app's message control opens a review; Allow lands the message in the transcript labelled as that app's, and its context control answers success. Chromium and WebKit share the conversation and send the same text, so each engine records execution ids before the click and requires exactly one new send, and the transcript row that was not already shown. The scripted agent replays one recorded turn, then answers a later prompt with text and no tool call, so the check needs no Claude key and no user model key. _Check:_ `mcp-apps-gateway.mjs --scripted` (`message`, `context`). `messagesArrived` in `gateway-view.mjs`.
+  Its message input reuses the release check's trusted-pointer entry before
+  one real click. A missing fixture pending state is reported as missing input;
+  an Allow is named only if the check actually clicked it. See the
+  [sampling order](../../docs/design/ui-workspace-load.md#verification-sampling-order).
 - [ ] **One tool call is drawn once** (#418): a harness reports one call as an
   announcement and then updates under its id (Codex three frames, or two
   in the recorded `review_rows` turn; Claude four), and the window draws it as one transcript step and one inline app
@@ -1007,7 +1022,10 @@ it is redesigned on its own branch.
   window's does. _Check:_ `shared-controls.mjs` (`identity`, per engine and
   layout; "‹ nessa Agent" measured inside Settings, over the inert window
   that keeps its own; and in the classic shell). Rule:
-  `ui/identity.css`. At the base commit the classic shell's read
+  `ui/identity.css`. Sampling waits for its finite hover transition through
+  `waitUntilSettled`, retaining the exact fill assertion. Browser measurement
+  ordering is in [UI workspace load](../../docs/design/ui-workspace-load.md#verification-sampling-order).
+  At the base commit the classic shell's read
   "nessaStudio" with no name, no pill and no fill, in the kit's grey.
 - [ ] **Every empty state is the kit's `EmptyState`, in the window's type
   (#657).** The session list's, the workspace's failure, an overview group
@@ -1414,3 +1432,48 @@ or clocks.
 - [ ] Resize removes a suspended returning drag copy in the resize event's turn,
   including a blur followed by resize (`drag.mjs`, return-interrupted).
   [ADR 238](../../docs/adr/done/238-desktop-workspace-frontend.md) owns the flight ordering.
+
+## Confirmed approval-mode publication (#712)
+
+`mode-publication.mjs` starts its own real gateway with the scripted ACP profile
+and drives the production panel effects/store/ComposerTray and workspace Source
+in Chromium and WebKit. The fixture is served in dev; run-all labels it dev-only
+in production. It creates an idle conversation and sends no transcript output.
+
+- A verified Ask-to-Auto commit advances public read revision, updates
+  the visible tray through its actual control, and advances the Source transcript
+  publication count.
+- Repeating confirmed Auto and unchanged reads retain public/panel/Source
+  revisions. Returning to Ask advances them again.
+- Runtime, capabilities, lifecycle and content remain unchanged across the
+  mode-only change. No client-side forced acceptance or fabricated revision is
+  used. The check closes its own page, client and gateway stack.
+
+Ownership and negative/recovered cases:
+[conversation admission](../../docs/design/conversation-admission.md).
+
+
+## Panel Messages catalogue follow (#722)
+
+`panel-list-follow.mjs` runs a real private scripted gateway and mounts the
+production ConversationList, effects, history store and client subscriptions
+in Chromium and WebKit. It is dev-only in run-all. The external caller uses a
+second authenticated connection under the same panel principal.
+
+- External create/send, archive and unarchive update the already-mounted list.
+  An archived held tab is excluded by explicit archived-list evidence. Catalogue
+  deletion removes the remote row; omission alone does not mark a held tab deleted.
+- Active and archived initial frames are required before first publication; they
+  are independent bounded replacements, not an atomic catalogue snapshot.
+- A controlled failure at the archived application port remains visible while a
+  real active-list frame adds another conversation. New paired follows recover it.
+  This injected outage does not claim to exercise a real gateway fault.
+- Leaving closes both target follows; an external change while hidden applies
+  nothing. Reopening catches up through two subscriptions. Normal external
+  changes retain the original mounted pair; no one-shot list reads occur.
+- Small screenshots show the live list and stale notice. The script closes its
+  page/client/gateway and deletes its conversations.
+
+The [panel-list ordering table](../../docs/design/record-subscriptions.md#panel-messages-list--issue-722)
+owns initial-half, stale-read, command, cleanup, incomplete and retry cases; the
+source-level regression tests cover those cases independently.

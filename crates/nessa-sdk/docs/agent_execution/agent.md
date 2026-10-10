@@ -178,7 +178,9 @@ is replaced runs at the new attachment's level, which that record does not name.
 
 `agent.approval_mode()` is the preset in force, the same way
 `agent.effort_level()` is the level in force. `agent.set_approval_mode` verifies
-a change on the current idle attachment. While that attachment is in use, the
+a change on the current idle attachment. Its caller-loss and close orderings
+are documented in [live approval control orderings](lifecycle.md#live-approval-control-orderings).
+While that attachment is in use, the
 report and every queued admission (`QueueAdmissionRecord::approval_mode`,
 from a queued turn and from steering that waits for the next turn) name the
 verified preset. Close can detach the attachment while that admission is still

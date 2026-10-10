@@ -1,0 +1,16 @@
+{
+  "base": "bd8ef0763b92a6f5ca6a7178d736b21a7a5ffe17",
+  "head": "f803d375a1036d73016b38cd6822e8c9e2947237",
+  "files": {
+    "docs/adr/done/231-model-and-approval-per-conversation.md": "edb4b3c188f0d1497f3eb1614dcafef91166b5748352ba0fd33a017ea7e6fcd5",
+    "src/conversation/adapters/store/read-failure.test.ts": "9fe0a77e5d22efb4143bad573eb03732a1b8fff653f68228879f69f4e42a5b36",
+    "src/conversation/application/usecases/attachments.test.ts": "172a81d9b3059aa0bb1640d837ff362c33d5f0f402966d0f761242f5054c6237",
+    "src/conversation/application/usecases/send-draft.ts": "3020569e989e1ac3ce22b5f7d58696ab5aff93e8770c542c349a8a71498b2feb",
+    "src/panel/ui/app.tsx": "91ad63987395a02eef793bbc4e871df6364c5b61856cbeefee5d4453861468bb"
+  },
+  "unchangedBrowserInputs": {
+    "verification/desktop/scripts/mode-publication.mjs": "f760e13f46270c3fb4169cd57da9d3d1000eb27b4855e4e321b6fb7590a76b2f",
+    "verification/desktop/fixtures/mode-publication/main.tsx": "449fc084f5f3fc95d906fe7b333a25eb3d5898ac306d76364bae7b463d3397b5"
+  },
+  "privateGateway": "2c6f28c1e19d7ac35a7fbfaeb0b2c2b8e3d0bb37c97717af375846e831505078"
+}

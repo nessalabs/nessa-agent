@@ -1,0 +1,39 @@
+{
+  "base": "965797a9f2cb1a71923f32eee4197aa501669ebf",
+  "branch": "codex/712-unblocked-audit",
+  "checkout": "/Users/nessa/.codex/worktrees/audit-desktop-history/nessa-agent",
+  "changed": {
+    "crates/nessa-protocol/src/conversation/projection.rs": "cddaf457ee2b5594c93eb07e676cd43a4375f73929d9780b8a4907838bc2bfd4",
+    "crates/nessa-protocol/src/conversation/view.rs": "9cee468389e3d23607a5c653b88b4c3745a08ce9bec42954ac0e34dc54a0e723",
+    "crates/nessa-protocol/tests/conversation/projection.rs": "576de19537d20549fde0ead9bce999b1e81d19640e3d07132858fbfe3f1efed6",
+    "crates/nessa-server/src/conversation/application/environment.rs": "0d698a09e92971cf5b7b6d478c233ca115637c1d6105687fb0e9d313f2b1bc72",
+    "crates/nessa-server/src/conversation/application/metadata_target.rs": "fd6b15493901ceac7ebd79247a8ee62043e36882019b6f9c3e3d9afde3634c6d",
+    "crates/nessa-server/src/conversation/application/mod.rs": "241a06f61be2ad14fee593e247e82d313cfffbf1003694d96784d696261a0e74",
+    "crates/nessa-server/src/conversation/application/passive_read.rs": "f64b675ca280724b27eb2a91d492123943821fd3cea62f314236f25b27555a08",
+    "crates/nessa-server/src/conversation/application/ports.rs": "28c992289bd82f9b857b0d6d0b0bec4c23ee71ecfbe54b22481b99c49bc31f3c",
+    "crates/nessa-server/src/conversation/application/read_grants.rs": "aa238c775eafba2eba9df08550c058a615620c19ff5177d82149a7637882587e",
+    "crates/nessa-server/src/conversation/application/service.rs": "e7b4af29d7d3f5145599ee0027b2dabf2381e23af3543fa7c3a54341e96be0ef",
+    "crates/nessa-server/src/conversation/application/service/app_calls.rs": "b2595a94c84eb4b5a2165d09eaed9042b52e796ca7eff2191b34adce5f46db68",
+    "crates/nessa-server/src/conversation/application/service/creation.rs": "78d30653e5b20579f0656fb1c07f231ad44b206dbfaa43f7d94dc22c456d8892",
+    "crates/nessa-server/src/conversation/application/service/mutation.rs": "36c831cbabaa86a6a87d21f7dace7cb817f7779d9bf0c308f07c05121c6ceed1",
+    "crates/nessa-server/tests/conversation/approval_mode.rs": "dd0f99b55e8cdeab3f069f0f7aad5bfdaa697037fd0a1a738052c3b40e49f5e1",
+    "crates/nessa-server/tests/conversation/creation_metadata.rs": "4fb978fbddbe310c8ee08018beb80815dec908f67956d7126e846e6db6f3e7eb",
+    "crates/nessa-server/tests/conversation/desktop_stop.rs": "ec1afa9a492421730894084f90e771bf9a6c4422c7fdac9a1a630dfdaf3ec771",
+    "crates/nessa-server/tests/conversation/passive_read.rs": "8d71265d35453e4bfdeec7ddf4a917127db65d310c8c09b0cb45563555bfbf33",
+    "crates/nessa-server/tests/conversation/support.rs": "ffc02f1c49aa2a3dbaa13af7ca8a48cd35631ba937d6c33cf6c764564180fbc8",
+    "crates/nessa-server/tests/product/socket/subscriptions.rs": "6c3c6e8b94d6160899a0a95cbbd1fa1338bf0b333ede1631e0bb0c536a35f75e",
+    "docs/adr/done/231-model-and-approval-per-conversation.md": "5c3732112727e1f2dfde5707cce192fb8fd4ed9b8621ae4bf428c5c41641922e",
+    "docs/codebase-structure.md": "9c4d5978d25ef198ce10d00c9a4f002a53b7def692312152a559a6123aecc9d0"
+  },
+  "unchangedComparedWithBase": [
+    "protocol",
+    "packages",
+    "src",
+    "src-tauri",
+    "crates/nessa-sdk",
+    "Cargo.toml",
+    "Cargo.lock"
+  ],
+  "mutationSourceRestorationVerified": true,
+  "head": "25ab96ae9ffa475761b1b95d85a44da31805193d"
+}

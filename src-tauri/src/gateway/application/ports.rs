@@ -472,6 +472,43 @@ pub enum GatewayPhysicalResult {
     Failed(Box<GatewayError>),
 }
 
+/// Failed settings publication retains the prior value once the writer obtained it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClaudeSettingsPublishError {
+    /// No authoritative prior value was obtained.
+    Unavailable(String),
+    /// The desired write may have landed before acknowledgement failed.
+    NotConfirmed {
+        message: String,
+        previous: Option<PathBuf>,
+    },
+}
+
+/// Durable Claude directory publication, serialized by the gateway publication owner.
+pub trait ClaudeDirectorySettings: Send + Sync {
+    /// Publish the requested directory and return the durable value it replaced.
+    /// Once a store callback provides the prior value, an unconfirmed write
+    /// (including a panic) returns `NotConfirmed` with that value for rollback.
+    fn publish(
+        &self,
+        directory: Option<PathBuf>,
+    ) -> Result<Option<PathBuf>, ClaudeSettingsPublishError>;
+    /// Restore the prior value only while this publication still owns the setting.
+    fn restore(&self, expected: &Option<PathBuf>, previous: Option<PathBuf>) -> Result<(), String>;
+}
+
+/// A directory change retains settings and native failures independently.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClaudeConfigurationChangeError {
+    Settings(String),
+    Gateway(GatewayError),
+    Rollback {
+        failure: Box<ClaudeConfigurationChangeError>,
+        settings: Option<String>,
+        gateway: Option<GatewayError>,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GatewayError {
     Registration(String),

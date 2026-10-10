@@ -7,8 +7,11 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { createDependencies } from "../../composition/dependencies"
 import { sessionReady } from "../../session/testing"
 import { makeStore } from "../../store"
-import { ControlFailedError, ConversationReadFailedError } from "../application/ports"
-import { listConversations } from "../adapters/store/history"
+import {
+  ControlFailedError,
+  ConversationReadFailedError,
+  type ConversationEffects,
+} from "../application/ports"
 import { openListed, followConversation } from "../adapters/store/slice"
 import { scenarioEffects } from "../testing"
 import { ConversationList } from "./conversation-list"
@@ -39,6 +42,32 @@ afterEach(async () => {
   container.remove()
 })
 
+/** A static list double: each follow reads once, like the view doubles in store tests. */
+function followByListing(
+  list: ConversationEffects["list"],
+): ConversationEffects["followList"] {
+  return (archived, follower) => {
+    let stopped = false
+    void Promise.resolve()
+      .then(() => list(archived))
+      .then(
+        (value) => {
+          if (!stopped) follower.list(value)
+        },
+        (error: unknown) => {
+          if (!stopped)
+            follower.failed(
+              error instanceof ConversationReadFailedError ? error.reason : "unavailable",
+              error,
+            )
+        },
+      )
+    return () => {
+      stopped = true
+    }
+  }
+}
+
 /** A gateway holding one conversation that no tab in this window has open. */
 async function gatewayWithClosedConversation(
   overrides: Partial<ReturnType<typeof scenarioEffects>> = {},
@@ -55,7 +84,14 @@ async function gatewayWithClosedConversation(
   })
   const list = vi.fn(effects.list)
   const store = makeStore(
-    createDependencies({ conversation: { ...effects, list, ...overrides } }),
+    createDependencies({
+      conversation: {
+        ...effects,
+        list,
+        ...overrides,
+        followList: overrides.followList ?? followByListing(overrides.list ?? list),
+      },
+    }),
   )
   return { store, list, effects }
 }
@@ -107,7 +143,11 @@ it("says the list could not be loaded rather than that there is nothing", async 
   const list = vi.fn(async () => {
     throw new ConversationReadFailedError("unavailable")
   })
-  const store = makeStore(createDependencies({ conversation: { ...effects, list } }))
+  const store = makeStore(
+    createDependencies({
+      conversation: { ...effects, list, followList: followByListing(list) },
+    }),
+  )
   await render(store)
   // Before the gateway arrives there is nothing to have failed yet.
   expect(container.textContent).toContain("Connecting…")
@@ -394,7 +434,7 @@ it("does not list a conversation it knows was deleted, even while a tab is open 
   await vi.waitFor(() => expect(container.textContent).toMatch(/was deleted/))
   // Neither the list nor the tab open on it brings it back as a row.
   await vi.waitFor(() =>
-    expect(store.getState().conversationHistory.requestId).toBeNull(),
+    expect(store.getState().conversationHistory.leavingIds).toEqual([]),
   )
   expect(rows()).toHaveLength(0)
 })
@@ -408,7 +448,7 @@ it("does not list an archived conversation, even while a tab is open on it", asy
     expect(store.getState().conversationHistory.archivedIds).toEqual([written]),
   )
   await vi.waitFor(() =>
-    expect(store.getState().conversationHistory.requestId).toBeNull(),
+    expect(store.getState().conversationHistory.leavingIds).toEqual([]),
   )
   // The tab open on it does not bring it back as a row.
   expect(rows()).toHaveLength(0)
@@ -428,9 +468,8 @@ it("says the list may be out of date when reading it again fails", async () => {
   )
   await render(store)
   await vi.waitFor(() => expect(rows()).toHaveLength(1))
-  await React.act(async () => {
-    await store.dispatch(listConversations())
-  })
+  await React.act(async () => root.render(React.createElement("div")))
+  await render(store)
   expect(container.textContent).toContain(
     "The list could not be refreshed, so it may be out of date.",
   )
@@ -460,4 +499,63 @@ it("says nothing about completeness when the list is whole", async () => {
   await render(store)
   await vi.waitFor(() => expect(rows()).toHaveLength(1))
   expect(container.textContent).not.toContain("Not every conversation is shown.")
+})
+
+it("PL2: Messages stays current through another caller's create, archive, undo and delete without remounting", async () => {
+  const effects = scenarioEffects("echo")
+  const store = makeStore(createDependencies({ conversation: effects }))
+  const list = vi.spyOn(effects, "list")
+  await render(store)
+  expect(rows()).toHaveLength(0)
+  await React.act(async () => {
+    await effects.create(written)
+    await effects.send({
+      conversationId: written,
+      executionId: "external-turn",
+      actionId: "external-send",
+      text: "External conversation",
+      attachments: [],
+      files: [],
+    })
+  })
+  expect(rows()).toHaveLength(1)
+  expect(rows()[0]!.textContent).toContain("External conversation")
+  await React.act(async () => {
+    await effects.archive(written, true)
+  })
+  expect(rows()).toHaveLength(0)
+  expect(store.getState().conversationHistory.archivedIds).toEqual([written])
+  await React.act(async () => {
+    await effects.archive(written, false)
+  })
+  expect(rows()).toHaveLength(1)
+  await React.act(async () => {
+    await effects.delete(written)
+  })
+  expect(rows()).toHaveLength(0)
+  expect(store.getState().conversationHistory.deletedIds).toEqual([])
+  expect(list).not.toHaveBeenCalled()
+})
+
+it("PL4: leaving Messages closes both list follows; a later external change applies no list", async () => {
+  const effects = scenarioEffects("echo")
+  const followList = vi.fn(effects.followList)
+  const store = makeStore(
+    createDependencies({ conversation: { ...effects, followList } }),
+  )
+  await render(store)
+  const previous = store.getState().conversationHistory.rows
+  await React.act(async () => root.render(React.createElement("div")))
+  expect(store.getState().conversationHistory.following).toBe(false)
+  await effects.create(written)
+  await effects.send({
+    conversationId: written,
+    executionId: "gone-turn",
+    actionId: "gone-send",
+    text: "After leaving",
+    attachments: [],
+    files: [],
+  })
+  expect(store.getState().conversationHistory.rows).toBe(previous)
+  expect(followList.mock.calls.map(([archived]) => archived)).toEqual([false, true])
 })

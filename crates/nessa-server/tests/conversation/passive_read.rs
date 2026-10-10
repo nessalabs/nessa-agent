@@ -1374,3 +1374,91 @@ async fn a_revoke_ends_the_next_read_and_lets_an_admitted_one_finish() {
         Err(ReadRefusal::WrongOwner)
     );
 }
+
+#[tokio::test]
+async fn metadata_query_target_fences_passive_admission_and_shares() {
+    use crate::conversation::application::{
+        ConversationCaller, ConversationError, ShareConversation,
+    };
+    use crate::conversation_test_support::MemoryRepository;
+    use nessa_sdk::application::agent_execution::sessions::StorageError;
+    let fixture = GrantFixture::new().await;
+    fixture
+        .change(crate::conversation::application::ReadGrantTransition::Grant)
+        .await;
+    let repository = MemoryRepository::default();
+    let record = fixture.store.load(&fixture.id).await.unwrap().unwrap();
+    repository
+        .records
+        .lock()
+        .unwrap()
+        .insert(fixture.id.clone(), record);
+    let foreign = || {
+        Conversation::new(
+            ConversationId::new(&Uuid::from_u128(2).to_string()).unwrap(),
+            OrganizationId::new("org").unwrap(),
+            PrincipalId::new("owner").unwrap(),
+            "historical-window".into(),
+            "foreign-create".into(),
+            1,
+            AgentId::Claude,
+            ConversationModelId::new("foreign-model").unwrap(),
+            ConversationApprovalMode::Auto,
+        )
+        .unwrap()
+    };
+    let access = access();
+    let policy = CedarPolicyEvaluator::new().unwrap();
+    let gateway = Resource::new(
+        OrganizationId::new("org").unwrap(),
+        ResourceId::new("gateway").unwrap(),
+    );
+    let bindings = Bindings(Mutex::new(Ok(Some(binding()))));
+    let admit = AdmitPassiveRead {
+        authorization: AuthorizeAction {
+            access: &access,
+            clock: &FixedClock,
+            policy: &policy,
+        },
+        gateway: &gateway,
+        receivers: &bindings,
+        conversations: &repository,
+        grants: &CONVERSATION_READ_GRANT,
+        read_grants: &fixture.store,
+    };
+    let session = device_session().await;
+    let source_reads = AtomicUsize::new(0);
+    for read in [PassiveRead::RecordHead, PassiveRead::RecordPage] {
+        *repository.mode_loaded_reply.lock().unwrap() = Some(foreign());
+        let result = admit
+            .read_with(&session, &fixture.id, "receiver", 7, read, |_| {
+                source_reads.fetch_add(1, Ordering::SeqCst);
+                async { Ok::<_, ()>(()) }
+            })
+            .await;
+        assert_eq!(result, Err(ReadRefusal::Unverifiable));
+        assert_eq!(source_reads.load(Ordering::SeqCst), 0);
+        assert!(admit
+            .execute(&session, &fixture.id, "receiver", 7, read)
+            .await
+            .is_ok());
+    }
+    let shares = ShareConversation {
+        conversations: &repository,
+        receivers: &bindings,
+        grants: &fixture.store,
+        access: &access,
+    };
+    let caller = ConversationCaller {
+        organization_id: OrganizationId::new("org").unwrap(),
+        principal_id: PrincipalId::new("owner").unwrap(),
+        surface_id: "desktop".into(),
+        action_id: Uuid::new_v4().to_string(),
+    };
+    *repository.mode_loaded_reply.lock().unwrap() = Some(foreign());
+    assert!(matches!(
+        shares.shares(&caller, &fixture.id).await,
+        Err(ConversationError::Storage(StorageError::IdentityMismatch))
+    ));
+    assert_eq!(shares.shares(&caller, &fixture.id).await.unwrap().len(), 1);
+}

@@ -274,6 +274,15 @@ fn conversation_service(
     metadata: &Arc<LocalConversationStore>,
     provider: &Arc<ProviderFactory>,
 ) -> Arc<ConversationService> {
+    conversation_service_with_repository(storage, metadata, provider, metadata.clone())
+}
+
+fn conversation_service_with_repository(
+    storage: &Arc<RecordStorage>,
+    metadata: &Arc<LocalConversationStore>,
+    provider: &Arc<ProviderFactory>,
+    repository: Arc<dyn ConversationRepository>,
+) -> Arc<ConversationService> {
     let service = ConversationService::new(
         ConversationDependencies {
             // Agents that can change approval mode (row S20).
@@ -282,7 +291,7 @@ fn conversation_service(
                 Arc::new(RecordingModeExecutionAudit::default()),
             ),
             storage: storage.clone(),
-            metadata: metadata.clone(),
+            metadata: repository,
             mode_audit: Arc::new(AcceptingModeAudit),
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
@@ -1163,7 +1172,9 @@ async fn subscriptions_past_the_published_limit_are_refused() {
         .take(MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS)
         .enumerate()
     {
-        client.subscribe(&format!("view-{index}"), conversation).await;
+        client
+            .subscribe(&format!("view-{index}"), conversation)
+            .await;
     }
     client.send(
         "one-too-many",
@@ -1174,9 +1185,38 @@ async fn subscriptions_past_the_published_limit_are_refused() {
     assert_eq!(reply["error"]["code"], "subscription_capacity");
     client.send("list", "conversation.subscribeList", json!({}));
     assert_eq!(client.reply("list").await.0["ok"], true);
-    client.send("archived", "conversation.subscribeList", json!({"archived": true}));
+    client.send(
+        "archived",
+        "conversation.subscribeList",
+        json!({"archived": true}),
+    );
     let (reply, _) = client.reply("archived").await;
-    assert_eq!(reply["error"]["code"], "subscription_capacity");
+    assert_eq!(reply["ok"], true, "{reply}");
+    let archived = reply["payload"]["subscriptionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    client.send(
+        "duplicate-list",
+        "conversation.subscribeList",
+        json!({"archived": true}),
+    );
+    assert_eq!(
+        client.reply("duplicate-list").await.0["error"]["code"],
+        "subscription_duplicate"
+    );
+    client.send(
+        "release-archived",
+        "conversation.unsubscribe",
+        json!({"subscriptionId": archived}),
+    );
+    assert_eq!(client.reply("release-archived").await.0["ok"], true);
+    client.send(
+        "archived-again",
+        "conversation.subscribeList",
+        json!({"archived": true}),
+    );
+    assert_eq!(client.reply("archived-again").await.0["ok"], true);
     client.close().await;
 }
 
@@ -2032,4 +2072,125 @@ async fn share_refuses_what_the_owner_cannot_grant() {
     unshare["requestId"] = json!("unshare-phone");
     let answer = fixture.call("conversation.unshare", unshare).await;
     assert_eq!(answer["payload"]["applied"], true, "{answer}");
+}
+
+/// A retained retirement owner refuses both the wire read and its live follow.
+#[tokio::test]
+async fn retained_stopping_publication_refuses_wire_and_subscription_until_cleanup() {
+    use conversation_support::{MemoryRepository, ModeReadbackFault};
+    use nessa_protocol::conversation::domain::ConversationApprovalMode;
+    use nessa_sdk::application::agent_execution::agents::AgentError;
+    for terminal_mode in [false, true] {
+        let expected_mode = if terminal_mode { "auto" } else { "ask" };
+        let mut fixture = SubscriptionFixture::new().await;
+        grants(
+            &fixture.authority,
+            &["conversation.write", "conversation.read", "server.read"],
+        );
+        fixture.session = authenticate(&fixture.state).await;
+        let repository = Arc::new(MemoryRepository::default());
+        repository
+            .create(fixture.metadata.load(&fixture.id).await.unwrap().unwrap())
+            .await
+            .unwrap();
+        fixture.service = conversation_service_with_repository(
+            &fixture.storage,
+            &fixture.metadata,
+            &fixture.provider,
+            repository.clone(),
+        );
+        fixture.state = fixture.state.with_conversations(fixture.service.clone());
+        fixture
+            .service
+            .read(
+                fixture.id.clone(),
+                caller(&fixture.session, "initial".into()),
+            )
+            .await
+            .unwrap();
+        let opens = fixture.provider.open_calls.load(Ordering::SeqCst);
+        let mut client = fixture.connect();
+        let subscription = client.subscribe("before-retirement", &fixture.id).await;
+        let initial = client.next().await;
+        assert_eq!(view(&initial)["approvalMode"], "ask");
+        *fixture.provider.close_failure.lock().unwrap() = Some(AgentError::CleanupUncertain);
+        if terminal_mode {
+            repository
+                .lose_mode_commit_ack
+                .store(true, Ordering::SeqCst);
+            *repository.mode_readback_fault.lock().unwrap() = Some(ModeReadbackFault::Refuse);
+            assert!(fixture
+                .service
+                .set_approval_mode(
+                    fixture.id.clone(),
+                    caller(&fixture.session, "uncertain-mode".into()),
+                    ConversationApprovalMode::Auto
+                )
+                .await
+                .is_err());
+        } else {
+            assert!(fixture
+                .service
+                .close(
+                    fixture.id.clone(),
+                    caller(&fixture.session, "uncertain-close".into())
+                )
+                .await
+                .is_err());
+        }
+        for method in ["conversation.read"] {
+            let response = fixture
+                .call(method, json!({"conversationId":fixture.id.to_string()}))
+                .await;
+            assert_eq!(response["ok"], false, "{response}");
+            assert_eq!(response["error"]["code"], "conversation_closed");
+            assert!(
+                response.get("payload").is_none(),
+                "no clean replacement on refusal"
+            );
+        }
+        let ended = client
+            .until(&subscription, |frame| {
+                frame["event"] == "conversation.subscriptionEnded"
+            })
+            .await;
+        assert!(
+            ended
+                .iter()
+                .all(|frame| frame["event"] != "conversation.view"),
+            "{ended:?}"
+        );
+        let end = ended.last().unwrap();
+        assert_eq!(end["payload"]["reason"], "refused");
+        assert_eq!(end["payload"]["code"], "conversation_closed");
+        client.send(
+            "blocked-new-follow",
+            "conversation.subscribe",
+            json!({"conversationId":fixture.id.to_string()}),
+        );
+        let (reply, _) = client.reply("blocked-new-follow").await;
+        assert_eq!(reply["error"]["code"], "conversation_closed");
+        assert_eq!(fixture.provider.open_calls.load(Ordering::SeqCst), opens);
+        *fixture.provider.close_failure.lock().unwrap() = None;
+        fixture
+            .service
+            .close(
+                fixture.id.clone(),
+                caller(&fixture.session, "confirmed-close".into()),
+            )
+            .await
+            .unwrap();
+        let after = fixture
+            .call(
+                "conversation.read",
+                json!({"conversationId":fixture.id.to_string()}),
+            )
+            .await;
+        assert_eq!(after["ok"], true, "{after}");
+        assert_eq!(after["payload"]["approvalMode"], expected_mode);
+        client.subscribe("after-cleanup", &fixture.id).await;
+        assert_eq!(view(&client.next().await)["approvalMode"], expected_mode);
+        client.close().await;
+        fixture.service.shutdown().await.unwrap();
+    }
 }

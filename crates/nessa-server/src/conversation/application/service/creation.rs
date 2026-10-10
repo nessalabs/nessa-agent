@@ -1,8 +1,8 @@
 //! Creation command receipts consume the SDK ordering owner and this service's
 //! existing target access, metadata, audit, provider and cleanup path.
 use super::{
-    conversation_session, AgentError, AttachmentPhase, ConversationCaller, ConversationError,
-    ConversationId, ConversationService, RequestedAgent, RequestedConversation,
+    conversation_session, load_conversation, AgentError, AttachmentPhase, ConversationCaller,
+    ConversationError, ConversationId, ConversationService, RequestedAgent, RequestedConversation,
 };
 use nessa_sdk::application::agent_execution::commands::{
     CreationBinding, CreationCoordinator, CreationFailure, CreationFuture,
@@ -110,10 +110,7 @@ impl ConversationService {
         if saved.is_some() {
             return Ok(None);
         }
-        let Some(record) = self
-            .inner
-            .metadata
-            .load(id)
+        let Some(record) = load_conversation(self.inner.metadata.as_ref(), id)
             .await
             .map_err(CreationFailure::Target)?
         else {
@@ -158,7 +155,9 @@ impl CreationTarget for Target {
         stage: Option<CreationStage>,
     ) -> CreationFuture<'_, (), Self::Error> {
         Box::pin(async move {
-            if let Some(record) = self.service.inner.metadata.load(&self.id).await? {
+            if let Some(record) =
+                load_conversation(self.service.inner.metadata.as_ref(), &self.id).await?
+            {
                 record.check_access(&self.caller.organization_id, &self.caller.principal_id)?;
                 // A missing receipt is not a conflict. The creator comparison
                 // applies to a saved stage for this request. Lookup of an

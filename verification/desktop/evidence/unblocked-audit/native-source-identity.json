@@ -1,0 +1,21 @@
+{
+  "head": "4fea9814cb7ba5bc6debaff9cf0a01e1cbcc5b3b",
+  "parked_source": "d49c6777e445d5ee1558699f46af691a2a71db5a",
+  "regions": {
+    "sdk": {
+      "paths": ["crates/nessa-sdk"],
+      "changed": []
+    },
+    "native_and_storage": {
+      "paths": ["src-tauri", "crates/nessa-local-storage"],
+      "changed": []
+    },
+    "oauth": {
+      "paths": [
+        "crates/nessa-server/src/mcp_authorization",
+        "crates/nessa-server/tests/mcp_authorization"
+      ],
+      "changed": []
+    }
+  }
+}

@@ -35,7 +35,7 @@
   },
   "x-subscriptionLimits": {
     "conversationTargets": 8,
-    "listTargets": 1,
+    "listTargets": 2,
     "deliveryTimeoutMs": 10000
   },
   "x-frameBytes": { "maxPayloadBytes": 65536 },

@@ -19,8 +19,8 @@ use nessa_sdk::{
 use serde::Serialize;
 
 /// Internal fixed selection used to enrich the product view from the same
-/// catalog that powers agents.list. It is not an independent wire field.
-#[derive(Clone, Debug)]
+/// catalog that powers agents.list. Equality lets Projection own replacements.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConversationSelectionView {
     pub agent: AgentId,
     pub model: String,
@@ -752,7 +752,7 @@ pub enum ConversationLeaseRefusal {
 }
 
 /// Non-secret runtime facts selected by server composition.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ConversationRuntime {
     pub model: String,
     pub provider: String,

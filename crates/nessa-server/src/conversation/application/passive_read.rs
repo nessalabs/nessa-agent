@@ -1,5 +1,6 @@
 //! Admission for bounded passive reads, before a record or catalogue source is touched.
 
+use super::metadata_target::load_conversation;
 use super::{admit_read, ConversationRepository, ReadGrants, Reader};
 use crate::conversation::domain::ReceiverBinding;
 use nessa_auth::{
@@ -125,9 +126,7 @@ impl AdmitPassiveRead<'_> {
         let binding = self
             .binding(session, receiver_id, access_epoch, read)
             .await?;
-        let conversation = self
-            .conversations
-            .load(conversation_id)
+        let conversation = load_conversation(self.conversations, conversation_id)
             .await
             .map_err(|_| ReadRefusal::Unverifiable)?
             .ok_or(ReadRefusal::WrongOwner)?;

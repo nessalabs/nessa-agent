@@ -9,7 +9,8 @@
 #[cfg(test)]
 use super::SystemMonotonicClock;
 use super::{
-    ClaudeDirectoryReplacement, GatewayError, GatewayHost, GatewayPhysicalResult,
+    ClaudeConfigurationChangeError, ClaudeDirectoryReplacement, ClaudeDirectorySettings,
+    ClaudeSettingsPublishError, GatewayError, GatewayHost, GatewayPhysicalResult,
     GatewayReconciliationAttempt, GatewayReconciliationAudit, GatewayReconciliationEffect,
     GatewayReconciliationEffectTiming, GatewayReconciliationIds, GatewayReconciliationIntent,
     GatewayReconciliationIntentDelivery, GatewayReconciliationJournalSession,
@@ -988,7 +989,7 @@ impl Gateway {
     ///
     /// The host must already be publishing that directory.
     /// [`Self::change_claude_configuration`] is the production entry: it updates
-    /// the host, records the directory, and then reconciles. Tests call this
+    /// durable settings, publishes the host directory, and then reconciles. Tests call this
     /// when they only need the cause.
     #[cfg(test)]
     pub async fn configuration_changed(&self, surface: BundledSurface) -> Result<(), GatewayError> {
@@ -999,27 +1000,37 @@ impl Gateway {
         .await
     }
 
-    /// Publish `directory` on the host and reconcile once when it changed.
+    /// Acknowledge durable settings before publishing `directory` on the host,
+    /// then reconcile once when it changed. A failed acknowledgement retains
+    /// its known prior settings for rollback before any native dispatch
+    /// (`an_unconfirmed_settings_publication_restores_its_known_prior_before_native_dispatch`).
     ///
     /// An equal directory that no attempt is still publishing returns without
-    /// a registration
-    /// (`settings_change_reregisters_once_and_records_the_reason`). The same
+    /// a registration. It retains a failed startup outcome instead of claiming
+    /// recovery (`late_physical_success_retains_configuration_when_outcome_delivery_fails_or_panics`,
+    /// `settings_change_reregisters_once_and_records_the_reason`). The same
     /// directory, while its attempt is in flight, waits for that attempt
     /// (`an_identical_in_flight_directory_change_waits_for_that_attempt`).
     /// A different directory waits until that attempt finishes, then publishes
     /// its own (`a_different_directory_waits_until_the_in_flight_attempt_finishes`).
+    /// Accepted transactions outlive dropped or panicking caller waiters
+    /// (`a_dropped_directory_caller_retains_ownership_through_late_success_and_failure`,
+    /// `a_panicking_directory_waiter_cannot_end_the_publication_transaction`).
     /// A reconciliation that fails restores the previous directory only when
     /// this attempt still owns the value it published
     /// (`a_failed_registration_restores_the_directory_and_can_be_repeated`,
     /// `a_failed_registration_does_not_restore_a_newer_directory`).
     pub async fn change_claude_configuration(
-        &self,
+        self: &Arc<Self>,
         surface: BundledSurface,
         directory: Option<PathBuf>,
-    ) -> Result<(), GatewayError> {
+        settings: Arc<dyn ClaudeDirectorySettings>,
+    ) -> Result<(), ClaudeConfigurationChangeError> {
         let claimed = loop {
-            match self.claim_claude_directory(surface, &directory)? {
-                ClaudeDirectoryClaim::Settled => return Ok(()),
+            match self
+                .claim_claude_directory(&directory)
+                .map_err(ClaudeConfigurationChangeError::Gateway)?
+            {
                 ClaudeDirectoryClaim::Join(existing) => {
                     if existing.is_pending() {
                         return wait_claude_publication(existing).await;
@@ -1030,29 +1041,37 @@ impl Gateway {
                     let _ = wait_claude_publication(existing.clone()).await;
                     self.clear_claude_publication(&existing);
                 }
-                ClaudeDirectoryClaim::Publish {
-                    publication,
-                    previous,
-                    evidence,
-                } => break (publication, previous, evidence),
+                ClaudeDirectoryClaim::Publish(publication) => break publication,
             }
         };
-        let (publication, previous, evidence) = claimed;
+        let publication = claimed;
         let mut finish = ClaudePublicationFinish {
-            gateway: self,
-            publication,
+            gateway: self.clone(),
+            publication: publication.clone(),
             directory,
-            previous,
+            previous: None,
+            settings,
+            durable_previous: None,
             outcome: None,
         };
-        let outcome = self.reconcile(evidence).await;
-        finish.outcome = Some(outcome.clone());
-        outcome
+        // The accepted transaction owns both configuration and the native receipt.
+        // Callers only wait; dropping one cannot undo a still-running native effect.
+        let _owner = tauri::async_runtime::spawn_blocking(move || {
+            let outcome = catch_unwind(AssertUnwindSafe(|| finish.publish(surface)))
+                .unwrap_or_else(|_| {
+                    Err(ClaudeConfigurationChangeError::Gateway(
+                        GatewayError::Registration(
+                            "claude configuration publication panicked".into(),
+                        ),
+                    ))
+                });
+            finish.complete(outcome)
+        });
+        wait_claude_publication(publication).await
     }
 
     fn claim_claude_directory(
         &self,
-        surface: BundledSurface,
         directory: &Option<PathBuf>,
     ) -> Result<ClaudeDirectoryClaim, GatewayError> {
         let mut slot = self
@@ -1065,31 +1084,9 @@ impl Gateway {
             }
             return Ok(ClaudeDirectoryClaim::Wait(existing));
         }
-        match self
-            .host
-            .replace_claude_config_directory(directory.clone())?
-        {
-            ClaudeDirectoryReplacement::Unchanged => Ok(ClaudeDirectoryClaim::Settled),
-            ClaudeDirectoryReplacement::Changed { previous } => {
-                let evidence =
-                    match directory_evidence(surface, previous.clone(), directory.clone()) {
-                        Ok(evidence) => evidence,
-                        Err(error) => {
-                            let _ = self
-                                .host
-                                .restore_claude_config_directory(directory, previous);
-                            return Err(error);
-                        }
-                    };
-                let publication = Arc::new(ClaudePublication::new(directory.clone()));
-                *slot = Some(Arc::clone(&publication));
-                Ok(ClaudeDirectoryClaim::Publish {
-                    publication,
-                    previous,
-                    evidence,
-                })
-            }
-        }
+        let publication = Arc::new(ClaudePublication::new(directory.clone()));
+        *slot = Some(Arc::clone(&publication));
+        Ok(ClaudeDirectoryClaim::Publish(publication))
     }
 
     fn clear_claude_publication(&self, publication: &Arc<ClaudePublication>) {
@@ -1451,20 +1448,15 @@ fn directory_evidence(
 }
 
 enum ClaudeDirectoryClaim {
-    Settled,
     Join(Arc<ClaudePublication>),
     /// A different directory is still reconciling. Wait, then claim again.
     Wait(Arc<ClaudePublication>),
-    Publish {
-        publication: Arc<ClaudePublication>,
-        previous: Option<PathBuf>,
-        evidence: ReconciliationEvidence,
-    },
+    Publish(Arc<ClaudePublication>),
 }
 
 struct ClaudePublication {
     directory: Option<PathBuf>,
-    result: Mutex<Option<Result<(), GatewayError>>>,
+    result: Mutex<Option<Result<(), ClaudeConfigurationChangeError>>>,
     ready: Condvar,
     #[cfg(test)]
     waiters: AtomicUsize,
@@ -1488,45 +1480,163 @@ impl ClaudePublication {
             .unwrap_or(false)
     }
 
-    fn finish(&self, outcome: Result<(), GatewayError>) {
+    fn finish(&self, outcome: Result<(), ClaudeConfigurationChangeError>) {
         if let Ok(mut result) = self.result.lock() {
             *result = Some(outcome);
             self.ready.notify_all();
         }
     }
 
-    fn wait(&self) -> Result<(), GatewayError> {
+    fn wait(&self) -> Result<(), ClaudeConfigurationChangeError> {
         #[cfg(test)]
         self.waiters.fetch_add(1, Ordering::SeqCst);
-        let mut result = self.result.lock().map_err(|_| state_unavailable())?;
+        let mut result = self
+            .result
+            .lock()
+            .map_err(|_| ClaudeConfigurationChangeError::Gateway(state_unavailable()))?;
         while result.is_none() {
-            result = self.ready.wait(result).map_err(|_| state_unavailable())?;
+            result = self
+                .ready
+                .wait(result)
+                .map_err(|_| ClaudeConfigurationChangeError::Gateway(state_unavailable()))?;
         }
-        result.clone().ok_or_else(state_unavailable)?
+        result
+            .clone()
+            .ok_or_else(|| ClaudeConfigurationChangeError::Gateway(state_unavailable()))?
     }
 }
 
-struct ClaudePublicationFinish<'a> {
-    gateway: &'a Gateway,
+struct ClaudePublicationFinish {
+    gateway: Arc<Gateway>,
     publication: Arc<ClaudePublication>,
     directory: Option<PathBuf>,
-    previous: Option<PathBuf>,
-    outcome: Option<Result<(), GatewayError>>,
+    previous: Option<Option<PathBuf>>,
+    settings: Arc<dyn ClaudeDirectorySettings>,
+    durable_previous: Option<Option<PathBuf>>,
+    outcome: Option<Result<(), ClaudeConfigurationChangeError>>,
 }
 
-impl Drop for ClaudePublicationFinish<'_> {
-    fn drop(&mut self) {
-        let outcome = self.outcome.take().unwrap_or_else(|| {
-            Err(GatewayError::Registration(
-                "claude configuration reconciliation ended before it reported a result".into(),
+impl ClaudePublicationFinish {
+    fn publish(&mut self, surface: BundledSurface) -> Result<(), ClaudeConfigurationChangeError> {
+        let published = catch_unwind(AssertUnwindSafe(|| {
+            self.settings.publish(self.directory.clone())
+        }))
+        .unwrap_or_else(|_| {
+            Err(ClaudeSettingsPublishError::Unavailable(
+                "claude settings publication panicked".into(),
             ))
         });
-        if outcome.is_err() {
-            let _ = self
-                .gateway
-                .host
-                .restore_claude_config_directory(&self.directory, self.previous.clone());
+        match published {
+            Ok(previous) => self.durable_previous = Some(previous),
+            Err(error) => {
+                let message = match error {
+                    ClaudeSettingsPublishError::Unavailable(message) => message,
+                    ClaudeSettingsPublishError::NotConfirmed { message, previous } => {
+                        self.durable_previous = Some(previous);
+                        message
+                    }
+                };
+                return Err(ClaudeConfigurationChangeError::Settings(message));
+            }
         }
+        match self
+            .gateway
+            .host
+            .replace_claude_config_directory(self.directory.clone())
+        {
+            Err(error) => Err(ClaudeConfigurationChangeError::Gateway(error)),
+            Ok(ClaudeDirectoryReplacement::Unchanged) => match self
+                .gateway
+                .startup()
+                .map_err(ClaudeConfigurationChangeError::Gateway)?
+                .phase()
+            {
+                GatewayStartupPhase::Failed(error) => {
+                    Err(ClaudeConfigurationChangeError::Gateway(error.clone()))
+                }
+                GatewayStartupPhase::Starting(_) | GatewayStartupPhase::Ready => Ok(()),
+            },
+            Ok(ClaudeDirectoryReplacement::Changed { previous }) => {
+                self.previous = Some(previous.clone());
+                let evidence = directory_evidence(surface, previous, self.directory.clone())
+                    .map_err(ClaudeConfigurationChangeError::Gateway)?;
+                tauri::async_runtime::block_on(self.gateway.reconcile(evidence))
+                    .map_err(ClaudeConfigurationChangeError::Gateway)
+            }
+        }
+    }
+
+    fn complete(
+        &mut self,
+        outcome: Result<(), ClaudeConfigurationChangeError>,
+    ) -> Result<(), ClaudeConfigurationChangeError> {
+        let outcome = self.restore_failed(outcome);
+        self.outcome = Some(outcome.clone());
+        outcome
+    }
+
+    fn restore_failed(
+        &mut self,
+        outcome: Result<(), ClaudeConfigurationChangeError>,
+    ) -> Result<(), ClaudeConfigurationChangeError> {
+        // An audit receipt failure does not undo a confirmed native success.
+        // Keep its acknowledged configuration while returning the audit failure.
+        if matches!(
+            &outcome,
+            Err(ClaudeConfigurationChangeError::Gateway(
+                GatewayError::Audit {
+                    physical: Some(GatewayPhysicalResult::Succeeded),
+                    ..
+                }
+            ))
+        ) {
+            return outcome;
+        }
+        if let Err(failure) = outcome {
+            let settings = self.durable_previous.take().and_then(|previous| {
+                catch_unwind(AssertUnwindSafe(|| {
+                    self.settings.restore(&self.directory, previous)
+                }))
+                .unwrap_or_else(|_| Err("claude settings rollback panicked".into()))
+                .err()
+            });
+            let gateway = self.previous.take().and_then(|previous| {
+                catch_unwind(AssertUnwindSafe(|| {
+                    self.gateway
+                        .host
+                        .restore_claude_config_directory(&self.directory, previous)
+                }))
+                .unwrap_or_else(|_| {
+                    Err(GatewayError::Registration(
+                        "claude configuration rollback panicked".into(),
+                    ))
+                })
+                .err()
+            });
+            return if settings.is_some() || gateway.is_some() {
+                Err(ClaudeConfigurationChangeError::Rollback {
+                    failure: Box::new(failure),
+                    settings,
+                    gateway,
+                })
+            } else {
+                Err(failure)
+            };
+        }
+        outcome
+    }
+}
+
+impl Drop for ClaudePublicationFinish {
+    fn drop(&mut self) {
+        let outcome = match self.outcome.take() {
+            Some(outcome) => outcome,
+            None => self.restore_failed(Err(ClaudeConfigurationChangeError::Gateway(
+                GatewayError::Registration(
+                    "claude configuration reconciliation ended before it reported a result".into(),
+                ),
+            ))),
+        };
         self.publication.finish(outcome);
         if let Ok(mut slot) = self.gateway.claude_publication.lock() {
             if slot
@@ -1539,10 +1649,14 @@ impl Drop for ClaudePublicationFinish<'_> {
     }
 }
 
-async fn wait_claude_publication(publication: Arc<ClaudePublication>) -> Result<(), GatewayError> {
+async fn wait_claude_publication(
+    publication: Arc<ClaudePublication>,
+) -> Result<(), ClaudeConfigurationChangeError> {
     tauri::async_runtime::spawn_blocking(move || publication.wait())
         .await
-        .map_err(|error| GatewayError::Registration(error.to_string()))?
+        .map_err(|error| {
+            ClaudeConfigurationChangeError::Gateway(GatewayError::Registration(error.to_string()))
+        })?
 }
 
 fn audit_attached(

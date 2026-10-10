@@ -1875,6 +1875,8 @@ describe("a row keeps the keyboard as its session changes group", () => {
       await act(async () => observed.forEach((report) => report(600)))
       await nextFrame()
       expect(host.querySelector(".agents-overview-peek")).toBeNull()
+      // Width commits outside observer delivery; focus follows that commit.
+      await nextFrame()
       expect(document.activeElement).toBe(row("run"))
     } finally {
       Object.assign(globalThis, { ResizeObserver: was })

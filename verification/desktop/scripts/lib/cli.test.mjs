@@ -223,6 +223,8 @@ describe("run-all's sum", () => {
     assert.equal(overallStatus([DEV_SERVER_ONLY]), 2)
     assert.equal(overallStatus(["FAILED", DEV_SERVER_ONLY]), 1)
     assert.deepEqual(devServerOnlyChecks, [
+      "panel-list-follow",
+      "mode-publication",
       "committed-transcript",
       "lease-details",
       "app-review",

@@ -15,12 +15,17 @@ import {
   loadWorkspace,
   newSession,
   openSession,
+  openWidget,
   showContent,
 } from "../store/commands"
 import { shallowEqual } from "react-redux"
 import { useWorkspaceSelector, useWorkspaceStore } from "../store/hooks"
 import { workspaceActions } from "../store/slice"
-import { selectFocusedPaneKey, selectShownSessionIds } from "../store/selectors"
+import {
+  selectFocusedPaneKey,
+  selectShownSessionIds,
+  selectWindowWidget,
+} from "../store/selectors"
 import { panesOf } from "../../../split-panes/model/pane-layout"
 import { emptyTranscript, type Transcript } from "../../model/transcript"
 import {
@@ -42,6 +47,7 @@ function Page() {
   const focused = useWorkspaceSelector(selectFocusedPaneKey)
   const shown = useWorkspaceSelector(selectShownSessionIds)
   const panes = useWorkspaceSelector((state) => state.workspace.panes)
+  const windowWidget = useWorkspaceSelector(selectWindowWidget)
   const asking = useWorkspaceSelector(
     (state) =>
       Object.values(state.workspace.transcripts)
@@ -54,6 +60,15 @@ function Page() {
       <button type="button" data-list-row>
         A row in a list
       </button>
+      {windowWidget ? (
+        <section data-widget-window>
+          <div
+            {...{ [widgetBodyAttribute]: "" }}
+            tabIndex={-1}
+            aria-label="Window widget"
+          />
+        </section>
+      ) : null}
       <div className="split-panes-grid" data-split-grid>
         {(panes ? panesOf(panes) : []).map((pane, index) => (
           <article
@@ -361,3 +376,116 @@ it("waits for a window widget's body rather than focusing the pane beneath it", 
     stop()
   }
 })
+
+/** Queue the public store event whose settlement the mounted hook owns. */
+async function queueSettlement(store: ReturnType<typeof testStore>, cause: string) {
+  if (cause === "widget") {
+    await act(async () =>
+      store.dispatch(
+        openWidget({ widget: { plugin: "test", id: "window" }, place: "window" }),
+      ),
+    )
+  } else if (cause.startsWith("overview")) {
+    await act(async () => store.dispatch(showContent({ content: "agents" })))
+    await act(async () => store.dispatch(showContent({ content: "panes" })))
+    if (cause === "overview-between") await act(async () => animation.runFrame())
+  } else {
+    await act(async () => void store.dispatch(newSession({ beside: "right" })))
+  }
+}
+
+it.each(["pane", "widget", "overview-before", "overview-between"])(
+  "retires queued %s settlement when its workspace unmounts",
+  async (cause) => {
+    const store = await page()
+    await queueSettlement(store, cause)
+    expect(animation.pending()).toBeGreaterThan(0)
+    await act(async () => root.render(null))
+    expect(animation.pending()).toBe(0)
+    await act(async () => animation.runFrame())
+    expect(animation.pending()).toBe(0)
+    expect(document.activeElement).toBe(document.body)
+  },
+)
+
+/** Record the browser-edge callbacks so a test may deliver one after cancellation. */
+function recordedRequests() {
+  const request = window.requestAnimationFrame
+  const callbacks: FrameRequestCallback[] = []
+  window.requestAnimationFrame = (callback) => {
+    callbacks.push(callback)
+    return request(callback)
+  }
+  return {
+    callbacks,
+    restore: () => {
+      window.requestAnimationFrame = request
+    },
+  }
+}
+
+it.each(["pane", "widget", "overview-before", "overview-between"])(
+  "declines a cancelled %s callback delivered after cleanup",
+  async (cause) => {
+    const store = await page()
+    const requests = recordedRequests()
+    try {
+      await queueSettlement(store, cause)
+      const retired = requests.callbacks.at(-1)
+      expect(retired).toBeDefined()
+      await act(async () => root.render(null))
+      await act(async () => retired?.(performance.now()))
+      expect(animation.pending()).toBe(0)
+      expect(document.activeElement).toBe(document.body)
+    } finally {
+      requests.restore()
+    }
+  },
+)
+
+it("retires the previous store's settlement while its replacement keeps focus ownership", async () => {
+  const previous = await page()
+  const requests = recordedRequests()
+  try {
+    await queueSettlement(previous, "pane")
+    const retired = requests.callbacks.at(-1)
+    expect(retired).toBeDefined()
+    const current = testStore()
+    await current.dispatch(loadWorkspace())
+    await settle()
+    await act(async () =>
+      root.render(
+        <Provider store={current}>
+          <Page />
+        </Provider>,
+      ),
+    )
+    expect(animation.pending()).toBe(0)
+    await act(async () => retired?.(performance.now()))
+    expect(animation.pending()).toBe(0)
+    await queueSettlement(current, "pane")
+    await frames()
+    expect(caretIn()).toBe(`Message ${current.getState().workspace.panes?.focused}`)
+  } finally {
+    requests.restore()
+  }
+})
+
+it.each(["pane", "widget", "overview-before"])(
+  "keeps the mounted %s settlement order before target paint",
+  async (cause) => {
+    const store = await page()
+    await queueSettlement(store, cause)
+    const focused = store.getState().workspace.panes?.focused
+    const destination = cause === "widget" ? "Window widget" : `Message ${focused}`
+    const settlementFrames = cause === "overview-before" ? 2 : 1
+    for (let frame = 0; frame < settlementFrames; frame++) {
+      await act(async () => animation.runFrame())
+      expect(caretIn()).not.toBe(destination)
+    }
+    await act(async () => animation.runFrame())
+    expect(caretIn()).not.toBe(destination)
+    await act(async () => animation.runFrame())
+    expect(caretIn()).toBe(destination)
+  },
+)

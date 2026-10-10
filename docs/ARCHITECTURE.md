@@ -246,7 +246,12 @@ the quick switcher included. Titlebar content starts at the one safe area,
 nothing draws under the window's controls. A column's title sits inline in
 the titlebar row, after the controls, where it fits, and on its own row below
 where it does not (`src/desktop/ui/column-header.tsx`, the same head for the
-session list, the sidebar and Settings' page).
+session list, the sidebar and Settings' page). ResizeObserver reports update
+its width measurements only. One animation-frame callback applies the latest
+placement before the next paint, so moving the title cannot resize neighboring
+panes within that observer broadcast (#693). The overview's width observer also
+commits its arrangement in an animation frame, avoiding a synchronous React
+flush that could mount pending neighboring observers during delivery.
 
 The **Agents overview** (`ui/overview/`, ⌘0 or "Agents" at the top of the
 sidebar, in every layout but Classic, with nothing to turn on) takes the
@@ -314,7 +319,8 @@ not reading the session, which stays unread.
   the workspace as the split panes' source (below). `adapters/dom/` holds what
   belongs to the page: what the workspace adds to a drag — a session's card,
   the side columns that are never targets (`split-panes-drag.ts`) — keys,
-  focus following the focused pane (`focus.ts`), the page's measure of the
+  focus following the focused pane and owning its queued settlement for the mounted
+  subscription (`focus.ts`, [frame lifetime](design/ui-workspace-load.md#focus-frame-lifetime-730)), the page's measure of the
   panes' room (`measure.ts`, injected into the commands), the arrival of a
   first message, and the clock's ticks. `adapters/storage/` keeps the Agents overview's
   filter between launches (`remembered-filter.ts`).
@@ -490,7 +496,7 @@ opinion rather than the product's.
 | `application/usecases/` | One file per command. Local drafts and tabs, send/steer/queue, stop, permission replies, and replacement-view application. |
 | `application/ports.ts` | `ConversationGateway` for local draft and tab operations; `ConversationEffects` for what the panel may ask the product to do, including staging an image's bytes and listing, archiving and deleting conversations; the typed `AttachmentStagingError`, `SubmissionRefusedError` (a message the gateway did not take, so the draft comes back), and `ControlFailedError` (a control it answered with a reason, a `ControlOutcome`, or both — the reason may be absent while the outcome is certain). |
 | `adapters/gateway/local.ts` | In-process draft/tab projection. Remote effects live in `adapters/gateway/effects.ts` and use the shared authenticated client; staging is begin, then upload of the original bytes only when a ticket was issued; it answers with the reference the gateway stored, and maps the client's failure codes to the panel's typed reasons. |
-| `adapters/store/` | Redux projection and command thunks. Thunks invoke injected effects; reducers apply local UI state and returned views. `history.ts` is the gateway's list of conversations as last read, and archive and delete: the rows with an action out, the conversations known deleted, what the latest action said, and the one archive that can be undone — the table in ADR 182, "In the panel". |
+| `adapters/store/` | Redux projection and command thunks. Thunks invoke injected effects; reducers apply local UI state and returned views. `history.ts` owns the Messages list's paired active/archived catalogue follow, publication identity and cleanup ([ordering table](design/record-subscriptions.md#panel-messages-list--issue-722)), and archive and delete: the rows with an action out, the conversations known deleted, what the latest action said, and the one archive that can be undone — the table in ADR 182, "In the panel". |
 | `application/queries/roster.ts` | The Messages list's rows: the gateway's list joined to the tabs this window holds, and the search over them. |
 | `ui/` | Transcript, thinking pill, `useConversation`, and `conversation-list.tsx`, the Messages list with each row's archive and delete. Paints and dispatches. `message-images.tsx` paints a sent turn's images: the local preview when this window has one, a labelled placeholder when only a reference is known. |
 | `model/attachments.ts` | File parts with their upload state (a stored file carries the gateway's whole returned reference), reference-only image parts, the preview budgets, and the message rules counted over stored references (10 images, 10 MiB together). No per-image byte or pixel limit lives here: that is the gateway's, per model. `messageImages` decides which parts of a message go as image references, or the one reason none can, and `messageFiles` the paths it points the agent at. Which of the two a file takes is `linkedFile`: an image is carried, and anything else the host named a path for is pointed at. A file with neither — a browser gave the bytes and nothing could say where they came from — cannot be sent, and the byte budgets are counted over held bytes alone, so a video attached by path is bound only by how many files a draft shows. `declaredMediaType` names a file the browser gave no type (camera RAW, some HEIC) by its extension, and `previewableImage` says which images a webview can paint. |

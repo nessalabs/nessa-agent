@@ -12,6 +12,29 @@ is unchanged. A browser page whose query names a seeded run
 (`seededWorkspaceSpec`) boots that builder through `src/desktop/seeded-window.ts`.
 Nothing in this change writes a fixture file.
 
+## Focus frame lifetime (#730)
+
+`workspace/adapters/dom/focus.ts` owns the workspace store subscription's
+queued focus settlement and the current target search for one mounted effect.
+Cleanup retires the effect before cancelling its frames and stopping its search.
+A later delivery from that retired effect cannot start another search. Settlement
+keeps its existing ordering; it does not coalesce pane movement or choose another
+focus destination. The mounted effect still defers to dialogs and deliberate
+focus taken during target search.
+
+| State | Event ordering | Required observation |
+| --- | --- | --- |
+| Pane movement settlement queued | Cleanup before its first frame | No pending settlement/search and no later caret move. |
+| Window widget settlement queued | Cleanup before its first frame | No pending settlement/search and no later caret move. |
+| Return from overview queued | Cleanup before its first frame | Both deferred stages are retired; no search starts. |
+| Return's first frame delivered | Cleanup before its second frame | The nested frame is retired; no search starts. |
+| Effect retired | A previously queued callback is delivered despite cancellation | It creates neither a nested frame nor a target search. |
+| Previous effect queued work | Replace its store/scope, then deliver old work | Old work is inert; the current owner still settles its own pane movement. |
+| Effect mounted | Pane movement or window widget opening | First settlement frame starts target search; target paints before the caret lands. |
+| Effect mounted | Return from overview | Two settlement frames precede target search; the overview leave's own frame does not search the panes. |
+| Mounted search waiting to land | Person focuses a list or dialog | That focus remains the person's. |
+| Browser layout owner replaced while pane movement is queued | Replace the workspace layout, then deliver retired callbacks | Retired callbacks enqueue zero new work; current layout's focus remains usable. |
+
 ## What load coverage exists
 
 | Check | What it drives | Scale | Evidence |
@@ -68,6 +91,21 @@ sequenceDiagram
 | Observing | A page refused, or the walk's budget ran out | Unapplied, a gap; the frame is walked again on the retry clock, or at once by the next index, unless a newer frame walks first | Nothing. The rows the frame named still apply |
 
 Creation revisions compare as integers, so a cursor of `"10"` is after `"9"`. One `within()` budget covers every observe page of a walk. Before each page the walk also asks whether its list subscription is still the current one; a listener who has left is not asked another page (`a listener who leaves during an observe walk is asked no further page`). A stored row that cannot be read back makes that observe page unfinished and nameless as a cursor, so the index keeps the list and does not drop the rows the page left out (`an_unreadable_summary_leaves_the_page_unfinished_and_keeps_the_others`). A list frame has no second page. An incomplete list of 500, with an observe pass that does not finish, is not a 10,000-chat success.
+
+## Verification sampling order
+
+These rows order browser input and measurement; they add no product state or
+dispatch policy. Existing published readiness and shared waits are the owners.
+
+| State | Event | Measurement or next action | Enforcer |
+| --- | --- | --- | --- |
+| A control has received hover | Its finite CSS transition is still running | Wait for finite animations before reading the exact hover fill | `waitUntilSettled` in `lib/browser.mjs`; `shared-controls.mjs` identity check |
+| The overview shell is mounted, with only a prefix of its rows | Header height, scroll room, group baseline or command row is requested | Wait for the published complete-list marker; reopening uses the same marker. Command checks report unavailable publication rather than accepting an existing prefix | `data-overview-listed` in `overview.tsx`; `responsive.mjs` and `command-order.mjs` |
+| The compact drag card is visible before the recorder's next frame | Its size, pointer position or title is requested | Wait for the current recording to publish a ghost before reading that sample | `recordShapeFrames` in `lib/shape-sampler.mjs`; `compact-drag-card` in `drag.mjs` |
+| The viewport has resized before the window's resize subscriber commits | The rail's fold and focus are requested | Cross the existing page-frame commit fence before sampling the rail | `useWindowWidth` in `adapters/window-width.ts`; `frames` in `lib/workspace.mjs`; `rail-fold-focus` in `columns.mjs` |
+| A pane has closed beside a live inline sandbox | The message control is about to be clicked | Obtain the current frame, wait for trusted pointer entry, then click once | `pointerOnto` in `mcp-apps-gateway.mjs`, shared with its release check |
+| The message click returned | The fixture output is still empty | Report missing input before waiting for a gateway review; do not claim an Allow occurred | `mcp-apps-gateway.mjs` message check; fixture's synchronous pending output |
+| The fixture observed the message input | Its review is published and Allow is actually clicked | Keep review origin, exact choice, transcript and acknowledgment assertions | `mcp-apps-gateway.mjs` message check |
 
 ## Gateway bounds that a 10,000-chat run has to respect
 
