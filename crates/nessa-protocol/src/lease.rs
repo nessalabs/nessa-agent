@@ -91,6 +91,9 @@ pub const MAX_ARTIFACT_BYTES: u64 =
 /// Most artifacts one lease may have published and not yet collected; the
 /// environment refuses another until one is answered.
 pub const MAX_ARTIFACTS_IN_FLIGHT: usize = 4;
+/// Most publishers one lease's publish point holds open at once, before any
+/// has sent its request; another waits to be accepted until one is answered.
+pub const MAX_OPEN_PUBLISHERS: usize = 16;
 /// Longest artifact name, in bytes: a file name, for people only.
 pub const MAX_ARTIFACT_NAME_BYTES: usize =
     nessa_sdk::application::agent_execution::sessions::ArtifactName::MAX_BYTES;

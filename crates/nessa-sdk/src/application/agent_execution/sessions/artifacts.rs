@@ -122,9 +122,10 @@ impl PublishedFile {
     }
 }
 
-/// One artifact the conversation holds: a file published under `lease`,
+/// One artifact the conversation recorded: a file published under `lease`,
 /// read, verified by its digest and kept. Committed to the conversation's
-/// stream after the file is held, never before.
+/// stream after the file is held, never before, and kept as history when the
+/// hold is later let go.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ArtifactRecord {
     /// The lease it was published under: the conversation's latest when it

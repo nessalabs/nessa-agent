@@ -34,6 +34,7 @@ Each row is a limit the gateway names when a refusal or a silent close hits it. 
 | record.read_work_budget | configured | 200 | config.json limits.readWorkBudgetMs | a cold read still preparing at this budget answers that it is preparing |
 | artifact.max_file_bytes | fixed | 67108864 | nessa_protocol::lease MAX_ARTIFACT_BYTES | a host refuses to publish a larger file, and the gateway to keep one |
 | artifact.host_in_flight | fixed | 4 | nessa_protocol::lease MAX_ARTIFACTS_IN_FLIGHT | a publish past this many unanswered under one lease is answered busy |
+| artifact.host_open_publishers | fixed | 16 | nessa_protocol::lease MAX_OPEN_PUBLISHERS | a publisher connecting while this many are open waits to be accepted |
 | artifact.environment_files | fixed | 64 | conversation ArtifactBudget::LEASE.files | a file one lease publishes past this many kept is refused unread |
 | artifact.environment_bytes | fixed | 1073741824 | conversation ArtifactBudget::LEASE.bytes | a file that would take one lease's kept files past this is refused unread |
 | artifact.conversation_records | fixed | 1024 | nessa-sdk ArtifactRecord::MAX_PER_CONVERSATION | a file published once a conversation records this many is refused unread |

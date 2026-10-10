@@ -27,6 +27,7 @@ use crate::env_serve::application::{
 };
 use nessa_protocol::lease::{
     StagedArtifact, MAX_ARTIFACT_BYTES, MAX_ARTIFACT_NAME_BYTES, MAX_ARTIFACT_PATH_BYTES,
+    MAX_OPEN_PUBLISHERS,
 };
 use nessa_sdk::domain::common::value_objects::MediaType;
 use sha2::{Digest, Sha256};
@@ -36,13 +37,13 @@ use std::{
     io::{self, Read, Write},
     os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
-    sync::{Mutex, PoisonError},
+    sync::{Arc, Mutex, PoisonError},
     time::Duration,
 };
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::{UnixListener, UnixStream},
-    sync::{mpsc, oneshot},
+    sync::{mpsc, oneshot, Semaphore},
     task::JoinHandle,
 };
 
@@ -327,9 +328,15 @@ impl ArtifactOutbox for FileOutbox {
     }
 }
 
-/// Take each publisher's one request and give it its one answer.
+/// Take each publisher's one request and give it its one answer, holding at
+/// most [`MAX_OPEN_PUBLISHERS`] open: a slot is taken before a connection is
+/// accepted, so publishers that never send hold no more than that.
 async fn accept(listener: UnixListener, calls: mpsc::Sender<PublishCall>) {
+    let open = Arc::new(Semaphore::new(MAX_OPEN_PUBLISHERS));
     loop {
+        let Ok(slot) = Arc::clone(&open).acquire_owned().await else {
+            return;
+        };
         let Ok((stream, _)) = listener.accept().await else {
             return;
         };
@@ -338,6 +345,7 @@ async fn accept(listener: UnixListener, calls: mpsc::Sender<PublishCall>) {
             if let Err(error) = answer(stream, calls).await {
                 tracing::debug!(%error, "a publisher went away before its answer");
             }
+            drop(slot);
         });
     }
 }

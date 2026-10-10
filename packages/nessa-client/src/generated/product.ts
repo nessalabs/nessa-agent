@@ -611,7 +611,7 @@ export interface ConversationView {
   runtime?: ConversationRuntime
   /** The conversation's latest lease: where its agent runs and under what limits, or why it could not. Absent before any lease was recorded. */
   lease?: ConversationLease
-  /** Files the conversation holds that its agent published under a lease, the newest 64 in the order they were recorded; empty before any was. An older one is left out of the list, not out of the conversation, and the list may give up its oldest entries to bound the response. */
+  /** Files its agent published under a lease that the conversation held when it recorded them, the newest 64 in the order they were recorded; empty before any was. A record is history and stays when the hold is let go, as closing the conversation does; whether the bytes are still held is asked when they are fetched. An older one is left out of the list, not out of the conversation, and the list may give up its oldest entries to bound the response. */
   artifacts: ConversationArtifact[]
   /** Name the gateway derived from the conversation's first message, the same one conversation.list shows; null before anything was said. */
   title: string | null
@@ -624,7 +624,7 @@ export interface ConversationView {
   /** Present while a change is in progress or recovery is required. */
   approvalModeChange?: ApprovalModeChange
 }
-/** One file the conversation holds that its agent published under a lease: read from the environment, verified by its digest, and recorded with the lease as its cause. The bytes are never in the view. */
+/** One file its agent published under a lease: read from the environment, verified by its digest, held, and then recorded with the lease as its cause. The record outlives the hold. The bytes are never in the view. */
 export interface ConversationArtifact {
   /** The turn that was running when it was recorded; absent when none was. */
   executionId?: string

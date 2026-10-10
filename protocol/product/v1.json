@@ -1443,7 +1443,7 @@
           "type": "array",
           "items": { "$ref": "#/$defs/ConversationArtifact" },
           "maxItems": 64,
-          "description": "Files the conversation holds that its agent published under a lease, the newest 64 in the order they were recorded; empty before any was. An older one is left out of the list, not out of the conversation, and the list may give up its oldest entries to bound the response."
+          "description": "Files its agent published under a lease that the conversation held when it recorded them, the newest 64 in the order they were recorded; empty before any was. A record is history and stays when the hold is let go, as closing the conversation does; whether the bytes are still held is asked when they are fetched. An older one is left out of the list, not out of the conversation, and the list may give up its oldest entries to bound the response."
         },
         "title": {
           "type": ["string", "null"],
@@ -1495,7 +1495,7 @@
     "ConversationArtifact": {
       "type": "object",
       "additionalProperties": false,
-      "description": "One file the conversation holds that its agent published under a lease: read from the environment, verified by its digest, and recorded with the lease as its cause. The bytes are never in the view.",
+      "description": "One file its agent published under a lease: read from the environment, verified by its digest, held, and then recorded with the lease as its cause. The record outlives the hold. The bytes are never in the view.",
       "properties": {
         "executionId": {
           "type": "string",

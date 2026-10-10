@@ -201,3 +201,30 @@ async fn an_unreadable_request_is_answered_invalid() {
         }
     );
 }
+
+#[tokio::test]
+async fn publishers_that_never_send_hold_no_more_than_their_bound() {
+    let fixture = fixture();
+    let mut point = fixture.outbox.open("lease").unwrap();
+    let mut idle = Vec::new();
+    for _ in 0..MAX_OPEN_PUBLISHERS {
+        idle.push(UnixStream::connect(&point.address).await.unwrap());
+    }
+    let mut waiting = UnixStream::connect(&point.address).await.unwrap();
+    waiting
+        .write_all(b"{\"path\":\"/work/a.png\"}\n")
+        .await
+        .unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), point.calls.recv())
+            .await
+            .is_err(),
+        "a publisher past the bound is not taken while the others are open"
+    );
+    drop(idle.pop());
+    let call = point.calls.recv().await.unwrap();
+    assert_eq!(call.request.path, "/work/a.png");
+    drop(call);
+    drop(idle);
+    fixture.outbox.close("lease");
+}

@@ -63,9 +63,12 @@ pub struct ConversationView {
     /// limits, or why it could not. Absent before any lease was recorded.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lease: Option<ConversationLeaseView>,
-    /// Artifacts the conversation holds, the newest
-    /// [`MAX_VIEW_ARTIFACTS`](super::projection::MAX_VIEW_ARTIFACTS) in the
-    /// order they were recorded. Empty before any was recorded.
+    /// Artifacts the conversation recorded, each held when it was recorded,
+    /// the newest [`MAX_VIEW_ARTIFACTS`](super::projection::MAX_VIEW_ARTIFACTS)
+    /// in the order they were recorded. Empty before any was recorded. A
+    /// record is history: it stays when the hold is let go, as closing the
+    /// conversation does, and whether the bytes are still held is asked
+    /// when they are fetched.
     pub artifacts: Vec<ConversationArtifact>,
 }
 /// Product status of the last physical committed read.
@@ -753,8 +756,9 @@ pub enum ConversationLeaseRefusal {
     AgentUnavailable,
 }
 
-/// One artifact the conversation holds: a file its agent published under a
-/// lease, collected and verified by its digest.
+/// One artifact the conversation recorded: a file its agent published under
+/// a lease, collected, verified by its digest and held when it was recorded.
+/// The record outlives the hold.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationArtifact {

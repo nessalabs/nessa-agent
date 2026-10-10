@@ -1134,7 +1134,7 @@ needs them:
 | `environment.disk_pause_bytes` | Free space below which an environment freezes its workloads, keeps the gateway's history readable, and refuses new leases until space returns |
 | `artifact.lease_bytes` | Bytes one lease may fetch by digest |
 | `artifact.environment_bytes`, `artifact.environment_files` | Bytes and files one lease may publish to the gateway |
-| `artifact.max_file_bytes`, `artifact.host_in_flight`, `artifact.conversation_records` | One published file's size; publishes a host holds unanswered per lease; artifacts one conversation records |
+| `artifact.max_file_bytes`, `artifact.host_in_flight`, `artifact.host_open_publishers`, `artifact.conversation_records` | One published file's size; publishes a host holds unanswered per lease; publishers one lease's publish point holds open before they send; artifacts one conversation records |
 | `artifact.read_resumes`, `artifact.publish_deadline` | How often a failed artifact channel is reopened; how long reading and checking one file may take |
 | `share.grants_per_conversation` | Grants one conversation may hold |
 

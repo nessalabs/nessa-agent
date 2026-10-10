@@ -12,7 +12,7 @@ use crate::conversation::application::{
 use crate::conversation::infrastructure::{DISCOVERY_STEPS_PER_READ, MAX_CATALOGUE_CHANGE_WATCHES};
 use crate::product::passive_read::deadlines::RECORD_SEND_TIMEOUT;
 use crate::product::{OperationalLimits, SessionSettings, RECORD_LANE, RECORD_SLOT, REFUSAL_LANE};
-use nessa_protocol::lease::{MAX_ARTIFACTS_IN_FLIGHT, MAX_ARTIFACT_BYTES};
+use nessa_protocol::lease::{MAX_ARTIFACTS_IN_FLIGHT, MAX_ARTIFACT_BYTES, MAX_OPEN_PUBLISHERS};
 use nessa_protocol::product::generated::{
     MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS, MAX_CONNECTION_LIST_SUBSCRIPTIONS,
     MAX_PRODUCT_CLIENT_ID_CHARACTERS, MAX_PRODUCT_SURFACE_INSTANCE_CHARACTERS,
@@ -218,6 +218,12 @@ fn catalogue() -> &'static [Limit] {
             meaning: "a publish past this many unanswered under one lease is answered busy",
         },
         Limit {
+            id: "artifact.host_open_publishers",
+            tier: "fixed",
+            owner: "nessa_protocol::lease MAX_OPEN_PUBLISHERS",
+            meaning: "a publisher connecting while this many are open waits to be accepted",
+        },
+        Limit {
             id: "artifact.environment_files",
             tier: "fixed",
             owner: "conversation ArtifactBudget::LEASE.files",
@@ -335,6 +341,7 @@ pub(crate) fn effective_json(
     put("record.discovery_steps", count(DISCOVERY_STEPS_PER_READ));
     put("artifact.max_file_bytes", MAX_ARTIFACT_BYTES);
     put("artifact.host_in_flight", count(MAX_ARTIFACTS_IN_FLIGHT));
+    put("artifact.host_open_publishers", count(MAX_OPEN_PUBLISHERS));
     put(
         "artifact.environment_files",
         u64::from(ArtifactBudget::LEASE.files),
