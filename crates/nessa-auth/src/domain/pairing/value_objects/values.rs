@@ -150,6 +150,13 @@ pub fn peer_principal(key: &DeviceKey) -> Result<PrincipalId, PairingError> {
     PrincipalId::new(id).map_err(|_| PairingError::Invalid)
 }
 
+/// Whether `principal` is a paired peer gateway's. The registry holds an id
+/// with [`PEER_PRINCIPAL_PREFIX`] exactly when its principal's kind is a
+/// gateway, so this answers the kind for anyone holding only the id.
+pub fn is_peer_principal(principal: &PrincipalId) -> bool {
+    principal.as_str().starts_with(PEER_PRINCIPAL_PREFIX)
+}
+
 /// One immutable gateway conversation-read consent, with owner linkage private.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConsentIntent {

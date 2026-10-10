@@ -1,7 +1,7 @@
 //! Peer gateways as a principal kind: who a peer enrollment names, and what
 //! that kind can never hold (`docs/design/auth/peer-gateways.md`, rows H1 and H4).
 use nessa_auth::domain::{
-    pairing::{peer_principal, ConsentClass, DeviceKey},
+    pairing::{is_peer_principal, peer_principal, ConsentClass, DeviceKey},
     Action, PrincipalId, PrincipalKind, CONVERSATION_AUTHORITY_ACTIONS,
 };
 
@@ -61,6 +61,9 @@ fn the_class_decides_which_principal_a_credential_names() {
     assert_eq!(peer.as_str(), format!("gateway:{}", "ab".repeat(32)));
     assert_ne!(peer, owner);
     assert_ne!(peer, peer_principal(&other).unwrap());
+    // Anyone holding only the id can tell a peer's principal from another.
+    assert!(is_peer_principal(&peer));
+    assert!(!is_peer_principal(&owner));
     assert_eq!(
         ConsentClass::parse("gateway-conversation-read"),
         Some(ConsentClass::DeviceRead)

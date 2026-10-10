@@ -1547,7 +1547,7 @@ fn validate_registry(
     }
     if !registry.principals.iter().all(principal_id_matches_kind) {
         return Err(CredentialRegistryFault::InvalidState(
-            RegistryInvariant::DuplicateIdentity,
+            RegistryInvariant::PrincipalKind,
         ));
     }
     for membership in &registry.memberships {

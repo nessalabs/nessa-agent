@@ -3787,7 +3787,10 @@ fn the_gateway_id_prefix_belongs_to_gateway_principals_alone() {
     std::fs::write(&path, &renamed).unwrap();
     assert!(matches!(
         open_store(&path),
-        Err(LocalStoreError::InvalidRegistry { .. })
+        Err(LocalStoreError::InvalidRegistry {
+            fault: CredentialRegistryFault::InvalidState(RegistryInvariant::PrincipalKind),
+            ..
+        })
     ));
     std::fs::write(&path, &original_bytes).unwrap();
     assert!(open_store(&path).is_ok());

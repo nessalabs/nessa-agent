@@ -90,13 +90,17 @@ yet. Every read of the owner's conversations is refused as not its own
 conversations it may read, and the session's principal is the peer, not that
 owner. The socket's owner methods are `forbidden` to it, as to a device.
 
-That holds even for a conversation shared with it. Per-conversation grants
-(slice G, #704, merged in #720) let the owner `conversation.share` with the
-peer's credential, because the peer's receiver binding names the owner as its
-grantor, and the grant is written. The peer still reads nothing: every read
-admission refuses a session whose principal is not the binding's owner before
-it consults a grant. Reading what it is granted is the next part (below), so
-pairing a peer, or sharing with one, discloses nothing yet.
+A peer cannot be shared with yet. Per-conversation grants (slice G, #704,
+merged in #720) let the owner `conversation.share` with a paired device's
+credential; a peer's credential is refused `share_target_not_paired` and no
+grant is written, even though its receiver binding names the owner as its
+grantor. A grant stored now would start disclosing as soon as a peer's reads
+were narrowed by grant, without a fresh decision by the owner, and the
+desktop shows a peer as a device. Should a grant on a peer's receiver exist
+anyway, it still discloses nothing: every read admission refuses a session
+whose principal is not the binding's owner before it consults a grant. So
+pairing a peer discloses nothing yet; the next part (below) lifts the share
+refusal together with the read-path change.
 
 ```mermaid
 sequenceDiagram
@@ -119,7 +123,7 @@ sequenceDiagram
     Peer->>GW: openProduct, session.authenticate
     GW-->>Peer: ready, principalId = gateway:<key hex>
     Owner->>GW: conversation.share {credentialId: the peer's}
-    GW-->>Owner: applied (the binding names the owner as grantor)
+    GW-->>Owner: share_target_not_paired (no grant written)
     Peer->>GW: conversation.catalogueHead (or any read)
     GW-->>Peer: wrong_owner (session principal is not the binding's owner)
     Owner->>GW: credential.revoke (or pairing.cancel)
@@ -140,7 +144,7 @@ Each row has at least one test.
 | H5 | The owner revokes a paired peer's credential | Its next connection is refused at `openProduct` | `a_revoked_peer_gateway_is_refused_its_next_connection` |
 | H6 | `credential.issue` for a principal of kind `gateway` | Refused `Conflict`, nothing written: no second way to make a peer | `a_gateway_principal_holds_only_what_pairing_issued_it` |
 | H7 | A gateway that pairs no peer | Every device enrollment, registry and client file reads and writes as before | the existing device pairing suites |
-| H8 | The owner shares a conversation with a paired peer's credential | The share applies; on the native channel the peer's catalogue and record heads and both watches are `wrong_owner`, while a device granted the same conversation passes admission; on the socket its read, view and list subscriptions and lists are `conversation_not_found` and `conversation.shares` is `forbidden` | `a_peer_granted_a_conversation_still_reads_nothing_of_it`; `a_peer_granted_a_conversation_reads_nothing_on_the_socket` |
+| H8 | The owner shares a conversation with a paired peer's credential; or a grant on a peer's receiver already exists | The share is refused `share_target_not_paired` and writes nothing, while the same share to a device applies. An existing grant discloses nothing: on the native channel the peer's catalogue and record heads and both watches are `wrong_owner`, while the device passes admission; on the socket, a binding whose owner is not the session principal has its read, view and list subscriptions and lists refused `conversation_not_found` | `a_peer_cannot_be_shared_with_and_reads_nothing_even_if_granted`; `a_binding_owned_by_another_principal_reads_nothing_on_the_socket` |
 
 ## What this part does not do
 
@@ -169,8 +173,10 @@ rest, proposed as the next part of #705 and the slices it names:
   head, record head and pages, and catalogue and record watches. Relaxing it
   first would hand a peer the owner's whole catalogue. Whatever records a
   peer's read (audit, journal, logs) names the session's principal, never the
-  binding's owner. Until then a share to a peer is accepted and listed by
-  `conversation.shares` like a device's, and sits unused.
+  binding's owner. The same change lifts `conversation.share`'s refusal of a
+  peer's credential, so the owner's first grant to a peer is made only once
+  the peer's reads honour it. `conversation.unshare` works on any credential
+  throughout: taking access away is always safe.
 - **The peer table's last addresses and local discovery.** The issue lists
   them; the ADR places local discovery in slice I, and the map leaves "whether
   to announce at all, and what it reveals" unresolved. This side's peer table

@@ -29,12 +29,15 @@
 //! A paired peer gateway (`docs/design/auth/peer-gateways.md`) has a binding
 //! too, but its session is its own principal, not the binding's owner, so
 //! [`reader_of`] and passive-read admission refuse it before it becomes a
-//! [`Reader`]. Relaxing that owner check is safe only in the change that puts
-//! every peer read path behind the grant filter.
+//! [`Reader`], and [`ShareConversation::share`] refuses to grant it anything.
+//! Relaxing that owner check is safe only in the change that puts every peer
+//! read path behind the grant filter, which lifts the share refusal too.
 
 use super::{ConversationCaller, ConversationError, ConversationFuture, ConversationRepository};
 use crate::conversation::application::ReceiverAuthority;
 use crate::conversation::domain::ReceiverBinding;
+use nessa_auth::application::ports::{AccessError, AccessReader};
+use nessa_auth::domain::pairing::is_peer_principal;
 use nessa_auth::domain::{AuthContext, CredentialId};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::conversation::read_scope::ReadRefusal;
@@ -180,6 +183,8 @@ pub struct ShareConversation<'a> {
     pub conversations: &'a dyn ConversationRepository,
     pub receivers: &'a dyn ReceiverAuthority,
     pub grants: &'a dyn ReadGrants,
+    /// The credential registry, read for the principal a share target names.
+    pub access: &'a dyn AccessReader,
 }
 
 impl ShareConversation<'_> {
@@ -187,6 +192,13 @@ impl ShareConversation<'_> {
     /// active paired device of the caller, or `ShareTargetNotPaired`; the
     /// store refuses a conversation that is not the caller's or is deleted,
     /// in the transaction that writes the grant (row G8).
+    ///
+    /// A paired peer gateway is refused `ShareTargetNotPaired` too, and
+    /// nothing is written (`docs/design/auth/peer-gateways.md`, row H8). Its
+    /// binding names the owner as grantor, but it reads as its own principal,
+    /// and its reads are not yet narrowed by grant; a grant stored now would
+    /// start disclosing when they are, without a fresh decision by the owner.
+    /// The change that narrows a peer's reads lifts this refusal.
     pub async fn share(
         &self,
         caller: ConversationCaller,
@@ -207,6 +219,16 @@ impl ShareConversation<'_> {
                     && binding.owner_id == caller.principal_id
             })
             .ok_or(ConversationError::ShareTargetNotPaired)?;
+        let target = match self.access.read(&credential).await {
+            Ok(snapshot) => snapshot,
+            Err(AccessError::Unavailable | AccessError::StaleRevision) => {
+                return Err(ConversationError::Metadata)
+            }
+            Err(_) => return Err(ConversationError::ShareTargetNotPaired),
+        };
+        if is_peer_principal(target.credential.principal_id()) {
+            return Err(ConversationError::ShareTargetNotPaired);
+        }
         self.grants
             .change(ReadGrantChange {
                 transition: ReadGrantTransition::Grant,

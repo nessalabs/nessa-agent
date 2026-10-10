@@ -1832,14 +1832,13 @@ async fn a_paired_device_on_the_socket_sees_only_what_it_was_granted() {
     fixture.assert_lists_refused().await;
 }
 
-/// Row H8 (`docs/design/auth/peer-gateways.md`): a peer gateway's receiver
-/// binding names the owner who paired it, its grantor, while its session is
-/// its own `gateway` principal. Granted a conversation, it still reads
-/// nothing of it on the socket: `reader_of` refuses a session whose principal
-/// is not the binding's owner, before any grant is consulted, so its read,
-/// view subscription and lists are all refused, and it cannot list shares.
+/// Row H8 (`docs/design/auth/peer-gateways.md`): a session whose receiver
+/// binding's owner is not the session's principal, the shape a paired peer
+/// gateway has, reads nothing on the socket even when its receiver holds a
+/// grant: `reader_of` refuses it before any grant is consulted, so its read,
+/// view subscription and lists are all refused.
 #[tokio::test]
-async fn a_peer_granted_a_conversation_reads_nothing_on_the_socket() {
+async fn a_binding_owned_by_another_principal_reads_nothing_on_the_socket() {
     let fixture = SubscriptionFixture::new().await;
     fixture.turn("first").await;
     let fixture = fixture.with_devices(Devices::new(&[("credential", "receiver", "grantor", true)]));
@@ -1858,10 +1857,6 @@ async fn a_peer_granted_a_conversation_reads_nothing_on_the_socket() {
             "{method}: {answer}"
         );
     }
-    // Sharing needs `credential.manage`, which a gateway principal can never
-    // hold, so the policy refuses it before the share command is asked.
-    let shares = fixture.call("conversation.shares", conversation.clone()).await;
-    assert_eq!(shares["error"]["code"], "forbidden", "{shares}");
     let mut client = fixture.connect();
     for (id, method, params) in [
         ("view", "conversation.subscribe", conversation),

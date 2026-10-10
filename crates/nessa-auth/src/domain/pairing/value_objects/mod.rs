@@ -4,8 +4,8 @@ mod wire_values;
 pub(crate) use wire_values::MANUAL_CODE_BYTES;
 mod values;
 pub use values::{
-    peer_principal, AttemptId, ConsentClass, ConsentIntent, ConsentIntentId, DeviceKey,
-    InvitationId, PairingError, PairingInitiator, PairingPolicy, PEER_PRINCIPAL_PREFIX,
+    is_peer_principal, peer_principal, AttemptId, ConsentClass, ConsentIntent, ConsentIntentId,
+    DeviceKey, InvitationId, PairingError, PairingInitiator, PairingPolicy, PEER_PRINCIPAL_PREFIX,
 };
 
 mod public_intent;

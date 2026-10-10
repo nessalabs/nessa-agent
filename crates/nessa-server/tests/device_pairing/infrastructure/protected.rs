@@ -38,9 +38,9 @@ use nessa_server::{
     agents::application::{AgentProbe, AgentProbeEvidence},
     app::dependencies::RuntimeDependencies,
     conversation::application::{
-        ConversationCaller, ConversationRepository, ReadGrants, RecordReadError, RecordReadFuture,
-        RecordReadLease, RecordReadOperation, RecordReadResponse, RecordReadSource,
-        ShareConversation,
+        ConversationCaller, ConversationError, ConversationRepository, ReadGrantChange,
+        ReadGrantTransition, ReadGrants, RecordReadError, RecordReadFuture, RecordReadLease,
+        RecordReadOperation, RecordReadResponse, RecordReadSource, ShareConversation,
     },
     conversation::domain::Conversation,
     conversation::infrastructure::{LocalConversationStore, NessaCatalogueReadSource},
@@ -515,17 +515,17 @@ async fn a_peer_gateway_pairs_as_its_own_principal_and_reads_nothing_ungranted()
     fixture.gateway.shutdown().await;
 }
 
-/// Row H8 (`docs/design/auth/peer-gateways.md`): the owner may share a
-/// conversation with a peer's credential, since the peer's receiver binding
-/// names the owner as its grantor, but the peer still reads nothing of it on
-/// the native channel: catalogue and record heads and both watches are
-/// refused `wrong_owner`, because passive-read admission refuses a session
-/// whose principal is not the binding's owner, and a peer's session is its
-/// own `gateway` principal. A device granted the same conversation passes
-/// that admission, so the share itself took effect. The socket's reads ask
-/// `reader_of`, which refuses the same shape (`subscriptions.rs`).
+/// Row H8 (`docs/design/auth/peer-gateways.md`): the owner cannot share a
+/// conversation with a paired peer yet. `conversation.share` refuses its
+/// credential `share_target_not_paired` and writes no grant, while the same
+/// share to a device applies. A grant on the peer's receiver that is already
+/// in the store, written here directly, still discloses nothing on the native
+/// channel: catalogue and record heads and both watches are refused
+/// `wrong_owner`, because passive-read admission refuses a session whose
+/// principal is not the binding's owner, and a peer's session is its own
+/// `gateway` principal. The device passes that admission.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_peer_granted_a_conversation_still_reads_nothing_of_it() {
+async fn a_peer_cannot_be_shared_with_and_reads_nothing_even_if_granted() {
     let fixture = Fixture::new().await;
     let metadata = conversation_store(&fixture);
     let sessions = sessions_on(
@@ -558,28 +558,41 @@ async fn a_peer_granted_a_conversation_still_reads_nothing_of_it() {
         conversations: metadata.as_ref(),
         receivers: fixture.receivers.as_ref(),
         grants: metadata.as_ref(),
+        access: fixture.registry.as_ref(),
     };
-    for (credential, request) in [
-        (&peer.credential, "share-peer"),
-        (&device.credential, "share-device"),
-    ] {
-        let caller = ConversationCaller {
-            organization_id: fixture.session.context().organization_id().clone(),
-            principal_id: fixture.session.context().principal_id().clone(),
-            surface_id: "panel".into(),
-            action_id: request.into(),
-        };
-        let applied = shares
-            .share(
-                caller,
-                id.clone(),
-                CredentialId::new(credential.clone()).unwrap(),
-                110,
-            )
-            .await
-            .unwrap();
-        assert!(applied, "{request}");
-    }
+    let caller = |request: &str| ConversationCaller {
+        organization_id: fixture.session.context().organization_id().clone(),
+        principal_id: fixture.session.context().principal_id().clone(),
+        surface_id: "panel".into(),
+        action_id: request.into(),
+    };
+    let share = |paired: &Paired, request: &str| {
+        shares.share(
+            caller(request),
+            id.clone(),
+            CredentialId::new(paired.credential.clone()).unwrap(),
+            110,
+        )
+    };
+    assert!(matches!(
+        share(&peer, "share-peer").await,
+        Err(ConversationError::ShareTargetNotPaired)
+    ));
+    assert!(!metadata.is_granted(&id, &peer.receiver).await.unwrap());
+    assert!(share(&device, "share-device").await.unwrap());
+    // A grant on the peer's receiver, as one would stand had it been written
+    // before this refusal: the read admission alone must still refuse.
+    assert!(metadata
+        .change(ReadGrantChange {
+            transition: ReadGrantTransition::Grant,
+            conversation_id: id.clone(),
+            receiver_id: Some(peer.receiver.clone()),
+            credential_id: CredentialId::new(peer.credential.clone()).unwrap(),
+            initiator: caller("grant-peer"),
+            at_ms: 110,
+        })
+        .await
+        .unwrap());
     assert!(metadata.is_granted(&id, &peer.receiver).await.unwrap());
     let reads = |paired: &Paired| {
         let credential = paired.credential.clone();
