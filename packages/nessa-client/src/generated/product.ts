@@ -1795,7 +1795,7 @@ export interface ConversationCatalogueHeadParams {
 export interface ConversationCatalogueHeadResult {
   /** Server-selected authorized owner scope, including current incarnation. */
   scope: RecordScope
-  /** Current owner catalogue head. */
+  /** Current catalogue head as this receiver sees it: the latest revision among the conversations granted to it and its own grant changes. It moves on a grant, a revoke or a change to a granted conversation, never on the owner's other work. */
   head: string
 }
 /** Read a bounded manifest under exact freshly authorized scope. */

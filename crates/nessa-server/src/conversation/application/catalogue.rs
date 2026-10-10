@@ -52,13 +52,23 @@ pub struct CatalogueValue {
 /// Each read is independently authorized by exact organization, principal and
 /// database incarnation. The caller supplies its current authenticated owner;
 /// a sync adapter additionally checks its exact scope and access epoch.
-/// `reader` narrows a page and a resolve to what that reader was granted
-/// (`read_grants`); the head is the owner's, so a grant change moves it.
+/// `reader` narrows a head, a page and a resolve to what that reader was
+/// granted (`read_grants`). The owner's head moves on every catalogue change.
+/// A paired reader's head is the latest revision among its granted rows and
+/// its own grant changes, so a change to a row it may not read never moves
+/// it, while a grant, a revoke or a change to a granted row does. In steady
+/// state it never goes backwards: rows are never removed, a row's revision
+/// only grows, and a revoke journals the revision it stamps on the row it
+/// takes away. The values are still the owner's catalogue revisions, so the
+/// gap between two of them counts the owner's other changes. A reader whose
+/// progress was saved against the owner's head before this rule finds the
+/// head below it once (`docs/design/auth/peer-gateways.md`, Known limits).
 pub trait ConversationCatalogue: Send + Sync {
     fn head(
         &self,
         organization: &OrganizationId,
         owner: &PrincipalId,
+        reader: &Reader,
     ) -> ConversationFuture<'_, CatalogueHead>;
     fn page(&self, request: CataloguePageRequest) -> ConversationFuture<'_, CataloguePage>;
     fn resolve(

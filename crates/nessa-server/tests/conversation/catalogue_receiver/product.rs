@@ -211,16 +211,18 @@ impl ConversationCatalogue for CountingCatalogue {
         &self,
         organization: &OrganizationId,
         owner: &PrincipalId,
+        reader: &crate::conversation::application::Reader,
     ) -> ConversationFuture<'_, CatalogueHead> {
         self.counts.head.fetch_add(1, Ordering::SeqCst);
         let organization = organization.clone();
         let owner = owner.clone();
+        let reader = reader.clone();
         Box::pin(async move {
             if self.counts.hold.load(Ordering::SeqCst) {
                 let permit = self.counts.release.acquire().await.unwrap();
                 permit.forget();
             }
-            self.store.head(&organization, &owner).await
+            self.store.head(&organization, &owner, &reader).await
         })
     }
     fn page(&self, request: CataloguePageRequest) -> ConversationFuture<'_, CataloguePage> {
@@ -487,26 +489,6 @@ async fn gateway_child() {
                         .unwrap()
                         .access_epoch = 8;
                     json!({"epoch":8})
-                }
-                "wrong-owner" => {
-                    owners
-                        .bindings
-                        .lock()
-                        .unwrap()
-                        .get_mut(&CredentialId::new(format!("{owner}-phone")).unwrap())
-                        .unwrap()
-                        .owner_id = PrincipalId::new("foreign").unwrap();
-                    json!({"owner":"foreign"})
-                }
-                "restore-owner" => {
-                    owners
-                        .bindings
-                        .lock()
-                        .unwrap()
-                        .get_mut(&CredentialId::new(format!("{owner}-phone")).unwrap())
-                        .unwrap()
-                        .owner_id = PrincipalId::new(owner).unwrap();
-                    json!({"owner":owner})
                 }
                 _ => panic!("unknown fixture instruction"),
             };
@@ -1131,13 +1113,6 @@ fn product_admission_refusals_touch_no_catalogue_and_source_refusals_are_typed()
         let reply = source.call("conversation.catalogueManifest", json!({"request":{"pass":catalogue_read::wire_pass(&pass),"maxEntries":count},"accessEpoch":"7"}));
         assert_eq!(reply["error"]["code"], "invalid_request", "{reply}");
     }
-    gateway.command(json!({"action":"wrong-owner","owner":"alice"}));
-    let reply = source.call(
-        "conversation.catalogueHead",
-        json!({"receiverId":"alice-receiver","accessEpoch":"7"}),
-    );
-    assert_eq!(reply["error"]["code"], "wrong_owner");
-    gateway.command(json!({"action":"restore-owner","owner":"alice"}));
     gateway.command(json!({"action":"deny","owner":"alice"}));
     let reply = source.call(
         "conversation.catalogueHead",

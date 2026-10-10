@@ -194,8 +194,11 @@ impl NessaCatalogueSource {
                     origin,
                     epoch,
                 } => runtime.block_on(async {
+                    let reader = Reader::PairedDevice {
+                        receiver_id: receiver.as_str().to_owned(),
+                    };
                     let head = catalogue
-                        .head(&caller.organization_id, &caller.principal_id)
+                        .head(&caller.organization_id, &caller.principal_id, &reader)
                         .await
                         .map_err(map_error)?;
                     let incarnation = Id::new(head.incarnation)
@@ -391,7 +394,11 @@ async fn read_head(
         return Err(CatalogueSourceError::IdentityChanged);
     }
     let head = catalogue
-        .head(&caller.organization_id, &caller.principal_id)
+        .head(
+            &caller.organization_id,
+            &caller.principal_id,
+            &device(scope),
+        )
         .await
         .map_err(map_error)?;
     if head.incarnation != scope.incarnation().as_str() {

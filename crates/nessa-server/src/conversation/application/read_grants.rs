@@ -21,23 +21,25 @@
 //! (`store::read_grants::granted`), so the two cannot disagree.
 //!
 //! Who is a grantee is decided by construction, not by a list of credential
-//! kinds: a session whose credential has a receiver binding is a paired
-//! device, because only pairing creates receiver bindings, and it reads only
-//! what it was granted. Every other session is the owner's own surface and
-//! reads by ownership, exactly as before this slice.
+//! kinds: a session whose credential has a receiver binding was paired,
+//! because only pairing creates receiver bindings, and it reads only what was
+//! granted to that receiver. Every other session is the owner's own surface
+//! and reads by ownership, exactly as before this slice.
 //!
-//! A paired peer gateway (`docs/design/auth/peer-gateways.md`) has a binding
-//! too, but its session is its own principal, not the binding's owner, so
-//! [`reader_of`] and passive-read admission refuse it before it becomes a
-//! [`Reader`], and [`ShareConversation::share`] refuses to grant it anything.
-//! Relaxing that owner check is safe only in the change that puts every peer
-//! read path behind the grant filter, which lifts the share refusal too.
+//! A paired party is a device, which signs in as its owner, or a peer
+//! gateway, which signs in as its own `gateway` principal
+//! (`docs/design/auth/peer-gateways.md`). Neither is compared with the
+//! binding's owner: that is the grantor whose conversations it reads, and the
+//! binding is matched to the session by credential and organization. Every
+//! read path a paired party reaches asks the grant above, so a peer reads
+//! exactly what a device would. The grantor's liveness rests on the pairing
+//! initiator's membership staying active, which no runtime operation changes
+//! today; see `AdmitPassiveRead::binding` for the change that must check it.
 
 use super::{ConversationCaller, ConversationError, ConversationFuture, ConversationRepository};
 use crate::conversation::application::ReceiverAuthority;
 use crate::conversation::domain::ReceiverBinding;
 use nessa_auth::application::ports::{AccessError, AccessReader};
-use nessa_auth::domain::pairing::is_peer_principal;
 use nessa_auth::domain::{AuthContext, CredentialId};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::conversation::read_scope::ReadRefusal;
@@ -65,10 +67,11 @@ impl Reader {
 }
 
 /// The reader `context`'s credential is, read from the receiver authority
-/// now. A paired device whose binding is no longer active is refused
+/// now. A paired party whose binding is no longer active is refused
 /// `Unauthorized`, as a passive read refuses it; a binding that names another
-/// credential or organization is `Unverifiable`, and one of another owner
-/// `WrongOwner`.
+/// credential or organization is `Unverifiable`. The binding's owner is the
+/// grantor, not the reader, so it is not compared with the session's
+/// principal: a peer gateway is its own principal and reads by grant alone.
 pub async fn reader_of(
     receivers: &dyn ReceiverAuthority,
     context: &AuthContext,
@@ -82,11 +85,6 @@ pub async fn reader_of(
             || binding.organization_id != *context.organization_id()
         {
             return Err(ReadRefusal::Unverifiable);
-        }
-        // Answered as a passive read answers it: a lasting state, not one to
-        // retry.
-        if binding.owner_id != *context.principal_id() {
-            return Err(ReadRefusal::WrongOwner);
         }
     }
     Ok(Reader::of(binding.as_ref()))
@@ -188,17 +186,12 @@ pub struct ShareConversation<'a> {
 }
 
 impl ShareConversation<'_> {
-    /// Grant `credential`'s device Read on `id`. The credential must be an
-    /// active paired device of the caller, or `ShareTargetNotPaired`; the
-    /// store refuses a conversation that is not the caller's or is deleted,
-    /// in the transaction that writes the grant (row G8).
-    ///
-    /// A paired peer gateway is refused `ShareTargetNotPaired` too, and
-    /// nothing is written (`docs/design/auth/peer-gateways.md`, row H8). Its
-    /// binding names the owner as grantor, but it reads as its own principal,
-    /// and its reads are not yet narrowed by grant; a grant stored now would
-    /// start disclosing when they are, without a fresh decision by the owner.
-    /// The change that narrows a peer's reads lifts this refusal.
+    /// Grant `credential`'s receiver Read on `id`. The credential must be an
+    /// active paired device or peer gateway of the caller, or
+    /// `ShareTargetNotPaired`; the store refuses a conversation that is not
+    /// the caller's or is deleted, in the transaction that writes the grant
+    /// (row G8). Either kind of party reads only what it is granted
+    /// (`docs/design/auth/peer-gateways.md`, row H8).
     pub async fn share(
         &self,
         caller: ConversationCaller,
@@ -228,13 +221,12 @@ impl ShareConversation<'_> {
         };
         // The answer must be about the credential asked for, in the
         // binding's organization, with a membership of the same principal:
-        // a principal read off anything else could pass a peer as a device.
+        // a grant is made on a registry answer about that exact credential.
         let named = &target.credential;
         if named.id() != &credential
             || named.organization_id() != &binding.organization_id
             || named.principal_id() != target.membership.principal_id()
             || named.organization_id() != target.membership.organization_id()
-            || is_peer_principal(named.principal_id())
         {
             return Err(ConversationError::ShareTargetNotPaired);
         }

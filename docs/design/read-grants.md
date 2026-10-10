@@ -31,11 +31,8 @@ The owner manages grants with three socket methods, each admitted by Cedar for
 - `conversation.share {requestId, conversationId, credentialId}` grants Read.
   The conversation must be the caller's and not deleted, and the credential an
   active paired device of the same owner (`share_target_not_paired`
-  otherwise). A paired peer gateway is refused the same way and nothing is
-  written: its reads are not yet narrowed by grant, so a grant stored now
-  would start disclosing when they are, without a fresh decision by the
-  owner. The change that narrows a peer's reads lifts this refusal
-  ([peer gateways](auth/peer-gateways.md), row H8).
+  otherwise). A paired peer gateway is shared with the same way, and reads
+  only what it is granted ([peer gateways](auth/peer-gateways.md), row H8).
 - `conversation.unshare {requestId, conversationId, credentialId}` revokes. It
   needs only ownership, so access can be taken away from a deleted
   conversation or an unpaired device.
@@ -80,7 +77,7 @@ Every read path asks it:
 | Path | Asks |
 |---|---|
 | A device's `conversation.recordsHead`, `recordsPage`, and `conversation.watchRecords` (admitted as a record head) | `AdmitPassiveRead::execute` → `admit_read` |
-| A device's catalogue head, manifest and resolve, and `conversation.watchCatalogue` | the store's page and resolve, narrowed in SQL |
+| A device's catalogue head, manifest and resolve, and `conversation.watchCatalogue` | the store's head, page and resolve, narrowed in SQL (the head over granted rows and the reader's own grant changes) |
 | `conversation.read` and every view subscription batch (`subscription::authorize_batch`) | `product::read_access::admit_conversation` → `admit_read` |
 | `conversation.list`, `conversation.observe`, every list subscription batch (`subscription::authorize_batch`) | `product::read_access::admit_list`: the owner's surfaces only |
 
@@ -140,8 +137,6 @@ and cache, on the follower's side; this gateway only stops serving it.
   only the grant table, and nothing syncs by default.
 - **Comment and Drive roles** and tool policy revisions (#707). The role
   column holds `read` only.
-- **Peers** as grantees: slice H adds the `gateway` principal kind; its
-  sessions will be grantees by the same construction.
 - **The Share control in the conversation header** on the desktop. The
   methods are on the wire and in the generated client; the desktop UI is a
   separate change with its browser verification.
@@ -157,11 +152,15 @@ and cache, on the follower's side; this gateway only stops serving it.
 
 ## Known limits
 
-- **The catalogue head is the owner's.** A device's head and catalogue watch
-  move on every catalogue change, granted or not, so a device can count its
-  owner's activity (shares to other devices included) without learning any
-  row. A head over granted rows only is left for when devices are more than
-  the owner's own phones.
+- **A device's catalogue watch is the owner's.** Its notices fire on every
+  catalogue change, granted or not, so a device can count its owner's activity
+  (shares to other devices included) without learning any row. Its catalogue
+  head no longer moves with them: a paired reader's head is the latest
+  revision among its granted rows and its own grant changes
+  ([peer gateways](auth/peer-gateways.md), row H9), still numbered by the
+  owner's catalogue. A device paired before that change needs one explicit
+  catalogue reset (see the peer gateways Known limits). A peer gateway,
+  another party, is refused the catalogue watch and polls that head.
 - **Unpairing is `credential.revoke`, which leaves the binding active.** Reads
   stop because the credential no longer authenticates, but `conversation.share`
   still accepts that credential and writes a grant no one can use.

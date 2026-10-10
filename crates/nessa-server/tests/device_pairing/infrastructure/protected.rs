@@ -39,9 +39,9 @@ use nessa_server::{
     agents::application::{AgentProbe, AgentProbeEvidence},
     app::dependencies::RuntimeDependencies,
     conversation::application::{
-        ConversationCaller, ConversationError, ConversationRepository, ReadGrantChange,
-        ReadGrantTransition, ReadGrants, RecordReadError, RecordReadFuture, RecordReadLease,
-        RecordReadOperation, RecordReadResponse, RecordReadSource, ShareConversation,
+        ConversationCaller, ConversationError, ConversationRepository, ReadGrants, RecordReadError,
+        RecordReadFuture, RecordReadLease, RecordReadOperation, RecordReadResponse,
+        RecordReadSource, ShareConversation,
     },
     conversation::domain::Conversation,
     conversation::infrastructure::{LocalConversationStore, NessaCatalogueReadSource},
@@ -484,8 +484,8 @@ async fn protected_session_refuses_after_revocation() {
 /// Rows H1, H3 (`docs/design/auth/peer-gateways.md`): a peer gateway pairs with
 /// the same enrollment, on the same listener, and its credential names a
 /// principal of kind `gateway` for the key it pinned, not the owner. Until it
-/// is granted a conversation (slice G), it reads nothing of the owner's: its
-/// catalogue read is refused as the owner's, and the socket's owner methods
+/// is granted a conversation, it reads nothing of the owner's: its catalogue
+/// head is zero, so it has nothing to page, and the socket's owner methods
 /// are forbidden to it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_peer_gateway_pairs_as_its_own_principal_and_reads_nothing_ungranted() {
@@ -508,8 +508,8 @@ async fn a_peer_gateway_pairs_as_its_own_principal_and_reads_nothing_ungranted()
     assert_eq!(ready["ok"], true, "{ready}");
     assert_eq!(ready["payload"]["principalId"], principal.as_str());
     assert_ne!(ready["payload"]["principalId"], "owner");
-    assert_eq!(head["ok"], false, "{head}");
-    assert_eq!(code(&head), "wrong_owner");
+    assert_eq!(head["ok"], true, "{head}");
+    assert_eq!(head["payload"]["head"], "0", "{head}");
     assert_eq!(code(&list), "forbidden");
     stop.send(()).unwrap();
     listener.await.unwrap().unwrap();
@@ -548,17 +548,18 @@ impl<A: AccessReader> AccessReader for ContradictoryAccess<A> {
     }
 }
 
-/// Row H8 (`docs/design/auth/peer-gateways.md`): the owner cannot share a
-/// conversation with a paired peer yet. `conversation.share` refuses its
-/// credential `share_target_not_paired` and writes no grant, while the same
-/// share to a device applies. A grant on the peer's receiver that is already
-/// in the store, written here directly, still discloses nothing on the native
-/// channel: catalogue and record heads and both watches are refused
-/// `wrong_owner`, because passive-read admission refuses a session whose
-/// principal is not the binding's owner, and a peer's session is its own
-/// `gateway` principal. The device passes that admission.
+/// Row H8 (`docs/design/auth/peer-gateways.md`): a paired peer reads, on the
+/// native channel, exactly what the owner granted it, as a device does. The
+/// owner shares one of two conversations with the peer's credential, which
+/// applies; an access answer about another credential, or one that
+/// contradicts itself, is still refused. The peer's record head on the
+/// granted conversation reaches the source, while the ungranted one is
+/// refused `wrong_owner`, as is a records watch on it; its catalogue head
+/// is the granted rows' revision and its manifest lists the granted
+/// conversation alone; the catalogue watch, which fires on all the owner's
+/// work, is refused it. An unshare takes the conversation away again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_peer_cannot_be_shared_with_and_reads_nothing_even_if_granted() {
+async fn a_peer_reads_only_what_it_was_granted() {
     let fixture = Fixture::new().await;
     let metadata = conversation_store(&fixture);
     let sessions = sessions_on(
@@ -569,57 +570,38 @@ async fn a_peer_cannot_be_shared_with_and_reads_nothing_even_if_granted() {
     let (address, stop, listener, _) = fixture.listener_serving(Some(sessions)).await;
     let peer = pair_as(&fixture, address, "peer", ConsentClass::PeerRead).await;
     let device = pair(&fixture, address, "device").await;
-    let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
-    metadata
-        .create(
-            Conversation::new(
-                id.clone(),
-                fixture.session.context().organization_id().clone(),
-                fixture.session.context().principal_id().clone(),
-                "panel".into(),
-                "create".into(),
-                1,
-                AgentId::Claude,
-                ConversationModelId::new("model").unwrap(),
-                ConversationApprovalMode::Ask,
-            )
-            .unwrap(),
+    let owned = || {
+        Conversation::new(
+            ConversationId::new(&Uuid::new_v4().to_string()).unwrap(),
+            fixture.session.context().organization_id().clone(),
+            fixture.session.context().principal_id().clone(),
+            "panel".into(),
+            "create".into(),
+            1,
+            AgentId::Claude,
+            ConversationModelId::new("model").unwrap(),
+            ConversationApprovalMode::Ask,
         )
-        .await
-        .unwrap();
-    let shares = ShareConversation {
-        conversations: metadata.as_ref(),
-        receivers: fixture.receivers.as_ref(),
-        grants: metadata.as_ref(),
-        access: fixture.registry.as_ref(),
+        .unwrap()
     };
+    let (granted, other) = (owned(), owned());
+    let (id, ungranted) = (granted.id().clone(), other.id().clone());
+    metadata.create(granted).await.unwrap();
+    metadata.create(other).await.unwrap();
     let caller = |request: &str| ConversationCaller {
         organization_id: fixture.session.context().organization_id().clone(),
         principal_id: fixture.session.context().principal_id().clone(),
         surface_id: "panel".into(),
         action_id: request.into(),
     };
-    let share = |paired: &Paired, request: &str| {
-        shares.share(
-            caller(request),
-            id.clone(),
-            CredentialId::new(paired.credential.clone()).unwrap(),
-            110,
-        )
-    };
-    assert!(matches!(
-        share(&peer, "share-peer").await,
-        Err(ConversationError::ShareTargetNotPaired)
-    ));
-    assert!(!metadata.is_granted(&id, &peer.receiver).await.unwrap());
+    let peer_credential = CredentialId::new(peer.credential.clone()).unwrap();
     // An access reader that answers about another credential (here, always
-    // the device's) never lets the peer pass as that device.
+    // the device's), or one that names the device's actor on the peer's
+    // credential against the peer's own membership, grants nothing.
     let misread = MisreadAccess(
         fixture.registry.clone(),
         CredentialId::new(device.credential.clone()).unwrap(),
     );
-    // Nor one that answers about the peer's credential but names the
-    // device's actor on it, against the peer's own membership.
     let contradictory = ContradictoryAccess(
         fixture.registry.clone(),
         CredentialId::new(device.credential.clone()).unwrap(),
@@ -637,29 +619,25 @@ async fn a_peer_cannot_be_shared_with_and_reads_nothing_even_if_granted() {
         };
         assert!(matches!(
             shares
-                .share(
-                    caller(request),
-                    id.clone(),
-                    CredentialId::new(peer.credential.clone()).unwrap(),
-                    110,
-                )
+                .share(caller(request), id.clone(), peer_credential.clone(), 110)
                 .await,
             Err(ConversationError::ShareTargetNotPaired)
         ));
         assert!(!metadata.is_granted(&id, &peer.receiver).await.unwrap());
     }
-    assert!(share(&device, "share-device").await.unwrap());
-    // A grant on the peer's receiver, as one would stand had it been written
-    // before this refusal: the read admission alone must still refuse.
-    assert!(metadata
-        .change(ReadGrantChange {
-            transition: ReadGrantTransition::Grant,
-            conversation_id: id.clone(),
-            receiver_id: Some(peer.receiver.clone()),
-            credential_id: CredentialId::new(peer.credential.clone()).unwrap(),
-            initiator: caller("grant-peer"),
-            at_ms: 110,
-        })
+    let shares = ShareConversation {
+        conversations: metadata.as_ref(),
+        receivers: fixture.receivers.as_ref(),
+        grants: metadata.as_ref(),
+        access: fixture.registry.as_ref(),
+    };
+    assert!(shares
+        .share(
+            caller("share-peer"),
+            id.clone(),
+            peer_credential.clone(),
+            110
+        )
         .await
         .unwrap());
     assert!(metadata.is_granted(&id, &peer.receiver).await.unwrap());
@@ -667,42 +645,182 @@ async fn a_peer_cannot_be_shared_with_and_reads_nothing_even_if_granted() {
         let credential = paired.credential.clone();
         let (receiver, epoch) = (paired.receiver.clone(), paired.epoch.to_string());
         let saved = paired.store.clone();
-        let conversation = id.to_string();
+        let (granted, ungranted) = (id.to_string(), ungranted.to_string());
         blocking(move || {
             let mut probe = Probe::open(address, &saved);
             let nonce = probe.nonce.clone();
             let ready = probe.authenticate(&credential, &nonce).unwrap();
             assert_eq!(ready["ok"], true, "{ready}");
             let by_receiver = json!({"receiverId": receiver, "accessEpoch": epoch});
-            let mut in_conversation = by_receiver.clone();
-            in_conversation["conversationId"] = json!(conversation);
-            [
-                ("conversation.catalogueHead", by_receiver.clone()),
-                ("conversation.watchCatalogue", by_receiver),
-                ("conversation.recordsHead", in_conversation.clone()),
-                ("conversation.watchRecords", in_conversation),
+            let in_conversation = |conversation: &str| {
+                let mut params = by_receiver.clone();
+                params["conversationId"] = json!(conversation);
+                params
+            };
+            let head = probe
+                .call("conversation.catalogueHead", by_receiver.clone())
+                .unwrap();
+            let manifest = (head["ok"] == true).then(|| {
+                let payload = &head["payload"];
+                probe
+                    .call(
+                        "conversation.catalogueManifest",
+                        json!({"accessEpoch": epoch, "request": {
+                            "pass": {"scope": payload["scope"], "completed": "0",
+                                     "boundary": payload["head"], "generation": "1"},
+                            "maxEntries": 16}}),
+                    )
+                    .unwrap()
+            });
+            let calls = [
+                ("conversation.watchCatalogue", by_receiver.clone()),
+                ("recordsHead granted", in_conversation(&granted)),
+                ("recordsHead ungranted", in_conversation(&ungranted)),
+                ("watchRecords ungranted", in_conversation(&ungranted)),
             ]
-            .map(|(method, params)| (method, probe.call(method, params).unwrap()))
+            .map(|(label, params)| {
+                let method = match label {
+                    "recordsHead granted" | "recordsHead ungranted" => "conversation.recordsHead",
+                    "watchRecords ungranted" => "conversation.watchRecords",
+                    method => method,
+                };
+                (label, probe.call(method, params).unwrap())
+            });
+            (head, manifest, calls)
         })
     };
-    for (method, answer) in reads(&peer).await {
-        assert_eq!(code(&answer), "wrong_owner", "peer {method}: {answer}");
+    let entries = |manifest: &Option<Value>| -> Vec<String> {
+        let manifest = manifest.as_ref().expect("an answered head");
+        assert_eq!(manifest["ok"], true, "{manifest}");
+        manifest["payload"]["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["key"]["id"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    let answer = |calls: &[(&str, Value); 4], label: &str| {
+        calls
+            .iter()
+            .find(|(name, _)| *name == label)
+            .unwrap()
+            .1
+            .clone()
+    };
+    let (head, manifest, calls) = reads(&peer).await;
+    assert_eq!(head["ok"], true, "{head}");
+    let peer_head = head["payload"]["head"].as_str().unwrap().to_owned();
+    assert_eq!(entries(&manifest), vec![id.to_string()]);
+    for (label, expected) in [
+        ("conversation.watchCatalogue", "forbidden"),
+        ("recordsHead granted", "history_pruned"),
+        ("recordsHead ungranted", "wrong_owner"),
+        ("watchRecords ungranted", "wrong_owner"),
+    ] {
+        let answer = answer(&calls, label);
+        assert_eq!(code(&answer), expected, "peer {label}: {answer}");
     }
-    // The device passes the admission the peer fails: its catalogue head
-    // answers, and its record head reaches the source, which answers
-    // `history_pruned`. This fixture has no change-watch storage, so an
-    // admitted watch answers `temporarily_unavailable`.
-    for (method, answer) in reads(&device).await {
-        let expected = match method {
-            "conversation.catalogueHead" => {
-                assert_eq!(answer["ok"], true, "device {method}: {answer}");
-                continue;
-            }
-            "conversation.recordsHead" => "history_pruned",
-            _ => "temporarily_unavailable",
-        };
-        assert_eq!(code(&answer), expected, "device {method}: {answer}");
-    }
+    // The owner's work on a conversation the peer was not granted moves the
+    // owner's head (here, a share to the device) and not the peer's.
+    assert!(shares
+        .share(
+            caller("share-device"),
+            ungranted.clone(),
+            CredentialId::new(device.credential.clone()).unwrap(),
+            110,
+        )
+        .await
+        .unwrap());
+    let (head, _, calls) = reads(&device).await;
+    assert_ne!(head["payload"]["head"].as_str().unwrap(), peer_head);
+    // The device signs in as the owner, so its catalogue watch is admitted
+    // (this fixture has no watch storage, hence `temporarily_unavailable`).
+    let watch = answer(&calls, "conversation.watchCatalogue");
+    assert_eq!(code(&watch), "temporarily_unavailable", "{watch}");
+    assert_eq!(code(&answer(&calls, "recordsHead granted")), "wrong_owner");
+    let (head, _, _) = reads(&peer).await;
+    assert_eq!(head["payload"]["head"].as_str().unwrap(), peer_head);
+    // Now the owner's head is past the peer's. Probe it as a peer would.
+    let probes = {
+        let credential = peer.credential.clone();
+        let (receiver, epoch) = (peer.receiver.clone(), peer.epoch.to_string());
+        let saved = peer.store.clone();
+        let ungranted = ungranted.to_string();
+        blocking(move || {
+            let mut probe = Probe::open(address, &saved);
+            let nonce = probe.nonce.clone();
+            let ready = probe.authenticate(&credential, &nonce).unwrap();
+            assert_eq!(ready["ok"], true, "{ready}");
+            let head = probe
+                .call(
+                    "conversation.catalogueHead",
+                    json!({"receiverId": receiver, "accessEpoch": epoch}),
+                )
+                .unwrap();
+            let payload = &head["payload"];
+            let shown: u64 = payload["head"].as_str().unwrap().parse().unwrap();
+            let pass = |boundary: u64| {
+                json!({"scope": payload["scope"], "completed": "0",
+                       "boundary": boundary.to_string(), "generation": "1"})
+            };
+            let over = probe
+                .call(
+                    "conversation.catalogueManifest",
+                    json!({"accessEpoch": epoch, "request": {"pass": pass(shown + 1), "maxEntries": 16}}),
+                )
+                .unwrap();
+            let mut resolve = |id: &str| {
+                probe
+                    .call(
+                        "conversation.catalogueResolve",
+                        json!({"accessEpoch": epoch, "pass": pass(shown),
+                               "descriptor": {"key": {"creation": "2", "id": id},
+                                              "revision": "2", "deleted": false},
+                               "maxPayloadBytes": 65536}),
+                    )
+                    .unwrap()
+            };
+            let resolve = (
+                resolve(&ungranted),
+                resolve(&Uuid::new_v4().to_string()),
+            );
+            let mut scope = payload["scope"].clone();
+            scope["stream"] = json!(format!("conversation:{ungranted}"));
+            let page = probe
+                .call(
+                    "conversation.recordsPage",
+                    json!({"conversationId": ungranted, "accessEpoch": epoch,
+                           "request": {"scope": scope, "after": "0", "target": "1",
+                                       "maxRecords": 16, "maxPayloadBytes": 1024,
+                                       "maxRecordBytes": 1024}}),
+                )
+                .unwrap();
+            (over, resolve, page)
+        })
+        .await
+    };
+    let (over, (resolved, missing), page) = probes;
+    // A boundary past the peer's own head is refused, so probing boundaries
+    // finds that head and never the owner's.
+    assert_eq!(code(&over), "invalid_request", "{over}");
+    // An ungranted conversation resolves exactly as one that does not exist.
+    assert_eq!(resolved["ok"], false, "{resolved}");
+    assert_eq!(
+        resolved["error"], missing["error"],
+        "{resolved} / {missing}"
+    );
+    // Its record pages are refused before any source is read.
+    assert_eq!(code(&page), "wrong_owner", "{page}");
+    // An unshare takes it away, and moves the peer's head forward.
+    assert!(shares
+        .unshare(caller("unshare-peer"), id.clone(), peer_credential, 110)
+        .await
+        .unwrap());
+    let (head, manifest, calls) = reads(&peer).await;
+    let after: u64 = head["payload"]["head"].as_str().unwrap().parse().unwrap();
+    assert!(after > peer_head.parse().unwrap(), "{head}");
+    assert!(entries(&manifest).is_empty());
+    assert_eq!(code(&answer(&calls, "recordsHead granted")), "wrong_owner");
     stop.send(()).unwrap();
     listener.await.unwrap().unwrap();
     fixture.gateway.shutdown().await;

@@ -647,6 +647,10 @@ async fn every_refusal_precedes_source_and_valid_owner_reaches_it() {
             .await,
         Err(ReadRefusal::WrongReceiver)
     );
+    // A binding names its grantor, who need not be the session's principal
+    // (a peer gateway signs in as itself). Its reads are the grantor's: a
+    // conversation that is not the grantor's is refused, and its catalogue
+    // is the grantor's, narrowed to the receiver's grants by the store.
     *bindings.0.lock().unwrap() = Ok(Some(ReceiverBinding {
         owner_id: PrincipalId::new("other-owner").unwrap(),
         ..binding()
@@ -669,12 +673,11 @@ async fn every_refusal_precedes_source_and_valid_owner_reaches_it() {
     );
     assert_eq!(
         admit
-            .catalogue_with(&session, "receiver", 7, PassiveRead::CatalogueHead, |_| {
-                calls.fetch_add(1, Ordering::SeqCst);
-                async { Ok::<(), ()>(()) }
-            })
-            .await,
-        Err(ReadRefusal::WrongOwner)
+            .catalogue(&session, "receiver", 7, PassiveRead::CatalogueHead)
+            .await
+            .unwrap()
+            .owner_id,
+        PrincipalId::new("other-owner").unwrap()
     );
     *bindings.0.lock().unwrap() = Err(ReadRefusal::Unverifiable);
     assert_eq!(

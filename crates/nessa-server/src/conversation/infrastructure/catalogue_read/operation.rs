@@ -140,6 +140,7 @@ mod tests {
             &self,
             _: &OrganizationId,
             _: &PrincipalId,
+            _: &crate::conversation::application::Reader,
         ) -> ConversationFuture<'_, CatalogueHead> {
             self.0.fetch_add(1, Ordering::SeqCst);
             Box::pin(async {

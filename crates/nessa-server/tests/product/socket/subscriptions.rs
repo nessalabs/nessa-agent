@@ -1834,42 +1834,32 @@ async fn a_paired_device_on_the_socket_sees_only_what_it_was_granted() {
 
 /// Row H8 (`docs/design/auth/peer-gateways.md`): a session whose receiver
 /// binding's owner is not the session's principal, the shape a paired peer
-/// gateway has, reads nothing on the socket even when its receiver holds a
-/// grant: `reader_of` refuses it before any grant is consulted, so its read,
-/// view subscription and lists are all refused.
+/// gateway has, is a paired reader on the socket like a device: `reader_of`
+/// matches its binding by credential and organization, not by owner, and its
+/// read and view subscription then ask its receiver's grant. Ungranted, both
+/// answer `conversation_not_found`; granted, the read answers. Its lists are
+/// refused, as a device's are. (A real peer never gets this far: these
+/// methods need `conversation.write`, which a gateway principal can never
+/// hold, so the policy refuses them first.)
 #[tokio::test]
-async fn a_binding_owned_by_another_principal_reads_nothing_on_the_socket() {
+async fn a_binding_owned_by_another_principal_reads_only_what_it_was_granted() {
     let fixture = SubscriptionFixture::new().await;
     fixture.turn("first").await;
     let fixture = fixture.with_devices(Devices::new(&[("credential", "receiver", "grantor", true)]));
+    let conversation = json!({"conversationId": fixture.id.to_string()});
+    let read = fixture.call("conversation.read", conversation.clone()).await;
+    assert_eq!(read["error"]["code"], "conversation_not_found", "{read}");
+    let mut client = fixture.connect();
+    client.send("view", "conversation.subscribe", conversation.clone());
+    let (reply, _) = client.reply("view").await;
+    assert_eq!(reply["error"]["code"], "conversation_not_found", "{reply}");
+    client.close().await;
     fixture
         .grant_to(crate::conversation::application::ReadGrantTransition::Grant)
         .await;
-    let conversation = json!({"conversationId": fixture.id.to_string()});
-    for (method, params) in [
-        ("conversation.read", conversation.clone()),
-        ("conversation.list", json!({})),
-        ("conversation.observe", json!({})),
-    ] {
-        let answer = fixture.call(method, params).await;
-        assert_eq!(
-            answer["error"]["code"], "conversation_not_found",
-            "{method}: {answer}"
-        );
-    }
-    let mut client = fixture.connect();
-    for (id, method, params) in [
-        ("view", "conversation.subscribe", conversation),
-        ("list", "conversation.subscribeList", json!({})),
-    ] {
-        client.send(id, method, params);
-        let (reply, _) = client.reply(id).await;
-        assert_eq!(
-            reply["error"]["code"], "conversation_not_found",
-            "{method}: {reply}"
-        );
-    }
-    client.close().await;
+    let read = fixture.call("conversation.read", conversation).await;
+    assert_eq!(read["ok"], true, "{read}");
+    fixture.assert_lists_refused().await;
 }
 
 /// Row G13: a revoke ends a device's subscription before its next batch.
