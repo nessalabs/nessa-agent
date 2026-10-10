@@ -1747,7 +1747,8 @@ async fn an_install_that_cannot_be_recorded_sends_nothing() {
 }
 
 /// An upload whose answer is lost after the host put the copy in place is
-/// asked of the host again: found there, it is recorded installed and
+/// asked of the host again: found there, it is recorded found (no digest
+/// claimed, as another gateway of this protocol may have put it there) and
 /// served, never recorded refused.
 #[tokio::test]
 async fn an_upload_whose_answer_was_lost_is_found_installed_by_the_probe() {
@@ -1769,12 +1770,12 @@ async fn an_upload_whose_answer_was_lost_is_found_installed_by_the_probe() {
         .iter()
         .map(|event| match event {
             EnvironmentEvent::InstallStarted { .. } => "started",
-            EnvironmentEvent::Installed { .. } => "installed",
+            EnvironmentEvent::InstallFound { .. } => "found",
             EnvironmentEvent::Connected { .. } => "connected",
             _ => "other",
         })
         .collect();
-    assert_eq!(kinds, ["started", "installed", "connected"]);
+    assert_eq!(kinds, ["started", "found", "connected"]);
 }
 
 /// A host that answers neither the probe nor the upload in time is

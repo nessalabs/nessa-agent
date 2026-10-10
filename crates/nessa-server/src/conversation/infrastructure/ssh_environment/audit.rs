@@ -59,6 +59,10 @@ pub(crate) enum EnvironmentEvent {
         protocol: String,
         digest: String,
     },
+    /// The upload's answer was lost, and the host's probe then found a copy
+    /// of this protocol in place: this upload's or another gateway's of the
+    /// same protocol, so no digest is claimed for it.
+    InstallFound { host: String, protocol: String },
     /// Nothing was installed, and why; `seen` is what the host said, where
     /// that is the reason (its platform, the digest it saw, the protocol the
     /// copy spoke).

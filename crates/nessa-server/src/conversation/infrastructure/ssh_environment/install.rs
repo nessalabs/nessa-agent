@@ -14,7 +14,9 @@
 //!              ──▶ refused fingerprint | unrunnable | digest tool | failed
 //!                     ──▶ InstallRefused ──▶ environment_install_failed
 //!              ──▶ refused version ──▶ InstallRefused ──▶ environment_version_mismatch
-//!              ──▶ no answer ──▶ InstallRefused{unanswered} ──▶ environment_unreachable
+//!              ──▶ no answer ──▶ probe again: present ──▶ InstallFound ──▶ Installed
+//!                                           otherwise ──▶ InstallRefused{unanswered}
+//!                                                         ──▶ environment_unreachable
 //! ```
 //!
 //! Arrows are steps, in order. What is installed is this gateway's own
@@ -239,10 +241,16 @@ impl HostInstaller {
         // and its word) is asked of the host again rather than recorded as
         // refused: a copy the probe finds there runs and speaks this
         // protocol.
-        let answer = match answer {
-            None if self.probe(host).await == Some(Probe::Present) => Some(Upload::Installed),
-            answer => answer,
-        };
+        if answer.is_none() && self.probe(host).await == Some(Probe::Present) {
+            let found = EnvironmentEvent::InstallFound {
+                host: name.into(),
+                protocol: self.protocol.into(),
+            };
+            if let Err(error) = audit.record(&found) {
+                tracing::error!(%error, "a copy found after a lost answer could not be recorded");
+            }
+            return Ok(Installation::Installed);
+        }
         let (reason, seen, refusal) = match answer {
             Some(Upload::Installed) => {
                 let installed = EnvironmentEvent::Installed {

@@ -300,12 +300,17 @@ fn a_copy_that_no_longer_runs_or_speaks_another_protocol_is_absent() {
     for (protocol, runs) in [(PROTOCOL, false), ("fedcba9876543210", true)] {
         let (path, _) = build(source.path(), protocol, runs);
         std::fs::create_dir_all(installed(home.path()).parent().unwrap()).unwrap();
-        std::fs::copy(&path, installed(home.path())).unwrap();
-        std::fs::set_permissions(
-            installed(home.path()),
-            std::fs::Permissions::from_mode(0o700),
-        )
-        .unwrap();
+        // Written by a child, as an upload is: a file this test process held
+        // open for writing while another test forked could not be run.
+        let placed = Command::new("sh")
+            .arg("-c")
+            .arg("cat > \"$1\" && chmod 700 \"$1\"")
+            .arg("sh")
+            .arg(installed(home.path()))
+            .stdin(std::fs::File::open(&path).unwrap())
+            .status()
+            .unwrap();
+        assert!(placed.success());
         assert!(matches!(
             Probe::parse(&on_host(home.path(), &probe_command(PROTOCOL), None)),
             Some(Probe::Absent(_))
