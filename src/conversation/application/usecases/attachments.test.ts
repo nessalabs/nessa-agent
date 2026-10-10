@@ -443,6 +443,25 @@ describe("why an upload failed, in words", () => {
 
 describe("why a draft is declined before anything is sent", () => {
   const hello = [{ type: "text" as const, text: "hello" }]
+  it("orders bound read failure after session refusal and before attachment refusal", () => {
+    const local = emptyLocalTabs().conversations[0]!
+    const failed = { ...local, readError: "unavailable" as const }
+    const bound = { ...failed, serverConversationId: "server" }
+    const stranger = { content: [...hello, image("stranger")] }
+    expect(declineReason(bound, { ...stranger, connected: false }, true)?.kind).toBe(
+      "not-connected",
+    )
+    expect(declineReason(bound, stranger, true)?.kind).toBe("view-unavailable")
+    expect(declineReason(failed, { content: hello }, true)).toBeNull()
+    expect(declineReason(failed, stranger, true)?.kind).toBe("unknown-attachment")
+    expect(
+      declineReason(
+        { ...local, serverConversationId: "server" },
+        { content: hello },
+        true,
+      ),
+    ).toBeNull()
+  })
   /** The conversation `stored()` built, with the gateway's answer about images. */
   const withImages = (imageInput?: boolean) => {
     const conv = stored().conversations[0]!
