@@ -2,20 +2,24 @@
 //! over SSH to find it, put it there, and start it (issue #703).
 //!
 //! ```text
-//! serve_command   ──▶ exec ~/.nessa/env/<protocol>/nessa env serve
+//! serve_command   ──▶ exec ~/.nessa/env/<digest>/nessa env serve
 //!                     absent: the stream ends with no hello
 //! probe_command   ──▶ "present", or "absent <os> <arch> <libc>"
 //! upload_command  ──▶ stdin to a private temporary file under ~/.nessa/env
 //!                 ──▶ its SHA-256 is the digest sent?      no ──▶ "refused fingerprint <seen>"
 //!                 ──▶ it runs, and `env protocol` says
-//!                     the protocol it is installed under?  no ──▶ "refused version <seen>"
-//!                 ──▶ renamed into ~/.nessa/env/<protocol>/nessa ──▶ "installed"
+//!                     this build's protocol?             no ──▶ "refused version <seen>"
+//!                 ──▶ renamed into ~/.nessa/env/<digest>/nessa ──▶ "installed"
 //! ```
 //!
 //! Arrows are what each command does, in order, and what it prints. The
-//! directory is named by the lease protocol, so a build is found only where
-//! its own protocol says, a host keeps one copy per protocol, and two
-//! gateways of different builds never replace each other's. Nothing is
+//! directory is named by the build's own SHA-256, so a gateway runs only the
+//! exact bytes it is: a build whose lease protocol is unchanged but whose
+//! harness or dependencies are not (the host runs its harness too) is
+//! absent until it is installed, a host keeps one copy per build, and two
+//! gateways of different builds never replace each other's. The lease
+//! protocol is still checked, on the copy itself, before it is placed and
+//! when it is probed. Nothing is
 //! renamed into place before it verified, and the rename is the only step
 //! that publishes, so a copy cut short or refused is never found.
 //!
@@ -24,6 +28,12 @@
 //! single-quoted word on unread. So a script holds no single quote, `!`,
 //! backslash or newline (`every_command_survives_any_login_shell`), and what
 //! varies in it — the protocol, the digest — is hex.
+//!
+//! Every build of one protocol on a host shares that host's data directory,
+//! and so its one serving lock and its lease ledger: the ledger is written
+//! by `env_serve`, all of whose sources the protocol names, so builds of one
+//! protocol read it alike, and one still serving holds the others off as
+//! `environment_busy`.
 //!
 //! The harness this build starts, and the account and credentials it runs
 //! with, are the host's own (`config.json` there, the SSH account): nothing
@@ -37,24 +47,26 @@ pub const INSTALL_DIRECTORY: &str = ".nessa/env";
 /// before a later install removes it, in minutes.
 const ABANDONED_MINUTES: u32 = 60;
 
-/// The command that starts this build's environment role on a host.
+/// The command that starts the build whose SHA-256 is `build` in its
+/// environment role on a host.
 #[must_use]
-pub fn serve_command(protocol: &str) -> String {
-    hex(protocol);
-    format!("sh -c 'exec \"$HOME/{INSTALL_DIRECTORY}/{protocol}/nessa\" env serve'")
+pub fn serve_command(build: &str) -> String {
+    hex(build);
+    format!("sh -c 'exec \"$HOME/{INSTALL_DIRECTORY}/{build}/nessa\" env serve'")
 }
 
-/// The command that says whether this build is installed on a host — a copy
-/// there that runs and says it speaks `protocol` — and if not, what the host
-/// runs on. A copy that no longer runs (the host's C library changed, its
+/// The command that says whether the build whose SHA-256 is `build` is
+/// installed on a host — a copy where it is kept that runs and says it
+/// speaks `protocol` — and if not, what the host runs on. A copy that no longer runs (the host's C library changed, its
 /// home is now mounted without execution) is absent, so it is installed
 /// again or refused with the reason.
 #[must_use]
-pub fn probe_command(protocol: &str) -> String {
+pub fn probe_command(protocol: &str, build: &str) -> String {
     hex(protocol);
+    hex(build);
     format!(
         "sh -c '\
-p=\"$HOME/{INSTALL_DIRECTORY}/{protocol}/nessa\"; \
+p=\"$HOME/{INSTALL_DIRECTORY}/{build}/nessa\"; \
 if [ -x \"$p\" ] && [ \"$(\"$p\" env protocol 2>/dev/null)\" = \"{protocol}\" ]; then echo present; else \
 if getconf GNU_LIBC_VERSION >/dev/null 2>&1; then l=gnu; else l=other; fi; \
 echo \"absent $(uname -s) $(uname -m) $l\"; fi'"
@@ -62,8 +74,8 @@ echo \"absent $(uname -s) $(uname -m) $l\"; fi'"
 }
 
 /// The command that installs the build whose bytes follow on its standard
-/// input, refusing them unless their SHA-256 is `digest` and, once run,
-/// they say they speak `protocol`.
+/// input where it is kept by `digest`, refusing them unless their SHA-256 is
+/// `digest` and, once run, they say they speak `protocol`.
 #[must_use]
 pub fn upload_command(protocol: &str, digest: &str) -> String {
     hex(protocol);
@@ -83,7 +95,7 @@ set -- $s; [ \"$1\" = \"{digest}\" ] || {fingerprint}; \
 chmod 700 \"$t\" || {failed_mode}; \
 v=$(\"$t\" env protocol 2>/dev/null) || {unrunnable}; \
 [ \"$v\" = \"{protocol}\" ] || {version}; \
-mkdir -p \"$d/{protocol}\" && mv -f \"$t\" \"$d/{protocol}/nessa\" || {failed_publish}; \
+mkdir -p \"$d/{digest}\" && mv -f \"$t\" \"$d/{digest}/nessa\" || {failed_publish}; \
 echo installed'",
         failed_write = refuse("failed write"),
         no_digest = refuse("refused digest_tool"),

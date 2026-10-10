@@ -185,19 +185,21 @@ impl From<LeaseRefusal> for Opening {
 }
 
 impl HostLink {
-    /// Connect to `host` and read its hello within `deadline`.
+    /// Connect to `host` by running `command` there (the serve command of
+    /// this build) and read its hello within `deadline`.
     ///
     /// # Errors
     /// The typed refusal: unreachable, another build, or busy; or the stream
     /// ending with nothing said on it.
     pub(crate) async fn open(
         host: &SshDestination,
+        command: String,
         connector: &dyn LeaseConnector,
         audit: Arc<dyn EnvironmentAudit>,
         deadline: Duration,
         keepalive: Keepalive,
     ) -> Result<Arc<Self>, Opening> {
-        let connection = connector.connect(host).map_err(|error| {
+        let connection = connector.connect(host, command).map_err(|error| {
             tracing::warn!(host = host.as_str(), %error, "ssh could not be started");
             LeaseRefusal::EnvironmentUnreachable
         })?;

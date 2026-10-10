@@ -49,8 +49,13 @@ fn build(directory: &Path, protocol: &str, runs: bool) -> (PathBuf, String) {
     (path, digest)
 }
 
-fn installed(home: &Path) -> PathBuf {
-    home.join(INSTALL_DIRECTORY).join(PROTOCOL).join("nessa")
+fn installed(home: &Path, digest: &str) -> PathBuf {
+    home.join(INSTALL_DIRECTORY).join(digest).join("nessa")
+}
+
+/// A digest no stand-in build has.
+fn elsewhere() -> String {
+    "e".repeat(64)
 }
 
 /// Nothing an install leaves behind but the installed copy.
@@ -68,8 +73,8 @@ fn leftovers(home: &Path) -> Vec<String> {
 fn every_command_survives_any_login_shell() {
     let digest = "a".repeat(64);
     for command in [
-        serve_command(PROTOCOL),
-        probe_command(PROTOCOL),
+        serve_command(&digest),
+        probe_command(PROTOCOL, &digest),
         upload_command(PROTOCOL, &digest),
     ] {
         let script = command
@@ -91,7 +96,12 @@ fn nothing_but_hex_goes_into_a_command() {
 #[test]
 fn a_host_without_this_build_says_what_it_runs_on_and_this_build_runs_there() {
     let home = tempfile::tempdir().unwrap();
-    let probe = Probe::parse(&on_host(home.path(), &probe_command(PROTOCOL), None)).unwrap();
+    let probe = Probe::parse(&on_host(
+        home.path(),
+        &probe_command(PROTOCOL, &elsewhere()),
+        None,
+    ))
+    .unwrap();
     let Probe::Absent(platform) = probe else {
         panic!("nothing is installed in an empty home: {probe:?}")
     };
@@ -108,24 +118,37 @@ fn an_upload_that_verifies_is_installed_where_the_probe_and_serve_look() {
     let answer = on_host(home.path(), &upload_command(PROTOCOL, &digest), Some(&path));
     assert_eq!(Upload::parse(&answer), Some(Upload::Installed), "{answer}");
     assert_eq!(
-        std::fs::read(installed(home.path())).unwrap(),
+        std::fs::read(installed(home.path(), &digest)).unwrap(),
         std::fs::read(&path).unwrap()
     );
-    let mode = std::fs::metadata(installed(home.path()))
+    let mode = std::fs::metadata(installed(home.path(), &digest))
         .unwrap()
         .permissions()
         .mode();
     assert_eq!(mode & 0o777, 0o700);
     assert!(leftovers(home.path()).is_empty());
     assert_eq!(
-        Probe::parse(&on_host(home.path(), &probe_command(PROTOCOL), None)),
+        Probe::parse(&on_host(
+            home.path(),
+            &probe_command(PROTOCOL, &digest),
+            None
+        )),
         Some(Probe::Present)
     );
+    // Another build of the same protocol is not it.
+    assert!(matches!(
+        Probe::parse(&on_host(
+            home.path(),
+            &probe_command(PROTOCOL, &elsewhere()),
+            None
+        )),
+        Some(Probe::Absent(_))
+    ));
     // The serve command runs exactly that copy.
     assert_eq!(
         on_host(
             home.path(),
-            &serve_command(PROTOCOL).replace("env serve", "env protocol"),
+            &serve_command(&digest).replace("env serve", "env protocol"),
             None
         )
         .trim(),
@@ -145,10 +168,11 @@ fn bytes_that_are_not_the_ones_sent_are_refused_and_nothing_is_left() {
     let answer = on_host(home.path(), &upload_command(PROTOCOL, &wrong), Some(&path));
     assert_eq!(
         Upload::parse(&answer),
-        Some(Upload::Refused(UploadRefusal::Fingerprint(digest))),
+        Some(Upload::Refused(UploadRefusal::Fingerprint(digest.clone()))),
         "{answer}"
     );
-    assert!(!installed(home.path()).exists());
+    assert!(!installed(home.path(), &wrong).exists());
+    assert!(!installed(home.path(), &digest).exists());
     assert!(leftovers(home.path()).is_empty());
 }
 
@@ -164,7 +188,7 @@ fn a_copy_cut_short_is_refused_by_its_fingerprint() {
         Upload::parse(&answer),
         Some(Upload::Refused(UploadRefusal::Fingerprint(_)))
     ));
-    assert!(!installed(home.path()).exists());
+    assert!(!installed(home.path(), &digest).exists());
 }
 
 #[test]
@@ -179,7 +203,7 @@ fn a_copy_speaking_another_protocol_is_refused_and_nothing_is_left() {
             "fedcba9876543210".into()
         )))
     );
-    assert!(!installed(home.path()).exists());
+    assert!(!installed(home.path(), &digest).exists());
     assert!(leftovers(home.path()).is_empty());
 }
 
@@ -193,7 +217,7 @@ fn a_copy_that_does_not_run_there_is_refused() {
         Upload::parse(&answer),
         Some(Upload::Refused(UploadRefusal::Unrunnable))
     );
-    assert!(!installed(home.path()).exists());
+    assert!(!installed(home.path(), &digest).exists());
 }
 
 #[test]
@@ -219,7 +243,7 @@ fn a_home_with_spaces_in_its_path_is_used_as_it_is() {
     let (path, digest) = build(source.path(), PROTOCOL, true);
     let answer = on_host(&home, &upload_command(PROTOCOL, &digest), Some(&path));
     assert_eq!(Upload::parse(&answer), Some(Upload::Installed), "{answer}");
-    assert!(installed(&home).exists());
+    assert!(installed(&home, &digest).exists());
 }
 
 #[test]
@@ -297,30 +321,40 @@ fn a_build_runs_only_on_its_own_system_and_processor() {
 fn a_copy_that_no_longer_runs_or_speaks_another_protocol_is_absent() {
     let home = tempfile::tempdir().unwrap();
     let source = tempfile::tempdir().unwrap();
+    let good = tempfile::tempdir().unwrap();
+    let (path, digest) = build(good.path(), PROTOCOL, true);
+    let kept = installed(home.path(), &digest);
     for (protocol, runs) in [(PROTOCOL, false), ("fedcba9876543210", true)] {
-        let (path, _) = build(source.path(), protocol, runs);
-        std::fs::create_dir_all(installed(home.path()).parent().unwrap()).unwrap();
+        let (other, _) = build(source.path(), protocol, runs);
+        std::fs::create_dir_all(kept.parent().unwrap()).unwrap();
         // Written by a child, as an upload is: a file this test process held
         // open for writing while another test forked could not be run.
         let placed = Command::new("sh")
             .arg("-c")
             .arg("cat > \"$1\" && chmod 700 \"$1\"")
             .arg("sh")
-            .arg(installed(home.path()))
-            .stdin(std::fs::File::open(&path).unwrap())
+            .arg(&kept)
+            .stdin(std::fs::File::open(&other).unwrap())
             .status()
             .unwrap();
         assert!(placed.success());
         assert!(matches!(
-            Probe::parse(&on_host(home.path(), &probe_command(PROTOCOL), None)),
+            Probe::parse(&on_host(
+                home.path(),
+                &probe_command(PROTOCOL, &digest),
+                None
+            )),
             Some(Probe::Absent(_))
         ));
     }
-    let (path, digest) = build(source.path(), PROTOCOL, true);
     let answer = on_host(home.path(), &upload_command(PROTOCOL, &digest), Some(&path));
     assert_eq!(Upload::parse(&answer), Some(Upload::Installed));
     assert_eq!(
-        Probe::parse(&on_host(home.path(), &probe_command(PROTOCOL), None)),
+        Probe::parse(&on_host(
+            home.path(),
+            &probe_command(PROTOCOL, &digest),
+            None
+        )),
         Some(Probe::Present)
     );
 }
@@ -359,7 +393,7 @@ fn every_command_runs_the_same_through_each_login_shell_here() {
         let shown = shell.display();
         assert!(
             matches!(
-                Probe::parse(&run(&probe_command(PROTOCOL), None)),
+                Probe::parse(&run(&probe_command(PROTOCOL, &digest), None)),
                 Some(Probe::Absent(_))
             ),
             "{shown}"
@@ -371,7 +405,7 @@ fn every_command_runs_the_same_through_each_login_shell_here() {
             "{shown}: {answer}"
         );
         assert_eq!(
-            Probe::parse(&run(&probe_command(PROTOCOL), None)),
+            Probe::parse(&run(&probe_command(PROTOCOL, &digest), None)),
             Some(Probe::Present),
             "{shown}"
         );

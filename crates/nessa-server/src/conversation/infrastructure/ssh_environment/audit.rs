@@ -46,7 +46,8 @@ pub(crate) enum EnvironmentEvent {
         channel: u32,
     },
     /// This build is about to be sent to a host that has no copy of it,
-    /// to be installed under `protocol` if its SHA-256 there is `digest`.
+    /// to be kept under `digest` if its SHA-256 there is that and it speaks
+    /// `protocol`.
     /// Recorded before a byte is sent. `lease` is the lease whose opening
     /// found no copy, in every install record: it joins them to its
     /// issuance and its actor, and pairs this start with its outcome, as a

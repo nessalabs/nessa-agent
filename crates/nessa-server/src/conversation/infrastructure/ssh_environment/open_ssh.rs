@@ -2,7 +2,7 @@
 //! client, as `connector.rs` describes. Composed only by the Unix gateway
 //! (`composition/local_auth.rs`); the tests drive the adapter with a
 //! substitute.
-use super::connector::{serve_arguments, ssh_arguments, LeaseConnection, LeaseConnector};
+use super::connector::{ssh_arguments, LeaseConnection, LeaseConnector};
 use super::install::{RemoteShell, ShellFuture};
 use nessa_sdk::domain::agent_execution::leases::SshDestination;
 use std::{fs::File, io, process::Stdio};
@@ -36,9 +36,9 @@ fn log_stderr(host: &SshDestination, stderr: impl AsyncRead + Send + Unpin + 'st
 }
 
 impl LeaseConnector for OpenSshConnector {
-    fn connect(&self, host: &SshDestination) -> io::Result<LeaseConnection> {
+    fn connect(&self, host: &SshDestination, command: String) -> io::Result<LeaseConnection> {
         let mut child = Command::new("ssh")
-            .args(serve_arguments(host))
+            .args(ssh_arguments(host, command))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

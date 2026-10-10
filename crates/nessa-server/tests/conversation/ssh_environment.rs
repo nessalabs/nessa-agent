@@ -5,7 +5,7 @@
 use super::{
     audit::InstallRefusal,
     audit::{EnvironmentAudit, EnvironmentEvent},
-    connector::{serve_arguments, LeaseConnection, LeaseConnector},
+    connector::{ssh_arguments, LeaseConnection, LeaseConnector},
     environment::{SshEnvironment, SshTimings},
     install::{
         open_build, Build, BuildSource, HostInstaller, InstallTimings, RemoteShell, ShellFuture,
@@ -171,6 +171,8 @@ struct Connector {
     ledger: Arc<Ledger>,
     stopped: Arc<AtomicUsize>,
     connects: AtomicUsize,
+    /// The command each connection ran on the host.
+    commands: Mutex<Vec<String>>,
     /// The relays of each connection, to cut it.
     relays: Mutex<Vec<(JoinHandle<()>, JoinHandle<()>)>>,
     /// What scripted hosts were sent.
@@ -201,6 +203,7 @@ impl Connector {
             ledger: Arc::new(Ledger::default()),
             stopped,
             connects: AtomicUsize::new(0),
+            commands: Mutex::new(Vec::new()),
             relays: Mutex::new(Vec::new()),
             received: Arc::new(Mutex::new(Vec::new())),
             frames: Arc::new(Mutex::new(Vec::new())),
@@ -226,8 +229,9 @@ fn relay(
 }
 
 impl LeaseConnector for Connector {
-    fn connect(&self, _host: &SshDestination) -> io::Result<LeaseConnection> {
+    fn connect(&self, _host: &SshDestination, command: String) -> io::Result<LeaseConnection> {
         self.connects.fetch_add(1, Ordering::SeqCst);
+        self.commands.lock().unwrap().push(command);
         let reach = self.reach.lock().unwrap().clone();
         let (gateway, gateway_end) = duplex(1 << 20);
         let (host_end, host) = duplex(1 << 20);
@@ -927,19 +931,20 @@ async fn a_grant_not_answered_in_time_is_ended_on_the_host() {
 }
 
 /// The destination comes after every option, and the remote command runs
-/// the copy of this build installed under its lease protocol, never a
-/// `nessa` the host's search path finds: what `ssh` is run with. Which
+/// the copy of this build kept under its SHA-256, never a `nessa` the
+/// host's search path finds: what `ssh` is run with. Which
 /// destinations are accepted is `SshDestination`'s own test.
 #[test]
 fn ssh_is_run_with_the_destination_after_its_options() {
     let host = devbox();
-    let arguments = serve_arguments(&host);
+    let digest = "ab".repeat(32);
+    let arguments = ssh_arguments(&host, crate::env_serve::install::serve_command(&digest));
     let separator = arguments.iter().position(|word| word == "--").unwrap();
     assert_eq!(
         &arguments[separator + 1..],
         [
             "devbox".to_owned(),
-            format!("sh -c 'exec \"$HOME/.nessa/env/{LEASE_PROTOCOL}/nessa\" env serve'")
+            format!("sh -c 'exec \"$HOME/.nessa/env/{digest}/nessa\" env serve'")
         ]
     );
     assert!(arguments.iter().any(|word| word == "BatchMode=yes"));
@@ -1588,7 +1593,7 @@ async fn a_host_without_this_build_gets_it_installed_and_then_serves() {
     assert_eq!(
         runs[0],
         (
-            crate::env_serve::install::probe_command(LEASE_PROTOCOL),
+            crate::env_serve::install::probe_command(LEASE_PROTOCOL, &this_digest()),
             None
         )
     );
@@ -1600,6 +1605,8 @@ async fn a_host_without_this_build_gets_it_installed_and_then_serves() {
         )
     );
     assert_eq!(connector.connects.load(Ordering::SeqCst), 2);
+    let serve = crate::env_serve::install::serve_command(&this_digest());
+    assert_eq!(*connector.commands.lock().unwrap(), [serve.clone(), serve]);
     let installed = |started: bool| {
         let (protocol, digest) = (LEASE_PROTOCOL.to_owned(), this_digest());
         let (host, lease) = ("devbox".to_owned(), lease.as_str().to_owned());
@@ -1790,6 +1797,96 @@ async fn an_install_whose_outcome_cannot_be_recorded_is_not_used() {
         assert_eq!(events.len(), 1);
         assert!(matches!(events[0], EnvironmentEvent::InstallStarted { .. }));
     }
+}
+
+/// A refusal that cannot be recorded is answered as a failed install, never
+/// as the host's own reason: the audit is what failed.
+#[tokio::test]
+async fn an_install_refusal_that_cannot_be_recorded_is_a_failed_install() {
+    for (probe, upload, limit) in [
+        ("absent Darwin arm64 other", "installed", 0),
+        (
+            "absent Linux x86_64 gnu",
+            "refused version fedcba9876543210",
+            1,
+        ),
+    ] {
+        let connector = Connector::new(Reach::Silent);
+        let shell = Shell::new(probe, upload, connector.clone());
+        let audit = Arc::new(Audit::default());
+        if limit == 0 {
+            audit.1.store(true, Ordering::SeqCst);
+        } else {
+            audit.2.store(limit, Ordering::SeqCst);
+        }
+        let environment = installing(connector.clone(), shell.clone(), audit.clone());
+        assert_eq!(
+            environment
+                .open(&lease(), &terms("claude"), binding_only())
+                .await
+                .err(),
+            Some(LeaseRefusal::EnvironmentInstallFailed),
+            "{upload}"
+        );
+        assert_eq!(audit.events().len(), limit, "{upload}");
+    }
+}
+
+/// A build whose executable is no longer the bytes it is served by (the
+/// path replaced by an update) sends nothing: those bytes would be kept
+/// where another build is looked for.
+#[tokio::test]
+async fn an_executable_replaced_since_it_was_measured_is_not_sent() {
+    struct Replaced(AtomicUsize);
+    impl BuildSource for Replaced {
+        fn open(&self) -> io::Result<Build> {
+            let opened = Built.open()?;
+            match self.0.fetch_add(1, Ordering::SeqCst) {
+                0 => Ok(opened),
+                _ => Ok(Build {
+                    digest: "0".repeat(64),
+                    ..opened
+                }),
+            }
+        }
+    }
+    let connector = Connector::new(Reach::Silent);
+    let shell = Shell::new("absent Linux x86_64 gnu", "installed", connector.clone());
+    let audit = Arc::new(Audit::default());
+    let environment = SshEnvironment::new(
+        devbox(),
+        connector.clone(),
+        audit.clone(),
+        Arc::new(HostInstaller::new(
+            shell.clone(),
+            Arc::new(Replaced(AtomicUsize::new(0))),
+            Platform {
+                os: "linux".into(),
+                arch: "x86_64".into(),
+                libc: "gnu".into(),
+            },
+            LEASE_PROTOCOL,
+            InstallTimings::default(),
+        )),
+        SshTimings {
+            connect: Duration::from_secs(5),
+            answer: Duration::from_secs(5),
+            ..SshTimings::default()
+        },
+    );
+    let lease = lease();
+    assert_eq!(
+        environment
+            .open(&lease, &terms("claude"), binding_only())
+            .await
+            .err(),
+        Some(LeaseRefusal::EnvironmentInstallFailed)
+    );
+    assert_eq!(shell.runs().len(), 1, "probed, and nothing uploaded");
+    assert_eq!(
+        audit.events(),
+        [refused(&lease, InstallRefusal::Source, None)]
+    );
 }
 
 /// An upload whose answer is lost after the host put the copy in place is

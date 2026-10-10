@@ -31,13 +31,15 @@
 //! (`env_serve::install`), and the hello after it is checked as any other.
 //!
 //! An install whose outcome cannot be recorded is not used, as a connection
-//! that cannot be recorded is not: the lease is refused. The copy stays on
+//! that cannot be recorded is not: the lease is refused, and any install
+//! record that fails, a refusal's included, answers
+//! `environment_install_failed`. The copy stays on
 //! the host, verified, so the next lease is served by it and recorded
 //! `Connected`; the audit keeps the `InstallStarted` with no outcome.
 use super::audit::{EnvironmentAudit, EnvironmentEvent, InstallRefusal};
 use crate::env::LEASE_PROTOCOL;
 use crate::env_serve::install::{
-    probe_command, upload_command, Platform, Probe, Upload, UploadRefusal,
+    probe_command, serve_command, upload_command, Platform, Probe, Upload, UploadRefusal,
 };
 use nessa_sdk::domain::agent_execution::leases::{LeaseRefusal, SshDestination};
 use sha2::{Digest, Sha256};
@@ -150,6 +152,8 @@ pub(crate) struct HostInstaller {
     platform: Platform,
     protocol: &'static str,
     timings: InstallTimings,
+    /// This build's SHA-256, taken once: where its copy is kept on a host.
+    digest: tokio::sync::OnceCell<String>,
 }
 
 impl HostInstaller {
@@ -166,6 +170,7 @@ impl HostInstaller {
             platform,
             protocol,
             timings,
+            digest: tokio::sync::OnceCell::new(),
         }
     }
 
@@ -178,6 +183,39 @@ impl HostInstaller {
             LEASE_PROTOCOL,
             InstallTimings::default(),
         )
+    }
+
+    /// This build's SHA-256, taken from its executable the first time it is
+    /// asked for.
+    ///
+    /// # Errors
+    /// `environment_install_failed`: the executable could not be read, so
+    /// which copy on a host is this build cannot be known.
+    async fn digest(&self) -> Result<&str, LeaseRefusal> {
+        let digest = self
+            .digest
+            .get_or_try_init(|| async {
+                let build = self.build.clone();
+                tokio::task::spawn_blocking(move || build.open())
+                    .await
+                    .map_err(io::Error::other)
+                    .and_then(|opened| opened)
+                    .map(|build| build.digest)
+            })
+            .await;
+        digest.map(String::as_str).map_err(|error| {
+            tracing::error!(%error, "this build's executable could not be read");
+            LeaseRefusal::EnvironmentInstallFailed
+        })
+    }
+
+    /// The command that serves this build on a host: its copy, kept by its
+    /// SHA-256, so only these exact bytes are run there.
+    ///
+    /// # Errors
+    /// As [`Self::digest`].
+    pub(crate) async fn serve_command(&self) -> Result<String, LeaseRefusal> {
+        Ok(serve_command(self.digest().await?))
     }
 
     /// Make sure this build is installed on `host`, for `lease`.
@@ -197,26 +235,44 @@ impl HostInstaller {
             None => return Err(LeaseRefusal::EnvironmentUnreachable),
         };
         if !self.platform.runs_on(&platform) {
-            refused(
+            return Err(refused(
                 audit,
                 name,
                 lease,
                 InstallRefusal::Platform,
                 Some(platform.to_string()),
-            );
-            return Err(LeaseRefusal::EnvironmentPlatformUnsupported);
+                LeaseRefusal::EnvironmentPlatformUnsupported,
+            ));
         }
+        // Served by its digest, so it is known by now; the copy sent must
+        // be those bytes, or it would be kept where another build is looked
+        // for (on macOS the path can name a newer executable than the one
+        // running).
+        let expected = self.digest().await?;
         let build = self.build.clone();
         let opened = tokio::task::spawn_blocking(move || build.open())
             .await
             .map_err(io::Error::other)
-            .and_then(|opened| opened);
+            .and_then(|opened| opened)
+            .and_then(|build| match build.digest == expected {
+                true => Ok(build),
+                false => Err(io::Error::other(format!(
+                    "this build's executable now has SHA-256 {}, not {expected}",
+                    build.digest
+                ))),
+            });
         let Build { file, digest } = match opened {
             Ok(build) => build,
             Err(error) => {
                 tracing::error!(%error, "this build's executable could not be read to install it");
-                refused(audit, name, lease, InstallRefusal::Source, None);
-                return Err(LeaseRefusal::EnvironmentInstallFailed);
+                return Err(refused(
+                    audit,
+                    name,
+                    lease,
+                    InstallRefusal::Source,
+                    None,
+                    LeaseRefusal::EnvironmentInstallFailed,
+                ));
             }
         };
         let started = EnvironmentEvent::InstallStarted {
@@ -308,8 +364,7 @@ impl HostInstaller {
                 LeaseRefusal::EnvironmentUnreachable,
             ),
         };
-        refused(audit, name, lease, reason, seen);
-        Err(refusal)
+        Err(refused(audit, name, lease, reason, seen, refusal))
     }
 }
 
@@ -319,7 +374,11 @@ impl HostInstaller {
         let name = host.as_str();
         let probed = tokio::time::timeout(
             self.timings.probe,
-            self.shell.run(host, probe_command(self.protocol), None),
+            self.shell.run(
+                host,
+                probe_command(self.protocol, self.digest().await.ok()?),
+                None,
+            ),
         )
         .await;
         match probed {
@@ -342,15 +401,18 @@ impl HostInstaller {
     }
 }
 
-/// Record an install refused; a record that fails is logged, as the refusal
-/// stands either way.
+/// Record an install refused, and answer `refusal`; a refusal that cannot
+/// be recorded is `environment_install_failed`, as an install whose start
+/// or outcome cannot be recorded is, so a failed audit is never answered
+/// as the host's own reason.
 fn refused(
     audit: &dyn EnvironmentAudit,
     host: &str,
     lease: &str,
     reason: InstallRefusal,
     seen: Option<String>,
-) {
+    refusal: LeaseRefusal,
+) -> LeaseRefusal {
     tracing::warn!(
         host,
         lease,
@@ -364,7 +426,11 @@ fn refused(
         reason,
         seen,
     };
-    if let Err(error) = audit.record(&event) {
-        tracing::error!(%error, "an install refused could not be recorded");
+    match audit.record(&event) {
+        Ok(()) => refusal,
+        Err(error) => {
+            tracing::error!(%error, "an install refused could not be recorded");
+            LeaseRefusal::EnvironmentInstallFailed
+        }
     }
 }

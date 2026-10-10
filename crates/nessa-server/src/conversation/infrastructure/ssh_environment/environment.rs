@@ -154,6 +154,7 @@ impl Inner {
     async fn open(&self) -> Result<Arc<HostLink>, Opening> {
         HostLink::open(
             &self.host,
+            self.installer.serve_command().await?,
             self.connector.as_ref(),
             self.audit.clone(),
             self.timings.connect,
