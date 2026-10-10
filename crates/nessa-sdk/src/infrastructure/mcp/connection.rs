@@ -494,14 +494,15 @@ impl Connection {
     }
 
     /// Abort the HTTP writer and leave its watch running, so a test can see
-    /// that cancellation does not record an end.
-    #[cfg(test)]
+    /// that cancellation does not record an end. The callers are the Unix
+    /// MCP fixtures.
+    #[cfg(all(test, unix))]
     pub(crate) fn abort_http_writer_for_test(&self) {
         self.http_writer.as_ref().expect("http writer").abort();
     }
 
     /// Whether the HTTP writer watch has finished joining that task.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn http_writer_watch_finished(&self) -> bool {
         self.writer_watch.is_finished()
     }
