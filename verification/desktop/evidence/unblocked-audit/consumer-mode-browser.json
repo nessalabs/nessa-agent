@@ -1,0 +1,66 @@
+{
+  "check": "mode-publication",
+  "ok": true,
+  "started": "2026-10-10T15:40:07.617Z",
+  "finished": "2026-10-10T15:40:20.467Z",
+  "target": {
+    "url": "http://127.0.0.1:57315/desktop.html",
+    "mode": "dev"
+  },
+  "results": [
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:57315/favicon.ico)"
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "confirmed-mode-consumers",
+      "engine": "chromium",
+      "seen": {
+        "initialMode": "ask",
+        "acceptedMode": "auto",
+        "returnedMode": "ask",
+        "sourceRevisions": [1, 2, 2, 3],
+        "transcriptMessages": 0,
+        "injectedUnavailable": {
+          "readError": "unavailable",
+          "dispatched": 0,
+          "declined": {
+            "kind": "view-unavailable"
+          },
+          "draftKept": true
+        },
+        "reconciledMode": "auto"
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "confirmed-mode-consumers",
+      "engine": "webkit",
+      "seen": {
+        "initialMode": "ask",
+        "acceptedMode": "auto",
+        "returnedMode": "ask",
+        "sourceRevisions": [1, 2, 2, 3],
+        "transcriptMessages": 0,
+        "injectedUnavailable": {
+          "readError": "unavailable",
+          "dispatched": 0,
+          "declined": {
+            "kind": "view-unavailable"
+          },
+          "draftKept": true
+        },
+        "reconciledMode": "auto"
+      }
+    }
+  ]
+}

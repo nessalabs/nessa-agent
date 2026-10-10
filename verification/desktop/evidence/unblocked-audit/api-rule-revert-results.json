@@ -1,0 +1,250 @@
+[
+  {
+    "rule": "metadata-target",
+    "exit": 101,
+    "behavioralFailure": true,
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "nessa-server",
+      "--lib",
+      "metadata_query_target_fences",
+      "--",
+      "--nocapture",
+      "--test-threads=2"
+    ],
+    "sourceAsserted": true
+  },
+  {
+    "rule": "created-proposal",
+    "exit": 101,
+    "behavioralFailure": true,
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "nessa-server",
+      "--lib",
+      "creation_metadata_tests",
+      "--",
+      "--nocapture",
+      "--test-threads=2"
+    ],
+    "sourceAsserted": true
+  },
+  {
+    "rule": "admitted-intent",
+    "exit": 101,
+    "behavioralFailure": true,
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "nessa-server",
+      "--lib",
+      "terminal_admitted_intent_cannot_be_replaced",
+      "--",
+      "--nocapture",
+      "--test-threads=2"
+    ],
+    "sourceAsserted": true
+  },
+  {
+    "rule": "observed-application-audit",
+    "exit": 101,
+    "behavioralFailure": true,
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "nessa-server",
+      "--lib",
+      "terminal_application_audit_keeps_original",
+      "--",
+      "--nocapture",
+      "--test-threads=2"
+    ],
+    "sourceAsserted": true
+  },
+  {
+    "rule": "terminal-equality",
+    "exit": 101,
+    "behavioralFailure": true,
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "nessa-server",
+      "--lib",
+      "terminal_each_record_fact_is_correlated",
+      "--",
+      "--nocapture",
+      "--test-threads=2"
+    ],
+    "sourceAsserted": true
+  },
+  {
+    "rule": "terminal-write-containment",
+    "exit": 101,
+    "behavioralFailure": true,
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "nessa-server",
+      "--lib",
+      "terminal_committed_invocation_and_poll_panics",
+      "--",
+      "--nocapture",
+      "--test-threads=2"
+    ],
+    "sourceAsserted": true
+  },
+  {
+    "rule": "terminal-readback-containment",
+    "exit": 101,
+    "behavioralFailure": true,
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "nessa-server",
+      "--lib",
+      "terminal_unreadable_readback_retires",
+      "--",
+      "--nocapture",
+      "--test-threads=2"
+    ],
+    "sourceAsserted": true
+  },
+  {
+    "rule": "pending-envelope",
+    "exit": 101,
+    "behavioralFailure": true,
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "nessa-server",
+      "--lib",
+      "terminal_pending_query_is_correlated",
+      "--",
+      "--nocapture",
+      "--test-threads=2"
+    ],
+    "sourceAsserted": true
+  },
+  {
+    "rule": "stopping-publication",
+    "exit": 101,
+    "behavioralFailure": true,
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "nessa-server",
+      "--lib",
+      "retained_stopping_publication_refuses_current_reads",
+      "--",
+      "--nocapture",
+      "--test-threads=2"
+    ],
+    "sourceAsserted": true
+  },
+  {
+    "rule": "final-publication-owner",
+    "exit": 101,
+    "behavioralFailure": true,
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "nessa-server",
+      "--lib",
+      "retained_stopping_publication_rechecks_owner_after_summary_wait",
+      "--",
+      "--nocapture",
+      "--test-threads=2"
+    ],
+    "sourceAsserted": true
+  },
+  {
+    "rule": "selection-revision",
+    "exit": 101,
+    "behavioralFailure": true,
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "nessa-protocol",
+      "selection_and_runtime_replacements",
+      "--",
+      "--nocapture"
+    ],
+    "sourceAsserted": true
+  },
+  {
+    "rule": "selection-equality",
+    "exit": 101,
+    "behavioralFailure": true,
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "nessa-protocol",
+      "selection_and_runtime_replacements",
+      "--",
+      "--nocapture"
+    ],
+    "sourceAsserted": true
+  },
+  {
+    "rule": "runtime-revision",
+    "exit": 101,
+    "behavioralFailure": true,
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "nessa-protocol",
+      "selection_and_runtime_replacements",
+      "--",
+      "--nocapture"
+    ],
+    "sourceAsserted": true
+  },
+  {
+    "rule": "runtime-equality",
+    "exit": 101,
+    "behavioralFailure": true,
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "nessa-protocol",
+      "selection_and_runtime_replacements",
+      "--",
+      "--nocapture"
+    ],
+    "sourceAsserted": true
+  },
+  {
+    "rule": "projection-private-view",
+    "exit": 101,
+    "behavioralFailure": true,
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "nessa-protocol",
+      "--doc",
+      "conversation::projection::Projection (line",
+      "--",
+      "--nocapture"
+    ],
+    "sourceAsserted": true,
+    "constructorTypeProof": true,
+    "excludedPriorWrapper": "expected getter compile_fail stderr caused over-broad validator rejection"
+  }
+]

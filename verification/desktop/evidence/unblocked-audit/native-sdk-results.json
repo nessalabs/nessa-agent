@@ -1,0 +1,23 @@
+{
+  "head": "4fea9814cb7ba5bc6debaff9cf0a01e1cbcc5b3b",
+  "stages": [
+    {
+      "name": "desktop",
+      "command": ["node", "scripts/check-desktop.mjs"],
+      "exit": 0,
+      "seconds": 42.4
+    },
+    {
+      "name": "sdk",
+      "command": ["pnpm", "sdk:check"],
+      "exit": 0,
+      "seconds": 215.6
+    },
+    {
+      "name": "storage-all-features",
+      "command": ["cargo", "test", "-p", "nessa-local-storage", "--all-features"],
+      "exit": 0,
+      "seconds": 2.5
+    }
+  ]
+}

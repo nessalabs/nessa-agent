@@ -1,0 +1,35 @@
+{
+  "sourceHead": "9c1c672f2f20e39f63ff9745a32d6467259d328d",
+  "base": "965797a9f2cb1a71923f32eee4197aa501669ebf",
+  "currentMainAtPublicationPreflight": "88f34e4dabdeca46486dfbd5294e0a2a00a0a5fa",
+  "regions": {
+    "rust-api": {
+      "checkedHead": "bd8ef0763b92a6f5ca6a7178d736b21a7a5ffe17",
+      "paths": ["crates", "Cargo.toml", "Cargo.lock"],
+      "changedPaths": []
+    },
+    "native-sdk-oauth": {
+      "checkedHead": "4fea9814cb7ba5bc6debaff9cf0a01e1cbcc5b3b",
+      "paths": [
+        "src-tauri",
+        "crates/nessa-sdk",
+        "crates/nessa-local-storage",
+        "crates/nessa-server/src/mcp_authorization",
+        "crates/nessa-server/tests/mcp_authorization"
+      ],
+      "changedPaths": []
+    },
+    "desktop-and-verification": {
+      "checkedHead": "4fea9814cb7ba5bc6debaff9cf0a01e1cbcc5b3b",
+      "paths": ["src/desktop", "verification"],
+      "changedPaths": []
+    },
+    "schema-client": {
+      "checkedHead": "bd8ef0763b92a6f5ca6a7178d736b21a7a5ffe17",
+      "paths": ["packages", "protocol", "scripts", "src-tauri"],
+      "changedPaths": []
+    }
+  },
+  "consumerAuthorHead": "f803d375a1036d73016b38cd6822e8c9e2947237",
+  "consumerWholeGitTreeIdentical": true
+}
