@@ -12,7 +12,9 @@
 //! end of stream ──▶ every route dropped: waiters unanswered, outputs ended,
 //!                   each lease's `gone` closed ──▶ ConnectionLost
 //! a harness: binding's input ──▶ its pump ──▶ Input… InputClosed ──▶ Stop
-//!            (cleanup, let go, or output overflow ask its pump for the Stop)
+//!            (cleanup, let go, or output overflow ask its pump for the Stop;
+//!             a Stopped the host sent unasked, for its input overflow, ends
+//!             the pump, so the binding's writes fail)
 //! ```
 //!
 //! Arrows are steps and frames, in order. A lease's frames are routed only
@@ -841,7 +843,12 @@ fn route_frame(routes: &mut Routes, frame: FromEnvironment) -> Routed {
             // again under it, and a later stop is answered from it.
             match route.channels.get_mut(&channel) {
                 Some(channel) => {
+                    // Stopped, asked or not (the host stops a harness that
+                    // stopped reading its input): its output ends, and its
+                    // pump, never to be asked for a Stop now, ends too, so
+                    // its binding's writes fail rather than go nowhere.
                     channel.output = None;
+                    channel.stop = None;
                     channel.cleanup = Some(cleanup);
                     if let Some(waiter) = channel.stopped.take() {
                         let _ = waiter.send(cleanup);

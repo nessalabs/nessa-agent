@@ -7,6 +7,8 @@
 //!                                         input pump ──▶ harness stdin
 //!                                         harness stdout ──▶ output pump ──▶ Output
 //!                          ──Stop───▶ cleanup(grace, kill) ──▶ ledger: stopped ──▶ Stopped
+//!                          ──Input──▶ input queue full, or the harness gone deaf
+//!                                     ──▶ ledger: input_overflow ──▶ stop ──▶ Stopped (unasked)
 //!                          ──End────▶ stop every harness ──▶ ledger: ended ──▶ Ended
 //!                          ──Account▶ ledger ──▶ Accounted
 //!                          ──Keepalive▶ (nothing: the gateway is there)
@@ -105,6 +107,9 @@ pub(crate) enum LedgerEntry {
         cleanup: Cleanup,
         lost: bool,
     },
+    /// A harness stopped reading its input until its queue was full, or for
+    /// good: it is stopped rather than fed a stream with bytes missing.
+    InputOverflow { lease: String, channel: u32 },
     /// A frame naming nothing this connection holds was dropped.
     Dropped {
         lease: Option<String>,
@@ -297,6 +302,21 @@ struct Stopping {
     cleanup: watch::Receiver<Option<Cleanup>>,
 }
 
+/// One harness's stop, as asked.
+struct Stop {
+    lease: String,
+    channel: u32,
+    /// How long it may take to leave by itself.
+    grace: Duration,
+    /// How long each forced step may take.
+    kill: Duration,
+    /// Whether the gateway is told what it took with a `Stopped`.
+    answer: bool,
+    /// Whether what made it stop was recorded; unrecorded, its cleanup is
+    /// answered uncertain.
+    recorded: bool,
+}
+
 /// One lease this connection holds.
 struct Held {
     /// The agent it was granted for; every harness under it is that agent's.
@@ -360,7 +380,17 @@ impl Served {
                 });
                 match taken {
                     Some(Ok(running)) => {
-                        let stop = self.stop(lease.clone(), channel, running, grace, kill, true);
+                        let stop = self.stop(
+                            Stop {
+                                lease: lease.clone(),
+                                channel,
+                                grace,
+                                kill,
+                                answer: true,
+                                recorded: true,
+                            },
+                            running,
+                        );
                         if let Some(held) = self.leases.get_mut(&lease) {
                             held.stopped.insert(channel, stop.cleanup.clone());
                             held.stops.push(stop);
@@ -626,25 +656,59 @@ impl Served {
         let Some(input) = &running.input else {
             return self.dropped(Some(lease), Some(channel), "input");
         };
-        if input.try_send(data.0).is_err() {
-            // Full, or the harness stopped reading for good: its input ends
-            // rather than losing bytes from the middle of its protocol.
-            running.input = None;
-            self.dropped(Some(lease), Some(channel), "input_overflow");
+        if input.try_send(data.0).is_ok() {
+            return;
+        }
+        // Full, or the harness stopped reading for good. Its stream would go
+        // on with these bytes missing, or end short, so the harness is
+        // stopped instead, and the gateway told with its `Stopped`, as for a
+        // stop it asked: its channel fails, never quietly truncated.
+        let Some(running) = self
+            .leases
+            .get_mut(lease)
+            .and_then(|held| held.channels.remove(&channel))
+        else {
+            return;
+        };
+        let entry = LedgerEntry::InputOverflow {
+            lease: lease.into(),
+            channel,
+        };
+        let recorded = match self.ledger.record(&entry) {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::error!(lease, channel, %error, "a harness's input overflow could not be recorded");
+                false
+            }
+        };
+        let stop = self.stop(
+            Stop {
+                lease: lease.into(),
+                channel,
+                grace: Duration::ZERO,
+                kill: self.timings.kill,
+                answer: true,
+                recorded,
+            },
+            running,
+        );
+        if let Some(held) = self.leases.get_mut(lease) {
+            held.stopped.insert(channel, stop.cleanup.clone());
+            held.stops.push(stop);
         }
     }
 
     /// Stop one harness on a task of its own, recording what that took and,
-    /// when the gateway asked for it (`answer`), answering it.
-    fn stop(
-        &self,
-        lease: String,
-        channel: u32,
-        running: Channel,
-        grace: Duration,
-        kill: Duration,
-        answer: bool,
-    ) -> Stopping {
+    /// when the gateway is to be told (`answer`), telling it.
+    fn stop(&self, stop: Stop, running: Channel) -> Stopping {
+        let Stop {
+            lease,
+            channel,
+            grace,
+            kill,
+            answer,
+            recorded,
+        } = stop;
         let ledger = self.ledger.clone();
         let frames = self.frames.clone();
         let (done, cleanup) = watch::channel(None);
@@ -675,7 +739,9 @@ impl Served {
                 cleanup,
             };
             let cleanup = match ledger.record(&entry) {
-                Ok(()) => cleanup,
+                // What made it stop went unrecorded: it settles nothing.
+                Ok(()) if recorded => cleanup,
+                Ok(()) => Cleanup::Uncertain,
                 Err(error) => {
                     tracing::error!(lease, channel, %error, "a harness's stop could not be recorded");
                     Cleanup::Uncertain
@@ -707,12 +773,15 @@ impl Served {
         let mut stops = held.stops;
         for (channel, running) in held.channels {
             stops.push(self.stop(
-                lease.clone(),
-                channel,
+                Stop {
+                    lease: lease.clone(),
+                    channel,
+                    grace: self.timings.grace,
+                    kill: self.timings.kill,
+                    answer: false,
+                    recorded: true,
+                },
                 running,
-                self.timings.grace,
-                self.timings.kill,
-                false,
             ));
         }
         let ledger = self.ledger.clone();

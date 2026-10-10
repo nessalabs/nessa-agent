@@ -9,16 +9,20 @@ use std::sync::{
 use tokio::io::{duplex, split, AsyncReadExt, AsyncWriteExt, DuplexStream, ReadHalf, WriteHalf};
 
 /// A harness that echoes its input, and counts how often it was stopped.
-/// Its stop takes `slow`.
+/// Its stop takes `slow`. A `deaf` one never reads its input, until it is
+/// stopped.
 struct EchoLauncher {
     stopped: Arc<AtomicUsize>,
     launched: Mutex<Vec<BTreeMap<String, String>>>,
     slow: Mutex<Duration>,
+    deaf: AtomicBool,
 }
 
 struct EchoControl {
     stopped: Arc<AtomicUsize>,
     slow: Duration,
+    /// Lets a deaf harness go once it is stopped.
+    released: Arc<tokio::sync::Notify>,
 }
 
 impl HarnessControl for EchoControl {
@@ -26,6 +30,7 @@ impl HarnessControl for EchoControl {
         let slow = self.slow;
         Box::pin(async move {
             tokio::time::sleep(slow).await;
+            self.released.notify_one();
             self.stopped.fetch_add(1, Ordering::SeqCst);
             Ok(CloseOutcome { forced: false })
         })
@@ -47,7 +52,13 @@ impl HarnessLauncher for EchoLauncher {
         self.launched.lock().unwrap().push(environment.clone());
         let (input, mut harness_in) = duplex(4096);
         let (mut harness_out, output) = duplex(4096);
+        let released = Arc::new(tokio::sync::Notify::new());
+        let deaf = self.deaf.load(Ordering::SeqCst).then(|| released.clone());
         tokio::spawn(async move {
+            if let Some(released) = deaf {
+                released.notified().await;
+                return;
+            }
             let mut buffer = [0; 256];
             loop {
                 match harness_in.read(&mut buffer).await {
@@ -66,6 +77,7 @@ impl HarnessLauncher for EchoLauncher {
             control: Box::new(EchoControl {
                 stopped: self.stopped.clone(),
                 slow: *self.slow.lock().unwrap(),
+                released,
             }),
         })
     }
@@ -136,6 +148,7 @@ impl Gateway {
             stopped: stopped.clone(),
             launched: Mutex::new(Vec::new()),
             slow: Mutex::new(Duration::ZERO),
+            deaf: AtomicBool::new(false),
         });
         let served = tokio::spawn(serve(
             environment_in,
@@ -835,4 +848,135 @@ fn every_source_speaking_lease_frames_names_the_protocol() {
             "{speaker:?} is not in the lease protocol"
         );
     }
+}
+
+/// A harness that stops reading its input is never fed a truncated stream:
+/// once its input queue is full the host records the overflow, stops it, and
+/// tells the gateway with its `Stopped`, unasked; a later stop of it is
+/// answered with the same cleanup.
+#[tokio::test]
+async fn input_a_harness_does_not_read_stops_it_and_says_so() {
+    let mut gateway = Gateway::start();
+    assert_eq!(gateway.next().await, hello());
+    gateway.granted(LEASE).await;
+    gateway.launcher.deaf.store(true, Ordering::SeqCst);
+    gateway
+        .send(ToEnvironment::Start {
+            lease: LEASE.into(),
+            channel: 1,
+            environment: BTreeMap::new(),
+        })
+        .await;
+    // Far more than the harness's pipe and the input queue hold.
+    for _ in 0..(INPUT_QUEUE + 64) {
+        gateway
+            .send(ToEnvironment::Input {
+                lease: LEASE.into(),
+                channel: 1,
+                data: Data(vec![b'x'; 1024]),
+            })
+            .await;
+    }
+    let stopped = FromEnvironment::Stopped {
+        lease: LEASE.into(),
+        channel: 1,
+        cleanup: Cleanup::Confirmed { forced: false },
+    };
+    let said = loop {
+        match gateway.next().await {
+            FromEnvironment::OutputClosed { .. } => continue,
+            other => break other,
+        }
+    };
+    assert_eq!(said, stopped);
+    assert_eq!(gateway.stopped.load(Ordering::SeqCst), 1);
+    let entries = gateway.ledger.entries();
+    let overflow = entries.iter().position(|entry| {
+        *entry
+            == LedgerEntry::InputOverflow {
+                lease: LEASE.into(),
+                channel: 1,
+            }
+    });
+    let recorded = entries.iter().position(|entry| {
+        *entry
+            == LedgerEntry::Stopped {
+                lease: LEASE.into(),
+                channel: 1,
+                cleanup: Cleanup::Confirmed { forced: false },
+            }
+    });
+    assert!(overflow.is_some() && overflow < recorded, "{entries:?}");
+    gateway
+        .send(ToEnvironment::Stop {
+            lease: LEASE.into(),
+            channel: 1,
+            grace_ms: 10,
+            kill_ms: 100,
+        })
+        .await;
+    assert_eq!(gateway.next().await, stopped);
+    assert_eq!(gateway.stopped.load(Ordering::SeqCst), 1);
+}
+
+/// An input overflow the host cannot record still stops the harness, but
+/// settles nothing: its `Stopped` answers uncertain.
+#[tokio::test]
+async fn an_unrecorded_input_overflow_stops_the_harness_uncertain() {
+    let mut gateway = Gateway::start();
+    assert_eq!(gateway.next().await, hello());
+    gateway.granted(LEASE).await;
+    gateway.launcher.deaf.store(true, Ordering::SeqCst);
+    gateway
+        .send(ToEnvironment::Start {
+            lease: LEASE.into(),
+            channel: 1,
+            environment: BTreeMap::new(),
+        })
+        .await;
+    // Started is recorded before its first input is read.
+    gateway
+        .send(ToEnvironment::Input {
+            lease: LEASE.into(),
+            channel: 1,
+            data: Data(vec![b'x'; 1024]),
+        })
+        .await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !gateway
+            .ledger
+            .entries()
+            .iter()
+            .any(|entry| matches!(entry, LedgerEntry::Started { .. }))
+        {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the start is recorded");
+    gateway.ledger.failing.store(true, Ordering::SeqCst);
+    for _ in 0..(INPUT_QUEUE + 64) {
+        gateway
+            .send(ToEnvironment::Input {
+                lease: LEASE.into(),
+                channel: 1,
+                data: Data(vec![b'x'; 1024]),
+            })
+            .await;
+    }
+    let said = loop {
+        match gateway.next().await {
+            FromEnvironment::OutputClosed { .. } => continue,
+            other => break other,
+        }
+    };
+    assert_eq!(
+        said,
+        FromEnvironment::Stopped {
+            lease: LEASE.into(),
+            channel: 1,
+            cleanup: Cleanup::Uncertain,
+        }
+    );
+    assert_eq!(gateway.stopped.load(Ordering::SeqCst), 1);
 }

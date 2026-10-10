@@ -44,8 +44,10 @@ use tokio::{
 
 // ---- the host side ----
 
-/// Echoes its input, except `flood`, which it answers with a mebibyte;
-/// counts its stops. A harness that flooded has to be forced to stop, so
+/// Echoes its input, except `flood`, which it answers with a mebibyte, and
+/// a read starting `deaf`, after which it reads nothing more until it is
+/// stopped; counts its
+/// stops. A harness that flooded or went deaf has to be forced to stop, so
 /// its cleanup is told apart from one that answers nothing ran.
 struct Echo {
     stopped: Arc<AtomicUsize>,
@@ -53,9 +55,12 @@ struct Echo {
 struct EchoControl {
     stopped: Arc<AtomicUsize>,
     flooded: Arc<AtomicBool>,
+    /// Lets a deaf harness go once it is stopped.
+    released: Arc<tokio::sync::Notify>,
 }
 impl HarnessControl for EchoControl {
     fn cleanup(&mut self, _grace: Duration, _kill: Duration) -> HarnessCleanupFuture<'_> {
+        self.released.notify_one();
         self.stopped.fetch_add(1, Ordering::SeqCst);
         let forced = self.flooded.load(Ordering::SeqCst);
         Box::pin(async move { Ok(CloseOutcome { forced }) })
@@ -77,9 +82,16 @@ impl HarnessLauncher for Echo {
         let (mut harness_out, output) = duplex(4096);
         let flooded = Arc::new(AtomicBool::new(false));
         let flooding = flooded.clone();
+        let released = Arc::new(tokio::sync::Notify::new());
+        let deafened = released.clone();
         tokio::spawn(async move {
             let mut buffer = [0; 256];
             while let Ok(read) = harness_in.read(&mut buffer).await {
+                if buffer[..read].starts_with(b"deaf") {
+                    flooding.store(true, Ordering::SeqCst);
+                    deafened.notified().await;
+                    return;
+                }
                 if &buffer[..read] == b"flood" {
                     flooding.store(true, Ordering::SeqCst);
                     for _ in 0..1024 {
@@ -100,6 +112,7 @@ impl HarnessLauncher for Echo {
             control: Box::new(EchoControl {
                 stopped: self.stopped.clone(),
                 flooded,
+                released,
             }),
         })
     }
@@ -788,6 +801,65 @@ async fn output_a_binding_does_not_read_is_bounded_and_stops_the_harness() {
     // The binding's own stop, after the host already stopped it, is answered
     // with the host's evidence (forced, as the flood made it), never left
     // uncertain and never as a harness that held nothing.
+    assert_eq!(
+        control
+            .cleanup(Duration::from_millis(10), Duration::from_millis(100))
+            .await
+            .unwrap(),
+        CloseOutcome { forced: true }
+    );
+    assert_eq!(connector.stopped.load(Ordering::SeqCst), 1);
+}
+
+/// A harness that stops reading its input fails its channel rather than
+/// taking a truncated stream: the host stops it and says so, the binding's
+/// writes then fail and its output ends, and its own stop is answered with
+/// the host's evidence of the forced stop.
+#[tokio::test]
+async fn input_a_harness_does_not_read_fails_its_channel() {
+    let connector = Connector::new(Reach::Serving);
+    let audit = Arc::new(Audit::default());
+    let environment = environment(connector.clone(), audit.clone());
+    let (binding, host) = binding(true);
+    let id = lease();
+    let _opened = environment
+        .open(&id, &terms("claude"), binding)
+        .await
+        .unwrap_or_else(|_| panic!("granted"));
+    let host = host.lock().unwrap().clone().unwrap();
+    let HarnessProcess {
+        mut input,
+        mut output,
+        mut control,
+    } = host.start(HarnessLaunch::default()).unwrap();
+    input.write_all(b"deaf").await.unwrap();
+    // Written until a write fails: far more than every queue on the way
+    // holds, if none ever does.
+    let failed = tokio::time::timeout(Duration::from_secs(20), async {
+        for _ in 0..(64 * 1024) {
+            if input.write_all(&[b'x'; 1024]).await.is_err() {
+                return true;
+            }
+        }
+        false
+    })
+    .await
+    .unwrap_or(false);
+    assert!(failed, "the binding's writes fail once the host stopped it");
+    let mut rest = Vec::new();
+    tokio::time::timeout(Duration::from_secs(5), output.read_to_end(&mut rest))
+        .await
+        .expect("its output ends")
+        .unwrap();
+    let entries = connector.ledger.0.lock().unwrap().clone();
+    assert!(
+        entries.iter().any(|entry| matches!(
+            entry,
+            LedgerEntry::InputOverflow { lease, channel: 1 } if lease == id.as_str()
+        )),
+        "{entries:?} {:?}",
+        audit.events()
+    );
     assert_eq!(
         control
             .cleanup(Duration::from_millis(10), Duration::from_millis(100))
