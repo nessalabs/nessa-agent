@@ -27,8 +27,8 @@ use crate::read_only_sync::entrypoint::watch::WatchLines;
 use crate::read_only_sync::entrypoint::{online, Command, CommandError};
 use crate::read_only_sync::infrastructure::cache::ReadOnlyCache;
 use crate::read_only_sync::infrastructure::gateway::{
-    DeviceEvidence, GatewayAuthorizer, GatewayConnection, LocalConnector, RecordGatewaySource,
-    Session,
+    CatalogueReader, DeviceEvidence, GatewayAuthorizer, GatewayConnection, LocalConnector,
+    RecordGatewaySource, Session,
 };
 use nessa_auth::adapters::pairing::NativeIdentity;
 use nessa_auth::application::pairing::ClientPendingStore;
@@ -466,9 +466,11 @@ impl Run<'_> {
         lines.end(end, recheck)
     }
     fn catalogue(self, pages: usize, output: &mut dyn Write) -> Result<(), CommandError> {
-        let mut source = self
-            .connection
-            .catalogue(self.receiver.clone(), self.access_epoch);
+        let mut source = self.connection.catalogue(
+            self.receiver.clone(),
+            self.access_epoch,
+            CatalogueReader::Owner,
+        );
         let discovery = self
             .connection
             .run(|| source.discover())

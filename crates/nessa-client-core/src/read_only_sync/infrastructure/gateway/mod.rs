@@ -7,7 +7,9 @@ mod deadline_stream;
 mod session;
 pub(crate) use session::{DeviceEvidence, LocalConnector, Session};
 mod sources;
-pub(crate) use sources::{GatewayAuthorizer, GatewayConnection, RecordGatewaySource};
+pub(crate) use sources::{
+    CatalogueReader, GatewayAuthorizer, GatewayConnection, RecordGatewaySource,
+};
 
 #[cfg(test)]
 #[path = "../../../../tests/read_only_sync/gateway.rs"]

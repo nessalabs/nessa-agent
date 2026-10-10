@@ -28,7 +28,9 @@ use crate::read_only_sync::application::{
     CachePolicy, Cancellation, GatewayConnector, GatewayError, GatewayPolicy, GatewayStream,
 };
 use crate::read_only_sync::infrastructure::cache::ReadOnlyCache;
-use crate::read_only_sync::infrastructure::gateway::{DeviceEvidence, GatewayConnection, Session};
+use crate::read_only_sync::infrastructure::gateway::{
+    CatalogueReader, DeviceEvidence, GatewayConnection, Session,
+};
 use nessa_auth::adapters::pairing::NativeIdentity;
 use nessa_auth::application::ports::Clock as WallClock;
 use nessa_protocol::clock::Clock as MonotonicClock;
@@ -291,7 +293,9 @@ impl RetainedCache {
         let connection = GatewayConnection::new(session);
         let epoch = access.access_epoch;
 
-        let mut catalogue = connection.catalogue(receiver.clone(), epoch);
+        // The reader is a peer gateway: it reads what the peer's owner
+        // granted it, not a catalogue of its own.
+        let mut catalogue = connection.catalogue(receiver.clone(), epoch, CatalogueReader::Granted);
         let discovery = connection.run(|| catalogue.discover()).map_err(failure)?;
         let (scope, head) = match (discovery.result, discovery.outcome.failure) {
             (_, Some(error)) => return Err(failure(error)),
