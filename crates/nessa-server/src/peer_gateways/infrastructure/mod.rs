@@ -1,13 +1,14 @@
-//! Peer records on disk, their audit, the owner commands over them, and the
-//! poller that reads what each peer granted. Design:
-//! `docs/design/auth/peer-gateways.md` ("The dialing side", "Reading a peer").
+//! Peer records on disk, their audit, the connector enrollments dial with,
+//! the owner commands over them, and the poller that reads what each peer
+//! granted. Design: `docs/design/auth/peer-gateways.md` ("The dialing side",
+//! "Reading a peer").
 mod audit;
 mod commands;
+mod connector;
 mod poller;
 mod records;
 pub use audit::DurablePeerAudit;
-pub use commands::{PeerCommands, PeerError, PeerSync, SyncState};
+pub use commands::{PeerCommands, PeerError, PeerSync, SyncState, CONNECT};
+pub use connector::TcpPeerConnector;
 pub use poller::{PeerPoller, PollPolicy, POLL_BACKOFF_CAP, POLL_INTERVAL};
-pub use records::{
-    PeerEntry, PeerPhase, PeerRecord, PeerRecords, PeerSlot, SlotRefusal, SlotSave,
-};
+pub use records::{PeerEntry, PeerPhase, PeerRecord, PeerRecords, PeerSlot, SlotRefusal, SlotSave};

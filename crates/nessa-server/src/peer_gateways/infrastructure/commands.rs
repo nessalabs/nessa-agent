@@ -2,7 +2,8 @@
 //! gateway's peer invitation, list what is kept, and forget a peer.
 //!
 //! ```text
-//! enroll: audit intent --> TcpStream --> NativeEnrollmentClient (PeerRead, PeerSlot)
+//! enroll: audit intent --> PeerConnector (bounded by the deadline clock)
+//!         --> NativeEnrollmentClient (PeerRead, PeerSlot)
 //!         --> peer gateway's listener --> PeerRecords (pending record) --> audit outcome
 //! forget: PeerRecords (before) --> audit intent --> remove --> audit outcome
 //! list:   PeerRecords
@@ -12,7 +13,7 @@
 //! forget hands its intent to the audit port before its effect and its
 //! outcome after it, and answers success only when both are kept.
 use super::records::{PeerEntry, PeerPhase, PeerRecords, PeerSlot, SlotRefusal, SlotSave};
-use crate::peer_gateways::application::{PeerAudit, PeerAuditRecord, PeerState};
+use crate::peer_gateways::application::{PeerAudit, PeerAuditRecord, PeerConnector, PeerState};
 use nessa_auth::{
     adapters::pairing::{ManualCode, OsEntropy, PairingCryptoError},
     application::pairing::PrivateStateError,
@@ -23,19 +24,20 @@ use nessa_auth::{
 };
 use nessa_client_core::pairing::{NativeClientError, NativeEnrollmentClient};
 use nessa_protocol::clock::Clock as MonotonicClock;
+use nessa_protocol::pairing::socket::WAKE_TICK;
 use nessa_protocol::product::generated::PeerErrorCode;
+use std::collections::HashMap;
+use std::sync::{Mutex, PoisonError};
 use std::{
     net::{SocketAddr, TcpStream},
     sync::Arc,
     time::Duration,
 };
-use std::collections::HashMap;
-use std::sync::{Mutex, PoisonError};
 use tokio::sync::Semaphore;
 use uuid::Uuid;
 
-/// How long a TCP connect to a peer may take.
-const CONNECT: Duration = Duration::from_secs(5);
+/// How long a TCP connect to a peer may take, by the injected deadline clock.
+pub const CONNECT: Duration = Duration::from_secs(5);
 
 /// Why a peer command did not do what was asked.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -118,6 +120,7 @@ pub struct PeerCommands {
     pub(super) records: Arc<PeerRecords>,
     pub(super) clock: Arc<dyn MonotonicClock>,
     audit: Arc<dyn PeerAudit>,
+    connector: Arc<dyn PeerConnector>,
     /// One enroll, forget or peer read at a time: an enrollment runs a
     /// key-stretching function, a forget must not remove the record one is
     /// saving, and a read writes the record and its cache.
@@ -126,17 +129,20 @@ pub struct PeerCommands {
     pub(super) syncs: Mutex<HashMap<DeviceKey, PeerSync>>,
 }
 impl PeerCommands {
-    /// Commands over `records`, with `clock` for the enrollment's deadlines
-    /// and `audit` for the evidence of each enroll and forget.
+    /// Commands over `records`, with `clock` for every deadline of an
+    /// enrollment, its connect included, `audit` for the evidence of each
+    /// enroll and forget, and `connector` to dial with.
     pub fn new(
         records: Arc<PeerRecords>,
         clock: Arc<dyn MonotonicClock>,
         audit: Arc<dyn PeerAudit>,
+        connector: Arc<dyn PeerConnector>,
     ) -> Self {
         Self {
             records,
             clock,
             audit,
+            connector,
             turn: Arc::new(Semaphore::new(1)),
             syncs: Mutex::new(HashMap::new()),
         }
@@ -190,17 +196,24 @@ impl PeerCommands {
         }
         let slot = Arc::new(self.records.enrolling(address));
         let outcome = self.enroll_with(address, code, slot.clone()).await;
-        let (peer, before, after) = match slot.saved() {
-            None => (slot.peer(), PeerState::Absent, PeerState::Absent),
-            Some((key, SlotSave::Created)) => {
+        let (peer, before, after) = match (slot.saved(), slot.existing()) {
+            // Refused `Exists`: the record as the refusal found it, untouched.
+            (None, Some(existing)) => {
+                let state = state_of(&existing);
+                (Some(*existing.key()), state.clone(), state)
+            }
+            (None, None) => (slot.peer(), PeerState::Absent, PeerState::Absent),
+            (Some((key, SlotSave::Created)), _) => {
                 (Some(key), PeerState::Absent, PeerState::Pending { address })
             }
-            Some((key, SlotSave::Replaced)) => (
+            (Some((key, SlotSave::Replaced)), _) => (
                 Some(key),
                 PeerState::Pending { address },
                 PeerState::Pending { address },
             ),
-            Some((key, SlotSave::Uncertain)) => (Some(key), PeerState::Absent, PeerState::Unknown),
+            (Some((key, SlotSave::Uncertain)), _) => {
+                (Some(key), PeerState::Absent, PeerState::Unknown)
+            }
         };
         let finished = self
             .audit
@@ -241,11 +254,7 @@ impl PeerCommands {
         code: ManualCode,
         slot: Arc<PeerSlot>,
     ) -> Result<PeerEntry, PeerError> {
-        let stream =
-            tokio::task::spawn_blocking(move || TcpStream::connect_timeout(&address, CONNECT))
-                .await
-                .map_err(|_| PeerError::Unavailable)?
-                .map_err(|_| PeerError::Unreachable)?;
+        let stream = self.connect(address).await?;
         let client = NativeEnrollmentClient::enrolling(
             ConsentClass::PeerRead,
             slot.clone(),
@@ -269,6 +278,32 @@ impl PeerCommands {
         self.blocking(move |records| records.get(&peer))
             .await?
             .ok_or(PeerError::Unavailable)
+    }
+    /// A connection to `address`, or `Unreachable` once the injected clock
+    /// passes [`CONNECT`]. The clock is read every [`WAKE_TICK`], so a
+    /// substituted clock ends a connect that never answers within one tick
+    /// of moving past the deadline; the dropped attempt leaves nothing
+    /// running.
+    pub(super) async fn connect(&self, address: SocketAddr) -> Result<TcpStream, PeerError> {
+        let deadline = self
+            .clock
+            .elapsed_ms()
+            .saturating_add(CONNECT.as_millis() as u64);
+        let connecting = self.connector.connect(address);
+        tokio::pin!(connecting);
+        loop {
+            tokio::select! {
+                biased;
+                connected = &mut connecting => {
+                    return connected.map_err(|_| PeerError::Unreachable);
+                }
+                () = tokio::time::sleep(WAKE_TICK) => {
+                    if self.clock.elapsed_ms() >= deadline {
+                        return Err(PeerError::Unreachable);
+                    }
+                }
+            }
+        }
     }
     /// Every kept peer, with what its reading last came to.
     pub async fn list(&self) -> Result<Vec<(PeerEntry, Option<PeerSync>)>, PeerError> {

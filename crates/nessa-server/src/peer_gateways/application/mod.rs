@@ -7,7 +7,12 @@
 //! intent cannot be kept changes nothing. An outcome that cannot be kept
 //! turns the answer into a refusal, while the effect it describes stays.
 use nessa_auth::domain::{pairing::DeviceKey, PrincipalId};
-use std::{future::Future, net::SocketAddr, pin::Pin};
+use std::{
+    future::Future,
+    io,
+    net::{SocketAddr, TcpStream},
+    pin::Pin,
+};
 use uuid::Uuid;
 
 /// The audit port refused or could not keep a record.
@@ -90,4 +95,18 @@ pub type PeerAuditFuture<'a> =
 /// Keeps peer command evidence. `Ok` means the record is durable.
 pub trait PeerAudit: Send + Sync {
     fn record(&self, record: PeerAuditRecord) -> PeerAuditFuture<'_>;
+}
+
+/// The bounded future a connector answers with.
+pub type PeerConnectFuture<'a> = Pin<Box<dyn Future<Output = io::Result<TcpStream>> + Send + 'a>>;
+
+/// Opens the connection an enrollment runs over: the network, behind the
+/// peer commands' own port so a test can stand in for it.
+///
+/// A connector sets no deadline of its own. The peer commands bound the
+/// returned future by their injected monotonic clock and drop it when that
+/// deadline passes, so dropping it must abandon the attempt and leave nothing
+/// running.
+pub trait PeerConnector: Send + Sync {
+    fn connect(&self, address: SocketAddr) -> PeerConnectFuture<'_>;
 }

@@ -1,7 +1,7 @@
 //! The dialing side of a peer gateway over the real `/session` route, Cedar,
 //! and a real peer: gateway B enrolls, with its own native key, into gateway
 //! A's peer invitation, keeping a reference to that key and never a copy.
-//! Rows P1–P12 in `docs/design/auth/peer-gateways.md` ("The dialing side").
+//! Rows P1–P13 in `docs/design/auth/peer-gateways.md` ("The dialing side").
 use super::product_client::ProductClient;
 use super::support::{private_root, Fixture, Time, WAIT};
 use base64::{engine::general_purpose::STANDARD, Engine};
@@ -34,9 +34,13 @@ use nessa_server::{
     agents::application::{AgentProbe, AgentProbeEvidence},
     app::dependencies::RuntimeDependencies,
     peer_gateways::{
-        application::{PeerAudit, PeerAuditFuture, PeerAuditRecord, PeerAuditUnavailable},
+        application::{
+            PeerAudit, PeerAuditFuture, PeerAuditRecord, PeerAuditUnavailable, PeerConnectFuture,
+            PeerConnector,
+        },
         infrastructure::{
-            DurablePeerAudit, PeerCommands, PeerEntry, PeerPhase, PeerRecords, SlotRefusal,
+            DurablePeerAudit, PeerCommands, PeerEntry, PeerError, PeerPhase, PeerRecords,
+            SlotRefusal, TcpPeerConnector, CONNECT,
         },
     },
     product::{ProductDependencies, ProductRouteState},
@@ -149,6 +153,7 @@ impl Dialing {
                 records.clone(),
                 RuntimeDependencies::default().clock,
                 audit.clone(),
+                Arc::new(TcpPeerConnector),
             )),
         )
         .await;
@@ -399,6 +404,23 @@ async fn a_refused_or_wrong_class_invitation_saves_nothing() {
         dialing.files(),
         kept,
         "the kept record is unchanged, byte for byte"
+    );
+    // The refusal is evidence about the peer that refused it: its key, and
+    // the record as it was found and left.
+    let pending = json!({"phase": "pending", "address": native.to_string()});
+    let finished = dialing.audit.records().pop().unwrap();
+    assert_eq!(finished["kind"], "peer_enroll_finished");
+    assert_eq!(
+        finished["target"]["peerKey"],
+        kept[0].0.strip_suffix(".json").unwrap()
+    );
+    assert_eq!(
+        finished["transition"],
+        json!({"before": pending, "after": pending})
+    );
+    assert_eq!(
+        finished["outcome"],
+        json!({"result": "refused", "code": "peer_exists"})
     );
     stop.send(()).unwrap();
     listener.await.unwrap().unwrap();
@@ -653,6 +675,17 @@ async fn a_record_takes_only_the_gateways_key_and_an_unreadable_one_can_be_forgo
     });
     assert_eq!(frame["error"]["code"], "peer_exists", "{frame}");
     assert_eq!(std::fs::read(&path).unwrap(), tampered);
+    let finished = dialing.audit.records().pop().unwrap();
+    assert_eq!(finished["kind"], "peer_enroll_finished");
+    assert_eq!(finished["target"]["peerKey"], a_hex);
+    assert_eq!(
+        finished["transition"],
+        json!({"before": {"phase": "unreadable"}, "after": {"phase": "unreadable"}})
+    );
+    assert_eq!(
+        finished["outcome"],
+        json!({"result": "refused", "code": "peer_exists"})
+    );
     stop.send(()).unwrap();
     listener.await.unwrap().unwrap();
 }
@@ -826,4 +859,105 @@ async fn the_durable_peer_audit_reports_a_record_it_could_not_keep() {
         address: "127.0.0.1:1".parse().unwrap(),
     };
     assert_eq!(audit.record(record).await, Err(PeerAuditUnavailable));
+}
+
+/// A monotonic clock that moves only when the test moves it.
+struct Manual(std::sync::atomic::AtomicU64);
+impl nessa_protocol::clock::Clock for Manual {
+    fn elapsed_ms(&self) -> u64 {
+        self.0.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+/// A connect that never answers, as a black-holed address does. It flags
+/// when it is dialed and when its attempt is dropped.
+struct Never {
+    dialed: Arc<std::sync::atomic::AtomicBool>,
+    dropped: Arc<std::sync::atomic::AtomicBool>,
+}
+struct Flag(Arc<std::sync::atomic::AtomicBool>);
+impl Drop for Flag {
+    fn drop(&mut self) {
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+impl PeerConnector for Never {
+    fn connect(&self, _: SocketAddr) -> PeerConnectFuture<'_> {
+        self.dialed.store(true, std::sync::atomic::Ordering::SeqCst);
+        let attempt = Flag(self.dropped.clone());
+        Box::pin(async move {
+            let _attempt = attempt;
+            std::future::pending().await
+        })
+    }
+}
+
+/// Row P13: the connect runs under the injected deadline clock, not an
+/// operating-system timeout. A connect that never answers holds the
+/// enrollment while the clock stands still, and ends it `peer_unreachable`,
+/// audited, once the clock passes the connect deadline; the abandoned attempt
+/// is dropped, so nothing is left running.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_connect_that_never_answers_ends_when_the_injected_clock_passes_its_deadline() {
+    use nessa_auth::{adapters::pairing::ManualCode, domain::PrincipalId};
+    use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
+    let fixture = Fixture::new().await;
+    let dialing = Dialing::new(&fixture).await;
+    let clock = Arc::new(Manual(1_000.into()));
+    let dialed = Arc::new(AtomicBool::new(false));
+    let dropped = Arc::new(AtomicBool::new(false));
+    let commands = Arc::new(PeerCommands::new(
+        dialing.records.clone(),
+        clock.clone(),
+        dialing.audit.clone(),
+        Arc::new(Never {
+            dialed: dialed.clone(),
+            dropped: dropped.clone(),
+        }),
+    ));
+    let address: SocketAddr = "192.0.2.1:7443".parse().unwrap();
+    let mut enrolling = tokio::spawn({
+        let commands = commands.clone();
+        async move {
+            let owner = PrincipalId::new("owner").unwrap();
+            commands
+                .enroll(address, ManualCode::generate(&mut OsEntropy), &owner)
+                .await
+        }
+    });
+    tokio::time::timeout(WAIT, async {
+        while !dialed.load(SeqCst) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the enrollment dials");
+
+    // One millisecond short of the deadline, real time passing ends nothing:
+    // several clock reads go by and the connect is still held.
+    clock
+        .0
+        .store(1_000 + CONNECT.as_millis() as u64 - 1, SeqCst);
+    let held = tokio::time::timeout(
+        nessa_protocol::pairing::socket::WAKE_TICK * 3,
+        &mut enrolling,
+    )
+    .await;
+    assert!(held.is_err(), "the enrollment is still connecting");
+    assert!(!dropped.load(SeqCst));
+
+    clock.0.store(1_000 + CONNECT.as_millis() as u64, SeqCst);
+    let ended = tokio::time::timeout(WAIT, enrolling)
+        .await
+        .expect("the deadline ends the enrollment")
+        .unwrap();
+    assert_eq!(ended, Err(PeerError::Unreachable));
+    assert!(dropped.load(SeqCst), "the abandoned connect is dropped");
+    assert!(dialing.files().is_empty(), "nothing is saved");
+    let finished = dialing.audit.records().pop().unwrap();
+    assert_eq!(finished["kind"], "peer_enroll_finished");
+    assert_eq!(
+        finished["outcome"],
+        json!({"result": "refused", "code": "peer_unreachable"})
+    );
 }

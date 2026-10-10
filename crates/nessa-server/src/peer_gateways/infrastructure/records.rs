@@ -179,6 +179,7 @@ impl PeerRecords {
             address: Some(address),
             peer: Mutex::new(None),
             refusal: Mutex::new(None),
+            existing: Mutex::new(None),
             saved: Mutex::new(None),
         }
     }
@@ -190,6 +191,7 @@ impl PeerRecords {
             address: None,
             peer: Mutex::new(Some(key)),
             refusal: Mutex::new(None),
+            existing: Mutex::new(None),
             saved: Mutex::new(None),
         }
     }
@@ -405,6 +407,8 @@ pub struct PeerSlot {
     address: Option<SocketAddr>,
     peer: Mutex<Option<DeviceKey>>,
     refusal: Mutex<Option<SlotRefusal>>,
+    /// The record an `Exists` refusal found, as it found it.
+    existing: Mutex<Option<PeerEntry>>,
     /// The peer and what the first save that touched its record did.
     saved: Mutex<Option<(DeviceKey, SlotSave)>>,
 }
@@ -418,6 +422,14 @@ impl PeerSlot {
     pub fn refusal(&self) -> Option<SlotRefusal> {
         *self.refusal.lock().unwrap_or_else(PoisonError::into_inner)
     }
+    /// The record that refused this slot's save `Exists`, as it was read
+    /// under the records' lock; that save left it untouched.
+    pub fn existing(&self) -> Option<PeerEntry> {
+        self.existing
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
     /// The peer whose record this slot's saves touched, and how the first
     /// of them did; `None` when no save reached storage.
     pub fn saved(&self) -> Option<(DeviceKey, SlotSave)> {
@@ -428,6 +440,11 @@ impl PeerSlot {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .get_or_insert((peer, save));
+    }
+    /// Refuse `Exists`, keeping the record that refused it.
+    fn refuse_existing(&self, existing: PeerEntry) -> PrivateStateError {
+        *self.existing.lock().unwrap_or_else(PoisonError::into_inner) = Some(existing);
+        self.refuse(SlotRefusal::Exists)
     }
     fn refuse(&self, refusal: SlotRefusal) -> PrivateStateError {
         *self.refusal.lock().unwrap_or_else(PoisonError::into_inner) = Some(refusal);
@@ -513,7 +530,9 @@ impl ClientPendingStore for PeerSlot {
         }
         let existing = match self.records.read(&peer, &own) {
             // A record this build cannot read is still that peer's.
-            Err(PrivateStateError::Corrupt) => return Err(self.refuse(SlotRefusal::Exists)),
+            Err(PrivateStateError::Corrupt) => {
+                return Err(self.refuse_existing(PeerEntry::Unreadable(peer)))
+            }
             read => read?,
         };
         let replace = match &existing {
@@ -531,7 +550,7 @@ impl ClientPendingStore for PeerSlot {
                         || (expected == Some(old.intent)
                             && old.intent.with_attempt(intent.attempt()) == intent));
                 if !retry {
-                    return Err(self.refuse(SlotRefusal::Exists));
+                    return Err(self.refuse_existing(PeerEntry::Readable(old.clone())));
                 }
                 true
             }
