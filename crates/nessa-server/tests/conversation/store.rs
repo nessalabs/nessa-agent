@@ -2833,6 +2833,48 @@ async fn a_revoke_takes_the_row_out_of_the_devices_catalogue() {
     assert!(!opened.store.is_granted(&id, "phone").await.unwrap());
 }
 
+/// The journal's index by receiver is made on open, not by a new version: a
+/// version 4 file made before it gets it, stays at version 4, and keeps its
+/// rows (docs/adr/todo/202-versioned-local-datasets.md).
+#[tokio::test]
+async fn a_version_4_file_made_before_the_receiver_index_gets_it_on_open() {
+    let Opened {
+        _directory,
+        path,
+        store,
+    } = opened();
+    let id = new_id();
+    store.create(owned(&id)).await.unwrap();
+    drop(store);
+    let index_columns = |connection: &Connection| -> Vec<String> {
+        connection
+            .prepare("SELECT name FROM pragma_index_info('read_grant_changes_by_receiver')")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    };
+    let before = raw(&path);
+    before
+        .execute_batch("DROP INDEX read_grant_changes_by_receiver")
+        .unwrap();
+    assert!(index_columns(&before).is_empty());
+    drop(before);
+
+    let store = LocalConversationStore::open(&path).unwrap();
+    let after = raw(&path);
+    assert_eq!(index_columns(&after), ["receiver_id", "revision"]);
+    let version: i64 = after
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 4);
+    assert!(ConversationRepository::load(&store, &id)
+        .await
+        .unwrap()
+        .is_some());
+}
+
 /// Row H9 (`docs/design/auth/peer-gateways.md`): a paired reader's head
 /// moves only with what it was granted. An owner change to a row it was not
 /// granted, or a grant to another receiver, leaves it where it was; a grant,

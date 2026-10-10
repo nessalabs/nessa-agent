@@ -1,6 +1,7 @@
 //! Native enrollment over TLS and PAKE: the gateway listener and runtime, the
 //! bounded blocking workers they run on. The device client is owned by
-//! `nessa_client_core::pairing`, consumed here only by gateway tests. A connection
+//! `nessa_client_core::pairing`, which a peer gateway's side and the gateway
+//! tests consume. A connection
 //! whose first envelope is `openProduct` becomes a protected product session,
 //! moving to the product session pool and returning its connection permit.
 //! Framing, the envelope codec, the enrollment channel and the deadline socket

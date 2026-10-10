@@ -41,6 +41,15 @@ use std::sync::{MutexGuard, PoisonError};
 /// The tables and their version, defined once.
 const DEFINITION: &str = include_str!("schema.sql");
 
+/// The grant journal by receiver, which a paired reader's head reads through
+/// ([`granted_head`]). Defined here alone, not in `schema.sql`, and run on
+/// every open: an index changes nothing a version 4 reader understands, so it
+/// is no new version (docs/adr/todo/202-versioned-local-datasets.md), and a
+/// version 4 file made before it gets it here
+/// (`a_version_4_file_made_before_the_receiver_index_gets_it_on_open`).
+const RECEIVER_INDEX: &str = "CREATE INDEX IF NOT EXISTS read_grant_changes_by_receiver
+    ON read_grant_changes (receiver_id, revision)";
+
 /// One owner's conversations that a list shows, newest summary first, at most
 /// `?4` of them. The index on `(organization, owner)` finds the owner's rows,
 /// each summary and tombstone is looked up by key, and the sort keeps only the
@@ -90,6 +99,7 @@ impl LocalConversationStore {
     /// (docs/adr/todo/202-versioned-local-datasets.md).
     pub fn open(path: &Path) -> Result<Self, OpenError> {
         let connection = nessa_local_database::open(path, &Schema::new(DEFINITION)?)?;
+        connection.execute_batch(RECEIVER_INDEX)?;
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
             changes: CatalogueChanges::default(),

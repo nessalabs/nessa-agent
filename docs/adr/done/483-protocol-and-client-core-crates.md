@@ -10,6 +10,8 @@ client links independently of `nessa-server` (issue
 
 - **Date:** 2026-10-04
 - **Status:** accepted
+- **Amended (#705):** the gateway links the client crate, without its `cli`
+  feature, because a peer gateway dials (slice H of ADR 252).
 
 ## Context
 
@@ -36,9 +38,13 @@ envelope codec, enrollment channel and deadline-and-wake socket, the monotonic
 `Clock` port that socket reads, and the conversation read model.
 `nessa-client-core` holds the device client. The dependency direction is
 `nessa-server → nessa-protocol ← nessa-client-core`, and `nessa-protocol`
-depends on neither. The gateway reaches `nessa-client-core` only as a
-dev-dependency, for the tests that enrol a real device and run the client
-against a composed gateway; nothing the gateway ships links it. The generators
+depends on neither. A gateway that dials another as its peer is that
+gateway's client, so the gateway also links `nessa-client-core`, without the
+crate's `cli` feature: the example's argument parsing and JSON presentation,
+and the retained-sync composition behind them, stay out of what the gateway
+ships. Its tests take the feature as a dev-dependency to enrol a real device
+and run the example's command entry point against a composed gateway. The
+client never depends on the gateway. The generators
 write into `nessa-protocol`. Its admission rule is no process state and no
 runtime of its own; `pairing::socket` is the one deliberate exception
 (blocking std socket mechanics both ends need), and `tokio` is taken with
@@ -75,10 +81,22 @@ the projection's bounds, `DeadlineStream`). A crate named for a contract
 attracts anything shared; the admission rule above is what keeps it to the
 contract, and the sign it has stopped being right is a type in it that only
 one end uses. `scripts/architecture/rust-dependency-graphs.mjs` keeps both
-crates free of the desktop framework, rejects every renamed/transitive client
-path to `nessa-server`, and refuses every gateway-to-client path made only of
-normal/build dependency edges. Dev-only edges, including downstream dev edges, are excluded from that
-production path check.
+crates free of the desktop framework and rejects every renamed/transitive client
+path to `nessa-server`.
+
+**Amended (#705): the gateway links the client.** This record first had the
+gateway reach `nessa-client-core` only through dev edges, and the dependency
+check refused any other path. Slice H of ADR 252 makes a gateway enroll into
+another gateway and read from it, which is what the client crate does; a
+second enrollment client in the gateway would give the pairing and pinning
+rules two owners. So the edge is now a normal one, and the check no longer
+looks at it. What still holds: the client never depends on the gateway, the
+shared contract stays in `nessa-protocol` under its admission rule, and the
+gateway builds the client without `cli`, so the example's command line is
+not in its build. What changes: the client crate is now upstream of the
+gateway's build, which the first alternative below was rejected partly for.
+The phone still links the client without the gateway, which is what this
+record is for.
 
 ## Policy and test ownership
 
@@ -105,4 +123,5 @@ outcomes. This keeps SDK diagnostic strings private rather than widening their
 mutable error representation. `NativeRetryOutcome` keeps receipt fields private
 and exposes borrowed accessors. Retained-sync implementation, SQLite mutation and
 reset APIs remain internal; a future binding is not a current caller requiring
-them to be public.
+them to be public. The peer side of a gateway is a caller, and gets public
+only what it calls.

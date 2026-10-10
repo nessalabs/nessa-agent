@@ -1,25 +1,26 @@
 # Device client core
 
 Native device enrollment and retained gateway reads, independent of the gateway
-runtime. The standalone `read_only_sync` example composes this crate. The gateway
-consumes it only as a dev-dependency for real paired client process tests.
+runtime. The standalone `read_only_sync` example composes this crate. A gateway
+links it as a peer's client without the `cli` feature (on by default), which
+holds the example's command line and the retained-sync composition behind it;
+gateway process tests enable `cli` to drive that entry point.
 
 ```text
 example -> composition -> pairing + read_only_sync -> nessa-protocol
-nessa-server tests -------> public client entry point
+nessa-server ------------> pairing (no cli)
+nessa-server tests -------> public client entry point (cli)
 ```
 
 Arrows are construction and calls. The client imports no gateway implementation;
 `PACKAGE_DENYLISTS` in `scripts/architecture/rust-dependency-graphs.mjs` rejects
 any resolved client dependency path to `nessa-server`. The portable dependency
-gate also rejects desktop frameworks. Gateway-to-client normal/build paths are
-rejected, including transitive, renamed and mixed-kind edges; dev-only edges break
-production paths. Domain/application imports are checked by
+gate also rejects desktop frameworks. Domain/application imports are checked by
 `node scripts/check-architecture.mjs`; application code consumes pure protocol
 outcome values through `product_contract`, not transport DTOs through `product`.
 
 The public API is `pairing::{NativeEnrollmentClient, NativeClientError,
-NativeRetryOutcome}` and `composition::{execute, run_read_only_example}`.
+NativeRetryOutcome}` and, with `cli`, `composition::{execute, run_read_only_example}`.
 Gateway enrollment tests use the former; gateway online tests/child fixtures use
 `execute`; the example uses `run_read_only_example`. The crate root publishes an
 immutable diagnostic `CommandError` retaining the

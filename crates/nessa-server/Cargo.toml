@@ -16,6 +16,9 @@ path = "src/main.rs"
 [dependencies]
 base64 = "0.22"
 nessa-protocol = { path = "../nessa-protocol" }
+# A peer gateway dials another gateway as a client (ADR 483, amended for slice
+# H of ADR 252). Without the example's command line.
+nessa-client-core = { path = "../nessa-client-core", default-features = false }
 nessa-sdk = { path = "../nessa-sdk" }
 nessa-sync = { workspace = true }
 nessa-images = { path = "../nessa-images" }
@@ -84,7 +87,8 @@ security-framework = "3.7"
 security-framework-sys = "2.17"
 
 [dev-dependencies]
-nessa-client-core = { path = "../nessa-client-core" }
+# Online process tests drive the example's command entry point.
+nessa-client-core = { path = "../nessa-client-core", features = ["cli"] }
 tempfile = "3"
 # Only to build the private key material a test record store double returns;
 # already in the build graph through nessa-auth.
