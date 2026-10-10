@@ -1,6 +1,8 @@
 //! What each committed record says, and that it is committed privately.
 use super::*;
-use crate::attachments::application::{PublishedFile, RemovedBlob, RetiredHold, RetirementEvidence};
+use crate::attachments::application::{
+    PublishedFile, RemovedBlob, RetiredHold, RetirementEvidence,
+};
 use crate::attachments::domain::{RetiredFrom, TicketLifetime};
 use crate::attachments_test_support::{
     attachment, conversation, digest_of, organization, principal, ManualClock, CONVERSATION,

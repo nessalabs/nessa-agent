@@ -79,11 +79,14 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
     if let [artifact, publish, rest @ ..] = args {
         if artifact == "artifact" && publish == "publish" {
             return match rest {
-                [path] => Ok(Command::ArtifactPublish {
+                // A path never begins with `-`: a flag is never read as one.
+                [path] if !path.starts_with('-') => Ok(Command::ArtifactPublish {
                     path: path.into(),
                     media_type: None,
                 }),
-                [path, flag, media_type] | [flag, media_type, path] if flag == "--type" => {
+                [path, flag, media_type] | [flag, media_type, path]
+                    if flag == "--type" && !path.starts_with('-') =>
+                {
                     Ok(Command::ArtifactPublish {
                         path: path.into(),
                         media_type: Some(media_type.clone()),

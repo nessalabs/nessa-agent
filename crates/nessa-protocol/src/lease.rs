@@ -86,12 +86,14 @@ pub fn stop_steps(grace: Duration, kill: Duration) -> Duration {
 /// storage keeps of one file. The environment refuses a larger file before
 /// staging any of it, and the gateway refuses a
 /// [`FromEnvironment::Published`] naming more.
-pub const MAX_ARTIFACT_BYTES: u64 = 64 * 1024 * 1024;
+pub const MAX_ARTIFACT_BYTES: u64 =
+    nessa_sdk::application::agent_execution::sessions::PublishedFile::MAX_BYTES;
 /// Most artifacts one lease may have published and not yet collected; the
 /// environment refuses another until one is answered.
 pub const MAX_ARTIFACTS_IN_FLIGHT: usize = 4;
 /// Longest artifact name, in bytes: a file name, for people only.
-pub const MAX_ARTIFACT_NAME_BYTES: usize = 255;
+pub const MAX_ARTIFACT_NAME_BYTES: usize =
+    nessa_sdk::application::agent_execution::sessions::ArtifactName::MAX_BYTES;
 /// Longest path of a staged artifact on the environment, in bytes.
 pub const MAX_ARTIFACT_PATH_BYTES: usize = 1024;
 

@@ -329,7 +329,10 @@ async fn a_published_file_is_kept_and_a_failed_read_says_why() {
     let holds = ConversationHolds::new(fixture.service.clone());
     let file: &[u8] = b"twenty bytes of file";
     for (end, refusal) in [
-        (ArtifactReadFailure::LeaseEnded, CollectionRefusal::LeaseEnded),
+        (
+            ArtifactReadFailure::LeaseEnded,
+            CollectionRefusal::LeaseEnded,
+        ),
         (ArtifactReadFailure::Changed, CollectionRefusal::Mismatch),
         (
             ArtifactReadFailure::Unavailable,
@@ -337,7 +340,11 @@ async fn a_published_file_is_kept_and_a_failed_read_says_why() {
         ),
     ] {
         let (published, _) = offer(staged(file), &[&file[..10]], Some(end));
-        assert_eq!(holds.keep_published(published).await, Err(refusal), "{end:?}");
+        assert_eq!(
+            holds.keep_published(published).await,
+            Err(refusal),
+            "{end:?}"
+        );
     }
     let (published, _) = offer(staged(file), &[b"twenty bytes of fil!"], None);
     assert_eq!(
@@ -369,7 +376,10 @@ async fn a_published_file_is_kept_and_a_failed_read_says_why() {
     assert!(fixture.store.held().is_empty());
 
     let (published, _) = offer(staged(file), &[&file[..7], &file[7..]], None);
-    assert_eq!(holds.keep_published(published).await, Ok(ArtifactKept::Held));
+    assert_eq!(
+        holds.keep_published(published).await,
+        Ok(ArtifactKept::Held)
+    );
     assert_eq!(fixture.store.held()[0].lease(), Some("lease-1"));
     let (published, read) = offer(staged(file), &[file], None);
     assert_eq!(

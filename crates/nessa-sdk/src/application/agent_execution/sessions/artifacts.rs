@@ -165,7 +165,7 @@ impl ArtifactRecord {
             CurrentLeaseState::Refused { .. } => return Err(ArtifactRefusal::NotThisLease),
             CurrentLeaseState::Held(lease)
                 if lease.id() != &self.lease
-                    
+                    || lease.phase() != LeasePhase::Live
                     || current.issued_by() != Some(&self.actor) =>
             {
                 return Err(ArtifactRefusal::NotThisLease);

@@ -28,6 +28,7 @@ use crate::env_serve::application::{
 use nessa_protocol::lease::{
     StagedArtifact, MAX_ARTIFACT_BYTES, MAX_ARTIFACT_NAME_BYTES, MAX_ARTIFACT_PATH_BYTES,
 };
+use nessa_sdk::domain::common::value_objects::MediaType;
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
@@ -231,21 +232,9 @@ fn shown(name: &str) -> bool {
     !name.is_empty() && name.len() <= MAX_ARTIFACT_NAME_BYTES && !name.chars().any(char::is_control)
 }
 
-/// Lowercase `type/subtype`, as the gateway's attachments accept.
+/// Lowercase `type/subtype`: the one rule the gateway reads it by.
 pub(crate) fn well_formed(media_type: &str) -> bool {
-    fn token(value: &str) -> bool {
-        let mut bytes = value.bytes();
-        bytes
-            .next()
-            .is_some_and(|first| first.is_ascii_lowercase() || first.is_ascii_digit())
-            && bytes.all(|byte| {
-                byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"!#$&^_.+-".contains(&byte)
-            })
-    }
-    media_type.len() <= 127
-        && media_type
-            .split_once('/')
-            .is_some_and(|(kind, subtype)| token(kind) && token(subtype))
+    MediaType::parse(media_type).is_ok()
 }
 
 /// The media type a file's extension names, for the files builds and
