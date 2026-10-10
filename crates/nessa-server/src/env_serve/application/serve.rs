@@ -259,6 +259,15 @@ pub(crate) async fn refuse<W: AsyncWrite + Unpin>(
     output.shutdown().await
 }
 
+/// What this host runs for a gateway: its agents' harnesses, and commands
+/// when it serves them.
+#[derive(Clone)]
+pub(crate) struct Runners {
+    pub(crate) harnesses: Arc<dyn HarnessLauncher>,
+    /// `None` refuses every command lease `commands_unavailable`.
+    pub(crate) commands: Option<Arc<dyn CommandRunner>>,
+}
+
 /// Serve one gateway until its stream ends, then end every lease it held as
 /// lost and return once each is recorded.
 pub(crate) async fn serve<R, W>(
@@ -266,14 +275,17 @@ pub(crate) async fn serve<R, W>(
     output: W,
     build: &str,
     protocol: &str,
-    launcher: Arc<dyn HarnessLauncher>,
-    commands: Option<Arc<dyn CommandRunner>>,
+    runners: Runners,
     ledger: Arc<dyn LeaseLedger>,
     timings: ServeTimings,
 ) where
     R: AsyncRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin + Send + 'static,
 {
+    let Runners {
+        harnesses: launcher,
+        commands,
+    } = runners;
     let (frames, mut writer) = start_writer(output);
     let _ = frames
         .send(FromEnvironment::Hello {

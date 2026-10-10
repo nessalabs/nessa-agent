@@ -133,7 +133,11 @@ fn handle(
                 return Some(error(id, -32600, "a call with this id is already running"));
             }
             if calls.len() >= MAX_BUILT_IN_CALLS {
-                return Some(error(id, -32000, "too many calls are running on this server"));
+                return Some(error(
+                    id,
+                    -32000,
+                    "too many calls are running on this server",
+                ));
             }
             let Some(tool) = params.get("name").and_then(Value::as_str) else {
                 return Some(error(id, -32602, "a tool call names its tool"));

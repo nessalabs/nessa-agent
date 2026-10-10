@@ -26,8 +26,7 @@ use nessa_sdk::application::agent_execution::{
 use nessa_sdk::domain::agent_execution::executions::InvocationStage;
 use nessa_sdk::domain::agent_execution::leases::{
     CommandExit, CommandOutput, CommandRefusal, CommandTerms, CommandWork, EnvironmentRef, Lease,
-    LeaseEndCause, LeaseId, LeasePhase, SandboxProfile, SandboxProfiles,
-    SshDestination,
+    LeaseEndCause, LeaseId, LeasePhase, SandboxProfile, SandboxProfiles, SshDestination,
 };
 use std::sync::Arc;
 use tokio::sync::watch;
@@ -71,7 +70,10 @@ pub enum CommandAnswer {
     /// It was refused, with its reason; nothing ran.
     Refused(CommandRefusal),
     /// It ran, under `lease`.
-    Ran { lease: LeaseId, result: CommandResult },
+    Ran {
+        lease: LeaseId,
+        result: CommandResult,
+    },
 }
 
 /// Why a `run` was not even decided: nothing was recorded.
@@ -147,14 +149,17 @@ impl ConversationService {
         let live = self.live(id).await.ok_or(CommandCallError::NoTurn)?;
         let manager = live.agent.session_manager();
         let snapshot = manager.snapshot().await.ok_or(CommandCallError::NoTurn)?;
-        let (parent, actor) = running_turn(&snapshot, &call.call).ok_or(CommandCallError::NoTurn)?;
+        let (parent, actor) =
+            running_turn(&snapshot, &call.call).ok_or(CommandCallError::NoTurn)?;
         let lease = LeaseId::new(uuid::Uuid::new_v4().to_string())
             .expect("a UUID is a portable lease identity");
         let host = (call.environment != HERE)
             .then(|| SshDestination::new(call.environment.clone()).ok())
             .flatten();
         let terms = CommandTerms {
-            environment: host.clone().map_or(EnvironmentRef::Here, EnvironmentRef::Ssh),
+            environment: host
+                .clone()
+                .map_or(EnvironmentRef::Here, EnvironmentRef::Ssh),
             command: work.clone(),
             sandbox: call.sandbox,
         };
@@ -181,13 +186,19 @@ impl ConversationService {
             return self.refuse(&live, &refused, refusal).await;
         }
         if let Err(refusal) = SandboxProfiles::UNENCLOSED.admit(call.sandbox) {
-            return self.refuse(&live, &refused, CommandRefusal::Environment(refusal)).await;
+            return self
+                .refuse(&live, &refused, CommandRefusal::Environment(refusal))
+                .await;
         }
         if !has_room(snapshot.lease.as_ref(), &parent) {
-            return self.refuse(&live, &refused, CommandRefusal::BudgetExceeded).await;
+            return self
+                .refuse(&live, &refused, CommandRefusal::BudgetExceeded)
+                .await;
         }
         let Some(commands) = environment.commands() else {
-            return self.refuse(&live, &refused, CommandRefusal::CommandsUnavailable).await;
+            return self
+                .refuse(&live, &refused, CommandRefusal::CommandsUnavailable)
+                .await;
         };
         let hold = match commands.grant(&lease, &work).await {
             Ok(hold) => hold,
@@ -215,7 +226,9 @@ impl ConversationService {
             Ok(commit) if commit.decided && commit.saved.is_ok() => {}
             Ok(commit) if !commit.decided => {
                 drop(hold);
-                return self.refuse(&live, &refused, CommandRefusal::BudgetExceeded).await;
+                return self
+                    .refuse(&live, &refused, CommandRefusal::BudgetExceeded)
+                    .await;
             }
             Ok(commit) => {
                 tracing::error!(error = ?commit.saved, conversation_id = %id, "a command lease could not be saved; it does not run");
@@ -292,7 +305,7 @@ impl ConversationService {
                 lease: refused.lease.clone(),
                 parent: refused.parent.clone(),
                 terms: refused.terms.clone(),
-                refusal: refusal.clone(),
+                refusal,
                 actor: refused.actor.clone(),
             },
         )
@@ -319,7 +332,12 @@ impl ConversationService {
 
     /// `exit` with a stop's cause made the agent lease's own when that lease
     /// is ending: the command stopped because its parent did (row L15).
-    async fn stop_cause(&self, live: &LiveConversation, parent: &LeaseId, exit: CommandExit) -> CommandExit {
+    async fn stop_cause(
+        &self,
+        live: &LiveConversation,
+        parent: &LeaseId,
+        exit: CommandExit,
+    ) -> CommandExit {
         let CommandExit::Stopped { .. } = exit else {
             return exit;
         };

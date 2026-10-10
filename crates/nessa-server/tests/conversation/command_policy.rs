@@ -37,7 +37,10 @@ fn a_program_is_matched_by_its_file_name_and_a_denial_wins() {
     }
     let open = CommandPolicy::new(names(&["devbox"]), None, names(&["rm"]));
     assert_eq!(open.admit("devbox", "anything"), Ok(()));
-    assert_eq!(open.admit("devbox", "/usr/bin/rm"), Err(CommandRefusal::CommandDenied));
+    assert_eq!(
+        open.admit("devbox", "/usr/bin/rm"),
+        Err(CommandRefusal::CommandDenied)
+    );
 }
 
 #[test]

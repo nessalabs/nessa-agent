@@ -287,9 +287,7 @@ fn refusal_message(refusal: CommandRefusal) -> &'static str {
         CommandRefusal::Environment(LeaseRefusal::EnvironmentBusy) => {
             "the host is serving another gateway"
         }
-        CommandRefusal::Environment(LeaseRefusal::AgentUnavailable) => {
-            "the host cannot run this"
-        }
+        CommandRefusal::Environment(LeaseRefusal::AgentUnavailable) => "the host cannot run this",
         CommandRefusal::EnvironmentNotGranted => {
             "commands are not granted on that environment; see environments_list"
         }

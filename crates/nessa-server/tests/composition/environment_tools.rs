@@ -48,8 +48,11 @@ fn another_policy_is_another_configuration() {
 
 #[test]
 fn run_reads_its_arguments_with_their_defaults_and_refuses_anything_else() {
-    let call = command_call(json!({"environment": "devbox", "argv": ["ls", "-l"]}), "c".into())
-        .unwrap();
+    let call = command_call(
+        json!({"environment": "devbox", "argv": ["ls", "-l"]}),
+        "c".into(),
+    )
+    .unwrap();
     assert_eq!(call.environment, "devbox");
     assert_eq!(call.argv, ["ls", "-l"]);
     assert_eq!(call.cwd, None);
@@ -72,7 +75,10 @@ fn run_reads_its_arguments_with_their_defaults_and_refuses_anything_else() {
         json!({"environment": "devbox", "argv": ["ls"], "sandbox": "container"}),
         json!({"environment": "devbox", "argv": ["ls"], "timeoutMs": -1}),
     ] {
-        assert!(command_call(refused.clone(), "c".into()).is_err(), "{refused}");
+        assert!(
+            command_call(refused.clone(), "c".into()).is_err(),
+            "{refused}"
+        );
     }
 }
 
@@ -127,10 +133,7 @@ fn an_answer_says_how_the_command_ended_or_why_it_was_refused() {
         json!({"kind": "stopped", "cause": "closed"})
     );
     assert_eq!(stopped["structuredContent"]["cleanup"], "uncertain");
-    assert_eq!(
-        ran(CommandExit::Exited { code: 1 }, None)["isError"],
-        true
-    );
+    assert_eq!(ran(CommandExit::Exited { code: 1 }, None)["isError"], true);
 }
 
 #[test]
@@ -146,8 +149,10 @@ fn every_refusal_has_its_own_code() {
         CommandRefusal::BudgetExceeded,
         CommandRefusal::CommandsUnavailable,
     ];
-    let codes: std::collections::BTreeSet<&str> =
-        refusals.iter().map(|refusal| refusal_code(*refusal)).collect();
+    let codes: std::collections::BTreeSet<&str> = refusals
+        .iter()
+        .map(|refusal| refusal_code(*refusal))
+        .collect();
     assert_eq!(codes.len(), refusals.len());
 }
 

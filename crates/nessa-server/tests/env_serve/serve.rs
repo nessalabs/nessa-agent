@@ -229,8 +229,10 @@ impl Gateway {
             environment_out,
             "1.2.3",
             "protocol",
-            launcher.clone(),
-            runner,
+            Runners {
+                harnesses: launcher.clone(),
+                commands: runner,
+            },
             ledger.clone(),
             ServeTimings {
                 grace: Duration::from_millis(10),

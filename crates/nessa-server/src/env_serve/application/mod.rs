@@ -7,6 +7,6 @@ mod serve;
 mod wire;
 pub(crate) use serve::{
     refuse, serve, CommandRan, CommandRunner, CommandStop, HarnessLauncher, LeaseLedger,
-    LedgerEntry, ServeTimings,
+    LedgerEntry, Runners, ServeTimings,
 };
 pub(crate) use wire::FrameStream;

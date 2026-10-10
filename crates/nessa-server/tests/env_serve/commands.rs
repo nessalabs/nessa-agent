@@ -39,7 +39,13 @@ async fn a_command_runs_in_the_workspace_with_its_arguments_as_given() {
     let ran = runner(workspace.path())
         .run(
             command(
-                &["sh", "-c", "pwd; printf '%s|' \"$0\" \"$1\"; echo err >&2; exit 3", "a b", "$HOME"],
+                &[
+                    "sh",
+                    "-c",
+                    "pwd; printf '%s|' \"$0\" \"$1\"; echo err >&2; exit 3",
+                    "a b",
+                    "$HOME",
+                ],
                 Some("sub"),
                 10_000,
             ),
@@ -72,10 +78,12 @@ async fn a_command_does_not_inherit_what_the_serving_process_holds() {
         .filter_map(|line| line.split_once('=').map(|(name, _)| name.to_owned()))
         .collect();
     assert!(
-        names.iter().all(|name| COMMAND_VARIABLES.contains(&name.as_str())
-            || name == "PWD"
-            || name == "SHLVL"
-            || name == "_"),
+        names
+            .iter()
+            .all(|name| COMMAND_VARIABLES.contains(&name.as_str())
+                || name == "PWD"
+                || name == "SHLVL"
+                || name == "_"),
         "{names:?}"
     );
 }
@@ -110,11 +118,9 @@ async fn a_stop_ends_a_running_command_and_its_descendants() {
     let workspace = tempfile::tempdir().unwrap();
     let (stop, stopped) = not_stopped();
     let marker = workspace.path().join("child.pid");
-    let script = format!(
-        "sleep 30 & echo $! > {}; wait",
-        marker.to_str().unwrap()
-    );
-    let running = runner(workspace.path()).run(command(&["sh", "-c", &script], None, 60_000), stopped);
+    let script = format!("sleep 30 & echo $! > {}; wait", marker.to_str().unwrap());
+    let running =
+        runner(workspace.path()).run(command(&["sh", "-c", &script], None, 60_000), stopped);
     let task = tokio::spawn(running);
     while !marker.exists() {
         tokio::time::sleep(Duration::from_millis(10)).await;

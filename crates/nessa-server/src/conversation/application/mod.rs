@@ -160,8 +160,8 @@ pub use catalogue_read::{
     CatalogueReadSource, CatalogueReadValue, ReadCatalogue,
 };
 // The port itself, which placement and the service use on every host.
-pub(crate) use command_environment::{CommandEnvironment, CommandHold};
 pub use command_environment::CommandResult;
+pub(crate) use command_environment::{CommandEnvironment, CommandHold};
 pub(crate) use environment::{Environment, EnvironmentFuture};
 // For the adapters, which only the Unix gateway composes (`infrastructure`).
 #[cfg(any(unix, test))]
@@ -205,9 +205,7 @@ pub use record_read::{
     ReadRecords, RecordHead, RecordReadError, RecordReadFuture, RecordReadLease,
     RecordReadOperation, RecordReadResponse, RecordReadSource, RecordReadValue,
 };
-pub use service::{
-    CommandAnswer, CommandCall, CommandCallError, EnvironmentListing, HERE,
-};
+pub use service::{CommandAnswer, CommandCall, CommandCallError, EnvironmentListing, HERE};
 pub use service::{
     ConversationAgent, ConversationAgentFuture, ConversationAgentSource, ConversationAgents,
     ConversationCaller, ConversationDeletionBudgets, ConversationDependencies, ConversationLimits,

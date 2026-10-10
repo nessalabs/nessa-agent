@@ -31,8 +31,8 @@ use crate::mcp_servers::{
     application::{BuiltInServer, McpServerSettings, Unfinished},
     domain::{relay_arguments, ConfigurationKey},
     infrastructure::{
-        bind, built_in_digest, launch_digest, BoundRelay, ConfigCheck, ConfigFiles, ConfigJsonStore,
-        ConversationGrants, DurableMcpServerAudit, LaunchSettings, LiveMcpServers,
+        bind, built_in_digest, launch_digest, BoundRelay, ConfigCheck, ConfigFiles,
+        ConfigJsonStore, ConversationGrants, DurableMcpServerAudit, LaunchSettings, LiveMcpServers,
         McpServerInspector, OsConfigFiles, OsTokens, Relay, ResourceTicketStore, TicketEvent,
         TokenSource,
     },
@@ -375,9 +375,7 @@ pub(super) async fn compose(
     let (ticket_ends, ticket_events) = unbounded_channel();
     Ok(Some(McpComposition {
         relay: Arc::new(match built_in {
-            Some(server) => {
-                Relay::new(servers.clone(), grants, key.clone()).with_built_in(server)
-            }
+            Some(server) => Relay::new(servers.clone(), grants, key.clone()).with_built_in(server),
             None => Relay::new(servers.clone(), grants, key.clone()),
         }),
         key,

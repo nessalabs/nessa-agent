@@ -56,8 +56,17 @@ fn the_built_in_server_is_handed_over_beside_the_configured_and_takes_its_name()
     let name = super::super::environment_tools::SERVER_NAME;
     let configured = launches(&[server("mcptest", &["/s.mjs"]), server(name, &["/own.mjs"])]);
     let key = ConfigurationKey::new([7; 32]);
-    let handed = stand_ins(&live_of(&configured), "/bundle/nessa", "/s.sock", &key, Some(tools.as_ref()));
-    let names: Vec<&str> = handed.iter().map(|stand_in| stand_in.name.as_str()).collect();
+    let handed = stand_ins(
+        &live_of(&configured),
+        "/bundle/nessa",
+        "/s.sock",
+        &key,
+        Some(tools.as_ref()),
+    );
+    let names: Vec<&str> = handed
+        .iter()
+        .map(|stand_in| stand_in.name.as_str())
+        .collect();
     assert_eq!(names, ["mcptest", name]);
     assert_eq!(
         handed[1].args,
@@ -69,7 +78,13 @@ fn the_built_in_server_is_handed_over_beside_the_configured_and_takes_its_name()
         ]
     );
     // Without it, the configured server of that name is handed over again.
-    let handed = stand_ins(&live_of(&configured), "/bundle/nessa", "/s.sock", &key, None);
+    let handed = stand_ins(
+        &live_of(&configured),
+        "/bundle/nessa",
+        "/s.sock",
+        &key,
+        None,
+    );
     assert_eq!(handed.len(), 2);
     assert_eq!(handed[1].args[3], launch_digest(&key, &configured[1]));
 }
@@ -271,7 +286,7 @@ async fn the_agents_get_stand_ins_and_the_relay_is_bound_privately() {
             Path::new("/nessa"),
             BTreeMap::new(),
             false,
-        None,
+            None,
         )
         .await
         .unwrap();
@@ -449,7 +464,7 @@ async fn servers_that_cannot_be_launched_as_configured_are_an_agent_error_naming
             Path::new("/nessa"),
             BTreeMap::new(),
             false,
-        None,
+            None,
         )
         .await;
         match refused {

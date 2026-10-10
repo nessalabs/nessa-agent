@@ -2,7 +2,10 @@
 //! configured server's stand-in reaches its server: admitted by its digest
 //! and the conversation's grant, answering MCP, and stopping its calls when
 //! a call is cancelled, its stand-in goes, or its grant is revoked.
-use super::super::{built_in_digest, read_line, write_line, Answer, ConversationGrants, Hello, OsTokens, Refusal, Relay};
+use super::super::{
+    built_in_digest, read_line, write_line, Answer, ConversationGrants, Hello, OsTokens, Refusal,
+    Relay,
+};
 use super::MAX_BUILT_IN_LINE_BYTES;
 use crate::mcp_servers::application::{BuiltInFuture, BuiltInServer};
 use crate::mcp_servers::domain::ConfigurationKey;
@@ -43,12 +46,18 @@ impl BuiltInServer for Fake {
         arguments: Value,
         mut stop: watch::Receiver<bool>,
     ) -> BuiltInFuture {
-        self.sessions.lock().unwrap().push(session.as_str().to_owned());
+        self.sessions
+            .lock()
+            .unwrap()
+            .push(session.as_str().to_owned());
         let stopped = self.stopped.clone();
         Box::pin(async move {
             if tool == "wait" {
                 let _ = stop.wait_for(|stop| *stop).await;
-                stopped.lock().unwrap().push(arguments["name"].as_str().unwrap().into());
+                stopped
+                    .lock()
+                    .unwrap()
+                    .push(arguments["name"].as_str().unwrap().into());
                 return json!({"content": [], "isError": true});
             }
             json!({"content": [{"type": "text", "text": arguments.to_string()}], "call": call})
@@ -74,9 +83,7 @@ fn opened() -> Opened {
     let grant = grants.grant(&SessionId::new("conversation").unwrap());
     let token = grant.environment()[0].1.clone();
     let fake = Arc::new(Fake::default());
-    let relay = Arc::new(
-        Relay::new(servers, grants.clone(), key()).with_built_in(fake.clone()),
-    );
+    let relay = Arc::new(Relay::new(servers, grants.clone(), key()).with_built_in(fake.clone()));
     Opened {
         fake,
         grants,
@@ -205,7 +212,9 @@ async fn a_stand_in_gone_or_a_grant_revoked_stops_every_call_and_ends_the_connec
     let mut gone = opened.admitted().await;
     gone.send(json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "wait", "arguments": {"name": "gone"}}}))
         .await;
-    let _ = gone.ask(json!({"jsonrpc": "2.0", "id": 2, "method": "ping"})).await;
+    let _ = gone
+        .ask(json!({"jsonrpc": "2.0", "id": 2, "method": "ping"}))
+        .await;
     // The harness closing its input: the stand-in passes that on.
     gone.to.shutdown().await.unwrap();
     stopped(&opened.fake, &["gone"]).await;
@@ -214,7 +223,9 @@ async fn a_stand_in_gone_or_a_grant_revoked_stops_every_call_and_ends_the_connec
     revoked
         .send(json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "wait", "arguments": {"name": "revoked"}}}))
         .await;
-    let _ = revoked.ask(json!({"jsonrpc": "2.0", "id": 2, "method": "ping"})).await;
+    let _ = revoked
+        .ask(json!({"jsonrpc": "2.0", "id": 2, "method": "ping"}))
+        .await;
     drop(opened.grant.take());
     stopped(&opened.fake, &["gone", "revoked"]).await;
     assert_eq!(revoked.next().await, None, "the connection ends");
@@ -249,7 +260,10 @@ async fn a_stand_in_handed_out_for_another_configuration_or_line_too_long_is_tur
         }
     ));
     let (_, answer) = opened
-        .connect(&built_in_digest(&key(), opened.fake.as_ref()), "no-such-token")
+        .connect(
+            &built_in_digest(&key(), opened.fake.as_ref()),
+            "no-such-token",
+        )
         .await;
     assert!(matches!(
         answer,

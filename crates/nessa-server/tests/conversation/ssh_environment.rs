@@ -7,12 +7,12 @@ use super::{
     connector::{ssh_arguments, LeaseConnection, LeaseConnector},
     environment::{SshEnvironment, SshTimings},
 };
-use crate::conversation::application::{CommandEnvironment, Environment, LeaseRelease};
+use crate::conversation::application::{Environment, LeaseRelease};
 use crate::env::{LEASE_PROTOCOL, VERSION};
 use crate::env_serve::application::FrameStream;
 use crate::env_serve::application::{
     serve, CommandRan, CommandRunner, CommandStop, HarnessLauncher, LeaseLedger, LedgerEntry,
-    ServeTimings,
+    Runners, ServeTimings,
 };
 use nessa_protocol::lease::{
     decode, encode, Cleanup, CommandEnd, Data, FromEnvironment, ToEnvironment,
@@ -26,12 +26,10 @@ use nessa_sdk::application::agent_execution::{
 };
 use nessa_sdk::domain::{
     agent_execution::leases::{
-        CommandExit, CommandRefusal, CommandWork,
-    },
-    agent_execution::leases::{
         AgentWork, EnvironmentRef, LeaseCleanup, LeaseDeadline, LeaseEndCause, LeaseGrants,
         LeaseId, LeaseRefusal, LeaseTerms, LeaseWork, SandboxProfile, SshDestination,
     },
+    agent_execution::leases::{CommandExit, CommandRefusal, CommandWork},
     effective_capabilities::value_objects::EffectiveCapabilities,
 };
 use std::{
@@ -240,8 +238,10 @@ impl LeaseConnector for Connector {
                     host_out,
                     VERSION,
                     LEASE_PROTOCOL,
-                    self.launcher.clone(),
-                    self.commands.lock().unwrap().clone(),
+                    Runners {
+                        harnesses: self.launcher.clone(),
+                        commands: self.commands.lock().unwrap().clone(),
+                    },
                     self.ledger.clone(),
                     ServeTimings {
                         grace: Duration::from_millis(10),
@@ -1432,11 +1432,16 @@ async fn a_command_runs_on_the_host_and_answers_how_it_ended_and_what_it_printed
     assert_eq!(result.stdout, b"hi there");
     assert_eq!(result.stderr, b"warned");
     assert_eq!(result.dropped_bytes, 2);
-    assert_eq!(result.cleanup, Some(LeaseCleanup::Confirmed { forced: false }));
+    assert_eq!(
+        result.cleanup,
+        Some(LeaseCleanup::Confirmed { forced: false })
+    );
     // The host ended the lease itself, and recorded it.
     let ledger = connector.ledger.0.lock().unwrap().clone();
     assert!(
-        ledger.iter().any(|entry| matches!(entry, LedgerEntry::Ended { .. })),
+        ledger
+            .iter()
+            .any(|entry| matches!(entry, LedgerEntry::Ended { .. })),
         "{ledger:?}"
     );
 }
@@ -1446,7 +1451,10 @@ async fn a_stopped_command_is_stopped_on_the_host_and_answers_the_stops_cause() 
     let connector = serving_commands();
     let host = environment(connector.clone(), Arc::new(Audit::default()));
     let commands = host.commands().unwrap();
-    let hold = commands.grant(&lease(), &work(&["sleep", "60"])).await.unwrap();
+    let hold = commands
+        .grant(&lease(), &work(&["sleep", "60"]))
+        .await
+        .unwrap();
     let (stop, stopped) = tokio::sync::watch::channel(None);
     let running = tokio::spawn(hold.run(stopped));
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -1462,7 +1470,10 @@ async fn a_stopped_command_is_stopped_on_the_host_and_answers_the_stops_cause() 
         }
     );
     assert_eq!(result.stdout, b"partial");
-    assert_eq!(result.cleanup, Some(LeaseCleanup::Confirmed { forced: true }));
+    assert_eq!(
+        result.cleanup,
+        Some(LeaseCleanup::Confirmed { forced: true })
+    );
 }
 
 #[tokio::test]
@@ -1476,7 +1487,10 @@ async fn a_command_is_refused_by_a_host_that_runs_none_or_cannot_be_reached() {
         .await
         .err();
     assert_eq!(refused, Some(CommandRefusal::CommandsUnavailable));
-    let host = environment(Connector::new(Reach::Unreachable), Arc::new(Audit::default()));
+    let host = environment(
+        Connector::new(Reach::Unreachable),
+        Arc::new(Audit::default()),
+    );
     let refused = host
         .commands()
         .unwrap()
@@ -1485,7 +1499,9 @@ async fn a_command_is_refused_by_a_host_that_runs_none_or_cannot_be_reached() {
         .err();
     assert_eq!(
         refused,
-        Some(CommandRefusal::Environment(LeaseRefusal::EnvironmentUnreachable))
+        Some(CommandRefusal::Environment(
+            LeaseRefusal::EnvironmentUnreachable
+        ))
     );
 }
 

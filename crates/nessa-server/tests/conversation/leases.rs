@@ -18,6 +18,7 @@ use super::{
     LeaseHold, LeaseRelease, RequestedConversation, SubmissionMode, SubmittedFile,
     SubmittedMessage,
 };
+use crate::conversation::domain::CommandPolicy;
 use crate::conversation::infrastructure::{
     in_process_environment, DurableConversationCreationAudit, DurableConversationDeletionAudit,
     DurableConversationFileLinkAudit, DurableExecutionAudit, FilePlacements,
@@ -46,15 +47,12 @@ use nessa_sdk::application::agent_execution::{
     },
 };
 use nessa_sdk::domain::agent_execution::executions::MessageChunk;
-use crate::conversation::domain::CommandPolicy;
-use nessa_sdk::domain::agent_execution::leases::{
-    CommandExit, CommandRefusal, CommandWork, Lease,
-};
 use nessa_sdk::domain::agent_execution::leases::{
     AgentWork, EnvironmentRef, LeaseCleanup, LeaseDeadline, LeaseEndCause, LeaseGrants, LeaseId,
     LeaseRefusal, LeaseRevision, LeaseTerms, LeaseWork, SandboxProfile, SandboxProfiles,
     SshDestination,
 };
+use nessa_sdk::domain::agent_execution::leases::{CommandExit, CommandRefusal, CommandWork, Lease};
 use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use nessa_sdk::infrastructure::session_storage::{RecordStorage, RuntimeMessageCommitClock};
 use std::{
@@ -1928,7 +1926,11 @@ impl CommandHold for FakeCommand {
 
 /// A gateway with `devbox`, which runs commands as `host` says, under
 /// `policy`, and an agent that runs here.
-fn with_command_host(root: &Path, host: Arc<CommandHost>, policy: Option<CommandPolicy>) -> Harness {
+fn with_command_host(
+    root: &Path,
+    host: Arc<CommandHost>,
+    policy: Option<CommandPolicy>,
+) -> Harness {
     let mut hosts: BTreeMap<String, Arc<dyn Environment>> = BTreeMap::new();
     hosts.insert("devbox".into(), host);
     let placements =
@@ -2047,7 +2049,8 @@ async fn l14_a_command_runs_for_the_persons_turn_under_its_agent_lease_and_its_e
     })
     .await
     .expect("the running command shows on its agent lease");
-    host.finish.send_replace(Some(CommandExit::Exited { code: 0 }));
+    host.finish
+        .send_replace(Some(CommandExit::Exited { code: 0 }));
     let answer = running.await.unwrap().unwrap();
     let CommandAnswer::Ran { lease, result } = answer else {
         panic!("it ran: {answer:?}");
@@ -2107,7 +2110,11 @@ async fn l14_each_refusal_is_typed_recorded_for_the_turns_person_and_runs_nothin
     );
     // The caller's tool policy.
     assert_eq!(
-        refused(harness.run(command("devbox", &["/bin/rm", "-rf", "x"], "c3")).await),
+        refused(
+            harness
+                .run(command("devbox", &["/bin/rm", "-rf", "x"], "c3"))
+                .await
+        ),
         CommandRefusal::CommandDenied
     );
     // A sandbox a command's environment cannot enforce.
@@ -2118,8 +2125,9 @@ async fn l14_each_refusal_is_typed_recorded_for_the_turns_person_and_runs_nothin
         CommandRefusal::Environment(LeaseRefusal::SandboxUnavailable)
     );
     // An unreachable host.
-    *host.refusal.lock().unwrap() =
-        Some(CommandRefusal::Environment(LeaseRefusal::EnvironmentUnreachable));
+    *host.refusal.lock().unwrap() = Some(CommandRefusal::Environment(
+        LeaseRefusal::EnvironmentUnreachable,
+    ));
     assert_eq!(
         refused(harness.run(command("devbox", &["ls"], "c5")).await),
         CommandRefusal::Environment(LeaseRefusal::EnvironmentUnreachable)
@@ -2149,7 +2157,8 @@ async fn l14_each_refusal_is_typed_recorded_for_the_turns_person_and_runs_nothin
         refused(harness.run(command("devbox", &["ls"], "c6")).await),
         CommandRefusal::BudgetExceeded
     );
-    host.finish.send_replace(Some(CommandExit::Exited { code: 0 }));
+    host.finish
+        .send_replace(Some(CommandExit::Exited { code: 0 }));
     for running in running {
         assert!(matches!(
             running.await.unwrap().unwrap(),
@@ -2186,7 +2195,10 @@ async fn l14_each_refusal_is_typed_recorded_for_the_turns_person_and_runs_nothin
         ]
     );
     // Only the four that fit were granted by the host.
-    assert_eq!(host.granted.load(Ordering::SeqCst), Lease::MAX_LIVE_COMMANDS);
+    assert_eq!(
+        host.granted.load(Ordering::SeqCst),
+        Lease::MAX_LIVE_COMMANDS
+    );
     assert!(harness
         .saved_commands()
         .iter()
@@ -2262,7 +2274,11 @@ async fn environments_list_says_where_the_agent_runs_and_where_it_may_run_comman
     let root = tempfile::tempdir().unwrap();
     let harness = with_command_host(root.path(), CommandHost::new(), Some(devbox_policy()));
     harness.create().await;
-    let listed = harness.service.list_environments(&harness.id).await.unwrap();
+    let listed = harness
+        .service
+        .list_environments(&harness.id)
+        .await
+        .unwrap();
     assert_eq!(
         listed,
         [

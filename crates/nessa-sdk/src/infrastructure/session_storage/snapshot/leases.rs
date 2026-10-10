@@ -850,8 +850,14 @@ mod tests {
         }
         for (exit, cleanup) in [
             (CommandExit::Exited { code: -2 }, None),
-            (CommandExit::Signalled { signal: 9 }, Some(LeaseCleanup::NotHeld)),
-            (CommandExit::TimedOut, Some(LeaseCleanup::Confirmed { forced: true })),
+            (
+                CommandExit::Signalled { signal: 9 },
+                Some(LeaseCleanup::NotHeld),
+            ),
+            (
+                CommandExit::TimedOut,
+                Some(LeaseCleanup::Confirmed { forced: true }),
+            ),
             (
                 CommandExit::Stopped {
                     cause: LeaseEndCause::Closed,
@@ -986,7 +992,9 @@ mod tests {
             },
             WireLease {
                 kind: COMMAND_ISSUED.into(),
-                body: issued.body.replace(r#""parent":"lease""#, r#""parent":"bad id""#),
+                body: issued
+                    .body
+                    .replace(r#""parent":"lease""#, r#""parent":"bad id""#),
             },
             WireLease {
                 kind: COMMAND_ENDED.into(),

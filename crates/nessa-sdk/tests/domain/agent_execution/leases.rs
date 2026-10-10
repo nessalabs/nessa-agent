@@ -9,9 +9,10 @@
 
 use nessa_sdk::domain::agent_execution::{
     leases::{
-        AgentWork, CleanupDecision, CommandOutput, CommandWork, EndDecision, EnvironmentRef, Lease, LeaseCleanup,
-        LeaseDeadline, LeaseEndCause, LeaseError, LeaseGrants, LeaseId, LeasePhase, LeaseRefusal,
-        LeaseRevision, LeaseTerms, LeaseWork, SandboxProfile, SandboxProfiles, SshDestination,
+        AgentWork, CleanupDecision, CommandOutput, CommandWork, EndDecision, EnvironmentRef, Lease,
+        LeaseCleanup, LeaseDeadline, LeaseEndCause, LeaseError, LeaseGrants, LeaseId, LeasePhase,
+        LeaseRefusal, LeaseRevision, LeaseTerms, LeaseWork, SandboxProfile, SandboxProfiles,
+        SshDestination,
     },
     ExecutionError,
 };
@@ -460,8 +461,12 @@ fn l14_only_a_live_lease_admits_a_command_and_its_end_ends_them_all() {
 #[test]
 fn a_command_is_an_argument_vector_bounded_so_its_record_always_fits() {
     let ok = |argv: &[&str]| argv.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>();
-    let work = CommandWork::new(ok(&["cargo", "test", "-p", "a b"]), Some("crates/x".into()), 1)
-        .unwrap();
+    let work = CommandWork::new(
+        ok(&["cargo", "test", "-p", "a b"]),
+        Some("crates/x".into()),
+        1,
+    )
+    .unwrap();
     assert_eq!(work.program(), "cargo");
     assert_eq!(work.argv().len(), 4);
     assert_eq!(work.cwd(), Some("crates/x"));
@@ -483,7 +488,11 @@ fn a_command_is_an_argument_vector_bounded_so_its_record_always_fits() {
     ));
     assert!(CommandWork::new(vec!["a".into(); CommandWork::MAX_ARGS], None, 1).is_ok());
     assert!(matches!(
-        CommandWork::new(ok(&["a", &"b".repeat(CommandWork::MAX_ARGV_BYTES)]), None, 1),
+        CommandWork::new(
+            ok(&["a", &"b".repeat(CommandWork::MAX_ARGV_BYTES)]),
+            None,
+            1
+        ),
         Err(ExecutionError::ValueTooLong { .. })
     ));
     for bad in ["\u{0}", "\r", "\u{1b}[2J", "\u{85}"] {
@@ -501,7 +510,11 @@ fn a_command_is_an_argument_vector_bounded_so_its_record_always_fits() {
         );
     }
     assert!(matches!(
-        CommandWork::new(ok(&["ls"]), Some("a".repeat(CommandWork::MAX_CWD_BYTES + 1)), 1),
+        CommandWork::new(
+            ok(&["ls"]),
+            Some("a".repeat(CommandWork::MAX_CWD_BYTES + 1)),
+            1
+        ),
         Err(ExecutionError::ValueTooLong { .. })
     ));
     for timeout in [0, CommandWork::MAX_TIMEOUT_MS + 1] {
@@ -510,20 +523,28 @@ fn a_command_is_an_argument_vector_bounded_so_its_record_always_fits() {
             Err(ExecutionError::InvalidCommandTimeout)
         );
     }
-    assert!(CommandWork::DEFAULT_TIMEOUT_MS <= CommandWork::MAX_TIMEOUT_MS);
+    const { assert!(CommandWork::DEFAULT_TIMEOUT_MS <= CommandWork::MAX_TIMEOUT_MS) };
 }
 
 #[test]
 fn a_command_output_keeps_the_last_of_each_stream_as_showable_text() {
     let output = CommandOutput::new(10, 20, 3, "ok\n\tdone", "warn\r\u{1b}[0m");
     assert_eq!(
-        (output.stdout_bytes(), output.stderr_bytes(), output.dropped_bytes()),
+        (
+            output.stdout_bytes(),
+            output.stderr_bytes(),
+            output.dropped_bytes()
+        ),
         (10, 20, 3)
     );
     assert_eq!(output.stdout_tail(), "ok\n\tdone");
     assert_eq!(output.stderr_tail(), "warn\u{fffd}\u{fffd}[0m");
 
-    let long = format!("{}{}", "x".repeat(10), "é".repeat(CommandOutput::MAX_TAIL_BYTES));
+    let long = format!(
+        "{}{}",
+        "x".repeat(10),
+        "é".repeat(CommandOutput::MAX_TAIL_BYTES)
+    );
     let output = CommandOutput::new(0, 0, 0, &long, "");
     assert!(output.stdout_tail().len() <= CommandOutput::MAX_TAIL_BYTES);
     assert!(output.stdout_tail().chars().all(|c| c == 'é'));
@@ -531,7 +552,10 @@ fn a_command_output_keeps_the_last_of_each_stream_as_showable_text() {
     // A cut that would split a character starts after it instead.
     let odd = format!("ab{}x", "é".repeat(CommandOutput::MAX_TAIL_BYTES / 2));
     let output = CommandOutput::new(0, 0, 0, "", &odd);
-    assert_eq!(output.stderr_tail().len(), CommandOutput::MAX_TAIL_BYTES - 1);
+    assert_eq!(
+        output.stderr_tail().len(),
+        CommandOutput::MAX_TAIL_BYTES - 1
+    );
     assert!(output.stderr_tail().ends_with("éx"));
 }
 

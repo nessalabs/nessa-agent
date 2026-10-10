@@ -10,12 +10,12 @@ use crate::conversation::infrastructure::{DISCOVERY_STEPS_PER_READ, MAX_CATALOGU
 use crate::mcp_servers::infrastructure::{MAX_BUILT_IN_CALLS, MAX_BUILT_IN_LINE_BYTES};
 use crate::product::passive_read::deadlines::RECORD_SEND_TIMEOUT;
 use crate::product::{OperationalLimits, SessionSettings, RECORD_LANE, RECORD_SLOT, REFUSAL_LANE};
+use nessa_protocol::lease::{COMMAND_STOP_WAIT, MAX_DATA_BYTES};
 use nessa_protocol::product::generated::{
     MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS, MAX_CONNECTION_LIST_SUBSCRIPTIONS,
     MAX_PRODUCT_CLIENT_ID_CHARACTERS, MAX_PRODUCT_SURFACE_INSTANCE_CHARACTERS,
     MAX_RECORD_RESPONSE_BYTES, SUBSCRIPTION_DELIVERY_TIMEOUT_MS,
 };
-use nessa_protocol::lease::{COMMAND_STOP_WAIT, MAX_DATA_BYTES};
 use nessa_protocol::protocol::MAX_PAYLOAD_BYTES;
 use nessa_sdk::domain::agent_execution::leases::{CommandOutput, CommandWork, Lease};
 use nessa_sdk::infrastructure::session_storage::MAX_RECORD_CHANGE_WATCHES;
@@ -355,11 +355,17 @@ pub(crate) fn effective_json(
     );
     put("record.read_work_budget", millis(limits.read_work_budget()));
     put("record.discovery_steps", count(DISCOVERY_STEPS_PER_READ));
-    put("command.default_timeout_ms", CommandWork::DEFAULT_TIMEOUT_MS);
+    put(
+        "command.default_timeout_ms",
+        CommandWork::DEFAULT_TIMEOUT_MS,
+    );
     put("command.max_timeout_ms", CommandWork::MAX_TIMEOUT_MS);
     put("command.stop_wait_ms", millis(COMMAND_STOP_WAIT));
     put("command.capture_bytes", count(MAX_DATA_BYTES));
-    put("command.retained_tail_bytes", count(CommandOutput::MAX_TAIL_BYTES));
+    put(
+        "command.retained_tail_bytes",
+        count(CommandOutput::MAX_TAIL_BYTES),
+    );
     put("command.live_per_lease", count(Lease::MAX_LIVE_COMMANDS));
     put("command.max_args", count(CommandWork::MAX_ARGS));
     put("command.max_argv_bytes", count(CommandWork::MAX_ARGV_BYTES));

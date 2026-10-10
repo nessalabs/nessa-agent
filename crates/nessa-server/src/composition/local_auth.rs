@@ -826,9 +826,9 @@ async fn conversations(
                 &gateway,
                 super::mcp_servers::server_environment(|key| std::env::var_os(key)),
                 packaged_agents,
-                environment_tools.clone().map(|tools| {
-                    tools as Arc<dyn crate::mcp_servers::application::BuiltInServer>
-                }),
+                environment_tools
+                    .clone()
+                    .map(|tools| tools as Arc<dyn crate::mcp_servers::application::BuiltInServer>),
             )
             .await?
         }

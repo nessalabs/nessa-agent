@@ -45,8 +45,8 @@ use nessa_sdk::application::agent_execution::{
     },
 };
 use nessa_sdk::domain::agent_execution::leases::{
-    CommandExit, CommandRefusal, CommandWork, EnvironmentRef, LeaseCleanup, LeaseEndCause,
-    LeaseId, LeaseRefusal, LeaseTerms, LeaseWork, SandboxProfiles, SshDestination,
+    CommandExit, CommandRefusal, CommandWork, EnvironmentRef, LeaseCleanup, LeaseEndCause, LeaseId,
+    LeaseRefusal, LeaseTerms, LeaseWork, SandboxProfiles, SshDestination,
 };
 use std::{collections::BTreeMap, path::Path, sync::Arc, time::Duration};
 use tokio::sync::{watch, Mutex};
@@ -219,7 +219,11 @@ impl CommandEnvironment for SshEnvironment {
                 .map_err(CommandRefusal::Environment)?;
             link.grant_command(
                 lease.as_str(),
-                command.argv().iter().map(|argument| argument.to_string()).collect(),
+                command
+                    .argv()
+                    .iter()
+                    .map(|argument| argument.to_string())
+                    .collect(),
                 command.cwd().map(Into::into),
                 command.timeout_ms(),
                 self.inner.timings.answer,
@@ -245,11 +249,16 @@ fn command_refusal(host: &SshDestination, refused: AdmissionRefused) -> CommandR
         // The gateway checked it against the same bounds: a host that
         // disagrees has another reading of its workspace, so it is not run.
         AdmissionRefused::Host(GrantRefusal::InvalidCommand) => {
-            tracing::warn!(host = host.as_str(), "the host refused a command the gateway admitted");
+            tracing::warn!(
+                host = host.as_str(),
+                "the host refused a command the gateway admitted"
+            );
             CommandRefusal::CommandDenied
         }
         AdmissionRefused::Host(
-            GrantRefusal::AgentUnavailable | GrantRefusal::Duplicate | GrantRefusal::AuditUnavailable,
+            GrantRefusal::AgentUnavailable
+            | GrantRefusal::Duplicate
+            | GrantRefusal::AuditUnavailable,
         )
         | AdmissionRefused::Unreachable => {
             CommandRefusal::Environment(LeaseRefusal::EnvironmentUnreachable)

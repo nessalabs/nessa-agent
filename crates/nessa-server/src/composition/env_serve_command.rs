@@ -17,18 +17,18 @@ use crate::{
     core::RunError,
     env::{Environment, LEASE_PROTOCOL, VERSION},
     env_serve::{
-        application::{refuse, serve, CommandRunner, HarnessLauncher, ServeTimings},
+        application::{refuse, serve, CommandRunner, HarnessLauncher, Runners, ServeTimings},
         infrastructure::{
             ConfiguredLauncher, FileLedger, LaunchSpec, ServeLock, ServeLockError,
             ShepherdCommands, COMMAND_VARIABLES,
         },
     },
 };
-use shepherd::{ProcessSupervisor, SupervisorBuilder};
 use nessa_protocol::{
     agents::AgentId,
     lease::{Hello, Unavailability},
 };
+use shepherd::{ProcessSupervisor, SupervisorBuilder};
 use std::{collections::HashMap, path::Path, sync::Arc, time::Duration};
 
 /// How long a new serving process waits for the previous one to finish
@@ -67,8 +67,10 @@ pub(super) async fn execute() -> Result<(), RunError> {
         tokio::io::stdout(),
         VERSION,
         LEASE_PROTOCOL,
-        launcher,
-        runner,
+        Runners {
+            harnesses: launcher,
+            commands: runner,
+        },
         ledger,
         ServeTimings::default(),
     )
@@ -111,11 +113,8 @@ async fn compose() -> Result<Composed, (Unavailability, RunError)> {
             .into_iter()
             .filter_map(|key| std::env::var_os(key).map(|value| (key.into(), value)))
             .collect();
-        let runner = ShepherdCommands::new(
-            supervisor.clone(),
-            launcher.workspace().into(),
-            environment,
-        );
+        let runner =
+            ShepherdCommands::new(supervisor.clone(), launcher.workspace().into(), environment);
         (Arc::new(runner), supervisor)
     });
     let directory = namespace.join("environment");

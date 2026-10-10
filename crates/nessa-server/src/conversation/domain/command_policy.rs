@@ -46,7 +46,11 @@ impl CommandPolicy {
     /// The policy as lines, each one fact, in a fixed order: what a digest of
     /// it is taken over, so two policies read alike only when they are.
     pub fn describe(&self) -> Vec<String> {
-        let mut lines: Vec<String> = self.hosts.iter().map(|host| format!("host {host}")).collect();
+        let mut lines: Vec<String> = self
+            .hosts
+            .iter()
+            .map(|host| format!("host {host}"))
+            .collect();
         match &self.allow {
             Some(allow) => lines.extend(allow.iter().map(|program| format!("allow {program}"))),
             None => lines.push("allow *".into()),

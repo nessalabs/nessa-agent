@@ -38,8 +38,9 @@ const _: () = assert!(
 const OUTPUT_POLL: Duration = Duration::from_millis(5);
 
 /// The variables a command keeps from the serving process's environment.
-pub(crate) const COMMAND_VARIABLES: [&str; 7] =
-    ["PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "LANG", "LC_ALL"];
+pub(crate) const COMMAND_VARIABLES: [&str; 7] = [
+    "PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "LANG", "LC_ALL",
+];
 
 /// Runs commands with Shepherd in one workspace.
 pub(crate) struct ShepherdCommands {

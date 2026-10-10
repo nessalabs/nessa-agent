@@ -458,7 +458,10 @@ fn l14_command_records_the_lease_rules_refuse_are_corrupt() {
             "{record:?}"
         );
     }
-    assert!(is_corrupt(CurrentLease::apply(None, &command_issued("c", "a"))));
+    assert!(is_corrupt(CurrentLease::apply(
+        None,
+        &command_issued("c", "a")
+    )));
     let mut full = live;
     for n in 2..=Lease::MAX_LIVE_COMMANDS {
         full = CurrentLease::apply(Some(&full), &command_issued(&format!("c{n}"), "a")).unwrap();
