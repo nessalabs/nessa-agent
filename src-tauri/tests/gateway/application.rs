@@ -2454,7 +2454,7 @@ fn an_identical_in_flight_directory_change_waits_for_that_attempt() {
         ))
     });
     let started = Instant::now();
-    while gateway.claude_publication_waiters() == 0 {
+    while gateway.claude_publication_waiters() < 2 {
         assert!(
             started.elapsed() < Duration::from_secs(2),
             "identical directory change did not join the in-flight attempt"
@@ -2526,7 +2526,7 @@ fn a_different_directory_waits_until_the_in_flight_attempt_finishes() {
         ))
     });
     let started = Instant::now();
-    while gateway.claude_publication_waiters() == 0 {
+    while gateway.claude_publication_waiters() < 2 {
         assert!(
             started.elapsed() < Duration::from_secs(2),
             "later directory change did not wait"
@@ -5062,7 +5062,7 @@ fn an_unchanged_directory_save_holds_publication_ownership_until_it_is_durable()
         ))
     });
     let deadline = Instant::now() + Duration::from_secs(2);
-    while gateway.claude_publication_waiters() == 0 {
+    while gateway.claude_publication_waiters() < 2 {
         assert!(
             Instant::now() < deadline,
             "changed directory did not wait for unchanged save"

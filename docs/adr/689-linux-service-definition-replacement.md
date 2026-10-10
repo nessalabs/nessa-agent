@@ -43,6 +43,7 @@ an interrupted native effect may have landed before failure was recorded.
 | Durable save, host publication or reconciliation panics                 | Catch outside the transaction; retain known prior values and finish joined receipts; catch each rollback independently               | publication phase panic corpus                         |
 | Rollback adapter panics / another rollback remains                      | Retain panic beside primary failure; run the other rollback; finish publication before next request                                  | independent rollback panic corpus                      |
 | Caller waiter panics or disappears / another waiter remains             | Waiter owns no publication effects; transaction continues and remaining waiter receives settled receipt                              | panicking waiter retains transaction                   |
+| Held test effect / first receipt already waiting | Observe both receipt waiters before releasing the native/settings fixture; the first alone does not prove second admission | identical/different callers; unchanged save |
 
 An equal save acknowledges no configuration change. If the gateway's startup
 projection is Failed, it returns that existing typed failure and leaves native
