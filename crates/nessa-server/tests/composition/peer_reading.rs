@@ -474,6 +474,19 @@ async fn a_peer_reads_only_what_it_is_granted_and_stops_at_revocation() {
         "the cache is removed"
     );
 
+    // R7: forgetting a peer removes its cache with its record. A cache left
+    // by an earlier failed removal goes too.
+    let cache = b.directory.join(format!("{hex}.sqlite3"));
+    let mut left = std::fs::OpenOptions::new();
+    left.write(true).create_new(true);
+    // Private, as the cache's own file is: a file anyone can read is refused.
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut left, 0o600);
+    std::io::Write::write_all(&mut left.open(&cache).unwrap(), b"left behind").unwrap();
+    b.peers.forget(key, &b.owner).await.unwrap();
+    assert!(b.peers.list().await.unwrap().is_empty());
+    assert!(!cache.exists(), "forget removes the cache");
+
     // Nothing left running: A's listener drains; B's pollers were joined.
     let mut running = a.running.take().unwrap();
     running.signal_stop();

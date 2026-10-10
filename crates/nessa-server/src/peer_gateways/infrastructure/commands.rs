@@ -260,10 +260,11 @@ impl PeerCommands {
     }
     /// What the work `start` begins answers, or `None` once the injected
     /// clock has moved `limit` past the moment before it began: the one way
-    /// this gateway's peer commands bound a wait on something outside it. The clock is read every [`WAKE_TICK`],
-    /// so a substituted clock ends the wait within one tick of passing the
-    /// deadline, and read again when `work` answers, so an answer that comes
-    /// after the deadline, before a tick saw it, is too late all the same.
+    /// this gateway's peer commands bound a wait on something outside it.
+    /// The clock is read every [`WAKE_TICK`], so a substituted clock ends the
+    /// wait within one tick of passing the deadline, and read again when
+    /// `work` answers, so an answer that comes after the deadline, before a
+    /// tick saw it, is too late all the same.
     /// `work` is dropped either way, which abandons it.
     async fn within<F: Future>(
         &self,

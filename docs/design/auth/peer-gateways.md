@@ -367,6 +367,7 @@ sequenceDiagram
 | R4 | B's cache records more of A's catalogue than A serves | `ResetRequired`: B deletes the cache, logs it, and reads again from nothing; `synced`, holding Y | same |
 | R5 | A's owner revokes B's credential | B's read is refused, its status is Terminal; the record lists `revoked`, the cache is removed, A is not read again | same |
 | R6 | A device reads its owner's catalogue; a peer reads a granted one | The device refuses another owner's stream; the peer accepts any owner stream for its receiver and epoch and refuses another receiver, epoch or a stream that is not an owner's | `a_catalogue_scope_is_checked_as_its_reader_can`, `every_owner_stream_has_the_shape_a_non_owner_reader_checks` |
+| R7 | B's owner forgets A | The record and the cache beside it are removed, the cache first, so a failure leaves a record that can be forgotten again | `a_peer_reads_only_what_it_is_granted_and_stops_at_revocation` |
 
 ## What this part does not do
 
