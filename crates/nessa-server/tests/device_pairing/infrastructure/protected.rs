@@ -20,7 +20,7 @@ use nessa_auth::{
             PortFuture, VerifiedCredential,
         },
     },
-    domain::{AudienceId, CredentialId, OrganizationId, ResourceId},
+    domain::{AudienceId, Credential, CredentialId, OrganizationId, ResourceId},
 };
 use nessa_client_core::pairing::NativeEnrollmentClient;
 use nessa_protocol::agents::AgentId;
@@ -524,6 +524,30 @@ impl<A: AccessReader> AccessReader for MisreadAccess<A> {
     }
 }
 
+/// Answers about the credential asked for, but names the actor of another
+/// (`.1`) on it, leaving the asked credential's own membership in place.
+struct ContradictoryAccess<A>(Arc<A>, CredentialId);
+impl<A: AccessReader> AccessReader for ContradictoryAccess<A> {
+    fn read<'a>(&'a self, credential: &'a CredentialId) -> PortFuture<'a, AccessSnapshot> {
+        Box::pin(async move {
+            let mut asked = self.0.read(credential).await?;
+            let other = self.0.read(&self.1).await?;
+            let named = &asked.credential;
+            asked.credential = Credential::new(
+                named.id().clone(),
+                other.credential.principal_id().clone(),
+                named.organization_id().clone(),
+                named.audience_id().clone(),
+                named.issued_at(),
+                named.expires_at(),
+                named.grants().to_vec(),
+            )
+            .unwrap();
+            Ok(asked)
+        })
+    }
+}
+
 /// Row H8 (`docs/design/auth/peer-gateways.md`): the owner cannot share a
 /// conversation with a paired peer yet. `conversation.share` refuses its
 /// credential `share_target_not_paired` and writes no grant, while the same
@@ -594,24 +618,36 @@ async fn a_peer_cannot_be_shared_with_and_reads_nothing_even_if_granted() {
         fixture.registry.clone(),
         CredentialId::new(device.credential.clone()).unwrap(),
     );
-    let misread_shares = ShareConversation {
-        conversations: metadata.as_ref(),
-        receivers: fixture.receivers.as_ref(),
-        grants: metadata.as_ref(),
-        access: &misread,
-    };
-    assert!(matches!(
-        misread_shares
-            .share(
-                caller("share-peer-misread"),
-                id.clone(),
-                CredentialId::new(peer.credential.clone()).unwrap(),
-                110,
-            )
-            .await,
-        Err(ConversationError::ShareTargetNotPaired)
-    ));
-    assert!(!metadata.is_granted(&id, &peer.receiver).await.unwrap());
+    // Nor one that answers about the peer's credential but names the
+    // device's actor on it, against the peer's own membership.
+    let contradictory = ContradictoryAccess(
+        fixture.registry.clone(),
+        CredentialId::new(device.credential.clone()).unwrap(),
+    );
+    let readers: [(&dyn AccessReader, &str); 2] = [
+        (&misread, "share-peer-misread"),
+        (&contradictory, "share-peer-contradictory"),
+    ];
+    for (access, request) in readers {
+        let shares = ShareConversation {
+            conversations: metadata.as_ref(),
+            receivers: fixture.receivers.as_ref(),
+            grants: metadata.as_ref(),
+            access,
+        };
+        assert!(matches!(
+            shares
+                .share(
+                    caller(request),
+                    id.clone(),
+                    CredentialId::new(peer.credential.clone()).unwrap(),
+                    110,
+                )
+                .await,
+            Err(ConversationError::ShareTargetNotPaired)
+        ));
+        assert!(!metadata.is_granted(&id, &peer.receiver).await.unwrap());
+    }
     assert!(share(&device, "share-device").await.unwrap());
     // A grant on the peer's receiver, as one would stand had it been written
     // before this refusal: the read admission alone must still refuse.

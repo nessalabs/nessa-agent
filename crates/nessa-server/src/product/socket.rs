@@ -2503,13 +2503,29 @@ mod tests {
     }
 
     impl AccessReader for Authority {
-        fn read<'a>(&'a self, _: &'a CredentialId) -> PortFuture<'a, AccessSnapshot> {
+        /// The one configured snapshot, answered about the credential asked
+        /// for: a share target reads as the session's own actor.
+        fn read<'a>(&'a self, credential: &'a CredentialId) -> PortFuture<'a, AccessSnapshot> {
             Box::pin(async move {
-                Ok(self
+                let mut snapshot = self
                     .snapshot
                     .lock()
                     .unwrap_or_else(|error| error.into_inner())
-                    .clone())
+                    .clone();
+                let named = &snapshot.credential;
+                if named.id() != credential {
+                    snapshot.credential = Credential::new(
+                        credential.clone(),
+                        named.principal_id().clone(),
+                        named.organization_id().clone(),
+                        named.audience_id().clone(),
+                        named.issued_at(),
+                        named.expires_at(),
+                        named.grants().to_vec(),
+                    )
+                    .unwrap();
+                }
+                Ok(snapshot)
             })
         }
     }

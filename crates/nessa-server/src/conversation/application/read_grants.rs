@@ -226,10 +226,15 @@ impl ShareConversation<'_> {
             }
             Err(_) => return Err(ConversationError::ShareTargetNotPaired),
         };
-        // The answer must be about the credential asked for: a principal
-        // read off any other could pass a peer as a device.
-        if target.credential.id() != &credential
-            || is_peer_principal(target.credential.principal_id())
+        // The answer must be about the credential asked for, in the
+        // binding's organization, with a membership of the same principal:
+        // a principal read off anything else could pass a peer as a device.
+        let named = &target.credential;
+        if named.id() != &credential
+            || named.organization_id() != &binding.organization_id
+            || named.principal_id() != target.membership.principal_id()
+            || named.organization_id() != target.membership.organization_id()
+            || is_peer_principal(named.principal_id())
         {
             return Err(ConversationError::ShareTargetNotPaired);
         }
