@@ -22,9 +22,12 @@
 //! fresh, the sequence counting from 1 in each process, the time from the
 //! injected wall clock when this adapter took the record. That is not claimed
 //! as the time of the peer's own effect. A full queue refuses the record at
-//! once, without waiting, and logs the sequence it would have had: past
-//! [`AUDIT_QUEUE`] waiting records the store is stalled, and an answer that
-//! waited would only hold its caller. A process that stops between a
+//! once, without waiting: one poller cycle queues at most about half of
+//! [`AUDIT_QUEUE`], so a full queue means the store has fallen behind, and an
+//! answer that waited would only hold its caller. A refused record uses up
+//! its sequence, and the log names it, so a gap in the files' sequences is a
+//! refused record, never a lost one (`a_full_queue_refuses_the_owner_and_drops_the_poller_record`).
+//! Only after `close` is nothing numbered. A process that stops between a
 //! command's effect and its outcome record leaves the intent alone: the
 //! intent says what was asked, and the peer record on disk says what it came
 //! to. A record still queued when shutdown's drain runs out is not written
@@ -217,7 +220,7 @@ impl DurablePeerAudit {
     ) -> Result<u64, PeerAuditUnavailable> {
         let mut queue = self.lock_queue();
         let sequence = queue.next;
-        let Some(sender) = &queue.sender else {
+        let Some(sender) = queue.sender.clone() else {
             tracing::error!(
                 sequence,
                 "peer gateway audit record refused: the audit is closed"
@@ -229,16 +232,15 @@ impl DurablePeerAudit {
         value["recordId"] = json!(id);
         value["sequence"] = json!(sequence);
         value["observedAtMs"] = json!(self.wall.unix_milliseconds());
+        // Used up whether or not it is queued: a refusal is a visible gap.
+        queue.next = sequence.saturating_add(1);
         match sender.try_send(Queued {
             sequence,
             id,
             value,
             kept,
         }) {
-            Ok(()) => {
-                queue.next = sequence.saturating_add(1);
-                Ok(sequence)
-            }
+            Ok(()) => Ok(sequence),
             Err(TrySendError::Full(_)) => {
                 tracing::error!(
                     sequence,
@@ -281,6 +283,15 @@ fn write_in_order(
     shared: &Shared,
     before_write: Option<&BeforeWrite>,
 ) {
+    // Set however the loop ends, a panic included, so a drain never waits
+    // on a writer that is gone.
+    struct Finished<'a>(&'a Shared);
+    impl Drop for Finished<'_> {
+        fn drop(&mut self) {
+            self.0.finished.send_replace(true);
+        }
+    }
+    let _finished = Finished(shared);
     for queued in queue {
         if let Some(before_write) = before_write {
             before_write(queued.sequence);
@@ -302,7 +313,6 @@ fn write_in_order(
         // The caller may have stopped listening; the record stands either way.
         let _ = queued.kept.send(written);
     }
-    shared.finished.send_replace(true);
 }
 
 fn write_one(directory: &Path, queued: &Queued) -> std::io::Result<()> {

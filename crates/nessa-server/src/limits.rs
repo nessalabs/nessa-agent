@@ -8,7 +8,7 @@
 use crate::conversation::application::MAX_READ_GRANTS_PER_CONVERSATION;
 use crate::conversation::infrastructure::{DISCOVERY_STEPS_PER_READ, MAX_CATALOGUE_CHANGE_WATCHES};
 use crate::peer_gateways::infrastructure::{
-    AUDIT_QUEUE, POLL_BACKOFF_CAP, POLL_INTERVAL, PREEMPT, READ_BUDGET,
+    AUDIT_QUEUE, POLL_BACKOFF_CAP, POLL_INTERVAL, PREEMPT, READ_BUDGET, WITHDRAWN_PER_READ,
 };
 use crate::product::passive_read::deadlines::RECORD_SEND_TIMEOUT;
 use crate::product::{OperationalLimits, SessionSettings, RECORD_LANE, RECORD_SLOT, REFUSAL_LANE};
@@ -238,7 +238,13 @@ fn catalogue() -> &'static [Limit] {
             id: "peer.audit_queue",
             tier: "fixed",
             owner: "AUDIT_QUEUE in crates/nessa-server/src/peer_gateways/infrastructure/audit.rs",
-            meaning: "the most peer audit records waiting to be written, one at a time in the order they were handed over; a record past it is refused at once, so peer.enroll or peer.forget answers peer_audit_unavailable before any effect and a peer read's change stands with its record logged as not kept; an owner command's record waits behind at most this many, well inside its 5 s audit deadline",
+            meaning: "the most peer audit records waiting to be written, one at a time in the order they were handed over; one poller cycle queues at most about half of it, so it fills only when the store falls behind; a record past it is refused at once, its sequence left as a gap, so peer.enroll or peer.forget answers peer_audit_unavailable before any effect and a peer read's change stands with its record logged as not kept; an owner command's record waits behind at most this many, well inside its 5 s audit deadline",
+        },
+        Limit {
+            id: "peer.withdrawn_per_read",
+            tier: "fixed",
+            owner: "WITHDRAWN_PER_READ in crates/nessa-server/src/peer_gateways/infrastructure/poller.rs",
+            meaning: "the most conversations one read of a peer gateway withdraws, a quarter of peer.audit_queue's records of 64 each; a read that reaches it ends incomplete and the next cycle, soon, withdraws the rest",
         },
     ]
 }
@@ -324,6 +330,7 @@ pub(crate) fn effective_json(
     put("peer.read_budget", millis(READ_BUDGET));
     put("peer.preempt", millis(PREEMPT));
     put("peer.audit_queue", count(AUDIT_QUEUE));
+    put("peer.withdrawn_per_read", count(WITHDRAWN_PER_READ));
     serde_json::Value::Object(values.into_iter().collect())
 }
 

@@ -498,15 +498,19 @@ fn audit_files(directory: &Path) -> Vec<Value> {
     records
 }
 
-/// Each record's kind, with the poller's cause, in sequence order; and the
-/// sequences are 1, 2, 3 ... with no gap, their observation times in order.
-fn audit_kinds(directory: &Path) -> Vec<String> {
-    let records = audit_files(directory);
-    let sequences: Vec<u64> = records
+/// The sequences of the records written, in order. A gap is a record the
+/// audit refused, which its log names.
+fn audit_sequences(directory: &Path) -> Vec<u64> {
+    audit_files(directory)
         .iter()
         .map(|record| record["sequence"].as_u64().unwrap())
-        .collect();
-    assert_eq!(sequences, (1..=records.len() as u64).collect::<Vec<_>>());
+        .collect()
+}
+
+/// Each record's kind, with the poller's cause, in sequence order; their
+/// observation times in that order too.
+fn audit_kinds(directory: &Path) -> Vec<String> {
+    let records = audit_files(directory);
     let observed: Vec<u64> = records
         .iter()
         .map(|record| record["observedAtMs"].as_u64().unwrap())
@@ -704,6 +708,30 @@ impl Reader {
             .execute_batch(statement)
             .unwrap();
     }
+    /// B's cache of `key`, byte for byte, while no read has it open.
+    fn snapshot(&self, key: &DeviceKey) -> Vec<u8> {
+        std::fs::read(self.cache_path(key)).unwrap()
+    }
+    /// Put back a `snapshot`, in the same private file.
+    fn restore(&self, key: &DeviceKey, bytes: &[u8]) {
+        let mut file = nessa_local_storage::open(
+            &self.cache_path(key),
+            nessa_local_storage::OpenMode::ReadWrite,
+        )
+        .unwrap();
+        file.set_len(0).unwrap();
+        std::io::Write::write_all(&mut file, bytes).unwrap();
+        file.sync_all().unwrap();
+    }
+    /// The catalogue head B's cache of `key` completed, as hex.
+    fn completed(&self, key: &DeviceKey) -> String {
+        nessa_local_database::rusqlite::Connection::open(self.cache_path(key))
+            .unwrap()
+            .query_row("SELECT hex(completed) FROM catalogue_progress", [], |row| {
+                row.get(0)
+            })
+            .unwrap()
+    }
     /// How many finished walks B's cache of `key` notes.
     fn walks(&self, key: &DeviceKey) -> i64 {
         nessa_local_database::rusqlite::Connection::open(self.cache_path(key))
@@ -874,13 +902,31 @@ async fn reads(refuse: bool) {
     assert_eq!(b.cached(&key, &reader.0), vec![y.to_string()]);
     assert_eq!(b.walks(&key), 1, "a finished walk is noted");
 
-    // R21: a cache whose last walk was cut short, after a failure or a
-    // restart, has no note: every poller here is a new one, as after a
-    // restart. At A's unchanged head, the cache is walked again, not taken
-    // as settled, and the walk notes itself once it finishes.
-    b.tamper(&key, "DELETE FROM retained_walks");
+    // R21: a walk cut short after its catalogue pass, then a restart (every
+    // poller here is a new one). B's cache is put back to how such a walk
+    // leaves it: A unshared Y, the pass reached A's new head, and the walk
+    // stopped before it asked Y, so Y is still cached and no walk is noted.
+    // At that unchanged head B walks again and withdraws Y; it is `synced`
+    // only after that, holding nothing.
+    let before = b.snapshot(&key);
+    a.grant(ReadGrantTransition::Revoke, &y, &reader).await;
+    synced_with(&b, 0).await;
+    let head = b.completed(&key);
+    b.restore(&key, &before);
+    b.tamper(
+        &key,
+        &format!("UPDATE catalogue_progress SET completed = x'{head}'; DELETE FROM retained_walks"),
+    );
+    assert_eq!(b.cached(&key, &reader.0), vec![y.to_string()]);
+    assert_eq!(b.completed(&key), head, "the pass is at A's head");
+    synced_with(&b, 0).await;
+    assert!(
+        b.cached(&key, &reader.0).is_empty(),
+        "withdrawn at the unchanged head"
+    );
+    assert_eq!(b.walks(&key), 1, "the finished walk is noted");
+    a.grant(ReadGrantTransition::Grant, &y, &reader).await;
     synced_with(&b, 1).await;
-    assert_eq!(b.walks(&key), 1, "walked again at an unchanged head");
 
     // R6: B's cache records more of A's catalogue than A serves, as after A
     // is restored from an older copy. The cache cannot continue
@@ -1015,6 +1061,9 @@ async fn reads(refuse: bool) {
         "approved: pending+none -> active+none".to_owned(),
         format!("withdrew {x}: active+cache -> active+cache"),
         format!("withdrew {y}: active+cache -> active+cache"),
+        // R21: withdrawn, and withdrawn again after the cut walk.
+        format!("withdrew {y}: active+cache -> active+cache"),
+        format!("withdrew {y}: active+cache -> active+cache"),
         "reset_required: active+cache -> active+none".to_owned(),
         "reset_required: active+cache -> active+none".to_owned(),
         "cache_damaged: active+cache -> active+none".to_owned(),
@@ -1099,6 +1148,7 @@ async fn records_land_in_turn_order() {
             "peer_forget_finished",
         ]
     );
+    assert_eq!(audit_sequences(&audits), [1, 2, 3, 4, 5]);
 
     drop(relay);
     stop(a).await;
@@ -1175,6 +1225,7 @@ async fn a_stalled_audit_never_holds_an_owner_command() {
             "peer_forget_finished",
         ]
     );
+    assert_eq!(audit_sequences(&audits), [1, 2, 3, 4, 5, 6]);
 
     drop(relay);
     stop(a).await;
@@ -1218,7 +1269,7 @@ async fn a_full_queue_refuses_the_owner_and_drops_the_poller_record() {
     // The writer stalls on one record, and one more fills the queue.
     drop(audit.record(filler()));
     stall.until_reached().await;
-    drop(audit.record(filler()));
+    let queued = audit.record(filler());
 
     // The poller's change lands; its record has no room.
     synced_with(&b, 0).await;
@@ -1247,7 +1298,11 @@ async fn a_full_queue_refuses_the_owner_and_drops_the_poller_record() {
     assert_eq!(relay.accepted(), accepted, "nothing dialed");
     assert_eq!(b.peers.list().await.unwrap().len(), 1, "nothing removed");
 
+    // The store catches up; the next record is kept, and the refused ones
+    // are the gap before it: the poller's change, the enroll, the forget.
     stall.release();
+    assert_eq!(queued.await, Ok(()));
+    assert_eq!(audit.record(filler()).await, Ok(()));
     assert!(audit.drained(AUDIT_DEADLINE).await);
     assert_eq!(
         audit_kinds(&audits),
@@ -1256,9 +1311,11 @@ async fn a_full_queue_refuses_the_owner_and_drops_the_poller_record() {
             "peer_enroll_finished",
             "peer_forget_requested",
             "peer_forget_requested",
+            "peer_forget_requested",
         ],
-        "the two fillers, and no poller record"
+        "the fillers, and no poller record"
     );
+    assert_eq!(audit_sequences(&audits), [1, 2, 3, 4, 8]);
 
     drop(relay);
     stop(a).await;

@@ -61,7 +61,7 @@ impl EachConversation for Scripted {
 fn walk(scripted: &mut Scripted, held_back: Option<ReadFailure>) -> Result<bool, ReadFailure> {
     let mut withdrawn = Vec::new();
     let ids = scripted.ids();
-    let result = read_each(ids, held_back, scripted, &mut withdrawn);
+    let result = read_each(ids, held_back, usize::MAX, scripted, &mut withdrawn);
     assert_eq!(withdrawn, scripted.withdrawn, "reported as withdrawn");
     result
 }
@@ -234,16 +234,45 @@ fn a_cache_without_the_walk_marker_is_walked_at_an_unchanged_head() {
 }
 
 /// Only a walk that finished is noted, and one whose note cannot be written
-/// is not reported complete: the note is what the next read settles on.
+/// fails as the cache's failure, so it is backed off, not walked again at
+/// once: the note is what the next read settles on.
 #[test]
-fn a_marker_that_cannot_be_written_reports_incomplete() {
-    assert!(walked(true, || Ok(())));
-    assert!(!walked(true, || Err(CacheError::Unavailable)));
-    assert!(!walked(true, || Err(CacheError::Quota)));
+fn a_marker_that_cannot_be_written_fails_the_read() {
+    assert_eq!(walked(true, || Ok(())), Ok(true));
+    assert_eq!(
+        walked(true, || Err(CacheError::Unavailable)),
+        Err(ReadFailure::Cache)
+    );
+    assert_eq!(
+        walked(true, || Err(CacheError::Quota)),
+        Err(ReadFailure::Quota)
+    );
     // An incomplete walk notes nothing.
-    assert!(!walked(false, || panic!(
-        "an incomplete walk is never noted"
-    )));
+    assert_eq!(
+        walked(false, || panic!("an incomplete walk is never noted")),
+        Ok(false)
+    );
+}
+
+/// A read withdraws at most as many conversations as its caller allows, so
+/// the evidence one read leaves stays bounded; it then ends incomplete, and
+/// the next read withdraws the rest.
+#[test]
+fn a_read_withdraws_at_most_its_cap_and_ends_incomplete() {
+    let mut scripted = Scripted::new(vec![
+        ("a", Ok(Conversation::Withdrawn)),
+        ("b", Ok(Conversation::Read { complete: true })),
+        ("c", Ok(Conversation::Withdrawn)),
+        ("d", Ok(Conversation::Withdrawn)),
+    ]);
+    let mut withdrawn = vec!["earlier".to_owned()];
+    let ids = scripted.ids();
+    assert_eq!(
+        read_each(ids, None, 2, &mut scripted, &mut withdrawn),
+        Ok(false)
+    );
+    assert_eq!(withdrawn, ["earlier", "a", "c"]);
+    assert_eq!(scripted.asked.len(), 3, "d is left for the next read");
 }
 
 fn report(complete: bool) -> ReadReport {

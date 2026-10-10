@@ -268,11 +268,16 @@ sequenceDiagram
   over, under the same lock that puts it on a bounded queue
   (`AUDIT_QUEUE`, 64, a row of [`limits.md`](../../limits.md)), and one
   writer thread writes the queue in that order. A full queue refuses the
-  record at once rather than wait. Stopping native pairing closes the audit
-  after the poller is joined (a command from then on is refused before any
-  effect) and waits for the writer within one `AUDIT_DEADLINE` on the
-  injected clock; records still queued past it are logged by sequence and
-  not written. An intent that is
+  record at once rather than wait; a refused record uses up its sequence,
+  so a gap in the files is a refusal the log names. Stopping native pairing
+  first joins the poller, then closes the peer commands: none takes the
+  turn from then (it answers `peer_unavailable`, its outcome kept, before
+  any effect), and those already between intent and outcome are waited for,
+  within `PREEMPT` on the injected clock, so no effect is left without its
+  outcome. Only then is the audit closed (a command from then on is refused
+  before its intent) and its writer waited for, within one `AUDIT_DEADLINE`;
+  records still queued past it are logged by sequence and not written, and
+  a writer that panics counts as ended. An intent that is
   not kept refuses the command before anything is dialed or removed; an
   outcome that is not kept answers `peer_audit_unavailable` while the effect
   stands, so the owner never sees success without its evidence. A process
@@ -366,7 +371,12 @@ sequenceDiagram
   and that note is there at the same head and generation. A walk cut short
   by the budget, a failure, a stop or a restart notes nothing, so the next
   read walks again and withdraws what it had not reached; a note that
-  cannot be written leaves the read incomplete (`syncing`). Adding the
+  cannot be written fails the read as the cache's own failure (`quota`, or
+  `failed`), backed off like any other, rather than walked again at once.
+  One read withdraws at most `WITHDRAWN_PER_READ` (1024) conversations, so
+  one cycle's audit records fill at most about half the audit's queue; a
+  read that reaches it ends incomplete and the next cycle, soon, withdraws
+  the rest. Adding the
   table moved the cache's schema version to 2: a cache of the older version
   is refused (`OutdatedSchema`) and, being derived, emptied and read again.
 - **Whose catalogue.** A device's session principal owns the catalogue it
@@ -503,9 +513,11 @@ sequenceDiagram
 | R18 | A poller change, then a forget that stops its cycle; a store that stalls on the poller's record; a record handed over and never awaited | Records land in turn order: the cycle's change, then the forget's intent and outcome, sequences 1, 2, 3 ... with observation times in order. With the store stalled the forget's intent waits behind the poller's record and is answered `peer_audit_unavailable` once B's clock passes `AUDIT_DEADLINE`, nothing removed; once the store answers every record lands in sequence and the next forget goes ahead. A record never awaited is still written | `records_land_in_turn_order`, `a_stalled_audit_never_holds_an_owner_command`, `an_unpolled_poller_record_is_still_written` |
 | R19 | A cached conversation over quota, then one the peer stopped granting; then a stop or a lost connection | The second is withdrawn; the read ends `quota`, still `quota` when the walk is then stopped or loses its connection; a storage failure is held back the same way, and only a damaged cache or a lost connection stops the withdrawals | `a_full_cache_still_withdraws_what_the_gateway_no_longer_grants`, `a_full_catalogue_still_withdraws_and_quota_outranks_a_storage_failure`, `a_withdrawal_that_cannot_be_written_does_not_stop_the_others`, `a_full_cache_is_listed_quota_and_a_read_that_saved_nothing_unreachable`, `a_held_quota_outlasts_a_stop_or_a_lost_connection` |
 | R20 | A status step whose write fails after it began, or lands before the status fails; a cycle giving back the turn as an owner command asks; a read whose worker panics after a withdrawal | Named by the transition begun (`peer_ended` after a failed ending, `peer_approved` after a failed save), its outcome the store's (refused when the write failed, succeeded when it landed, whatever the status said); the owner command finds the turn free or a cycle to stop, never `peer_busy`; the withdrawal is still reported and audited | `a_slot_names_the_transition_a_status_began_whatever_storage_did`, `a_status_change_is_named_by_the_transition_its_store_began`, `a_status_change_outcome_is_what_its_store_did`, `a_cycle_gives_back_the_turn_as_it_clears_itself`, `a_read_that_panics_still_reports_what_it_withdrew` |
-| R21 | A walk cut short after its catalogue pass, then a failed cycle or a restart, at A's unchanged head | No walk is noted, so the next read walks every cached conversation and withdraws what A no longer grants; `synced` only after a walk that finished and was noted; a note that cannot be written leaves it `syncing` | `a_peer_reads_only_what_it_is_granted_and_stops_at_revocation` (the note removed, walked again), `a_cache_without_the_walk_marker_is_walked_at_an_unchanged_head`, `a_marker_that_cannot_be_written_reports_incomplete`, `a_walk_marker_is_kept_per_catalogue_and_goes_with_a_purge` |
-| R22 | The audit queue is full (the store stalled) | Answered at once, no wait: `peer.enroll` and `peer.forget` are `peer_audit_unavailable` with nothing dialed or removed; a poller change lands and its record is logged as not kept, never written | `a_full_queue_refuses_the_owner_and_drops_the_poller_record` |
-| R23 | Native pairing stops with records queued and the store stalled | After the poller is joined the audit is closed and drained within one `AUDIT_DEADLINE` on the injected clock: records before the stall are written, the rest are logged and not, and the writer ends once the stalled write returns | `close_drains_within_one_deadline` |
+| R21 | A walk cut short after its catalogue pass (A unshared Y, the pass reached A's new head, Y not yet asked), then a restart, at A's unchanged head | No walk is noted, so the next read walks every cached conversation and withdraws Y, audited; `synced` only after that, holding nothing; a note that cannot be written fails the read as the cache's failure, backed off | `a_peer_reads_only_what_it_is_granted_and_stops_at_revocation` (the cache put back as the cut walk left it), `a_cache_without_the_walk_marker_is_walked_at_an_unchanged_head`, `a_marker_that_cannot_be_written_fails_the_read`, `a_walk_marker_is_kept_per_catalogue_and_goes_with_a_purge` |
+| R22 | The audit queue is full (the store fell behind) | Answered at once, no wait: `peer.enroll` and `peer.forget` are `peer_audit_unavailable` with nothing dialed or removed; a poller change lands and its record is logged as not kept, never written; each refusal uses up its sequence, so the next kept record follows a gap | `a_full_queue_refuses_the_owner_and_drops_the_poller_record` |
+| R23 | Native pairing stops with records queued and the store stalled; or its writer panics | The audit is closed and drained within one `AUDIT_DEADLINE` on the injected clock: records before the stall are written, the rest are logged and not, and the writer ends once the stalled write returns; a writer that panicked ends the drain at once | `close_drains_within_one_deadline`, `a_writer_that_panics_does_not_hold_the_drain` |
+| R24 | Native pairing stops while an enroll and a forget have handed over their intents | The peer commands are closed before the audit: both are waited for, find the turn closed, and answer `peer_unavailable` with their outcomes kept, having read, dialed and removed nothing; never an effect without its outcome | `a_command_admitted_before_shutdown_ends_with_its_outcome_and_no_effect` |
+| R25 | One read finds more conversations withdrawn than `WITHDRAWN_PER_READ` | It withdraws that many and ends incomplete; the next cycle withdraws the rest; one cycle's records stay within about half the audit's queue | `a_read_withdraws_at_most_its_cap_and_ends_incomplete`; the bound on a cycle's records is a compile-time assertion beside `WITHDRAWN_PER_READ` |
 | R17 | The wait after each cycle | The interval when settled or pending; an eighth of it when incomplete or stopped; doubling from the interval on each failure in a row; spread 80 to 120 percent; never past the cap; a failing entropy source draws the middle | `failures_double_the_wait_up_to_the_cap`, `jitter_spreads_a_wait_over_80_to_120_percent_and_the_cap_still_holds` and the other tests in `tests/peer_gateways/poller.rs` |
 
 ## What this part does not do
@@ -536,10 +548,12 @@ the client and gives the head an access path by receiver
   `pending`; the poller's next pinned status settles it, and
   `peer.forget` removes it. Enrolling into the same peer again is
   `peer_exists` until then.
-- **Shutdown does not wait for an enrollment.** Nothing holds a
-  `peer.enroll` open the way owner admission holds a pairing command, so its
-  blocking worker ends at its own enrollment deadline or with the process.
-  What it saved by then is a record like any other.
+- **Shutdown waits for an enrollment only so long.** Closing the peer
+  commands waits for those already running within `PREEMPT`; an enrollment
+  still in its exchange past that (its own deadlines are longer) goes on
+  until its enrollment deadline or the process ends, and its outcome may
+  find the audit closed, which is logged. Its intent is kept, and what it
+  saved by then is a record like any other.
 
 - **The grantor's liveness is not a read check.** The grantor of a pairing
   is its initiator: an active admin holding `credential.manage` when it
@@ -586,6 +600,7 @@ the client and gives the head an access path by receiver
   stalls mid-connection, which the relay does not do.
 - **An audit sequence counts within one process.** It starts at 1 each
   time the gateway starts; across restarts `observedAtMs` orders the runs.
+  A gap within a run is a refused record, named in the log.
   A record still queued when shutdown's drain runs out is not written
   (logged by sequence), and one the writer had begun may still land.
 - **A cache removal not confirmed durable is not tested.** It needs a

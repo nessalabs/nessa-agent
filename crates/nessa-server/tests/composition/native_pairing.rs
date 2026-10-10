@@ -323,6 +323,7 @@ async fn faulted_listener_join_reports_the_fault_without_reconciling() {
         stop: None,
         task: tokio::spawn(async { panic!("native listener fault") }),
         poller: bound.start_poller(),
+        peers: bound.peers.clone(),
         audit: bound.audit.clone(),
     };
     assert_eq!(

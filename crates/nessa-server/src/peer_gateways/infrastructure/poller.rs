@@ -38,6 +38,7 @@
 //! a change the cycle made comes before the owner command that stopped it.
 //! The cycle waits for the audit's answers only once it has given back the
 //! turn, so an audit that is slow or stalled never holds the turn.
+use super::audit::AUDIT_QUEUE;
 use super::commands::{
     CycleStop, CycleTurn, EnrollmentEntropySource, PeerCommands, PeerSync, PollerRecord, SyncState,
 };
@@ -68,6 +69,17 @@ pub const POLL_INTERVAL: Duration = Duration::from_secs(30);
 pub const POLL_BACKOFF_CAP: Duration = Duration::from_secs(15 * 60);
 /// The longest one read of a peer runs before it ends incomplete.
 pub const READ_BUDGET: Duration = Duration::from_secs(60);
+/// The most conversations one read withdraws: one record per
+/// [`WITHDRAWN_PER_RECORD`], so a cycle's records (two status steps, a
+/// reset, and the two reads around it) fill at most about half of the
+/// audit's queue ([`AUDIT_QUEUE`]), and an owner command's record has room
+/// behind them while the store keeps up (asserted when the gateway is built).
+/// A read that reaches it ends incomplete and the next cycle, soon,
+/// withdraws the rest.
+pub const WITHDRAWN_PER_READ: usize = AUDIT_QUEUE / 4 * WITHDRAWN_PER_RECORD;
+/// The most records one cycle hands the audit.
+const RECORDS_PER_CYCLE: usize = 3 + 2 * WITHDRAWN_PER_READ.div_ceil(WITHDRAWN_PER_RECORD);
+const _: () = assert!(RECORDS_PER_CYCLE <= AUDIT_QUEUE / 2 + 3);
 /// How this gateway names itself to a peer's product session.
 const CLIENT_ID: &str = "nessa-peer-gateway";
 
@@ -524,6 +536,7 @@ impl Poller {
                 },
                 &stop,
                 budget,
+                WITHDRAWN_PER_READ,
                 withdrawn,
             )
         });

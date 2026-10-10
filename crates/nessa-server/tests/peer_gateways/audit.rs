@@ -158,3 +158,27 @@ async fn an_unpolled_poller_record_is_still_written() {
     assert!(audit.drained(Duration::from_secs(5)).await);
     assert_eq!(written(&directory), [1, 2]);
 }
+
+/// A writer that panics still ends as finished: the drain returns at once,
+/// on a clock that never moves, and the record it was writing is not kept.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_writer_that_panics_does_not_hold_the_drain() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = directory(&root);
+    let audit = DurablePeerAudit::with_writer_hook(
+        directory.clone(),
+        Arc::new(Ticks(AtomicU64::new(1))),
+        Arc::new(Manual(AtomicU64::new(0))),
+        AUDIT_QUEUE,
+        Arc::new(|_| std::panic::resume_unwind(Box::new("the writer failed"))),
+    );
+    assert_eq!(audit.record(record()).await, Err(PeerAuditUnavailable));
+    let drained = tokio::time::timeout(
+        Duration::from_secs(30),
+        audit.drained(Duration::from_secs(5)),
+    )
+    .await
+    .expect("the drain does not wait on a writer that is gone");
+    assert!(drained);
+    assert!(written(&directory).is_empty());
+}

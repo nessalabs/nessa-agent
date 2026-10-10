@@ -52,7 +52,7 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use tokio::sync::{watch, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{watch, OwnedSemaphorePermit, Semaphore, TryAcquireError};
 use uuid::Uuid;
 
 /// Entropy for one enrollment: its attempt id and its key exchange.
@@ -100,7 +100,8 @@ pub enum PeerError {
     Capacity,
     /// No record for that peer.
     NotFound,
-    /// Storage, the key, or a worker failed; retrying may help.
+    /// Storage, the key, or a worker failed, or the gateway is stopping;
+    /// retrying may help.
     Unavailable,
     /// The command's audit record could not be kept. Before the effect,
     /// nothing changed; after it, the effect stands and `peer.list` shows it.
@@ -176,6 +177,9 @@ pub struct PeerCommands {
     cycle: Mutex<Option<Arc<CycleStop>>>,
     /// What the poller last saw of each peer.
     syncs: Mutex<HashMap<DeviceKey, PeerSync>>,
+    /// Owner commands between their intent and their outcome: shutdown waits
+    /// for them before it closes the audit.
+    running: watch::Sender<usize>,
 }
 
 /// Ends one poller cycle: its read's sockets are shut, and its waits woken.
@@ -232,6 +236,17 @@ pub(super) enum OwnerTurn {
     Cycle(Arc<CycleStop>),
     /// Another owner command holds it.
     Busy,
+    /// The commands are closed for shutdown.
+    Closed,
+}
+
+/// One owner command counted as running until it is dropped.
+struct Running<'a>(&'a watch::Sender<usize>);
+impl Drop for Running<'_> {
+    fn drop(&mut self) {
+        self.0
+            .send_modify(|running| *running = running.saturating_sub(1));
+    }
 }
 impl PeerCommands {
     /// Commands over `records`, with `clock` for every deadline of an
@@ -254,6 +269,7 @@ impl PeerCommands {
             turn: Arc::new(Semaphore::new(1)),
             cycle: Mutex::new(None),
             syncs: Mutex::new(HashMap::new()),
+            running: watch::channel(0).0,
         }
     }
     /// The records these commands are over.
@@ -278,26 +294,60 @@ impl PeerCommands {
         }
     }
     /// The turn for an owner command: free, or given back by the poller
-    /// cycle that held it once stopped, within [`PREEMPT`]. `None` when
-    /// another owner command holds it, or the cycle did not give it back.
-    async fn owner_turn(&self) -> Option<OwnedSemaphorePermit> {
+    /// cycle that held it once stopped, within [`PREEMPT`]. `Busy` when
+    /// another owner command holds it, or the cycle did not give it back;
+    /// `Unavailable` once the commands are closed for shutdown. Either way
+    /// before the command has any effect.
+    async fn owner_turn(&self) -> Result<OwnedSemaphorePermit, PeerError> {
         let cycle = match self.try_owner_turn() {
-            OwnerTurn::Taken(permit) => return Some(permit),
+            OwnerTurn::Taken(permit) => return Ok(permit),
             OwnerTurn::Cycle(cycle) => cycle,
-            OwnerTurn::Busy => return None,
+            OwnerTurn::Busy => return Err(PeerError::Busy),
+            OwnerTurn::Closed => return Err(PeerError::Unavailable),
         };
         cycle.stop();
-        self.within(PREEMPT, || self.turn.clone().acquire_owned())
-            .await?
-            .ok()
+        match self
+            .within(PREEMPT, || self.turn.clone().acquire_owned())
+            .await
+        {
+            Some(Ok(permit)) => Ok(permit),
+            Some(Err(_)) => Err(PeerError::Unavailable),
+            None => Err(PeerError::Busy),
+        }
     }
     /// The turn if free, else who holds it, read under the cycle's lock.
     pub(super) fn try_owner_turn(&self) -> OwnerTurn {
         let holder = self.cycle.lock().unwrap_or_else(PoisonError::into_inner);
         match self.turn.clone().try_acquire_owned() {
             Ok(permit) => OwnerTurn::Taken(permit),
-            Err(_) => holder.clone().map_or(OwnerTurn::Busy, OwnerTurn::Cycle),
+            Err(TryAcquireError::Closed) => OwnerTurn::Closed,
+            Err(TryAcquireError::NoPermits) => {
+                holder.clone().map_or(OwnerTurn::Busy, OwnerTurn::Cycle)
+            }
         }
+    }
+    /// Close the commands for shutdown, once the poller is joined: no owner
+    /// command takes the turn from now (it answers `peer_unavailable`, its
+    /// outcome kept, before any effect), and every command already between
+    /// its intent and its outcome is waited for, until the injected clock
+    /// has moved `limit` past now, so its outcome reaches the audit before
+    /// the audit closes. `true` when none was left running.
+    pub async fn close(&self, limit: Duration) -> bool {
+        self.turn.close();
+        let mut running = self.running.subscribe();
+        let finished = self
+            .within(limit, || async move {
+                let _ = running.wait_for(|running| *running == 0).await;
+            })
+            .await
+            .is_some();
+        if !finished {
+            tracing::error!(
+                running = *self.running.borrow(),
+                "peer commands still running at shutdown; their outcomes may not be audited"
+            );
+        }
+        finished
     }
     pub(super) fn set_sync(&self, key: DeviceKey, sync: Option<PeerSync>) {
         let mut syncs = self.syncs.lock().unwrap_or_else(PoisonError::into_inner);
@@ -349,8 +399,9 @@ impl PeerCommands {
         address: SocketAddr,
         code: ManualCode,
     ) -> (Result<PeerEntry, PeerError>, Evidence) {
-        let Some(_permit) = self.owner_turn().await else {
-            return (Err(PeerError::Busy), Evidence::not_read(None));
+        let _permit = match self.owner_turn().await {
+            Ok(permit) => permit,
+            Err(refused) => return (Err(refused), Evidence::not_read(None)),
         };
         let slot = Arc::new(self.records.enrolling(address));
         let outcome = self.enroll_with(address, code, slot.clone()).await;
@@ -482,8 +533,9 @@ impl PeerCommands {
     /// The forget, and what it found and left of the record.
     async fn forget_turn(&self, key: DeviceKey) -> (Result<PeerEntry, PeerError>, Evidence) {
         let not_read = Evidence::not_read(Some(key));
-        let Some(_permit) = self.owner_turn().await else {
-            return (Err(PeerError::Busy), not_read);
+        let _permit = match self.owner_turn().await {
+            Ok(permit) => permit,
+            Err(refused) => return (Err(refused), not_read),
         };
         // Nothing else writes peer records while the permit is held, so the
         // record read here is the one the removal finds.
@@ -550,6 +602,10 @@ impl PeerCommands {
         initiator: &PrincipalId,
         turn: impl Future<Output = (Result<T, PeerError>, Evidence)>,
     ) -> Result<T, PeerError> {
+        // Counted from before the intent until the outcome is kept, so
+        // shutdown closes the audit only after both.
+        self.running.send_modify(|running| *running += 1);
+        let _running = Running(&self.running);
         let operation = Uuid::new_v4();
         let requested = match command {
             Command::Enroll { address } => PeerAuditRecord::EnrollRequested {

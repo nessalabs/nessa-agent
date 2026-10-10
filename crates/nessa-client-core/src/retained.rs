@@ -368,7 +368,11 @@ impl RetainedCache {
     /// `budget` on the injected clock. An unchanged catalogue head ends the
     /// read after one call only when the cache notes a finished walk at that
     /// head ([`settled`]); otherwise every cached conversation is walked, and
-    /// only a walk that finished notes it ([`walked`]). Each conversation removed
+    /// only a walk that finished notes it ([`walked`]). At most
+    /// `max_withdrawn` conversations are withdrawn in one read; one that
+    /// reaches that many ends incomplete and the next read carries on, so a
+    /// caller that keeps evidence of each withdrawal can bound it. Each
+    /// conversation removed
     /// because the gateway no longer grants it is pushed to `withdrawn` as it
     /// goes, so the caller learns of it however the read ends.
     ///
@@ -382,6 +386,7 @@ impl RetainedCache {
         access: ReaderAccess<'_>,
         stop: &Arc<ReadStop>,
         budget: Duration,
+        max_withdrawn: usize,
         withdrawn: &mut Vec<String>,
     ) -> Result<ReadReport, ReadFailure> {
         let receiver = access.receiver.to_owned();
@@ -395,7 +400,7 @@ impl RetainedCache {
         });
         let before = withdrawn.len();
         self.progressed = false;
-        let result = self.read_inner(access, &ending, withdrawn);
+        let result = self.read_inner(access, &ending, max_withdrawn, withdrawn);
         stop.release();
         let progressed = self.progressed || withdrawn.len() > before;
         match read_end(result, stop.is_stopped(), ending.spent(), progressed) {
@@ -413,6 +418,7 @@ impl RetainedCache {
         &mut self,
         access: ReaderAccess<'_>,
         ending: &Arc<Stopping>,
+        max_withdrawn: usize,
         withdrawn: &mut Vec<String>,
     ) -> Result<ReadReport, ReadFailure> {
         let stop = &ending.stop;
@@ -523,6 +529,7 @@ impl RetainedCache {
         let each = read_each(
             ids,
             held_back,
+            max_withdrawn,
             &mut Each {
                 reader: self,
                 connection: &connection,
@@ -540,7 +547,7 @@ impl RetainedCache {
                 .ok_or(CacheError::Stale)?;
             self.cache
                 .note_walk(&scope, progress.completed, progress.generation)
-        });
+        })?;
         Ok(ReadReport {
             moved: true,
             complete,
@@ -677,20 +684,19 @@ fn settled(saved: Option<&CatalogueProgress>, walk: Option<(u64, u64)>, head: u6
 }
 
 /// Whether a read that walked everything it holds is complete: only when the
-/// walk was, and `note`, which keeps that in the cache, succeeded. The note is
-/// the evidence a later read settles on, so a read that cannot write it does
-/// not report itself complete; the next read walks again.
-fn walked(complete: bool, note: impl FnOnce() -> Result<(), CacheError>) -> bool {
+/// walk was, and then `note` keeps that in the cache. The note is the
+/// evidence a later read settles on, so a note that cannot be written fails
+/// the read as the cache's own failure (`Quota`, `Cache`, ...): it is backed
+/// off like any cache failure rather than walked again at once.
+fn walked(
+    complete: bool,
+    note: impl FnOnce() -> Result<(), CacheError>,
+) -> Result<bool, ReadFailure> {
     if !complete {
-        return false;
+        return Ok(false);
     }
-    match note() {
-        Ok(()) => true,
-        Err(error) => {
-            tracing::warn!(%error, "retained walk could not be noted; the next read walks again");
-            false
-        }
-    }
+    note().map_err(|error| cache_failure(&error))?;
+    Ok(true)
 }
 
 /// How a read that has returned ends, from what it returned, whether it was
@@ -741,8 +747,8 @@ trait EachConversation {
     fn withdraw(&mut self, id: &Id) -> Result<(), ReadFailure>;
 }
 
-/// Every cached conversation `ids`, in order, until the budget is spent or
-/// the connection is lost: each one the gateway no longer grants is withdrawn
+/// Every cached conversation `ids`, in order, until the budget is spent,
+/// `max_withdrawn` have been withdrawn, or the connection is lost: each one the gateway no longer grants is withdrawn
 /// and pushed to `withdrawn`, the rest are read. Whether all were read to the
 /// end. A cache write that fails for space or storage (`Quota`, `Cache`; or
 /// `held_back`, the catalogue's) does not end the walk: from then on each
@@ -756,14 +762,17 @@ trait EachConversation {
 fn read_each(
     ids: Vec<Id>,
     held_back: Option<ReadFailure>,
+    max_withdrawn: usize,
     each: &mut impl EachConversation,
     withdrawn: &mut Vec<String>,
 ) -> Result<bool, ReadFailure> {
     let mut held = held_back;
     let mut complete = true;
+    let before = withdrawn.len();
     for id in ids {
-        // No conversation starts once the budget is spent.
-        if each.spent() {
+        // No conversation starts once the budget is spent, or once this
+        // read has withdrawn as many as it may.
+        if each.spent() || withdrawn.len() - before >= max_withdrawn {
             complete = false;
             break;
         }

@@ -13,6 +13,7 @@
 //! start:   BoundNative --> listener task (failed --> watch)
 //!          --> PeerPoller (reads each peer) --> RunningNative
 //! stop:    signal_stop (listener and poller) --> join: the poller's workers,
+//!          then the peer commands closed (running ones waited for, bounded by PREEMPT),
 //!          then the peer audit closed and drained (bounded by AUDIT_DEADLINE),
 //!          then listener drain, then GatewayPairing::shutdown, then reconcile_cleanup
 //! ```
@@ -30,7 +31,7 @@ use crate::device_pairing::infrastructure::{
 };
 use crate::peer_gateways::infrastructure::{
     DurablePeerAudit, EnrollmentEntropy, PeerCommands, PeerPoller, PeerRecords, PollInputs,
-    PollPolicy, TcpPeerConnector, AUDIT_DEADLINE,
+    PollPolicy, TcpPeerConnector, AUDIT_DEADLINE, PREEMPT,
 };
 use crate::product::{DeviceCredentials, NativeSessions, ProductRouteState};
 use nessa_auth::{
@@ -296,7 +297,9 @@ pub(super) struct RunningNative {
     task: JoinHandle<IoResult<()>>,
     /// Reads what each peer granted; stopped and joined with the listener.
     poller: PeerPoller,
-    /// The peer commands' audit: closed and drained once the poller is joined.
+    /// The peer commands: closed once the poller is joined.
+    peers: Arc<PeerCommands>,
+    /// Their audit: closed and drained once the commands are.
     audit: Arc<DurablePeerAudit>,
 }
 
@@ -312,6 +315,7 @@ pub(super) fn start(
     let BoundNative {
         gateway,
         listener,
+        peers,
         audit,
         ..
     } = bound;
@@ -331,6 +335,7 @@ pub(super) fn start(
         stop: Some(stop),
         task,
         poller,
+        peers,
         audit,
     }
 }
@@ -358,9 +363,15 @@ impl RunningNative {
         // The poller's read and status workers end before anything else is
         // waited on: they hold sockets to peers and the peer turn.
         self.poller.join().await;
-        // Then the peer audit: closed, so an owner command from now is
-        // refused before any effect, and what was queued, the poller's last
-        // records included, written within one bound on the deadline clock.
+        // Then the owner's peer commands: none takes the turn from now (it
+        // is refused, with its outcome, before any effect), and those already
+        // between their intent and their outcome are waited for, so no
+        // effect is left without its outcome when the audit closes.
+        self.peers.close(PREEMPT).await;
+        // Then the peer audit: closed, so a command from now is refused
+        // before its intent, and what was queued, the poller's last records
+        // and the commands' outcomes included, written within one bound on
+        // the deadline clock.
         if !self.audit.drained(AUDIT_DEADLINE).await {
             tracing::error!("peer gateway audit not drained before shutdown");
         }
