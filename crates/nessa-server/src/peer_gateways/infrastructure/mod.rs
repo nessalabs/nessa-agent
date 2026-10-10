@@ -11,4 +11,6 @@ pub use audit::DurablePeerAudit;
 pub use commands::{PeerCommands, PeerError, PeerSync, SyncState, CONNECT};
 pub use connector::TcpPeerConnector;
 pub use poller::{PeerPoller, PollPolicy, POLL_BACKOFF_CAP, POLL_INTERVAL};
-pub use records::{PeerEntry, PeerPhase, PeerRecord, PeerRecords, PeerSlot, SlotRefusal, SlotSave};
+pub use records::{
+    PeerEntry, PeerPhase, PeerRecord, PeerRecords, PeerSlot, SlotFound, SlotRefusal, SlotSave,
+};

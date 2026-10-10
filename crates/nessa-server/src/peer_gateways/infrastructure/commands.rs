@@ -5,14 +5,17 @@
 //! enroll: audit intent --> PeerConnector (bounded by the deadline clock)
 //!         --> NativeEnrollmentClient (PeerRead, PeerSlot)
 //!         --> peer gateway's listener --> PeerRecords (pending record) --> audit outcome
-//! forget: PeerRecords (before) --> audit intent --> remove --> audit outcome
+//! forget: audit intent --> PeerRecords (before) --> remove --> audit outcome
 //! list:   PeerRecords
 //! ```
 //! Arrows are calls, in order. The product socket has already asked Cedar for
-//! `credential.manage`; nothing here decides who may ask. Each enroll and
-//! forget hands its intent to the audit port before its effect and its
-//! outcome after it, and answers success only when both are kept.
-use super::records::{PeerEntry, PeerPhase, PeerRecords, PeerSlot, SlotRefusal, SlotSave};
+//! `credential.manage`; nothing here decides who may ask. Every call of
+//! enroll and forget runs through one audited wrapper: its intent before
+//! anything, its outcome on every way it ends, and success answered only when
+//! both are kept.
+use super::records::{
+    PeerEntry, PeerPhase, PeerRecords, PeerSlot, SlotFound, SlotRefusal, SlotSave,
+};
 use crate::peer_gateways::application::{PeerAudit, PeerAuditRecord, PeerConnector, PeerState};
 use nessa_auth::{
     adapters::pairing::{ManualCode, OsEntropy, PairingCryptoError},
@@ -29,6 +32,7 @@ use nessa_protocol::product::generated::PeerErrorCode;
 use std::collections::HashMap;
 use std::sync::{Mutex, PoisonError};
 use std::{
+    future::Future,
     net::{SocketAddr, TcpStream},
     sync::Arc,
     time::Duration,
@@ -168,85 +172,34 @@ impl PeerCommands {
     /// Enroll this gateway, with its own key, into the peer invitation that
     /// `code` opens at `address`, for `initiator`. The record is saved,
     /// pending, before the claim is confirmed; the peer's owner approves on
-    /// the peer. The intent is audited before anything is dialed, and the
-    /// outcome, with what the enrollment did to the peer's record, before the
-    /// answer. Each is also logged with the peer's key, the address and the
-    /// initiator; never the code or any key material.
+    /// the peer. Audited like every peer command (see [`Self::audited`]): the
+    /// outcome names the peer once it presented its key, and its record as
+    /// found and as left.
     pub async fn enroll(
         &self,
         address: SocketAddr,
         code: ManualCode,
         initiator: &PrincipalId,
     ) -> Result<PeerEntry, PeerError> {
+        self.audited(
+            Command::Enroll { address },
+            initiator,
+            self.enroll_turn(address, code),
+        )
+        .await
+    }
+    /// The enrollment, and what it found and left of the peer's record.
+    async fn enroll_turn(
+        &self,
+        address: SocketAddr,
+        code: ManualCode,
+    ) -> (Result<PeerEntry, PeerError>, Evidence) {
         let Ok(_permit) = self.turn.try_acquire() else {
-            tracing::info!(address = %address, initiator = initiator.as_str(),
-                outcome = ?PeerError::Busy, "peer gateway enrollment refused");
-            return Err(PeerError::Busy);
+            return (Err(PeerError::Busy), Evidence::not_read(None));
         };
-        let operation = Uuid::new_v4();
-        let requested = PeerAuditRecord::EnrollRequested {
-            operation,
-            initiator: initiator.clone(),
-            address,
-        };
-        if self.audit.record(requested).await.is_err() {
-            tracing::error!(address = %address, initiator = initiator.as_str(),
-                operation = %operation, "peer gateway enrollment not started: audit unavailable");
-            return Err(PeerError::AuditUnavailable);
-        }
         let slot = Arc::new(self.records.enrolling(address));
         let outcome = self.enroll_with(address, code, slot.clone()).await;
-        let (peer, before, after) = match (slot.saved(), slot.existing()) {
-            // Refused `Exists`: the record as the refusal found it, untouched.
-            (None, Some(existing)) => {
-                let state = state_of(&existing);
-                (Some(*existing.key()), state.clone(), state)
-            }
-            (None, None) => (slot.peer(), PeerState::Absent, PeerState::Absent),
-            (Some((key, SlotSave::Created)), _) => {
-                (Some(key), PeerState::Absent, PeerState::Pending { address })
-            }
-            (Some((key, SlotSave::Replaced)), _) => (
-                Some(key),
-                PeerState::Pending { address },
-                PeerState::Pending { address },
-            ),
-            (Some((key, SlotSave::Uncertain)), _) => {
-                (Some(key), PeerState::Absent, PeerState::Unknown)
-            }
-        };
-        let finished = self
-            .audit
-            .record(PeerAuditRecord::EnrollFinished {
-                operation,
-                initiator: initiator.clone(),
-                address,
-                peer,
-                before,
-                after: after.clone(),
-                outcome: outcome.as_ref().map(|_| ()).map_err(|error| error.code()),
-            })
-            .await;
-        let peer = peer.map(|key| hex(&key)).unwrap_or_default();
-        let outcome = match finished {
-            Ok(()) => outcome,
-            Err(_) => {
-                tracing::error!(peer = %peer, address = %address,
-                    initiator = initiator.as_str(), operation = %operation,
-                    outcome = ?outcome.as_ref().map(|_| "pending"), after = ?after,
-                    "peer gateway enrollment outcome not audited");
-                return Err(PeerError::AuditUnavailable);
-            }
-        };
-        match &outcome {
-            Ok(_) => tracing::info!(peer = %peer, address = %address,
-                initiator = initiator.as_str(), operation = %operation,
-                outcome = "pending", "peer gateway enrolled"),
-            Err(error) => tracing::info!(peer = %peer, address = %address,
-                initiator = initiator.as_str(), operation = %operation,
-                outcome = ?error, "peer gateway enrollment refused"),
-        }
-        outcome
+        (outcome, Evidence::of_slot(&slot, address))
     }
     async fn enroll_with(
         &self,
@@ -295,6 +248,11 @@ impl PeerCommands {
             tokio::select! {
                 biased;
                 connected = &mut connecting => {
+                    // Completed past the deadline, before a tick read the
+                    // clock: too late all the same, and dropped.
+                    if self.clock.elapsed_ms() >= deadline {
+                        return Err(PeerError::Unreachable);
+                    }
                     return connected.map_err(|_| PeerError::Unreachable);
                 }
                 () = tokio::time::sleep(WAKE_TICK) => {
@@ -329,55 +287,38 @@ impl PeerCommands {
     /// Local only: the peer's owner revokes the credential on the peer.
     /// Refused `Busy` while an enrollment runs, which may be saving that very
     /// record: removing it then would spend the peer's invitation for nothing.
-    /// The record as found is audited before it is removed, and what removing
-    /// it came to before the answer.
+    /// Audited like every peer command (see [`Self::audited`]).
     pub async fn forget(
         &self,
         key: DeviceKey,
         initiator: &PrincipalId,
     ) -> Result<PeerEntry, PeerError> {
-        let operation = Uuid::new_v4();
-        let outcome = self.forget_audited(key, initiator, operation).await;
-        tracing::info!(
-            peer = %hex(&key),
-            address = outcome
-                .as_ref()
-                .ok()
-                .and_then(|entry| match entry {
-                    PeerEntry::Readable(record) => Some(record.address().to_string()),
-                    PeerEntry::Unreadable(_) => None,
-                })
-                .unwrap_or_default(),
-            initiator = initiator.as_str(),
-            operation = %operation,
-            outcome = ?outcome.as_ref().map(|_| "forgotten"),
-            "peer gateway forget"
-        );
-        outcome
+        self.audited(
+            Command::Forget { peer: key },
+            initiator,
+            self.forget_turn(key),
+        )
+        .await
     }
-    async fn forget_audited(
-        &self,
-        key: DeviceKey,
-        initiator: &PrincipalId,
-        operation: Uuid,
-    ) -> Result<PeerEntry, PeerError> {
-        let _permit = self.turn.try_acquire().map_err(|_| PeerError::Busy)?;
+    /// The forget, and what it found and left of the record.
+    async fn forget_turn(&self, key: DeviceKey) -> (Result<PeerEntry, PeerError>, Evidence) {
+        let not_read = Evidence::not_read(Some(key));
+        let Ok(_permit) = self.turn.try_acquire() else {
+            return (Err(PeerError::Busy), not_read);
+        };
         // Nothing else writes peer records while the permit is held, so the
         // record read here is the one the removal finds.
-        let found = self
-            .blocking(move |records| records.get(&key))
-            .await?
-            .ok_or(PeerError::NotFound)?;
-        let before = state_of(&found);
-        let requested = PeerAuditRecord::ForgetRequested {
-            operation,
-            initiator: initiator.clone(),
-            peer: key,
-            before: before.clone(),
+        let found = match self.blocking(move |records| records.get(&key)).await {
+            Ok(Some(found)) => found,
+            Ok(None) => {
+                return (
+                    Err(PeerError::NotFound),
+                    Evidence::unchanged(key, PeerState::Absent),
+                )
+            }
+            Err(error) => return (Err(error), not_read),
         };
-        if self.audit.record(requested).await.is_err() {
-            return Err(PeerError::AuditUnavailable);
-        }
+        let before = state_of(&found);
         let records = self.records.clone();
         let removed = tokio::task::spawn_blocking(move || records.forget(&key))
             .await
@@ -392,20 +333,81 @@ impl PeerCommands {
             Err(PrivateStateError::Uncertain) => (PeerState::Unknown, Err(PeerError::Unavailable)),
             Err(_) => (before.clone(), Err(PeerError::Unavailable)),
         };
-        let finished = PeerAuditRecord::ForgetFinished {
-            operation,
-            initiator: initiator.clone(),
-            peer: key,
-            before,
-            after,
-            outcome: outcome.as_ref().map(|_| ()).map_err(|error| error.code()),
+        (
+            outcome,
+            Evidence {
+                peer: Some(key),
+                before,
+                after,
+            },
+        )
+    }
+    /// Run one call of a peer command under its audit, the only way either
+    /// command runs. The intent is kept before `turn` starts, so before any
+    /// check, even whether another command holds the turn; no intent, and
+    /// `turn` never runs. `turn` answers with the evidence of what it found
+    /// and left on every path it can end on, as its return type demands, and
+    /// that outcome is kept before the answer: one not kept turns the answer
+    /// into `AuditUnavailable`, while the effect stands. Both are logged with
+    /// the target, the initiator and the operation; never a code or key
+    /// material.
+    async fn audited<T>(
+        &self,
+        command: Command,
+        initiator: &PrincipalId,
+        turn: impl Future<Output = (Result<T, PeerError>, Evidence)>,
+    ) -> Result<T, PeerError> {
+        let operation = Uuid::new_v4();
+        let requested = match command {
+            Command::Enroll { address } => PeerAuditRecord::EnrollRequested {
+                operation,
+                initiator: initiator.clone(),
+                address,
+            },
+            Command::Forget { peer } => PeerAuditRecord::ForgetRequested {
+                operation,
+                initiator: initiator.clone(),
+                peer,
+            },
         };
-        if self.audit.record(finished).await.is_err() {
-            tracing::error!(peer = %hex(&key), operation = %operation,
-                outcome = ?outcome.as_ref().map(|_| "forgotten"),
-                "peer gateway forget outcome not audited");
+        if self.audit.record(requested).await.is_err() {
+            tracing::error!(command = command.name(), target = %command.target(),
+                initiator = initiator.as_str(), operation = %operation,
+                "peer command not started: audit unavailable");
             return Err(PeerError::AuditUnavailable);
         }
+        let (outcome, evidence) = turn.await;
+        let answer = outcome.as_ref().map(|_| ()).map_err(|error| error.code());
+        let peer = evidence.peer.as_ref().map(hex).unwrap_or_default();
+        let finished = match command {
+            Command::Enroll { address } => PeerAuditRecord::EnrollFinished {
+                operation,
+                initiator: initiator.clone(),
+                address,
+                peer: evidence.peer,
+                before: evidence.before,
+                after: evidence.after.clone(),
+                outcome: answer,
+            },
+            Command::Forget { peer } => PeerAuditRecord::ForgetFinished {
+                operation,
+                initiator: initiator.clone(),
+                peer,
+                before: evidence.before,
+                after: evidence.after.clone(),
+                outcome: answer,
+            },
+        };
+        if self.audit.record(finished).await.is_err() {
+            tracing::error!(command = command.name(), target = %command.target(), peer = %peer,
+                initiator = initiator.as_str(), operation = %operation,
+                outcome = ?answer, after = ?evidence.after,
+                "peer command outcome not audited");
+            return Err(PeerError::AuditUnavailable);
+        }
+        tracing::info!(command = command.name(), target = %command.target(), peer = %peer,
+            initiator = initiator.as_str(), operation = %operation,
+            outcome = ?answer, "peer command finished");
         outcome
     }
     async fn blocking<T: Send + 'static>(
@@ -417,6 +419,76 @@ impl PeerCommands {
             .await
             .map_err(|_| PeerError::Unavailable)?
             .map_err(|_| PeerError::Unavailable)
+    }
+}
+
+/// One call of a peer command, as its audit names it.
+#[derive(Clone, Copy)]
+enum Command {
+    Enroll { address: SocketAddr },
+    Forget { peer: DeviceKey },
+}
+impl Command {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Enroll { .. } => "peer.enroll",
+            Self::Forget { .. } => "peer.forget",
+        }
+    }
+    /// What the owner named: the address dialed, or the peer forgotten.
+    fn target(self) -> String {
+        match self {
+            Self::Enroll { address } => address.to_string(),
+            Self::Forget { peer } => hex(&peer),
+        }
+    }
+}
+
+/// What one call found and left of its peer's record.
+struct Evidence {
+    /// The peer, once known.
+    peer: Option<DeviceKey>,
+    before: PeerState,
+    after: PeerState,
+}
+impl Evidence {
+    /// The call ended before it read any record.
+    fn not_read(peer: Option<DeviceKey>) -> Self {
+        Self {
+            peer,
+            before: PeerState::NotRead,
+            after: PeerState::NotRead,
+        }
+    }
+    /// The record was read as `state` and left as it was.
+    fn unchanged(peer: DeviceKey, state: PeerState) -> Self {
+        Self {
+            peer: Some(peer),
+            before: state.clone(),
+            after: state,
+        }
+    }
+    /// What an enrollment's slot noted: the peer from the moment its pin was
+    /// seen, its record as first found, and what the save did to it.
+    fn of_slot(slot: &PeerSlot, address: SocketAddr) -> Self {
+        let Some((peer, found)) = slot.found() else {
+            return Self::not_read(None);
+        };
+        let before = match found {
+            SlotFound::NotRead => PeerState::NotRead,
+            SlotFound::Absent => PeerState::Absent,
+            SlotFound::Kept(entry) => state_of(&entry),
+        };
+        let after = match slot.saved() {
+            None => before.clone(),
+            Some(SlotSave::Created | SlotSave::Replaced) => PeerState::Pending { address },
+            Some(SlotSave::Uncertain) => PeerState::Unknown,
+        };
+        Self {
+            peer: Some(peer),
+            before,
+            after,
+        }
     }
 }
 

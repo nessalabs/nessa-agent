@@ -1,7 +1,7 @@
 //! The dialing side of a peer gateway over the real `/session` route, Cedar,
 //! and a real peer: gateway B enrolls, with its own native key, into gateway
 //! A's peer invitation, keeping a reference to that key and never a copy.
-//! Rows P1–P13 in `docs/design/auth/peer-gateways.md` ("The dialing side").
+//! Rows P1–P14 in `docs/design/auth/peer-gateways.md` ("The dialing side").
 use super::product_client::ProductClient;
 use super::support::{private_root, Fixture, Time, WAIT};
 use base64::{engine::general_purpose::STANDARD, Engine};
@@ -120,13 +120,21 @@ struct Dialing {
 }
 impl Dialing {
     async fn new(fixture: &Fixture) -> Self {
-        let root = private_root(fixture.directory.path(), "dialing");
+        Self::with_identity(
+            fixture,
+            "dialing",
+            NativeIdentity::generate(&mut OsEntropy).unwrap(),
+        )
+        .await
+    }
+    /// Gateway B under `name`, enrolling with `identity`.
+    async fn with_identity(fixture: &Fixture, name: &str, identity: NativeIdentity) -> Self {
+        let root = private_root(fixture.directory.path(), name);
         for directory in ["native-pairing", "peer-gateways", "peer-gateways-audit"] {
             nessa_local_storage::create_directory_beneath(&root, Path::new(directory)).unwrap();
         }
         let keys = Arc::new(FilePairingState::open(&root, Path::new("native-pairing")).unwrap());
         let audience = AudienceId::new("gateway-b").unwrap();
-        let identity = NativeIdentity::generate(&mut OsEntropy).unwrap();
         keys.save_gateway_key(identity.key_material(), &audience, &Time)
             .unwrap();
         let records = Arc::new(
@@ -781,13 +789,15 @@ async fn enrolling_and_forgetting_are_audited_and_answer_only_when_kept() {
     let text = serde_json::to_string(&kept).unwrap();
     assert!(!text.contains(&code), "the code is never kept");
 
-    // Success: a forget's intent names the record as it was.
+    // Success: a forget's intent names the peer; its outcome, the record as
+    // it was and as it is left.
     assert_eq!(forget()["ok"], true);
     let kept = dialing.audit.records();
     let (requested, finished) = (&kept[2], &kept[3]);
     assert_eq!(requested["kind"], "peer_forget_requested");
+    assert_eq!(requested["target"]["peerKey"], hex);
     assert_eq!(
-        requested["transition"]["before"],
+        finished["transition"]["before"],
         json!({"phase": "pending", "address": address})
     );
     assert_eq!(finished["kind"], "peer_forget_finished");
@@ -796,7 +806,7 @@ async fn enrolling_and_forgetting_are_audited_and_answer_only_when_kept() {
     assert_eq!(finished["transition"]["after"]["phase"], "absent");
     assert_eq!(finished["initiator"], owner);
 
-    // Failure: a refused enrollment is kept, with nothing before or after.
+    // Failure: a refused enrollment is kept; it never reached the record.
     let (code, id) = invite(&fixture, ConsentClass::PeerRead).await;
     let wrong = if code == "ABCD-2345" {
         "ABCD-2346"
@@ -812,7 +822,7 @@ async fn enrolling_and_forgetting_are_audited_and_answer_only_when_kept() {
         finished["outcome"],
         json!({"result": "refused", "code": "peer_invitation_refused"})
     );
-    assert_eq!(finished["transition"]["after"]["phase"], "absent");
+    assert_eq!(finished["transition"]["after"]["phase"], "not_read");
     assert_eq!(finished["target"]["peerKey"], Value::Null);
     cancel(&fixture, id).await;
 
@@ -960,4 +970,378 @@ async fn a_connect_that_never_answers_ends_when_the_injected_clock_passes_its_de
         finished["outcome"],
         json!({"result": "refused", "code": "peer_unreachable"})
     );
+}
+
+/// A connect that completes only when the test lets it, to a real listener.
+struct Late {
+    to: SocketAddr,
+    release: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+    dialed: Arc<std::sync::atomic::AtomicBool>,
+}
+impl PeerConnector for Late {
+    fn connect(&self, _: SocketAddr) -> PeerConnectFuture<'_> {
+        let release = self.release.lock().unwrap().take().unwrap();
+        let to = self.to;
+        self.dialed.store(true, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async move {
+            let _ = release.await;
+            let stream = tokio::net::TcpStream::connect(to).await?.into_std()?;
+            stream.set_nonblocking(false)?;
+            Ok(stream)
+        })
+    }
+}
+
+/// Row P13, the other edge: a connect that completes once the clock has
+/// passed the deadline, before a tick read it, is too late all the same. The
+/// connection is closed unused and the enrollment ends `peer_unreachable`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_connect_completed_after_the_deadline_is_refused_and_closed() {
+    use nessa_auth::{adapters::pairing::ManualCode, domain::PrincipalId};
+    use std::io::Read;
+    let fixture = Fixture::new().await;
+    let dialing = Dialing::new(&fixture).await;
+    let clock = Arc::new(Manual(1_000.into()));
+    let peer = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let (release, released) = tokio::sync::oneshot::channel();
+    let dialed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let commands = Arc::new(PeerCommands::new(
+        dialing.records.clone(),
+        clock.clone(),
+        dialing.audit.clone(),
+        Arc::new(Late {
+            to: peer.local_addr().unwrap(),
+            release: Mutex::new(Some(released)),
+            dialed: dialed.clone(),
+        }),
+    ));
+    let enrolling = tokio::spawn({
+        let commands = commands.clone();
+        async move {
+            let owner = PrincipalId::new("owner").unwrap();
+            commands
+                .enroll(
+                    "192.0.2.1:7443".parse().unwrap(),
+                    ManualCode::generate(&mut OsEntropy),
+                    &owner,
+                )
+                .await
+        }
+    });
+    tokio::time::timeout(WAIT, async {
+        while !dialed.load(std::sync::atomic::Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the enrollment dials");
+    // Past the deadline and connected at once: the connect is ready when
+    // the command next looks, whether or not a tick has read the clock.
+    clock.0.store(
+        1_000 + CONNECT.as_millis() as u64,
+        std::sync::atomic::Ordering::SeqCst,
+    );
+    release.send(()).unwrap();
+    let ended = tokio::time::timeout(WAIT, enrolling)
+        .await
+        .expect("the late connection is refused, not used")
+        .unwrap();
+    assert_eq!(ended, Err(PeerError::Unreachable));
+    let (mut accepted, _) = blocking(|| peer.accept().unwrap());
+    accepted
+        .set_read_timeout(Some(std::time::Duration::from_secs(30)))
+        .unwrap();
+    let mut byte = [0; 1];
+    assert_eq!(
+        blocking(|| accepted.read(&mut byte)).unwrap(),
+        0,
+        "closed without a byte sent"
+    );
+    assert!(dialing.files().is_empty());
+    let finished = dialing.audit.records().pop().unwrap();
+    assert_eq!(
+        finished["outcome"],
+        json!({"result": "refused", "code": "peer_unreachable"})
+    );
+}
+
+/// One audited call's expected evidence.
+struct Expected {
+    /// `peer_enroll` or `peer_forget`.
+    command: &'static str,
+    /// The wire code, or `None` for success.
+    code: Option<&'static str>,
+    /// The address an enrollment dialed.
+    address: Option<String>,
+    /// The peer's key, when the call learned it.
+    peer: Option<String>,
+}
+
+/// The operation `after` added over `before`, which must be exactly one.
+fn new_operation(before: &[Value], after: &[Value]) -> String {
+    let seen: std::collections::HashSet<_> = before.iter().map(|r| &r["recordId"]).collect();
+    let mut added: Vec<_> = after
+        .iter()
+        .filter(|record| !seen.contains(&record["recordId"]))
+        .map(|record| record["operationId"].as_str().unwrap().to_owned())
+        .collect();
+    added.dedup();
+    assert_eq!(added.len(), 1, "one operation per call: {added:?}");
+    added.pop().unwrap()
+}
+
+/// `operation` kept exactly one intent and then exactly one outcome, each
+/// naming the initiator and the target, and the outcome the answer.
+fn assert_pair(records: &[Value], operation: &str, expected: &Expected) {
+    let pair: Vec<_> = records
+        .iter()
+        .filter(|record| record["operationId"] == operation)
+        .collect();
+    assert_eq!(pair.len(), 2, "one intent and one outcome: {pair:?}");
+    let (requested, finished) = (pair[0], pair[1]);
+    let row = format!("{}/{:?}", expected.command, expected.code);
+    assert_eq!(
+        requested["kind"],
+        format!("{}_requested", expected.command),
+        "{row}"
+    );
+    assert_eq!(
+        finished["kind"],
+        format!("{}_finished", expected.command),
+        "{row}"
+    );
+    let owner = json!({"kind": "principal", "principalId": "owner"});
+    for record in [requested, finished] {
+        assert_eq!(record["initiator"], owner, "{row}");
+        assert_eq!(record["cause"], "owner_requested", "{row}");
+        if let Some(address) = &expected.address {
+            assert_eq!(record["target"]["address"], *address, "{row}");
+        }
+    }
+    let peer = expected.peer.clone().map_or(Value::Null, Value::from);
+    assert_eq!(finished["target"]["peerKey"], peer, "{row}");
+    if expected.command == "peer_forget" {
+        assert_eq!(requested["target"]["peerKey"], peer, "{row}");
+    }
+    let outcome = match expected.code {
+        None => json!({"result": "succeeded"}),
+        Some(code) => json!({"result": "refused", "code": code}),
+    };
+    assert_eq!(finished["outcome"], outcome, "{row}");
+}
+
+/// Row P14: every way peer.enroll and peer.forget can answer, success and
+/// each typed refusal, keeps exactly one intent and one outcome under one
+/// operation id, naming the initiator, the target and the peer once known.
+/// The table must cover every answer, so a new path that skips the audit,
+/// or a new refusal left out of this table, fails here.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn every_peer_command_answer_keeps_one_intent_and_one_outcome() {
+    use nessa_auth::{adapters::pairing::ManualCode, domain::PrincipalId};
+    let fixture = Fixture::new().await;
+    let (native, stop, listener, _) = fixture.listener().await;
+    let a = pin_at(native).await;
+    let a_hex: String = a[12..].iter().map(|byte| format!("{byte:02x}")).collect();
+    let other_fixture = Fixture::new().await;
+    let (other, other_stop, other_listener, _) = other_fixture.listener().await;
+    let b = pin_at(other).await;
+    let b_hex: String = b[12..].iter().map(|byte| format!("{byte:02x}")).collect();
+    let owner = PrincipalId::new("owner").unwrap();
+    let commands_over = |dialing: &Dialing| {
+        Arc::new(PeerCommands::new(
+            dialing.records.clone(),
+            RuntimeDependencies::default().clock,
+            dialing.audit.clone(),
+            Arc::new(TcpPeerConnector),
+        ))
+    };
+    let dialing = Dialing::new(&fixture).await;
+    let commands = commands_over(&dialing);
+    let mut covered = std::collections::BTreeSet::new();
+    let code_of = |answer: &Result<PeerEntry, PeerError>| answer.as_ref().err().map(|e| e.code());
+
+    // One call against `dialing`'s audit, then its pair checked.
+    macro_rules! row {
+        ($dialing:expr, $call:expr, $expected:expr) => {{
+            let before = $dialing.audit.records();
+            let answer = $call;
+            let expected: Expected = $expected;
+            assert_eq!(code_of(&answer), expected.code);
+            let after = $dialing.audit.records();
+            assert_pair(&after, &new_operation(&before, &after), &expected);
+            covered.insert(format!(
+                "{}/{}",
+                expected.command,
+                expected.code.unwrap_or("ok")
+            ));
+        }};
+    }
+    let enroll = |command: &'static str, code, address: SocketAddr, peer: Option<&str>| Expected {
+        command,
+        code,
+        address: Some(address.to_string()),
+        peer: peer.map(str::to_owned),
+    };
+    let parse = |code: &str| ManualCode::parse(code.as_bytes()).unwrap();
+
+    let (code, id) = invite(&fixture, ConsentClass::DeviceRead).await;
+    row!(
+        dialing,
+        commands.enroll(native, parse(&code), &owner).await,
+        enroll("peer_enroll", Some("peer_wrong_invitation"), native, None)
+    );
+    cancel(&fixture, id).await;
+    let (code, id) = invite(&fixture, ConsentClass::PeerRead).await;
+    let wrong = if code == "ABCD-2345" {
+        "ABCD-2346"
+    } else {
+        "ABCD-2345"
+    };
+    row!(
+        dialing,
+        commands.enroll(native, parse(wrong), &owner).await,
+        enroll("peer_enroll", Some("peer_invitation_refused"), native, None)
+    );
+    row!(
+        dialing,
+        commands.enroll(native, parse(&code), &owner).await,
+        enroll("peer_enroll", None, native, Some(&a_hex))
+    );
+    cancel(&fixture, id).await;
+    let (code, id) = invite(&fixture, ConsentClass::PeerRead).await;
+    row!(
+        dialing,
+        commands.enroll(native, parse(&code), &owner).await,
+        enroll("peer_enroll", Some("peer_exists"), native, Some(&a_hex))
+    );
+    cancel(&fixture, id).await;
+
+    // As many peers as the list holds: one real, the rest placeholders.
+    let fillers: Vec<_> = (1..nessa_protocol::product::generated::MAX_PEERS)
+        .map(|index| dialing.directory.join(format!("{:064x}.json", index)))
+        .collect();
+    for filler in &fillers {
+        drop(nessa_local_storage::open(filler, nessa_local_storage::OpenMode::CreateNew).unwrap());
+    }
+    let (code, id) = invite(&other_fixture, ConsentClass::PeerRead).await;
+    row!(
+        dialing,
+        commands.enroll(other, parse(&code), &owner).await,
+        enroll("peer_enroll", Some("peer_capacity"), other, Some(&b_hex))
+    );
+    cancel(&other_fixture, id).await;
+    for filler in &fillers {
+        std::fs::remove_file(filler).unwrap();
+    }
+
+    // A gateway enrolling with A's own key reaches itself at A's address.
+    let own = fixture
+        .keys
+        .restore_gateway_key(&AudienceId::new("gateway").unwrap(), &Time)
+        .unwrap()
+        .unwrap();
+    let itself =
+        Dialing::with_identity(&fixture, "itself", NativeIdentity::restore(own).unwrap()).await;
+    let (code, id) = invite(&fixture, ConsentClass::PeerRead).await;
+    row!(
+        itself,
+        commands_over(&itself)
+            .enroll(native, parse(&code), &owner)
+            .await,
+        enroll(
+            "peer_enroll",
+            Some("peer_own_gateway"),
+            native,
+            Some(&a_hex)
+        )
+    );
+    cancel(&fixture, id).await;
+
+    let forget = |code, peer: &str| Expected {
+        command: "peer_forget",
+        code,
+        address: None,
+        peer: Some(peer.to_owned()),
+    };
+    let nobody = DeviceKey::new([7; 32]);
+    row!(
+        dialing,
+        commands.forget(nobody, &owner).await,
+        forget(Some("peer_not_found"), &"07".repeat(32))
+    );
+
+    // An enrollment held at a peer that accepts and never speaks: every
+    // other call meanwhile is busy, and it ends unreachable once dropped.
+    let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let held_at = silent.local_addr().unwrap();
+    let before = dialing.audit.records();
+    let held = tokio::spawn({
+        let commands = commands.clone();
+        let owner = owner.clone();
+        async move { commands.enroll(held_at, parse_code(), &owner).await }
+    });
+    let (socket, _) = blocking(|| silent.accept().unwrap());
+    let held_operation = new_operation(&before, &dialing.audit.records());
+    row!(
+        dialing,
+        commands
+            .enroll(native, ManualCode::generate(&mut OsEntropy), &owner)
+            .await,
+        enroll("peer_enroll", Some("peer_busy"), native, None)
+    );
+    let a_key = DeviceKey::new(a[12..].try_into().unwrap());
+    row!(
+        dialing,
+        commands.forget(a_key, &owner).await,
+        forget(Some("peer_busy"), &a_hex)
+    );
+    drop(socket);
+    let answer = tokio::time::timeout(WAIT, held).await.unwrap().unwrap();
+    let expected = enroll("peer_enroll", Some("peer_unreachable"), held_at, None);
+    assert_eq!(code_of(&answer), expected.code);
+    assert_pair(&dialing.audit.records(), &held_operation, &expected);
+    covered.insert("peer_enroll/peer_unreachable".to_owned());
+
+    row!(
+        dialing,
+        commands.forget(a_key, &owner).await,
+        forget(None, &a_hex)
+    );
+
+    // Every answer either command gives, but the two that need storage or
+    // the audit to fail (rows P12 and the store tests cover those).
+    let answers: std::collections::BTreeSet<String> = [
+        "peer_enroll/ok",
+        "peer_enroll/peer_busy",
+        "peer_enroll/peer_unreachable",
+        "peer_enroll/peer_invitation_refused",
+        "peer_enroll/peer_wrong_invitation",
+        "peer_enroll/peer_own_gateway",
+        "peer_enroll/peer_exists",
+        "peer_enroll/peer_capacity",
+        "peer_forget/ok",
+        "peer_forget/peer_busy",
+        "peer_forget/peer_not_found",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
+    assert_eq!(covered, answers);
+    // And nothing else was kept: every operation is one pair.
+    for dialing in [&dialing, &itself] {
+        let records = dialing.audit.records();
+        let operations: std::collections::BTreeSet<_> = records
+            .iter()
+            .map(|record| record["operationId"].as_str().unwrap().to_owned())
+            .collect();
+        assert_eq!(records.len(), 2 * operations.len());
+    }
+    stop.send(()).unwrap();
+    listener.await.unwrap().unwrap();
+    other_stop.send(()).unwrap();
+    other_listener.await.unwrap().unwrap();
+}
+
+fn parse_code() -> nessa_auth::adapters::pairing::ManualCode {
+    nessa_auth::adapters::pairing::ManualCode::parse(b"ABCD-2345").unwrap()
 }

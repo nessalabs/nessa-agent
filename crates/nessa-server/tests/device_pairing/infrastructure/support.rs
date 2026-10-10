@@ -100,6 +100,8 @@ pub struct Fixture {
     pub owner_token: String,
     pub gateway: Arc<GatewayPairing>,
     pub time: Arc<GatewayTime>,
+    /// The gateway's own key store, which its runtime holds open.
+    pub keys: Arc<FilePairingState>,
 }
 impl Fixture {
     pub async fn new() -> Self {
@@ -198,7 +200,7 @@ impl Fixture {
                 receivers: receivers(authority.clone()),
                 clock: time.clone(),
                 gateway: resource,
-                key_store: keys,
+                key_store: keys.clone(),
                 identity,
             })
             .unwrap(),
@@ -211,6 +213,7 @@ impl Fixture {
             owner_token,
             gateway,
             time,
+            keys,
         }
     }
     /// Reopen actual current registry/private owners after their physical drains.
@@ -224,7 +227,9 @@ impl Fixture {
             owner_token,
             gateway,
             time,
+            keys,
         } = self;
+        drop(keys);
         drop(gateway);
         drop(registry);
         drop(receivers);
@@ -256,7 +261,7 @@ impl Fixture {
                 receivers: Arc::new(ConversationReceivers::new(authority.clone())),
                 clock: time.clone(),
                 gateway: resource,
-                key_store: keys,
+                key_store: keys.clone(),
                 identity,
             })
             .unwrap(),
@@ -269,6 +274,7 @@ impl Fixture {
             owner_token,
             gateway,
             time,
+            keys,
         }
     }
     pub async fn listener(

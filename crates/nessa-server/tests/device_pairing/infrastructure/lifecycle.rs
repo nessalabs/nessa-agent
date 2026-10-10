@@ -241,7 +241,9 @@ async fn native_create_observer_loss_keeps_original_owner_until_drain() {
         time: _,
         owner_token: _,
         receivers: _,
+        keys,
     } = fixture;
+    drop(keys);
     drop(gateway);
     drop(registry);
     #[cfg(unix)]
