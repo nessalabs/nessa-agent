@@ -1491,14 +1491,61 @@ mod artifact_records {
             .unwrap()
             .artifacts = vec![artifact("lease-1", None); ArtifactRecord::MAX_PER_CONVERSATION];
         assert_eq!(manager.artifact_room().await, Some(0));
+        let another = ArtifactRecord {
+            file: PublishedFile::new(
+                Sha256Digest::from_bytes([8; 32]),
+                MediaType::parse("application/pdf").unwrap(),
+                12,
+            )
+            .unwrap(),
+            ..artifact("lease-1", None)
+        };
         assert_eq!(
-            manager.record_artifact(artifact("lease-1", None)).await,
+            manager.record_artifact(another).await,
             Err(ArtifactRecordError::Full)
         );
         assert_eq!(lease.changes.lock().unwrap().len(), saves);
         assert_eq!(
             observed_artifacts(&manager).await.len(),
             ArtifactRecord::MAX_PER_CONVERSATION
+        );
+    }
+
+    /// A file already recorded under its lease is answered as recorded
+    /// when the conversation is full, and counts as having room; another
+    /// file does not.
+    #[tokio::test]
+    async fn a_full_conversation_still_answers_a_file_it_records() {
+        let (manager, lease) = leased().await;
+        let recorded = artifact("lease-1", None);
+        manager.record_artifact(recorded.clone()).await.unwrap();
+        let saves = lease.changes.lock().unwrap().len();
+        manager
+            .evidence
+            .lock()
+            .await
+            .observed
+            .as_mut()
+            .unwrap()
+            .artifacts
+            .resize(ArtifactRecord::MAX_PER_CONVERSATION, recorded.clone());
+        assert_eq!(
+            manager
+                .has_artifact_room(&recorded.lease, &recorded.file)
+                .await,
+            Some(true)
+        );
+        assert_eq!(manager.record_artifact(recorded.clone()).await, Ok(()));
+        assert_eq!(lease.changes.lock().unwrap().len(), saves);
+        let other = PublishedFile::new(
+            Sha256Digest::from_bytes([8; 32]),
+            recorded.file.media_type().clone(),
+            recorded.file.size(),
+        )
+        .unwrap();
+        assert_eq!(
+            manager.has_artifact_room(&recorded.lease, &other).await,
+            Some(false)
         );
     }
 

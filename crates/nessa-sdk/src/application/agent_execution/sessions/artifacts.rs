@@ -153,9 +153,6 @@ impl ArtifactRecord {
         snapshot: &SessionSnapshot,
         knows_turn: impl Fn(&ExecutionId) -> bool,
     ) -> Result<(), ArtifactRefusal> {
-        if snapshot.artifacts.len() >= Self::MAX_PER_CONVERSATION {
-            return Err(ArtifactRefusal::Full);
-        }
         let current = snapshot
             .lease
             .as_ref()
@@ -175,6 +172,11 @@ impl ArtifactRecord {
         if self.turn.as_ref().is_some_and(|turn| !knows_turn(turn)) {
             return Err(ArtifactRefusal::UnknownTurn);
         }
+        // Last, so a refusal for room is one the record would otherwise
+        // pass: what lets a file already recorded be answered as recorded.
+        if snapshot.artifacts.len() >= Self::MAX_PER_CONVERSATION {
+            return Err(ArtifactRefusal::Full);
+        }
         Ok(())
     }
 
@@ -186,6 +188,13 @@ impl ArtifactRecord {
         snapshot: &SessionSnapshot,
         knows_turn: impl Fn(&ExecutionId) -> bool,
     ) -> Result<(), StorageError> {
+        // The bound holds under every lease, one this build cannot read too.
+        if snapshot.artifacts.len() >= Self::MAX_PER_CONVERSATION {
+            return Err(StorageError::Corrupt(format!(
+                "artifact record: {}",
+                ArtifactRefusal::Full
+            )));
+        }
         match self.admit(snapshot, knows_turn) {
             Ok(()) | Err(ArtifactRefusal::LeaseUnreadable) => Ok(()),
             Err(refusal) => Err(StorageError::Corrupt(format!("artifact record: {refusal}"))),

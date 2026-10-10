@@ -215,10 +215,11 @@ impl ArtifactCollector {
             .and_then(|(digest, media_type)| PublishedFile::new(digest, media_type, file.size).ok())
             .ok_or(CollectionRefusal::Invalid)?;
         let manager = agent.session_manager();
-        // Never a file held that the conversation could not record.
-        match manager.artifact_room().await {
-            Some(0) => return Err(CollectionRefusal::BudgetExceeded),
-            Some(_) => {}
+        // Nothing read for a file the conversation could not record; one it
+        // already records under this lease has room, as it needs no more.
+        match manager.has_artifact_room(&self.lease, &published).await {
+            Some(false) => return Err(CollectionRefusal::BudgetExceeded),
+            Some(true) => {}
             None => return Err(CollectionRefusal::LeaseEnded),
         }
         let size = file.size;
