@@ -1567,6 +1567,7 @@ async fn dispatch_authorized(
         method if method.starts_with("pairing.") => {
             super::pairing::dispatch(state, session, frame).await
         }
+        method if method.starts_with("peer.") => super::peers::dispatch(state, frame).await,
         "server.health" => {
             if frame.params != json!({}) {
                 return failure(&frame.id, "invalid_request");

@@ -283,6 +283,13 @@ pub trait GatewayKeyStore: Send + Sync {
 /// Active, then the issued credential in its place. The replacement is one
 /// atomic publication, so no state holds both or neither.
 pub trait ClientPendingStore: Send + Sync {
+    /// The key a new enrollment must use, when this store keeps a reference
+    /// to a key another owner holds rather than a key of its own: a peer
+    /// gateway enrolls with the gateway's own key. `None`, the default, means
+    /// the client generates a key and hands it to [`Self::save_pending`].
+    fn enrollment_key(&self) -> Result<Option<PrivateKeyMaterial>, PrivateStateError> {
+        Ok(None)
+    }
     /// Restore the atomic seed/pin/public correlation; absence is explicit.
     /// Once the credential has replaced it, there is no pending record.
     fn load_pending(&self) -> Result<Option<PendingEnrollment>, PrivateStateError>;

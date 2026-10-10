@@ -104,6 +104,7 @@ impl Namespace {
                 OrganizationId::new("org").unwrap(),
                 ResourceId::new("gateway").unwrap(),
             ),
+            audience: AudienceId::new("gateway").unwrap(),
         }
     }
     fn key_file(&self) -> PathBuf {
@@ -148,7 +149,7 @@ async fn native_startup_history_without_key_refuses_before_bind() {
         let namespace = Namespace::new();
         let session = namespace.bootstrap().await;
         let registry = namespace.registry();
-        let (prepared, commands) = prepare(&loopback(), namespace.inputs(registry.clone()))
+        let (prepared, commands, peers) = prepare(&loopback(), namespace.inputs(registry.clone()))
             .await
             .unwrap();
         // A first start publishes the key; an invitation is enrollment history.
@@ -157,7 +158,8 @@ async fn native_startup_history_without_key_refuses_before_bind() {
             .create(&session, ConsentClass::DeviceRead)
             .await
             .unwrap();
-        drop((prepared, commands));
+        // The peer commands hold the same key store, so they go too.
+        drop((prepared, commands, peers));
         drop(registry);
         if whole_directory {
             std::fs::remove_dir_all(namespace.root().join(PRIVATE_DIRECTORY)).unwrap();
@@ -202,7 +204,7 @@ async fn native_bind_failure_preserves_key_and_history() {
     let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = taken.local_addr().unwrap();
     let registry = namespace.registry();
-    let (prepared, commands) = prepare(
+    let (prepared, commands, peers) = prepare(
         &NativeConfig {
             listen_address: address,
         },
@@ -235,11 +237,11 @@ async fn native_bind_failure_preserves_key_and_history() {
         *created.record()
     );
     // Once the address is free, the same key is restored, not regenerated.
-    drop(commands);
+    drop((commands, peers));
     drop(registry);
     drop(taken);
     let registry = namespace.registry();
-    let (prepared, _commands) = prepare(&loopback(), namespace.inputs(registry.clone()))
+    let (prepared, _commands, _peers) = prepare(&loopback(), namespace.inputs(registry.clone()))
         .await
         .unwrap();
     bind(
@@ -259,7 +261,7 @@ async fn native_shutdown_joins_a_held_peer() {
     let namespace = Namespace::new();
     let session = namespace.bootstrap().await;
     let registry = namespace.registry();
-    let (prepared, commands) = prepare(&loopback(), namespace.inputs(registry.clone()))
+    let (prepared, commands, _peers) = prepare(&loopback(), namespace.inputs(registry.clone()))
         .await
         .unwrap();
     let bound = bind(
@@ -305,7 +307,7 @@ async fn faulted_listener_join_reports_the_fault_without_reconciling() {
     let namespace = Namespace::new();
     namespace.bootstrap().await;
     let registry = namespace.registry();
-    let (prepared, _commands) = prepare(&loopback(), namespace.inputs(registry.clone()))
+    let (prepared, _commands, _peers) = prepare(&loopback(), namespace.inputs(registry.clone()))
         .await
         .unwrap();
     let bound = bind(

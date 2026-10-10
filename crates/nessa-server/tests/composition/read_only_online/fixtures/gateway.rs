@@ -269,7 +269,7 @@ async fn gateway_child() {
         Ok(address) => address.parse().unwrap(),
         Err(_) => "127.0.0.1:0".parse().unwrap(),
     };
-    let (prepared, commands) = prepare(
+    let (prepared, commands, _peers) = prepare(
         &NativeConfig {
             listen_address: address,
         },
@@ -283,6 +283,7 @@ async fn gateway_child() {
                 OrganizationId::new(organization.clone()).unwrap(),
                 ResourceId::new(gateway.clone()).unwrap(),
             ),
+            audience: AudienceId::new(gateway.clone()).unwrap(),
         },
     )
     .await

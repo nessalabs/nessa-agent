@@ -468,6 +468,17 @@ Design: [device pairing](design/auth/device-pairing.md#native-enrollment-consume
 [activation and credential delivery](design/auth/device-pairing.md#activation-and-credential-delivery-slice-2b)
 and [protected reads](design/auth/device-pairing.md#protected-reads-over-the-native-channel-slice-3).
 
+The dialing side of a peer gateway is `nessa-server/src/peer_gateways/`.
+`infrastructure/records.rs` keeps one private record per peer under
+`peer-gateways/` and is the enrollment client's store for one enrollment
+(`PeerSlot`), naming the gateway's own native key without copying it;
+`infrastructure/commands.rs` holds the owner's enroll, list and forget. The
+product methods are `nessa-server/src/product/peers.rs`, composed beside native
+pairing in `composition/native_pairing.rs`. Tests are
+`tests/peer_gateways/enroll.rs` and the two-process case in
+`tests/device_pairing/mounted.rs`, both registered by `tests/native_enrollment.rs`.
+Design: [peer gateways](design/auth/peer-gateways.md#the-dialing-side).
+
 `crates/nessa-auth` is a workspace library with pure domain models and
 application-owned DTOs/ports. See its [module and collaboration guide](../crates/nessa-auth/README.md).
 The local backend, embedded Cedar, and `/session` gateway are implemented.

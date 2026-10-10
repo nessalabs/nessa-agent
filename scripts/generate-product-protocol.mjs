@@ -401,6 +401,12 @@ rs += `pub const MAX_PRINCIPAL_CHANGE_WATCHES: usize = ${watchLimits.principalOw
 rs += `pub const MAX_CONNECTION_RECORD_WATCHES: usize = ${watchLimits.recordTargets};\n`
 rs += `pub const MAX_CONNECTION_CATALOGUE_WATCHES: usize = ${watchLimits.catalogueTargets};\n`
 rs += `pub const MAX_CONNECTION_CHANGE_WATCHES: usize = ${connectionWatches};\n`
+// The most peer gateways one gateway keeps: the list's bound is the store's,
+// so the server refuses one more rather than list fewer than it holds.
+const maxPeers = schema.$defs.PeerListResult.properties.items.maxItems
+if (!Number.isSafeInteger(maxPeers) || maxPeers <= 0)
+  throw new Error("Invalid peer list bound")
+rs += `pub const MAX_PEERS: usize = ${maxPeers};\n`
 ts += `export const maxChangeWatchIdBytes = ${watchId.maxLength} as const\n`
 ts += `export const changeWatchIdPattern = ${JSON.stringify(watchId.pattern)} as const\n`
 ts += `export const changeWatchLimits = ${JSON.stringify(watchLimits)} as const\n`

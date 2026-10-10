@@ -127,6 +127,7 @@ impl NativeEnrollmentClient {
     }
     /// Enroll once using address+code, committing pending seed/pin/context before KE3.
     /// A lost reply remains recoverable through `status` using the exact saved identity.
+    /// The key is the store's `enrollment_key` when it names one, else a new one.
     pub async fn enroll<R: RngCore + CryptoRng + Send + 'static>(
         &self,
         stream: TcpStream,
@@ -153,8 +154,16 @@ impl NativeEnrollmentClient {
                 return Err(NativeClientError::Enrolled);
             }
             let mut entropy = entropy;
-            let identity =
-                NativeIdentity::generate(&mut entropy).map_err(NativeClientError::Crypto)?;
+            // A store that refers to a key it does not own names that key;
+            // otherwise this enrollment's key is new.
+            let identity = match pending
+                .enrollment_key()
+                .map_err(NativeClientError::Storage)?
+            {
+                Some(key) => NativeIdentity::restore(key),
+                None => NativeIdentity::generate(&mut entropy),
+            }
+            .map_err(NativeClientError::Crypto)?;
             stream.blocking().map_err(physical_error)?;
             let channel =
                 NativeTransport::connect(stream, &identity, GatewayTrust::ManualBootstrap)
