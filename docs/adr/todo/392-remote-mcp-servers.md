@@ -536,19 +536,45 @@ Peer replies never await queue capacity in the reader. A full HTTP control
 admission ends with typed `TooLarge("queued MCP control frames")`; a closed
 writer ends with its retained terminal cause or `ServerGone`. The existing
 reader shutdown fence and connection end owner retain the first cause and one
-cleanup. `RecoveryReady` still awaits FIFO admission and completion under the
-remaining initialization budget. Direct local cancellation remains independent
-of its best-effort remote notification. The HTTP owner remains the authority
+cleanup. A panicked HTTP writer does not wait for that later read. The writer
+catches that panic on every await it performs and discards the payload. That
+covers every await the writer performs, including `finish_recovery`'s
+initialized POST, which owns the completion sender across that await. That
+in-flight sender drops with the panic, before the writer records. A
+completion still sitting in the queue stays in the writer task until that
+task returns, which is after the record. The writer then settles itself as
+panicked and asks the same owner, after the same fence, for `ServerGone`,
+then logs a fixed marker and the server id. A `RecoveryReady` completion the
+writer drops, whether it is still queued or held by `finish_recovery`, does
+not decide the end. It waits for that settlement outside the recovery
+deadline: a panic resolves `ServerGone`, and a clean finish or cancellation
+resolves `Unconfirmed`. An already-due deadline does not replace that
+settlement with `Timeout`. The wait ends because the writer settles right
+after the catch, and shutdown aborts the recovery task.
+`HttpRequest` and `HttpResponse` debug output keeps the method,
+`scheme://host` and a port when the URL has one, header names, and the body
+length. The default panic hook can still print the panic message itself. An
+adapter's own panic string is the host app's responsibility. The watch remains
+for a panic that still fails the task: it settles that outcome, asks the same
+owner, and then logs the same marker. That fence runs before the record (J27).
+Shutdown releases a claimed session id and signals finished even when DELETE
+panics, so the id
+can be claimed again. Drop and close abort the writer before the watch
+so a held exchange cannot retain the session. `RecoveryReady` still awaits
+FIFO admission and completion under the remaining initialization budget.
+Direct local cancellation remains independent of its best-effort remote
+notification. The HTTP owner remains the authority
 for captured binding, recovery admission, deadlines and close.
 
 | Row | Trigger/order | Required outcome and ownership | Enforcer |
 | --- | --- | --- | --- |
 | J21 | 64 ordinary frames wait behind a held writer; early recovery ping or unsupported request arrives before matching initialize | Reserve admits the answer without blocking the reader. Drain pressure; ordinary calls remain Busy and answer uses originating SID and unnegotiated version. Matching initialization supplied after actual answer advances | `j21_saturated_ordinary_queue_preserves_early_recovery_answers` |
 | J22 | Matching initialize arrives while saturated ordinary frames and early answer remain queued | Captured answer retains unnegotiated version; FIFO answer precedes RecoveryReady/initialized. Ordinary admission remains fenced until valid initialized completion | `j22_matching_initialize_preserves_queued_reply_order` |
-| J23 | Physical queue fills with ordinary frames and one answer or entirely with controls; a live call/notification waits for ordinary or physical admission, then another peer request overflows, or writer is closed | Explicit typed overflow/closed termination through existing reader fence; first cause survives later close/failure, no queued answer effect after fence, one retained DELETE and joined startup. Connection admission observes existing Shared end publication so blocked calls/notifications resolve retained cause before the held writer drains; admission subscribes before its retained-State snapshot, and a recorded end returns that cause even while watch publication is paused. Watch publishes after releasing State and before pending response wakes. HTTP shutdown remains the downstream effect fence | `j23_control_overflow_retains_first_cause_and_one_cleanup`, `j23_terminal_admission_wakes_physical_waiters_and_refuses_ended_notifications`, `connection::end_tests::recorded_end_refuses_admission_while_watch_publication_is_held`, `j23_closed_control_queue_is_explicit` |
+| J23 | Physical queue fills with ordinary frames and one answer or entirely with controls; a live call/notification waits for ordinary or physical admission, then another peer request overflows, or writer is closed | Explicit typed overflow/closed termination through existing reader fence; first cause survives later close/failure, no queued answer effect after fence, one retained DELETE and joined startup. Aborting the HTTP writer closes that queue without recording an end or fencing the session. The next peer request returns the retained cause, or `ServerGone` when none is recorded, and cleanup DELETEs the id that request claimed, once. Connection admission observes existing Shared end publication so blocked calls/notifications resolve retained cause before the held writer drains; admission subscribes before its retained-State snapshot, and a recorded end returns that cause even while watch publication is paused. Watch publishes after releasing State and before pending response wakes. HTTP shutdown remains the downstream effect fence | `j23_control_overflow_retains_first_cause_and_one_cleanup`, `j23_terminal_admission_wakes_physical_waiters_and_refuses_ended_notifications`, `connection::end_tests::recorded_end_refuses_admission_while_watch_publication_is_held`, `j23_closed_control_queue_is_explicit` |
 | J24 | Ordinary sender waits for capacity and is dropped; dequeue retains returned frame; receiver is dropped | No permit leak; dequeue releases ordinary capacity before dispatch completion; later frames progress; closed receiver rejects remaining sends. Canceling terminal Connection admission drops pending send permits/envelopes without inventing a second terminal owner | `j24_ordinary_capacity_releases_on_dequeue_and_cancellation`, `j23_terminal_admission_wakes_physical_waiters_and_refuses_ended_notifications` |
 | J25 | Recovery budget expires while early answer or handoff waits behind writer pressure | Timeout remains authoritative; queued reply/initialized cannot dispatch or reopen admission after expiry; provisional claim remains close-owned | `j25_deadline_refuses_queued_saturated_reply`, existing J9/J11 handoff expiry tests |
 | J26 | Explicit close or control POST failure wins before queued saturated answer dispatch | No downstream answer/initialized effect; explicit HTTP close raises its existing shutdown fence before committing the first Shared end cause, then publishes watch outside State before waking responses. Later competing causes cannot replace the first commit. Admission checked open before that commit may race queue insertion, but HTTP effects remain fenced | `j26_close_or_writer_failure_refuses_queued_saturated_reply`, `j26_close_fences_http_and_publishes_before_response_wakes`, existing J19 close-fence tests |
+| J27 | A custom HTTP exchange panics the writer, or that task is aborted, while a call and recovery are in flight. No later inbound message is required. An explicit close may commit before the panic or after it. Drop or close may run while the writer is stuck inside an exchange. DELETE may panic after the writer panic. A `RecoveryReady` may already be queued when the writer panics | The watch is not an end owner. The writer catches a panic on every await it performs, discards the payload, and settles itself as panicked. It then raises the existing HTTP shutdown fence, which refuses new posts, joins body readers, and DELETEs a claimed id once, asks `Shared.end` for `ServerGone`, and then logs a fixed marker and the server id. A recovery completion the writer drops, whether it is still queued or owned by `finish_recovery` during any of the writer's awaits, waits for the writer settlement outside the recovery deadline, so an already-due deadline does not replace it with `Timeout`. Panic resolves `ServerGone`. A clean finish or cancellation resolves `Unconfirmed`. A panic that still fails the task is settled by the watch, which asks the same owner and then logs the same marker. That fence runs before the end is recorded, so a wake inside the record already sees it. Pending calls wake with that cause. A later close cannot replace it. A close that already committed stays `Closed`, and the panic still DELETEs a claimed id once. Joining a cancellation does not fence the session or record a cause. Drop and close abort the HTTP writer before the watch, so a held exchange cannot retain the session: the session is released and a claimed id is deleted once. Recovery that has released its previous id and not claimed the next does not DELETE. A panic in DELETE still releases the claim and signals finished, and a later opening can claim that session id | `j27_writer_panic_ends_without_later_input`, `j27_cancelled_writer_does_not_record_an_end`, `j27_drop_releases_a_held_writer_and_deletes_once`, `j27_close_releases_a_held_writer_and_deletes_once`, `j27_delete_panic_releases_the_claim_for_reuse`, `j27_queued_recovery_keeps_the_writer_panic`, `j27_finish_recovery_panic_defers_to_the_writer`, `j27_due_recovery_deadline_defers_to_the_writer`, `connection::end_tests::closed_cause_survives_a_panicked_writer`, `connection::end_tests::writer_panic_log_follows_the_recorded_end`, `connection::end_tests::writer_watch_fences_before_recording_the_end` |
 
 J4/J5/J10's no-claim requirements describe bodies without an early claim for a peer answer.
 An already answered request may own provisional cleanup but cannot validate
@@ -570,7 +596,7 @@ sequenceDiagram
     Writer->>Peer: notifications/initialized
     Note over Registry: close fences admission, joins tasks, owns DELETE
     Registry->>Peer: DELETE claimed ID once
-    Note over Registry: release claim after DELETE observation and finish after joins
+    Note over Registry: release claim and finish after DELETE, including a DELETE panic
 ```
 
 ## Audit verification by recorded meaning (#631)

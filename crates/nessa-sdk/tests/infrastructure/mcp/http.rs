@@ -1291,3 +1291,62 @@ async fn a_bearer_debug_omits_the_token() {
     assert!(!text.contains("secret-token"));
     assert!(text.contains('3'));
 }
+
+#[test]
+fn request_debug_omits_the_bearer_and_the_body() {
+    let body = br#"{"method":"tools/call","params":{"text":"secret-tool-body"}}"#;
+    let request = HttpRequest {
+        method: HttpMethod::Post,
+        url: "https://user:secret-user@mcp.example:8443/secret-path/dir@hidden?access_token=bearer-secret#frag"
+            .into(),
+        headers: vec![
+            ("Authorization".into(), "Bearer bearer-secret".into()),
+            ("Content-Type".into(), "application/json".into()),
+        ],
+        body: body.to_vec(),
+    };
+    let text = format!("{request:?}");
+    assert!(!text.contains("bearer-secret"), "{text}");
+    assert!(!text.contains("secret-tool-body"), "{text}");
+    assert!(!text.contains("secret-user"), "{text}");
+    assert!(!text.contains("secret-path"), "{text}");
+    assert!(!text.contains("dir@hidden"), "{text}");
+    assert!(!text.contains('@'), "{text}");
+    assert!(!text.contains("access_token"), "{text}");
+    assert!(text.contains("POST"), "{text}");
+    assert!(text.contains("https://mcp.example:8443"), "{text}");
+    assert!(!text.contains("https://mcp.example:8443/"), "{text}");
+    assert!(text.contains("Authorization"), "{text}");
+    assert!(text.contains("Content-Type"), "{text}");
+    assert!(text.contains(&request.body.len().to_string()), "{text}");
+
+    let ipv6 = HttpRequest {
+        method: HttpMethod::Get,
+        url: "https://user:secret-user@[::1]:9443/secret-path".into(),
+        headers: vec![("Authorization".into(), "Bearer bearer-secret".into())],
+        body: Vec::new(),
+    };
+    let ipv6_text = format!("{ipv6:?}");
+    assert!(ipv6_text.contains("https://[::1]:9443"), "{ipv6_text}");
+    assert!(!ipv6_text.contains("secret-user"), "{ipv6_text}");
+    assert!(!ipv6_text.contains("secret-path"), "{ipv6_text}");
+    assert!(!ipv6_text.contains("bearer-secret"), "{ipv6_text}");
+
+    let response = HttpResponse {
+        status: 200,
+        headers: vec![("set-cookie".into(), "session=secret-cookie".into())],
+        body: HttpBody::Buffered(b"secret-body-text".to_vec()),
+    };
+    let response_text = format!("{response:?}");
+    assert!(!response_text.contains("secret-cookie"), "{response_text}");
+    assert!(
+        !response_text.contains("secret-body-text"),
+        "{response_text}"
+    );
+    assert!(response_text.contains("set-cookie"), "{response_text}");
+    assert!(response_text.contains("200"), "{response_text}");
+    assert!(
+        response_text.contains(&b"secret-body-text".len().to_string()),
+        "{response_text}"
+    );
+}
