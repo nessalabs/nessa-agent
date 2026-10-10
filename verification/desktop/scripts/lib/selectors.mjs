@@ -750,3 +750,16 @@ export const messageSync = {
   title: "Nessa: message synchronization",
   session: "Message synchronization",
 }
+
+/** Real gateway mode publications consumed by the production panel and source (#712). */
+export const modePublication = {
+  more: ["button", { name: "More options", exact: true }],
+  approval: ["button", { name: /Tool approval/ }],
+  autoLabel: ["button", { name: /Tool approval.*Auto/ }],
+  askLabel: ["button", { name: /Tool approval.*Ask/ }],
+  page: "verification/desktop/fixtures/mode-publication/index.html",
+  panel: "[data-mode-panel]",
+  value: "[data-mode-value]",
+  auto: "[data-tray-focus=mode-auto]",
+  ask: "[data-tray-focus=mode-ask]",
+}

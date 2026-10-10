@@ -127,6 +127,7 @@ export const DEV_SERVER_ONLY = "not run: dev server only"
  * --mode prod` leaves them out (`checksUnder`) instead of running them.
  */
 export const devServerOnlyChecks = [
+  "mode-publication",
   "committed-transcript",
   "lease-details",
   "app-review",

@@ -1428,3 +1428,22 @@ or clocks.
 - [ ] Resize removes a suspended returning drag copy in the resize event's turn,
   including a blur followed by resize (`drag.mjs`, return-interrupted).
   [ADR 238](../../docs/adr/done/238-desktop-workspace-frontend.md) owns the flight ordering.
+
+## Confirmed approval-mode publication (#712)
+
+`mode-publication.mjs` starts its own real gateway with the scripted ACP profile
+and drives the production panel effects/store/ComposerTray and workspace Source
+in Chromium and WebKit. The fixture is served in dev; run-all labels it dev-only
+in production. It creates an idle conversation and sends no transcript output.
+
+- A verified Ask-to-Auto commit advances public read revision, updates
+  the visible tray through its actual control, and advances the Source transcript
+  publication count.
+- Repeating confirmed Auto and unchanged reads retain public/panel/Source
+  revisions. Returning to Ask advances them again.
+- Runtime, capabilities, lifecycle and content remain unchanged across the
+  mode-only change. No client-side forced acceptance or fabricated revision is
+  used. The check closes its own page, client and gateway stack.
+
+Ownership and negative/recovered cases:
+[conversation admission](../../docs/design/conversation-admission.md).

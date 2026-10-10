@@ -44,6 +44,7 @@ const functional = [
   "load-fallback",
   "gateway-states",
   "conversation-unread",
+  "mode-publication",
   "linked-devices",
   "settings-page",
   "widgets",
