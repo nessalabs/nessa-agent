@@ -17,6 +17,7 @@ fn rows(cache: &ReadOnlyCache, receiver: &str) -> i64 {
         "transcript_progress",
         "transcript_checkpoints",
         "catalogue_entries",
+        "retained_walks",
         "catalogue_progress",
     ]
     .iter()
@@ -120,16 +121,17 @@ async fn purge_is_atomic_audited_and_fences_the_receiver() {
     assert!(late.observe_head(&other_scope(), 0).is_ok());
 }
 
-/// Review F4: a cache made before purge receipts existed is refused at open
-/// with its own typed cause, and nothing in it is changed.
+/// A cache file at an older schema version, as every cache made before
+/// retained walks were noted is, is refused at open with its own typed cause,
+/// and nothing in it is changed: the version is the one check of the shape.
 #[test]
-fn a_cache_without_purge_receipts_is_refused_at_open() {
+fn an_older_cache_file_is_refused_as_outdated_schema() {
     let root = tempfile::tempdir().unwrap();
     let path = cache_path(root.path(), "cache.sqlite3");
     let cache = cache(&path);
     cache
         .connection
-        .execute("DROP TABLE cache_purges", [])
+        .execute_batch("DROP TABLE retained_walks; PRAGMA user_version = 1;")
         .unwrap();
     drop(cache);
     let before = std::fs::read(&path).unwrap();
@@ -138,4 +140,28 @@ fn a_cache_without_purge_receipts_is_refused_at_open() {
         Some(crate::read_only_sync::application::CacheError::OutdatedSchema)
     );
     assert_eq!(std::fs::read(&path).unwrap(), before);
+}
+
+/// A finished walk is noted per catalogue, replaced by the next, and goes
+/// with the receiver's other rows when it is purged.
+#[test]
+fn a_walk_marker_is_kept_per_catalogue_and_goes_with_a_purge() {
+    let root = tempfile::tempdir().unwrap();
+    let mut cache = cache(&cache_path(root.path(), "cache.sqlite3"));
+    let scope = catalogue("receiver");
+    CatalogueStore::begin(&mut cache, &scope, None, 1).unwrap();
+    let walk = |cache: &ReadOnlyCache| {
+        cache
+            .retained_walk(scope.receiver(), scope.origin(), scope.stream())
+            .unwrap()
+    };
+    assert_eq!(walk(&cache), None);
+    cache.note_walk(&scope, 4, 1).unwrap();
+    assert_eq!(walk(&cache), Some((4, 1)));
+    cache.note_walk(&scope, 9, 2).unwrap();
+    assert_eq!(walk(&cache), Some((9, 2)));
+    let purged = cache.purge_receiver(&id("receiver")).unwrap();
+    assert_eq!(purged.receiver, id("receiver"));
+    assert_eq!(walk(&cache), None);
+    assert_eq!(rows(&cache, "receiver"), 0);
 }

@@ -6,7 +6,9 @@ mod catalogue_identity;
 mod conversation_id;
 mod conversation_selection;
 mod conversation_summary;
-pub use catalogue_identity::{conversation_catalogue_schema, conversation_catalogue_stream};
+pub use catalogue_identity::{
+    conversation_catalogue_schema, conversation_catalogue_stream, is_conversation_catalogue_stream,
+};
 pub use conversation_id::ConversationId;
 pub use conversation_selection::{ConversationApprovalMode, ConversationModelId};
 pub use conversation_summary::{

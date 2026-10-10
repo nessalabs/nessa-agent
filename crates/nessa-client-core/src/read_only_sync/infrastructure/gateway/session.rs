@@ -249,9 +249,20 @@ impl Session {
             .checked_sub(clock.elapsed_ms())
             .filter(|ms| *ms > 0)
             .ok_or(GatewayError::TimedOut)?;
+        // The run's own cancellation time bounds the connect too.
+        let cut = cancellation
+            .until_ms()
+            .map(|until| until.saturating_sub(clock.elapsed_ms()))
+            .filter(|left| *left < remaining);
+        if cut == Some(0) {
+            return Err(GatewayError::Cancelled);
+        }
         let stream = connector
-            .connect(address, Duration::from_millis(remaining))
-            .map_err(|error| io_cause(&error))?;
+            .connect(address, Duration::from_millis(cut.unwrap_or(remaining)))
+            .map_err(|error| match io_cause(&error) {
+                GatewayError::TimedOut if cut.is_some() => GatewayError::Cancelled,
+                cause => cause,
+            })?;
         let stream = DeadlineStream::new(stream, clock.clone(), cancellation, deadline);
         stream.remaining()?;
         let failure = stream.failure_owner();
@@ -453,9 +464,17 @@ impl Session {
 }
 /// `source_preparing` is a complete, correlated answer: the gateway keeps its
 /// preparation progress for the same read, so the connection stays usable for
-/// the next operation. Every other failure leaves the stream's state unknown.
+/// the next operation. `wrong_owner` is one too: the gateway answered that
+/// this reader holds no grant on that one conversation, which says nothing
+/// about the next read on another. Every other failure leaves the stream's
+/// state unknown.
 fn keeps_connection(error: GatewayError) -> bool {
-    error == GatewayError::Record(RecordReadErrorCode::SourcePreparing)
+    matches!(
+        error,
+        GatewayError::Record(
+            RecordReadErrorCode::SourcePreparing | RecordReadErrorCode::WrongOwner
+        )
+    )
 }
 fn shape_decode<T: DeserializeOwned>(
     value: Value,

@@ -2009,14 +2009,15 @@ export interface PeerForgetParams {
   /** The peer's key, as peer.list shows it. */
   peerKey: number[]
 }
-/** Where this gateway's enrollment with a peer stands, as this gateway last heard. pending: claimed, waiting on the peer's owner to approve, or not yet confirmed. active: the peer issued this gateway a credential. unreadable: the peer's record is there but this build cannot read it, or it was made with a key that is no longer this gateway's; only peer.forget helps. */
+/** Where this gateway's enrollment with a peer stands, as this gateway last heard. pending: claimed, waiting on the peer's owner to approve, or not yet confirmed. active: the peer issued this gateway a credential. revoked: the peer ended the enrollment (its owner revoked the credential, or denied, cancelled or let expire the claim), its retained cache is removed and it is no longer read; only peer.forget helps. unreadable: the peer's record is there but this build cannot read it, or it was made with a key that is no longer this gateway's; only peer.forget helps. */
 export const PeerPhase = {
   Pending: "pending",
   Active: "active",
+  Revoked: "revoked",
   Unreadable: "unreadable",
 } as const
 export type PeerPhase = (typeof PeerPhase)[keyof typeof PeerPhase]
-/** One peer gateway this gateway enrolled into. Result of peer.enroll and peer.forget. */
+/** One peer gateway this gateway enrolled into. Result of peer.enroll and peer.forget; peer.list adds sync for a pending or active peer. */
 export interface PeerGateway {
   /** The peer's key: what identifies the peer, whatever address it answers at. Its TLS key is pinned to exactly this. */
   peerKey: number[]
@@ -2027,13 +2028,33 @@ export interface PeerGateway {
   credentialId?: string
   /** The receiver the peer paired with that credential, once active. */
   receiverId?: string
+  /** What this gateway's poller last saw reading the peer. Only in peer.list, and only for a pending or active peer; absent for a revoked or unreadable one, and in the results of peer.enroll and peer.forget. */
+  sync?: PeerSync
+}
+/** How reading a peer last went, since this gateway started. waiting: not read yet, or still pending on the peer. synced: the last read brought the retained cache up to what the peer grants. syncing: the last read saved some of what the peer grants and stopped at a bound (a page bound or its time budget); the next continues it. A read an owner command stops leaves the state as it was. unreachable: the peer could not be reached, or the last read ran out of its time budget before it saved anything; reads back off. failed: the peer answered but the read failed; reads back off. quota: this gateway's retained cache of the peer is full; each read still withdraws what the peer no longer grants, and reads back off until the peer grants less. */
+export const PeerSyncState = {
+  Waiting: "waiting",
+  Synced: "synced",
+  Syncing: "syncing",
+  Unreachable: "unreachable",
+  Failed: "failed",
+  Quota: "quota",
+} as const
+export type PeerSyncState = (typeof PeerSyncState)[keyof typeof PeerSyncState]
+/** What this gateway last saw reading a peer: its poller reads each pending or active peer's status and grants on a cadence. */
+export interface PeerSync {
+  state: PeerSyncState
+  /** When the last read of this peer that saved something, or found the cache up to date, finished, in Unix milliseconds. A failed read leaves it as it was. Absent until one has since this gateway started. */
+  lastSyncedAtMs?: number
+  /** Conversations the peer granted that this gateway's retained cache holds, as the last read counted. Absent until one has. */
+  conversations?: number
 }
 /** Result of peer.list. */
 export interface PeerListResult {
   /** Every peer this gateway keeps, by key. */
   items: PeerGateway[]
 }
-/** Why the gateway refused a peer method it dispatched. peer_not_configured: native pairing is off in this gateway's configuration, so it has no key to enroll with. peer_not_found: no peer with that key. peer_exists: a record for that peer is already kept; forget it first. peer_capacity: this gateway keeps as many peers as it may. peer_busy: an enrollment or a forget is running; another waits for it. peer_unreachable: nothing answered at the address, the connection failed, or what answered is not a gateway enrolling peers; an open port is not told from a closed one. peer_invitation_refused: the peer refused the code: no open invitation, or an expired, used or wrong code; it does not say which. peer_wrong_invitation: the code is for a device, not a gateway. peer_own_gateway: the address is this gateway's own. peer_unavailable: storage, the key or a worker failed; retry later. peer_audit_unavailable: the command's audit record could not be kept; if that was before its effect nothing changed, and if after, the effect stands and peer.list shows it. */
+/** Why the gateway refused a peer method it dispatched. peer_not_configured: native pairing is off in this gateway's configuration, so it has no key to enroll with. peer_not_found: no peer with that key. peer_exists: a record for that peer is already kept; forget it first. peer_capacity: this gateway keeps as many peers as it may. peer_busy: another enrollment or forget is running; retry once it ends. A read of a peer makes a command busy only if a stopped read does not give back its turn within peer.preempt: the command stops the read and takes its turn once the read gives it back, and the read carries on later. peer_unreachable: nothing answered at the address, the connection failed, or what answered is not a gateway enrolling peers; an open port is not told from a closed one. peer_invitation_refused: the peer refused the code: no open invitation, or an expired, used or wrong code; it does not say which. peer_wrong_invitation: the code is for a device, not a gateway. peer_own_gateway: the address is this gateway's own. peer_unavailable: storage, the key or a worker failed, or the gateway is stopping and refused the command before any effect; retry later. peer_audit_unavailable: the command's audit record could not be kept; if that was before its effect nothing changed, and if after, the effect stands and peer.list shows it. */
 export const PeerErrorCode = {
   PeerNotConfigured: "peer_not_configured",
   PeerNotFound: "peer_not_found",

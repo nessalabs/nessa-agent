@@ -42,11 +42,13 @@ mod offline_tests;
 #[path = "../../../../tests/read_only_sync/infrastructure/driver.rs"]
 mod driver_tests;
 
-#[cfg(test)]
+// It drives the example's command line, which `cli` builds.
+#[cfg(all(test, feature = "cli"))]
 #[path = "../../../../tests/read_only_sync/infrastructure/offline_commands.rs"]
 mod offline_command_tests;
 
-#[cfg(test)]
+// It drives the example's command line, which `cli` builds.
+#[cfg(all(test, feature = "cli"))]
 #[path = "../../../../tests/read_only_sync/infrastructure/reset_commands.rs"]
 mod reset_command_tests;
 
@@ -62,6 +64,7 @@ mod fixtures;
 #[path = "../../../../tests/read_only_sync/infrastructure/allocations.rs"]
 mod allocations;
 
-#[cfg(test)]
+// It drives the example's command line, which `cli` builds.
+#[cfg(all(test, feature = "cli"))]
 #[path = "../../../../tests/read_only_sync/infrastructure/saved_output.rs"]
 mod saved_output_tests;

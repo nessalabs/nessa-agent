@@ -66,5 +66,8 @@ mod warm_up;
 
 mod cli;
 #[cfg(test)]
+#[path = "../../tests/composition/peer_reading.rs"]
+mod peer_reading_tests;
+#[cfg(test)]
 #[path = "../../tests/composition/read_only_online.rs"]
 mod read_only_online_tests;

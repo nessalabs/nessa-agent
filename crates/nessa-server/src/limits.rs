@@ -7,6 +7,9 @@
 //! test beside this module refuses a copy that has drifted.
 use crate::conversation::application::MAX_READ_GRANTS_PER_CONVERSATION;
 use crate::conversation::infrastructure::{DISCOVERY_STEPS_PER_READ, MAX_CATALOGUE_CHANGE_WATCHES};
+use crate::peer_gateways::infrastructure::{
+    AUDIT_QUEUE, POLL_BACKOFF_CAP, POLL_INTERVAL, PREEMPT, READ_BUDGET, WITHDRAWN_PER_READ,
+};
 use crate::product::passive_read::deadlines::RECORD_SEND_TIMEOUT;
 use crate::product::{OperationalLimits, SessionSettings, RECORD_LANE, RECORD_SLOT, REFUSAL_LANE};
 use nessa_protocol::product::generated::{
@@ -207,6 +210,42 @@ fn catalogue() -> &'static [Limit] {
             meaning:
                 "a cold read that uses every discovery step answers that the source is preparing",
         },
+        Limit {
+            id: "peer.poll_interval",
+            tier: "fixed",
+            owner: "POLL_INTERVAL in crates/nessa-server/src/peer_gateways/infrastructure/poller.rs",
+            meaning: "how often each up-to-date peer gateway is read, jittered 80 to 120 percent; what a peer shares or unshares reaches this gateway's cache within about one interval",
+        },
+        Limit {
+            id: "peer.poll_backoff_cap",
+            tier: "fixed",
+            owner: "POLL_BACKOFF_CAP in crates/nessa-server/src/peer_gateways/infrastructure/poller.rs",
+            meaning: "the longest wait a peer is scheduled for between reads, jitter included; a peer that keeps failing waits twice as long each time, from the interval up to this; peers are read one at a time, so reads of other peers ahead of it can add to it",
+        },
+        Limit {
+            id: "peer.read_budget",
+            tier: "fixed",
+            owner: "READ_BUDGET in crates/nessa-server/src/peer_gateways/infrastructure/poller.rs",
+            meaning: "the longest one read of a peer gateway runs; a read that reaches it having saved something ends incomplete and continues on the next cycle, and one that saved nothing is unreachable and backs off, so a slow peer cannot hold the peer commands, and holds the other peers, read one at a time, at most this long per read",
+        },
+        Limit {
+            id: "peer.preempt",
+            tier: "fixed",
+            owner: "PREEMPT in crates/nessa-server/src/peer_gateways/infrastructure/commands.rs",
+            meaning: "the longest peer.enroll or peer.forget waits for a peer read it stopped to give back its turn; at least twice the read's unstoppable connect (the 5 s handshake), and the read only queues its audit records before it gives the turn back, so past it the command answers peer_busy only if local storage stalls",
+        },
+        Limit {
+            id: "peer.audit_queue",
+            tier: "fixed",
+            owner: "AUDIT_QUEUE in crates/nessa-server/src/peer_gateways/infrastructure/audit.rs",
+            meaning: "the most peer audit records waiting to be written, one at a time in the order they were handed over; one poller cycle queues at most about half of it, so it fills only when the store falls behind; a record past it is refused at once, its sequence left as a gap, so peer.enroll or peer.forget answers peer_audit_unavailable before any effect and a peer read's change stands with its record logged as not kept; an owner command's record waits behind at most this many, well inside its 5 s audit deadline",
+        },
+        Limit {
+            id: "peer.withdrawn_per_read",
+            tier: "fixed",
+            owner: "WITHDRAWN_PER_READ in crates/nessa-server/src/peer_gateways/infrastructure/poller.rs",
+            meaning: "the most conversations one read of a peer gateway withdraws, a quarter of peer.audit_queue's records of 64 each; a read that reaches it ends incomplete and the next cycle, soon, withdraws the rest",
+        },
     ]
 }
 
@@ -286,6 +325,12 @@ pub(crate) fn effective_json(
     );
     put("record.read_work_budget", millis(limits.read_work_budget()));
     put("record.discovery_steps", count(DISCOVERY_STEPS_PER_READ));
+    put("peer.poll_interval", millis(POLL_INTERVAL));
+    put("peer.poll_backoff_cap", millis(POLL_BACKOFF_CAP));
+    put("peer.read_budget", millis(READ_BUDGET));
+    put("peer.preempt", millis(PREEMPT));
+    put("peer.audit_queue", count(AUDIT_QUEUE));
+    put("peer.withdrawn_per_read", count(WITHDRAWN_PER_READ));
     serde_json::Value::Object(values.into_iter().collect())
 }
 
