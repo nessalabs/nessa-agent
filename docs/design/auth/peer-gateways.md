@@ -492,8 +492,10 @@ sequenceDiagram
 - **Shutdown leaves nothing running.** Stopping native pairing stops the
   poller first: its wait ends, the cycle holding the turn is stopped (a
   status read dropped, a read's sockets shut), and `join` returns once its
-  blocking worker has. Then the peer audit is closed and its writer
-  waited for, within one `AUDIT_DEADLINE` on the injected clock.
+  blocking worker has. Then the peer commands are closed, and those past
+  their intent are waited for, within `PREEMPT`. Then the peer audit is
+  closed and its writer waited for, within one `AUDIT_DEADLINE` on the
+  injected clock.
 
 | Row | Situation | Expected | Test |
 | --- | --- | --- | --- |
