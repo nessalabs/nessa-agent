@@ -186,13 +186,23 @@ impl AdmitPassiveRead<'_> {
         if !binding.active {
             return Err(ReadRefusal::Unauthorized);
         }
+        // The binding is the session's own: the credential it was resolved by
+        // and the organization it reads in. Its owner is the grantor whose
+        // conversations it reads, not the reader, so it is not compared with
+        // the session's principal: a paired device signs in as its owner, a
+        // peer gateway as itself (`docs/design/auth/peer-gateways.md`), and
+        // both read only what was granted to the binding's receiver.
+        //
+        // The grantor is not checked here. It is the registry's owner, the
+        // only one who can pair, and the registry keeps that owner an active
+        // admin. A device stops with its owner because it signs in as them; a
+        // peer would not. A change that lets a membership be disabled at
+        // runtime, or admits a second owner, must add the grantor's liveness
+        // to this admission in the same change.
         if binding.credential_id != *session.context().credential_id()
             || binding.organization_id != *session.context().organization_id()
         {
             return Err(ReadRefusal::Unverifiable);
-        }
-        if binding.owner_id != *session.context().principal_id() {
-            return Err(ReadRefusal::WrongOwner);
         }
         if binding.receiver_id != receiver_id {
             return Err(ReadRefusal::WrongReceiver);

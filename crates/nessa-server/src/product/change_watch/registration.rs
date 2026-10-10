@@ -199,12 +199,23 @@ impl WatchSelector {
                     .map_err(WatchRefusal::Read)?;
                 Admitted::Records(conversation.clone())
             }
-            Self::Catalogue { receiver, epoch } => Admitted::Catalogue(
-                admission
+            Self::Catalogue { receiver, epoch } => {
+                let admitted = admission
                     .catalogue(session, receiver, *epoch, PassiveRead::CatalogueHead)
                     .await
-                    .map_err(WatchRefusal::Read)?,
-            ),
+                    .map_err(WatchRefusal::Read)?;
+                // A catalogue watch is the owner's: its notices fire on every
+                // change to the owner's catalogue, granted or not. A paired
+                // device signs in as that owner; a peer gateway is another
+                // party, and the timing of the owner's ungranted work is not
+                // its to see, so it is refused the watch and polls its head,
+                // which moves only with what it was granted
+                // (`docs/design/auth/peer-gateways.md`).
+                if admitted.owner_id != *session.context().principal_id() {
+                    return Err(WatchRefusal::Read(ReadRefusal::Forbidden));
+                }
+                Admitted::Catalogue(admitted)
+            }
         };
         Ok(admitted)
     }

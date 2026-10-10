@@ -76,7 +76,11 @@ async fn receiver_child() {
         super::super::store::LocalConversationStore::open(Path::new(&source_path)).unwrap(),
     );
     let head = store
-        .head(&owner().organization_id, &owner().principal_id)
+        .head(
+            &owner().organization_id,
+            &owner().principal_id,
+            &crate::conversation::application::Reader::Owner,
+        )
         .await
         .unwrap();
     let scope = scope(&receiver, &head.incarnation);

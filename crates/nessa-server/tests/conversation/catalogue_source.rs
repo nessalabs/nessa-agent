@@ -20,7 +20,11 @@ async fn failed_worker_start_returns_unavailable_without_scheduler_panic() {
             .unwrap(),
     );
     let head = store
-        .head(&caller().organization_id, &caller().principal_id)
+        .head(
+            &caller().organization_id,
+            &caller().principal_id,
+            &crate::conversation::application::Reader::Owner,
+        )
         .await
         .unwrap();
     let result = NessaCatalogueSource::start_with_spawn(
@@ -68,7 +72,11 @@ fn source_head_finishes_when_caller_owns_the_only_blocking_slot() {
                 .unwrap(),
         );
         let head = store
-            .head(&caller().organization_id, &caller().principal_id)
+            .head(
+                &caller().organization_id,
+                &caller().principal_id,
+                &crate::conversation::application::Reader::Owner,
+            )
             .await
             .unwrap();
         let scope = scope(&head.incarnation);
@@ -145,7 +153,11 @@ async fn source_reads_owner_scoped_current_values_and_rejects_wrong_scope() {
     // The scope's receiver reads what it was granted; the grant takes revision 2.
     crate::conversation_test_support::grant_read(store.as_ref(), &alice_id, "receiver").await;
     let head = store
-        .head(&caller().organization_id, &caller().principal_id)
+        .head(
+            &caller().organization_id,
+            &caller().principal_id,
+            &crate::conversation::application::Reader::Owner,
+        )
         .await
         .unwrap();
     let exact = scope(&head.incarnation);
@@ -288,7 +300,11 @@ async fn source_resolves_deletion_after_manifest_and_keeps_newer_revision() {
     crate::conversation_test_support::grant_read(store.as_ref(), &conversation_id, "receiver")
         .await;
     let head = store
-        .head(&caller().organization_id, &caller().principal_id)
+        .head(
+            &caller().organization_id,
+            &caller().principal_id,
+            &crate::conversation::application::Reader::Owner,
+        )
         .await
         .unwrap();
     let source =

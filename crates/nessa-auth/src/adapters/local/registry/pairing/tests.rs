@@ -3758,6 +3758,46 @@ fn a_pairing_bound_credential_names_a_gateway_exactly_when_its_class_is_a_peers(
     }
 }
 
+/// The grantor of every pairing is the registry's owner, whose membership the
+/// registry keeps an active admin: a registry where it is disabled or no
+/// longer an admin is refused on open. A peer reads under the owner's grants
+/// without signing in as the owner, so this is what keeps a grantor live; a
+/// change that lets a membership be disabled at runtime, or admits a second
+/// owner, must check the grantor at read admission in the same change
+/// (`docs/design/auth/peer-gateways.md`).
+#[test]
+fn a_registry_whose_owner_is_not_an_active_admin_does_not_open() {
+    let fixture = peer_claim();
+    publish(&fixture);
+    let path = fixture.directory.path().join("native/credentials.v1.json");
+    let original_bytes = std::fs::read(&path).unwrap();
+    let original: Registry = serde_json::from_slice(&original_bytes).unwrap();
+    drop(fixture.store);
+    for disabled in [true, false] {
+        let mut changed = original.clone();
+        let owner = changed
+            .memberships
+            .iter_mut()
+            .find(|membership| membership.id == original.owner_membership_id)
+            .unwrap();
+        if disabled {
+            owner.state = MembershipStateDto::Disabled;
+        } else {
+            owner.role = MembershipRoleDto::Member;
+        }
+        std::fs::write(&path, serde_json::to_vec(&changed).unwrap()).unwrap();
+        assert!(matches!(
+            open_store(&path),
+            Err(LocalStoreError::InvalidRegistry {
+                fault: CredentialRegistryFault::InvalidState(RegistryInvariant::OwnerMembership),
+                ..
+            })
+        ));
+    }
+    std::fs::write(&path, &original_bytes).unwrap();
+    assert!(open_store(&path).is_ok());
+}
+
 #[test]
 fn the_gateway_id_prefix_belongs_to_gateway_principals_alone() {
     let fixture = enrolled_claim();

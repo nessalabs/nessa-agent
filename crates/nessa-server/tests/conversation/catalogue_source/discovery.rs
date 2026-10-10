@@ -31,7 +31,12 @@ impl Metadata {
     }
 }
 impl ConversationCatalogue for Metadata {
-    fn head(&self, _: &OrganizationId, _: &PrincipalId) -> ConversationFuture<'_, CatalogueHead> {
+    fn head(
+        &self,
+        _: &OrganizationId,
+        _: &PrincipalId,
+        _: &crate::conversation::application::Reader,
+    ) -> ConversationFuture<'_, CatalogueHead> {
         Box::pin(async move {
             self.calls.fetch_add(1, Ordering::SeqCst);
             if let Some((entered, release)) = self.gate.lock().unwrap().take() {

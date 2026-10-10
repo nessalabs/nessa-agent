@@ -188,6 +188,36 @@ fn granted_to(reader: &Reader) -> Option<String> {
     }
 }
 
+/// A paired reader's head: the latest revision among the owner's rows granted
+/// to `receiver`, and among `receiver`'s grant changes that changed something.
+/// A revoke stamps the row it takes away with a new revision and journals
+/// that revision, so the head moves forward on a revoke and never back: the
+/// journal only grows and conversation rows are never removed. Zero when the
+/// receiver was never granted anything.
+fn granted_head(
+    connection: &Connection,
+    organization: &OrganizationId,
+    owner: &PrincipalId,
+    receiver: &str,
+) -> Result<i64, ConversationError> {
+    connection
+        .query_row(
+            &format!(
+                "SELECT MAX(
+                     COALESCE((SELECT MAX(c.change_revision) FROM conversations AS c
+                               WHERE c.organization = ?1 AND c.owner = ?2 AND {}), 0),
+                     COALESCE((SELECT MAX(j.revision) FROM read_grant_changes AS j
+                               JOIN conversations AS c ON c.id = j.conversation_id
+                               WHERE c.organization = ?1 AND c.owner = ?2
+                                 AND j.receiver_id = ?3 AND j.before <> j.after), 0))",
+                read_grants::granted("c.id", "?3")
+            ),
+            params![organization.as_str(), owner.as_str(), receiver],
+            |row| row.get(0),
+        )
+        .map_err(failed)
+}
+
 /// The head and the latest retained row are one fact. No row for a new owner
 /// means zero; a missing counter beside existing conversations is damage.
 fn owner_head(
@@ -1237,7 +1267,8 @@ impl ConversationListing for LocalConversationStore {
         let organization = organization.clone();
         let owner = owner.clone();
         Box::pin(async move {
-            let head = ConversationCatalogue::head(self, &organization, &owner).await?;
+            let head =
+                ConversationCatalogue::head(self, &organization, &owner, &Reader::Owner).await?;
             // A head of zero has no descriptor to start a pass from. The
             // catalogue pass refuses a boundary that is not past the
             // completed revision, and both would be zero here.
@@ -1385,8 +1416,10 @@ impl ConversationCatalogue for LocalConversationStore {
         &self,
         organization: &OrganizationId,
         owner: &PrincipalId,
+        reader: &Reader,
     ) -> ConversationFuture<'_, CatalogueHead> {
         let (organization, owner) = (organization.clone(), owner.clone());
+        let receiver = granted_to(reader);
         self.run(move |connection| {
             let transaction = connection.transaction().map_err(failed)?;
             let incarnation: String = transaction
@@ -1400,6 +1433,10 @@ impl ConversationCatalogue for LocalConversationStore {
                 )
                 .map_err(failed)?;
             let revision = owner_head(&transaction, &organization, &owner)?;
+            let revision = match receiver {
+                None => revision,
+                Some(receiver) => granted_head(&transaction, &organization, &owner, &receiver)?,
+            };
             Ok(CatalogueHead {
                 incarnation,
                 revision: u64::try_from(revision).map_err(|_| ConversationError::Metadata)?,

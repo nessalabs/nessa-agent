@@ -128,7 +128,16 @@ async fn mode_intent_and_commit_survive_restart_without_reapplying() {
         .await
         .unwrap();
     assert_eq!(
-        opened.store.head(&org(), &alice()).await.unwrap().revision,
+        opened
+            .store
+            .head(
+                &org(),
+                &alice(),
+                &crate::conversation::application::Reader::Owner
+            )
+            .await
+            .unwrap()
+            .revision,
         2
     );
     drop(opened.store);
@@ -159,7 +168,18 @@ async fn mode_intent_and_commit_survive_restart_without_reapplying() {
             .state,
         ConversationModeRequestState::Applied
     );
-    assert_eq!(reopened.head(&org(), &alice()).await.unwrap().revision, 2);
+    assert_eq!(
+        reopened
+            .head(
+                &org(),
+                &alice(),
+                &crate::conversation::application::Reader::Owner
+            )
+            .await
+            .unwrap()
+            .revision,
+        2
+    );
 }
 
 #[tokio::test]
@@ -1059,7 +1079,15 @@ async fn oversized_text_costs_its_list_one_row_and_remains_refused_by_exact_read
             matches!(exact, Err(ConversationError::Metadata)),
             "{column}"
         );
-        let head = opened.store.head(&org(), &alice()).await.unwrap();
+        let head = opened
+            .store
+            .head(
+                &org(),
+                &alice(),
+                &crate::conversation::application::Reader::Owner,
+            )
+            .await
+            .unwrap();
         assert!(
             matches!(
                 opened
@@ -1255,12 +1283,25 @@ async fn catalogue_revisions_follow_owner_visible_changes_and_survive_restart() 
     let bob = PrincipalId::new("bob").unwrap();
     let incarnation = opened
         .store
-        .head(&org(), &alice())
+        .head(
+            &org(),
+            &alice(),
+            &crate::conversation::application::Reader::Owner,
+        )
         .await
         .unwrap()
         .incarnation;
     assert_eq!(
-        opened.store.head(&org(), &alice()).await.unwrap().revision,
+        opened
+            .store
+            .head(
+                &org(),
+                &alice(),
+                &crate::conversation::application::Reader::Owner
+            )
+            .await
+            .unwrap()
+            .revision,
         0
     );
     opened.store.create(owned(&id)).await.unwrap();
@@ -1334,13 +1375,30 @@ async fn catalogue_revisions_follow_owner_visible_changes_and_survive_restart() 
         .unwrap();
     opened.store.erase(&id).await.unwrap();
     assert_eq!(
-        opened.store.head(&org(), &alice()).await.unwrap().revision,
+        opened
+            .store
+            .head(
+                &org(),
+                &alice(),
+                &crate::conversation::application::Reader::Owner
+            )
+            .await
+            .unwrap()
+            .revision,
         4
     );
     drop(opened.store);
     let reopened = LocalConversationStore::open(&opened.path).unwrap();
     assert_eq!(
-        reopened.head(&org(), &alice()).await.unwrap().incarnation,
+        reopened
+            .head(
+                &org(),
+                &alice(),
+                &crate::conversation::application::Reader::Owner
+            )
+            .await
+            .unwrap()
+            .incarnation,
         incarnation
     );
     assert!(
@@ -1365,7 +1423,11 @@ async fn catalogue_pages_use_creation_keys_and_do_not_cut_off_newer_changes() {
     let opened = opened();
     let incarnation = opened
         .store
-        .head(&org(), &alice())
+        .head(
+            &org(),
+            &alice(),
+            &crate::conversation::application::Reader::Owner,
+        )
         .await
         .unwrap()
         .incarnation;
@@ -1382,7 +1444,19 @@ async fn catalogue_pages_use_creation_keys_and_do_not_cut_off_newer_changes() {
             .unwrap();
     }
     let bob = PrincipalId::new("bob").unwrap();
-    assert_eq!(opened.store.head(&org(), &bob).await.unwrap().revision, 20);
+    assert_eq!(
+        opened
+            .store
+            .head(
+                &org(),
+                &bob,
+                &crate::conversation::application::Reader::Owner
+            )
+            .await
+            .unwrap()
+            .revision,
+        20
+    );
     assert_eq!(
         opened
             .store
@@ -1393,7 +1467,16 @@ async fn catalogue_pages_use_creation_keys_and_do_not_cut_off_newer_changes() {
             .len(),
         20
     );
-    let boundary = opened.store.head(&org(), &alice()).await.unwrap().revision;
+    let boundary = opened
+        .store
+        .head(
+            &org(),
+            &alice(),
+            &crate::conversation::application::Reader::Owner,
+        )
+        .await
+        .unwrap()
+        .revision;
     let writer = LocalConversationStore::open(&opened.path).unwrap();
     let created_midpass = new_id();
     writer.create(owned(&created_midpass)).await.unwrap();
@@ -1481,7 +1564,11 @@ async fn catalogue_refuses_its_owners_damaged_row_without_reading_another_owners
         .unwrap();
     let incarnation = opened
         .store
-        .head(&org(), &alice())
+        .head(
+            &org(),
+            &alice(),
+            &crate::conversation::application::Reader::Owner,
+        )
         .await
         .unwrap()
         .incarnation;
@@ -1515,7 +1602,11 @@ async fn catalogue_resolves_a_deletion_that_raced_its_manifest_descriptor() {
     opened.store.create(owned(&id)).await.unwrap();
     let incarnation = opened
         .store
-        .head(&org(), &alice())
+        .head(
+            &org(),
+            &alice(),
+            &crate::conversation::application::Reader::Owner,
+        )
         .await
         .unwrap()
         .incarnation;
@@ -1570,7 +1661,11 @@ async fn a_failed_visible_write_rolls_back_its_owner_revision() {
     opened.store.create(owned(&id)).await.unwrap();
     let incarnation = opened
         .store
-        .head(&org(), &alice())
+        .head(
+            &org(),
+            &alice(),
+            &crate::conversation::application::Reader::Owner,
+        )
         .await
         .unwrap()
         .incarnation;
@@ -1581,7 +1676,16 @@ async fn a_failed_visible_write_rolls_back_its_owner_revision() {
         Err(ConversationError::Metadata)
     ));
     assert_eq!(
-        opened.store.head(&org(), &alice()).await.unwrap().revision,
+        opened
+            .store
+            .head(
+                &org(),
+                &alice(),
+                &crate::conversation::application::Reader::Owner
+            )
+            .await
+            .unwrap()
+            .revision,
         1
     );
     assert!(opened
@@ -1595,7 +1699,16 @@ async fn a_failed_visible_write_rolls_back_its_owner_revision() {
     raw.execute_batch("DROP TRIGGER refuse_summary;").unwrap();
     opened.store.record(&id, said("accepted", 3)).await.unwrap();
     assert_eq!(
-        opened.store.head(&org(), &alice()).await.unwrap().revision,
+        opened
+            .store
+            .head(
+                &org(),
+                &alice(),
+                &crate::conversation::application::Reader::Owner
+            )
+            .await
+            .unwrap()
+            .revision,
         2
     );
     raw.execute_batch("CREATE TRIGGER refuse_deletion BEFORE INSERT ON deletions BEGIN SELECT RAISE(ABORT, 'refused'); END;").unwrap();
@@ -1604,7 +1717,16 @@ async fn a_failed_visible_write_rolls_back_its_owner_revision() {
         Err(ConversationError::Metadata)
     ));
     assert_eq!(
-        opened.store.head(&org(), &alice()).await.unwrap().revision,
+        opened
+            .store
+            .head(
+                &org(),
+                &alice(),
+                &crate::conversation::application::Reader::Owner
+            )
+            .await
+            .unwrap()
+            .revision,
         2
     );
     assert!(
@@ -1624,7 +1746,16 @@ async fn a_failed_visible_write_rolls_back_its_owner_revision() {
         .await
         .unwrap();
     assert_eq!(
-        opened.store.head(&org(), &alice()).await.unwrap().revision,
+        opened
+            .store
+            .head(
+                &org(),
+                &alice(),
+                &crate::conversation::application::Reader::Owner
+            )
+            .await
+            .unwrap()
+            .revision,
         3
     );
 }
@@ -1635,7 +1766,11 @@ async fn a_failed_creation_does_not_publish_an_owner_or_spend_a_revision() {
     let id = new_id();
     let incarnation = opened
         .store
-        .head(&org(), &alice())
+        .head(
+            &org(),
+            &alice(),
+            &crate::conversation::application::Reader::Owner,
+        )
         .await
         .unwrap()
         .incarnation;
@@ -1646,7 +1781,16 @@ async fn a_failed_creation_does_not_publish_an_owner_or_spend_a_revision() {
         Err(ConversationError::Metadata)
     ));
     assert_eq!(
-        opened.store.head(&org(), &alice()).await.unwrap().revision,
+        opened
+            .store
+            .head(
+                &org(),
+                &alice(),
+                &crate::conversation::application::Reader::Owner
+            )
+            .await
+            .unwrap()
+            .revision,
         0
     );
     assert!(opened
@@ -1689,7 +1833,11 @@ async fn a_missing_owner_head_cannot_publish_empty_or_reuse_a_revision() {
         .unwrap();
     let incarnation = opened
         .store
-        .head(&org(), &alice())
+        .head(
+            &org(),
+            &alice(),
+            &crate::conversation::application::Reader::Owner,
+        )
         .await
         .unwrap()
         .incarnation;
@@ -1701,7 +1849,14 @@ async fn a_missing_owner_head_cannot_publish_empty_or_reuse_a_revision() {
     )
     .unwrap();
     assert!(matches!(
-        opened.store.head(&org(), &alice()).await,
+        opened
+            .store
+            .head(
+                &org(),
+                &alice(),
+                &crate::conversation::application::Reader::Owner
+            )
+            .await,
         Err(ConversationError::Metadata)
     ));
     assert!(matches!(
@@ -1738,7 +1893,19 @@ async fn a_missing_owner_head_cannot_publish_empty_or_reuse_a_revision() {
         .deletion()
         .is_some());
     let bob = PrincipalId::new("bob").unwrap();
-    assert_eq!(opened.store.head(&org(), &bob).await.unwrap().revision, 1);
+    assert_eq!(
+        opened
+            .store
+            .head(
+                &org(),
+                &bob,
+                &crate::conversation::application::Reader::Owner
+            )
+            .await
+            .unwrap()
+            .revision,
+        1
+    );
     assert!(opened
         .store
         .resolve(&org(), &bob, &Reader::Owner, &incarnation, &foreign)
@@ -1760,7 +1927,14 @@ async fn a_regressed_owner_head_is_unavailable_before_a_new_revision() {
     )
     .unwrap();
     assert!(matches!(
-        opened.store.head(&org(), &alice()).await,
+        opened
+            .store
+            .head(
+                &org(),
+                &alice(),
+                &crate::conversation::application::Reader::Owner
+            )
+            .await,
         Err(ConversationError::Metadata)
     ));
     assert!(matches!(
@@ -1782,7 +1956,15 @@ async fn catalogue_metadata_consumes_actual_request_owner_and_derives_one_incarn
     let opened = opened();
     let conversation = new_id();
     opened.store.create(owned(&conversation)).await.unwrap();
-    let head = opened.store.head(&org(), &alice()).await.unwrap();
+    let head = opened
+        .store
+        .head(
+            &org(),
+            &alice(),
+            &crate::conversation::application::Reader::Owner,
+        )
+        .await
+        .unwrap();
     let valid = catalogue_request(alice(), &head.incarnation, 0, head.revision, None, 1);
     assert_eq!(
         opened
@@ -1844,7 +2026,15 @@ async fn catalogue_acquisition_refuses_corruption_atomically_and_preserves_unkno
     let second = new_id();
     opened.store.create(owned(&first)).await.unwrap();
     opened.store.create(owned(&second)).await.unwrap();
-    let head = opened.store.head(&org(), &alice()).await.unwrap();
+    let head = opened
+        .store
+        .head(
+            &org(),
+            &alice(),
+            &crate::conversation::application::Reader::Owner,
+        )
+        .await
+        .unwrap();
     let request = catalogue_request(alice(), &head.incarnation, 0, head.revision, None, 2);
     let connection = raw(&opened.path);
     connection
@@ -1950,7 +2140,15 @@ async fn catalogue_acquisition_refuses_corruption_atomically_and_preserves_unkno
             ["x".repeat(1_000_000)],
         )
         .unwrap();
-    assert!(opened.store.head(&org(), &alice()).await.is_err());
+    assert!(opened
+        .store
+        .head(
+            &org(),
+            &alice(),
+            &crate::conversation::application::Reader::Owner
+        )
+        .await
+        .is_err());
     assert!(opened.store.page(request).await.is_err());
     assert!(opened
         .store
@@ -1988,7 +2186,15 @@ async fn catalogue_acquisition_accepts_full_supported_multibyte_fields() {
     )
     .unwrap();
     opened.store.create(conversation).await.unwrap();
-    let head = opened.store.head(&organization, &owner).await.unwrap();
+    let head = opened
+        .store
+        .head(
+            &organization,
+            &owner,
+            &crate::conversation::application::Reader::Owner,
+        )
+        .await
+        .unwrap();
     let mut request =
         catalogue_request(owner.clone(), &head.incarnation, 0, head.revision, None, 1);
     request.organization = organization.clone();
@@ -2064,7 +2270,15 @@ async fn catalogue_resolve_acquires_bounded_deletion_and_preserves_supported_pro
             .record_deletion(&id, decision.clone())
             .await
             .unwrap();
-        let head = opened.store.head(&org(), &alice()).await.unwrap();
+        let head = opened
+            .store
+            .head(
+                &org(),
+                &alice(),
+                &crate::conversation::application::Reader::Owner,
+            )
+            .await
+            .unwrap();
         let value = opened
             .store
             .resolve(&org(), &alice(), &Reader::Owner, &head.incarnation, &id)
@@ -2076,7 +2290,15 @@ async fn catalogue_resolve_acquires_bounded_deletion_and_preserves_supported_pro
     let id = new_id();
     opened.store.create(owned(&id)).await.unwrap();
     opened.store.record_deletion(&id, recorded).await.unwrap();
-    let head = opened.store.head(&org(), &alice()).await.unwrap();
+    let head = opened
+        .store
+        .head(
+            &org(),
+            &alice(),
+            &crate::conversation::application::Reader::Owner,
+        )
+        .await
+        .unwrap();
     let connection = raw(&opened.path);
     connection
         .pragma_update(None, "ignore_check_constraints", true)
@@ -2173,7 +2395,16 @@ async fn catalogue_watch_tracks_only_committed_owner_revisions_and_tombstone_fen
     catalogue_watch_pending(&mut watch);
     let mut late = opened.store.watch(&org(), &alice()).unwrap();
     assert_eq!(
-        opened.store.head(&org(), &alice()).await.unwrap().revision,
+        opened
+            .store
+            .head(
+                &org(),
+                &alice(),
+                &crate::conversation::application::Reader::Owner
+            )
+            .await
+            .unwrap()
+            .revision,
         1
     );
     catalogue_watch_pending(&mut late);
@@ -2200,7 +2431,16 @@ async fn catalogue_watch_tracks_only_committed_owner_revisions_and_tombstone_fen
         CatalogueWatchState::Dirty
     );
     assert_eq!(
-        opened.store.head(&org(), &alice()).await.unwrap().revision,
+        opened
+            .store
+            .head(
+                &org(),
+                &alice(),
+                &crate::conversation::application::Reader::Owner
+            )
+            .await
+            .unwrap()
+            .revision,
         4
     );
     assert!(matches!(
@@ -2242,7 +2482,16 @@ async fn catalogue_watch_refuses_to_publish_a_rolled_back_revision() {
     ));
     catalogue_watch_pending(&mut watch);
     assert_eq!(
-        opened.store.head(&org(), &alice()).await.unwrap().revision,
+        opened
+            .store
+            .head(
+                &org(),
+                &alice(),
+                &crate::conversation::application::Reader::Owner
+            )
+            .await
+            .unwrap()
+            .revision,
         0
     );
     raw(&opened.path)
@@ -2445,7 +2694,14 @@ async fn device_pass(
     reader: Reader,
     completed: u64,
 ) -> Vec<(ConversationId, u64)> {
-    let head = store.head(&org(), &alice()).await.unwrap();
+    let head = store
+        .head(
+            &org(),
+            &alice(),
+            &crate::conversation::application::Reader::Owner,
+        )
+        .await
+        .unwrap();
     let mut request = catalogue_request(
         alice(),
         &head.incarnation,
@@ -2481,7 +2737,15 @@ async fn a_device_pages_only_the_conversations_granted_to_it() {
     assert_eq!(ids, vec![shared.clone()]);
     let owner: Vec<_> = device_pass(&opened.store, Reader::Owner, 0).await;
     assert_eq!(owner.len(), 2, "the owner still pages everything");
-    let head = opened.store.head(&org(), &alice()).await.unwrap();
+    let head = opened
+        .store
+        .head(
+            &org(),
+            &alice(),
+            &crate::conversation::application::Reader::Owner,
+        )
+        .await
+        .unwrap();
     for (id, found) in [(&shared, true), (&private, false)] {
         let resolved = opened
             .store
@@ -2502,9 +2766,27 @@ async fn a_grant_moves_the_row_past_what_a_device_completed() {
     let (old, other) = (new_id(), new_id());
     opened.store.create(owned(&old)).await.unwrap();
     opened.store.create(owned(&other)).await.unwrap();
-    let completed = opened.store.head(&org(), &alice()).await.unwrap().revision;
+    let completed = opened
+        .store
+        .head(
+            &org(),
+            &alice(),
+            &crate::conversation::application::Reader::Owner,
+        )
+        .await
+        .unwrap()
+        .revision;
     assert!(grant(&opened.store, &old, "phone").await);
-    let head = opened.store.head(&org(), &alice()).await.unwrap().revision;
+    let head = opened
+        .store
+        .head(
+            &org(),
+            &alice(),
+            &crate::conversation::application::Reader::Owner,
+        )
+        .await
+        .unwrap()
+        .revision;
     assert_eq!(head, completed + 1);
     assert_eq!(
         device_pass(&opened.store, device("phone"), completed).await,
@@ -2519,9 +2801,26 @@ async fn a_revoke_takes_the_row_out_of_the_devices_catalogue() {
     let id = new_id();
     opened.store.create(owned(&id)).await.unwrap();
     grant(&opened.store, &id, "phone").await;
-    let before = opened.store.head(&org(), &alice()).await.unwrap().revision;
+    let before = opened
+        .store
+        .head(
+            &org(),
+            &alice(),
+            &crate::conversation::application::Reader::Owner,
+        )
+        .await
+        .unwrap()
+        .revision;
     assert!(revoke(&opened.store, &id, "phone").await);
-    let head = opened.store.head(&org(), &alice()).await.unwrap();
+    let head = opened
+        .store
+        .head(
+            &org(),
+            &alice(),
+            &crate::conversation::application::Reader::Owner,
+        )
+        .await
+        .unwrap();
     assert_eq!(head.revision, before + 1, "a revoke moves the head");
     assert!(device_pass(&opened.store, device("phone"), 0)
         .await
@@ -2534,6 +2833,61 @@ async fn a_revoke_takes_the_row_out_of_the_devices_catalogue() {
         .is_none());
     use crate::conversation::application::ReadGrants;
     assert!(!opened.store.is_granted(&id, "phone").await.unwrap());
+}
+
+/// Row H9 (`docs/design/auth/peer-gateways.md`): a paired reader's head
+/// moves only with what it was granted. An owner change to a row it was not
+/// granted, or a grant to another receiver, leaves it where it was; a grant,
+/// a change to a granted row and a revoke each move it, and a revoke moves it
+/// forward, never back to an older granted row.
+#[tokio::test]
+async fn a_paired_readers_head_moves_only_with_what_it_was_granted() {
+    let opened = opened();
+    let store = &opened.store;
+    let heads = || async {
+        let head = |reader: Reader| async move {
+            store
+                .head(&org(), &alice(), &reader)
+                .await
+                .unwrap()
+                .revision
+        };
+        (head(Reader::Owner).await, head(device("phone")).await)
+    };
+    let (first, second) = (new_id(), new_id());
+    store.create(owned(&first)).await.unwrap();
+    store.create(owned(&second)).await.unwrap();
+    assert_eq!(heads().await.1, 0, "nothing granted yet");
+    assert!(grant(store, &first, "phone").await);
+    let (owner, granted) = heads().await;
+    assert_eq!(granted, owner, "a grant moves it");
+    // Owner work it was not granted, and a grant to another receiver.
+    let third = new_id();
+    store.create(owned(&third)).await.unwrap();
+    assert!(grant(store, &second, "tablet").await);
+    let (owner, unmoved) = heads().await;
+    assert!(owner > granted);
+    assert_eq!(unmoved, granted, "an ungranted change does not move it");
+    assert!(grant(store, &second, "phone").await);
+    store
+        .record_deletion(&second, deletion("delete"))
+        .await
+        .unwrap();
+    let (owner, changed) = heads().await;
+    assert!(changed > unmoved);
+    assert_eq!(changed, owner, "a change to a granted row moves it");
+    // Revoking the row that holds the highest revision must not drop the
+    // head back to the other granted row's.
+    assert!(revoke(store, &second, "phone").await);
+    let (owner, revoked) = heads().await;
+    assert!(revoked > changed, "a revoke moves it forward");
+    assert_eq!(revoked, owner);
+    assert!(revoke(store, &first, "phone").await);
+    let (_, empty) = heads().await;
+    assert!(
+        empty > revoked,
+        "revoking the last grant still moves it forward"
+    );
 }
 
 /// Row G7.
@@ -2565,10 +2919,28 @@ async fn a_repeated_share_or_unshare_changes_nothing() {
     opened.store.create(owned(&id)).await.unwrap();
     assert!(!revoke(&opened.store, &id, "phone").await);
     assert!(grant(&opened.store, &id, "phone").await);
-    let head = opened.store.head(&org(), &alice()).await.unwrap().revision;
+    let head = opened
+        .store
+        .head(
+            &org(),
+            &alice(),
+            &crate::conversation::application::Reader::Owner,
+        )
+        .await
+        .unwrap()
+        .revision;
     assert!(!grant(&opened.store, &id, "phone").await);
     assert_eq!(
-        opened.store.head(&org(), &alice()).await.unwrap().revision,
+        opened
+            .store
+            .head(
+                &org(),
+                &alice(),
+                &crate::conversation::application::Reader::Owner
+            )
+            .await
+            .unwrap()
+            .revision,
         head
     );
     let unchanged: i64 = raw(&opened.path)
@@ -2602,11 +2974,29 @@ async fn a_retried_share_that_changed_nothing_never_undoes_a_later_unshare() {
     };
     assert!(!opened.store.change(share()).await.unwrap());
     assert!(revoke(&opened.store, &id, "phone").await);
-    let head = opened.store.head(&org(), &alice()).await.unwrap().revision;
+    let head = opened
+        .store
+        .head(
+            &org(),
+            &alice(),
+            &crate::conversation::application::Reader::Owner,
+        )
+        .await
+        .unwrap()
+        .revision;
     assert!(!opened.store.change(share()).await.unwrap());
     assert!(!opened.store.is_granted(&id, "phone").await.unwrap());
     assert_eq!(
-        opened.store.head(&org(), &alice()).await.unwrap().revision,
+        opened
+            .store
+            .head(
+                &org(),
+                &alice(),
+                &crate::conversation::application::Reader::Owner
+            )
+            .await
+            .unwrap()
+            .revision,
         head
     );
 }
@@ -2772,7 +3162,16 @@ async fn every_grant_change_is_journaled_with_its_initiator() {
                 .unwrap());
         }
     }
-    let head = opened.store.head(&org(), &alice()).await.unwrap().revision;
+    let head = opened
+        .store
+        .head(
+            &org(),
+            &alice(),
+            &crate::conversation::application::Reader::Owner,
+        )
+        .await
+        .unwrap()
+        .revision;
     let connection = raw(&opened.path);
     let mut statement = connection
         .prepare(
