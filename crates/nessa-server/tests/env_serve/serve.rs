@@ -834,6 +834,69 @@ async fn i4_a_dialed_gateway_without_a_grant_is_refused_and_nothing_runs() {
     );
 }
 
+/// Row I4: the peer's grant is checked before what the host runs, so a
+/// gateway not granted a lease learns nothing of it: an agent the host does
+/// not run, a sandbox it cannot enforce, and commands on a host that runs
+/// none are each refused `NotGranted`. Once granted, it is told why.
+#[tokio::test]
+async fn an_ungranted_gateway_learns_nothing_of_what_the_host_runs() {
+    let grants = MemoryGrants::none();
+    let mut gateway = Gateway::for_peer(
+        DIALED,
+        grants.clone(),
+        Arc::new(MemoryLedger::default()),
+        Arc::new(NoOutbox),
+        false,
+    );
+    assert_eq!(gateway.next().await, hello());
+    let asks = |n: u8| {
+        [
+            ToEnvironment::Grant {
+                lease: format!("lease-unknown-{n}"),
+                agent: "unknown".into(),
+                sandbox: Sandbox::HarnessDefault,
+            },
+            ToEnvironment::Grant {
+                lease: format!("lease-unsandboxed-{n}"),
+                agent: "claude".into(),
+                sandbox: Sandbox::None,
+            },
+            grant_command(&format!("command-{n}"), &["echo", "a"], None),
+        ]
+    };
+    for ask in asks(1) {
+        gateway.send(ask).await;
+        assert!(
+            matches!(
+                gateway.next().await,
+                FromEnvironment::Refused {
+                    reason: GrantRefusal::NotGranted,
+                    ..
+                }
+            ),
+            "refused not granted"
+        );
+    }
+    grants.set(
+        DIALED,
+        Some(PeerGrant::new(
+            Agents::All,
+            Some(CommandGrant::new(CommandWork::MAX_TIMEOUT_MS).unwrap()),
+        )),
+    );
+    for (ask, reason) in asks(2).into_iter().zip([
+        GrantRefusal::AgentUnavailable,
+        GrantRefusal::SandboxUnavailable,
+        GrantRefusal::CommandsUnavailable,
+    ]) {
+        gateway.send(ask).await;
+        assert!(
+            matches!(gateway.next().await, FromEnvironment::Refused { reason: got, .. } if got == reason),
+            "{reason:?}"
+        );
+    }
+}
+
 /// Row I6: a grant is read at every lease, so an ungrant refuses the next
 /// lease while the lease already running goes on; a grant names agents,
 /// and one it leaves out is refused.

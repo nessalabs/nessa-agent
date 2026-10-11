@@ -25,7 +25,7 @@
 //! environment owner's own policy. An answer granting more — a longer
 //! timeout, another sandbox — is never run.
 use super::{ConversationError, ConversationService, LiveConversation};
-use crate::conversation::application::{CommandResult, Environment, GrantedTerms};
+use crate::conversation::application::{environment::GrantedTerms, CommandResult, Environment};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::application::agent_execution::{
     permissions::ActionContext,
@@ -34,7 +34,7 @@ use nessa_sdk::application::agent_execution::{
 use nessa_sdk::domain::agent_execution::executions::InvocationStage;
 use nessa_sdk::domain::agent_execution::leases::{
     CommandExit, CommandOutput, CommandRefusal, CommandTerms, CommandWork, EnvironmentRef, Lease,
-    LeaseEndCause, LeaseId, LeasePhase, SandboxProfile, SandboxProfiles,
+    LeaseEndCause, LeaseId, LeasePhase, LeaseRefusal, SandboxProfile, SandboxProfiles,
 };
 use std::sync::Arc;
 use tokio::sync::watch;
@@ -237,9 +237,8 @@ impl ConversationService {
                 "the environment granted a command other terms than asked; it does not run"
             );
             drop(granted.hold);
-            return self
-                .refuse(&live, &refused, CommandRefusal::EnvironmentNotGranted)
-                .await;
+            let refusal = CommandRefusal::Environment(LeaseRefusal::EnvironmentNotGranted);
+            return self.refuse(&live, &refused, refusal).await;
         };
         let hold = granted.hold;
         // Recorded under the lock as granted, or refused if the lease filled
@@ -299,7 +298,7 @@ impl ConversationService {
         let gone = *stop.borrow();
         let (stopping, stopped) = watch::channel(gone.then_some(LeaseEndCause::Closed));
         let mut caller = stop;
-        let mut ran = hold.run(stopped);
+        let mut ran = hold.run(terms.command.timeout_ms(), stopped);
         let result = loop {
             tokio::select! {
                 result = &mut ran => break result,

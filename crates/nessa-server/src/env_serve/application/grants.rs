@@ -30,7 +30,11 @@ pub(crate) fn grant_for(grants: &dyn PeerGrants, peer: &Peer) -> PeerGrant {
     match grants.entry(peer) {
         Ok(entry) => granted_to(peer, entry),
         Err(error) => {
-            tracing::error!(peer = peer.name(), %error, "this host's grants could not be read; nothing is granted");
+            let peer = match peer {
+                Peer::Ssh => "ssh",
+                Peer::Gateway { .. } => "a dialed gateway",
+            };
+            tracing::error!(peer, %error, "this host's grants could not be read; nothing is granted");
             PeerGrant::nothing()
         }
     }

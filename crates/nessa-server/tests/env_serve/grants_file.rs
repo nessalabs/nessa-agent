@@ -19,6 +19,23 @@ fn gateway() -> Peer {
     Peer::Gateway { pin: [9; 44] }
 }
 
+/// A peer has one spelling: `ssh`, or its pin in standard base64, read back
+/// exactly; nothing else names one.
+#[test]
+fn a_peer_is_spelled_one_way_and_read_back() {
+    assert_eq!(parse_peer("ssh"), Ok(Peer::Ssh));
+    assert_eq!(peer_name(&Peer::Ssh), "ssh");
+    let gateway = Peer::Gateway { pin: [7; 44] };
+    assert_eq!(peer_name(&gateway).len(), 60);
+    assert_eq!(parse_peer(&peer_name(&gateway)), Ok(gateway));
+    let too_short = STANDARD.encode([7u8; 43]);
+    let unpadded = peer_name(&gateway).trim_end_matches('=').to_owned();
+    let spaced = format!("{} ", peer_name(&gateway));
+    for refused in ["", "SSH", "peer:ab", "*", &too_short, &unpadded, &spaced] {
+        assert_eq!(parse_peer(refused), Err(InvalidPeer), "{refused:?}");
+    }
+}
+
 /// No file is no entries: every peer has its defaults.
 #[test]
 fn an_absent_file_is_no_entries() {
@@ -56,7 +73,7 @@ fn a_change_is_written_privately_and_read_back() {
             "schemaVersion": 1,
             "peers": {
                 "ssh": {},
-                gateway().name(): {"agents": ["claude"], "commands": {"maxTimeoutMs": 60000}},
+                peer_name(&gateway()): {"agents": ["claude"], "commands": {"maxTimeoutMs": 60000}},
             }
         })
     );
@@ -83,7 +100,7 @@ fn every_agent_and_missing_fields_are_read_as_written() {
         directory.path(),
         &format!(
             r#"{{"schemaVersion":1,"peers":{{"ssh":{{"agents":"*"}},"{}":{{"commands":{{"maxTimeoutMs":5}}}}}}}}"#,
-            gateway().name()
+            peer_name(&gateway())
         ),
     );
     let grants = FileGrants::new(directory.path());
@@ -151,4 +168,46 @@ fn a_file_this_build_cannot_read_is_refused() {
         FileGrants::new(shared.path()).read(),
         Err(GrantsError::Unreadable(_))
     ));
+}
+
+/// A change that would make the file larger than every reader takes is
+/// refused before anything is written: the file stays as it was, readable.
+#[test]
+fn a_change_past_the_bound_is_refused_and_writes_nothing() {
+    let gateway = |n: usize| {
+        let mut pin = [0; 44];
+        pin[..2].copy_from_slice(&u16::try_from(n).unwrap().to_be_bytes());
+        Peer::Gateway { pin }
+    };
+    let size = |peers: &BTreeMap<Peer, PeerGrant>| {
+        serde_json::to_vec_pretty(&printed(peers)).unwrap().len() as u64 + 1
+    };
+    // As many peers as the bound holds, written as a change would write them.
+    let mut peers = BTreeMap::new();
+    let mut next = BTreeMap::new();
+    while size(&next) <= MAX_BYTES {
+        peers = next.clone();
+        next.insert(gateway(next.len()), PeerGrant::new(Agents::All, None));
+    }
+    let directory = private_directory();
+    let text = serde_json::to_string_pretty(&printed(&peers)).unwrap() + "\n";
+    write_private(directory.path(), &text);
+    let grants = FileGrants::new(directory.path());
+    assert_eq!(grants.read().unwrap(), peers);
+    let refused = grants
+        .change(&gateway(peers.len()), |_| {
+            Ok::<_, ()>(Some(PeerGrant::new(Agents::All, None)))
+        })
+        .unwrap_err();
+    assert!(
+        matches!(refused, Changed::Grants(GrantsError::TooLarge)),
+        "{refused:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(directory.path().join(FILE)).unwrap(),
+        text
+    );
+    // Taking one away still works.
+    grants.change(&gateway(0), |_| Ok::<_, ()>(None)).unwrap();
+    assert_eq!(grants.read().unwrap().len(), peers.len() - 1);
 }

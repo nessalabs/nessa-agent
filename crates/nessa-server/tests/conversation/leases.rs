@@ -2129,7 +2129,6 @@ impl CommandEnvironment for CommandHost {
                     finish: self.finish.subscribe(),
                     stopped: self.stopped.clone(),
                     timeouts: self.timeouts.clone(),
-                    timeout_ms: granted.timeout_ms.unwrap_or_default(),
                 }),
                 granted,
             })
@@ -2139,18 +2138,18 @@ impl CommandEnvironment for CommandHost {
 struct FakeCommand {
     finish: tokio::sync::watch::Receiver<Option<CommandExit>>,
     stopped: Arc<Mutex<Vec<LeaseEndCause>>>,
+    /// The timeout each run was given.
     timeouts: Arc<Mutex<Vec<u64>>>,
-    /// What the host granted it.
-    timeout_ms: u64,
 }
 impl CommandHold for FakeCommand {
     fn run(
         self: Box<Self>,
+        timeout_ms: u64,
         mut stop: tokio::sync::watch::Receiver<Option<LeaseEndCause>>,
     ) -> EnvironmentFuture<'static, CommandResult> {
         let mut finish = self.finish.clone();
         let stopped = self.stopped.clone();
-        self.timeouts.lock().unwrap().push(self.timeout_ms);
+        self.timeouts.lock().unwrap().push(timeout_ms);
         Box::pin(async move {
             let exit = tokio::select! {
                 Ok(exit) = finish.wait_for(Option::is_some) => exit.unwrap(),
@@ -2806,13 +2805,19 @@ async fn i5_a_narrowed_command_is_recorded_as_granted_and_a_wider_one_is_refused
                 .run(command("devbox", &["echo", "hi"], &call))
                 .await
                 .unwrap(),
-            CommandAnswer::Refused(CommandRefusal::EnvironmentNotGranted)
+            CommandAnswer::Refused(CommandRefusal::Environment(
+                LeaseRefusal::EnvironmentNotGranted
+            ))
         );
         let saved = harness.saved_commands();
         let Some(LeaseRecord::CommandRefused { terms, refusal, .. }) = saved.last() else {
             panic!("refused last: {saved:?}");
         };
-        assert_eq!(*refusal, CommandRefusal::EnvironmentNotGranted);
+        // The environment's refusal, not this gateway's own policy.
+        assert_eq!(
+            *refusal,
+            CommandRefusal::Environment(LeaseRefusal::EnvironmentNotGranted)
+        );
         // What was asked, since nothing was granted.
         assert_eq!(terms.command.timeout_ms(), 10_000);
     }

@@ -480,19 +480,15 @@ impl CommandEnvironment for SshEnvironment {
                 )
                 .await
                 .map_err(|refused| command_refusal(&self.inner.name(), refused))?;
-            let granted = granted(terms);
-            // The host runs it for what it granted: an answer that grants
-            // more is refused by the gateway before this runs, and one
-            // that grants none is waited on as long as was asked.
-            let timeout = granted.timeout_ms.unwrap_or(command.timeout_ms());
+            // The terms as the host answered them: the service checks them
+            // and runs the hold with the timeout it checked.
             Ok(GrantedCommand {
                 hold: Box::new(SshCommand {
                     inner: self.inner.clone(),
                     link,
                     lease: lease.as_str().into(),
-                    timeout: Duration::from_millis(timeout),
                 }),
-                granted,
+                granted: granted(terms),
             })
         })
     }
@@ -512,8 +508,11 @@ fn command_refusal(host: &str, refused: AdmissionRefused) -> CommandRefusal {
         AdmissionRefused::Host(GrantRefusal::CommandsUnavailable) => {
             CommandRefusal::CommandsUnavailable
         }
-        // The host's owner grants this gateway no commands there.
-        AdmissionRefused::Host(GrantRefusal::NotGranted) => CommandRefusal::EnvironmentNotGranted,
+        // The host's owner grants this gateway no commands there: the
+        // environment's refusal, not this gateway's own policy.
+        AdmissionRefused::Host(GrantRefusal::NotGranted) => {
+            CommandRefusal::Environment(LeaseRefusal::EnvironmentNotGranted)
+        }
         AdmissionRefused::Host(GrantRefusal::SandboxUnavailable) => {
             CommandRefusal::Environment(LeaseRefusal::SandboxUnavailable)
         }
@@ -540,12 +539,12 @@ struct SshCommand {
     inner: Arc<Inner>,
     link: Arc<HostLink>,
     lease: String,
-    timeout: Duration,
 }
 
 impl CommandHold for SshCommand {
     fn run(
         self: Box<Self>,
+        timeout_ms: u64,
         mut stop: watch::Receiver<Option<LeaseEndCause>>,
     ) -> EnvironmentFuture<'static, CommandResult> {
         Box::pin(async move {
@@ -564,7 +563,8 @@ impl CommandHold for SshCommand {
                     ..CommandResult::unanswered()
                 };
             }
-            let bound = self.timeout + COMMAND_STOP_WAIT + self.inner.timings.answer;
+            let bound =
+                Duration::from_millis(timeout_ms) + COMMAND_STOP_WAIT + self.inner.timings.answer;
             let mut stopped = None;
             let answer = tokio::time::timeout(bound, async {
                 let run = self.link.run(&self.lease);

@@ -15,23 +15,6 @@ fn pin(byte: u8) -> [u8; 44] {
     [byte; 44]
 }
 
-/// A peer has one spelling: `ssh`, or its pin in standard base64, read back
-/// exactly; nothing else names one.
-#[test]
-fn a_peer_is_spelled_one_way_and_read_back() {
-    assert_eq!(Peer::parse("ssh"), Ok(Peer::Ssh));
-    assert_eq!(Peer::Ssh.name(), "ssh");
-    let gateway = Peer::Gateway { pin: pin(7) };
-    assert_eq!(gateway.name().len(), 60);
-    assert_eq!(Peer::parse(&gateway.name()), Ok(gateway));
-    let too_short = STANDARD.encode([7u8; 43]);
-    let unpadded = gateway.name().trim_end_matches('=').to_owned();
-    let spaced = format!("{} ", gateway.name());
-    for refused in ["", "SSH", "peer:ab", "*", &too_short, &unpadded, &spaced] {
-        assert_eq!(Peer::parse(refused), Err(InvalidPeer), "{refused:?}");
-    }
-}
-
 /// Without an entry, SSH keeps what a host served over SSH always had and
 /// a dialed gateway is granted nothing; an entry is what it says.
 #[test]

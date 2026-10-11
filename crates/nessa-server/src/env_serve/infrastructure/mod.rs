@@ -18,7 +18,7 @@ mod outbox;
 mod pairing;
 pub(crate) use commands::{ShepherdCommands, COMMAND_VARIABLES};
 pub(crate) use dial::dial;
-pub(crate) use grants::{printed, Changed, FileGrants};
+pub(crate) use grants::{parse_peer, peer_name, printed, Changed, FileGrants};
 pub(crate) use launcher::{ConfiguredLauncher, LaunchSpec};
 pub(crate) use ledger::FileLedger;
 pub(crate) use lock::{ServeLock, ServeLockError};

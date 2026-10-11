@@ -22,7 +22,9 @@ use crate::{
     core::RunError,
     env_serve::{
         domain::{granted_to, AgentName, Agents, AllAgents, CommandGrant, Peer, PeerGrant},
-        infrastructure::{printed, Changed, FileGrants, FilePairingEnvironment},
+        infrastructure::{
+            parse_peer, peer_name, printed, Changed, FileGrants, FilePairingEnvironment,
+        },
     },
 };
 use nessa_protocol::agents::AgentId;
@@ -84,7 +86,7 @@ pub(super) async fn ungrant(peer: Option<&str>, what: Ungranted) -> Result<(), R
         (Ungranted::Agent(_), Some(agent)) => current.without_agent(&agent).map_err(|AllAgents| {
             RunError::Agent(format!(
                 "{} is granted every agent: ungrant --all, then grant the agents it keeps",
-                peer.name()
+                peer_name(&peer)
             ))
         }),
         (Ungranted::Commands, _) => Ok(current.without_commands()),
@@ -135,7 +137,7 @@ fn print(grants: &FileGrants) -> Result<(), RunError> {
 /// approved by, or `ssh` when nothing is paired here.
 async fn peer_named(directory: &Path, given: Option<&str>) -> Result<Peer, RunError> {
     if let Some(name) = given {
-        return Peer::parse(name).map_err(|_| {
+        return parse_peer(name).map_err(|_| {
             RunError::Agent(format!(
                 "{name}: give --peer as ssh or a gateway's pin as env grants prints it"
             ))

@@ -1571,7 +1571,7 @@ async fn a_command_runs_on_the_host_and_answers_how_it_ended_and_what_it_printed
         .hold;
     assert_eq!(commands.reachable(), Some(true));
     let (_stop, stopped) = tokio::sync::watch::channel(None);
-    let result = tokio::time::timeout(Duration::from_secs(5), hold.run(stopped))
+    let result = tokio::time::timeout(Duration::from_secs(5), hold.run(10_000, stopped))
         .await
         .expect("answered");
     assert_eq!(result.exit, CommandExit::Exited { code: 0 });
@@ -1603,7 +1603,7 @@ async fn a_stopped_command_is_stopped_on_the_host_and_answers_the_stops_cause() 
         .unwrap()
         .hold;
     let (stop, stopped) = tokio::sync::watch::channel(None);
-    let running = tokio::spawn(hold.run(stopped));
+    let running = tokio::spawn(hold.run(10_000, stopped));
     tokio::time::sleep(Duration::from_millis(50)).await;
     stop.send_replace(Some(LeaseEndCause::Revoked));
     let result = tokio::time::timeout(Duration::from_secs(5), running)
@@ -1686,7 +1686,9 @@ async fn what_the_hosts_owner_did_not_grant_is_refused_and_a_narrowed_timeout_is
     *connector.grants.0.lock().unwrap() = Some(PeerGrant::nothing());
     assert_eq!(
         commands.grant(&lease(), &work(&["ls"])).await.err(),
-        Some(CommandRefusal::EnvironmentNotGranted)
+        Some(CommandRefusal::Environment(
+            LeaseRefusal::EnvironmentNotGranted
+        ))
     );
 }
 
@@ -1750,7 +1752,7 @@ async fn a_command_whose_connection_is_lost_is_unanswered_with_what_the_host_rec
         .unwrap()
         .hold;
     let (_stop, stopped) = tokio::sync::watch::channel(None);
-    let running = tokio::spawn(hold.run(stopped));
+    let running = tokio::spawn(hold.run(10_000, stopped));
     tokio::time::sleep(Duration::from_millis(50)).await;
     connector.cut();
     let result = tokio::time::timeout(Duration::from_secs(10), running)

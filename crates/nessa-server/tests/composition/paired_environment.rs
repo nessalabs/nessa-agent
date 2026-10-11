@@ -235,7 +235,11 @@ impl Gateway {
             .unwrap()?
             .hold;
         let (_stop, stopped) = watch::channel(None);
-        Ok(tokio::time::timeout(WAIT, hold.run(stopped)).await.unwrap())
+        Ok(
+            tokio::time::timeout(WAIT, hold.run(work.timeout_ms(), stopped))
+                .await
+                .unwrap(),
+        )
     }
 }
 
@@ -463,7 +467,7 @@ async fn a_dialed_gateway_runs_only_what_the_environment_granted_it() {
     a.until_connected(e.peer, true).await;
     assert_eq!(
         a.echo(e.peer, "ungranted").await.unwrap_err(),
-        CommandRefusal::EnvironmentNotGranted
+        CommandRefusal::Environment(LeaseRefusal::EnvironmentNotGranted)
     );
     host.grant_commands();
     assert_eq!(a.echo(e.peer, "granted").await.unwrap().stdout, b"granted");

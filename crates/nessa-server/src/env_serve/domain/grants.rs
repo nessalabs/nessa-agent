@@ -12,11 +12,12 @@
 //! the host can do: whether it runs an agent at all, or commands at all, is
 //! its configuration's, decided before a grant is read. A grant never
 //! widens a lease: a command's timeout comes back the one asked or shorter.
-use base64::{engine::general_purpose::STANDARD, Engine};
 use nessa_sdk::domain::agent_execution::leases::{AgentWork, CommandWork};
 use std::collections::BTreeSet;
 
-/// Who is leasing from this host, as its grants name them.
+/// Who is leasing from this host, as its grants name them. How a peer is
+/// spelled in the grants file and on the command line is the file's
+/// (`infrastructure::grants`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) enum Peer {
     /// Whoever runs `nessa env serve` over SSH: a gateway that logged in as
@@ -28,40 +29,6 @@ pub(crate) enum Peer {
         /// The gateway's key, as the pairing stores it.
         pin: [u8; 44],
     },
-}
-
-/// A peer name that is neither `ssh` nor a gateway's pin.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct InvalidPeer;
-
-impl Peer {
-    /// What [`Self::name`] spells [`Peer::Ssh`].
-    pub(crate) const SSH: &'static str = "ssh";
-
-    /// Its one spelling, in the grants file and on the command line: `ssh`,
-    /// or the gateway's pin in standard base64.
-    pub(crate) fn name(&self) -> String {
-        match self {
-            Self::Ssh => Self::SSH.into(),
-            Self::Gateway { pin } => STANDARD.encode(pin),
-        }
-    }
-
-    /// Read back a name [`Self::name`] wrote.
-    ///
-    /// # Errors
-    /// [`InvalidPeer`] for anything else.
-    pub(crate) fn parse(name: &str) -> Result<Self, InvalidPeer> {
-        if name == Self::SSH {
-            return Ok(Self::Ssh);
-        }
-        let bytes = STANDARD.decode(name).map_err(|_| InvalidPeer)?;
-        let pin = <[u8; 44]>::try_from(bytes).map_err(|_| InvalidPeer)?;
-        // Base64 has more than one spelling of some bytes: only this one is
-        // a name, so one peer is never two entries.
-        let peer = Self::Gateway { pin };
-        (peer.name() == name).then_some(peer).ok_or(InvalidPeer)
-    }
 }
 
 /// The agents a peer may lease harnesses for.

@@ -269,26 +269,9 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
                 let value = words
                     .next()
                     .ok_or("--ttl requires a duration such as 12h or 7d")?;
-                let split = value.len().checked_sub(1).ok_or("invalid TTL")?;
-                let (number, unit) = value.split_at_checked(split).ok_or("invalid TTL")?;
-                let factor = match unit {
-                    "s" => 1,
-                    "m" => 60,
-                    "h" => 3600,
-                    "d" => 86400,
-                    _ => return Err("TTL unit must be s, m, h or d".into()),
-                };
-                if number.is_empty() || !number.bytes().all(|b| b.is_ascii_digit()) {
-                    return Err("TTL must be a positive integer with a unit".into());
-                }
-                ttl_seconds = Some(
-                    number
-                        .parse::<u64>()
-                        .ok()
-                        .and_then(|v| v.checked_mul(factor))
-                        .filter(|v| *v > 0)
-                        .ok_or("TTL must be positive and representable")?,
-                );
+                ttl_seconds = Some(duration_seconds(value).ok_or(
+                    "--ttl requires a positive whole duration such as 60s, 30m, 12h or 7d",
+                )?);
             }
             "--credential-file" if credential_file.is_none() => {
                 let path = PathBuf::from(
@@ -385,25 +368,30 @@ fn value(word: Option<&String>, usage: &str) -> Result<String, String> {
         .ok_or_else(|| usage.to_owned())
 }
 
-/// A positive whole number of seconds, minutes or hours (`90s`, `10m`,
-/// `1h`), in milliseconds.
-fn duration_ms(text: &str) -> Result<u64, String> {
-    let invalid = || format!("{text}: give a duration such as 90s, 10m or 1h");
-    let split = text.len().checked_sub(1).ok_or_else(invalid)?;
-    let (number, unit) = text.split_at_checked(split).ok_or_else(invalid)?;
+/// A positive whole number of seconds, minutes, hours or days (`90s`,
+/// `10m`, `12h`, `7d`), in seconds; `None` for anything else, or too large.
+fn duration_seconds(text: &str) -> Option<u64> {
+    let (number, unit) = text.split_at_checked(text.len().checked_sub(1)?)?;
     let factor = match unit {
-        "s" => 1_000,
-        "m" => 60_000,
-        "h" => 3_600_000,
-        _ => return Err(invalid()),
+        "s" => 1,
+        "m" => 60,
+        "h" => 3_600,
+        "d" => 86_400,
+        _ => return None,
     };
     if number.is_empty() || !number.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err(invalid());
+        return None;
     }
     number
         .parse::<u64>()
-        .ok()
-        .and_then(|number| number.checked_mul(factor))
-        .filter(|ms| *ms > 0)
-        .ok_or_else(invalid)
+        .ok()?
+        .checked_mul(factor)
+        .filter(|seconds| *seconds > 0)
+}
+
+/// [`duration_seconds`], in milliseconds.
+fn duration_ms(text: &str) -> Result<u64, String> {
+    duration_seconds(text)
+        .and_then(|seconds| seconds.checked_mul(1_000))
+        .ok_or_else(|| format!("{text}: give a duration such as 90s, 10m or 1h"))
 }

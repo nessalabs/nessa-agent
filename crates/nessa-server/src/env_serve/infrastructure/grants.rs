@@ -22,8 +22,9 @@
 //!
 //! ```text
 //! FileGrants::entry ──▶ open (private, bounded) ──▶ parse ──▶ the peer's entry
-//! FileGrants::change ──▶ grants.lock (held) ──▶ read ──▶ change ──▶ a private
-//!   temporary file ──▶ synced ──▶ renamed over grants.json ──▶ directory synced
+//! FileGrants::change ──▶ grants.lock (held) ──▶ read ──▶ change ──▶ encoded
+//!   (past the bound: refused, nothing written) ──▶ a private temporary file
+//!   ──▶ synced ──▶ renamed over grants.json ──▶ directory synced
 //! ```
 //!
 //! Arrows are steps, in order. A reader never takes the lock: the rename
@@ -34,6 +35,7 @@ use crate::env_serve::{
     application::PeerGrants,
     domain::{AgentName, Agents, CommandGrant, Peer, PeerGrant},
 };
+use base64::{engine::general_purpose::STANDARD, Engine};
 use nessa_local_storage::{is_unsafe_file, open, sync_directory, OpenMode, PrivateTempFile};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -53,6 +55,40 @@ const SCHEMA_VERSION: u32 = 1;
 /// every lease reads.
 pub(crate) const MAX_BYTES: u64 = 64 * 1024;
 
+/// How [`peer_name`] spells [`Peer::Ssh`].
+pub(crate) const SSH: &str = "ssh";
+
+/// A peer's one spelling, in the grants file and on the command line: `ssh`,
+/// or the gateway's pin in standard base64, as the peer records spell it.
+pub(crate) fn peer_name(peer: &Peer) -> String {
+    match peer {
+        Peer::Ssh => SSH.into(),
+        Peer::Gateway { pin } => STANDARD.encode(pin),
+    }
+}
+
+/// A peer name that is neither `ssh` nor a gateway's pin.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct InvalidPeer;
+
+/// Read back a name [`peer_name`] wrote.
+///
+/// # Errors
+/// [`InvalidPeer`] for anything else.
+pub(crate) fn parse_peer(name: &str) -> Result<Peer, InvalidPeer> {
+    if name == SSH {
+        return Ok(Peer::Ssh);
+    }
+    let bytes = STANDARD.decode(name).map_err(|_| InvalidPeer)?;
+    let pin = <[u8; 44]>::try_from(bytes).map_err(|_| InvalidPeer)?;
+    // Base64 has more than one spelling of some bytes: only this one is a
+    // name, so one peer is never two entries.
+    let peer = Peer::Gateway { pin };
+    (peer_name(&peer) == name)
+        .then_some(peer)
+        .ok_or(InvalidPeer)
+}
+
 /// Why the grants could not be read or changed.
 #[derive(Debug)]
 pub(crate) enum GrantsError {
@@ -60,6 +96,9 @@ pub(crate) enum GrantsError {
     Unavailable(io::Error),
     /// The file is not one this build reads: the reason says why.
     Unreadable(String),
+    /// A change would make the file larger than every reader takes: it is
+    /// not made.
+    TooLarge,
 }
 
 impl fmt::Display for GrantsError {
@@ -67,6 +106,10 @@ impl fmt::Display for GrantsError {
         match self {
             Self::Unavailable(error) => write!(formatter, "{FILE} could not be used: {error}"),
             Self::Unreadable(reason) => write!(formatter, "{FILE} cannot be read: {reason}"),
+            Self::TooLarge => write!(
+                formatter,
+                "{FILE} would be larger than {MAX_BYTES} bytes; ungrant another peer first"
+            ),
         }
     }
 }
@@ -171,15 +214,22 @@ impl FileGrants {
             Some(entry) => grants.insert(*peer, entry),
             None => None,
         };
-        let written = self.write(&grants).map_err(unavailable);
+        // Encoded whole first: a file every reader would refuse is never
+        // written.
+        let mut bytes = serde_json::to_vec_pretty(&encode(&grants))
+            .map_err(|error| unavailable(error.into()))?;
+        bytes.push(b'\n');
+        if bytes.len() as u64 > MAX_BYTES {
+            return Err(Changed::Grants(GrantsError::TooLarge));
+        }
+        let written = self.write(&bytes).map_err(unavailable);
         drop(lock);
         written
     }
 
-    fn write(&self, grants: &BTreeMap<Peer, PeerGrant>) -> io::Result<()> {
+    fn write(&self, bytes: &[u8]) -> io::Result<()> {
         let mut file = PrivateTempFile::new_in(&self.directory)?;
-        serde_json::to_writer_pretty(file.as_file_mut(), &encode(grants))?;
-        file.as_file_mut().write_all(b"\n")?;
+        file.as_file_mut().write_all(bytes)?;
         file.as_file().sync_all()?;
         file.persist(&self.directory.join(FILE))?;
         sync_directory(&self.directory)
@@ -215,7 +265,7 @@ fn decode(bytes: &[u8]) -> Result<BTreeMap<Peer, PeerGrant>, GrantsError> {
         serde_json::from_slice(bytes).map_err(|error| unreadable(error.to_string()))?;
     let mut grants = BTreeMap::new();
     for (name, entry) in stored.peers {
-        let peer = Peer::parse(&name)
+        let peer = parse_peer(&name)
             .map_err(|_| unreadable(format!("{name:?} is neither ssh nor a gateway's pin")))?;
         let agents = match entry.agents {
             None => Agents::Named(Default::default()),
@@ -248,7 +298,7 @@ fn encode(grants: &BTreeMap<Peer, PeerGrant>) -> Stored {
         schema_version: SCHEMA_VERSION,
         peers: grants
             .iter()
-            .map(|(peer, grant)| (peer.name(), stored(grant)))
+            .map(|(peer, grant)| (peer_name(peer), stored(grant)))
             .collect(),
     }
 }

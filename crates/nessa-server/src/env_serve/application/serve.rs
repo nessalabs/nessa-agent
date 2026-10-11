@@ -2,8 +2,8 @@
 //! (issue #699).
 //!
 //! ```text
-//! gateway ──frames──▶ serve ──Grant──▶ the host runs the agent, in the sandbox asked?
-//!                                     the peer's grant covers it? (PeerGrants, read now)
+//! gateway ──frames──▶ serve ──Grant──▶ the peer's grant covers it? (PeerGrants, read now)
+//!                                     the host runs the agent, in the sandbox asked?
 //!                                     ──▶ ledger: granted{sandbox} ──▶ Granted{terms}
 //!                                     ──▶ otherwise ledger: refused ──▶ Refused
 //!                          ──Start──▶ ledger: started ──▶ HarnessLauncher::launch
@@ -14,8 +14,8 @@
 //!                                     ──▶ ledger: input_overflow ──▶ stop ──▶ Stopped (unasked)
 //!                          ──End────▶ stop every harness ──▶ ledger: ended ──▶ Ended
 //!                          ──Account▶ ledger ──▶ Accounted
-//!                          ──GrantCommand──▶ the host runs commands? the peer's grant
-//!                                            covers them? timeout narrowed to its most
+//!                          ──GrantCommand──▶ the peer's grant covers commands? the host
+//!                                            runs them? timeout narrowed to its most
 //!                                            ──▶ ledger: command_granted ──▶ Granted{terms}
 //!                          ──Run──▶ ledger: command_started ──▶ CommandRunner::run
 //!                                   ──▶ ledger: command_ran, ended ──▶ Ran
@@ -53,6 +53,8 @@
 //! serving is for ([`Peer`], given by composition, never by the gateway),
 //! read through [`PeerGrants`] at every grant: what the host can run is its
 //! configuration's, and the grant only narrows it, refusing `not_granted`.
+//! The grant is checked first, so a peer not granted a lease learns nothing
+//! of which agents the host runs, or whether it runs commands.
 //! A command's timeout is granted as asked or shorter, and it runs with the
 //! timeout granted. A harness's sandbox is one the host can enforce, as
 //! asked, or the lease is refused `sandbox_unavailable`: none other is put
@@ -735,12 +737,14 @@ impl Served {
             Some(GrantRefusal::Duplicate)
         } else if let Some(refusal) = self.recorded_before(&lease) {
             Some(refusal)
+        } else if admit_agent(&self.grant_now(), &agent).is_err() {
+            // First: a peer not granted the agent learns nothing of what
+            // the host runs.
+            Some(GrantRefusal::NotGranted)
         } else if !self.launcher.runs(&agent) {
             Some(GrantRefusal::AgentUnavailable)
         } else if !self.launcher.sandboxes().contains(sandbox.into()) {
             Some(GrantRefusal::SandboxUnavailable)
-        } else if admit_agent(&self.grant_now(), &agent).is_err() {
-            Some(GrantRefusal::NotGranted)
         } else {
             match self.ledger.record(&LedgerEntry::Granted {
                 lease: lease.clone(),
@@ -1082,9 +1086,9 @@ impl Served {
     }
 
     /// Admit a command lease, or refuse it, as [`Self::grant`] does a
-    /// harness's: only on a host that runs commands, only for a command a
-    /// command lease can hold, and only as the peer's grant has it, its
-    /// timeout narrowed to the grant's longest.
+    /// harness's: only as the peer's grant has it, its timeout narrowed to
+    /// the grant's longest, then only on a host that runs commands, and only
+    /// for a command a command lease can hold with the timeout granted.
     async fn grant_command(
         &mut self,
         lease: String,
@@ -1099,16 +1103,16 @@ impl Served {
         });
         let refusal = if LeaseId::new(lease.clone()).is_err() || self.granted.contains(&lease) {
             Err(GrantRefusal::Duplicate)
-        } else if self.runner.is_none() {
-            Err(GrantRefusal::CommandsUnavailable)
         } else if let Some(refusal) = self.recorded_before(&lease) {
             Err(refusal)
-        } else if CommandWork::new(argv.clone(), cwd.clone(), timeout_ms).is_err() {
-            Err(GrantRefusal::InvalidCommand)
         } else {
+            // The peer's grant first: a peer granted no commands learns
+            // nothing of whether the host runs any.
             match admit_command(&self.grant_now(), timeout_ms) {
                 Err(_) => Err(GrantRefusal::NotGranted),
-                // No longer than the timeout just checked, and never zero.
+                Ok(_) if self.runner.is_none() => Err(GrantRefusal::CommandsUnavailable),
+                // Checked here as the command it will run, with the timeout
+                // granted: the one asked, or shorter.
                 Ok(granted) => match CommandWork::new(argv.clone(), cwd.clone(), granted) {
                     Err(_) => Err(GrantRefusal::InvalidCommand),
                     Ok(work) => match self.ledger.record(&LedgerEntry::CommandGranted {

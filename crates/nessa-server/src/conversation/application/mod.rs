@@ -164,11 +164,13 @@ pub use catalogue_read::{
     CatalogueReadSource, CatalogueReadValue, ReadCatalogue,
 };
 // The port itself, which placement and the service use on every host.
+pub(crate) use command_environment::CommandEnvironment;
 pub use command_environment::CommandResult;
-pub(crate) use command_environment::{CommandEnvironment, GrantedCommand};
 // Held by the SSH adapter, which is Unix only, and by tests.
 #[cfg_attr(not(any(unix, test)), allow(unused_imports))]
 pub(crate) use command_environment::CommandHold;
+#[cfg(any(unix, test))]
+pub(crate) use command_environment::GrantedCommand;
 pub(crate) use environment::{Environment, EnvironmentFuture};
 // For the adapters, which only the Unix gateway composes (`infrastructure`).
 pub use artifacts::{
