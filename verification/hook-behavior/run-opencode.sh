@@ -249,7 +249,6 @@ python3 "$HOOK_BEHAVIOR_ROOT/evidence.py" finalize \
 finalize_status=$?
 set -e
 if [[ "$finalize_status" -eq 0 ]]; then
-  publish_evidence "$ROWS" "$OUT/rows.jsonl"
-  publish_evidence "$SUMMARY" "$OUT/summary.json"
+  publish_snapshot "$OUT" "$ROWS" "$SUMMARY"
 fi
 exit "$finalize_status"

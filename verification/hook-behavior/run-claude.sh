@@ -17,8 +17,9 @@
 # invocations. events-permission omits it.
 #
 # --managed plants /etc/claude-code/managed-settings.json for two rows and
-# restores or removes it before the work directory is deleted. If that restore
-# fails, the work directory is kept and the script exits non-zero. This script
+# restores or removes it before publishing evidence. If that restore fails,
+# nothing is published, the backup and work directory are kept, and the script
+# exits non-zero. This script
 # is not run in CI: it needs the Claude Max login on the machine that holds it.
 # stdout is the summary JSON. The reference checks exit non-zero when they fail.
 
@@ -50,25 +51,42 @@ MANAGED_PATH="/etc/claude-code/managed-settings.json"
 MANAGED_BACKUP="$WORKDIR/managed-settings.backup"
 MANAGED_EXISTED=0
 MANAGED_PLANTED=0
+KEEP_WORKDIR=0
 
-# Restore the managed file before deleting the work directory. The backup
-# lives in that directory. A failed restore leaves the directory in place.
+# Put the managed file back. On success MANAGED_PLANTED is 0. On failure the
+# backup is still in the work directory and the caller must not publish.
+restore_managed_settings() {
+  local restore_status=0
+  if [[ "$MANAGED_PLANTED" -ne 1 ]]; then
+    return 0
+  fi
+  if [[ "$MANAGED_EXISTED" -eq 1 ]]; then
+    sudo cp "$MANAGED_BACKUP" "$MANAGED_PATH" || restore_status=$?
+    if [[ "$restore_status" -ne 0 ]]; then
+      echo "error: failed to restore $MANAGED_PATH from $MANAGED_BACKUP" >&2
+      return "$restore_status"
+    fi
+  else
+    sudo rm -f "$MANAGED_PATH" || restore_status=$?
+    if [[ "$restore_status" -ne 0 ]]; then
+      echo "error: failed to remove $MANAGED_PATH" >&2
+      return "$restore_status"
+    fi
+  fi
+  MANAGED_PLANTED=0
+}
+
+# A failed restore leaves the work directory in place. The backup lives there.
 cleanup() {
   local status=$?
+  if [[ "$KEEP_WORKDIR" -eq 1 ]]; then
+    exit "$status"
+  fi
   if [[ "$MANAGED_PLANTED" -eq 1 ]]; then
     local restore_status=0
-    if [[ "$MANAGED_EXISTED" -eq 1 ]]; then
-      sudo cp "$MANAGED_BACKUP" "$MANAGED_PATH" || restore_status=$?
-      if [[ "$restore_status" -ne 0 ]]; then
-        echo "error: failed to restore $MANAGED_PATH from $MANAGED_BACKUP" >&2
-        exit "$restore_status"
-      fi
-    else
-      sudo rm -f "$MANAGED_PATH" || restore_status=$?
-      if [[ "$restore_status" -ne 0 ]]; then
-        echo "error: failed to remove $MANAGED_PATH" >&2
-        exit "$restore_status"
-      fi
+    restore_managed_settings || restore_status=$?
+    if [[ "$restore_status" -ne 0 ]]; then
+      exit "$restore_status"
     fi
   fi
   rm -rf "$WORKDIR"
@@ -329,8 +347,15 @@ python3 "$HOOK_BEHAVIOR_ROOT/evidence.py" finalize \
   --claude-reference
 finalize_status=$?
 set -e
+if [[ "$MANAGED_PLANTED" -eq 1 ]]; then
+  restore_status=0
+  restore_managed_settings || restore_status=$?
+  if [[ "$restore_status" -ne 0 ]]; then
+    KEEP_WORKDIR=1
+    exit "$restore_status"
+  fi
+fi
 if [[ "$finalize_status" -eq 0 ]]; then
-  publish_evidence "$ROWS" "$OUT/rows.jsonl"
-  publish_evidence "$SUMMARY" "$OUT/summary.json"
+  publish_snapshot "$OUT" "$ROWS" "$SUMMARY"
 fi
 exit "$finalize_status"

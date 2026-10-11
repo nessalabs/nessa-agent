@@ -69,12 +69,14 @@ reason is `deny_reason_quoted`. That fact is not part of the pass.
 and `suppress-managed-plus-flag` (that file plus
 `--settings '{"disableAllHooks":true}'`). Managed hooks still fire with that
 flag, and the two rows match. The reference check does not require those logs
-to be empty. The exit trap restores or removes
-`/etc/claude-code/managed-settings.json` and then deletes the work directory.
-If restoring the original file fails, it names that path and the backup,
-leaves the work directory in place, and exits non-zero. If removing a file
-this script planted fails, it names that path, leaves the work directory in
-place, and exits non-zero.
+to be empty. Before evidence is published, the script restores or removes
+`/etc/claude-code/managed-settings.json`. If that restore fails, nothing is
+published, the backup and work directory stay, and the script exits non-zero.
+The exit trap does that restore when the script stops earlier. A failed
+restore or removal leaves the work directory in place and exits non-zero.
+After a successful restore, the trap deletes the work directory. Rows and
+the summary are published as one directory snapshot, so a failed copy leaves
+the previous pair in place.
 
 Codex and OpenCode results are labeled `real harness, scripted model`. Codex
 `config.toml` leaves hooks enabled and does not set `notify`. Suppression on

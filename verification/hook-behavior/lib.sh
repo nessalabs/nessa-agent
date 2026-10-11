@@ -88,14 +88,131 @@ print(found)
 PY
 }
 
-# Copy src onto dest only after the copy is complete. A failed copy leaves dest.
-publish_evidence() {
-  local src="$1" dest="$2" staging="${2}.new"
-  if ! cp -f "$src" "$staging"; then
-    rm -f "$staging"
+# Replace dest with a directory that already holds one complete snapshot.
+# renameat2 exchanges the two directories in one call. Without that call, move
+# dest aside and move the snapshot into its place, and put dest back if the
+# second move fails.
+exchange_snapshot() {
+  python3 - "$1" "$2" <<'PY'
+import ctypes
+import os
+import sys
+
+src, dst = sys.argv[1:]
+AT_FDCWD = -100
+RENAME_EXCHANGE = 2
+libc = ctypes.CDLL(None, use_errno=True)
+try:
+    renameat2 = libc.renameat2
+except AttributeError:
+    raise SystemExit(2)
+renameat2.argtypes = [
+    ctypes.c_int,
+    ctypes.c_char_p,
+    ctypes.c_int,
+    ctypes.c_char_p,
+    ctypes.c_uint,
+]
+renameat2.restype = ctypes.c_int
+result = renameat2(
+    AT_FDCWD,
+    os.fsencode(src),
+    AT_FDCWD,
+    os.fsencode(dst),
+    RENAME_EXCHANGE,
+)
+if result != 0:
+    print(os.strerror(ctypes.get_errno()), file=sys.stderr)
+    raise SystemExit(1)
+PY
+}
+
+rename_snapshot() {
+  local stage="$1" dest="$2" parent previous
+  parent="$(dirname "$dest")"
+  previous="$(mktemp -d "$parent/.snapshot-old.XXXXXX")" || return 1
+  rmdir "$previous" || {
+    rm -rf "$previous"
+    return 1
+  }
+  if ! mv "$dest" "$previous"; then
     return 1
   fi
-  mv -f "$staging" "$dest"
+  if ! mv "$stage" "$dest"; then
+    mv "$previous" "$dest" || echo "error: could not restore $dest from $previous" >&2
+    return 1
+  fi
+  rm -rf "$previous"
+}
+
+release_snapshot_lock() {
+  if [[ -n "${lock_fd:-}" ]]; then
+    flock -u "$lock_fd" || true
+    exec {lock_fd}<&-
+  fi
+}
+
+# Publish rows.jsonl and summary.json as one snapshot. A failed copy leaves
+# dest unchanged. On Linux the swap is one rename, so the two files stay from
+# one run. Without that rename, the directory is moved aside and put back if
+# the replacement fails.
+publish_snapshot() {
+  local out="${1%/}" rows="$2" summary="$3"
+  local parent base stage lock_fd name bn exchange_status=0
+  mkdir -p "$(dirname "$out")"
+  parent="$(cd "$(dirname "$out")" && pwd)"
+  base="$(basename "$out")"
+  out="$parent/$base"
+  exec {lock_fd}<"$parent" || return 1
+  flock "$lock_fd" || {
+    release_snapshot_lock
+    return 1
+  }
+  mkdir -p "$out"
+  stage="$(mktemp -d "$parent/.$base.XXXXXX")" || {
+    release_snapshot_lock
+    return 1
+  }
+  while IFS= read -r -d '' name; do
+    bn="$(basename "$name")"
+    if [[ "$bn" == "rows.jsonl" || "$bn" == "summary.json" ]]; then
+      continue
+    fi
+    if ! cp -a "$name" "$stage/$bn"; then
+      rm -rf "$stage"
+      release_snapshot_lock
+      return 1
+    fi
+  done < <(find "$out" -mindepth 1 -maxdepth 1 -print0)
+  if ! cp -f "$rows" "$stage/rows.jsonl" || ! cp -f "$summary" "$stage/summary.json"; then
+    rm -rf "$stage"
+    release_snapshot_lock
+    return 1
+  fi
+  exchange_snapshot "$stage" "$out" || exchange_status=$?
+  if [[ "$exchange_status" -eq 2 ]]; then
+    if ! rename_snapshot "$stage" "$out"; then
+      if [[ -d "$stage" ]]; then
+        rm -rf "$stage"
+      fi
+      release_snapshot_lock
+      return 1
+    fi
+  elif [[ "$exchange_status" -ne 0 ]]; then
+    rm -rf "$stage"
+    release_snapshot_lock
+    return 1
+  else
+    case "$stage" in
+      "$parent/.$base."*) rm -rf "$stage" ;;
+      *)
+        echo "error: refusing to remove $stage" >&2
+        release_snapshot_lock
+        return 1
+        ;;
+    esac
+  fi
+  release_snapshot_lock
 }
 
 append_row() {
