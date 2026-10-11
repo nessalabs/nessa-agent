@@ -1157,7 +1157,9 @@ sequenceDiagram
   `channelUnavailable`. A lease that ends or loses its connection mid-read
   is refused `leaseEnded` at once: its staged copies go with it. Resuming
   across leases is by digest: published again, a file the conversation
-  already holds answers `alreadyHeld` without a byte read. Whatever stops a
+  already holds answers `alreadyHeld` without a byte read. One that a
+  concurrent publish lands only while this one is being read still answers
+  `alreadyHeld`, once its bytes are read. Whatever stops a
   read, no hold is visible: one is written only after the bytes match.
 - **Records.** A kept file is a `SessionChange::Artifact` in the
   conversation's stream naming its lease, the turn running when it was

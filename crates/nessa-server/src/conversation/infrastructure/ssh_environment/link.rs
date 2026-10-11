@@ -510,6 +510,7 @@ impl HostLink {
                         ToEnvironment::End {
                             lease: lease.into(),
                         },
+                        None,
                     );
                 }
                 Err(match refused {
@@ -741,6 +742,7 @@ impl HostLink {
                 ToEnvironment::End {
                     lease: lease.into(),
                 },
+                None,
             );
         }
     }
@@ -897,9 +899,9 @@ impl Shared {
         };
         match routed {
             Routed::Done => {}
-            Routed::Answer(frame) => {
+            Routed::Answer(frame, unanswered) => {
                 if let Some(frames) = self.frames.upgrade() {
-                    deliver(&frames, None, frame);
+                    deliver(&frames, None, frame, unanswered);
                 }
             }
             Routed::Dropped => self.dropped(lease.as_deref(), channel, name),
@@ -922,8 +924,9 @@ impl Shared {
 
 enum Routed {
     Done,
-    /// Routed, and answered at once by this gateway.
-    Answer(ToEnvironment),
+    /// Routed, and answered at once by this gateway; the fence it was
+    /// taken under, if any, is held until the answer is queued.
+    Answer(ToEnvironment, Option<OwnedRwLockReadGuard<()>>),
     Dropped,
     Overflow {
         lease: String,
@@ -978,40 +981,47 @@ fn route_frame(routes: &mut Routes, frame: FromEnvironment) -> Routed {
             let Some(route) = routes.leases.get_mut(&lease) else {
                 return Routed::Dropped;
             };
-            let refused = |reason| {
-                Routed::Answer(ToEnvironment::Collected {
-                    lease: lease.clone(),
-                    artifact,
-                    outcome: Collection::Refused { reason },
-                })
+            let refused = |reason, unanswered| {
+                Routed::Answer(
+                    ToEnvironment::Collected {
+                        lease: lease.clone(),
+                        artifact,
+                        outcome: Collection::Refused { reason },
+                    },
+                    unanswered,
+                )
             };
             // Once its End is asked, nothing more is taken under it.
             if route.ending {
-                return refused(CollectionRefusal::LeaseEnded);
+                return refused(CollectionRefusal::LeaseEnded, None);
             }
             let Ok(unanswered) = route.pumps.clone().try_read_owned() else {
-                return refused(CollectionRefusal::LeaseEnded);
+                return refused(CollectionRefusal::LeaseEnded, None);
             };
             let offer = Published {
                 artifact,
                 file,
                 unanswered,
             };
+            // A refusal keeps the offer's fence until it is queued, so an End
+            // asked meanwhile still goes after it.
             let sent = match route.published.as_ref() {
                 Some(offers) => offers.try_send(offer).map_err(|error| match error {
-                    mpsc::error::TrySendError::Full(_) => true,
-                    mpsc::error::TrySendError::Closed(_) => false,
+                    mpsc::error::TrySendError::Full(offer) => (true, offer.unanswered),
+                    mpsc::error::TrySendError::Closed(offer) => (false, offer.unanswered),
                 }),
-                None => Err(false),
+                None => Err((false, offer.unanswered)),
             };
             match sent {
                 Ok(()) => Routed::Done,
                 // The host keeps at most as many in flight as there is room
                 // for: one past it is not this gateway's to take.
-                Err(true) => refused(CollectionRefusal::BudgetExceeded),
-                Err(false) => {
+                Err((true, unanswered)) => {
+                    refused(CollectionRefusal::BudgetExceeded, Some(unanswered))
+                }
+                Err((false, unanswered)) => {
                     route.published = None;
-                    refused(CollectionRefusal::ChannelUnavailable)
+                    refused(CollectionRefusal::ChannelUnavailable, Some(unanswered))
                 }
             }
         }
@@ -1263,12 +1273,14 @@ async fn write_frames(
 /// Queue `frame` for the host even when there is no room just now: on a
 /// task of its own, once every pump `after` holds is done, behind what is
 /// already queued; done once it is queued or the connection is gone.
+/// `held` is let go only then.
 /// Outside a runtime, which a gateway never is, it is queued only if there
 /// is room.
 fn deliver(
     frames: &mpsc::Sender<ToEnvironment>,
     after: Option<Arc<RwLock<()>>>,
     frame: ToEnvironment,
+    held: Option<OwnedRwLockReadGuard<()>>,
 ) {
     match tokio::runtime::Handle::try_current() {
         Ok(runtime) => {
@@ -1279,6 +1291,7 @@ fn deliver(
                     None => None,
                 };
                 let _ = frames.send(frame).await;
+                drop(held);
             });
         }
         Err(_) => {
