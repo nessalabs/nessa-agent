@@ -331,3 +331,35 @@ async fn a_published_file_is_read_only_while_its_lease_is_live() {
         Err(super::super::ArtifactReadFailure::LeaseEnded)
     );
 }
+
+/// Bytes whose next chunk never comes, as from a host that stopped
+/// answering.
+struct Stalled;
+impl super::super::ArtifactBytes for Stalled {
+    fn next(&mut self) -> super::super::ArtifactChunk<'_> {
+        Box::pin(std::future::pending())
+    }
+}
+
+/// A read already waiting when its lease's end is asked is cut off then,
+/// not when the host answers: the offer holds the lease's End back until it
+/// is answered.
+#[tokio::test]
+async fn a_read_waiting_when_its_lease_ends_is_cut_off_at_once() {
+    let opening = open_lease(
+        in_process_environment().as_ref(),
+        request(SandboxProfiles::HARNESS_DEFAULT),
+        binding(),
+    )
+    .await;
+    let live = LiveLease::new(&opening);
+    let mut bytes = live.while_live(Box::new(Stalled));
+    let read = tokio::spawn(async move { bytes.next().await });
+    tokio::task::yield_now().await;
+    opening.fence.ending();
+    let read = tokio::time::timeout(std::time::Duration::from_secs(5), read)
+        .await
+        .expect("a waiting read ends with its lease")
+        .unwrap();
+    assert_eq!(read, Err(super::super::ArtifactReadFailure::LeaseEnded));
+}
