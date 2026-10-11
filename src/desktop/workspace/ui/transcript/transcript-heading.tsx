@@ -1,4 +1,4 @@
-import { conversationLeaseStatus } from "@nessa/client"
+import { conversationLeasePlace, conversationLeaseStatus } from "@nessa/client"
 import type { RefObject } from "react"
 import type { TranscriptLease } from "../../model/transcript"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
@@ -10,14 +10,15 @@ import { useListedChannel, useWorkspaceFrame } from "../workspace-frame"
 import { tooltip } from "../../../ui/tooltip"
 
 /**
- * Where the agent's lease stands, in the client's words, and the SSH host it
- * runs on when it runs on one; nothing for a lease the gateway cannot read,
- * since the heading has nothing true to say of it.
+ * Where the agent's lease stands, in the client's words, and the machine it
+ * runs on when that is not this one; nothing for a lease the gateway cannot
+ * read, since the heading has nothing true to say of it.
  */
 export function leaseNote(lease: TranscriptLease): string | undefined {
   if (lease.state === "unreadable") return undefined
   const status = conversationLeaseStatus(lease)
-  return lease.environment === "ssh" && lease.host ? `${status} · ${lease.host}` : status
+  const place = lease.environment === "here" ? undefined : conversationLeasePlace(lease)
+  return place ? `${status} · ${place}` : status
 }
 
 /**

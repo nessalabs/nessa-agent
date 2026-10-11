@@ -1,13 +1,14 @@
 use super::wire_values::{DEVICE_KEY_BYTES, IDENTITY_BYTES};
 use crate::domain::{
-    models::CONVERSATION_READ, Action, AudienceId, Grant, Initiator, MembershipId, OrganizationId,
-    PrincipalId, Resource,
+    models::{CONVERSATION_READ, ENVIRONMENT_SERVE},
+    Action, AudienceId, Grant, Initiator, MembershipId, OrganizationId, PrincipalId, Resource,
 };
 use std::{error::Error, fmt};
 
 const MAX_ATTEMPTS: u8 = 5;
 const DEVICE_READ_CLASS: &str = "gateway-conversation-read";
 const PEER_READ_CLASS: &str = "peer-gateway-conversation-read";
+const PEER_ENVIRONMENT_CLASS: &str = "peer-gateway-environment-serve";
 /// Prefix of the principal id a peer gateway's credential names. The
 /// registry reserves it: a principal's id has it exactly when its kind is a
 /// gateway.
@@ -90,36 +91,50 @@ impl DeviceKey {
     }
 }
 
-/// Who an enrollment enrolls, which is what the credential it issues names.
+/// Who an enrollment enrolls, and the one grant the credential it issues
+/// holds.
 ///
-/// Both classes ask for the same read grant through the same enrollment; they
-/// differ only in the principal the issued credential belongs to. The class is
-/// public, bound into the PAKE transcript, and fixed when the owner creates the
-/// invitation, so an enrolling party cannot become a different kind of
-/// principal than the owner invited.
+/// Every class uses the same enrollment and listener. A device's credential
+/// names the owner and reads; a peer's names the gateway principal of the key
+/// it pinned and either reads what it is granted or serves as an environment,
+/// never both under one credential. The class is public, bound into the PAKE
+/// transcript, and fixed when the owner creates the invitation, so an
+/// enrolling party cannot become a different kind of principal, or hold a
+/// different grant, than the owner invited.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ConsentClass {
     /// One of the owner's own devices: the credential names the owner.
     DeviceRead,
-    /// A peer gateway: the credential names a principal of kind
+    /// A peer gateway that reads: the credential names a principal of kind
     /// `PrincipalKind::Gateway`, identified by the key it pinned, which pairing
     /// creates (see [`peer_principal`]).
     PeerRead,
+    /// A peer gateway or worker that serves as an environment: the same
+    /// principal as [`Self::PeerRead`] for the same key, holding
+    /// `environment.serve` and no read.
+    PeerEnvironment,
 }
 impl ConsentClass {
+    /// Every class, in no particular order.
+    pub const ALL: [Self; 3] = [Self::DeviceRead, Self::PeerRead, Self::PeerEnvironment];
     /// The public class name, as the wire and the PAKE transcript carry it.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::DeviceRead => DEVICE_READ_CLASS,
             Self::PeerRead => PEER_READ_CLASS,
+            Self::PeerEnvironment => PEER_ENVIRONMENT_CLASS,
         }
     }
     /// The class a public name denotes; `None` for any other text.
     pub fn parse(name: &str) -> Option<Self> {
-        match name {
-            DEVICE_READ_CLASS => Some(Self::DeviceRead),
-            PEER_READ_CLASS => Some(Self::PeerRead),
-            _ => None,
+        Self::ALL.into_iter().find(|class| class.as_str() == name)
+    }
+    /// Whether it enrolls a peer gateway, whose credential names the gateway
+    /// principal of its key rather than the owner.
+    pub fn is_peer(self) -> bool {
+        match self {
+            Self::DeviceRead => false,
+            Self::PeerRead | Self::PeerEnvironment => true,
         }
     }
     /// The principal a credential issued to `key` under this class names:
@@ -130,10 +145,36 @@ impl ConsentClass {
         owner: &PrincipalId,
         key: &DeviceKey,
     ) -> Result<PrincipalId, PairingError> {
-        match self {
-            Self::DeviceRead => Ok(owner.clone()),
-            Self::PeerRead => peer_principal(key),
+        match self.is_peer() {
+            false => Ok(owner.clone()),
+            true => peer_principal(key),
         }
+    }
+    /// The action of the one grant a credential issued under this class
+    /// holds. This is the one place that decides it.
+    pub fn grant_action(self) -> &'static str {
+        match self {
+            Self::DeviceRead | Self::PeerRead => CONVERSATION_READ,
+            Self::PeerEnvironment => ENVIRONMENT_SERVE,
+        }
+    }
+    /// Whether that grant is one the owner hands on from their own, so the
+    /// owner creating the invitation must hold it too. A read is; serving is
+    /// not: no person serves as an environment, and admitting a peer as one
+    /// is managing this gateway's credentials, which `credential.manage`
+    /// decides alone.
+    pub fn delegates_owner_grant(self) -> bool {
+        match self {
+            Self::DeviceRead | Self::PeerRead => true,
+            Self::PeerEnvironment => false,
+        }
+    }
+    /// That grant, on the gateway `resource`.
+    pub fn grant(self, resource: Resource) -> Result<Grant, PairingError> {
+        Ok(Grant::new(
+            Action::new(self.grant_action()).map_err(|_| PairingError::Invalid)?,
+            resource,
+        ))
     }
 }
 
@@ -157,7 +198,7 @@ pub fn is_peer_principal(principal: &PrincipalId) -> bool {
     principal.as_str().starts_with(PEER_PRINCIPAL_PREFIX)
 }
 
-/// One immutable gateway conversation-read consent, with owner linkage private.
+/// One immutable gateway consent, with owner linkage private.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConsentIntent {
     id: ConsentIntentId,
@@ -169,18 +210,13 @@ pub struct ConsentIntent {
     class: ConsentClass,
 }
 impl ConsentIntent {
-    /// Publish the sole gateway-read grant representation for boundary projections.
-    pub fn read_grant(resource: Resource) -> Result<Grant, PairingError> {
-        let action = Action::new(CONVERSATION_READ).map_err(|_| PairingError::Invalid)?;
-        Ok(Grant::new(action, resource))
-    }
-
     /// Who this consent enrolls; fixed when the owner created it.
     pub fn class(&self) -> ConsentClass {
         self.class
     }
 
-    /// Build a read consent of `class` for an authoritative gateway resource.
+    /// Build a consent of `class` for an authoritative gateway resource,
+    /// asking for that class's one grant.
     /// Generation zero is invalid; policy evaluation remains with Cedar.
     pub fn new(
         id: ConsentIntentId,
@@ -194,7 +230,7 @@ impl ConsentIntent {
         if generation == 0 {
             return Err(PairingError::Invalid);
         }
-        let grant = Self::read_grant(resource)?;
+        let grant = class.grant(resource)?;
         Ok(Self {
             id,
             generation,
@@ -225,7 +261,7 @@ impl ConsentIntent {
     pub fn membership(&self) -> &MembershipId {
         &self.membership
     }
-    /// Exact gateway resource whose conversation reads may be delegated.
+    /// Exact gateway resource the consent's grant is on.
     pub fn resource(&self) -> &Resource {
         self.grant.resource()
     }
@@ -246,7 +282,7 @@ impl ConsentIntent {
             && gateway == self.resource()
             && gateway.id().as_str() == self.audience().as_str()
     }
-    /// The canonical exact grant published by this read-only consent class.
+    /// The canonical exact grant this consent's class asks for.
     pub fn grant(&self) -> &Grant {
         &self.grant
     }

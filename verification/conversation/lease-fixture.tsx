@@ -53,6 +53,31 @@ const leaseCases: Record<string, Record<string, unknown> | undefined> = {
     refusal: "environment_unreachable",
     droppedEvents: 0,
   },
+  // On a paired machine that dials in: named by the start of its key.
+  "peer-live": {
+    state: "live",
+    ...terms,
+    environment: "peer",
+    host: `peer:${"ab".repeat(32)}`,
+    droppedEvents: 0,
+  },
+  "peer-lost": {
+    state: "ended",
+    ...terms,
+    environment: "peer",
+    host: `peer:${"0f".repeat(32)}`,
+    cause: "lost",
+    cleanup: "confirmed",
+    droppedEvents: 0,
+  },
+  "peer-refused": {
+    state: "refused",
+    ...terms,
+    environment: "peer",
+    host: `peer:${"0f".repeat(32)}`,
+    refusal: "environment_unreachable",
+    droppedEvents: 0,
+  },
 }
 
 function withLease(lease: Record<string, unknown> | undefined): Conversation {
@@ -74,6 +99,7 @@ function withLease(lease: Record<string, unknown> | undefined): Conversation {
       questions: [],
       tools: [],
       permissions: [],
+      artifacts: [],
       capabilities: {
         queue: true,
         steer: true,

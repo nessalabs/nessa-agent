@@ -3,10 +3,16 @@ use super::{
     catalogue_tests::{catalogue_scope, page, start, value},
     fixtures::{cache, cache_path, id, scope as transcript_scope},
 };
-use crate::read_only_sync::application::CacheError;
+use crate::read_only_sync::application::{
+    offline::{SavedReads, SavedTranscript},
+    CacheError,
+};
+use nessa_local_database::rusqlite::params;
+use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sync::replication::catalogue::{
     CatalogueStore, MAX_CATALOGUE_ENTRIES, MAX_CATALOGUE_PAYLOAD_BYTES,
 };
+use uuid::Uuid;
 
 #[test]
 fn offline_catalogue_reads_saved_scope_and_bounded_pages() {
@@ -168,6 +174,77 @@ fn offline_catalogue_refuses_selected_corruption_without_payload_acquisition() {
         .retained_transcript_progress(scope.receiver(), scope.origin(), target.stream())
         .unwrap()
         .is_none());
+}
+
+/// The first offline show of a checkpoint this build cannot read is not
+/// loaded. The discarded rows stay gone, and a second show is the same.
+#[test]
+fn an_unmarked_checkpoint_is_not_loaded_on_the_first_offline_show() {
+    let root = tempfile::tempdir().unwrap();
+    let path = cache_path(root.path(), "unmarked-show.sqlite3");
+    let scope = transcript_scope();
+    let mut writer = cache(&path);
+    writer.observe_head(&scope, 0).unwrap();
+    writer
+        .connection
+        .execute(
+            "UPDATE transcript_checkpoints SET payload = ?1",
+            params![nessa_sdk::infrastructure::session_storage::UNMARKED_SESSION_CHECKPOINT],
+        )
+        .unwrap();
+    writer
+        .connection
+        .execute(
+            "INSERT INTO transcript_records
+             (receiver, origin, stream, position, record_id, payload)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                scope.receiver().as_str(),
+                scope.origin().as_str(),
+                scope.stream().as_str(),
+                1u64.to_be_bytes().as_slice(),
+                "saved-record",
+                b"bytes".as_slice(),
+            ],
+        )
+        .unwrap();
+    drop(writer);
+
+    let mut reader = cache(&path);
+    let conversation = ConversationId::new(scope.stream().as_str()).unwrap();
+    assert!(matches!(
+        SavedReads::transcript_view(
+            &mut reader,
+            scope.receiver(),
+            scope.origin(),
+            &conversation,
+            Uuid::nil(),
+        ),
+        Ok(SavedTranscript::NotLoaded)
+    ));
+    for table in [
+        "transcript_progress",
+        "transcript_checkpoints",
+        "transcript_records",
+    ] {
+        let rows: i64 = reader
+            .connection
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(rows, 0, "{table}");
+    }
+    assert!(matches!(
+        SavedReads::transcript_view(
+            &mut reader,
+            scope.receiver(),
+            scope.origin(),
+            &conversation,
+            Uuid::nil(),
+        ),
+        Ok(SavedTranscript::NotLoaded)
+    ));
 }
 
 #[tokio::test]

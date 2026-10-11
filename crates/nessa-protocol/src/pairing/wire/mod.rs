@@ -67,6 +67,11 @@ pub enum NativePairingRequest {
     /// Select the protected product session on this connection. Only a first
     /// envelope selects it; it carries no credential and grants nothing.
     OpenProduct,
+    /// Select the environment phase on this connection: the dialing gateway
+    /// serves leases to this one over it. Only a first envelope selects it;
+    /// it carries no credential, and whether the proved key may serve is the
+    /// gateway's decision.
+    OpenEnvironment,
 }
 /// Client-side decoded enrollment state; no variant grants product access.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -161,6 +166,9 @@ pub enum NativePairingReply {
     Status(NativePairingStatus),
     /// Redacted refusal; it does not authorize a pin/cache change.
     Refused,
+    /// The environment phase was admitted: lease frames follow, the serving
+    /// side's hello first.
+    Serving,
 }
 /// Refuse oversized complete envelopes before decoding their syntax and domain values.
 /// Decoded requests remain untrusted; no key proof or admission is established.
@@ -178,6 +186,7 @@ pub fn decode_request(bytes: &[u8]) -> Result<NativePairingRequest, NativeWireEr
         }),
         WireRequest::Status { public } => Ok(NativePairingRequest::Status(public.into_domain()?)),
         WireRequest::OpenProduct {} => Ok(NativePairingRequest::OpenProduct),
+        WireRequest::OpenEnvironment {} => Ok(NativePairingRequest::OpenEnvironment),
     }
 }
 /// Encode a client request without retaining an unbounded serde output buffer.
@@ -198,6 +207,7 @@ pub fn encode_request(request: &NativePairingRequest) -> Result<Vec<u8>, NativeW
             public: WirePublic::from_domain(*public),
         },
         NativePairingRequest::OpenProduct => WireRequest::OpenProduct {},
+        NativePairingRequest::OpenEnvironment => WireRequest::OpenEnvironment {},
     };
     encode(&request)
 }
@@ -247,6 +257,10 @@ pub fn encode_status(
 pub fn encode_refused() -> Result<Vec<u8>, NativeWireError> {
     encode(&WireReply::Refused {})
 }
+/// Encode the admission of an environment phase.
+pub fn encode_serving() -> Result<Vec<u8>, NativeWireError> {
+    encode(&WireReply::Serving {})
+}
 /// Decode a complete bounded peer reply through the domain projection/identity owners.
 /// Successful decode alone does not authenticate the peer or authorize replacing prior scope.
 pub fn decode_reply(bytes: &[u8]) -> Result<NativePairingReply, NativeWireError> {
@@ -259,6 +273,7 @@ pub fn decode_reply(bytes: &[u8]) -> Result<NativePairingReply, NativeWireError>
         }),
         WireReply::Status { status } => Ok(NativePairingReply::Status(status.into_domain()?)),
         WireReply::Refused {} => Ok(NativePairingReply::Refused),
+        WireReply::Serving {} => Ok(NativePairingReply::Serving),
     }
 }
 /// `access_epoch` is the current epoch an Active status carries, and only an

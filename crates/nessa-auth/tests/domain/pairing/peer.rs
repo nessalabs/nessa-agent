@@ -5,12 +5,15 @@ use nessa_auth::domain::{
     Action, PrincipalId, PrincipalKind, CONVERSATION_AUTHORITY_ACTIONS,
 };
 
-/// Row H4: a gateway principal can hold the read grant and none of the
-/// conversation authority's actions; the other kinds are not narrowed here.
+/// Row H4 and I1: a gateway principal can hold the read grant and
+/// `environment.serve`, and none of the conversation authority's actions; the
+/// other kinds may hold anything but `environment.serve`, which only a peer
+/// serves.
 #[test]
-fn a_gateway_principal_can_hold_only_the_read_grant() {
+fn a_gateway_principal_can_hold_only_the_read_and_serve_grants() {
     let action = |name: &str| Action::new(name).unwrap();
     assert!(PrincipalKind::Gateway.may_hold(&action("conversation.read")));
+    assert!(PrincipalKind::Gateway.may_hold(&action("environment.serve")));
     for refused in [
         "conversation.write",
         "credential.manage",
@@ -37,6 +40,7 @@ fn a_gateway_principal_can_hold_only_the_read_grant() {
         PrincipalKind::Integration,
     ] {
         assert!(kind.may_hold(&action("conversation.write")));
+        assert!(!kind.may_hold(&action("environment.serve")), "{kind:?}");
     }
 }
 
@@ -72,5 +76,20 @@ fn the_class_decides_which_principal_a_credential_names() {
         ConsentClass::parse("peer-gateway-conversation-read"),
         Some(ConsentClass::PeerRead)
     );
+    assert_eq!(
+        ConsentClass::parse("peer-gateway-environment-serve"),
+        Some(ConsentClass::PeerEnvironment)
+    );
     assert_eq!(ConsentClass::parse("gateway"), None);
+    // An environment peer is the same principal as a reading peer of the
+    // same key: one key, one principal, whatever it was enrolled for.
+    assert_eq!(
+        ConsentClass::PeerEnvironment
+            .credential_principal(&owner, &key)
+            .unwrap(),
+        peer
+    );
+    assert!(ConsentClass::PeerEnvironment.is_peer());
+    assert!(ConsentClass::PeerRead.is_peer());
+    assert!(!ConsentClass::DeviceRead.is_peer());
 }

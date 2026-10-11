@@ -49,3 +49,10 @@ permit (
     resource is Nessa::Resource
 )
 when { principal.active && (principal.role == "member" || principal.role == "admin") };
+
+permit (
+    principal is Nessa::Actor,
+    action == Nessa::Action::"environment.serve",
+    resource is Nessa::Resource
+)
+when { principal.active && principal.role == "member" };

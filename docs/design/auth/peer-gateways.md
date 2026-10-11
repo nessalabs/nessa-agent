@@ -32,7 +32,8 @@ pairing.create {"enrollee":"gateway"} -> a peer gateway
 ```
 
 That choice is the consent's **class**, and it is the only difference between
-the two enrollments:
+the two enrollments (slice I adds a third, `"environment"`; see Environment
+peers):
 
 | | Device (`gateway-conversation-read`) | Peer gateway (`peer-gateway-conversation-read`) |
 |---|---|---|
@@ -57,21 +58,25 @@ handed a peer's code does not become a gateway principal.
   asks the same function, so a stored credential that names anyone else is
   refused on open.
 - **What a principal kind can hold** is `PrincipalKind::may_hold`. A gateway
-  may hold `conversation.read` and nothing else. In particular it can never
-  hold `conversation.write` (admitting commands into a conversation and
-  answering its approvals) or `credential.manage` (holding credentials and
-  pairing, which also admits every grant-management method). Those are the
+  may hold `conversation.read` and, since slice I, `environment.serve`, and
+  nothing else. In particular it can never hold `conversation.write`
+  (admitting commands into a conversation and answering its approvals) or
+  `credential.manage` (holding credentials and pairing, which also admits
+  every grant-management method). Those are the
   conversation authority's, listed once in `CONVERSATION_AUTHORITY_ACTIONS`,
-  and the gateway that owns a conversation keeps them. Slice I will widen the
-  peer's allowlist to the environment-grant actions; the authority's actions
-  stay excluded, and `may_hold` refuses them before it consults the
-  allowlist, so a widening cannot admit one by mistake. Whatever a peer is
-  later allowed to run for a conversation, it therefore cannot also be that
-  conversation's authority.
-- **That the registry agrees** is `validate_principal_kind`, run by
-  `validate_registry` on open and before every write. A gateway principal's
-  credential must be pairing-bound, its membership a member's, and its grants
-  ones the kind may hold. A pairing-bound credential names a gateway
+  and the gateway that owns a conversation keeps them. Slice I widens the
+  peer's allowlist to `environment.serve` (see Environment peers); the
+  authority's actions stay excluded, and `may_hold` refuses them before it
+  consults the allowlist, so a widening cannot admit one by mistake. No other
+  kind may hold `environment.serve`: a person or an agent never serves.
+  Whatever a peer is later allowed to run for a conversation, it therefore
+  cannot also be that conversation's authority.
+- **That the registry agrees** is `validate_principal_kind` and
+  `validate_grants`, run by `validate_registry` on open and before every
+  write. A gateway principal's credential must be pairing-bound and its
+  membership a member's; every credential's grants must be ones its kind may
+  hold, and `credential.issue`, bootstrap and owner recovery ask the same
+  check before they write. A pairing-bound credential names a gateway
   principal exactly when its pairing's class is a peer's, and a principal's
   id starts with `gateway:` exactly when its kind is a gateway.
   `credential.issue` refuses a gateway principal, and any principal id with
@@ -157,6 +162,107 @@ sequenceDiagram
     GW-->>Peer: Refused
 ```
 
+## Environment peers
+
+Slice I ([#706](https://github.com/nessalabs/nessa-agent/issues/706)) lets
+another machine run agents for this gateway: a paired environment that dials
+in. Its first part only lets the owner pair one. A third class does it, on the
+same method, listener and PAKE:
+
+```text
+pairing.create {"enrollee":"environment"} -> a gateway that serves as an environment
+```
+
+| | Peer gateway (`peer-gateway-conversation-read`) | Environment (`peer-gateway-environment-serve`) |
+|---|---|---|
+| Grant asked for | `conversation.read` on this gateway | `environment.serve` on this gateway |
+| Credential names | `gateway:<key in hex>` | The same principal |
+| Owner must hold | `credential.manage` and the read | `credential.manage` only |
+
+- **Why a grant and not a setting.** Whether a machine may serve this gateway
+  is a credential fact, so the registry is its one authority, revoked the way
+  every credential is. A worker's credential holds `environment.serve` and
+  nothing else, so a machine that runs agents can never read a conversation.
+- **Which grant a class carries** is `ConsentClass::grant`, asked by the
+  intent, the disclosure check and the stored pairing, so a relabelled grant
+  is refused at each. The owner does not hold `environment.serve` (no person
+  may), so admission asks the owner for the proposed grant only when the class
+  delegates the owner's own (`ConsentClass::delegates_owner_grant`).
+- **One key, two credentials.** On this side, a key paired as both a reader
+  and an environment names the same principal both times, and each
+  credential holds its class's one grant. The dialing side keeps one
+  enrollment and accepts only a reading one today; enrolling as an
+  environment comes with the worker's enroll command.
+- **It can never read.** `conversation.share` refuses an environment's
+  credential (`share_target_not_paired`), since it can never read what it
+  would be granted.
+
+### Serving over the connection it dials
+
+Part 1b lets a paired environment serve. It dials this gateway's native
+listener with the key it paired with, asks for the environment phase, and
+then runs `nessa env serve`'s own frame loop over that same TLS connection.
+The gateway treats it as it treats an SSH host: the same lease frames, the
+same per-lease routing, the same audit. Only how the connection is had
+differs: the gateway runs `ssh` to a host, and a paired environment calls in.
+
+```mermaid
+sequenceDiagram
+    participant E as Environment (env serve)
+    participant L as Gateway native listener
+    participant P as PeerEnvironments
+    participant S as Registry and Cedar
+    participant C as Conversation service
+    E->>L: TCP, TLS with E's paired key, A's key pinned
+    E->>L: openEnvironment
+    L->>S: does a credential bound to this key authenticate and get environment.serve on this gateway?
+    S-->>L: no: Refused, no permit taken
+    S-->>L: yes
+    L->>L: take an environment permit (a pool of its own, eight)
+    L-->>E: Serving
+    L->>P: the TLS stream, as a byte stream, and the key it proved
+    E->>P: Hello {build, protocol, workspace}
+    P->>P: replace this key's connection (the old one closed, its leases lost)
+    C->>P: open, grant or command on peer:<key>
+    P->>S: ask again: does this key still serve?
+    S-->>P: no: the connection closed, the lease refused unreachable
+    S-->>P: yes
+    P->>E: Grant / GrantCommand, and the lease's frames
+    E-->>P: Granted, output, Ran, Ended
+    Note over E,P: each side sends a keepalive when idle 15 s and takes 45 s of silence as the other gone
+```
+
+- **One authority for "may serve".** The listener and the environment both
+  ask the same question, `ServingCredentials::serves`: is there a credential
+  bound to the key this connection proved that authenticates and that Cedar
+  allows `environment.serve` on this gateway, now? Nothing keeps a copy of the
+  answer. It is asked when the connection is admitted and again before every
+  lease, so a revoked credential or a disabled membership stops the next
+  lease asked for, and that ask closes the connection.
+- **One name per key.** A paired environment is `peer:` and its key in
+  lowercase hex (`PeerEnvironment`), whichever connection it last made. A
+  new connection from the same key takes the place of the old one: the old
+  one is closed and its leases are lost, then accounted on the new one as any
+  lost lease is.
+- **Placing a conversation** on a paired environment needs it connected
+  then, so a name nobody serves is never kept. A conversation already placed
+  waits for it to dial in again.
+- **Liveness.** A network that goes quiet tells neither side. Each side sends
+  a keepalive frame when it has sent nothing for 15 s, and each takes 45 s
+  with nothing read as the other gone, so a lost connection ends its leases
+  on both sides within that bound.
+- **Its own permits.** An environment's connection moves to a pool of its
+  own once admitted, as a product session does, so environments never take
+  the permits enrollment and status need. A key that may not serve is
+  refused before it takes one.
+- **Known limits.** A file the environment publishes is not fetched over a
+  paired connection yet: there is no artifact channel, so its collection is
+  refused. Revocation closes a connection only when a lease is next asked
+  of it: until then a revoked environment that stays idle keeps its
+  connection, and one of the environment permits, though it is given
+  nothing. The environment's own enroll and dial command, and revocation
+  that closes an idle connection, are the next parts of #706.
+
 ## State and order table
 
 Each row has at least one test.
@@ -166,12 +272,14 @@ Each row has at least one test.
 | H1 | The owner creates a peer invitation; a peer claims it; the owner approves its key | Same enrollment and listener; the credential names `gateway:<key hex>`, kind `gateway`, an active member, holding only `conversation.read`, bound to that key; the record and the client's file keep the class | `owner_route_creates_a_peer_gateway_invitation`; `a_peer_enrollment_issues_a_gateway_principal_bound_to_its_key`; `an_enrollment_record_keeps_its_class`; `the_class_decides_which_principal_a_credential_names` |
 | H2 | A client given an invitation for the other kind of party, or a client that relabels the class | Refused `OtherEnrollee` at the first reply, no attempt charged, nothing saved, the invitation still open; a relabelled class does not complete the PAKE; the wire carries the class as sent | `a_client_refuses_an_invitation_for_another_kind_of_party`; `a_relabelled_enrollment_class_does_not_complete_the_pake`; `the_enrollment_class_is_carried_and_never_changes_in_transit` |
 | H3 | A paired peer authenticates and reads before anything is shared with it | `ready` as its own principal; its catalogue head is zero, so it has nothing to page; `conversation.list` is `forbidden` | `a_peer_gateway_pairs_as_its_own_principal_and_reads_nothing_ungranted` |
-| H4 | A gateway principal with `conversation.write` or `credential.manage`, an admin membership, a bearer credential, a credential naming another principal, or a peer record that lost its class | Refused on open and never written | `a_gateway_principal_can_hold_only_the_read_grant`; `a_gateway_principal_holds_only_what_pairing_issued_it` |
+| H4 | A gateway principal with `conversation.write` or `credential.manage`, an admin membership, a bearer credential, a credential naming another principal, or a peer record that lost its class | Refused on open and never written | `a_gateway_principal_can_hold_only_the_read_and_serve_grants`; `a_gateway_principal_holds_only_what_pairing_issued_it` |
 | H5 | The owner revokes a paired peer's credential | Its next connection is refused at `openProduct` | `a_revoked_peer_gateway_is_refused_its_next_connection` |
 | H6 | `credential.issue` for a principal of kind `gateway` | Refused `Conflict`, nothing written: no second way to make a peer | `a_gateway_principal_holds_only_what_pairing_issued_it` |
 | H7 | A gateway that pairs no peer | Every device enrollment, registry and client file reads and writes as before | the existing device pairing suites |
 | H8 | The owner shares one of two conversations with a paired peer, then unshares it | The share applies (an access answer about another credential, or one that contradicts itself, is still refused); the peer's record head on the granted one reaches the source and on the other is `wrong_owner`, as are a records watch and a record page on it; resolving the other answers as an id that does not exist; a manifest boundary one past the peer's head is `invalid_request` though the owner's head is past it; its manifest lists the granted one alone; its catalogue watch is `forbidden`, while a device's is admitted; the owner's work on the other conversation does not move the peer's head; the unshare moves the head forward and takes the row away. On the socket, a binding whose owner is not the session principal reads only what it was granted, and its lists are refused | `a_peer_reads_only_what_it_was_granted`; `a_binding_owned_by_another_principal_reads_only_what_it_was_granted` |
 | H9 | A paired reader's catalogue head as the owner works, grants and revokes | An ungranted change and a grant to another receiver leave it; a grant, a change to a granted row and a revoke each move it; a revoke moves it forward, never back to an older granted row | `a_paired_readers_head_moves_only_with_what_it_was_granted` |
+| I1 | The owner creates an environment invitation; a gateway claims it; the owner approves its key | Same enrollment and listener; the credential names the same `gateway:<key hex>` a reading enrollment of that key would, an active member, holding only `environment.serve`, bound to that key; the owner needs `credential.manage` and never holds the grant; the record keeps `class: "environment"`. A registry in which that credential also or instead reads, or a person's credential serves, is refused on open; `credential.issue` of `environment.serve` to anyone is refused `Conflict`, nothing written; a share to its credential is refused `share_target_not_paired`, nothing granted; Cedar allows the action only to an active member holding it | `owner_route_creates_an_environment_invitation`; `owner_route_without_the_consent_grant_is_forbidden`; `owner_route_refuses_a_member_before_disclosure`; `an_environment_enrollment_issues_the_peer_principal_holding_only_serve`; `an_environment_is_paired_but_never_shared_with`; `cedar_allows_serving_only_to_a_member_holding_the_grant`; `each_class_discloses_only_its_own_grant`; `an_enrollment_record_keeps_its_class`; `the_enrollment_class_is_carried_and_never_changes_in_transit` |
+| I2 | A paired environment dials the native listener and asks for `openEnvironment`; the gateway runs a command there; the environment dials again; then its credential is revoked | Admitted only for a key whose credential is allowed `environment.serve` now: a key paired to read is refused before it takes a permit. The command runs on the environment over its own connection and answers its exit, output and cleanup; a second connection takes the place of the first, whose serving ends; once revoked, the next command is refused unreachable, the connection is closed, and the next dial is refused | `a_paired_environment_dials_in_serves_and_stops_at_revocation`; `a_key_paired_to_read_is_refused_at_open_environment` |
 | H10 | A registry whose owner membership is disabled or not an admin | Refused on open (`owner_membership`). The pairing initiator's membership is what keeps a grantor live; the owner's is the one the registry pins | `a_registry_whose_owner_is_not_an_active_admin_does_not_open` |
 
 ## The dialing side
@@ -635,5 +743,6 @@ the client and gives the head an access path by receiver
 - **Linked devices also shows a claimed peer invitation as an ordinary device
   awaiting approval**, with no class shown. This is a labelling gap, not a
   security one: the class is fixed when the invitation is created and bound
-  into the exchange, so approving it yields only the read-only gateway
-  credential, never a device credential that names the owner.
+  into the exchange, so approving it yields only that class's gateway
+  credential (read-only, or serve-only for an environment), never a device
+  credential that names the owner.

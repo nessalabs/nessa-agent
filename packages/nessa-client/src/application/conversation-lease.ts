@@ -27,10 +27,10 @@ export function conversationLeaseStatus(
           return "Access withdrawn"
         case "expired":
           return "Timed out"
-        // The environment no longer held it: an SSH host's connection went
-        // away, or this gateway started again.
+        // The environment no longer held it: a host's connection went away,
+        // or this gateway started again.
         case "lost":
-          return lease.environment === "ssh"
+          return lease.environment === "ssh" || lease.environment === "peer"
             ? "Ended when the connection to its host was lost"
             : "Ended when Nessa restarted"
         case "stopped":
@@ -77,9 +77,30 @@ export function conversationLeaseStatus(
   }
 }
 
+/** What every paired environment's name begins with. */
+const PEER = "peer:"
+
 /**
- * Which machine a lease names, in a person's words: this one, or the SSH
- * destination it runs on; nothing when the lease does not say.
+ * A place a conversation may run, named as the gateway names it, in a
+ * person's words: a paired machine by the start of its key, an SSH
+ * destination as written. An SSH destination holds no `:`, so the two never
+ * read alike.
+ */
+export function environmentPlace(name: string): string {
+  return isPairedEnvironment(name)
+    ? `Paired machine ${name.slice(PEER.length, PEER.length + 8)}`
+    : name
+}
+
+/** Whether a place the gateway names is a paired environment. */
+export function isPairedEnvironment(name: string): boolean {
+  return name.startsWith(PEER)
+}
+
+/**
+ * Which machine a lease names, in a person's words: this one, the SSH
+ * destination it runs on, or a paired machine by the start of its key;
+ * nothing when the lease does not say.
  */
 export function conversationLeasePlace(
   lease: Pick<ConversationLease, "environment" | "host">,
@@ -89,6 +110,8 @@ export function conversationLeasePlace(
       return "This computer"
     case "ssh":
       return lease.host
+    case "peer":
+      return lease.host === undefined ? undefined : environmentPlace(lease.host)
     case undefined:
       return undefined
     default: {

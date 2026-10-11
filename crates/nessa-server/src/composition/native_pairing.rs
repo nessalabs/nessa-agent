@@ -25,8 +25,8 @@ use super::runtime_config::NativeConfig;
 use crate::conversation::infrastructure::LocalReceiverAuthority;
 use crate::core::{NativeFailure, NativeShutdownFailure, RunError};
 use crate::device_pairing::infrastructure::{
-    restore_gateway_identity, ConversationReceivers, GatewayPairing, InvitationEntropy,
-    NativeEnrollmentConnections, NativeEnrollmentListener, PairingOwnerCommands,
+    restore_gateway_identity, ConversationReceivers, EnvironmentPeers, GatewayPairing,
+    InvitationEntropy, NativeEnrollmentConnections, NativeEnrollmentListener, PairingOwnerCommands,
     PairingRuntimeDependencies, TcpEnrollmentAccept,
 };
 use crate::peer_gateways::infrastructure::{
@@ -99,6 +99,16 @@ pub(super) struct PreparedNative {
     audit: Arc<DurablePeerAudit>,
     /// Wall time for when a peer read finished.
     clock: Arc<dyn Clock>,
+    /// The paired environments `openEnvironment` reaches; `None` refuses it.
+    environments: Option<Arc<dyn EnvironmentPeers>>,
+}
+
+impl PreparedNative {
+    /// Serve `openEnvironment` with `environments`.
+    pub(super) fn with_environments(mut self, environments: Arc<dyn EnvironmentPeers>) -> Self {
+        self.environments = Some(environments);
+        self
+    }
 }
 
 /// Prepare native pairing before either socket is bound (design rows S3–S8):
@@ -190,6 +200,7 @@ pub(super) async fn prepare(
             peers: peers.clone(),
             audit,
             clock: wall,
+            environments: None,
         },
         commands,
         peers,
@@ -245,15 +256,18 @@ pub(super) async fn bind(
         peers,
         audit,
         clock: wall,
+        environments,
     } = prepared;
     let bind_failed = |source| RunError::Native(NativeFailure::Bind { address, source });
     let socket = TcpEnrollmentAccept::new(TcpListener::bind(address).await.map_err(bind_failed)?);
     let bound = socket.local_address().map_err(bind_failed)?;
     let sessions = NativeSessions::new(product, Arc::new(RegistryDevices(registry)));
-    let connections = Arc::new(
-        NativeEnrollmentConnections::new(gateway.clone(), clock.clone())
-            .with_protected_sessions(Arc::new(sessions)),
-    );
+    let connections = NativeEnrollmentConnections::new(gateway.clone(), clock.clone())
+        .with_protected_sessions(Arc::new(sessions));
+    let connections = Arc::new(match environments {
+        Some(environments) => connections.with_environment_peers(environments),
+        None => connections,
+    });
     Ok(BoundNative {
         gateway,
         listener: NativeEnrollmentListener::new(socket, connections),

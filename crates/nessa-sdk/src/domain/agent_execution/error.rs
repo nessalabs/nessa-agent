@@ -62,6 +62,8 @@ pub enum ExecutionError {
     InvalidLeaseRevision,
     /// An SSH destination outside the portable alphabet or its bound.
     InvalidSshDestination,
+    /// A `peer:` environment name that holds no device key in lowercase hex.
+    InvalidPeerEnvironment,
     /// A command's timeout is zero or past the longest a command may run.
     InvalidCommandTimeout,
     /// A command argument holds a control character other than newline or

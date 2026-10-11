@@ -1389,6 +1389,81 @@ async fn a_history_that_cannot_be_opened_at_all_is_left_not_carried_on() {
     service.shutdown().await.unwrap();
 }
 
+/// Opens fail once with a records-database failure, then the inner store.
+struct StoreFailsOnce {
+    storage: Arc<InMemoryStorage>,
+    fail: std::sync::atomic::AtomicBool,
+    discarded: AtomicUsize,
+}
+impl SessionStorage for StoreFailsOnce {
+    fn open(&self, id: SessionId) -> StorageFuture<'_, Box<dyn SessionStorageLease>> {
+        self.storage.open(id)
+    }
+    fn open_existing(
+        &self,
+        id: SessionId,
+    ) -> StorageFuture<'_, Option<Box<dyn SessionStorageLease>>> {
+        if self.fail.swap(false, Ordering::SeqCst) {
+            return Box::pin(async {
+                Err(StorageError::Store(
+                    "event identity points to a missing record".into(),
+                ))
+            });
+        }
+        self.storage.open_existing(id)
+    }
+    fn discard_unreadable(&self, id: SessionId) -> StorageFuture<'_, ()> {
+        self.discarded.fetch_add(1, Ordering::SeqCst);
+        self.storage.discard_unreadable(id)
+    }
+}
+
+#[tokio::test]
+async fn a_store_failure_while_opening_history_leaves_the_delete_retryable() {
+    let fixture = deleting();
+    let id = talked_in(&fixture).await;
+    fixture.service.shutdown().await.unwrap();
+    let provider_session = history(&fixture.storage, &id)
+        .await
+        .expect("the turn saved a history")
+        .provider_context
+        .recorded()
+        .cloned()
+        .expect("the history names a provider session");
+    let storage = Arc::new(StoreFailsOnce {
+        storage: fixture.storage.clone(),
+        fail: std::sync::atomic::AtomicBool::new(true),
+        discarded: AtomicUsize::new(0),
+    });
+    let service = service_with(&fixture, fixture.repository.clone(), storage.clone());
+    let failures = incomplete(service.delete(id.clone(), caller("delete-1")).await);
+    assert!(
+        matches!(
+            failures.history,
+            Some(ConversationError::Storage(StorageError::Store(_)))
+        ),
+        "{failures:?}"
+    );
+    assert!(fixture.audit.records.lock().unwrap().is_empty());
+    assert_eq!(storage.discarded.load(Ordering::SeqCst), 0);
+    assert!(history(&fixture.storage, &id).await.is_some());
+    assert_eq!(
+        tombstone(&fixture, &id).provider_session(),
+        &ProviderSessionLink::Unread
+    );
+    assert!(service
+        .delete(id.clone(), caller("delete-1"))
+        .await
+        .unwrap());
+    let records = fixture.audit.records.lock().unwrap().clone();
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        records[0].provider_session_id.as_ref(),
+        Some(&provider_session)
+    );
+    service.shutdown().await.unwrap();
+}
+
 /// Session storage whose leases open, and then answer `Busy` to reading or
 /// to erasing the history under the deletion's own lease.
 struct BusyUnderLease {
@@ -2968,6 +3043,290 @@ async fn deleting_a_conversation_that_never_opened_creates_no_history_lock() {
         .join("deletion")
         .join(format!("conversation-deleted-{id}.json"))
         .exists());
+}
+
+/// A chat whose only history is a batch main wrote, with no `schemaVersion`,
+/// cannot be read or attached, and can be deleted. A sibling written by this
+/// build still opens, and its read grant stays. Deleting the unmarked chat
+/// resets its stream and wakes a record subscription on it.
+#[tokio::test]
+async fn an_unmarked_chat_cannot_be_read_and_can_be_deleted() {
+    use crate::conversation::application::error_code::error_code;
+    use crate::conversation::application::{ReadGrantChange, ReadGrantTransition, ReadGrants};
+    use nessa_protocol::product_contract::generated::ConversationErrorCode;
+    use nessa_sdk::application::agent_execution::sessions::{
+        ChangeWatchState, CommittedChangeWatch, StorageError,
+    };
+    use nessa_sdk::infrastructure::session_storage::UNMARKED_SESSION_BATCH;
+    use std::task::{Context, Poll, Waker};
+
+    fn notice(watch: &mut CommittedChangeWatch) -> ChangeWatchState {
+        let mut wait = Box::pin(watch.changed());
+        match wait.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
+            Poll::Ready(state) => state,
+            Poll::Pending => panic!("expected a committed record notice"),
+        }
+    }
+    fn quiet(watch: &mut CommittedChangeWatch) {
+        let mut wait = Box::pin(watch.changed());
+        assert!(matches!(
+            wait.as_mut().poll(&mut Context::from_waker(Waker::noop())),
+            Poll::Pending
+        ));
+    }
+
+    let root = tempfile::tempdir().unwrap();
+    let root = root.path();
+    nessa_local_storage::create_directory(&root.join("conversations")).unwrap();
+    let metadata = Arc::new(
+        LocalConversationStore::open(&root.join("conversations").join("metadata.sqlite3")).unwrap(),
+    );
+    let storage = Arc::new(RecordStorage::new(root.join("sessions")).unwrap());
+    storage.initialize().await.unwrap();
+    let service = ConversationService::new(
+        ConversationDependencies {
+            agents: only(Arc::new(Provider::new(
+                Arc::new(ProviderFactory::default()),
+            ))),
+            storage: storage.clone(),
+            metadata: metadata.clone(),
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            deletion_audit: Arc::new(RecordingDeletionAudit::default()),
+            attachments: None,
+            summaries: metadata.clone(),
+            listing: metadata.clone(),
+            provider_sessions: claude_erasers(),
+            deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
+            clock: Arc::new(TestClock),
+            environment: crate::conversation::infrastructure::in_process_environment().into(),
+        },
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    let sibling = new_id();
+    service
+        .create(
+            sibling.clone(),
+            caller("create-sibling"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    let sibling_view = service.read(sibling.clone(), caller("read-sibling")).await;
+    assert!(sibling_view.is_ok(), "{sibling_view:?}");
+
+    let id = new_id();
+    service
+        .create(
+            id.clone(),
+            caller("create"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    // The live agent holds the history. Stop it, drop what this build wrote,
+    // and leave only the batch main writes. The next open cannot read it.
+    service.stop_active_agents().await.unwrap();
+    storage.discard_unreadable(session(&id)).await.unwrap();
+    storage
+        .append_encoded_batch(session(&id), UNMARKED_SESSION_BATCH)
+        .await
+        .unwrap();
+    assert!(matches!(
+        storage.read_committed(session(&id)).await,
+        Err(StorageError::AnotherVersion { found: None })
+    ));
+    let sibling_history = storage
+        .read_committed(session(&sibling))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        sibling_history.snapshot().unwrap().lease.is_some(),
+        "the sibling's lease survives discarding the other chat"
+    );
+    let grant = |id: &ConversationId, action: &str| {
+        let metadata = metadata.clone();
+        let id = id.clone();
+        let action = action.to_owned();
+        async move {
+            assert!(metadata
+                .change(ReadGrantChange {
+                    transition: ReadGrantTransition::Grant,
+                    conversation_id: id,
+                    receiver_id: Some("phone".into()),
+                    credential_id: nessa_auth::domain::CredentialId::new("phone-credential")
+                        .unwrap(),
+                    initiator: caller(&action),
+                    at_ms: 7,
+                })
+                .await
+                .unwrap());
+        }
+    };
+    grant(&sibling, "grant-sibling").await;
+    grant(&id, "grant-unmarked").await;
+    assert!(metadata.is_granted(&sibling, "phone").await.unwrap());
+    assert!(metadata.is_granted(&id, "phone").await.unwrap());
+
+    let read = service.read(id.clone(), caller("read")).await.unwrap_err();
+    assert!(
+        matches!(
+            &read,
+            ConversationError::Storage(StorageError::AnotherVersion { found: None })
+        ),
+        "{read:?}"
+    );
+    assert_eq!(
+        error_code(&read),
+        ConversationErrorCode::ConversationStateUnreadable
+    );
+    let attach = service
+        .create(
+            id.clone(),
+            caller("attach"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            &attach,
+            ConversationError::Storage(StorageError::AnotherVersion { found: None })
+        ),
+        "{attach:?}"
+    );
+    assert_eq!(
+        error_code(&attach),
+        ConversationErrorCode::ConversationStateUnreadable
+    );
+    assert!(service
+        .read(sibling.clone(), caller("read-sibling-again"))
+        .await
+        .is_ok());
+    // Armed after the reads: opening the sibling records its lease and would
+    // otherwise be the notice this delete is checked against.
+    let mut unmarked_watch = storage.watch_committed(&session(&id)).unwrap();
+    let mut sibling_watch = storage.watch_committed(&session(&sibling)).unwrap();
+    let mut any_watch = storage.watch_any_committed().unwrap();
+    quiet(&mut unmarked_watch);
+    quiet(&mut sibling_watch);
+    quiet(&mut any_watch);
+
+    assert!(service.delete(id.clone(), caller("delete")).await.unwrap());
+    assert_eq!(notice(&mut unmarked_watch), ChangeWatchState::Dirty);
+    assert_eq!(notice(&mut any_watch), ChangeWatchState::Dirty);
+    quiet(&mut sibling_watch);
+    assert!(matches!(
+        service.read(id.clone(), caller("read-deleted")).await,
+        Err(ConversationError::Deleted)
+    ));
+    assert!(service
+        .read(sibling.clone(), caller("read-sibling-after"))
+        .await
+        .is_ok());
+    assert!(metadata.is_granted(&sibling, "phone").await.unwrap());
+    assert!(metadata.is_granted(&id, "phone").await.unwrap());
+    let sibling_after = storage
+        .read_committed(session(&sibling))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(sibling_after.snapshot().unwrap().lease.is_some());
+    let lease = storage.open_existing(session(&id)).await.unwrap().unwrap();
+    assert!(lease.load().await.unwrap().snapshot().is_none());
+    drop(lease);
+    service.shutdown().await.unwrap();
+}
+
+/// The deletion record is acknowledged before an unreadable history is
+/// discarded. An audit that refuses leaves the unmarked batch in place, and
+/// a retry that records the deletion then discards it.
+#[tokio::test]
+async fn an_unreadable_chat_stays_until_its_deletion_is_recorded() {
+    use nessa_sdk::application::agent_execution::sessions::StorageError;
+    use nessa_sdk::infrastructure::session_storage::UNMARKED_SESSION_BATCH;
+    use std::sync::atomic::Ordering;
+
+    let root = tempfile::tempdir().unwrap();
+    let root = root.path();
+    nessa_local_storage::create_directory(&root.join("conversations")).unwrap();
+    let metadata = Arc::new(
+        LocalConversationStore::open(&root.join("conversations").join("metadata.sqlite3")).unwrap(),
+    );
+    let storage = Arc::new(RecordStorage::new(root.join("sessions")).unwrap());
+    storage.initialize().await.unwrap();
+    let audit = Arc::new(RecordingDeletionAudit::default());
+    let service = ConversationService::new(
+        ConversationDependencies {
+            agents: only(Arc::new(Provider::new(
+                Arc::new(ProviderFactory::default()),
+            ))),
+            storage: storage.clone(),
+            metadata: metadata.clone(),
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            deletion_audit: audit.clone(),
+            attachments: None,
+            summaries: metadata.clone(),
+            listing: metadata.clone(),
+            provider_sessions: claude_erasers(),
+            deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
+            clock: Arc::new(TestClock),
+            environment: crate::conversation::infrastructure::in_process_environment().into(),
+        },
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    let id = new_id();
+    service
+        .create(
+            id.clone(),
+            caller("create"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    service.stop_active_agents().await.unwrap();
+    storage.discard_unreadable(session(&id)).await.unwrap();
+    storage
+        .append_encoded_batch(session(&id), UNMARKED_SESSION_BATCH)
+        .await
+        .unwrap();
+
+    audit.refuses.store(true, Ordering::SeqCst);
+    let failures = incomplete(service.delete(id.clone(), caller("delete")).await);
+    assert!(matches!(failures.audit, Some(ConversationError::Audit)));
+    assert!(failures.history.is_none() && !failures.history_leased_elsewhere);
+    assert!(matches!(
+        storage.read_committed(session(&id)).await,
+        Err(StorageError::AnotherVersion { found: None })
+    ));
+
+    audit.refuses.store(false, Ordering::SeqCst);
+    assert!(service
+        .delete(id.clone(), caller("delete-again"))
+        .await
+        .is_ok());
+    assert!(matches!(
+        service.read(id.clone(), caller("read-deleted")).await,
+        Err(ConversationError::Deleted)
+    ));
+    let lease = storage.open_existing(session(&id)).await.unwrap().unwrap();
+    assert!(lease.load().await.unwrap().snapshot().is_none());
+    drop(lease);
+    service.shutdown().await.unwrap();
 }
 
 #[tokio::test]

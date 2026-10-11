@@ -898,55 +898,68 @@ fn ended_enrollment_is_removed_exactly() {
     );
 }
 
-/// Row H1 (`docs/design/auth/peer-gateways.md`): a peer gateway's enrollment
-/// record keeps its class through save, credential replacement and reopen,
-/// and a device's record is written exactly as before, so an enrollment never
-/// reads back as the other kind.
+/// Rows H1 and I1 (`docs/design/auth/peer-gateways.md`): a peer gateway's
+/// enrollment record, reading or environment, keeps its class through save,
+/// credential replacement and reopen, and a device's record is written
+/// exactly as before, so an enrollment never reads back as another kind.
 #[test]
 fn an_enrollment_record_keeps_its_class() {
-    let peer = |attempt| {
-        PublicIntent::new(
-            InvitationId::new([1; 16]),
-            AttemptId::new([attempt; 16]),
-            ConsentIntentId::new([3; 16]),
-            1,
-            600_000,
+    for (class, pending_magic, credential_magic) in [
+        (
             ConsentClass::PeerRead,
-        )
-        .unwrap()
-    };
-    let credential = CredentialId::new("peer-1").unwrap();
-    let receiver = ResourceId::new("receiver-1").unwrap();
-    let fixture = Fixture::new();
-    fixture
-        .store
-        .save_pending(&key(7), &[5; 44], peer(2), None)
-        .unwrap();
-    assert_eq!(
-        fixture.store.load_pending().unwrap().unwrap().intent(),
-        peer(2)
-    );
-    let pending = fs::read(fixture.path().join(ENROLLMENT_FILE)).unwrap();
-    assert_eq!(&pending[..4], PEER_PENDING_MAGIC);
-    // The device intent of the same enrollment is another enrollment.
-    assert_eq!(
+            PEER_PENDING_MAGIC,
+            PEER_CREDENTIAL_MAGIC,
+        ),
+        (
+            ConsentClass::PeerEnvironment,
+            ENVIRONMENT_PENDING_MAGIC,
+            ENVIRONMENT_CREDENTIAL_MAGIC,
+        ),
+    ] {
+        let peer = |attempt| {
+            PublicIntent::new(
+                InvitationId::new([1; 16]),
+                AttemptId::new([attempt; 16]),
+                ConsentIntentId::new([3; 16]),
+                1,
+                600_000,
+                class,
+            )
+            .unwrap()
+        };
+        let credential = CredentialId::new("peer-1").unwrap();
+        let receiver = ResourceId::new("receiver-1").unwrap();
+        let fixture = Fixture::new();
         fixture
             .store
-            .save_credential(&credential, &receiver, intent(2)),
-        Err(PrivateStateError::Conflict)
-    );
-    fixture
-        .store
-        .save_credential(&credential, &receiver, peer(2))
-        .unwrap();
-    let encoded = fs::read(fixture.path().join(ENROLLMENT_FILE)).unwrap();
-    assert_eq!(&encoded[..4], PEER_CREDENTIAL_MAGIC);
-    let root = fixture.anchor();
-    drop(fixture.store);
-    let reopened = FilePairingState::open(&root, Path::new("private")).unwrap();
-    let restored = reopened.load_credential().unwrap().unwrap();
-    assert_eq!(restored.intent(), peer(2));
-    assert_eq!(restored.intent().class(), ConsentClass::PeerRead);
+            .save_pending(&key(7), &[5; 44], peer(2), None)
+            .unwrap();
+        assert_eq!(
+            fixture.store.load_pending().unwrap().unwrap().intent(),
+            peer(2)
+        );
+        let pending = fs::read(fixture.path().join(ENROLLMENT_FILE)).unwrap();
+        assert_eq!(&pending[..4], pending_magic);
+        // The device intent of the same enrollment is another enrollment.
+        assert_eq!(
+            fixture
+                .store
+                .save_credential(&credential, &receiver, intent(2)),
+            Err(PrivateStateError::Conflict)
+        );
+        fixture
+            .store
+            .save_credential(&credential, &receiver, peer(2))
+            .unwrap();
+        let encoded = fs::read(fixture.path().join(ENROLLMENT_FILE)).unwrap();
+        assert_eq!(&encoded[..4], credential_magic);
+        let root = fixture.anchor();
+        drop(fixture.store);
+        let reopened = FilePairingState::open(&root, Path::new("private")).unwrap();
+        let restored = reopened.load_credential().unwrap().unwrap();
+        assert_eq!(restored.intent(), peer(2));
+        assert_eq!(restored.intent().class(), class);
+    }
     // A device's record keeps its original magic and layout.
     let device = Fixture::new();
     device

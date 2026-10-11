@@ -50,9 +50,9 @@ export function approvalModeChoices(value: unknown): ApprovalModeChoice[] {
 export function agentsList(value: unknown): AgentsListResult {
   const result = object(value)
   exact(result, ["agents", "environments"])
-  // The SSH destinations a new conversation may run on: at most 16, each
-  // named once.
-  if (!Array.isArray(result.environments) || result.environments.length > 16)
+  // The places a new conversation may run on: at most 16 SSH destinations
+  // and 8 connected paired environments, each named once.
+  if (!Array.isArray(result.environments) || result.environments.length > 24)
     throw new Error("Invalid agent catalog environments")
   const environments = new Set<string>()
   for (const host of result.environments as unknown[]) {

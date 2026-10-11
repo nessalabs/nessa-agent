@@ -2,7 +2,7 @@
 use super::{ConsentIntent, PairingError, PublicIntent};
 use crate::domain::{AudienceId, Grant};
 
-/// Protected canonical read scope, omitting private owner and membership selectors.
+/// Protected canonical scope, omitting private owner and membership selectors.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DisclosedConsent {
     public: PublicIntent,
@@ -10,14 +10,14 @@ pub struct DisclosedConsent {
     grant: Grant,
 }
 impl DisclosedConsent {
-    /// Decode a bounded domain grant through the canonical fixed read-class owner.
+    /// Decode a bounded domain grant: it must be the one grant its class asks for.
     /// Key/channel authentication and canonical-intent correlation belong to consumers.
     pub fn new(
         public: PublicIntent,
         audience: AudienceId,
         grant: Grant,
     ) -> Result<Self, PairingError> {
-        if grant != ConsentIntent::read_grant(grant.resource().clone())? {
+        if grant != public.class().grant(grant.resource().clone())? {
             return Err(PairingError::Invalid);
         }
         Ok(Self {
@@ -66,7 +66,7 @@ impl DisclosedConsent {
     pub fn audience(&self) -> &AudienceId {
         &self.audience
     }
-    /// Canonical fixed read grant, not locally issued authority.
+    /// Canonical grant of its class, not locally issued authority.
     pub fn grant(&self) -> &Grant {
         &self.grant
     }

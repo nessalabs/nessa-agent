@@ -56,6 +56,23 @@ describe("client.pairing", () => {
     expect(created.status.class).toBe("peer-gateway-conversation-read")
   })
 
+  it("names an environment as the enrollee when asked", async () => {
+    const { api, calls } = session(() => ({
+      code: "ABCD-2345",
+      status: {
+        ...status,
+        class: "peer-gateway-environment-serve",
+        grant: { ...status.grant, action: "environment.serve" },
+      },
+    }))
+    const created = await api.create({ enrollee: PairingEnrollee.Environment })
+    expect(calls).toEqual([
+      { method: "pairing.create", params: { enrollee: "environment" } },
+    ])
+    expect(created.status.class).toBe("peer-gateway-environment-serve")
+    expect(created.status.grant.action).toBe("environment.serve")
+  })
+
   it("lists pending enrollments and reads one by its invitation", async () => {
     const claimed = {
       ...status,

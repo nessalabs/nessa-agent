@@ -667,7 +667,7 @@ const leaseValues = {
     refused: true,
     unreadable: true,
   } satisfies Record<ConversationLease["state"], true>,
-  environment: { here: true, ssh: true } satisfies Record<
+  environment: { here: true, ssh: true, peer: true } satisfies Record<
     NonNullable<ConversationLease["environment"]>,
     true
   >,
@@ -813,10 +813,18 @@ function lease(value: unknown) {
   }
   if (!shape.dropped && item.droppedEvents !== 0)
     throw new Error("Invalid conversation lease droppedEvents")
-  // The SSH destination, exactly when the lease names an SSH environment.
+  // The machine's name, exactly when the lease names a machine of its own:
+  // an SSH destination, or a paired environment's `peer:` and its key, 32
+  // bytes in lowercase hex, as the gateway writes it.
   if (item.environment === "ssh") text(item, "host", 253, false)
-  else if (item.host !== undefined) throw new Error("Invalid conversation lease host")
+  else if (item.environment === "peer") {
+    if (typeof item.host !== "string" || !PEER_ENVIRONMENT.test(item.host))
+      throw new Error("Invalid conversation lease host")
+  } else if (item.host !== undefined) throw new Error("Invalid conversation lease host")
 }
+
+/** A paired environment's name: `peer:` and its 32-byte key in lowercase hex. */
+const PEER_ENVIRONMENT = /^peer:[0-9a-f]{64}$/
 
 /** One artifact the view lists: the published shape, closed. The conversation
  * keeps an artifact as one of its uploads, so it is bounded as an upload is. */

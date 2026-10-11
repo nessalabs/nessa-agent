@@ -142,13 +142,17 @@ fn disclosure_correlates_whole_canonical_intent() {
         DisclosedConsent::new(
             public(),
             intent.audience().clone(),
-            ConsentIntent::read_grant(resource("org-2", "gateway-1")).unwrap(),
+            ConsentClass::DeviceRead
+                .grant(resource("org-2", "gateway-1"))
+                .unwrap(),
         )
         .unwrap(),
         DisclosedConsent::new(
             public(),
             intent.audience().clone(),
-            ConsentIntent::read_grant(resource("org-1", "gateway-2")).unwrap(),
+            ConsentClass::DeviceRead
+                .grant(resource("org-1", "gateway-2"))
+                .unwrap(),
         )
         .unwrap(),
     ] {
@@ -189,7 +193,9 @@ fn disclosure_retains_received_scope_on_retry() {
     let foreign_private = DisclosedConsent::new(
         public(),
         AudienceId::new("gateway-2").unwrap(),
-        ConsentIntent::read_grant(resource("org-2", "gateway-2")).unwrap(),
+        ConsentClass::DeviceRead
+            .grant(resource("org-2", "gateway-2"))
+            .unwrap(),
     )
     .unwrap();
     // The first client disclosure cannot infer undisclosed selectors from opaque IDs.
@@ -254,4 +260,55 @@ fn disclosure_retains_received_scope_on_retry() {
             Err(PairingError::Conflict)
         );
     }
+}
+/// Each class discloses the one grant it asks for and no other: an
+/// environment consent carries `environment.serve` and never the read, and a
+/// reading consent never `environment.serve`, so a relabelled grant does not
+/// decode.
+#[test]
+fn each_class_discloses_only_its_own_grant() {
+    let gateway = resource("org-1", "gateway-1");
+    for class in ConsentClass::ALL {
+        let public = PublicIntent::new(
+            InvitationId::new([1; 16]),
+            AttemptId::new([2; 16]),
+            ConsentIntentId::new([3; 16]),
+            1,
+            600_000,
+            class,
+        )
+        .unwrap();
+        let intent = ConsentIntent::new(
+            public.consent(),
+            1,
+            AudienceId::new("gateway-1").unwrap(),
+            PrincipalId::new("owner").unwrap(),
+            MembershipId::new("membership").unwrap(),
+            gateway.clone(),
+            class,
+        )
+        .unwrap();
+        assert_eq!(intent.grant().action().as_str(), class.grant_action());
+        DisclosedConsent::from_intent(public, &intent).unwrap();
+        for other in ["conversation.read", "environment.serve"] {
+            if other == class.grant_action() {
+                continue;
+            }
+            assert_eq!(
+                DisclosedConsent::new(
+                    public,
+                    intent.audience().clone(),
+                    Grant::new(Action::new(other).unwrap(), gateway.clone()),
+                ),
+                Err(PairingError::Invalid),
+                "{class:?} disclosing {other}"
+            );
+        }
+    }
+    assert_eq!(
+        ConsentClass::PeerEnvironment.grant_action(),
+        "environment.serve"
+    );
+    assert_eq!(ConsentClass::PeerRead.grant_action(), "conversation.read");
+    assert_eq!(ConsentClass::DeviceRead.grant_action(), "conversation.read");
 }

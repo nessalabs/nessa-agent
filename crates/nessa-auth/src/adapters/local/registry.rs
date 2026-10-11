@@ -33,10 +33,7 @@ use crate::{
         },
     },
     domain::{
-        pairing::{
-            validate_pairing_collection, ConsentClass, InvitationId, PairingError,
-            PEER_PRINCIPAL_PREFIX,
-        },
+        pairing::{validate_pairing_collection, InvitationId, PairingError, PEER_PRINCIPAL_PREFIX},
         Action, AudienceId, Credential, CredentialId, CredentialTransition, DomainError, Initiator,
         IssuanceCause, Membership, Principal, PrincipalId, PrincipalKind, Supersession,
         TransitionCause,
@@ -467,7 +464,12 @@ impl LocalCredentialStore {
             grants: request.grants,
         };
         let credential = domain_credential(&metadata)?;
-        validate_grants(&metadata, &request.gateway_id, true)?;
+        validate_grants(
+            &metadata,
+            principal_kind(&request.principal)?,
+            &request.gateway_id,
+            true,
+        )?;
         let (evidence, verifier) = issue_secret(&metadata.id)?;
         let mut registry = Registry {
             schema_version: SCHEMA_VERSION,
@@ -568,7 +570,12 @@ impl LocalCredentialStore {
             grants: request.grants,
         };
         let credential = domain_credential(&metadata)?;
-        validate_grants(&metadata, &current.gateway_id, administrative_allowed)?;
+        validate_grants(
+            &metadata,
+            principal_kind(&request.principal)?,
+            &current.gateway_id,
+            administrative_allowed,
+        )?;
         let initiator = Initiator::Principal(
             PrincipalId::new(request.issuer_principal_id.clone())
                 .map_err(|_| LocalStoreError::Conflict)?,
@@ -787,7 +794,12 @@ impl LocalCredentialStore {
             grants,
         };
         let credential = domain_credential(&metadata)?;
-        validate_grants(&metadata, &current.gateway_id, true)?;
+        let owner = current
+            .principals
+            .iter()
+            .find(|principal| principal.id == membership.principal_id)
+            .ok_or(LocalStoreError::Corrupt)?;
+        validate_grants(&metadata, principal_kind(owner)?, &current.gateway_id, true)?;
         if !credential_identity_available(current, &metadata.id, None)
             .map_err(|_| LocalStoreError::Corrupt)?
         {
@@ -1601,9 +1613,6 @@ fn validate_registry(
         validate_metadata(&credential.metadata).map_err(|_| {
             CredentialRegistryFault::InvalidState(RegistryInvariant::CredentialMetadata)
         })?;
-        validate_grants(&credential.metadata, &registry.gateway_id, true).map_err(|_| {
-            CredentialRegistryFault::InvalidState(RegistryInvariant::CredentialMetadata)
-        })?;
         if credential.metadata.audience_id != registry.gateway_id
             || !principals.contains(&credential.metadata.principal_id)
             || !organizations.contains(&credential.metadata.organization_id)
@@ -1616,6 +1625,20 @@ fn validate_registry(
                 RegistryInvariant::CredentialBinding,
             ));
         }
+        // The principal is known to exist here, so a kind that does not
+        // parse or a grant it may not hold is the metadata's fault.
+        let kind = registry
+            .principals
+            .iter()
+            .find(|principal| principal.id == credential.metadata.principal_id)
+            .ok_or(LocalStoreError::Corrupt)
+            .and_then(principal_kind);
+        kind.and_then(|kind| {
+            validate_grants(&credential.metadata, kind, &registry.gateway_id, true)
+        })
+        .map_err(|_| {
+            CredentialRegistryFault::InvalidState(RegistryInvariant::CredentialMetadata)
+        })?;
         let valid_proof = match &credential.verifier {
             StoredProof::Bearer(verifier) => URL_SAFE_NO_PAD
                 .decode(verifier)
@@ -1679,11 +1702,12 @@ fn principal_id_matches_kind(principal: &PrincipalInputDto) -> bool {
 
 /// What a credential's principal kind allows, held for every credential the
 /// registry keeps. A gateway principal is a paired peer: its credential is
-/// bound to the key it pinned by pairing (never a bearer secret), its
-/// membership is a member's, and its grants are only those
-/// `PrincipalKind::may_hold` lets a peer hold, so it can never carry the
-/// conversation authority's actions. A pairing-bound credential names a
-/// gateway principal exactly when its enrollment's class is a peer's.
+/// bound to the key it pinned by pairing (never a bearer secret) and its
+/// membership is a member's. Which grants each kind may hold is
+/// `validate_grants`'s check, through `PrincipalKind::may_hold`. A
+/// pairing-bound credential names a gateway principal exactly when its
+/// enrollment's class is a peer's; that it holds exactly its class's one
+/// grant is its pairing's own check (`StoredPairing`).
 fn validate_principal_kind(
     registry: &Registry,
     credential: &StoredCredential,
@@ -1702,15 +1726,15 @@ fn validate_principal_kind(
     if let StoredProof::Device(DeviceProofBinding::DevicePairing { invitation, .. }) =
         &credential.verifier
     {
-        let peer_class = registry
+        let class = registry
             .pairings
             .iter()
             .find(|pairing| pairing.id().bytes() == invitation)
-            .map(|pairing| pairing.class() == ConsentClass::PeerRead)
+            .map(StoredPairing::class)
             .ok_or(CredentialRegistryFault::InvalidState(
                 RegistryInvariant::CredentialBinding,
             ))?;
-        if peer_class != gateway {
+        if class.is_peer() != gateway {
             return Err(CredentialRegistryFault::InvalidState(
                 RegistryInvariant::CredentialBinding,
             ));
@@ -1730,13 +1754,6 @@ fn validate_principal_kind(
     }) {
         return Err(CredentialRegistryFault::InvalidState(
             RegistryInvariant::MembershipBinding,
-        ));
-    }
-    if metadata.grants.iter().any(|grant| {
-        Action::new(grant.action.clone()).map_or(true, |action| !kind.may_hold(&action))
-    }) {
-        return Err(CredentialRegistryFault::InvalidState(
-            RegistryInvariant::CredentialMetadata,
         ));
     }
     Ok(())
@@ -1836,20 +1853,35 @@ fn validate_issue(
     Ok(())
 }
 
+/// The kind of a principal as the registry stores it; `Conflict` when it
+/// does not parse.
+fn principal_kind(principal: &PrincipalInputDto) -> Result<PrincipalKind, LocalStoreError> {
+    Principal::try_from(principal.clone())
+        .map(|principal| principal.kind())
+        .map_err(|_| LocalStoreError::Conflict)
+}
+
+/// The grants a credential may carry: on this gateway, from the known actions,
+/// each one its principal's kind may hold (`PrincipalKind::may_hold`), and
+/// `credential.manage` only where administration is allowed. Every issuing
+/// path and the stored registry ask this one check.
 fn validate_grants(
     metadata: &CredentialMetadataDto,
+    kind: PrincipalKind,
     gateway_id: &str,
     administrative_allowed: bool,
 ) -> Result<(), LocalStoreError> {
     if metadata.grants.is_empty()
         || metadata.grants.iter().any(|grant| {
             grant.resource.id != gateway_id
+                || Action::new(grant.action.clone()).map_or(true, |action| !kind.may_hold(&action))
                 || !matches!(
                     grant.action.as_str(),
                     "server.read"
                         | "credential.manage"
                         | "conversation.read"
                         | "conversation.write"
+                        | "environment.serve"
                 )
                 || (!administrative_allowed && grant.action == "credential.manage")
         })

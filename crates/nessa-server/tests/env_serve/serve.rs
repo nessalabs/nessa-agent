@@ -291,7 +291,17 @@ impl Gateway {
     async fn send(&mut self, frame: ToEnvironment) {
         write_frame(&mut self.writer, &frame).await.unwrap();
     }
+    /// The next frame that says something: a keepalive only says the host
+    /// is there, and comes whenever it has been quiet.
     async fn next(&mut self) -> FromEnvironment {
+        loop {
+            match self.frame().await {
+                FromEnvironment::Keepalive => {}
+                frame => return frame,
+            }
+        }
+    }
+    async fn frame(&mut self) -> FromEnvironment {
         let body = tokio::time::timeout(Duration::from_secs(5), self.frames.next())
             .await
             .expect("a frame in time")
@@ -837,7 +847,8 @@ async fn a_silent_gateway_is_lost_and_serving_ends() {
     );
 }
 
-/// A gateway's keepalives are what keep a quiet connection served.
+/// A gateway's keepalives are what keep a quiet connection served, and a
+/// quiet host sends its own, so the gateway does not take it for lost.
 #[tokio::test(start_paused = true)]
 async fn keepalives_keep_a_quiet_gateway_served() {
     let mut gateway = Gateway::start();
@@ -848,6 +859,7 @@ async fn keepalives_keep_a_quiet_gateway_served() {
         gateway.send(ToEnvironment::Keepalive).await;
     }
     assert!(!gateway.served.is_finished());
+    assert_eq!(gateway.frame().await, FromEnvironment::Keepalive);
     gateway
         .send(ToEnvironment::End {
             lease: LEASE.into(),

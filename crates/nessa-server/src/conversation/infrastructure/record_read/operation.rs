@@ -98,6 +98,9 @@ fn discover<T>(
 pub(super) fn storage_error(error: StorageError) -> RecordReadError {
     match error {
         StorageError::IdentityMismatch => RecordReadError::IdentityChanged,
+        // `Store` is the records database. `Corrupt` and `AnotherVersion` are
+        // this conversation's bytes. This read does not open the chat, so
+        // every one of them stays temporarily unavailable.
         _ => RecordReadError::TemporarilyUnavailable,
     }
 }

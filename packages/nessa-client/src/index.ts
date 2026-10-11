@@ -319,6 +319,8 @@ export { conversationErrorCode } from "./application/conversation-error-code.js"
 export type { ConversationLease } from "./generated/product.js"
 export {
   conversationLeasePlace,
+  environmentPlace,
+  isPairedEnvironment,
   conversationLeaseStatus,
 } from "./application/conversation-lease.js"
 export {
