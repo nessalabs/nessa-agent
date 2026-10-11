@@ -263,63 +263,56 @@ fn a_missing_pid_is_not_running() {
     assert!(!descendant_is_running(i32::MAX));
 }
 
-/// When `NESSA_ZOMBIE_PID_FILE` is set, this process is the zombie's parent:
-/// it forks, lets the child exit, and does not reap it. The test process
-/// cannot do that itself. A runtime reaper collects every child of this
-/// process, which would remove the `/proc` entry before the check.
+/// Parent of one zombie. It forks, lets the child exit, and does not reap it,
+/// so `/proc/<pid>` stays listed with state `Z`. A child of this test process
+/// is reaped by the runtime, which removes that entry. Dropping the holder
+/// reaps the zombie; [`a_zombie_listed_in_proc_has_exited`] reads `/proc` first.
 #[cfg(target_os = "linux")]
-fn hold_zombie_if_asked() {
-    let Some(path) = std::env::var_os("NESSA_ZOMBIE_PID_FILE") else {
-        return;
-    };
-    // SAFETY: the child calls `_exit` immediately, which is async-signal-safe,
-    // so the other threads in this process are not resumed in the child.
-    let pid = unsafe { libc::fork() };
-    if pid == 0 {
-        // SAFETY: `_exit` ends the child without running destructors.
-        unsafe { libc::_exit(0) };
-    }
-    assert!(pid > 0, "fork failed: {pid}");
-    std::fs::write(&path, pid.to_string()).unwrap();
-    std::thread::sleep(Duration::from_secs(60));
-    std::process::exit(0);
+fn zombie_holder() -> StopChild {
+    // python3 is on the Linux CI image. The holder is not a second copy of
+    // this test binary: that starts another harness in the same crate.
+    StopChild(
+        std::process::Command::new("python3")
+            .args([
+                "-c",
+                concat!(
+                    "import os, sys, time\n",
+                    "pid = os.fork()\n",
+                    "if pid == 0:\n",
+                    "    os._exit(0)\n",
+                    "sys.stdout.write('%d\\n' % pid)\n",
+                    "sys.stdout.flush()\n",
+                    "time.sleep(60)\n",
+                ),
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("python3 holds the zombie"),
+    )
 }
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn a_zombie_listed_in_proc_has_exited() {
-    hold_zombie_if_asked();
-    let workspace = tempfile::tempdir().unwrap();
-    let pid_file = workspace.path().join("zombie.pid");
-    let holder_err = workspace.path().join("holder.err");
-    let mut holder = StopChild(
-        std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "env_serve::infrastructure::commands::tests::a_zombie_listed_in_proc_has_exited",
-                "--exact",
-            ])
-            .env("NESSA_ZOMBIE_PID_FILE", &pid_file)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::fs::File::create(&holder_err).unwrap())
-            .spawn()
-            .unwrap(),
-    );
-    let startup = tokio::time::Instant::now() + Duration::from_secs(15);
-    let pid = loop {
-        if let Ok(text) = std::fs::read_to_string(&pid_file) {
-            if let Ok(pid) = text.trim().parse::<i32>() {
-                if pid > 0 {
-                    break pid;
-                }
-            }
-        }
-        if holder.0.try_wait().unwrap().is_some() || tokio::time::Instant::now() >= startup {
-            let err = std::fs::read_to_string(&holder_err).unwrap_or_default();
-            panic!("the holder did not leave a zombie listed: {err}");
-        }
-        tokio::time::sleep(DESCENDANT_EXIT_POLL).await;
-    };
+    let mut holder = zombie_holder();
+    let stdout = holder.0.stdout.take().unwrap();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        let _ = std::io::BufRead::read_line(&mut std::io::BufReader::new(stdout), &mut line);
+        let _ = sender.send(line);
+    });
+    // Killing the holder closes the pipe, so a holder that never prints does
+    // not leave this read running after the timeout.
+    let line = receiver
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the holder prints the zombie pid");
+    let pid: i32 = line
+        .trim()
+        .parse()
+        .expect("the holder prints the zombie pid");
     // Dropping the holder reaps the zombie. It has to stay alive until the
     // assertions have read `/proc`.
     let _holder = holder;
