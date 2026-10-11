@@ -336,6 +336,8 @@ const AGENT_TAKES_IMAGES: ProviderOperationCapabilities = ProviderOperationCapab
     model_switch_reporting: ProviderModelSwitchReportingCapability::Unknown,
     permission_deferral: ProviderPermissionDeferralCapability::Unknown,
     elicitation_forwarding: ElicitationForwardingCapability::Unknown,
+    turn_stop_cleanup: TurnStopCleanup::Unknown,
+    session_close_ownership: SessionCloseOwnership::Unknown,
     supports_questions: false,
     effort_levels: OfferedEffortLevels::NONE,
 };
@@ -391,11 +393,11 @@ async fn provider_advertisements_cannot_enable_missing_application_integrations(
     );
     assert_eq!(
         capabilities.policy_end_turn(),
-        PolicyEndTurnCapability::UnsupportedNotImplemented
+        PolicyEndTurnCapability::Unknown
     );
     assert_eq!(
         capabilities.policy_close_session(),
-        PolicyCloseSessionCapability::UnsupportedNotImplemented
+        PolicyCloseSessionCapability::Unknown
     );
     assert_eq!(
         capabilities.incoming_elicitation(),

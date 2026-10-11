@@ -283,6 +283,7 @@ mod tests {
             mcp_servers: nessa_sdk::infrastructure::acp::sessions::McpServerList::none(),
             stand_ins: nessa_sdk::infrastructure::acp::sessions::StandInSessions::none(),
             permissions: PermissionOfferPolicy::once_only(),
+            refusal: nessa_sdk::application::agent_execution::permissions::ConfiguredRefusal::continue_turn(),
             launch_timeout: Duration::from_secs(10),
             startup_timeout: Duration::from_secs(10),
             execution_timeout: None,

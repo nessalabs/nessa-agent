@@ -22,6 +22,9 @@ pub(super) enum Settlement {
         attachment: Attachment,
     },
     LocalCancellation(Cleanup),
+    PolicyStop {
+        attachment: Attachment,
+    },
     ProviderFinalized {
         result: Option<Result<Outcome, SavedError>>,
         resources: SavedResources,
@@ -156,6 +159,9 @@ impl From<ExecutionReport> for Settlement {
                 };
                 Self::LocalCancellation(report.clone().into())
             }
+            ExecutionReportSource::PolicyStop => Self::PolicyStop {
+                attachment: attachment.clone().into(),
+            },
         }
     }
 }
@@ -174,6 +180,9 @@ impl TryFrom<Settlement> for ExecutionReport {
                 attachment.try_into()?,
             ),
             Settlement::LocalCancellation(report) => Self::cancelled_locally(report.try_into()?),
+            Settlement::PolicyStop { attachment } => {
+                Self::stopped_by_policy(attachment.try_into()?)
+            }
             Settlement::ProviderFinalized {
                 result,
                 resources,

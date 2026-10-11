@@ -13,6 +13,11 @@ impl Agent {
     pub(super) fn start_shutdown(&self, request: SessionCloseRequest) -> CloseAttempt {
         self.inner.lifecycle.start_stop(request)
     }
+    // Names an unstarted execution-failed fence. Only the settlement that owns
+    // a CleanupRequired report may call this.
+    pub(super) fn start_shutdown_naming_fence(&self, request: SessionCloseRequest) -> CloseAttempt {
+        self.inner.lifecycle.start_stop_naming_fence(request)
+    }
     pub(super) fn accept_control(&self) -> Result<AcceptedControl, AgentError> {
         self.inner.lifecycle.accept_control().map(Arc::new)
     }

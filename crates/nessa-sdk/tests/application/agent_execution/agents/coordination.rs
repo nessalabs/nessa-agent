@@ -743,6 +743,44 @@ async fn close_after_work_admission_preserves_input_and_closer_before_handoff() 
 }
 
 #[tokio::test]
+async fn observation_deadline_keeps_an_unstarted_execution_failed_fence() {
+    let (agent, backend) = agent_with_backend().await;
+    let work = agent.inner.lifecycle.accept_work().unwrap();
+    agent
+        .inner
+        .lifecycle
+        .record_provider_state(&work, &ProviderSessionState::CleanupRequired);
+    let joined = agent.start_shutdown(SessionCloseRequest::DeadlineExceeded);
+    assert_eq!(joined.request, SessionCloseRequest::ExecutionFailed);
+    agent.inner.lifecycle.complete_stop(&joined).await;
+    assert_eq!(
+        backend.closes.lock().unwrap().as_slice(),
+        [SessionCloseRequest::ExecutionFailed]
+    );
+    drop(work);
+}
+
+#[tokio::test]
+async fn cleanup_required_settlement_names_an_unstarted_execution_failed_fence() {
+    for request in [
+        SessionCloseRequest::PolicyRefusal,
+        SessionCloseRequest::DeadlineExceeded,
+    ] {
+        let (agent, backend) = agent_with_backend().await;
+        let work = agent.inner.lifecycle.accept_work().unwrap();
+        agent
+            .inner
+            .lifecycle
+            .record_provider_state(&work, &ProviderSessionState::CleanupRequired);
+        let named = agent.start_shutdown_naming_fence(request.clone());
+        assert_eq!(named.request, request);
+        agent.inner.lifecycle.complete_stop(&named).await;
+        assert_eq!(backend.closes.lock().unwrap().as_slice(), [request]);
+        drop(work);
+    }
+}
+
+#[tokio::test]
 async fn automatic_cleanup_after_provider_fence_preserves_concurrent_close() {
     for explicit_first in [false, true] {
         let (agent, backend) = agent_with_backend().await;

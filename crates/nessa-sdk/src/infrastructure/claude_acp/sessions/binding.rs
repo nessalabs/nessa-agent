@@ -264,7 +264,7 @@ impl AgentProvider for ClaudeAcpProvider {
 }
 impl ClaudeAcpProvider {
     /// The launch configuration every connection this provider opens uses.
-    pub(super) fn config(&self) -> &AcpConfig {
+    pub(crate) fn config(&self) -> &AcpConfig {
         &self.config
     }
     /// Deletions this binding started that are still stopping their process.
@@ -272,7 +272,7 @@ impl ClaudeAcpProvider {
         &self.deletions
     }
     /// How every connection this provider opens is launched.
-    pub(super) fn process_factory(&self) -> acp_binding::ProcessFactory {
+    pub(crate) fn process_factory(&self) -> acp_binding::ProcessFactory {
         let factory = self.clone();
         #[cfg(test)]
         if let Some(process) = self.process.clone() {
@@ -293,7 +293,7 @@ impl ClaudeAcpProvider {
             }
         }
     }
-    pub(super) fn profile(&self) -> ClaudeProfile {
+    pub(crate) fn profile(&self) -> ClaudeProfile {
         ClaudeProfile::new(
             self.system_prompt.clone(),
             self.approval_mode,

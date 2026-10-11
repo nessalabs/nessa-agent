@@ -15,9 +15,8 @@ export type AgentFeatures = {
     "unknown" | "unsupported" | "supported_with_correlated_round_trip"
   preToolPolicy:
     "unknown" | "unsupported_not_implemented" | "supported_at_permission_gate"
-  policyEndTurn:
-    "unknown" | "unsupported_not_implemented" | "supported_for_current_invocation"
-  policyCloseSession: "unknown" | "unsupported_not_implemented" | "supported_for_session"
+  policyEndTurn: "unknown" | "unsupported" | "supported_for_current_invocation"
+  policyCloseSession: "unknown" | "unsupported" | "supported_for_session"
   incomingElicitation: "unknown" | "unsupported" | "supported_with_correlated_round_trip"
 }
 

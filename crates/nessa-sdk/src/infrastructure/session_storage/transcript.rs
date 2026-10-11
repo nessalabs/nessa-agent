@@ -1976,6 +1976,36 @@ mod tests {
     }
 
     #[test]
+    fn a_version_one_batch_and_checkpoint_are_another_version() {
+        let mut batch: Value = serde_json::from_slice(
+            &snapshot::encode_semantic_batch(std::slice::from_ref(&opened())).unwrap(),
+        )
+        .unwrap();
+        batch["schemaVersion"] = serde_json::json!(1);
+        assert_eq!(
+            snapshot::decode_semantic_batch(
+                &serde_json::to_vec(&batch).unwrap(),
+                &ProviderContext::Absent,
+            ),
+            Err(StorageError::AnotherVersion { found: Some(1) })
+        );
+
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
+            .unwrap();
+        let checkpoint = fold.checkpoint().unwrap();
+        let mut value: Value = serde_json::from_reader(checkpoint.reader()).unwrap();
+        value["schemaVersion"] = serde_json::json!(1);
+        assert_eq!(
+            TranscriptCheckpoint::from_chunks(vec![serde_json::to_vec(&value).unwrap()]),
+            Err(TranscriptError::Decision(StorageError::AnotherVersion {
+                found: Some(1)
+            }))
+        );
+    }
+
+    #[test]
     fn checkpoint_streams_history_beyond_one_fact_limit() {
         let fold = checkpoint_fixture(snapshot::checkpoint::history_fixture(41));
         let checkpoint = fold.checkpoint().unwrap();

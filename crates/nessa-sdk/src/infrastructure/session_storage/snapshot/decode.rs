@@ -326,9 +326,10 @@ fn preflight_shape(reader: impl Read, shape: Shape) -> Result<(), StorageError> 
 /// Top-level `schemaVersion` seen while preflight walks a record.
 ///
 /// An unsupported marker ends the walk at once. Otherwise the last duplicate
-/// key wins: `"schemaVersion":1` then `"schemaVersion":2` is
-/// [`RecordVersion::Other`] of 2, and `"schemaVersion":2` then
-/// `"schemaVersion":1` is that same other version because the walk stops at 2.
+/// key wins. A current `schemaVersion` followed by a later one is
+/// [`RecordVersion::Other`] of that later value. A later value followed by
+/// the current one is that same other version, because the walk stops at the
+/// first marker this build does not read.
 /// A value that is not an unsigned integer is [`RecordVersion::Invalid`].
 /// An array or object is marked invalid without reading its contents.
 /// [`RecordVersion::Absent`] means the root value was a JSON object and the
@@ -638,19 +639,20 @@ mod tests {
     #[test]
     fn an_unsupported_marker_stops_the_preflight_walk() {
         let filler = "x".repeat(1024 * 1024);
-        let batch = format!(r#"{{"schemaVersion":2,"changes":["{filler}"]}}"#);
+        let later = StorageError::SCHEMA_VERSION + 1;
+        let batch = format!(r#"{{"schemaVersion":{later},"changes":["{filler}"]}}"#);
         let (reader, read) = counted(batch.as_bytes());
         assert_eq!(
             preflight_semantic_batch(reader),
-            Err(StorageError::AnotherVersion { found: Some(2) })
+            Err(StorageError::AnotherVersion { found: Some(later) })
         );
         assert!(read.get() < 4 * 1024, "batch read {}", read.get());
 
-        let checkpoint = format!(r#"{{"schemaVersion":2,"snapshot":{{"pad":"{filler}"}}}}"#);
+        let checkpoint = format!(r#"{{"schemaVersion":{later},"snapshot":{{"pad":"{filler}"}}}}"#);
         let (reader, read) = counted(checkpoint.as_bytes());
         assert_eq!(
             preflight_checkpoint(reader),
-            Err(StorageError::AnotherVersion { found: Some(2) })
+            Err(StorageError::AnotherVersion { found: Some(later) })
         );
         assert!(read.get() < 4 * 1024, "checkpoint read {}", read.get());
 

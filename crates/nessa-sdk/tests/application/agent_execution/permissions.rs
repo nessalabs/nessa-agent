@@ -2,6 +2,7 @@ mod correlation;
 mod execution_targets;
 mod question_refusal;
 mod retained_review;
+mod review_decline;
 use super::{
     providers::{provider_agent, provider_agent_with_review},
     support::*,

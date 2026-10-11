@@ -44,6 +44,7 @@ impl SessionClosure {
             }
             PermissionCancellationReasonView::SessionClosed
             | PermissionCancellationReasonView::SessionFailed
+            | PermissionCancellationReasonView::PolicyRefusal
             | PermissionCancellationReasonView::ExecutionFailed
             | PermissionCancellationReasonView::DeadlineExceeded
             | PermissionCancellationReasonView::EventConsumerDropped

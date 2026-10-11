@@ -2,6 +2,7 @@
 import json
 import os
 import pathlib
+import select
 import signal
 import subprocess
 import sys
@@ -21,6 +22,71 @@ def record(name, value):
     temporary = root / (name + ".tmp")
     temporary.write_text(value)
     temporary.replace(root / name)
+class StdinLines:
+    """Lines from stdin, read without the text wrapper pulling the next one ahead.
+
+    The stopped-reply wait has to notice a session/prompt that arrives while
+    it is waiting, and still hand every other line to the main loop.
+    """
+    def __init__(self, fd):
+        self.fd = fd
+        self.pending = []
+        self.partial = b""
+        self.eof = False
+        os.set_blocking(fd, False)
+
+    def _consume(self):
+        while True:
+            try:
+                chunk = os.read(self.fd, 65536)
+            except BlockingIOError:
+                return
+            if chunk == b"":
+                self.eof = True
+                if self.partial:
+                    self.pending.append(self.partial.decode())
+                    self.partial = b""
+                return
+            self.partial += chunk
+            while b"\n" in self.partial:
+                line, self.partial = self.partial.split(b"\n", 1)
+                self.pending.append(line.decode())
+
+    def next_line(self):
+        while not self.pending and not self.eof:
+            try:
+                select.select([self.fd], [], [])
+            except InterruptedError:
+                continue
+            self._consume()
+        if self.pending:
+            return self.pending.pop(0)
+        return ""
+
+    def wait_for_file(self, name, seconds=5):
+        deadline = time.time() + seconds
+        seen = 0
+        while time.time() < deadline:
+            if (root / name).exists():
+                return
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                break
+            try:
+                select.select([self.fd], [], [], min(0.01, remaining))
+            except InterruptedError:
+                continue
+            self._consume()
+            for line in self.pending[seen:]:
+                try:
+                    incoming = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if incoming.get("method") == "session/prompt":
+                    record("prompt-before-release", line)
+            seen = len(self.pending)
+        record("release-wait-expired", "yes")
+        sys.exit(1)
 
 if mode == "identity-credentials":
     assert os.environ["NESSA_FIXTURE_CREDENTIAL"] in ("synthetic-secret-one", "synthetic-secret-two")
@@ -98,7 +164,15 @@ if mode == "ignore-stop":
             pass
     signal.signal(signal.SIGCHLD, reap)
 
-for line in sys.stdin:
+stdin_lines = StdinLines(sys.stdin.fileno())
+
+def wait_for_release(name):
+    stdin_lines.wait_for_file(name)
+
+while True:
+    line = stdin_lines.next_line()
+    if line == "":
+        break
     msg = json.loads(line)
     method = msg.get("method")
     if method == "initialize":
@@ -486,6 +560,50 @@ for line in sys.stdin:
                     {"optionId": "allow-with-updates", "kind": "allow_always",
                      "name": "Yes, and don't ask again for WebSearch commands"},
                     {"optionId": "reject", "kind": "reject_once", "name": "No"}]}})
+        elif mode in (
+            "refusal-end-turn",
+            "refusal-close-session",
+            "refusal-stale-next",
+            "refusal-malformed-stopped",
+            "refusal-open-work",
+            "refusal-silent",
+        ):
+            # The review is answered, and the prompt stays open until
+            # session/cancel. That later result is a cancelled reply, as Claude
+            # answers a prompt that session/cancel stopped.
+            if (root / "cancel-observed").exists():
+                text(user_text)
+                result(pending, {"stopReason": "end_turn"})
+                pending = None
+            elif mode == "refusal-open-work":
+                # A review and a question stay open, then a declined tool stops
+                # the turn. Cleanup has to cancel both of the open ones.
+                write = tool("Write")
+                update({"sessionUpdate": "tool_call", **write})
+                write_call = {key: value for key, value in write.items() if key != "title"}
+                send({"id": "write-review", "method": "session/request_permission", "params": {
+                    "sessionId": session, "toolCall": write_call, "options": [
+                        {"optionId": "approve-one", "kind": "allow_once", "name": "Allow once"},
+                        {"optionId": "deny-one", "kind": "reject_once", "name": "Deny once"}]}})
+                send({"id": "ask", "method": "elicitation/create", "params": {
+                    "sessionId": session, "mode": "form", "message": "Which environment?",
+                    "requestedSchema": {"type": "object", "properties": {
+                        "question_0": {"type": "string", "oneOf": [{"const": "staging"}]}}}}})
+                bash = tool("Bash")
+                bash["toolCallId"] = "bash-1"
+                update({"sessionUpdate": "tool_call", **bash})
+                bash_call = {key: value for key, value in bash.items() if key != "title"}
+                send({"id": "bash-review", "method": "session/request_permission", "params": {
+                    "sessionId": session, "toolCall": bash_call, "options": [
+                        {"optionId": "approve-one", "kind": "allow_once", "name": "Allow once"},
+                        {"optionId": "deny-one", "kind": "reject_once", "name": "Deny once"}]}})
+            else:
+                update({"sessionUpdate": "tool_call", **tool("Bash")})
+                call = {key: value for key, value in tool("Bash").items() if key != "title"}
+                send({"id": permission_id, "method": "session/request_permission", "params": {
+                    "sessionId": session, "toolCall": call, "options": [
+                        {"optionId": "approve-one", "kind": "allow_once", "name": "Allow once"},
+                        {"optionId": "deny-one", "kind": "reject_once", "name": "Deny once"}]}})
         elif mode.startswith("declined-"):
             # A review this binding will not put to a host. The call is still
             # observed, the review is answered "no", and the turn finishes —
@@ -591,7 +709,37 @@ for line in sys.stdin:
                 "sessionId": session, "mode": "form", "message": "One more thing?",
                 "requestedSchema": {"type": "object", "properties": {
                     "question_0": {"type": "string", "oneOf": [{"const": "yes"}]}}}}})
-        if pending is not None and mode not in ("ignore-stop", "consumer-loss-during-close"):
+        if mode in (
+            "refusal-end-turn",
+            "refusal-close-session",
+            "refusal-stale-next",
+            "refusal-malformed-stopped",
+            "refusal-open-work",
+            "refusal-silent",
+        ) and pending is not None:
+            if mode == "refusal-stale-next":
+                # Turn N speaks and asks again after cancel, while the next
+                # prompt may already be running. None of this belongs to it.
+                # The cancelled reply waits until the test has submitted that
+                # next prompt, so the hold is the only way it can start.
+                text("from-stopped-turn")
+                call = {key: value for key, value in tool("Write").items() if key != "title"}
+                call["toolCallId"] = "stale-1"
+                send({"id": "stale-review", "method": "session/request_permission", "params": {
+                    "sessionId": session, "toolCall": call, "options": [
+                        {"optionId": "approve-one", "kind": "allow_once", "name": "Allow once"},
+                        {"optionId": "deny-one", "kind": "reject_once", "name": "Deny once"}]}})
+                wait_for_release("release-stopped-result")
+            if mode == "refusal-malformed-stopped":
+                # The stopped prompt is answered with an id and neither a result
+                # nor an error. That is a protocol failure, not a late outcome.
+                wait_for_release("release-stopped-result")
+                send({"id": pending})
+                pending = None
+            elif mode != "refusal-silent":
+                result(pending, {"stopReason": "cancelled"})
+                pending = None
+        elif pending is not None and mode not in ("ignore-stop", "consumer-loss-during-close"):
             if mode == "late-tool-close":
                 update({"sessionUpdate": "tool_call_update", "toolCallId": "file-1", "status": "completed", "content": []})
                 update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "late message"}})
@@ -640,6 +788,19 @@ for line in sys.stdin:
         text("search denied")
         result(pending, {"stopReason": "end_turn"})
         pending = None
+    elif mode in (
+        "refusal-end-turn",
+        "refusal-close-session",
+        "refusal-stale-next",
+        "refusal-malformed-stopped",
+        "refusal-open-work",
+        "refusal-silent",
+    ) and msg.get("id") in (permission_id, "write-review", "bash-review", "stale-review", "ask"):
+        seen = root / "permission-outcomes"
+        prior = seen.read_text() if seen.exists() else ""
+        record("permission-outcomes", prior + json.dumps({"id": msg["id"], "result": msg["result"]}) + "\n")
+        if "outcome" in msg["result"]:
+            record("permission-outcome", json.dumps(msg["result"]["outcome"]))
     elif mode.startswith("declined-") and msg.get("id") == permission_id:
         # Every answer for this review, in order: one refusal must not be able
         # to hide behind a later one.

@@ -17,7 +17,7 @@ use nessa_sdk::domain::agent_execution::{
     permissions::{
         PermissionCancellationReason, PermissionCancellationReasonView, PermissionDecision,
         PermissionEffect, PermissionRequest, PermissionScopeView, PermissionStateView,
-        ReviewDeclineReason,
+        RefusalOutcome, ReviewDeclineReason,
     },
     questions::{
         AgentQuestion, AnswerShape, QuestionCancellation, QuestionRefusalReason, QuestionResponse,
@@ -141,6 +141,19 @@ pub(super) fn record_value(record: &ExecutionAuditRecord) -> Value {
         }
         ExecutionAuditRecord::ReviewDeclined(record) => declined(record),
         ExecutionAuditRecord::QuestionRefused(record) => refused(record),
+        ExecutionAuditRecord::LateProviderResult(record) => json!({
+            "kind":"late_provider_result",
+            "sessionId":record.session_id().as_str(),
+            "executionId":record.execution_id().as_str(),
+            "result":match record.result() {
+                Ok(ExecutionOutcome::Completed) => json!("completed"),
+                Ok(ExecutionOutcome::Cancelled) => json!("cancelled"),
+                Ok(ExecutionOutcome::OutputLimit) => json!("output_limit"),
+                Ok(ExecutionOutcome::RequestLimit) => json!("request_limit"),
+                Ok(ExecutionOutcome::Refused) => json!("refused"),
+                Err(error) => json!({"failed":error.to_string()}),
+            },
+        }),
         ExecutionAuditRecord::QuestionAnswered(record) => {
             json!({
                 "kind":"question_answered",
@@ -315,6 +328,20 @@ fn asked(question: &AgentQuestion) -> Value {
 /// frame named the tool in a way not worth retaining.
 fn declined(record: &ReviewDeclineRecord) -> Value {
     let decline = record.decline();
+    let outcome = match decline.outcome() {
+        RefusalOutcome::Continue => "continue",
+        RefusalOutcome::EndTurn => "end_turn",
+        RefusalOutcome::CloseSession => "close_session",
+    };
+    let origin = match record.rule() {
+        None => json!({"kind":"runtime"}),
+        Some(rule) => json!({
+            "kind":"rule",
+            "ruleId":rule.rule_id(),
+            "revision":rule.revision(),
+            "grantedBy":actor(rule.granted_by()),
+        }),
+    };
     json!({
         "kind":"review_declined",
         "sessionId":record.session_id().as_str(),
@@ -326,8 +353,9 @@ fn declined(record: &ReviewDeclineRecord) -> Value {
             ReviewDeclineReason::UnreadableRequest => "unreadable_request",
             ReviewDeclineReason::UnusableOptions => "unusable_options",
         },
+        "outcome":outcome,
         "delivery":delivery(record.delivery()),
-        "origin":{"kind":"runtime"},
+        "origin":origin,
     })
 }
 /// One vocabulary for how a decision reached the provider, answered or refused.
@@ -360,6 +388,7 @@ fn reason(value: &PermissionCancellationReason) -> Value {
         PermissionCancellationReasonView::DeadlineExceeded => "deadline_exceeded",
         PermissionCancellationReasonView::EventConsumerDropped => "event_consumer_dropped",
         PermissionCancellationReasonView::SessionHandlesDropped => "session_handles_dropped",
+        PermissionCancellationReasonView::PolicyRefusal => "policy_refusal",
         PermissionCancellationReasonView::Custom(value) => {
             return json!({"code":value.code(),"explanation":value.explanation()})
         }

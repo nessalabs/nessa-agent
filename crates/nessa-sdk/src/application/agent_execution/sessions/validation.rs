@@ -403,6 +403,9 @@ pub(super) fn record_report(
                 .record_local_cancellation(cancellation.cancellation()?)
                 .map_err(corrupt)
         }
+        (Some(report), None) if report.source() == ExecutionReportSource::PolicyStop => {
+            history.record_provider_result(None).map_err(corrupt)
+        }
         (Some(report), None) if report.source() == ExecutionReportSource::Provider => history
             .record_provider_result(
                 report

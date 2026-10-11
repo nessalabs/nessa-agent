@@ -69,7 +69,11 @@ fn decline_publication(
     let (events, receiver) = EventQueueBudget::new().channel(capacity);
     let observation = ReviewDeclineObservation::selected(
         ReviewDeclineId::new("1").unwrap(),
-        ReviewDecline::new(Some("Read"), ReviewDeclineReason::ToolNotReviewable),
+        ReviewDecline::new(
+            Some("Read"),
+            ReviewDeclineReason::ToolNotReviewable,
+            crate::domain::agent_execution::permissions::RefusalOutcome::Continue,
+        ),
     );
     (
         DeclineNoticePublication::new(events, ExecutionId::new("execution").unwrap(), observation),
@@ -235,6 +239,11 @@ async fn worker_initial_and_fallback_cancellation_share_grace_with_a_full_pipe()
             startup_advisory_session: None,
             questions: HashMap::new(),
             declined: None,
+            stopped_prompts: Vec::new(),
+            expired_stops: Vec::new(),
+            held_prompts: VecDeque::new(),
+            stop_reply_deadline: None,
+            stop_cleanup: StopCleanup::None,
             shutdown_deadline: None,
             configured: true,
             closing: true,

@@ -390,14 +390,14 @@ impl PreToolPolicySupport {
 #[serde(rename_all = "snake_case")]
 pub enum PolicyEndTurnSupport {
     Unknown,
-    UnsupportedNotImplemented,
+    Unsupported,
     SupportedForCurrentInvocation,
 }
 impl PolicyEndTurnSupport {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Unknown => "unknown",
-            Self::UnsupportedNotImplemented => "unsupported_not_implemented",
+            Self::Unsupported => "unsupported",
             Self::SupportedForCurrentInvocation => "supported_for_current_invocation",
         }
     }
@@ -406,14 +406,14 @@ impl PolicyEndTurnSupport {
 #[serde(rename_all = "snake_case")]
 pub enum PolicyCloseSessionSupport {
     Unknown,
-    UnsupportedNotImplemented,
+    Unsupported,
     SupportedForSession,
 }
 impl PolicyCloseSessionSupport {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Unknown => "unknown",
-            Self::UnsupportedNotImplemented => "unsupported_not_implemented",
+            Self::Unsupported => "unsupported",
             Self::SupportedForSession => "supported_for_session",
         }
     }

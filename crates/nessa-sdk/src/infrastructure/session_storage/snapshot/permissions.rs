@@ -174,6 +174,7 @@ enum Reason {
     DeadlineExceeded,
     EventConsumerDropped,
     SessionHandlesDropped,
+    PolicyRefusal,
     Custom { code: String, explanation: String },
 }
 impl From<&PermissionCancellation> for Cancellation {
@@ -207,6 +208,7 @@ impl From<&PermissionCancellation> for Cancellation {
                 PermissionCancellationReasonView::SessionHandlesDropped => {
                     Reason::SessionHandlesDropped
                 }
+                PermissionCancellationReasonView::PolicyRefusal => Reason::PolicyRefusal,
                 PermissionCancellationReasonView::Custom(reason) => Reason::Custom {
                     code: reason.code().into(),
                     explanation: reason.explanation().into(),
@@ -236,6 +238,7 @@ impl Cancellation {
             Reason::SessionHandlesDropped => {
                 PermissionCancellationReason::session_handles_dropped()
             }
+            Reason::PolicyRefusal => PermissionCancellationReason::policy_refusal(),
             Reason::Custom { code, explanation } => PermissionCancellationReason::custom(
                 CustomPermissionCancellationReason::new(code, explanation).map_err(corrupt)?,
             ),

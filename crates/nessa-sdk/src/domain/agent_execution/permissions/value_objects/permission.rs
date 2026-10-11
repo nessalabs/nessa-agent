@@ -285,6 +285,8 @@ enum PermissionCancellationReasonValue {
     EventConsumerDropped,
     /// All controlling session handles were dropped.
     SessionHandlesDropped,
+    /// A configured refusal closed the session.
+    PolicyRefusal,
     /// A validated custom lifecycle reason, retained exactly.
     Custom(CustomPermissionCancellationReason),
 }
@@ -308,6 +310,8 @@ pub enum PermissionCancellationReasonView<'a> {
     EventConsumerDropped,
     /// All controlling session handles were dropped.
     SessionHandlesDropped,
+    /// A configured refusal closed the session.
+    PolicyRefusal,
     /// A validated custom lifecycle reason, retained exactly.
     Custom(&'a CustomPermissionCancellationReason),
 }
@@ -344,6 +348,10 @@ impl PermissionCancellationReason {
     /// All controlling session handles were dropped. This value performs no cancellation.
     pub fn session_handles_dropped() -> Self {
         Self(PermissionCancellationReasonValue::SessionHandlesDropped)
+    }
+    /// A configured refusal closed the session. This value performs no cancellation.
+    pub fn policy_refusal() -> Self {
+        Self(PermissionCancellationReasonValue::PolicyRefusal)
     }
     /// Own validated custom `reason` without cancelling or mutating any review.
     pub fn custom(reason: CustomPermissionCancellationReason) -> Self {
@@ -384,6 +392,9 @@ impl PermissionCancellationReason {
             }
             PermissionCancellationReasonValue::SessionHandlesDropped => {
                 PermissionCancellationReasonView::SessionHandlesDropped
+            }
+            PermissionCancellationReasonValue::PolicyRefusal => {
+                PermissionCancellationReasonView::PolicyRefusal
             }
             PermissionCancellationReasonValue::Custom(reason) => {
                 PermissionCancellationReasonView::Custom(reason)

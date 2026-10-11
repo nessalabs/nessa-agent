@@ -83,7 +83,7 @@ pub use operations::{
     PermissionDeferralCapability, PermissionDenialCapability, PolicyCloseSessionCapability,
     PolicyEndTurnCapability, PreToolPolicyCapability, ProviderCompactionReportingCapability,
     ProviderModelSwitchReportingCapability, ProviderOperationCapabilities,
-    ProviderPermissionDeferralCapability,
+    ProviderPermissionDeferralCapability, SessionCloseOwnership, TurnStopCleanup,
 };
 pub use ports::{
     AgentProvider, CloseOutcome, ExecutionEventStream, OpenedProviderSession,

@@ -116,6 +116,11 @@ async fn blocked_worker(
         startup_advisory_session: None,
         questions: HashMap::new(),
         declined: None,
+        stopped_prompts: Vec::new(),
+        expired_stops: Vec::new(),
+        held_prompts: VecDeque::new(),
+        stop_reply_deadline: None,
+        stop_cleanup: StopCleanup::None,
         shutdown_deadline: None,
         configured: true,
         closing: false,
@@ -693,4 +698,156 @@ async fn an_ask_whose_answer_could_not_be_recorded_is_still_ended_with_evidence(
         &QuestionResponse::Cancelled(QuestionCancellation::SessionEnded)
     );
     assert_eq!(ended[1].actor(), None);
+}
+
+#[tokio::test]
+async fn a_second_stop_keeps_the_first_prompt_reply() {
+    let (mut worker, mut execution, _events, _recovery, _clock) = blocked_worker("", false).await;
+    let _ = worker.active.take();
+    let (first_reply, mut first_rx) = oneshot::channel();
+    let (second_reply, mut second_rx) = oneshot::channel();
+    let session_id = execution.id().clone();
+    worker.stopped_prompts.push(StoppedPrompt {
+        prompt_id: 1,
+        execution_id: ExecutionId::new("first").unwrap(),
+        session_id: session_id.clone(),
+        reply: first_reply,
+        kind: StopKind::EndTurn,
+    });
+    worker.stopped_prompts.push(StoppedPrompt {
+        prompt_id: 2,
+        execution_id: ExecutionId::new("second").unwrap(),
+        session_id,
+        reply: second_reply,
+        kind: StopKind::EndTurn,
+    });
+    let first = serde_json::from_str::<Envelope>(
+        r#"{"jsonrpc":"2.0","id":1,"result":{"stopReason":"cancelled"}}"#,
+    )
+    .unwrap();
+    worker
+        .message(&mut execution, first, None)
+        .await
+        .unwrap_or_else(|failure| {
+            panic!(
+                "the first late reply is a stopped prompt: {:?}",
+                failure.error()
+            )
+        });
+    let ProviderExecutionReply::Finished(report) = first_rx.try_recv().unwrap() else {
+        panic!("first reply missing");
+    };
+    assert!(matches!(
+        report.session_state(),
+        ProviderSessionState::Usable
+    ));
+    assert!(second_rx.try_recv().is_err());
+    let second = serde_json::from_str::<Envelope>(
+        r#"{"jsonrpc":"2.0","id":2,"result":{"stopReason":"cancelled"}}"#,
+    )
+    .unwrap();
+    worker
+        .message(&mut execution, second, None)
+        .await
+        .unwrap_or_else(|failure| {
+            panic!(
+                "the second late reply is still a stopped prompt: {:?}",
+                failure.error()
+            )
+        });
+    let ProviderExecutionReply::Finished(report) = second_rx.try_recv().unwrap() else {
+        panic!("second reply missing");
+    };
+    assert!(matches!(
+        report.session_state(),
+        ProviderSessionState::Usable
+    ));
+}
+
+#[tokio::test]
+async fn a_late_reply_after_the_stop_grace_does_not_fail_the_worker() {
+    let (mut worker, mut execution, _events, _recovery, _clock) = blocked_worker("", false).await;
+    let _ = worker.active.take();
+    let (reply, mut reply_rx) = oneshot::channel();
+    let session_id = execution.id().clone();
+    worker.stopped_prompts.push(StoppedPrompt {
+        prompt_id: 7,
+        execution_id: ExecutionId::new("expired").unwrap(),
+        session_id,
+        reply,
+        kind: StopKind::EndTurn,
+    });
+    worker.expire_stopped_prompts();
+    let ProviderExecutionReply::Finished(report) = reply_rx.try_recv().unwrap() else {
+        panic!("grace expiry did not settle the prompt");
+    };
+    assert!(matches!(
+        report.session_state(),
+        ProviderSessionState::CleanupRequired
+    ));
+    assert_eq!(report.into_result(), Err(AgentError::Deadline));
+    let late = serde_json::from_str::<Envelope>(
+        r#"{"jsonrpc":"2.0","id":7,"result":{"stopReason":"cancelled"}}"#,
+    )
+    .unwrap();
+    worker
+        .message(&mut execution, late, None)
+        .await
+        .unwrap_or_else(|failure| {
+            panic!(
+                "a reply after grace expiry failed the worker: {:?}",
+                failure.error()
+            )
+        });
+}
+
+#[tokio::test]
+async fn an_update_after_the_stop_grace_does_not_fail_the_worker() {
+    let (mut worker, mut execution, _events, _recovery, _clock) = blocked_worker("", false).await;
+    let _ = worker.active.take();
+    let (reply, mut reply_rx) = oneshot::channel();
+    worker.stopped_prompts.push(StoppedPrompt {
+        prompt_id: 7,
+        execution_id: ExecutionId::new("expired").unwrap(),
+        session_id: execution.id().clone(),
+        reply,
+        kind: StopKind::EndTurn,
+    });
+    worker.expire_stopped_prompts();
+    assert!(reply_rx.try_recv().is_ok());
+    worker
+        .update(
+            &mut execution,
+            serde_json::json!({
+                "sessionId": "context",
+                "update": {
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {"type": "text", "text": "late"}
+                }
+            }),
+        )
+        .unwrap_or_else(|error| {
+            panic!("an update after grace expiry failed the worker: {error:?}")
+        });
+}
+
+#[tokio::test]
+async fn a_held_prompt_waits_until_the_active_turn_is_gone() {
+    let (mut worker, mut execution, _events, _recovery, _clock) = blocked_worker("", false).await;
+    let (reply, mut reply_rx) = oneshot::channel();
+    let input = ExecutionRequest {
+        execution_id: ExecutionId::new("held").unwrap(),
+        user_message: UserMessage::text_only(PromptText::new("held").unwrap()),
+        estimated_input_tokens: 1,
+        reserved_output_tokens: 1,
+    };
+    worker
+        .held_prompts
+        .push_back((super::dispatched(input, None), reply));
+    worker
+        .flush_held_prompts(&mut execution)
+        .await
+        .unwrap_or_else(|failure| panic!("{:?}", failure.error()));
+    assert_eq!(worker.held_prompts.len(), 1);
+    assert!(reply_rx.try_recv().is_err());
 }

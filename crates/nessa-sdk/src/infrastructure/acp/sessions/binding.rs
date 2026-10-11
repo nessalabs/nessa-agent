@@ -21,13 +21,13 @@ use crate::application::agent_execution::permissions::{
     PermissionSelectionState, QuestionAnswer,
 };
 use crate::application::agent_execution::providers::{
-    CleanupFuture, CleanupReport, ExecutionEventStream, ExecutionReport, FailedOpenCauseSource,
-    FailedOpenCleanup, ImageInputRefusal, ObservationFailure, ObservationFailureCause,
-    OpenedProviderSession, ProviderCleanup, ProviderExecutionFuture, ProviderExecutionReply,
-    ProviderObservationFuture, ProviderOpenControl, ProviderOpenError, ProviderOpenRequest,
-    ProviderOperationCapabilities, ProviderOperationFailure, ProviderOperationFuture,
-    ProviderOperationResult, ProviderSession, ProviderSessionBackend, ProviderSessionState,
-    ResourceCleanup, SessionCloseRequest, SteeringOutcome,
+    CleanupFuture, CleanupReport, ExecutionEventStream, ExecutionReport, ExecutionReportSource,
+    FailedOpenCauseSource, FailedOpenCleanup, ImageInputRefusal, ObservationFailure,
+    ObservationFailureCause, OpenedProviderSession, ProviderCleanup, ProviderExecutionFuture,
+    ProviderExecutionReply, ProviderObservationFuture, ProviderOpenControl, ProviderOpenError,
+    ProviderOpenRequest, ProviderOperationCapabilities, ProviderOperationFailure,
+    ProviderOperationFuture, ProviderOperationResult, ProviderSession, ProviderSessionBackend,
+    ProviderSessionState, ResourceCleanup, SessionCloseRequest, SteeringOutcome,
 };
 use crate::domain::agent_execution::executions::ExecutionId;
 use crate::domain::agent_execution::prompts::UserMessage;
@@ -37,7 +37,7 @@ use crate::infrastructure::clock::ClockInstant;
 use crate::infrastructure::process::{ProcessScope, ProcessStartFailure};
 use std::{
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex as ControlMutex,
     },
     time::Duration,
@@ -145,6 +145,7 @@ pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
         close_activity,
         event_generations,
         image_budget,
+        policy_closed: AtomicBool::new(false),
     });
     Ok(OpenedProviderSession {
         session: ProviderSession::new(session_id, session, capabilities),
@@ -536,12 +537,19 @@ struct AcpSession<P> {
     event_generations: mpsc::Sender<EventStream>,
     // Retained by the blocks of every message read but not yet written.
     image_budget: Arc<Semaphore>,
+    /// A refusal closed this binding. A later prompt must not restore it.
+    policy_closed: AtomicBool,
 }
 impl<P: AcpProfile + Clone> AcpSession<P> {
     async fn live_generation(&self) -> Result<MutexGuard<'_, Generation>, LiveGenerationFailure> {
+        if self.policy_closed.load(Ordering::Acquire) {
+            return Err(AgentError::Closed.into());
+        }
         let close_activity = self.close_activity.subscribe();
         let mut generation = self.generation.lock().await;
-        if close_activity.has_changed().unwrap_or(true) {
+        if self.policy_closed.load(Ordering::Acquire)
+            || close_activity.has_changed().unwrap_or(true)
+        {
             return Err(AgentError::Closed.into());
         }
         if generation.startup.is_some() && !generation.stopped() {
@@ -583,6 +591,9 @@ impl<P: AcpProfile + Clone> AcpSession<P> {
                     return Err(recovery.failure(ProviderSessionState::CleanupReported(report)));
                 }
                 generation.restoration = None;
+            }
+            if self.policy_closed.load(Ordering::Acquire) {
+                return Err(AgentError::Closed.into());
             }
             // Reserve the reader before starting another process. A dropped consumer
             // or an undrained sequence of generations cannot create hidden workers.
@@ -846,6 +857,19 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
                     ProviderSessionState::CleanupRequired,
                 ))
             });
+            // The turn is already finished. Remember that a policy close must
+            // not be restored. The agent owns the close, and names the refusal.
+            if matches!(
+                &result,
+                ProviderExecutionReply::Finished(report)
+                    if report.source() == ExecutionReportSource::PolicyStop
+                        && matches!(
+                            report.session_state(),
+                            ProviderSessionState::CleanupRequired
+                        )
+            ) {
+                self.policy_closed.store(true, Ordering::Release);
+            }
             if let Err(error) = result.clone().into_result() {
                 observations
                     .lock()

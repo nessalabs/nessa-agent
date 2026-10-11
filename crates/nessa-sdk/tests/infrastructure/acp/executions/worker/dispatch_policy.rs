@@ -293,6 +293,11 @@ async fn worker_with_ready_frames_boundary(
             startup_advisory_session: None,
             questions: HashMap::new(),
             declined: None,
+            stopped_prompts: Vec::new(),
+            expired_stops: Vec::new(),
+            held_prompts: VecDeque::new(),
+            stop_reply_deadline: None,
+            stop_cleanup: StopCleanup::None,
             shutdown_deadline: None,
             configured: true,
             closing: false,
@@ -353,7 +358,11 @@ async fn decline_final_notice_backpressure_is_an_exact_operation_fact() {
         });
         let observation = ReviewDeclineObservation::selected(
             ReviewDeclineId::new("1").unwrap(),
-            ReviewDecline::new(Some("Read"), ReviewDeclineReason::ToolNotReviewable),
+            ReviewDecline::new(
+                Some("Read"),
+                ReviewDeclineReason::ToolNotReviewable,
+                crate::domain::agent_execution::permissions::RefusalOutcome::Continue,
+            ),
         );
         for _ in 0..15 {
             worker
@@ -366,7 +375,7 @@ async fn decline_final_notice_backpressure_is_an_exact_operation_fact() {
         }
         let failure = match worker
             .decline_review(
-                &execution,
+                &mut execution,
                 RpcId::Number(4),
                 &json!({"toolCall":{"name":"Read"}}),
                 ReviewDeclineReason::UnreadableRequest,

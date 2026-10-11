@@ -27,6 +27,8 @@ pub enum SessionCloseRequest {
     EventConsumerDropped,
     /// The final owning session handles were actually dropped.
     SessionHandlesDropped,
+    /// A configured refusal closed the session. The refusal record is the cause.
+    PolicyRefusal,
 }
 impl SessionCloseRequest {
     /// Return the domain lifecycle cause without I/O or changing the request.
@@ -38,6 +40,7 @@ impl SessionCloseRequest {
             Self::DeadlineExceeded => PermissionCancellationReason::deadline_exceeded(),
             Self::EventConsumerDropped => PermissionCancellationReason::event_consumer_dropped(),
             Self::SessionHandlesDropped => PermissionCancellationReason::session_handles_dropped(),
+            Self::PolicyRefusal => PermissionCancellationReason::policy_refusal(),
         }
     }
     /// Return verified caller attribution for explicit close, otherwise Runtime.

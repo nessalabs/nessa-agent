@@ -1626,6 +1626,7 @@ impl SessionManager {
             .invocations[index];
         record.provider_report.as_ref().is_some_and(|settlement| {
             settlement.source() == ExecutionReportSource::LocalCancellation
+                || settlement.source() == ExecutionReportSource::PolicyStop
                 || settlement.provider_result() == Some(&Ok(ExecutionOutcome::Cancelled))
         }) || record.local_outcome == Some(ExecutionOutcome::Cancelled)
             || record.result == Some(Ok(ExecutionOutcome::Cancelled))

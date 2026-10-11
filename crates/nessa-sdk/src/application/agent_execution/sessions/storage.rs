@@ -794,13 +794,14 @@ impl StorageError {
     pub(crate) const DIAGNOSTIC_BYTES: usize = 4096;
     /// `schemaVersion` written on every session-record batch and transcript checkpoint.
     ///
-    /// A finished object with no marker, or with any other unsigned integer, is
-    /// [`Self::AnotherVersion`]. A marker that is not an unsigned integer is
-    /// [`Self::Corrupt`]. A missing marker together with a body the walk
-    /// refuses is also [`Self::Corrupt`]: the broken body is reported, not
-    /// another version. This build reads only this value. Old files are
-    /// deleted by hand. Nothing is migrated.
-    pub const SCHEMA_VERSION: u64 = 1;
+    /// This build reads only [`Self::SCHEMA_VERSION`]. A record stamped 1, a
+    /// finished object with no marker, or any other unsigned integer is
+    /// [`Self::AnotherVersion`] and is not decoded. A marker that is not an
+    /// unsigned integer is [`Self::Corrupt`]. A missing marker together with a
+    /// body the walk refuses is also [`Self::Corrupt`]: the broken body is
+    /// reported, not another version. Old files are deleted by hand. Nothing
+    /// is migrated.
+    pub const SCHEMA_VERSION: u64 = 2;
     fn measure(
         mut pending: Vec<(&StorageError, usize)>,
         mut usage: StorageErrorUsage,

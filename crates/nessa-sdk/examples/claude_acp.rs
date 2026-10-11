@@ -88,6 +88,13 @@ impl ExecutionAudit for TracingExecutionAudit {
                         "Agent question answered"
                     );
                 }
+                ExecutionAuditRecord::LateProviderResult(late) => {
+                    tracing::info!(
+                        session = late.session_id().as_str(),
+                        execution = late.execution_id().as_str(),
+                        "provider result arrived after a local refusal stop"
+                    );
+                }
                 ExecutionAuditRecord::QuestionRefused(refused) => {
                     tracing::info!(
                         session = refused.session_id().as_str(),
@@ -140,6 +147,7 @@ fn cancellation_reason_code(state: PermissionStateView<'_>) -> &str {
             PermissionCancellationReasonView::DeadlineExceeded => "deadline_exceeded",
             PermissionCancellationReasonView::EventConsumerDropped => "event_consumer_dropped",
             PermissionCancellationReasonView::SessionHandlesDropped => "session_handles_dropped",
+            PermissionCancellationReasonView::PolicyRefusal => "policy_refusal",
             PermissionCancellationReasonView::Custom(reason) => reason.code(),
         },
         _ => "invalid_cancellation",
@@ -210,6 +218,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
             mcp_servers: nessa_sdk::infrastructure::acp::sessions::McpServerList::none(),
             stand_ins: nessa_sdk::infrastructure::acp::sessions::StandInSessions::none(),
             permissions: PermissionOfferPolicy::once_only(),
+            refusal: nessa_sdk::application::agent_execution::permissions::ConfiguredRefusal::continue_turn(),
             // The launch belongs to the operating system: a runtime written
             // by a fresh install is scanned on its first execution.
             launch_timeout: Duration::from_secs(120),

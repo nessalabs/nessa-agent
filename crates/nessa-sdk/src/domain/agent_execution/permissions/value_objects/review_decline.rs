@@ -52,6 +52,26 @@ impl ReviewDeclineId {
     }
 }
 
+/// What a refusal does to the work that asked.
+///
+/// The outcome is decided with the refusal. It is not inferred afterwards from
+/// the tool name. [`Continue`] leaves the execution running. [`EndTurn`] stops
+/// this execution. [`CloseSession`] means nothing further should run on this
+/// binding.
+///
+/// [`Continue`]: RefusalOutcome::Continue
+/// [`EndTurn`]: RefusalOutcome::EndTurn
+/// [`CloseSession`]: RefusalOutcome::CloseSession
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RefusalOutcome {
+    /// The agent is told no, and this execution continues.
+    Continue,
+    /// This execution stops. Whatever the agent still planned does not run.
+    EndTurn,
+    /// Nothing further should run on this binding.
+    CloseSession,
+}
+
 /// Why a review could not be offered.
 ///
 /// Each reason answers a different question about the same frame: whether the
@@ -108,6 +128,7 @@ pub enum ReviewDeclineStage {
 pub struct ReviewDecline {
     tool: Option<Box<str>>,
     reason: ReviewDeclineReason,
+    outcome: RefusalOutcome,
 }
 
 /// One immutable local refusal observation and its current delivery evidence.
@@ -190,10 +211,11 @@ impl ReviewDecline {
     /// `None`. Construction performs no I/O and never fails, because a refusal
     /// must always be recordable — including the refusal of a frame that was
     /// unreadable in the first place.
-    pub fn new(tool: Option<&str>, reason: ReviewDeclineReason) -> Self {
+    pub fn new(tool: Option<&str>, reason: ReviewDeclineReason, outcome: RefusalOutcome) -> Self {
         Self {
             tool: tool.filter(|name| nameable(name)).map(Box::from),
             reason,
+            outcome,
         }
     }
 
@@ -210,6 +232,7 @@ impl ReviewDecline {
     pub fn restore(
         tool: Option<String>,
         reason: ReviewDeclineReason,
+        outcome: RefusalOutcome,
     ) -> Result<Self, ExecutionError> {
         if tool.as_deref().is_some_and(|name| !nameable(name)) {
             return Err(ExecutionError::InvalidReviewDeclineToolName);
@@ -217,6 +240,7 @@ impl ReviewDecline {
         Ok(Self {
             tool: tool.map(String::into_boxed_str),
             reason,
+            outcome,
         })
     }
 
@@ -231,6 +255,11 @@ impl ReviewDecline {
     /// Why the review was refused.
     pub fn reason(&self) -> ReviewDeclineReason {
         self.reason
+    }
+
+    /// Whether the agent continues, this execution stops, or the binding closes.
+    pub fn outcome(&self) -> RefusalOutcome {
+        self.outcome
     }
 
     /// Whether a name was readable, kept separate from what the name was.

@@ -346,7 +346,7 @@ export type PreToolPolicySupport =
 /** Whether a Nessa policy can end its correlated current invocation. */
 export const PolicyEndTurnSupport = {
   Unknown: "unknown",
-  UnsupportedNotImplemented: "unsupported_not_implemented",
+  Unsupported: "unsupported",
   SupportedForCurrentInvocation: "supported_for_current_invocation",
 } as const
 export type PolicyEndTurnSupport =
@@ -354,7 +354,7 @@ export type PolicyEndTurnSupport =
 /** Whether a Nessa policy can close its correlated provider session. */
 export const PolicyCloseSessionSupport = {
   Unknown: "unknown",
-  UnsupportedNotImplemented: "unsupported_not_implemented",
+  Unsupported: "unsupported",
   SupportedForSession: "supported_for_session",
 } as const
 export type PolicyCloseSessionSupport =

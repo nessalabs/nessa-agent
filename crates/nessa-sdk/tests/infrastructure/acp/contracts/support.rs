@@ -83,6 +83,7 @@ pub(super) struct RecordingAudit {
     pub(super) declines: Mutex<Vec<ReviewDeclineRecord>>,
     pub(super) answered_questions: Mutex<Vec<QuestionAnswerRecord>>,
     pub(super) refused_questions: Mutex<Vec<QuestionRefusalRecord>>,
+    pub(super) late_results: Mutex<Vec<LateProviderResultRecord>>,
     pub(super) reject: bool,
     pub(super) stall: bool,
 }
@@ -119,6 +120,9 @@ impl ExecutionAudit for RecordingAudit {
                 }
                 ExecutionAuditRecord::QuestionAnswered(record) => {
                     self.answered_questions.lock().unwrap().push(record)
+                }
+                ExecutionAuditRecord::LateProviderResult(record) => {
+                    self.late_results.lock().unwrap().push(record)
                 }
                 ExecutionAuditRecord::QuestionRefused(record) => {
                     self.refused_questions.lock().unwrap().push(record)
@@ -227,6 +231,8 @@ pub(super) fn test_acp_configuration(
         mcp_servers: crate::infrastructure::acp::sessions::McpServerList::none(),
         stand_ins: crate::infrastructure::acp::sessions::StandInSessions::none(),
         permissions: PermissionOfferPolicy::once_only(),
+        refusal: crate::application::agent_execution::permissions::ConfiguredRefusal::continue_turn(
+        ),
         launch_timeout: Duration::from_secs(10),
         startup_timeout: Duration::from_secs(10),
         // Unbounded unless a test bounds it, on a clock it moves: a real

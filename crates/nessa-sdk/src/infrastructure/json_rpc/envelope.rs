@@ -63,9 +63,17 @@ pub(crate) fn parse_within(frame: &[u8], items: usize) -> Result<Envelope, Agent
     if matches!(&message.id, Some(RpcId::Text(id)) if id.is_empty() || id.len() > 256) {
         return Err(protocol("invalid RPC identifier"));
     }
+    // A response that names an id and carries neither result nor error is
+    // delivered. The prompt that id belongs to rejects it. Dropping the frame
+    // here would fail the worker before that prompt could refuse what it holds.
+    let named_without_terminal = message.method.is_none()
+        && message.id.is_some()
+        && message.result.is_none()
+        && message.error.is_none();
     if message.jsonrpc != "2.0"
         || (message.method.is_some() && (message.result.is_some() || message.error.is_some()))
         || (message.method.is_none()
+            && !named_without_terminal
             && (message.id.is_none() || message.result.is_some() == message.error.is_some()))
     {
         return Err(protocol("invalid JSON-RPC envelope"));
@@ -185,6 +193,14 @@ mod tests {
         ] {
             assert!(parse(&serde_json::to_vec(&frame).unwrap()).is_err());
         }
+    }
+    #[test]
+    fn a_response_with_neither_result_nor_error_keeps_its_id() {
+        let message =
+            parse(&serde_json::to_vec(&json!({"jsonrpc":"2.0","id":7})).unwrap()).unwrap();
+        assert_eq!(message.id, Some(RpcId::Number(7)));
+        assert!(message.result.is_none());
+        assert!(message.error.is_none());
     }
 }
 

@@ -1385,9 +1385,15 @@ impl Agent {
                         settlement.session_state(),
                         ProviderSessionState::CleanupRequired
                     ) {
-                        let cleanup = self
-                            .shutdown_after_failure(SessionCloseRequest::ExecutionFailed)
-                            .await;
+                        let request = if matches!(settlement.failure(), Some(AgentError::Deadline))
+                        {
+                            SessionCloseRequest::DeadlineExceeded
+                        } else if settlement.source() == ExecutionReportSource::PolicyStop {
+                            SessionCloseRequest::PolicyRefusal
+                        } else {
+                            SessionCloseRequest::ExecutionFailed
+                        };
+                        let cleanup = self.shutdown_naming_fence(request).await;
                         stop_after_ready_settlement = !cleanup.is_confirmed();
                         cleanup_failure = cleanup.into_result().err();
                     }
@@ -1636,6 +1642,14 @@ impl Agent {
 
     async fn shutdown_after_failure(&self, request: SessionCloseRequest) -> CleanupReport {
         let attempt = self.start_shutdown(request);
+        self.inner.lifecycle.complete_stop(&attempt).await
+    }
+
+    // The CleanupRequired report owns this stop, so it may name the unstarted
+    // execution-failed fence. An observation deadline uses shutdown_after_failure
+    // and keeps that fence.
+    async fn shutdown_naming_fence(&self, request: SessionCloseRequest) -> CleanupReport {
+        let attempt = self.start_shutdown_naming_fence(request);
         self.inner.lifecycle.complete_stop(&attempt).await
     }
 

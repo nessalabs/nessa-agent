@@ -1157,7 +1157,7 @@ impl SessionLifecycle {
         }
         // Applying this control's failure may already have stopped its work
         // generation. Cleanup still belongs to that same provider attachment.
-        Some(self.start_stop_locked(&mut state, SessionCloseRequest::ExecutionFailed))
+        Some(self.start_stop_locked(&mut state, SessionCloseRequest::ExecutionFailed, false))
     }
     fn apply_provider_state(
         &self,
@@ -1367,7 +1367,18 @@ impl SessionLifecycle {
     pub(super) fn start_stop(self: &Arc<Self>, request: SessionCloseRequest) -> CloseAttempt {
         self.seal_disposal_if_requested(&request);
         let mut state = self.state.lock().expect("session lifecycle");
-        self.start_stop_locked(&mut state, request)
+        self.start_stop_locked(&mut state, request, false)
+    }
+    // The CleanupRequired settlement owns a policy refusal or a missed end-turn
+    // grace. It may name an unstarted execution-failed fence. Every other stop,
+    // including an observation deadline, keeps that fence.
+    pub(super) fn start_stop_naming_fence(
+        self: &Arc<Self>,
+        request: SessionCloseRequest,
+    ) -> CloseAttempt {
+        self.seal_disposal_if_requested(&request);
+        let mut state = self.state.lock().expect("session lifecycle");
+        self.start_stop_locked(&mut state, request, true)
     }
     // Old invocation evidence cannot stop a newer work generation.
     pub(super) fn start_stop_for(
@@ -1379,12 +1390,13 @@ impl SessionLifecycle {
         if state.work_generation != work_generation {
             return None;
         }
-        Some(self.start_stop_locked(&mut state, request))
+        Some(self.start_stop_locked(&mut state, request, false))
     }
     fn start_stop_locked(
         self: &Arc<Self>,
         state: &mut State,
         request: SessionCloseRequest,
+        name_unstarted_fence: bool,
     ) -> CloseAttempt {
         let fresh_queue_stop = self.accepts_waiting(state)
             && state
@@ -1418,9 +1430,27 @@ impl SessionLifecycle {
             }
             _ => RecoveryPolicy::Automatic,
         };
-        let first_request = existing
-            .as_ref()
-            .map_or_else(|| request.clone(), |ticket| ticket.request.clone());
+        // A provider-state fence blocks admission before its owner names the
+        // cause. Cleanup has not started, so only the CleanupRequired settlement
+        // may replace that unstarted execution-failed request: a policy refusal
+        // or a missed end-turn grace. An observation deadline keeps the fence.
+        // A later join keeps the cause that already started cleanup.
+        let fence_only = name_unstarted_fence
+            && matches!(
+                (&state.work_status, &request),
+                (
+                    WorkStatus::Blocked(stop),
+                    SessionCloseRequest::PolicyRefusal | SessionCloseRequest::DeadlineExceeded,
+                ) if matches!(stop.recovery, RecoveryPolicy::CleanupNotStarted)
+                    && matches!(stop.ticket.request, SessionCloseRequest::ExecutionFailed)
+            );
+        let first_request = if fence_only {
+            request.clone()
+        } else {
+            existing
+                .as_ref()
+                .map_or_else(|| request.clone(), |ticket| ticket.request.clone())
+        };
         let stop_id = existing
             .as_ref()
             .map_or(state.work_generation.0 + 1, |ticket| ticket.id);
