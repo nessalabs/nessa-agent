@@ -62,8 +62,8 @@ pub(crate) enum CacheError {
     Uncertain,
     Quota,
     Corrupt,
-    /// The database predates the current cache shape (it has no purge
-    /// receipts). Development caches are not migrated: delete and resync.
+    /// The database is at an older schema version than this build reads.
+    /// Development caches are not migrated: delete and resync.
     OutdatedSchema,
     Transcript(StorageError),
     TranscriptScope,

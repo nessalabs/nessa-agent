@@ -7,6 +7,8 @@ use nessa_sync::replication::domain::Id;
 use sha2::{Digest, Sha256};
 
 const SCHEMA: &str = "nessa.conversation-catalogue.v1";
+/// What every owner's stream starts with, before its digest.
+const STREAM_PREFIX: &str = "conversation-owner:";
 
 /// The schema every conversation catalogue scope names.
 pub fn conversation_catalogue_schema() -> Id {
@@ -23,7 +25,22 @@ pub fn conversation_catalogue_stream(organization: &OrganizationId, principal: &
     hash.update((organization.len() as u64).to_be_bytes());
     hash.update(organization);
     hash.update(owner);
-    Id::new(format!("conversation-owner:{:x}", hash.finalize())).expect("digest fits sync ID")
+    Id::new(format!("{STREAM_PREFIX}{:x}", hash.finalize())).expect("digest fits sync ID")
+}
+
+/// Whether `stream` has the shape of some owner's catalogue stream, for a
+/// reader that is not the owner and cannot name it: a peer gateway reading
+/// what another gateway's owner granted it.
+pub fn is_conversation_catalogue_stream(stream: &Id) -> bool {
+    stream
+        .as_str()
+        .strip_prefix(STREAM_PREFIX)
+        .is_some_and(|digest| {
+            digest.len() == 64
+                && digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        })
 }
 
 #[cfg(test)]

@@ -1,7 +1,7 @@
 //! The client session against a real native TLS peer: the gateway key pinned,
 //! the device key presented, `openProduct`, then product frames.
 use super::super::session::{DeviceEvidence, LocalConnector, RpcKind, Session};
-use super::super::sources::GatewayConnection;
+use super::super::sources::{CatalogueReader, GatewayConnection};
 use crate::read_only_sync::application::{
     Cancellation, GatewayConnector, GatewayError, GatewayPolicy, GatewayStream,
 };
@@ -485,7 +485,7 @@ fn passive_authorizer_preserves_temporary_and_permanent_access_meaning() {
             let connection = GatewayConnection::new(connect(&endpoint));
             let mut authorizer = if catalogue {
                 connection
-                    .catalogue(Id::new("receiver").unwrap(), 3)
+                    .catalogue(Id::new("receiver").unwrap(), 3, CatalogueReader::Owner)
                     .authorizer()
             } else {
                 connection
@@ -962,7 +962,8 @@ fn catalogue_resolve_preserves_oversized_entry_and_transport_cause() {
             assert!(socket.ended());
         });
         let connection = GatewayConnection::new(connect(&endpoint));
-        let mut source = connection.catalogue(Id::new("receiver").unwrap(), 3);
+        let mut source =
+            connection.catalogue(Id::new("receiver").unwrap(), 3, CatalogueReader::Owner);
         let discovery = connection.run(|| source.discover()).unwrap();
         assert_eq!(discovery.result.unwrap().unwrap(), (scope.clone(), 1));
         let pass = CataloguePass {
@@ -987,6 +988,105 @@ fn catalogue_resolve_preserves_oversized_entry_and_transport_cause() {
         assert_eq!(resolve.result.unwrap(), Err(expected));
         assert_eq!(resolve.outcome.failure, Some(GatewayError::Catalogue(code)));
         assert!(matches!(connection.begin(), Err(GatewayError::Transport)));
+        drop(source);
+        drop(connection);
+        peer.join().unwrap();
+    }
+}
+
+/// A device must be answered its own owner's catalogue; a peer gateway, any
+/// owner's catalogue for its receiver and epoch, as the answering gateway
+/// bound that receiver to an owner the reader cannot name.
+#[test]
+fn a_catalogue_scope_is_checked_as_its_reader_can() {
+    let scope = |owner: &str, receiver: &str, epoch: &str, stream: Option<&str>| {
+        Scope::new(
+            Id::new(receiver).unwrap(),
+            Id::new("gateway").unwrap(),
+            stream.map_or_else(
+                || {
+                    conversation_catalogue_stream(
+                        &OrganizationId::new("org").unwrap(),
+                        &PrincipalId::new(owner).unwrap(),
+                    )
+                },
+                |stream| Id::new(stream).unwrap(),
+            ),
+            Id::new("incarnation").unwrap(),
+            conversation_catalogue_schema(),
+            Id::new(epoch).unwrap(),
+        )
+    };
+    let session_owner = ready().principal_id;
+    for (answered, reader, accepted) in [
+        (
+            scope(&session_owner, "receiver", "epoch-3", None),
+            CatalogueReader::Owner,
+            true,
+        ),
+        (
+            scope("someone-else", "receiver", "epoch-3", None),
+            CatalogueReader::Owner,
+            false,
+        ),
+        (
+            scope("someone-else", "receiver", "epoch-3", None),
+            CatalogueReader::Granted,
+            true,
+        ),
+        (
+            scope(&session_owner, "receiver", "epoch-3", None),
+            CatalogueReader::Granted,
+            true,
+        ),
+        (
+            scope("someone-else", "other", "epoch-3", None),
+            CatalogueReader::Granted,
+            false,
+        ),
+        (
+            scope("someone-else", "receiver", "epoch-4", None),
+            CatalogueReader::Granted,
+            false,
+        ),
+        (
+            scope("", "receiver", "epoch-3", Some("a-conversation-id")),
+            CatalogueReader::Granted,
+            false,
+        ),
+    ] {
+        let actual = answered.clone();
+        let (endpoint, peer) = peer(move |socket| {
+            let head = request(socket);
+            assert_eq!(head.method, product_method::CONVERSATION_CATALOGUE_HEAD);
+            send(
+                socket,
+                OutgoingMessage::Response(
+                    ResponseFrame::success(
+                        &head.id,
+                        &json!({"scope": wire_scope(&actual), "head":"1"}),
+                    )
+                    .unwrap(),
+                ),
+            );
+        });
+        let connection = GatewayConnection::new(connect(&endpoint));
+        let mut source = connection.catalogue(Id::new("receiver").unwrap(), 3, reader);
+        let discovery = connection.run(|| source.discover()).unwrap();
+        let result = match (discovery.result, discovery.outcome.failure) {
+            (_, Some(error)) => Err(error),
+            (Some(result), None) => result.map_err(|_| GatewayError::Protocol),
+            (None, None) => Err(GatewayError::Protocol),
+        };
+        if accepted {
+            assert_eq!(result, Ok((answered, 1)), "{reader:?}");
+        } else {
+            assert_eq!(
+                result,
+                Err(GatewayError::Correlation),
+                "{reader:?} {answered:?}"
+            );
+        }
         drop(source);
         drop(connection);
         peer.join().unwrap();

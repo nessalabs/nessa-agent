@@ -8,8 +8,8 @@ use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::{
     domain::ConversationId,
     read_scope::{
-        check_catalogue_scope_identity, validate_catalogue_selector, validate_record_selector,
-        CatalogueReadScope, ReceiverReadScope,
+        check_catalogue_scope_identity, check_granted_catalogue_scope, validate_catalogue_selector,
+        validate_record_selector, CatalogueReadScope, ReceiverReadScope,
     },
 };
 use nessa_protocol::product::generated::{
@@ -42,7 +42,20 @@ use std::{
 #[derive(Clone)]
 enum Target {
     Record(ConversationId),
-    Catalogue,
+    Catalogue(CatalogueReader),
+}
+
+/// Who reads a catalogue, which decides how its scope is checked.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CatalogueReader {
+    /// A device: its session's principal is the owner whose catalogue it
+    /// reads, so the scope must name exactly that owner's stream.
+    Owner,
+    /// A peer gateway: the answering gateway bound its receiver to one of
+    /// its own owners, whom the reader cannot name. The scope must be some
+    /// owner's catalogue for this receiver and epoch; the retained cache
+    /// keeps the stream it first read.
+    Granted,
 }
 #[derive(Clone)]
 struct GatewaySource {
@@ -132,12 +145,17 @@ impl GatewayConnection {
             descriptors: None,
         })
     }
-    pub(crate) fn catalogue(&self, receiver: Id, epoch: u64) -> CatalogueGatewaySource {
+    pub(crate) fn catalogue(
+        &self,
+        receiver: Id,
+        epoch: u64,
+        reader: CatalogueReader,
+    ) -> CatalogueGatewaySource {
         CatalogueGatewaySource(GatewaySource {
             session: self.0.clone(),
             receiver,
             epoch,
-            target: Target::Catalogue,
+            target: Target::Catalogue(reader),
             descriptors: None,
         })
     }
@@ -197,7 +215,7 @@ impl GatewaySource {
                 )?;
                 record_read::decode_head(wire).map_err(wire_error)?
             }
-            Target::Catalogue => {
+            Target::Catalogue(_) => {
                 let wire: ConversationCatalogueHeadResult = self.rpc(
                     product_method::CONVERSATION_CATALOGUE_HEAD,
                     &ConversationCatalogueHeadParams {
@@ -236,7 +254,11 @@ impl GatewaySource {
                     return Err(GatewayError::Correlation);
                 }
             }
-            Target::Catalogue => {
+            Target::Catalogue(CatalogueReader::Granted) => {
+                check_granted_catalogue_scope(self.receiver.as_str(), self.epoch, scope)
+                    .map_err(|_| GatewayError::Correlation)?;
+            }
+            Target::Catalogue(CatalogueReader::Owner) => {
                 let admitted = CatalogueReadScope {
                     receiver_id: self.receiver.as_str().to_owned(),
                     organization_id: organization_id.clone(),
@@ -288,7 +310,7 @@ impl RecordSource for GatewaySource {
                     request: wire,
                     conversation_id: match &self.target {
                         Target::Record(conversation) => conversation.to_string(),
-                        Target::Catalogue => return Err(GatewayError::Correlation),
+                        Target::Catalogue(_) => return Err(GatewayError::Correlation),
                     },
                     access_epoch: self.epoch.to_string(),
                 },

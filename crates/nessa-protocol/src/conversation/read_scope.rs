@@ -1,7 +1,10 @@
 //! The read scope a passive read is admitted for, and the rules that check a
 //! source scope against it. The gateway checks what it is asked against these;
 //! a device re-checks what the gateway answered against the same functions.
-use super::domain::{conversation_catalogue_schema, conversation_catalogue_stream, ConversationId};
+use super::domain::{
+    conversation_catalogue_schema, conversation_catalogue_stream, is_conversation_catalogue_stream,
+    ConversationId,
+};
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_sync::replication::catalogue::CatalogueSourceError;
 use nessa_sync::replication::domain::{Id, Scope};
@@ -100,3 +103,26 @@ pub fn check_catalogue_scope_identity(
     }
     Ok(())
 }
+
+/// Check a catalogue scope a reader that is not its owner was answered: a
+/// peer gateway, whose receiver the answering gateway bound to one of its
+/// owners. The reader cannot name that owner, so it checks what it can, the
+/// catalogue schema, an owner stream's shape, its receiver and its epoch,
+/// and keeps the stream it first read: a later answer naming another stream
+/// does not continue that cache.
+pub fn check_granted_catalogue_scope(
+    receiver: &str,
+    epoch: u64,
+    scope: &Scope,
+) -> Result<(), ReadRefusal> {
+    if scope.schema() != &conversation_catalogue_schema()
+        || !is_conversation_catalogue_stream(scope.stream())
+    {
+        return Err(ReadRefusal::WrongOwner);
+    }
+    validate_passive_read_selector(receiver, epoch, scope)
+}
+
+#[cfg(test)]
+#[path = "../../tests/conversation/read_scope.rs"]
+mod tests;

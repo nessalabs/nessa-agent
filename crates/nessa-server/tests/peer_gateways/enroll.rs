@@ -40,8 +40,8 @@ use nessa_server::{
         },
         infrastructure::{
             DurablePeerAudit, EnrollmentEntropy, EnrollmentEntropySource, PeerCommands, PeerEntry,
-            PeerError, PeerPhase, PeerRecords, SlotRefusal, TcpPeerConnector, AUDIT_DEADLINE,
-            CONNECT,
+            PeerError, PeerPhase, PeerRecords, SlotOutcome, SlotRefusal, SlotTransition,
+            TcpPeerConnector, AUDIT_DEADLINE, CONNECT,
         },
     },
     product::{ProductDependencies, ProductRouteState},
@@ -85,7 +85,7 @@ impl Audit {
     fn refuse(&self, kind: Option<&'static str>) {
         *self.refuse.lock().unwrap() = kind;
     }
-    /// Every kept record, oldest operation first, intent before outcome.
+    /// Every kept record, in the order the audit took them.
     fn records(&self) -> Vec<Value> {
         let mut records: Vec<Value> = std::fs::read_dir(&self.directory)
             .unwrap()
@@ -93,7 +93,7 @@ impl Audit {
                 serde_json::from_slice(&std::fs::read(entry.unwrap().path()).unwrap()).unwrap()
             })
             .collect();
-        records.sort_by_key(|record| record["observedAtMs"].as_u64().unwrap());
+        records.sort_by_key(|record| record["sequence"].as_u64().unwrap());
         records
     }
 }
@@ -108,6 +108,7 @@ fn kind(record: &PeerAuditRecord) -> &'static str {
         PeerAuditRecord::EnrollFinished { .. } => "peer_enroll_finished",
         PeerAuditRecord::ForgetRequested { .. } => "peer_forget_requested",
         PeerAuditRecord::ForgetFinished { .. } => "peer_forget_finished",
+        PeerAuditRecord::PollerChanged { .. } => "peer_poller_changed",
     }
 }
 impl PeerAudit for Audit {
@@ -165,6 +166,7 @@ impl Dialing {
             durable: DurablePeerAudit::new(
                 root.join("peer-gateways-audit"),
                 Arc::new(Ticks(1.into())),
+                RuntimeDependencies::default().clock,
             ),
             directory: root.join("peer-gateways-audit"),
             refuse: Mutex::new(None),
@@ -298,7 +300,8 @@ async fn a_gateway_enrolls_into_a_peer_with_its_own_key_and_keeps_only_a_referen
         .collect();
     assert_eq!(name, &format!("{hex}.json"));
     let record: Value = serde_json::from_slice(bytes).unwrap();
-    assert_eq!(record["schemaVersion"], 1);
+    assert_eq!(record["schemaVersion"], 2);
+    assert_eq!(record["revoked"], false);
     assert_eq!(record["pin"], STANDARD.encode(peer_key));
     assert_eq!(
         record["gatewayKey"],
@@ -350,6 +353,28 @@ async fn a_gateway_enrolls_into_a_peer_with_its_own_key_and_keeps_only_a_referen
     assert!(
         matches!(record.phase(), PeerPhase::Active { credential: saved, .. } if saved == credential)
     );
+
+    // The same record at version 1, before `revoked` was kept, does not
+    // read: one shape per version, and no default fills the gap.
+    let (_, current) = dialing.files().pop().unwrap();
+    let mut older: Value = serde_json::from_slice(&current).unwrap();
+    older["schemaVersion"] = json!(1);
+    older.as_object_mut().unwrap().remove("revoked");
+    let rewrite = |bytes: &[u8]| {
+        let mut file = nessa_local_storage::open(
+            &dialing.directory.join(format!("{hex}.json")),
+            nessa_local_storage::OpenMode::ReadWrite,
+        )
+        .unwrap();
+        file.set_len(0).unwrap();
+        std::io::Write::write_all(&mut file, bytes).unwrap();
+    };
+    rewrite(&serde_json::to_vec(&older).unwrap());
+    assert_eq!(
+        dialing.records.get(&peer).unwrap(),
+        Some(PeerEntry::Unreadable(peer))
+    );
+    rewrite(&current);
 
     blocking(|| {
         let mut owner = ProductClient::connect(dialing.product, &token);
@@ -523,8 +548,23 @@ async fn peer_routes_refuse_before_any_effect() {
     assert!(dialing.files().is_empty());
 }
 
-/// A's owner cancels invitation `id`.
+/// Wait until A has ended every attempt on invitation `id`. A wrong code
+/// fails at B before B sends its proof, so B answers its owner while A has yet
+/// to write that attempt's end. Until then a new attempt is refused, and an
+/// owner decision admitted before the write is refused as stale.
+async fn attempts_ended(fixture: &Fixture, id: nessa_auth::domain::pairing::InvitationId) {
+    tokio::time::timeout(WAIT, async {
+        while fixture.registry.read_pairing(id).unwrap().attempt_pending() {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("A ends the attempt");
+}
+
+/// A's owner cancels invitation `id`, once no attempt on it is still ending.
 async fn cancel(fixture: &Fixture, id: nessa_auth::domain::pairing::InvitationId) {
+    attempts_ended(fixture, id).await;
     fixture
         .gateway
         .decide(&fixture.session, id, OwnerDecision::Cancel)
@@ -879,7 +919,11 @@ async fn enrolling_and_forgetting_are_audited_and_answer_only_when_kept() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_durable_peer_audit_reports_a_record_it_could_not_keep() {
     let directory = tempfile::tempdir().unwrap();
-    let audit = DurablePeerAudit::new(directory.path().join("missing"), Arc::new(Time));
+    let audit = DurablePeerAudit::new(
+        directory.path().join("missing"),
+        Arc::new(Time),
+        RuntimeDependencies::default().clock,
+    );
     let record = PeerAuditRecord::EnrollRequested {
         operation: uuid::Uuid::new_v4(),
         initiator: nessa_auth::domain::PrincipalId::new("owner").unwrap(),
@@ -1222,6 +1266,7 @@ async fn every_peer_command_answer_keeps_one_intent_and_one_outcome() {
         commands.enroll(native, parse(wrong), &owner).await,
         enroll("peer_enroll", Some("peer_invitation_refused"), native, None)
     );
+    attempts_ended(&fixture, id).await;
     row!(
         dialing,
         commands.enroll(native, parse(&code), &owner).await,
@@ -1539,4 +1584,76 @@ async fn an_audit_that_never_answers_ends_the_call_at_its_deadline() {
     let kept = dialing.audit.records();
     assert_eq!(kept.len(), 1, "{kept:?}");
     assert_eq!(kept[0]["kind"], "peer_forget_requested");
+}
+
+/// The poller names a status's change by the transition the record's store
+/// began, not by what the record holds afterwards: an approval whose save
+/// went through, and an ending whose cache removal then failed, leaving the
+/// record active as it was, are each named by what was begun.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_slot_names_the_transition_a_status_began_whatever_storage_did() {
+    let fixture = Fixture::new().await;
+    let dialing = Dialing::new(&fixture).await;
+    let intent = PublicIntent::new(
+        InvitationId::new([1; 16]),
+        AttemptId::new([2; 16]),
+        ConsentIntentId::new([3; 16]),
+        1,
+        1,
+        ConsentClass::PeerRead,
+    )
+    .unwrap();
+    let peer = NativeIdentity::generate(&mut OsEntropy).unwrap();
+    dialing
+        .records
+        .enrolling("127.0.0.1:7443".parse().unwrap())
+        .save_pending(
+            dialing.identity.key_material(),
+            &peer.public_spki(),
+            intent,
+            None,
+        )
+        .unwrap();
+    let key = DeviceKey::new(peer.public_spki()[12..].try_into().unwrap());
+    let active = |records: &PeerRecords| match records.get(&key).unwrap() {
+        Some(PeerEntry::Readable(record)) => matches!(record.phase(), PeerPhase::Active { .. }),
+        other => panic!("{other:?}"),
+    };
+
+    // A status that saves nothing begins nothing.
+    let slot = dialing.records.slot(key);
+    assert_eq!(slot.transition(), None);
+    assert!(slot.load_credential().unwrap().is_none());
+    assert_eq!(slot.transition(), None);
+
+    let credential = nessa_auth::domain::CredentialId::new("credential").unwrap();
+    let receiver = ResourceId::new("receiver").unwrap();
+    slot.save_credential(&credential, &receiver, intent)
+        .unwrap();
+    assert_eq!(slot.transition(), Some(SlotTransition::Approved));
+    assert_eq!(slot.outcome(), Some(SlotOutcome::Landed));
+    assert!(active(&dialing.records));
+    // Saved again as it is: nothing begun.
+    let again = dialing.records.slot(key);
+    again
+        .save_credential(&credential, &receiver, intent)
+        .unwrap();
+    assert_eq!(again.transition(), None);
+    assert_eq!(again.outcome(), None);
+
+    // The ending's cache removal fails: a directory stands where SQLite's
+    // journal would be. The record is left active, and the change is still
+    // the ending that was begun.
+    let journal = dialing
+        .records
+        .cache_path(&key)
+        .with_extension("sqlite3-journal");
+    std::fs::create_dir(&journal).unwrap();
+    std::fs::write(journal.join("held"), b"").unwrap();
+    let ending = dialing.records.slot(key);
+    assert!(ending.end_enrollment(intent).is_err());
+    assert_eq!(ending.transition(), Some(SlotTransition::Ended));
+    // The status read may report that ending; its change did not land.
+    assert_eq!(ending.outcome(), Some(SlotOutcome::NotLanded));
+    assert!(active(&dialing.records), "the record is as it was");
 }

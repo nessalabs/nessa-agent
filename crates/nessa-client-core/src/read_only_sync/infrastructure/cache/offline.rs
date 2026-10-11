@@ -4,11 +4,11 @@ use crate::read_only_sync::application::{
     offline::{SavedReads, SavedTranscript},
     CacheError, CachedCatalogueEntry, CachedCataloguePage, CachedProgress,
 };
-use nessa_local_database::rusqlite::{params, TransactionBehavior};
+use nessa_local_database::rusqlite::{params, OptionalExtension, TransactionBehavior};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sync::replication::{
     catalogue::{CatalogueProgress, EntryKey, MAX_CATALOGUE_ENTRIES, MAX_CATALOGUE_PAYLOAD_BYTES},
-    domain::Id,
+    domain::{Id, Scope},
 };
 use uuid::Uuid;
 
@@ -36,6 +36,48 @@ impl SavedReads for ReadOnlyCache {
 }
 
 impl ReadOnlyCache {
+    /// The one catalogue scope saved for `receiver`. A receiver reads one
+    /// gateway's catalogue, so a second is damage.
+    pub(crate) fn catalogue_scope_of(
+        &mut self,
+        receiver: &Id,
+    ) -> Result<Option<Scope>, CacheError> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .map_err(rows::database_error)?;
+        let targets = {
+            let mut statement = tx
+                .prepare(
+                    "SELECT CASE WHEN octet_length(origin)<=?2 THEN origin END,
+                            CASE WHEN octet_length(stream)<=?2 THEN stream END
+                     FROM catalogue_progress WHERE receiver=?1 LIMIT 2",
+                )
+                .map_err(rows::database_error)?;
+            let selected = statement
+                .query_map(
+                    params![receiver.as_str(), rows::MAX_STORED_ID_BYTES as i64],
+                    |row| {
+                        Ok((|| {
+                            Ok((rows::identifier(row, 0)?, rows::identifier(row, 1)?))
+                        })())
+                    },
+                )
+                .map_err(rows::database_error)?;
+            selected
+                .map(|row| row.map_err(rows::database_error)?)
+                .collect::<Result<Vec<(Id, Id)>, CacheError>>()?
+        };
+        let scope = match targets.as_slice() {
+            [] => None,
+            [(origin, stream)] => catalogue_rows::progress_target(&tx, receiver, origin, stream)?
+                .map(|progress| progress.scope),
+            _ => return Err(CacheError::Corrupt),
+        };
+        tx.commit().map_err(rows::database_error)?;
+        Ok(scope)
+    }
+
     pub(crate) fn retained_catalogue_progress(
         &self,
         receiver: &Id,
@@ -43,6 +85,54 @@ impl ReadOnlyCache {
         stream: &Id,
     ) -> Result<Option<CatalogueProgress>, CacheError> {
         catalogue_rows::progress_target(&self.connection, receiver, origin, stream)
+    }
+
+    /// The catalogue head and progress generation at which a retained
+    /// reader last walked every cached conversation of this catalogue to the
+    /// end; `None` when no walk finished since the progress row began.
+    pub(crate) fn retained_walk(
+        &self,
+        receiver: &Id,
+        origin: &Id,
+        stream: &Id,
+    ) -> Result<Option<(u64, u64)>, CacheError> {
+        self.connection
+            .query_row(
+                "SELECT head,generation FROM retained_walks
+                 WHERE receiver=?1 AND origin=?2 AND stream=?3",
+                params![receiver.as_str(), origin.as_str(), stream.as_str()],
+                |row| Ok((|| Ok((rows::number(row, 0)?, rows::number(row, 1)?)))()),
+            )
+            .optional()
+            .map_err(rows::database_error)?
+            .transpose()
+    }
+
+    /// Note that a retained reader walked every cached conversation of
+    /// `scope`'s catalogue to the end at `head` and `generation`, replacing
+    /// any earlier walk.
+    pub(crate) fn note_walk(
+        &mut self,
+        scope: &Scope,
+        head: u64,
+        generation: u64,
+    ) -> Result<(), CacheError> {
+        self.connection
+            .execute(
+                "INSERT INTO retained_walks(receiver,origin,stream,head,generation)
+                 VALUES (?1,?2,?3,?4,?5)
+                 ON CONFLICT(receiver,origin,stream)
+                 DO UPDATE SET head=excluded.head, generation=excluded.generation",
+                params![
+                    scope.receiver().as_str(),
+                    scope.origin().as_str(),
+                    scope.stream().as_str(),
+                    head.to_be_bytes().as_slice(),
+                    generation.to_be_bytes().as_slice(),
+                ],
+            )
+            .map(|_| ())
+            .map_err(rows::database_error)
     }
 
     pub(crate) fn retained_transcript_progress(

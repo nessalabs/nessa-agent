@@ -8,6 +8,12 @@ use std::time::Duration;
 /// Cancellation supplied by the composition that owns the synchronous run.
 pub(crate) trait Cancellation: Send + Sync {
     fn cancelled(&self) -> bool;
+    /// The monotonic time, on the connection's clock, at which the run is
+    /// cancelled whatever its operation's own deadline: a blocked read or
+    /// write waits no longer than this. `None` when only `cancelled` ends it.
+    fn until_ms(&self) -> Option<u64> {
+        None
+    }
 }
 
 /// The synchronous connection owner supplies socket I/O and timeout controls.

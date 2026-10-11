@@ -35,9 +35,23 @@ impl DeadlineStream {
         if self.cancellation.cancelled() {
             return Err(GatewayError::Cancelled);
         }
+        let now = self.clock.elapsed_ms();
+        // A cancellation time before the operation's deadline bounds the wait;
+        // reaching it is a cancellation, not the operation timing out.
+        if let Some(until) = self
+            .cancellation
+            .until_ms()
+            .filter(|until| *until < self.deadline)
+        {
+            let remaining = until
+                .checked_sub(now)
+                .filter(|value| *value > 0)
+                .ok_or(GatewayError::Cancelled)?;
+            return Ok(Duration::from_millis(remaining));
+        }
         let remaining = self
             .deadline
-            .checked_sub(self.clock.elapsed_ms())
+            .checked_sub(now)
             .filter(|value| *value > 0)
             .ok_or(GatewayError::TimedOut)?;
         Ok(Duration::from_millis(remaining))
@@ -58,7 +72,19 @@ impl DeadlineStream {
     }
     fn physical<T>(&mut self, result: IoResult<T>) -> IoResult<T> {
         result.inspect_err(|error| {
-            self.record_failure(io_cause(error));
+            // A wait the cancellation time cut short was cancelled, not timed out.
+            let cause = match io_cause(error) {
+                GatewayError::TimedOut
+                    if self
+                        .cancellation
+                        .until_ms()
+                        .is_some_and(|until| self.clock.elapsed_ms() >= until) =>
+                {
+                    GatewayError::Cancelled
+                }
+                cause => cause,
+            };
+            self.record_failure(cause);
         })
     }
     fn refused(&mut self, error: GatewayError) -> Error {

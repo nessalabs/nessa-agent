@@ -234,6 +234,13 @@ impl PairingRecord {
     pub fn charged_attempts(&self) -> usize {
         self.attempts.len()
     }
+    /// Whether an admitted attempt's handshake has not ended yet. Its end is
+    /// a write of its own, so it can land after the device has its answer.
+    pub fn attempt_pending(&self) -> bool {
+        self.attempts
+            .iter()
+            .any(|attempt| attempt.outcome == AttemptOutcome::Pending)
+    }
     /// Winning claim; no key is published before its attempt is accepted.
     pub fn claim_binding(&self) -> Option<(AttemptId, DeviceKey)> {
         self.claim
@@ -369,11 +376,7 @@ impl PairingRecord {
                 if self.attempts.len() >= usize::from(self.policy.attempts()) {
                     return Err(PairingError::AttemptsExhausted);
                 }
-                if self
-                    .attempts
-                    .iter()
-                    .any(|a| a.outcome == AttemptOutcome::Pending)
-                {
+                if self.attempt_pending() {
                     return Err(PairingError::Capacity);
                 }
                 let mut attempts = self.attempts.to_vec();
