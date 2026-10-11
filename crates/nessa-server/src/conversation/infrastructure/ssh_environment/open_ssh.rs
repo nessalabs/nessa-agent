@@ -29,6 +29,24 @@ use tokio::{
     process::{Child, Command},
 };
 
+/// The longest path a Unix socket may have on macOS, the tighter bound of
+/// the two (104 bytes, its closing NUL included).
+const MAX_SOCKET_PATH: usize = 103;
+
+/// What a control socket's path adds to its root: this connector's
+/// directory, a `c` and a counter of up to ten digits, then the `.` and 16
+/// characters OpenSSH binds to before it renames the socket into place.
+const CONTROL_PATH_TAIL: usize = "/nessa-ssh-01234567/c".len() + 10 + 17;
+
+/// Where control sockets go: the temporary directory, unless it is too
+/// long for a socket path, when `/tmp`, which every Unix has.
+fn socket_root(temp: PathBuf) -> PathBuf {
+    match temp.as_os_str().len() + CONTROL_PATH_TAIL <= MAX_SOCKET_PATH {
+        true => temp,
+        false => PathBuf::from("/tmp"),
+    }
+}
+
 /// The system's OpenSSH client.
 pub(crate) struct OpenSshConnector {
     /// Where control sockets are made; created when first needed.
@@ -38,10 +56,11 @@ pub(crate) struct OpenSshConnector {
 
 impl OpenSshConnector {
     /// A connector making its control sockets under the temporary
-    /// directory, in a directory of this process's own.
+    /// directory (see [`socket_root`]), in a directory of this process's
+    /// own.
     pub(crate) fn new() -> Self {
         Self {
-            sockets: std::env::temp_dir().join(format!(
+            sockets: socket_root(std::env::temp_dir()).join(format!(
                 "nessa-ssh-{}",
                 &uuid::Uuid::new_v4().simple().to_string()[..8]
             )),
@@ -228,7 +247,18 @@ struct KeptChild(#[expect(dead_code, reason = "held so the child is killed on dr
 
 #[cfg(test)]
 mod tests {
-    use super::{read_tail, MAX_SHELL_OUTPUT};
+    use super::{read_tail, socket_root, CONTROL_PATH_TAIL, MAX_SHELL_OUTPUT, MAX_SOCKET_PATH};
+    use std::path::PathBuf;
+
+    #[test]
+    fn control_sockets_stay_inside_a_socket_path_s_bound() {
+        // A macOS temporary directory, as launchd sets it.
+        let usual = PathBuf::from("/var/folders/zz/zyxvpxvq6csfxvn_n0000000000000/T/");
+        assert_eq!(socket_root(usual.clone()), usual);
+        let long = PathBuf::from(format!("/Users/someone/{}/tmp", "nested/".repeat(10)));
+        assert_eq!(socket_root(long), PathBuf::from("/tmp"));
+        assert!("/tmp".len() + CONTROL_PATH_TAIL <= MAX_SOCKET_PATH);
+    }
 
     #[tokio::test]
     async fn a_long_login_banner_does_not_hide_the_answer() {
