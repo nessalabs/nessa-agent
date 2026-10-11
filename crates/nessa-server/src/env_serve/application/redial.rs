@@ -13,8 +13,9 @@
 //!
 //! Arrows are steps, in order. A refusal is redacted (see `dial.rs`), so a
 //! revoked key is dialed again like a full gateway: the wait caps how often.
+use super::timer::Timer;
 use std::{future::Future, io, time::Duration};
-use tokio::{sync::watch, time::Instant};
+use tokio::sync::watch;
 
 /// How long to wait between dials.
 #[derive(Debug, Clone, Copy)]
@@ -36,7 +37,7 @@ impl Default for Backoff {
 }
 
 /// Dial with `connect` and serve each connection with `serve` until `stop`
-/// says true, or until `connect` fails with [`io::ErrorKind::InvalidInput`].
+/// says true, waiting on `timer`, or until `connect` fails with [`io::ErrorKind::InvalidInput`].
 ///
 /// `serve` is given `stop` too: it closes its connection once stop is asked
 /// and returns when serving it has ended. A connection served for less than
@@ -49,6 +50,7 @@ pub(crate) async fn redial<C, Connect, Connected, Serve, Served>(
     mut connect: Connect,
     mut serve: Serve,
     backoff: Backoff,
+    timer: &dyn Timer,
     mut stop: watch::Receiver<bool>,
 ) -> io::Result<()>
 where
@@ -68,9 +70,9 @@ where
         };
         match dialed {
             Ok(connection) => {
-                let since = Instant::now();
+                let since = timer.now();
                 serve(connection, stop.clone()).await;
-                if since.elapsed() >= backoff.most {
+                if timer.now().since(since) >= backoff.most {
                     wait = backoff.first;
                 }
                 tracing::info!(?wait, "the gateway connection ended; dialing again");
@@ -82,7 +84,7 @@ where
             Err(error) => tracing::warn!(%error, ?wait, "dialing the gateway failed"),
         }
         tokio::select! {
-            () = tokio::time::sleep(wait) => {}
+            () = timer.sleep(wait) => {}
             _ = stopped(&mut stop) => return Ok(()),
         }
         wait = (wait * 2).min(backoff.most);

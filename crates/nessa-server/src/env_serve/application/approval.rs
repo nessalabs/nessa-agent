@@ -14,7 +14,7 @@
 //!
 //! Arrows are steps, in order. The pairing is a port so every answer,
 //! failures included, can be given by a test.
-use super::redial::stopped;
+use super::{redial::stopped, timer::Timer};
 use std::{future::Future, time::Duration};
 use tokio::sync::watch;
 
@@ -70,7 +70,7 @@ pub(crate) trait EnvironmentPairing: Send + Sync {
 }
 
 /// What `pairing` holds once the owner has approved it, asking every `poll`
-/// until then; `None` when `stop` says true first, which wins over anything
+/// on `timer` until then; `None` when `stop` says true first, which wins over anything
 /// else ready at the same moment.
 ///
 /// # Errors
@@ -78,6 +78,7 @@ pub(crate) trait EnvironmentPairing: Send + Sync {
 pub(crate) async fn approval<P: EnvironmentPairing>(
     pairing: &P,
     poll: Duration,
+    timer: &dyn Timer,
     mut stop: watch::Receiver<bool>,
 ) -> Result<Option<P::Approval>, NotApproved> {
     let mut said = false;
@@ -113,7 +114,7 @@ pub(crate) async fn approval<P: EnvironmentPairing>(
         tokio::select! {
             biased;
             () = stopped(&mut stop) => return Ok(None),
-            () = tokio::time::sleep(poll) => {}
+            () = timer.sleep(poll) => {}
         }
     }
 }

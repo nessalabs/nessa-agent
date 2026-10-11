@@ -1,4 +1,5 @@
 use super::{approval, Answer, EnvironmentPairing, NotApproved, Saved};
+use crate::env_serve::application::timer::manual::ManualTimer;
 use std::{sync::Mutex, time::Duration};
 use tokio::sync::watch;
 
@@ -66,38 +67,41 @@ fn running() -> (watch::Sender<bool>, watch::Receiver<bool>) {
     watch::channel(false)
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn an_approved_pairing_is_used_without_asking() {
     let pairing = Scripted::new(vec![Ok(Saved::Approved(7))], Vec::new());
     let (_stop, stopping) = running();
-    assert_eq!(approval(&pairing, POLL, stopping).await, Ok(Some(7)));
+    assert_eq!(
+        approval(&pairing, POLL, &ManualTimer::default(), stopping).await,
+        Ok(Some(7))
+    );
     assert_eq!(pairing.asked(), 0);
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn nothing_paired_stops_without_asking_the_gateway() {
     let pairing = Scripted::new(vec![Ok(Saved::Nothing)], Vec::new());
     let (_stop, stopping) = running();
     assert_eq!(
-        approval(&pairing, POLL, stopping).await,
+        approval(&pairing, POLL, &ManualTimer::default(), stopping).await,
         Err(NotApproved::NotPaired)
     );
     assert_eq!(pairing.asked(), 0);
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn a_pairing_that_cannot_be_read_stops_with_its_reason() {
     let pairing = Scripted::new(vec![Err("corrupt".into())], Vec::new());
     let (_stop, stopping) = running();
     assert_eq!(
-        approval(&pairing, POLL, stopping).await,
+        approval(&pairing, POLL, &ManualTimer::default(), stopping).await,
         Err(NotApproved::Unusable("corrupt".into()))
     );
 }
 
 /// No answer, a failed save among them, and waiting are asked again every
 /// poll; approval is then read from what the pairing saved.
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn waiting_and_no_answer_are_asked_again_until_approved() {
     let pairing = Scripted::new(
         vec![
@@ -115,14 +119,20 @@ async fn waiting_and_no_answer_are_asked_again_until_approved() {
         ],
     );
     let (_stop, stopping) = running();
-    let started = tokio::time::Instant::now();
-    assert_eq!(approval(&pairing, POLL, stopping).await, Ok(Some(3)));
+    let timer = ManualTimer::default();
+    assert_eq!(
+        timer
+            .passing(approval(&pairing, POLL, &timer, stopping))
+            .await,
+        Ok(Some(3))
+    );
     assert_eq!(pairing.asked(), 4);
     // Three waits, none after the approval.
-    assert_eq!(started.elapsed(), POLL * 3);
+    assert_eq!(timer.elapsed(), POLL * 3);
+    assert!(timer.waits().iter().all(|wait| wait.limit() == POLL));
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn ended_not_paired_and_unusable_answers_stop_waiting() {
     for (answer, stopped) in [
         (Answer::Ended, NotApproved::Ended),
@@ -134,13 +144,16 @@ async fn ended_not_paired_and_unusable_answers_stop_waiting() {
     ] {
         let pairing = Scripted::new(vec![Ok(Saved::Pending)], vec![answer]);
         let (_stop, stopping) = running();
-        assert_eq!(approval(&pairing, POLL, stopping).await, Err(stopped));
+        assert_eq!(
+            approval(&pairing, POLL, &ManualTimer::default(), stopping).await,
+            Err(stopped)
+        );
     }
 }
 
 /// Codex review on #756: stop asked while the gateway approves is seen
 /// first, so nothing is composed after a stop.
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn stop_asked_as_approval_arrives_wins() {
     let (stop, stopping) = running();
     let mut pairing = Scripted::new(
@@ -148,20 +161,25 @@ async fn stop_asked_as_approval_arrives_wins() {
         vec![Answer::Approved],
     );
     pairing.stop_when_asked = Some(stop);
-    assert_eq!(approval(&pairing, POLL, stopping).await, Ok(None));
+    assert_eq!(
+        approval(&pairing, POLL, &ManualTimer::default(), stopping).await,
+        Ok(None)
+    );
     assert_eq!(pairing.asked(), 1);
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn stop_asked_while_waiting_ends_the_wait() {
     let pairing = Scripted::new(vec![Ok(Saved::Pending)], vec![Answer::Waiting]);
     let (stop, stopping) = running();
+    let timer = ManualTimer::default();
     let waiting = async {
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        timer.nth(0).await;
+        timer.advance(Duration::from_secs(1));
         stop.send(true).unwrap();
     };
-    let started = tokio::time::Instant::now();
-    let (approved, ()) = tokio::join!(approval(&pairing, POLL, stopping), waiting);
+    let (approved, ()) = tokio::join!(approval(&pairing, POLL, &timer, stopping), waiting);
     assert_eq!(approved, Ok(None));
-    assert_eq!(started.elapsed(), Duration::from_secs(1));
+    // Stop ended the poll's wait a second in, not at its end.
+    assert_eq!(timer.elapsed(), Duration::from_secs(1));
 }
