@@ -65,7 +65,7 @@ use tokio::runtime::Handle;
 use uuid::Uuid;
 
 /// The longest any one wait below may take.
-const WAIT: Duration = Duration::from_secs(30);
+pub(super) const WAIT: Duration = Duration::from_secs(30);
 /// B reads A this often, so each step settles in well under a second.
 const POLICY: PollPolicy = PollPolicy {
     interval: Duration::from_millis(100),
@@ -76,11 +76,11 @@ const POLICY: PollPolicy = PollPolicy {
 /// so an end inside it was a stop, not that deadline.
 const PROMPT: Duration = Duration::from_secs(2);
 
-fn uuid() -> String {
+pub(super) fn uuid() -> String {
     Uuid::new_v4().to_string()
 }
 
-struct NoAgents;
+pub(super) struct NoAgents;
 impl crate::agents::application::AgentProbe for NoAgents {
     fn evidence(&self, _: AgentId) -> Option<crate::agents::application::AgentProbeEvidence> {
         None
@@ -89,7 +89,7 @@ impl crate::agents::application::AgentProbe for NoAgents {
 
 /// A registry with one owner who may manage credentials and read and write
 /// conversations on `gateway`, and that owner's authenticated session.
-async fn owned(
+pub(super) async fn owned(
     root: &Path,
     gateway: &str,
     organization: &str,
@@ -145,7 +145,7 @@ async fn owned(
     (auth, session, owner)
 }
 
-fn inputs(
+pub(super) fn inputs(
     root: &Path,
     auth: &Arc<LocalCredentialStore>,
     receivers: Arc<LocalReceiverAuthority>,
