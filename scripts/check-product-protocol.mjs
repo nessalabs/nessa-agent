@@ -165,6 +165,32 @@ for (const invalid of [
 }
 if (!validateView({ ...view, title: null }))
   throw new Error("Product conversation view rejects a null title")
+// The artifacts a view lists: required, at most 64, each closed and bounded.
+const artifact = view.artifacts[0]
+const artifactName = "😀".repeat(63) + "abc"
+for (const valid of [
+  { ...view, artifacts: [] },
+  { ...view, artifacts: Array(64).fill(artifact) },
+  { ...view, artifacts: [{ ...artifact, executionId: undefined }] },
+  { ...view, artifacts: [{ ...artifact, name: artifactName, size: 67108864 }] },
+]) {
+  if (!validateView(JSON.parse(JSON.stringify(valid))))
+    throw new Error("Product conversation view rejects a bounded artifact list")
+}
+for (const invalid of [
+  { ...view, artifacts: undefined },
+  { ...view, artifacts: Array(65).fill(artifact) },
+  { ...view, artifacts: [{ ...artifact, name: `${artifactName}d` }] },
+  { ...view, artifacts: [{ ...artifact, name: "" }] },
+  { ...view, artifacts: [{ ...artifact, size: 0 }] },
+  { ...view, artifacts: [{ ...artifact, size: 67108865 }] },
+  { ...view, artifacts: [{ ...artifact, digest: "sha256:00" }] },
+  { ...view, artifacts: [{ ...artifact, lease: "x".repeat(129) }] },
+  { ...view, artifacts: [{ ...artifact, path: "/outbox/1" }] },
+]) {
+  if (validateView(JSON.parse(JSON.stringify(invalid))))
+    throw new Error("Product conversation view accepts an invalid artifact")
+}
 // A tool's MCP identity and structured result: optional, bounded, and closed.
 const validateTool = ajv.getSchema(`${schema.$id}#/$defs/ConversationTool`)
 const tool = {

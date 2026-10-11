@@ -46,6 +46,7 @@
     "sandbox": "harness_default",
     "droppedEvents": 0
   },
+  "artifacts": [],
   "title": null,
   "questions": [],
   "approvalMode": "ask",

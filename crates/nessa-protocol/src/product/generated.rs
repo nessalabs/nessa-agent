@@ -613,6 +613,7 @@ pub struct ConversationView {
     pub runtime: Option<ConversationRuntime>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lease: Option<ConversationLease>,
+    pub artifacts: Vec<ConversationArtifact>,
     #[serde(deserialize_with = "Option::deserialize")]
     pub title: Option<String>,
     pub questions: Vec<ConversationQuestion>,
@@ -620,6 +621,17 @@ pub struct ConversationView {
     pub approval_modes: Vec<ApprovalModeChoice>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval_mode_change: Option<ApprovalModeChange>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationArtifact {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_id: Option<String>,
+    pub lease: String,
+    pub name: String,
+    pub digest: String,
+    pub mime_type: String,
+    pub size: u64,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

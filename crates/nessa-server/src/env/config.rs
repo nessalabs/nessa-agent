@@ -34,6 +34,9 @@ macro_rules! lease_protocol {
         /// The sources [`LEASE_PROTOCOL`] is taken over, relative to this file.
         #[cfg(all(test, unix))]
         pub(crate) const LEASE_PROTOCOL_SOURCES: &[&str] = &[$($source),+];
+        // One step per byte of the sources: as long as they are, and
+        // never more. The lint is for loops that might not end.
+        #[allow(long_running_const_eval)]
         const LEASE_PROTOCOL_DIGITS: [u8; 16] =
             nessa_protocol::lease::fingerprint(&[$(include_bytes!($source) as &[u8]),+]);
     };
@@ -52,15 +55,19 @@ lease_protocol!(
     "../env_serve/mod.rs",
     "../env_serve/application/mod.rs",
     "../env_serve/application/serve.rs",
+    "../env_serve/application/artifacts.rs",
     "../env_serve/application/wire.rs",
     "../env_serve/infrastructure/mod.rs",
     "../env_serve/infrastructure/commands.rs",
     "../env_serve/infrastructure/launcher.rs",
     "../env_serve/infrastructure/ledger.rs",
     "../env_serve/infrastructure/lock.rs",
+    "../env_serve/infrastructure/outbox.rs",
     "../env_serve/install.rs",
     "../conversation/infrastructure/ssh_environment/link.rs",
     "../conversation/infrastructure/ssh_environment/environment.rs",
+    "../conversation/infrastructure/ssh_environment/transfer.rs",
+    "../conversation/infrastructure/ssh_environment/sftp.rs",
     "../../../nessa-sdk/src/infrastructure/claude_acp/sessions/binding.rs",
     "../../../nessa-sdk/src/infrastructure/codex_acp/sessions/binding.rs",
     "../../../nessa-sdk/src/infrastructure/harness_process.rs",
@@ -72,8 +79,10 @@ lease_protocol!(
 /// when they are compiled. Any change to the frames or to how either end
 /// reads them changes it, with nothing to bump; a gateway speaks only to an
 /// environment saying the same in its hello. Not [`VERSION`], which every
-/// revision shares.
-pub const LEASE_PROTOCOL: &str = match std::str::from_utf8(&LEASE_PROTOCOL_DIGITS) {
+/// revision shares. A `static`, so the fingerprint is taken once, here: a
+/// `const` would be evaluated again in each crate that reads it.
+#[allow(long_running_const_eval)]
+pub static LEASE_PROTOCOL: &str = match std::str::from_utf8(&LEASE_PROTOCOL_DIGITS) {
     Ok(protocol) => protocol,
     Err(_) => panic!("a fingerprint is hex digits"),
 };

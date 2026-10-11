@@ -142,3 +142,59 @@ fn a_stand_in_names_an_absolute_socket_a_server_and_its_configuration() {
     assert!(parse(&args(&["mcp-relay", "/s", "mcptest"])).is_err());
     assert!(parse(&args(&["mcp-relay", "/s", "mcptest", "d", "extra"])).is_err());
 }
+
+#[test]
+fn artifact_publish_names_one_path_and_optionally_its_type() {
+    assert_eq!(
+        parse(&args(&["artifact", "publish", "/work/report.pdf"])),
+        Ok(Command::ArtifactPublish {
+            path: "/work/report.pdf".into(),
+            media_type: None,
+        })
+    );
+    for words in [
+        ["artifact", "publish", "/work/chart", "--type", "image/png"],
+        ["artifact", "publish", "--type", "image/png", "/work/chart"],
+    ] {
+        assert_eq!(
+            parse(&args(&words)),
+            Ok(Command::ArtifactPublish {
+                path: "/work/chart".into(),
+                media_type: Some("image/png".into()),
+            }),
+            "{words:?}"
+        );
+    }
+    for words in [
+        vec!["artifact", "publish"],
+        vec!["artifact"],
+        vec!["artifact", "publish", "/a", "/b"],
+        vec!["artifact", "publish", "/a", "--type"],
+        vec!["artifact", "publish", "--type", "image/png"],
+        vec!["artifact", "publish", "/a", "--kind", "image/png"],
+        vec![
+            "artifact",
+            "publish",
+            "/a",
+            "--type",
+            "image/png",
+            "--type",
+            "text/plain",
+        ],
+        vec!["artifact", "publish", "/a", "--type", "image/png", "extra"],
+    ] {
+        assert!(parse(&args(&words)).is_err(), "{words:?}");
+    }
+}
+
+/// A flag where the path goes is a flag, not a file named like one.
+#[test]
+fn artifact_publish_takes_no_flag_as_its_path() {
+    for words in [
+        vec!["artifact", "publish", "--type"],
+        vec!["artifact", "publish", "--json"],
+        vec!["artifact", "publish", "--type", "image/png", "--type"],
+    ] {
+        assert!(parse(&args(&words)).is_err(), "{words:?}");
+    }
+}

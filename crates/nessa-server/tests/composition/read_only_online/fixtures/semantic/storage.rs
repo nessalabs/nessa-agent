@@ -123,6 +123,7 @@ async fn confirmed_producer_snapshot_changes_only_after_successful_save() {
         invocations: vec![],
         queue_history: vec![],
         lease: None,
+        artifacts: Vec::new(),
     };
     let receipt = lease
         .save_changes(

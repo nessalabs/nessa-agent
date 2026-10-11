@@ -331,18 +331,60 @@ pub(super) fn record_value(record: &AttachmentAuditRecord) -> Value {
         // Recorded while the hold is pending: it becomes usable only once this
         // record is committed, and a hold that then does not last is followed
         // by `attachment_hold_reverted` or `attachment_hold_released`.
-        AttachmentAuditRecord::HoldCreated { hold } => json!({
-            "kind": "attachment_hold_created",
-            "target": hold_target(hold),
+        AttachmentAuditRecord::HoldCreated { hold } => {
+            let mut value = json!({
+                "kind": "attachment_hold_created",
+                "target": hold_target(hold),
+                "transition": {
+                    "before": hold_state(HoldState::Absent),
+                    "after": hold_state(HoldState::Held),
+                },
+                "cause": hold_cause(hold),
+                "initiator": caller(hold.uploaded_by()),
+                "correlationId": hold.uploaded_by().action_id(),
+                "requestedAtMs": hold.ticket_issued_at_ms(),
+                "uploadedAtMs": hold.uploaded_at_ms(),
+            });
+            if let Some(lease) = hold.lease() {
+                value["lease"] = json!(lease);
+            }
+            value
+        }
+        // A file an environment published that the conversation already
+        // keeps: nothing was read, and the hold is the one already there.
+        AttachmentAuditRecord::AlreadyPublished { published, hold } => json!({
+            "kind": "attachment_already_held",
+            "target": {
+                "organizationId": hold.organization_id().as_str(),
+                "conversationId": hold.conversation_id().to_string(),
+                "uploaded": file(published.file()),
+                "stored": file(hold.stored()),
+            },
             "transition": {
-                "before": hold_state(HoldState::Absent),
+                "before": hold_state(HoldState::Held),
                 "after": hold_state(HoldState::Held),
             },
-            "cause": "uploaded",
-            "initiator": caller(hold.uploaded_by()),
-            "correlationId": hold.uploaded_by().action_id(),
-            "requestedAtMs": hold.ticket_issued_at_ms(),
-            "uploadedAtMs": hold.uploaded_at_ms(),
+            "cause": "lease_published",
+            "lease": published.lease(),
+            "initiator": caller(published.caller()),
+            "correlationId": published.caller().action_id(),
+            "requestedAtMs": published.offered_at_ms(),
+            "heldSinceMs": hold.uploaded_at_ms(),
+        }),
+        // An environment's offer that became no hold.
+        AttachmentAuditRecord::PublishRejected { published, reason } => json!({
+            "kind": "attachment_publish_rejected",
+            "target": {
+                "organizationId": published.organization_id().as_str(),
+                "conversationId": published.conversation_id().to_string(),
+                "uploaded": file(published.file()),
+            },
+            "transition": {"before": "offered", "after": "not_held"},
+            "cause": rejection(*reason),
+            "lease": published.lease(),
+            "initiator": caller(published.caller()),
+            "correlationId": published.caller().action_id(),
+            "requestedAtMs": published.offered_at_ms(),
         }),
         // The ticket was used; the hold is the one already there, unchanged.
         AttachmentAuditRecord::AlreadyHeld { ticket, hold } => json!({
@@ -382,6 +424,15 @@ pub(super) fn record_value(record: &AttachmentAuditRecord) -> Value {
             "initiator": {"kind": "automatic"},
             "retirements": removed.retirements().iter().map(retirement_value).collect::<Vec<_>>(),
         }),
+    }
+}
+
+/// Why a hold exists: an upload under a ticket, or a file an environment
+/// published under a lease.
+fn hold_cause(hold: &Hold) -> &'static str {
+    match hold.lease() {
+        None => "uploaded",
+        Some(_) => "lease_published",
     }
 }
 

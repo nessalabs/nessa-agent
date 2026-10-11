@@ -27,6 +27,8 @@ mod root;
 
 pub use root::CompositionRoot;
 
+#[cfg(unix)]
+mod artifact_command;
 mod auth_command;
 mod credential_registry;
 #[cfg(unix)]
