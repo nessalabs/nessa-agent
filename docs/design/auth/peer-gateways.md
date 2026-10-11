@@ -487,8 +487,16 @@ sequenceDiagram
   credential's save, or the ending), not by what the record holds after,
   so a write that then fails is still named by what it was; whether it
   succeeded is the store's answer too (`SlotOutcome`), not whether the
-  status read then did. The conversations one read withdrew are one
-  record, or one per 64 (`WITHDRAWN_PER_RECORD`); they are kept outside the
+  status read then did. The ended detail is that status answer's cause or
+  outcome. A stop that wins the wait does not drop the answer: the worker
+  is woken and the answer is taken before the change is recorded, so the
+  audit names the cause that answer carried (`terminal: denied`,
+  `terminal: credential_revoked`, `unclaimed: …`) rather than an ended
+  change with no cause
+  (`a_stop_after_an_ended_transition_commits_keeps_the_status_cause`).
+  The cycle does not continue into a read.
+  The conversations one read withdrew are one record, or one per 64
+  (`WITHDRAWN_PER_RECORD`); they are kept outside the
   read's worker, so a worker that panics still reports what it withdrew.
   Each record goes to `PeerCommands::poller_changed` as the step ends,
   while the cycle still holds the turn, and the audit queues it at once; so
@@ -537,8 +545,8 @@ sequenceDiagram
   persists it.
 - **Shutdown leaves nothing running.** Stopping native pairing stops the
   poller first: its wait ends, the cycle holding the turn is stopped (a
-  status read dropped, a read's sockets shut), and `join` returns once its
-  blocking worker has. Then the peer commands are closed, and those past
+  status read is not continued, its answer kept for the cause, a read's
+  sockets shut), and `join` returns once its blocking worker has. Then the peer commands are closed, and those past
   their intent are waited for, within `PREEMPT`. Then the peer audit is
   closed and its writer waited for, within one `AUDIT_DEADLINE` on the
   injected clock.
@@ -564,6 +572,7 @@ sequenceDiagram
 | R18 | A poller change, then a forget that stops its cycle; a store that stalls on the poller's record; a record handed over and never awaited | Records land in turn order: the cycle's change, then the forget's intent and outcome, sequences 1, 2, 3 ... with observation times in order. With the store stalled the forget's intent waits behind the poller's record and is answered `peer_audit_unavailable` once B's clock passes `AUDIT_DEADLINE`, nothing removed; once the store answers every record lands in sequence and the next forget goes ahead. A record never awaited is still written | `records_land_in_turn_order`, `a_stalled_audit_never_holds_an_owner_command`, `an_unpolled_poller_record_is_still_written` |
 | R19 | A cached conversation over quota, then one the peer stopped granting; then a stop or a lost connection | The second is withdrawn; the read ends `quota`, still `quota` when the walk is then stopped or loses its connection; a storage failure is held back the same way, and only a damaged cache or a lost connection stops the withdrawals | `a_full_cache_still_withdraws_what_the_gateway_no_longer_grants`, `a_full_catalogue_still_withdraws_and_quota_outranks_a_storage_failure`, `a_withdrawal_that_cannot_be_written_does_not_stop_the_others`, `a_full_cache_is_listed_quota_and_a_read_that_saved_nothing_unreachable`, `a_held_quota_outlasts_a_stop_or_a_lost_connection` |
 | R20 | A status step whose write fails after it began, or lands before the status fails; a cycle giving back the turn as an owner command asks; a read whose worker panics after a withdrawal | Named by the transition begun (`peer_ended` after a failed ending, `peer_approved` after a failed save), its outcome the store's (refused when the write failed, succeeded when it landed, whatever the status said); the owner command finds the turn free or a cycle to stop, never `peer_busy`; the withdrawal is still reported and audited | `a_slot_names_the_transition_a_status_began_whatever_storage_did`, `a_status_change_is_named_by_the_transition_its_store_began`, `a_status_change_outcome_is_what_its_store_did`, `a_cycle_gives_back_the_turn_as_it_clears_itself`, `a_read_that_panics_still_reports_what_it_withdrew` |
+| R26 | A stop wins the status wait after the worker has committed an ending, before the poller has taken the status answer. The poller's own stop, or the cycle an owner command stops | The answer is kept, so the audit names the cause it carried. The cycle does not continue into a read | `a_stop_after_an_ended_transition_commits_keeps_the_status_cause` |
 | R21 | A walk cut short after its catalogue pass (A unshared Y, the pass reached A's new head, Y not yet asked), then a restart, at A's unchanged head | No walk is noted, so the next read walks every cached conversation and withdraws Y, audited; `synced` only after that, holding nothing; a note that cannot be written fails the read as the cache's failure, backed off | `a_peer_reads_only_what_it_is_granted_and_stops_at_revocation` (the cache put back as the cut walk left it), `a_cache_without_the_walk_marker_is_walked_at_an_unchanged_head`, `a_marker_that_cannot_be_written_fails_the_read`, `a_walk_marker_is_kept_per_catalogue_and_goes_with_a_purge` |
 | R22 | The audit queue is full (the store fell behind) | Answered at once, no wait: `peer.enroll` and `peer.forget` are `peer_audit_unavailable` with nothing dialed or removed; a poller change lands and its record is logged as not kept, never written; each refusal uses up its sequence, so the next kept record follows a gap | `a_full_queue_refuses_the_owner_and_drops_the_poller_record` |
 | R23 | Native pairing stops with records queued and the store stalled; or its writer panics | The audit is closed and drained within one `AUDIT_DEADLINE` on the injected clock: records before the stall are written, the rest are logged and not, and the writer ends once the stalled write returns; a writer that panicked ends the drain at once, reported as not drained, its unwritten records logged | `close_drains_within_one_deadline`, `a_writer_that_panics_does_not_hold_the_drain` |

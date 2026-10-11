@@ -496,7 +496,8 @@ pairing in `composition/native_pairing.rs`, which starts and joins the poller.
 Tests are `tests/peer_gateways/enroll.rs` and the two-process case in
 `tests/device_pairing/mounted.rs`, both registered by `tests/native_enrollment.rs`,
 the two-gateway read in `tests/composition/peer_reading.rs`, and the
-poller's cadence in `tests/peer_gateways/poller.rs`.
+poller's cadence and the ended cause it keeps when a stop wins the status
+wait in `tests/peer_gateways/poller.rs`.
 Design: [peer gateways](design/auth/peer-gateways.md#the-dialing-side),
 [reading a peer](design/auth/peer-gateways.md#reading-a-peer).
 

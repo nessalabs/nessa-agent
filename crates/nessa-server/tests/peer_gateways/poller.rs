@@ -1,5 +1,6 @@
 //! The poller's cadence: each wait after a cycle, from its pace, its
-//! failures in a row, and one draw of entropy.
+//! failures in a row, and one draw of entropy. And the status answer a stop
+//! does not drop once the worker has committed an ending.
 use super::*;
 
 const POLICY: PollPolicy = PollPolicy {
@@ -144,7 +145,7 @@ fn a_status_change_is_named_by_the_transition_its_store_began() {
         status_cause(Some(SlotTransition::Approved), Some(&failed)),
         Some(PollerCause::Approved)
     );
-    // Stopped part way.
+    // No answer came back: an ending begun with nothing that names it.
     assert_eq!(
         status_cause(Some(SlotTransition::Ended), None),
         Some(PollerCause::Ended { detail: None })
@@ -174,6 +175,78 @@ fn a_full_cache_is_listed_quota_and_a_read_that_saved_nothing_unreachable() {
         sync_state(&Unread::Read(ReadFailure::Cache)),
         SyncState::Failed
     );
+}
+
+/// A stop that wins after the status worker has passed its commit point, and
+/// before the reply is taken, still records that reply's cause. The worker
+/// blocks until [`take_status`] has chosen the stop and runs its settle, so
+/// the stop wins by the handshake, with no timer deciding the order. Both
+/// stops the wait races — the poller's own, and the cycle an owner command
+/// stops — take that path.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stop_after_an_ended_transition_commits_keeps_the_status_cause() {
+    for stop_via_poller in [true, false] {
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let worker = tokio::task::spawn_blocking(move || {
+            entered_tx
+                .send(())
+                .expect("the wait is still observing the commit");
+            // Long enough that a missed settle fails the test instead of
+            // hanging the blocking pool. The success path is released at once.
+            release_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("settle releases the reply");
+            Ok((Status::Ended, "terminal: denied".to_owned()))
+        });
+        let (stop_tx, mut stopped) = watch::channel(false);
+        let (cycle_tx, cycle_rx) = tokio::sync::oneshot::channel();
+        let settle = async move {
+            release_tx
+                .send(())
+                .expect("the worker is waiting for the reply to be released");
+        };
+        let waiting = tokio::spawn(async move {
+            take_status(
+                async move { worker.await.expect("the status worker finishes") },
+                async move {
+                    let _ = cycle_rx.await;
+                },
+                &mut stopped,
+                settle,
+            )
+            .await
+        });
+        entered_rx
+            .await
+            .expect("the worker commits before it returns the reply");
+        // Hold the stop that this iteration does not fire. Dropping the
+        // cycle's sender would complete that wait, and the two stops would
+        // no longer be distinct.
+        let _idle = if stop_via_poller {
+            stop_tx.send(true).expect("the poller stop is signaled");
+            Some(cycle_tx)
+        } else {
+            cycle_tx.send(()).expect("the cycle stop is signaled");
+            None
+        };
+        let (reply, stopped_early) = tokio::time::timeout(Duration::from_secs(5), waiting)
+            .await
+            .expect("the stop settles the reply")
+            .expect("the wait task finishes");
+        assert!(
+            stopped_early,
+            "the stop won while the reply was still pending (poller={stop_via_poller})"
+        );
+        assert_eq!(
+            status_cause(Some(SlotTransition::Ended), Some(&reply)),
+            Some(PollerCause::Ended {
+                detail: Some("terminal: denied".to_owned())
+            }),
+            "poller={stop_via_poller}"
+        );
+        drop(_idle);
+    }
 }
 
 /// A status step's outcome is the record's store's: a transition whose write

@@ -37,7 +37,12 @@
 //! the record at once, so the evidence is in the order the turn was held:
 //! a change the cycle made comes before the owner command that stopped it.
 //! The cycle waits for the audit's answers only once it has given back the
-//! turn, so an audit that is slow or stalled never holds the turn.
+//! turn, so an audit that is slow or stalled never holds the turn. A stop
+//! during the status wait does not drop the worker's answer: that answer
+//! names an ended enrollment's cause, and the worker may already have
+//! committed the ending. The cycle still does not go on to read.
+//! `a_stop_after_an_ended_transition_commits_keeps_the_status_cause` is
+//! that race, with the stop winning.
 use super::audit::AUDIT_QUEUE;
 use super::commands::{
     CycleStop, CycleTurn, EnrollmentEntropySource, PeerCommands, PeerSync, PollerRecord, SyncState,
@@ -55,6 +60,7 @@ use nessa_protocol::pairing::socket::WAKE_TICK;
 use nessa_protocol::pairing::wire::NativePairingStatus;
 use std::{
     collections::HashMap,
+    future::Future,
     sync::{Arc, Mutex, PoisonError},
     time::Duration,
 };
@@ -379,7 +385,8 @@ impl Poller {
     /// The peer's pinned status through its record, as one audited step:
     /// what is held before and after it, and the change if the status began
     /// one, its outcome as the record's store reports it. `None` when the
-    /// cycle was stopped.
+    /// cycle was stopped. A stop still audits an ending the worker committed,
+    /// with the cause that worker's answer names.
     async fn status<'a>(
         &'a self,
         record: &PeerRecord,
@@ -388,10 +395,10 @@ impl Poller {
     ) -> Option<Result<Status, NativeClientError>> {
         let key = *record.key();
         let before = self.commands.holding(key).await;
-        let (status, transition, landed) = self.ask_status(record, cycle).await;
+        let asked = self.ask_status(record, cycle).await;
         let after = self.commands.holding(key).await;
-        let outcome = status_outcome(landed);
-        match status_cause(transition, status.as_ref()) {
+        let outcome = status_outcome(asked.landed);
+        match status_cause(asked.transition, asked.status.as_ref()) {
             // A transition that changed nothing and failed nowhere is no change.
             Some(cause) if after != before || outcome.is_err() => changes.push(
                 self.commands
@@ -404,68 +411,79 @@ impl Poller {
             }
             None => {}
         }
-        Some(status?.map(|(status, _)| status))
+        if asked.stopped {
+            return None;
+        }
+        Some(asked.status?.map(|(status, _)| status))
     }
 
     /// The status, the transition its store began, if any, and whether that
-    /// transition's writes landed.
-    async fn ask_status(
-        &self,
-        record: &PeerRecord,
-        cycle: &Arc<CycleStop>,
-    ) -> (
-        Option<Result<(Status, String), NativeClientError>>,
-        Option<SlotTransition>,
-        Option<SlotOutcome>,
-    ) {
+    /// transition's writes landed. `stopped` when a stop won the wait: the
+    /// worker's answer is still here, so the cause of an ending it committed
+    /// is not lost, and the cycle does not continue into a read.
+    async fn ask_status(&self, record: &PeerRecord, cycle: &Arc<CycleStop>) -> AskedStatus {
         let mut stopped = self.stopped.clone();
         // The same connect as an enrollment's: the injected connector, bounded
         // by the injected deadline clock. Its own error is kept.
         let stream = tokio::select! {
             connected = self.commands.dial(record.address()) => match connected {
                 Ok(stream) => stream,
-                Err(error) => return (Some(Err(NativeClientError::Io(error.kind()))), None, None),
+                Err(error) => {
+                    return AskedStatus {
+                        status: Some(Err(NativeClientError::Io(error.kind()))),
+                        transition: None,
+                        landed: None,
+                        stopped: false,
+                    }
+                }
             },
-            () = cycle.stopped() => return (None, None, None),
-            () = until_stopped(&mut stopped) => return (None, None, None),
+            () = cycle.stopped() => return AskedStatus::none(true),
+            () = until_stopped(&mut stopped) => return AskedStatus::none(true),
         };
         let slot = Arc::new(self.commands.records().slot(*record.key()));
         let client = NativeEnrollmentClient::new(slot.clone(), self.commands.clock.clone());
-        let status = tokio::select! {
-            status = client.status(stream, None) => Some(status),
-            () = cycle.stopped() => None,
-            () = until_stopped(&mut stopped) => None,
-        };
-        // Wakes and waits for the client's blocking worker, whichever ended.
+        // `shutdown` wakes a worker still blocked in the read and waits until
+        // it has finished. It is polled only when a stop wins, and again
+        // below, so a status that answers first is drained the same way.
+        let (status, stopped_early) = take_status(
+            client.status(stream, None),
+            cycle.stopped(),
+            &mut stopped,
+            client.shutdown(),
+        )
+        .await;
         client.shutdown().await;
-        let status = status.map(|status| {
-            status.map(|status| match status {
-                NativePairingStatus::Active {
-                    receiver,
+        let status = status.map(|status| match status {
+            NativePairingStatus::Active {
+                receiver,
+                access_epoch,
+                ..
+            } => (
+                Status::Active {
+                    receiver: receiver.as_str().to_owned(),
                     access_epoch,
-                    ..
-                } => (
-                    Status::Active {
-                        receiver: receiver.as_str().to_owned(),
-                        access_epoch,
-                    },
-                    String::new(),
-                ),
-                NativePairingStatus::Terminal { cause, .. } => (
-                    Status::Ended,
-                    format!("terminal: {}", snake(&format!("{cause:?}"))),
-                ),
-                NativePairingStatus::Unclaimed { outcome, .. } => (
-                    Status::Ended,
-                    format!("unclaimed: {}", snake(&format!("{outcome:?}"))),
-                ),
-                NativePairingStatus::Pending(_)
-                | NativePairingStatus::Claimed(_)
-                | NativePairingStatus::Approved(_)
-                | NativePairingStatus::Staging(_) => (Status::Waiting, String::new()),
-            })
+                },
+                String::new(),
+            ),
+            NativePairingStatus::Terminal { cause, .. } => (
+                Status::Ended,
+                format!("terminal: {}", snake(&format!("{cause:?}"))),
+            ),
+            NativePairingStatus::Unclaimed { outcome, .. } => (
+                Status::Ended,
+                format!("unclaimed: {}", snake(&format!("{outcome:?}"))),
+            ),
+            NativePairingStatus::Pending(_)
+            | NativePairingStatus::Claimed(_)
+            | NativePairingStatus::Approved(_)
+            | NativePairingStatus::Staging(_) => (Status::Waiting, String::new()),
         });
-        (status, slot.transition(), slot.outcome())
+        AskedStatus {
+            status: Some(status),
+            transition: slot.transition(),
+            landed: slot.outcome(),
+            stopped: stopped_early,
+        }
     }
 
     /// Empty the peer's cache for `cause`, as one audited step. The cache is
@@ -618,6 +636,65 @@ enum Unread {
     Storage,
     Status(NativeClientError),
     Read(ReadFailure),
+}
+
+/// What [`Poller::ask_status`] learned. `stopped` means a stop won the wait.
+/// The worker's answer is still in `status` when it gave one, including
+/// after that stop.
+struct AskedStatus {
+    status: Option<Result<(Status, String), NativeClientError>>,
+    transition: Option<SlotTransition>,
+    landed: Option<SlotOutcome>,
+    stopped: bool,
+}
+impl AskedStatus {
+    /// No status was started. `stopped` is the dial wait's outcome.
+    fn none(stopped: bool) -> Self {
+        Self {
+            status: None,
+            transition: None,
+            landed: None,
+            stopped,
+        }
+    }
+}
+
+/// The status worker's answer, and whether a stop won the wait before it.
+/// A stop does not drop the answer: `settle` wakes the worker (the client's
+/// shutdown) and this then takes whatever the worker returns, so an ending
+/// it has already committed keeps the cause that answer names.
+/// `a_stop_after_an_ended_transition_commits_keeps_the_status_cause` wins
+/// the stop on purpose and checks the cause.
+async fn take_status<S, C, P>(
+    status: S,
+    cycle_stopped: C,
+    poller_stopped: &mut watch::Receiver<bool>,
+    settle: P,
+) -> (S::Output, bool)
+where
+    S: Future,
+    C: Future<Output = ()>,
+    P: Future<Output = ()>,
+{
+    tokio::pin!(status);
+    tokio::pin!(cycle_stopped);
+    tokio::pin!(settle);
+    tokio::select! {
+        answered = &mut status => return (answered, false),
+        () = &mut cycle_stopped => {}
+        () = until_stopped(poller_stopped) => {}
+    }
+    let answered = tokio::select! {
+        answered = &mut status => Some(answered),
+        () = &mut settle => None,
+    };
+    let answered = match answered {
+        Some(answered) => answered,
+        // The worker has finished (shutdown saw its permit drop) or is
+        // finishing; the answer is still in this future.
+        None => status.await,
+    };
+    (answered, true)
 }
 
 /// Why a status step changed what is held: from the transition its store
