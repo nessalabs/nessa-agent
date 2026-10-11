@@ -1154,8 +1154,11 @@ sequenceDiagram
 - **Resumption.** Within a live lease, a channel that fails is reopened
   and the read goes on from the offset already received, at most
   `artifact.read_resumes` times; past that it is refused
-  `channelUnavailable`. A lease that ends or loses its connection mid-read
-  is refused `leaseEnded` at once: its staged copies go with it. Resuming
+  `channelUnavailable`. A lease that ends mid-read is refused `leaseEnded`
+  at once, a read still waiting included: its staged copies go with it. A
+  lost connection stops the read at once too; the gateway refuses the file
+  `leaseEnded`, while the host, which can no longer hear that, records it
+  `unanswered` (see Records below). Resuming
   across leases is by digest: published again, a file the conversation
   already holds answers `alreadyHeld` without a byte read. One that a
   concurrent publish lands only while this one is being read still answers

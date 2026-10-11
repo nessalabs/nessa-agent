@@ -241,7 +241,7 @@ fn catalogue() -> &'static [Limit] {
             id: "artifact.environment_bytes",
             tier: "fixed",
             owner: "conversation ArtifactBudget::LEASE.bytes",
-            meaning: "a file that would take one lease's kept files past this is refused unread",
+            meaning: "a file that would take one lease's total kept bytes past this is refused unread",
         },
         Limit {
             id: "artifact.conversation_records",
