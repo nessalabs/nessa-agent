@@ -148,7 +148,10 @@ function ConversationFacts({ conversation }: { conversation: Conversation }) {
               <Fact label="Deny a request" value={support(features.permissionDenial)} />
               <Fact label="Answer later" value={support(features.permissionDeferral)} />
               <Fact label="End a turn" value={support(features.policyEndTurn)} />
-              <Fact label="Close the session" value={support(features.policyCloseSession)} />
+              <Fact
+                label="Close the session"
+                value={support(features.policyCloseSession)}
+              />
             </>
           ) : (
             <Fact label="Deny a request" value="Not verified" />
