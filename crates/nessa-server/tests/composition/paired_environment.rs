@@ -588,8 +588,7 @@ async fn waiting_for_approval_ends_when_denied_or_never_paired() {
     let never = tokio::time::timeout(WAIT, pairing.approved(connect, Duration::from_millis(20)))
         .await
         .unwrap()
-        .err()
-        .expect("nothing was paired here");
+        .expect_err("nothing was paired here");
     assert!(never.to_string().contains("not paired"), "{never}");
     pairing.shutdown().await;
 
@@ -616,8 +615,7 @@ async fn waiting_for_approval_ends_when_denied_or_never_paired() {
     let ended = tokio::time::timeout(WAIT, pairing.approved(connect, Duration::from_millis(20)))
         .await
         .unwrap()
-        .err()
-        .expect("a denied pairing is not approved");
+        .expect_err("a denied pairing is not approved");
     assert!(ended.to_string().contains("without approving"), "{ended}");
     pairing.shutdown().await;
 }
