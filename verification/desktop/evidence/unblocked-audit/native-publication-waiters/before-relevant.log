@@ -1,0 +1,4 @@
+publication_waiter_schedule first=Err(Gateway(Registration("unit was not published")))
+publication_waiter_schedule second=Ok(()) directory=Some("/Users/me/.claude-work") attempts=2
+assertion failed: second_result.is_err()
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 705 filtered out; finished in 0.00s

@@ -1,5 +1,5 @@
 use crate::gateway::domain::value_objects::{SearchPath, ServiceConfiguration, SystemdUnitName};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub(super) fn unit_name(stage: &str, instance: Option<&str>) -> Result<SystemdUnitName, String> {
     let suffix = instance.map_or_else(String::new, |value| format!("-{value}"));
@@ -100,6 +100,7 @@ pub(super) struct RenderedDeclaration {
     pub agent_path: SearchPath,
     pub fingerprint: String,
     pub generation: String,
+    pub claude_config_directory: Option<PathBuf>,
 }
 
 pub(super) fn rendered_declaration(bytes: &[u8]) -> Result<RenderedDeclaration, String> {
@@ -133,11 +134,21 @@ pub(super) fn rendered_declaration(bytes: &[u8]) -> Result<RenderedDeclaration, 
             )),
         }
     };
+    let directories = arguments
+        .iter()
+        .filter_map(|argument| argument.strip_prefix("CLAUDE_CONFIG_DIR="))
+        .collect::<Vec<_>>();
+    let claude_config_directory = match directories.as_slice() {
+        [] => None,
+        [directory] => Some(PathBuf::from(*directory)),
+        _ => return Err("The systemd gateway definition has multiple Claude directories".into()),
+    };
     Ok(RenderedDeclaration {
         agent_path: SearchPath::parse(&unique("NESSA_AGENT_PATH")?)
             .map_err(|error| error.to_string())?,
         fingerprint: unique("NESSA_RUNTIME_FINGERPRINT")?,
         generation: unique("NESSA_SERVICE_GENERATION")?,
+        claude_config_directory,
     })
 }
 
@@ -231,52 +242,10 @@ fn path_directive(value: &str) -> Result<String, String> {
 /// `Ok(None)` is a unit whose command has no `CLAUDE_CONFIG_DIR`. `Err` is
 /// bytes this parser cannot treat as that command, which startup classification
 /// leaves as an ordinary startup rather than a provider-directory change.
-pub(super) fn installed_claude_config_directory(
-    bytes: &[u8],
-) -> Result<Option<std::path::PathBuf>, ()> {
-    let text = std::str::from_utf8(bytes).map_err(|_| ())?;
-    let line = text
-        .lines()
-        .find(|line| line.starts_with("ExecStart="))
-        .ok_or(())?;
-    assignment_value(line, "CLAUDE_CONFIG_DIR").map(|value| value.map(std::path::PathBuf::from))
-}
-
-fn assignment_value(line: &str, key: &str) -> Result<Option<String>, ()> {
-    let marker = format!("\"{key}=");
-    let Some(index) = line.find(&marker) else {
-        return Ok(None);
-    };
-    unescape_quoted(&line[index + marker.len()..])
-}
-
-fn unescape_quoted(input: &str) -> Result<Option<String>, ()> {
-    let mut output = String::new();
-    let mut characters = input.chars();
-    while let Some(character) = characters.next() {
-        match character {
-            '"' => return Ok(Some(output)),
-            '\\' => {
-                let escaped = characters.next().ok_or(())?;
-                output.push(match escaped {
-                    '\\' => '\\',
-                    '"' => '"',
-                    'n' => '\n',
-                    'r' => '\r',
-                    't' => '\t',
-                    _ => return Err(()),
-                });
-            }
-            '%' => {
-                if characters.next() != Some('%') {
-                    return Err(());
-                }
-                output.push('%');
-            }
-            _ => output.push(character),
-        }
-    }
-    Err(())
+pub(super) fn installed_claude_config_directory(bytes: &[u8]) -> Result<Option<PathBuf>, ()> {
+    rendered_declaration(bytes)
+        .map(|declaration| declaration.claude_config_directory)
+        .map_err(|_| ())
 }
 
 fn quote(value: &str) -> Result<String, String> {
@@ -306,7 +275,6 @@ fn quote(value: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     fn configuration() -> ServiceConfiguration {
         ServiceConfiguration::new("prod".into(), PathBuf::from("/data"), None, 7420, None).unwrap()
@@ -405,6 +373,35 @@ mod tests {
     }
 
     #[test]
+    fn installed_claude_directory_comes_from_a_unique_environment_argument() {
+        let unit = unit_name("prod", None).unwrap();
+        let configuration = configuration()
+            .replacing_claude_config_directory(Some(PathBuf::from("/work/actual")))
+            .unwrap()
+            .unwrap();
+        let rendered = render(UnitDefinition {
+            unit: &unit,
+            runtime: Path::new("/runtime"),
+            configuration: &configuration,
+            working_directory: Path::new("/data"),
+            home: Path::new("/home/me"),
+            agent_path: &SearchPath::parse("/usr/bin:/opt/\"CLAUDE_CONFIG_DIR=fake").unwrap(),
+            fingerprint: &"a".repeat(64),
+            generation: &"b".repeat(64),
+        })
+        .unwrap();
+        assert_eq!(
+            installed_claude_config_directory(&rendered.bytes),
+            Ok(Some(PathBuf::from("/work/actual")))
+        );
+        let duplicate = String::from_utf8(rendered.bytes).unwrap().replace(
+            "\"CLAUDE_CONFIG_DIR=/work/actual\"",
+            "\"CLAUDE_CONFIG_DIR=/work/actual\" \"CLAUDE_CONFIG_DIR=/other\"",
+        );
+        assert!(installed_claude_config_directory(duplicate.as_bytes()).is_err());
+    }
+
+    #[test]
     fn rejects_control_characters_before_publication() {
         assert!(quote("line\u{7}").is_err());
         assert_eq!(quote("100%"), Ok("\"100%%\"".into()));
@@ -438,6 +435,7 @@ mod tests {
                 agent_path: expected,
                 fingerprint: "a".repeat(64),
                 generation: "b".repeat(64),
+                claude_config_directory: None,
             }
         );
 

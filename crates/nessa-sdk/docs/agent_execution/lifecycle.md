@@ -184,6 +184,30 @@ permit belongs to the supervised operation until its evidence and response settl
 dropping the caller's waiter cannot release that ownership. Physical cleanup and
 settlement of accepted work are separate completion boundaries.
 
+### Live approval control orderings
+
+`Agent::set_approval_mode` uses the existing `SessionLifecycle` control runner.
+Its owned task holds the scheduler lock and work permit through acknowledgement
+and generation-correlated publication, independently of the caller's waiter.
+The backend owns verified native application; the SDK owns admission's mode.
+No new durable approval-change record is introduced: queue admission audit owns
+its existing generation-correlated mode, and cleanup keeps its existing audit.
+`agents::approval` checks the approval-specific orderings. The common runner's
+`agents::coordination::ready_results` and
+`control_admitted_before_provider_reply_cannot_first_poll_after_unusable_state`
+check ready acknowledgement and first-poll exclusion.
+
+| Ordering | Result |
+| --- | --- |
+| Generation stopped before its backend's first poll | No provider command starts; control reports Closed with cleanup required. |
+| Started control has acknowledgement and stop ready together | The already-ready acknowledgement retains its meaning; generation correlation prevents authorizing a replacement attachment. |
+| Pending native response, then close with confirmed cleanup | Control stops and releases its scheduler ownership, allowing close to settle without the response. |
+| Accepted command, then dropped caller, then verified response | Owned control publishes the applied mode before releasing scheduler ownership; later admission records that mode. |
+| Caller dropped while response pending, then close | Physical cleanup and close settle without that response; a late answer cannot authorize the detached generation. |
+| Response verified before close | Applied mode belongs to the old attachment; a new attachment uses the binding preset. |
+| Failed/uncertain native response, including a backend panic before constructing its future | Existing control runner fences the affected generation; its mode is not published as verified. |
+| Repeated successful changes on the same attachment | Admissions observe the most recently acknowledged mode, under the same scheduler exclusion. |
+
 ```text
 Agent API -> supervised work permit -> provider operation
                     |                       |
@@ -269,7 +293,7 @@ storage ports are listed under "Not covered" below. This includes
 `AgentInitializationError::retry_cleanup` (whose cleanup handle is always empty
 today, so its wrapper cannot yet be exercised). That includes the operations
 that spawn their owner and await its `JoinHandle`: `invoke`, `enqueue`, `enqueue_steering`, `steer`,
-`reorder_queued`, `remove_queued`, `close`, `set_effort_level`,
+`reorder_queued`, `remove_queued`, `close`, `set_approval_mode`, `set_effort_level`,
 `answer_permission`, `cancel_permission` and `answer_question`. Tokio wakes a
 `JoinHandle` waiter inside its own `catch_unwind`, but it drops the caught
 payload outside it. A payload whose drop panics would then escape the task's
@@ -309,7 +333,7 @@ of the healthy waiter and exactly one physical close.
 | `AgentEvents::next` | The invocation that publishes the update | The invocation settles `Completed`, the attachment stays attached and later queued work runs. The update stays queued for the next poll | `panicking_event_subscriber_does_not_stop_the_invocation_that_published` |
 | `AttachmentCancellation::wait` | `close`, while it holds the lifecycle lock | Close returns normally, the lifecycle lock is not poisoned, and the Agent can attach and invoke again | `panicking_attachment_cancellation_waiter_does_not_interrupt_close` |
 | `ProviderOpenControl::wait`, polled by a provider during open | `close`, while it holds the lifecycle lock | Close returns normally and the lifecycle lock is not poisoned | `panicking_provider_open_stop_waiter_does_not_interrupt_close` |
-| `Agent::queued_ids`, `Agent::idle_for_approval_change`, `Agent::set_approval_mode` | Any task releasing the scheduler lock; the test uses an admission | The admission returns its receipt and the input runs | `panicking_lock_waiter_does_not_fail_the_admission_that_released_it`, one case each |
+| `Agent::queued_ids`, `Agent::idle_for_approval_change` | Any task releasing the scheduler lock; the test uses an admission | The admission returns its receipt and the input runs | `panicking_lock_waiter_does_not_fail_the_admission_that_released_it`, one case each |
 | `SessionManager::snapshot` | Any save releasing the evidence lock; the test uses an admission | As above | Same test, `CommittedSnapshot` case |
 | `AttachmentWait::wait`, plain panic | The attachment task, as its last action, holding no lock | The attachment is attached and runs work | `panicking_attachment_waiter_leaves_the_attachment_attached`, which also passes without the wrapper |
 | `AttachmentWait::wait`, panic whose payload panics twice when dropped, on a multi-thread runtime | The attachment task, whose `JoinHandle` the Agent does not keep | The runtime keeps running; the attachment is attached and runs work | `twice_panicking_payload_attachment_waiter_does_not_abort_the_runtime`, which runs `triple_fault_attachment_waiter_child` in a child process. Without the wrapper the child aborts with SIGABRT |

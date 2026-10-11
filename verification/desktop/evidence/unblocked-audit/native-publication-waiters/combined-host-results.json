@@ -1,0 +1,13 @@
+{
+  "head": "7f9ef18079e649831360df1d61afc160fa9271d7",
+  "command": ["node", "scripts/check-desktop.mjs"],
+  "exit": 0,
+  "seconds": 28.2,
+  "sourceHashes": {
+    "src-tauri/tests/gateway/application.rs": "f2afceaf863adfc94731932e30deaba1ca26af934465eb26531d0c05b5eebd61",
+    "docs/adr/689-linux-service-definition-replacement.md": "27802751ccc2f45fed0b134a542f757e622e0b1e676970571a9c6ea9c1db6a4e"
+  },
+  "cleanBefore": true,
+  "cleanAfter": true,
+  "localRust": "rustc 1.98.1 (48a229cea 2026-09-01)"
+}

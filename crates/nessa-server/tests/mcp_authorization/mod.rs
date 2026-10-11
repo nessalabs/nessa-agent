@@ -1829,3 +1829,69 @@ async fn a_restart_resumes_a_stranded_revocation() {
 
 #[path = "application/callback.rs"]
 mod callback_application;
+
+#[tokio::test]
+async fn refresh_refuses_mismatched_secret_generation_before_dispatch() {
+    for held in [false, true] {
+        for rejected in [false, true] {
+            for secret_generation in [1, 3] {
+                let memory = Arc::new(MemoryAuthorization::new());
+                let mut ready = ready_with_token_endpoint();
+                ready.generation = 2;
+                ready.expires_at_ms = Some(2_000);
+                memory.store(&ready).await.unwrap();
+                memory.set_resource(server(), &ready.resource).await;
+                memory
+                    .store_secret(
+                        server(),
+                        &TokenMaterial {
+                            access_token: "current-access".into(),
+                            refresh_token: Some("current-refresh".into()),
+                            generation: 2,
+                        },
+                    )
+                    .await
+                    .unwrap();
+                let owner = Arc::new(owner(memory.clone()));
+                if held {
+                    assert_eq!(owner.bearer(server()).await.unwrap().unwrap().generation, 2);
+                }
+                let secret = TokenMaterial {
+                    access_token: "other-access".into(),
+                    refresh_token: Some("other-refresh".into()),
+                    generation: secret_generation,
+                };
+                memory.store_secret(server(), &secret).await.unwrap();
+                memory
+                    .push_route(
+                        "https://as.example/token",
+                        Ok(OAuthResponse {
+                            status: 200,
+                            body: r#"{"access_token":"replacement","expires_in":60}"#.into(),
+                            www_authenticate: None,
+                        }),
+                    )
+                    .await;
+                let result = if rejected {
+                    owner.rejected(server(), "Bearer error=invalid_token").await
+                } else {
+                    memory.set_now(2_001);
+                    owner.bearer(server()).await
+                };
+                assert_eq!(
+                    result,
+                    Err(AdmissionRefusal::Unauthorized),
+                    "held={held} rejected={rejected} secret_generation={secret_generation}"
+                );
+                assert!(
+                    memory.posts().await.is_empty(),
+                    "mismatch dispatched a token POST"
+                );
+                assert_eq!(memory.load_secret(server()).await.unwrap(), Some(secret));
+                let retained = memory.load(server()).await.unwrap().unwrap();
+                assert_eq!(retained.generation, 2);
+                assert!(!retained.refresh_dispatched);
+            }
+        }
+    }
+}

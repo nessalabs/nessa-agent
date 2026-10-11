@@ -1,0 +1,147 @@
+{
+  "head": "bd8ef0763b92a6f5ca6a7178d736b21a7a5ffe17",
+  "base": "965797a9f2cb1a71923f32eee4197aa501669ebf",
+  "stages": [
+    {
+      "name": "fmt",
+      "command": ["cargo", "fmt", "--all", "--", "--check"],
+      "exit": 0,
+      "seconds": 2.2,
+      "log": "/tmp/nessa-unblocked-audit/rust-corrected-final/fmt.log"
+    },
+    {
+      "name": "runtime-dependencies",
+      "command": ["node", "scripts/check-runtime-dependencies.mjs", "--verify-fixture"],
+      "exit": 0,
+      "seconds": 0.8,
+      "log": "/tmp/nessa-unblocked-audit/rust-corrected-final/runtime-dependencies.log"
+    },
+    {
+      "name": "ci-tests",
+      "command": [
+        "node",
+        "scripts/cargo-test-parallel.mjs",
+        "--concurrency",
+        "2",
+        "--",
+        "-p",
+        "nessa-local-storage",
+        "-p",
+        "nessa-auth",
+        "-p",
+        "nessa-server",
+        "-p",
+        "nessa-protocol",
+        "-p",
+        "nessa-client-core",
+        "-p",
+        "nessa-sdk"
+      ],
+      "exit": 0,
+      "seconds": 316.2,
+      "log": "/tmp/nessa-unblocked-audit/rust-corrected-final/ci-tests.log"
+    },
+    {
+      "name": "ci-clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "-p",
+        "nessa-local-storage",
+        "-p",
+        "nessa-auth",
+        "-p",
+        "nessa-server",
+        "-p",
+        "nessa-protocol",
+        "-p",
+        "nessa-client-core",
+        "-p",
+        "nessa-sdk",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit": 0,
+      "seconds": 25.6,
+      "log": "/tmp/nessa-unblocked-audit/rust-corrected-final/ci-clippy.log"
+    },
+    {
+      "name": "client-no-cli",
+      "command": [
+        "cargo",
+        "clippy",
+        "-p",
+        "nessa-client-core",
+        "--no-default-features",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit": 0,
+      "seconds": 14.4,
+      "log": "/tmp/nessa-unblocked-audit/rust-corrected-final/client-no-cli.log"
+    },
+    {
+      "name": "server-production",
+      "command": [
+        "cargo",
+        "clippy",
+        "-p",
+        "nessa-server",
+        "--lib",
+        "--no-default-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit": 0,
+      "seconds": 17.6,
+      "log": "/tmp/nessa-unblocked-audit/rust-corrected-final/server-production.log"
+    },
+    {
+      "name": "sdk-docs",
+      "command": ["node", "scripts/check-sdk-docs.mjs"],
+      "exit": 0,
+      "seconds": 0.2,
+      "log": "/tmp/nessa-unblocked-audit/rust-corrected-final/sdk-docs.log"
+    },
+    {
+      "name": "sdk-rustdoc",
+      "command": ["cargo", "doc", "-p", "nessa-sdk", "--no-deps"],
+      "exit": 0,
+      "seconds": 0.1,
+      "log": "/tmp/nessa-unblocked-audit/rust-corrected-final/sdk-rustdoc.log"
+    },
+    {
+      "name": "desktop",
+      "command": ["node", "scripts/check-desktop.mjs"],
+      "exit": 0,
+      "seconds": 17.6,
+      "log": "/tmp/nessa-unblocked-audit/rust-corrected-final/desktop.log"
+    },
+    {
+      "name": "storage-all-features",
+      "command": ["cargo", "test", "-p", "nessa-local-storage", "--all-features"],
+      "exit": 0,
+      "seconds": 1.3,
+      "log": "/tmp/nessa-unblocked-audit/rust-corrected-final/storage-all-features.log"
+    },
+    {
+      "name": "release-host",
+      "command": ["cargo", "check", "-p", "nessa-app", "--release", "--all-targets"],
+      "exit": 0,
+      "seconds": 4.9,
+      "log": "/tmp/nessa-unblocked-audit/rust-corrected-final/release-host.log"
+    },
+    {
+      "name": "gateway-build",
+      "command": ["cargo", "build", "-p", "nessa-server"],
+      "exit": 0,
+      "seconds": 20.7,
+      "log": "/tmp/nessa-unblocked-audit/rust-corrected-final/gateway-build.log"
+    }
+  ]
+}

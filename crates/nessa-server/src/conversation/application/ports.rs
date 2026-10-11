@@ -196,7 +196,12 @@ pub trait ConversationRepository: Send + Sync {
     /// before records named their agent; [`ConversationError::Metadata`] for
     /// one that cannot be read.
     fn load(&self, id: &ConversationId) -> ConversationFuture<'_, Option<Conversation>>;
-    /// Create once, or return the existing owner without changing it.
+    /// Create once: Created acknowledges this exact immutable proposal.
+    /// Existing returns the retained owner unchanged, including its historical
+    /// creation surface, action and time.
+    /// The service correlates Created before effects:
+    /// `creation_created_acknowledgement_preserves_the_admitted_origin` and
+    /// `creation_mislabeled_historical_created_refuses_before_audit_and_recovers`.
     fn create(&self, conversation: Conversation) -> ConversationFuture<'_, ConversationCreation>;
     /// Persist intent under the conversation row's write lock. An existing
     /// request is returned unchanged; a different request cannot supersede a

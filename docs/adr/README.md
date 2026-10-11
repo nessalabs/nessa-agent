@@ -100,6 +100,11 @@ Primers, research, and detailed auth designs live in
 [local auth guide](../guides/local-auth.md); review findings live in
 [reviews](../reviews/local-auth-gateway.md). ADR folders contain decisions only.
 
+Native service audit corrections under review: [688 — shared service directory
+permissions](688-shared-service-directory-permissions.md) and [689 — Linux
+service-definition replacement](689-linux-service-definition-replacement.md),
+including #690's PATH generation replacement.
+
 ## Keeping this current
 
 Move a record from `todo/` to `done/` when its implementation scope is complete,

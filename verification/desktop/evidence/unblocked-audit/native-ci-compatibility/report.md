@@ -1,0 +1,13 @@
+# Native fixture compatibility correction
+
+The initial PR head `5c1c2257c630a3f5d5dc83ba422c882ecc598fbd` failed Linux, macOS and Windows native Clippy with warnings denied. The added settings fixture used `AtomicUsize::fetch_update`, deprecated by the CI toolchain. The affected expression is in the existing `#[cfg(test)] configuration_directory::UnconfirmedSettings::update` in `src-tauri/src/gateway/infrastructure/commands.rs`.
+
+The workspace/app declares Rust 1.85. A direct newer `try_update` call would raise that API requirement. The correction expresses the same checked decrement through `load` and `compare_exchange`, retaining sequentially consistent ordering. Zero consumes no fault; a successful decrement consumes one; contention retries the current value. The existing settings update runs once before counter ownership, and the existing error/panic is injected afterwards. No production code, persistent state, authority, public API, dependency, warning allowance or toolchain pin changes. The production prefix is byte-identical to the initial head.
+
+The independent source review reports no findings at any priority against the initial head plus this exact source SHA256: `865a30b8890569d80d3127eadb918408e2bf99684bb87bec2f7cdfc8ade7b1da`. That report is adjacent. It is a source review, separate from execution results.
+
+On local Rust 1.98.1, `node scripts/check-desktop.mjs` passes (31.5 seconds): 279 tooling tests, host formatting and all-targets Clippy with warnings denied, 705 host tests with one existing ignored, six signed-manifest cases and nine release-key cases. No other SDK or whole Rust suite is repeated for this test-only expression.
+
+The existing public rollback matrix is load-bearing: a source-asserted `checked_sub(1)` to `checked_sub(0)` mutation builds, selects one test and fails its typed Settings-versus-Rollback assertion. The exact file is then restored with a fresh modification time and the same SHA256. All eight configuration-directory tests pass after restoration. Other binaries' zero-selected filters are excluded; temporary mutant failures are not clean passes. The original deprecated call's failure is established by the actual three-platform CI logs, not falsely claimed to reproduce on the older local toolchain.
+
+The initial failed CI run remains recorded. Current-head cross-platform CI must rerun after this necessary source correction is pushed. The browser source at `9c1c672f2` is unchanged by this native test module; browser performance and functional failures remain separate Draft blockers. All owned check processes ended before browser verification resumed.

@@ -1,0 +1,180 @@
+{
+  "check": "columns",
+  "ok": true,
+  "started": "2026-10-10T17:27:43.637Z",
+  "finished": "2026-10-10T17:28:33.017Z",
+  "target": {
+    "url": "http://127.0.0.1:1438/desktop.html",
+    "mode": "dev"
+  },
+  "results": [
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "columns",
+      "size": "1440x900",
+      "name": "rail-fold-focus",
+      "width": 820,
+      "now": {
+        "rail": "closed",
+        "inRail": false,
+        "onToggle": true
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "columns",
+      "size": "1000x700",
+      "name": "rail-fold-focus",
+      "width": 820,
+      "now": {
+        "rail": "closed",
+        "inRail": false,
+        "onToggle": true
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "columns",
+      "size": "760x700",
+      "name": "rail-fold-focus",
+      "width": 620,
+      "now": {
+        "rail": "closed",
+        "inRail": false,
+        "onToggle": true
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "sidebar",
+      "size": "1440x900",
+      "name": "rail-fold-focus",
+      "width": 560,
+      "now": {
+        "rail": "closed",
+        "inRail": false,
+        "onToggle": true
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "sidebar",
+      "size": "1000x700",
+      "name": "rail-fold-focus",
+      "width": 560,
+      "now": {
+        "rail": "closed",
+        "inRail": false,
+        "onToggle": true
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "sidebar",
+      "size": "760x700",
+      "name": "rail-fold-focus",
+      "width": 560,
+      "now": {
+        "rail": "closed",
+        "inRail": false,
+        "onToggle": true
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "layout": "columns",
+      "size": "1440x900",
+      "name": "rail-fold-focus",
+      "width": 820,
+      "now": {
+        "rail": "closed",
+        "inRail": false,
+        "onToggle": true
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "layout": "columns",
+      "size": "1000x700",
+      "name": "rail-fold-focus",
+      "width": 820,
+      "now": {
+        "rail": "closed",
+        "inRail": false,
+        "onToggle": true
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "layout": "columns",
+      "size": "760x700",
+      "name": "rail-fold-focus",
+      "width": 620,
+      "now": {
+        "rail": "closed",
+        "inRail": false,
+        "onToggle": true
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "layout": "sidebar",
+      "size": "1440x900",
+      "name": "rail-fold-focus",
+      "width": 560,
+      "now": {
+        "rail": "closed",
+        "inRail": false,
+        "onToggle": true
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "layout": "sidebar",
+      "size": "1000x700",
+      "name": "rail-fold-focus",
+      "width": 560,
+      "now": {
+        "rail": "closed",
+        "inRail": false,
+        "onToggle": true
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "layout": "sidebar",
+      "size": "760x700",
+      "name": "rail-fold-focus",
+      "width": 560,
+      "now": {
+        "rail": "closed",
+        "inRail": false,
+        "onToggle": true
+      }
+    }
+  ]
+}

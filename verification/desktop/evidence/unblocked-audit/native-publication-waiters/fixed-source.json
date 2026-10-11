@@ -1,0 +1,7 @@
+{
+  "base": "05bc3c6c3b1ab1a9148bfc45f7cb133cc6f855fe",
+  "stage": "fixed controlled public schedule",
+  "sourceSha256": "ae2fa4d1f4e26a622a5d978fead61059d1c8fcb3e9f79441a922670890f37dc5",
+  "sameSchedulingScaffold": true,
+  "realGate": "< 2"
+}
