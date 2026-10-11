@@ -1,6 +1,17 @@
 //! The poller's cadence: each wait after a cycle, from its pace, its
-//! failures in a row, and one draw of entropy.
+//! failures in a row, and one draw of entropy. And the status answer a stop
+//! does not drop once the worker has committed an ending, which the audit
+//! then records instead of continuing into a read.
 use super::*;
+use crate::peer_gateways::application::{CacheState, PeerState};
+use nessa_auth::domain::{
+    pairing::{
+        AttemptId, AttemptOutcome, ConsentClass, ConsentIntentId, DisclosedConsent, InvitationId,
+        PublicIntent, TerminalCause,
+    },
+    AudienceId, OrganizationId, Resource, ResourceId,
+};
+use nessa_protocol::pairing::wire::NativePairingStatus;
 
 const POLICY: PollPolicy = PollPolicy {
     interval: Duration::from_secs(30),
@@ -144,7 +155,7 @@ fn a_status_change_is_named_by_the_transition_its_store_began() {
         status_cause(Some(SlotTransition::Approved), Some(&failed)),
         Some(PollerCause::Approved)
     );
-    // Stopped part way.
+    // No answer came back: an ending begun with nothing that names it.
     assert_eq!(
         status_cause(Some(SlotTransition::Ended), None),
         Some(PollerCause::Ended { detail: None })
@@ -174,6 +185,174 @@ fn a_full_cache_is_listed_quota_and_a_read_that_saved_nothing_unreachable() {
         sync_state(&Unread::Read(ReadFailure::Cache)),
         SyncState::Failed
     );
+}
+
+/// A stop that wins after the status worker has passed its commit point, and
+/// before the reply is taken, still keeps that reply's cause on
+/// [`AskedStatus`]. The worker blocks until [`asked_status`] has chosen the
+/// stop and runs its settle, so the stop wins by the handshake, with no timer
+/// deciding the order. Both stops the wait races — the poller's own, and the
+/// cycle an owner command stops — take that path, for a denial, a revocation,
+/// and an unclaimed attempt.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stop_after_an_ended_transition_commits_keeps_the_status_cause() {
+    let cases = [
+        (
+            NativePairingStatus::Terminal {
+                consent: Box::new(disclosed()),
+                cause: TerminalCause::Denied,
+            },
+            "terminal: denied",
+        ),
+        (
+            NativePairingStatus::Terminal {
+                consent: Box::new(disclosed()),
+                cause: TerminalCause::CredentialRevoked,
+            },
+            "terminal: credential_revoked",
+        ),
+        (
+            NativePairingStatus::Unclaimed {
+                public: public_intent(),
+                outcome: AttemptOutcome::Superseded,
+                terminal: None,
+            },
+            "unclaimed: superseded",
+        ),
+    ];
+    for (pairing, detail) in cases {
+        for stop_via_poller in [true, false] {
+            let asked = stop_during_status(pairing.clone(), stop_via_poller).await;
+            assert!(
+                asked.stopped,
+                "the stop won while the reply was still pending ({detail}, poller={stop_via_poller})"
+            );
+            assert_eq!(
+                status_cause(asked.transition, asked.status.as_ref()),
+                Some(PollerCause::Ended {
+                    detail: Some(detail.to_owned())
+                }),
+                "{detail}, poller={stop_via_poller}"
+            );
+        }
+    }
+}
+
+/// The same handshake as the cause test: the stand-in is the status call
+/// [`asked_status`] waits on, and it returns only after the stop has won.
+async fn stop_during_status(pairing: NativePairingStatus, stop_via_poller: bool) -> AskedStatus {
+    let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let worker = tokio::task::spawn_blocking(move || {
+        entered_tx
+            .send(())
+            .expect("the wait is still observing the commit");
+        // Long enough that a missed settle fails the test instead of
+        // hanging the blocking pool. The success path is released at once.
+        release_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("settle releases the reply");
+        Ok(pairing)
+    });
+    let (stop_tx, mut stopped) = watch::channel(false);
+    let (cycle_tx, cycle_rx) = tokio::sync::oneshot::channel();
+    let settle = async move {
+        release_tx
+            .send(())
+            .expect("the worker is waiting for the reply to be released");
+    };
+    let waiting = tokio::spawn(async move {
+        asked_status(
+            async move { worker.await.expect("the status worker finishes") },
+            async move {
+                let _ = cycle_rx.await;
+            },
+            &mut stopped,
+            settle,
+            || (Some(SlotTransition::Ended), Some(SlotOutcome::Landed)),
+        )
+        .await
+    });
+    entered_rx
+        .await
+        .expect("the worker commits before it returns the reply");
+    // Hold the stop this iteration does not fire. Dropping the cycle's
+    // sender would complete that wait, and the two stops would no longer
+    // be distinct.
+    let other_stop = if stop_via_poller {
+        stop_tx.send(true).expect("the poller stop is signaled");
+        Some(cycle_tx)
+    } else {
+        cycle_tx.send(()).expect("the cycle stop is signaled");
+        None
+    };
+    let asked = tokio::time::timeout(Duration::from_secs(5), waiting)
+        .await
+        .expect("the stop settles the reply")
+        .expect("the wait task finishes");
+    drop(other_stop);
+    asked
+}
+
+/// A stop after an ending has landed still records that ending's cause, and
+/// the cycle's result is `None`, so it does not continue into a read.
+#[test]
+fn a_stopped_status_records_its_cause_and_does_not_read() {
+    let address = "127.0.0.1:9".parse().unwrap();
+    let before = PeerHolding {
+        record: PeerState::Pending { address },
+        cache: CacheState::Absent,
+    };
+    let after = PeerHolding {
+        record: PeerState::Revoked { address },
+        cache: CacheState::Absent,
+    };
+    let recorded = status_record(
+        AskedStatus {
+            status: Some(Ok((Status::Ended, "terminal: denied".to_owned()))),
+            transition: Some(SlotTransition::Ended),
+            landed: Some(SlotOutcome::Landed),
+            stopped: true,
+        },
+        &before,
+        &after,
+    );
+    assert_eq!(
+        recorded.cause,
+        Some(PollerCause::Ended {
+            detail: Some("terminal: denied".to_owned())
+        })
+    );
+    assert_eq!(recorded.outcome, Ok(()));
+    assert!(recorded.answer.is_none());
+}
+
+fn public_intent() -> PublicIntent {
+    PublicIntent::new(
+        InvitationId::new([1; InvitationId::LENGTH]),
+        AttemptId::new([2; AttemptId::LENGTH]),
+        ConsentIntentId::new([3; ConsentIntentId::LENGTH]),
+        1,
+        600_000,
+        ConsentClass::PeerRead,
+    )
+    .unwrap()
+}
+
+fn disclosed() -> DisclosedConsent {
+    let public = public_intent();
+    DisclosedConsent::new(
+        public,
+        AudienceId::new("gateway").unwrap(),
+        public
+            .class()
+            .grant(Resource::new(
+                OrganizationId::new("org").unwrap(),
+                ResourceId::new("gateway").unwrap(),
+            ))
+            .unwrap(),
+    )
+    .unwrap()
 }
 
 /// A status step's outcome is the record's store's: a transition whose write
