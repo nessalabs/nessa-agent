@@ -117,8 +117,10 @@ impl EnvironmentPairing {
         let mut said = false;
         loop {
             let store = self.store.clone();
-            let (saved, pending) = tokio::task::spawn_blocking(move || {
-                Ok::<_, PrivateStateError>((store.load_credential()?, store.load_pending()?))
+            // Pending first: a pending record only ever becomes a
+            // credential, so a pairing that exists never reads as neither.
+            let (pending, saved) = tokio::task::spawn_blocking(move || {
+                Ok::<_, PrivateStateError>((store.load_pending()?, store.load_credential()?))
             })
             .await
             .map_err(|error| RunError::Agent(error.to_string()))?
@@ -156,29 +158,27 @@ impl EnvironmentPairing {
                     }
                     Ok(_) => {}
                     Err(NativeClientError::NoPending) => return Err(not_paired()),
-                    // Asking again can answer these.
-                    Err(
-                        error @ (NativeClientError::Io(_)
-                        | NativeClientError::Handshake(_)
-                        | NativeClientError::Busy
-                        | NativeClientError::Refused
-                        | NativeClientError::Entropy
-                        | NativeClientError::WorkerFault(_)
-                        | NativeClientError::Storage(
-                            PrivateStateError::Locked
-                            | PrivateStateError::Unavailable
-                            | PrivateStateError::Uncertain,
-                        )),
-                    ) => tracing::warn!(?error, "the pairing's status was not read"),
                     // A pairing record this machine cannot use, or a
                     // gateway answering out of turn: no later ask changes it.
-                    Err(error) => {
+                    Err(
+                        error @ (NativeClientError::Storage(
+                            PrivateStateError::Corrupt | PrivateStateError::Conflict,
+                        )
+                        | NativeClientError::Crypto(_)
+                        | NativeClientError::Wire(_)
+                        | NativeClientError::Phase
+                        | NativeClientError::OtherEnrollee),
+                    ) => {
                         return Err(RunError::Agent(format!(
                             "the pairing's status cannot be read: {error:?}; remove {} and \
                              enroll again",
                             self.directory.display()
                         )))
                     }
+                    // Anything else may clear: the gateway out of reach, busy
+                    // or refusing, or a save that failed, which leaves the
+                    // pending record for the next ask to deliver again.
+                    Err(error) => tracing::warn!(?error, "the pairing's status was not read"),
                 },
             }
             tokio::time::sleep(poll).await;
