@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# Pinned Claude CLI hook matrix. One isolated project per row. Every claude
+# Claude hook matrix for surveyed CLI 2.1.257. The script reads
+# `claude --version` before any run and exits unless that version is 2.1.257.
+# --allow-claude-version <v> allows v and records it in the summary.
+# One isolated project per row. Every claude
 # process starts in that project, so the repo checkout's .claude/settings.json
 # is not the file that loads. ANTHROPIC_API_KEY is unset. The model is
 # claude-haiku-4-5-20251001.
@@ -27,18 +30,53 @@ HOOK_BEHAVIOR_ROOT="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=lib.sh
 source "$HOOK_BEHAVIOR_ROOT/lib.sh"
 
+SURVEYED_CLAUDE_VERSION="2.1.257"
 MANAGED=0
 OUT=""
+ALLOW_CLAUDE_VERSION=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --managed) MANAGED=1; shift ;;
     --out) OUT="$2"; shift 2 ;;
+    --allow-claude-version)
+      if [[ $# -lt 2 || -z "$2" ]]; then
+        echo "--allow-claude-version needs a version" >&2
+        exit 2
+      fi
+      ALLOW_CLAUDE_VERSION="$2"
+      shift 2
+      ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 
 if ! command -v claude >/dev/null 2>&1; then
   echo "claude is not on PATH" >&2
+  exit 2
+fi
+
+# Read the version before creating the work directory or the evidence
+# directory. The first token of `claude --version` is the release, for
+# example 2.1.257 from "2.1.257 (Claude Code)".
+version_dir="$(mktemp -d "${TMPDIR:-/tmp}/nessa-claude-version.XXXXXX")"
+version_status=0
+VERSION="$(cd "$version_dir" && claude --version | head -n 1)" || version_status=$?
+rm -rf "$version_dir"
+if [[ "$version_status" -ne 0 || -z "${VERSION:-}" ]]; then
+  echo "claude --version failed" >&2
+  exit 2
+fi
+claude_version="${VERSION%% *}"
+expected_claude_version="$SURVEYED_CLAUDE_VERSION"
+if [[ -n "$ALLOW_CLAUDE_VERSION" ]]; then
+  expected_claude_version="$ALLOW_CLAUDE_VERSION"
+fi
+if [[ "$claude_version" != "$expected_claude_version" ]]; then
+  if [[ -n "$ALLOW_CLAUDE_VERSION" ]]; then
+    echo "claude version is ${claude_version}, --allow-claude-version is ${ALLOW_CLAUDE_VERSION}" >&2
+  else
+    echo "claude version is ${claude_version}, surveyed version is ${SURVEYED_CLAUDE_VERSION}" >&2
+  fi
   exit 2
 fi
 
@@ -99,7 +137,6 @@ mkdir -p "$OUT"
 ROWS="$WORKDIR/rows.jsonl"
 SUMMARY="$WORKDIR/summary.json"
 : >"$ROWS"
-VERSION="$(cd "$WORKDIR" && claude --version | head -n 1)"
 
 # Stored Claude fields only. A work directory under $HOME would otherwise
 # land in result and permission_denials. /tmp paths are left as they are.
@@ -337,14 +374,20 @@ if [[ "$MANAGED" -eq 1 ]]; then
   done
 fi
 
-set +e
-python3 "$HOOK_BEHAVIOR_ROOT/evidence.py" finalize \
-  --rows "$ROWS" \
-  --summary "$SUMMARY" \
-  --harness "$HARNESS" \
-  --version "$VERSION" \
-  --label "$LABEL" \
+finalize_cmd=(
+  python3 "$HOOK_BEHAVIOR_ROOT/evidence.py" finalize
+  --rows "$ROWS"
+  --summary "$SUMMARY"
+  --harness "$HARNESS"
+  --version "$VERSION"
+  --label "$LABEL"
   --claude-reference
+)
+if [[ -n "$ALLOW_CLAUDE_VERSION" ]]; then
+  finalize_cmd+=(--allowed-claude-version "$ALLOW_CLAUDE_VERSION")
+fi
+set +e
+"${finalize_cmd[@]}"
 finalize_status=$?
 set -e
 if [[ "$MANAGED_PLANTED" -eq 1 ]]; then

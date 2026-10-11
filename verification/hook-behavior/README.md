@@ -22,9 +22,14 @@ evidence directory` and exits 2, before anything there is removed. An `--only`
 value that is not one of that runner's rows prints
 `unknown row: <name>` and exits 2. A full run, with no `--only`, is unchanged.
 
-`run-claude.sh` uses `env -u ANTHROPIC_API_KEY` and
-`--model claude-haiku-4-5-20251001`. Every `claude` process, including resume
-and `/compact`, is started with `(cd "$project" && ...)`.
+`run-claude.sh` reads `claude --version` before it runs and exits unless that
+version is 2.1.257, the surveyed CLI. The compared token is the first word of
+that line, `2.1.257` in `2.1.257 (Claude Code)`. `--allow-claude-version <v>`
+allows `<v>` instead and records `allowed_claude_version` in `summary.json`.
+Without the flag the summary has no such field. The script uses
+`env -u ANTHROPIC_API_KEY` and `--model claude-haiku-4-5-20251001`. Every
+`claude` process, including resume and `/compact`, is started with
+`(cd "$project" && ...)`.
 `--dangerously-skip-permissions` is passed only on those invocations, and
 `events-permission` omits it. `CLAUDE_CONFIG_DIR` is the real login directory.
 Credential files are not copied. The script itself does not write that

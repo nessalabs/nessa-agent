@@ -14,6 +14,8 @@ request body, and they keep the excerpts. `finalize` refuses stored text that
 contains an email address or the home directory. After it writes the summary,
 it exits 1 when a row's exit code is not the expected one: 0, except Codex
 `stop-decision-block` with suppression off, which is 124.
+`allowed_claude_version` is written only when the Claude runner was passed
+`--allow-claude-version`.
 """
 
 import argparse
@@ -393,10 +395,12 @@ def finalize(args):
     summary = {
         "harness": args.harness,
         "version": args.version,
-        "label": args.label,
-        "row_count": len(rows),
-        "rows": [summary_row(row) for row in rows],
     }
+    if args.allowed_claude_version:
+        summary["allowed_claude_version"] = args.allowed_claude_version
+    summary["label"] = args.label
+    summary["row_count"] = len(rows)
+    summary["rows"] = [summary_row(row) for row in rows]
     if args.claude_reference:
         summary["reference_checks"] = claude_reference(rows)
     if privacy_violation(rows) or privacy_violation(summary):
@@ -444,6 +448,7 @@ def main():
     done.add_argument("--version", required=True)
     done.add_argument("--label", required=True)
     done.add_argument("--claude-reference", action="store_true")
+    done.add_argument("--allowed-claude-version", default="")
     args = parser.parse_args()
     if args.command == "append":
         append(args)
