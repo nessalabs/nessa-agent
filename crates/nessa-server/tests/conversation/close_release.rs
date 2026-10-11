@@ -24,6 +24,7 @@ fn snapshot(invocations: Vec<InvocationRecord>) -> SessionSnapshot {
         invocations,
         queue_history: Vec::new(),
         lease: None,
+        artifacts: Vec::new(),
     }
 }
 

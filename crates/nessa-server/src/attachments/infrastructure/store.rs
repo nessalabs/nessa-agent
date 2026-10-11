@@ -507,7 +507,7 @@ impl Files {
             }
             // A usable hold is never replaced. If its bytes had gone missing
             // they are back now, which is all that changed.
-            return Ok(Kept::Existing(kept));
+            return Ok(Kept::Existing(Box::new(kept)));
         }
         // Nothing, or a pending record: another upload's, whose claim stops
         // matching here, or one a crash left behind.

@@ -316,6 +316,7 @@ fn review_snapshot(events: Vec<ExecutionEvent>) -> SessionSnapshot {
             result: None,
         }],
         lease: None,
+        artifacts: Vec::new(),
     }
 }
 

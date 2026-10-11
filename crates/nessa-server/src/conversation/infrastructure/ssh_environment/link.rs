@@ -9,6 +9,8 @@
 //!          yes ──▶ writer task (frames out), demux task (frames in)
 //! writer: frames out, in the order queued; a Keepalive when idle `keepalive`
 //! demux: frame ──▶ lease route? ──▶ grant / channel output / stopped / ended
+//!                   published ──▶ the lease's offers ──▶ (taken) Collected
+//!                     no room, or nobody takes them ──▶ Collected refused
 //!                   none ──▶ FrameDropped, never applied elsewhere (row L9)
 //! end of stream ──▶ every route dropped: waiters unanswered, outputs ended,
 //!                   each lease's `gone` closed ──▶ ConnectionLost
@@ -44,13 +46,14 @@
 //! lease's end has no evidence, so it is Interrupted. A dropped frame's
 //! record failing is logged only: it records no transition of any lease.
 use super::audit::{EnvironmentAudit, EnvironmentEvent};
-use super::connector::LeaseConnector;
+use super::connector::{ArtifactChannels, LeaseConnector};
 use crate::env::LEASE_PROTOCOL;
 use crate::env_serve::application::FrameStream;
 use futures_util::FutureExt;
 use nessa_protocol::lease::{
-    decode, encode, read_hello, stop_steps, Cleanup, CommandEnd, Data, FromEnvironment,
-    GrantRefusal, ToEnvironment, Unavailability, MAX_DATA_BYTES,
+    decode, encode, read_hello, stop_steps, Cleanup, Collection, CollectionRefusal, CommandEnd,
+    Data, FromEnvironment, GrantRefusal, StagedArtifact, ToEnvironment, Unavailability,
+    MAX_ARTIFACTS_IN_FLIGHT, MAX_DATA_BYTES,
 };
 use nessa_sdk::domain::agent_execution::leases::{LeaseRefusal, SshDestination};
 use std::{
@@ -156,6 +159,9 @@ struct LeaseRoute {
     pumps: Arc<RwLock<()>>,
     channels: HashMap<u32, ChannelRoute>,
     next_channel: u32,
+    /// Where the files the host publishes under it are offered: `None`
+    /// once whoever takes them let go, and for a command lease.
+    published: Option<mpsc::Sender<Published>>,
     /// Dropped with the route: the lease is no longer routed here.
     _gone: watch::Sender<()>,
 }
@@ -172,6 +178,24 @@ struct Routes {
     unaudited: HashSet<String>,
 }
 
+/// A file the host published under a lease, as the demux hands it on.
+pub(crate) struct Published {
+    pub(crate) artifact: u32,
+    pub(crate) file: StagedArtifact,
+    /// Held, as a pump holds it, until its answer is queued: the lease's
+    /// End waits for it, so a file answered before the End is told before it.
+    pub(crate) unanswered: OwnedRwLockReadGuard<()>,
+}
+
+/// What a granted lease is handed: its watch, and the files published
+/// under it.
+pub(crate) struct Granted {
+    /// Closes once the lease is no longer routed here.
+    pub(crate) gone: watch::Receiver<()>,
+    /// Ends once the lease is no longer routed here.
+    pub(crate) published: mpsc::Receiver<Published>,
+}
+
 /// One open connection to a host's environment.
 pub(crate) struct HostLink {
     host: SshDestination,
@@ -180,6 +204,8 @@ pub(crate) struct HostLink {
     routes: Arc<Mutex<Routes>>,
     audit: Arc<dyn EnvironmentAudit>,
     keep: Mutex<Box<dyn Send>>,
+    /// Opens artifact channels on this same connection.
+    artifacts: Arc<dyn ArtifactChannels>,
 }
 
 /// How long the writer may be idle before it says the gateway is there.
@@ -290,6 +316,7 @@ impl HostLink {
             routes,
             audit,
             keep: Mutex::new(connection.keep),
+            artifacts: connection.artifacts,
         });
         tokio::spawn(demux(Arc::downgrade(&link), link.shared(), stream));
         Ok(link)
@@ -331,6 +358,7 @@ impl HostLink {
             host: self.host.clone(),
             routes: self.routes.clone(),
             audit: self.audit.clone(),
+            frames: self.frames.downgrade(),
         }
     }
 
@@ -341,6 +369,11 @@ impl HostLink {
     /// The host's workspace, from its hello.
     pub(crate) fn workspace(&self) -> &Path {
         &self.workspace
+    }
+
+    /// How artifact channels are opened on this connection.
+    pub(crate) fn artifact_channels(&self) -> Arc<dyn ArtifactChannels> {
+        self.artifacts.clone()
     }
 
     /// Whether the connection still serves leases.
@@ -361,19 +394,22 @@ impl HostLink {
         lease: &str,
         agent: &str,
         deadline: Duration,
-    ) -> Result<watch::Receiver<()>, LeaseRefusal> {
+    ) -> Result<Granted, LeaseRefusal> {
+        let (offers, published) = mpsc::channel(MAX_ARTIFACTS_IN_FLIGHT);
         let frame = ToEnvironment::Grant {
             lease: lease.into(),
             agent: agent.into(),
         };
-        self.admit(lease, frame, deadline)
+        let gone = self
+            .admit(lease, frame, Some(offers), deadline)
             .await
             .map_err(|refused| match refused {
                 AdmissionRefused::Host(GrantRefusal::AgentUnavailable) => {
                     LeaseRefusal::AgentUnavailable
                 }
                 _ => LeaseRefusal::EnvironmentUnreachable,
-            })
+            })?;
+        Ok(Granted { gone, published })
     }
 
     /// Ask the host to admit command lease `lease` to run `argv` once, as
@@ -395,7 +431,8 @@ impl HostLink {
             cwd,
             timeout_ms,
         };
-        self.admit(lease, frame, deadline).await
+        // A command publishes nothing: no file is offered under its lease.
+        self.admit(lease, frame, None, deadline).await
     }
 
     /// Run a granted command lease's command and wait for its `Ran`. The
@@ -421,12 +458,14 @@ impl HostLink {
         answered.await.ok()
     }
 
-    /// Route `lease` and send `frame`, the request to admit it, and wait at
-    /// most `deadline` for the host's answer.
+    /// Route `lease`, offering what it publishes to `published`, and send
+    /// `frame`, the request to admit it, and wait at most `deadline` for the
+    /// host's answer.
     async fn admit(
         &self,
         lease: &str,
         frame: ToEnvironment,
+        published: Option<mpsc::Sender<Published>>,
         deadline: Duration,
     ) -> Result<watch::Receiver<()>, AdmissionRefused> {
         let (answer, answered) = oneshot::channel();
@@ -447,6 +486,7 @@ impl HostLink {
                     pumps: Arc::new(RwLock::new(())),
                     channels: HashMap::new(),
                     next_channel: 1,
+                    published,
                     _gone: gone_sender,
                 },
             );
@@ -470,6 +510,7 @@ impl HostLink {
                         ToEnvironment::End {
                             lease: lease.into(),
                         },
+                        None,
                     );
                 }
                 Err(match refused {
@@ -701,7 +742,44 @@ impl HostLink {
                 ToEnvironment::End {
                     lease: lease.into(),
                 },
+                None,
             );
+        }
+    }
+
+    /// Tell the host what became of a file it published under `lease`,
+    /// unless the lease is no longer held here. `unanswered` is let go only
+    /// once the answer is queued, so the lease's End, which waits for it,
+    /// always goes after: the host never answers as ended a file this
+    /// gateway kept.
+    pub(crate) fn collected(
+        &self,
+        lease: &str,
+        artifact: u32,
+        outcome: Collection,
+        unanswered: OwnedRwLockReadGuard<()>,
+    ) {
+        if !self.routes().leases.contains_key(lease) {
+            return;
+        }
+        let frame = ToEnvironment::Collected {
+            lease: lease.into(),
+            artifact,
+            outcome,
+        };
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => {
+                let frames = self.frames.clone();
+                runtime.spawn(async move {
+                    let _ = frames.send(frame).await;
+                    drop(unanswered);
+                });
+            }
+            Err(_) => {
+                if self.frames.try_send(frame).is_err() {
+                    tracing::error!("an artifact's answer found no room; it is not sent");
+                }
+            }
         }
     }
 
@@ -764,6 +842,9 @@ struct Shared {
     host: SshDestination,
     routes: Arc<Mutex<Routes>>,
     audit: Arc<dyn EnvironmentAudit>,
+    /// The host's frames, for an answer the demux gives itself; weak, so
+    /// the demux never keeps the connection's writer open.
+    frames: mpsc::WeakSender<ToEnvironment>,
 }
 
 impl Shared {
@@ -818,6 +899,11 @@ impl Shared {
         };
         match routed {
             Routed::Done => {}
+            Routed::Answer(frame, unanswered) => {
+                if let Some(frames) = self.frames.upgrade() {
+                    deliver(&frames, None, frame, unanswered);
+                }
+            }
             Routed::Dropped => self.dropped(lease.as_deref(), channel, name),
             Routed::Overflow { lease, channel } => {
                 // The harness is stopped either way; unrecorded, its lease
@@ -838,8 +924,14 @@ impl Shared {
 
 enum Routed {
     Done,
+    /// Routed, and answered at once by this gateway; the fence it was
+    /// taken under, if any, is held until the answer is queued.
+    Answer(ToEnvironment, Option<OwnedRwLockReadGuard<()>>),
     Dropped,
-    Overflow { lease: String, channel: u32 },
+    Overflow {
+        lease: String,
+        channel: u32,
+    },
 }
 
 fn route_frame(routes: &mut Routes, frame: FromEnvironment) -> Routed {
@@ -879,6 +971,58 @@ fn route_frame(routes: &mut Routes, frame: FromEnvironment) -> Routed {
                     Routed::Done
                 }
                 None => Routed::Dropped,
+            }
+        }
+        FromEnvironment::Published {
+            lease,
+            artifact,
+            file,
+        } => {
+            let Some(route) = routes.leases.get_mut(&lease) else {
+                return Routed::Dropped;
+            };
+            let refused = |reason, unanswered| {
+                Routed::Answer(
+                    ToEnvironment::Collected {
+                        lease: lease.clone(),
+                        artifact,
+                        outcome: Collection::Refused { reason },
+                    },
+                    unanswered,
+                )
+            };
+            // Once its End is asked, nothing more is taken under it.
+            if route.ending {
+                return refused(CollectionRefusal::LeaseEnded, None);
+            }
+            let Ok(unanswered) = route.pumps.clone().try_read_owned() else {
+                return refused(CollectionRefusal::LeaseEnded, None);
+            };
+            let offer = Published {
+                artifact,
+                file,
+                unanswered,
+            };
+            // A refusal keeps the offer's fence until it is queued, so an End
+            // asked meanwhile still goes after it.
+            let sent = match route.published.as_ref() {
+                Some(offers) => offers.try_send(offer).map_err(|error| match error {
+                    mpsc::error::TrySendError::Full(offer) => (true, offer.unanswered),
+                    mpsc::error::TrySendError::Closed(offer) => (false, offer.unanswered),
+                }),
+                None => Err((false, offer.unanswered)),
+            };
+            match sent {
+                Ok(()) => Routed::Done,
+                // The host keeps at most as many in flight as there is room
+                // for: one past it is not this gateway's to take.
+                Err((true, unanswered)) => {
+                    refused(CollectionRefusal::BudgetExceeded, Some(unanswered))
+                }
+                Err((false, unanswered)) => {
+                    route.published = None;
+                    refused(CollectionRefusal::ChannelUnavailable, Some(unanswered))
+                }
             }
         }
         FromEnvironment::Ended { lease, cleanup } => match routes.leases.remove(&lease) {
@@ -1026,6 +1170,7 @@ fn frame_name(frame: &FromEnvironment) -> &'static str {
         FromEnvironment::Stopped { .. } => "stopped",
         FromEnvironment::Ended { .. } => "ended",
         FromEnvironment::Accounted { .. } => "accounted",
+        FromEnvironment::Published { .. } => "published",
         FromEnvironment::Ran { .. } => "ran",
     }
 }
@@ -1128,12 +1273,14 @@ async fn write_frames(
 /// Queue `frame` for the host even when there is no room just now: on a
 /// task of its own, once every pump `after` holds is done, behind what is
 /// already queued; done once it is queued or the connection is gone.
+/// `held` is let go only then.
 /// Outside a runtime, which a gateway never is, it is queued only if there
 /// is room.
 fn deliver(
     frames: &mpsc::Sender<ToEnvironment>,
     after: Option<Arc<RwLock<()>>>,
     frame: ToEnvironment,
+    held: Option<OwnedRwLockReadGuard<()>>,
 ) {
     match tokio::runtime::Handle::try_current() {
         Ok(runtime) => {
@@ -1144,6 +1291,7 @@ fn deliver(
                     None => None,
                 };
                 let _ = frames.send(frame).await;
+                drop(held);
             });
         }
         Err(_) => {

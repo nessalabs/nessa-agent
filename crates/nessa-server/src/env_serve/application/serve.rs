@@ -16,6 +16,8 @@
 //!                                   ──▶ ledger: command_ran, ended ──▶ Ran
 //!                          ──End (a command running)──▶ stop it ──▶ Ran ──▶ Ended
 //!                          ──Keepalive▶ (nothing: the gateway is there)
+//!                          ──Collected▶ the lease's artifact answered (artifacts.rs)
+//! a harness publishes ──▶ staged copy ──▶ ledger: published ──▶ Published
 //! end of stream, or nothing read for `silence` ──▶ every lease ended as lost
 //!                                                ──▶ ledger: ended(lost)
 //! ```
@@ -45,10 +47,11 @@
 //! A lease's end is answered by that end alone: an `Account`, or another
 //! `End`, of a lease whose end is still under way waits for it, rather than
 //! reading a ledger that does not hold it yet.
+use super::artifacts::{ArtifactOutbox, LeaseArtifacts};
 use super::wire::{write_frame, FrameStream};
 use nessa_protocol::lease::{
-    decode, Cleanup, CommandEnd, Data, FromEnvironment, GrantRefusal, Hello, StartFailure,
-    ToEnvironment, Unavailability, MAX_DATA_BYTES, MAX_STOP_WAIT, SILENCE_LIMIT,
+    decode, Cleanup, Collection, CommandEnd, Data, FromEnvironment, GrantRefusal, Hello,
+    StartFailure, ToEnvironment, Unavailability, MAX_DATA_BYTES, MAX_STOP_WAIT, SILENCE_LIMIT,
 };
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
@@ -78,7 +81,9 @@ pub(crate) trait HarnessLauncher: Send + Sync {
     fn workspace(&self) -> &str;
     /// Whether the host is configured to run `agent`.
     fn runs(&self, agent: &str) -> bool;
-    /// Start `agent`'s harness with `environment` added to the host's own.
+    /// Start `agent`'s harness with `environment`, the binding's variables,
+    /// added to the host's own, and `publish_point`, its lease's, when it
+    /// has one, as this side's own variable.
     ///
     /// # Errors
     /// The harness could not be started; nothing runs.
@@ -86,6 +91,7 @@ pub(crate) trait HarnessLauncher: Send + Sync {
         &self,
         agent: &str,
         environment: &BTreeMap<String, String>,
+        publish_point: Option<&str>,
     ) -> Result<HarnessProcess, AgentError>;
 }
 
@@ -169,6 +175,23 @@ pub(crate) enum LedgerEntry {
     /// A harness stopped reading its input until its queue was full, or for
     /// good: it is stopped rather than fed a stream with bytes missing.
     InputOverflow { lease: String, channel: u32 },
+    /// A harness published a file: its staged copy, by digest, was offered
+    /// to the gateway.
+    Published {
+        lease: String,
+        artifact: u32,
+        digest: String,
+        size: u64,
+    },
+    /// What the gateway made of a published file, or the lease ending first.
+    Collected {
+        lease: String,
+        artifact: u32,
+        outcome: Collection,
+    },
+    /// The connection to the gateway was lost before it answered a
+    /// published file: what the gateway made of it is not known here.
+    Unanswered { lease: String, artifact: u32 },
     /// A command lease was admitted to run `argv` once.
     CommandGranted {
         lease: String,
@@ -270,6 +293,7 @@ pub(crate) struct Runners {
 
 /// Serve one gateway until its stream ends, then end every lease it held as
 /// lost and return once each is recorded.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn serve<R, W>(
     input: R,
     output: W,
@@ -277,6 +301,7 @@ pub(crate) async fn serve<R, W>(
     protocol: &str,
     runners: Runners,
     ledger: Arc<dyn LeaseLedger>,
+    outbox: Arc<dyn ArtifactOutbox>,
     timings: ServeTimings,
 ) where
     R: AsyncRead + Unpin + Send + 'static,
@@ -303,6 +328,7 @@ pub(crate) async fn serve<R, W>(
         frames,
         launcher,
         ledger,
+        outbox,
         timings,
         drops: 0,
     };
@@ -420,6 +446,9 @@ struct Held {
     stopped: HashMap<u32, watch::Receiver<Option<Cleanup>>>,
     /// Stops already under way, each answering its harness's cleanup.
     stops: Vec<Stopping>,
+    /// Its publish point and the artifacts in flight under it; `None` when
+    /// the point could not be opened.
+    artifacts: Option<LeaseArtifacts>,
 }
 
 /// One command lease this connection holds.
@@ -458,6 +487,7 @@ struct Served {
     frames: mpsc::Sender<FromEnvironment>,
     launcher: Arc<dyn HarnessLauncher>,
     ledger: Arc<dyn LeaseLedger>,
+    outbox: Arc<dyn ArtifactOutbox>,
     timings: ServeTimings,
     drops: u32,
 }
@@ -573,6 +603,20 @@ impl Served {
                 .await;
             }
             ToEnvironment::Keepalive => {}
+            ToEnvironment::Collected {
+                lease,
+                artifact,
+                outcome,
+            } => {
+                let answered = self
+                    .leases
+                    .get(&lease)
+                    .and_then(|held| held.artifacts.as_ref())
+                    .is_some_and(|artifacts| artifacts.collected(artifact, outcome));
+                if !answered {
+                    self.dropped(Some(&lease), None, "collected");
+                }
+            }
         }
     }
 
@@ -659,6 +703,12 @@ impl Served {
         match refusal {
             None => {
                 self.granted.insert(lease.clone());
+                let artifacts = LeaseArtifacts::open(
+                    &lease,
+                    self.outbox.clone(),
+                    self.ledger.clone(),
+                    self.frames.clone(),
+                );
                 self.leases.insert(
                     lease.clone(),
                     Held {
@@ -666,6 +716,7 @@ impl Served {
                         channels: HashMap::new(),
                         stopped: HashMap::new(),
                         stops: Vec::new(),
+                        artifacts,
                     },
                 );
                 self.send(FromEnvironment::Granted { lease }).await;
@@ -719,12 +770,21 @@ impl Served {
                 .start_failed(lease, channel, StartFailure::AuditUnavailable)
                 .await;
         }
-        let agent = self
+        let (agent, publish_point) = self
             .leases
             .get(&lease)
-            .map(|held| held.agent.clone())
+            .map(|held| {
+                let point = held
+                    .artifacts
+                    .as_ref()
+                    .map(|artifacts| artifacts.address().to_owned());
+                (held.agent.clone(), point)
+            })
             .unwrap_or_default();
-        let process = match self.launcher.launch(&agent, environment) {
+        let process = match self
+            .launcher
+            .launch(&agent, environment, publish_point.as_deref())
+        {
             Ok(process) => process,
             Err(error) => {
                 tracing::warn!(lease, channel, %error, "a harness did not start");
@@ -899,7 +959,12 @@ impl Served {
     /// under it, wait for the stops already under way, record what all of it
     /// took and, unless it was lost with the connection, answer it after
     /// every answer those stops send.
-    fn end(&mut self, lease: String, held: Held, lost: bool) {
+    fn end(&mut self, lease: String, mut held: Held, lost: bool) {
+        // Nothing more is published under it, and nothing it staged is read
+        // again: the gateway ended it, or is gone.
+        if let Some(artifacts) = held.artifacts.take() {
+            artifacts.end(lost);
+        }
         let (done, ended) = watch::channel(None);
         // Ends already recorded are the audit's to answer from.
         self.ends.retain(|_, ended| ended.borrow().is_none());

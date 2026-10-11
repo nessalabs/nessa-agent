@@ -5,22 +5,31 @@ use crate::{
     attachments::{
         application::{
             AttachmentService, ConversationOwnership, Ownership, OwnershipUnavailable, PortFuture,
-            ReleaseCause, ReleaseError, ReleaseRequest,
+            PublishKept, PublishedFile, ReleaseCause, ReleaseError, ReleaseRequest, UploadBody,
+            UploadError, UploadInterrupted, UploadRejection,
         },
-        domain::Attachment,
+        domain::{Attachment, Caller, MediaType},
     },
     conversation::{
         application::{
-            AttachmentRelease, AttachmentReleaseCause, ConversationAttachments, ConversationError,
-            ConversationFuture, ConversationRepository,
+            ArtifactBytes, ArtifactKept, ArtifactReadFailure, AttachmentRelease,
+            AttachmentReleaseCause, ConversationAttachments, ConversationError, ConversationFuture,
+            ConversationRepository, PublishedArtifact,
         },
         domain::ConversationRefusal,
     },
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::domain::ConversationId;
-use nessa_sdk::domain::agent_execution::prompts::ImageReference;
-use std::sync::Arc;
+use nessa_protocol::lease::CollectionRefusal;
+use nessa_sdk::domain::{
+    agent_execution::prompts::ImageReference, common::value_objects::Sha256Digest,
+};
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::{Arc, Mutex, PoisonError},
+};
 
 /// What a conversation holds, answered by the attachment service.
 pub struct ConversationHolds {
@@ -80,6 +89,94 @@ impl ConversationAttachments for ConversationHolds {
                         audit_failures,
                     },
                 })
+        })
+    }
+    fn keep_published(
+        &self,
+        published: PublishedArtifact,
+    ) -> Pin<Box<dyn Future<Output = Result<ArtifactKept, CollectionRefusal>> + Send + '_>> {
+        Box::pin(async move {
+            let PublishedArtifact {
+                organization_id,
+                conversation_id,
+                lease,
+                requested_by,
+                file,
+                bytes,
+                record,
+            } = published;
+            // What the host said, read as this context reads any file: a
+            // name for what it is, never trusted for what its bytes are.
+            let attachment = Sha256Digest::parse(&format!("sha256:{}", file.digest))
+                .ok()
+                .zip(MediaType::parse(&file.media_type).ok())
+                .and_then(|(digest, media_type)| {
+                    Attachment::new(digest, media_type, file.size).ok()
+                })
+                .ok_or(CollectionRefusal::Invalid)?;
+            let caller = PrincipalId::new(requested_by.principal_id())
+                .ok()
+                .and_then(|principal| {
+                    Caller::new(
+                        principal,
+                        requested_by.surface_id(),
+                        requested_by.request_id(),
+                    )
+                    .ok()
+                })
+                .ok_or(CollectionRefusal::NotKept)?;
+            let published =
+                PublishedFile::new(organization_id, conversation_id, attachment, caller, &lease)
+                    .ok_or(CollectionRefusal::Invalid)?;
+            let failure = Arc::new(Mutex::new(None));
+            let body = Box::new(PulledBytes {
+                bytes,
+                failure: failure.clone(),
+            });
+            match self.service.keep_published(published, body, record).await {
+                Ok(PublishKept::Held(_)) => Ok(ArtifactKept::Held),
+                Ok(PublishKept::AlreadyHeld(_)) => Ok(ArtifactKept::AlreadyHeld),
+                Err(error) => {
+                    let read = *failure.lock().unwrap_or_else(PoisonError::into_inner);
+                    Err(refusal(error, read))
+                }
+            }
+        })
+    }
+}
+
+/// Why the host is told a published file was not kept: a read that failed
+/// says how, a file that differs from what was published is a mismatch,
+/// and anything on this side is not kept.
+fn refusal(error: UploadError, read: Option<ArtifactReadFailure>) -> CollectionRefusal {
+    match error {
+        UploadError::Rejected { reason, .. } => match reason {
+            UploadRejection::SizeMismatch | UploadRejection::DigestMismatch => {
+                CollectionRefusal::Mismatch
+            }
+            UploadRejection::UploadInterrupted => read.map_or(
+                CollectionRefusal::ChannelUnavailable,
+                ArtifactReadFailure::refusal,
+            ),
+            UploadRejection::UploadTimeout => CollectionRefusal::ChannelUnavailable,
+            _ => CollectionRefusal::NotKept,
+        },
+        _ => CollectionRefusal::NotKept,
+    }
+}
+
+/// A published file's bytes as an upload's body, keeping why a read failed.
+struct PulledBytes {
+    bytes: Box<dyn ArtifactBytes>,
+    failure: Arc<Mutex<Option<ArtifactReadFailure>>>,
+}
+impl UploadBody for PulledBytes {
+    fn next(&mut self) -> PortFuture<'_, Option<Vec<u8>>, UploadInterrupted> {
+        Box::pin(async move {
+            self.bytes.next().await.map_err(|read| {
+                *self.failure.lock().unwrap_or_else(PoisonError::into_inner) = Some(read);
+                UploadInterrupted
+            })
         })
     }
 }

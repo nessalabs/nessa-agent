@@ -6,6 +6,7 @@
 //! config.json "envServe.commands" ──▶ ShepherdCommands (in that workspace), or none
 //! <data>/environment/serve.lock ──▶ ServeLock (one serving process)
 //! <data>/environment/leases.jsonl ──▶ FileLedger
+//! <data>/environment/outbox/, a private temporary directory ──▶ FileOutbox
 //! stdin, stdout ──▶ serve(...) until the gateway's stream ends
 //! ```
 //!
@@ -19,7 +20,7 @@ use crate::{
     env_serve::{
         application::{refuse, serve, CommandRunner, HarnessLauncher, Runners, ServeTimings},
         infrastructure::{
-            ConfiguredLauncher, FileLedger, LaunchSpec, ServeLock, ServeLockError,
+            ConfiguredLauncher, FileLedger, FileOutbox, LaunchSpec, ServeLock, ServeLockError,
             ShepherdCommands, COMMAND_VARIABLES,
         },
     },
@@ -57,6 +58,8 @@ pub(super) async fn execute() -> Result<(), RunError> {
         launcher,
         commands,
         ledger,
+        outbox,
+        sockets,
         lock,
     } = composed;
     let runner = commands
@@ -72,6 +75,7 @@ pub(super) async fn execute() -> Result<(), RunError> {
             commands: runner,
         },
         ledger,
+        outbox,
         ServeTimings::default(),
     )
     .await;
@@ -84,6 +88,7 @@ pub(super) async fn execute() -> Result<(), RunError> {
             Err(error) => tracing::error!(%error, "the command supervisor did not shut down"),
         }
     }
+    let _ = std::fs::remove_dir_all(&sockets);
     drop(lock);
     Ok(())
 }
@@ -94,6 +99,9 @@ struct Composed {
     /// host does not run them.
     commands: Option<(Arc<ShepherdCommands>, ProcessSupervisor)>,
     ledger: Arc<FileLedger>,
+    outbox: Arc<FileOutbox>,
+    /// The publish points' directory, removed when serving ends.
+    sockets: std::path::PathBuf,
     lock: ServeLock,
 }
 
@@ -134,10 +142,25 @@ async fn compose() -> Result<Composed, (Unavailability, RunError)> {
     };
     let ledger = FileLedger::open(directory.join("leases.jsonl"))
         .map_err(|error| not_configured(RunError::Agent(error.to_string())))?;
+    // Short whatever the data directory is called: a socket's path is
+    // bounded (104 bytes on macOS), and the temporary directory is this
+    // user's.
+    let sockets = std::env::temp_dir().join(format!(
+        "nessa-env-{}",
+        &uuid::Uuid::new_v4().simple().to_string()[..8]
+    ));
+    let outbox = FileOutbox::open(
+        directory.join("outbox"),
+        sockets.clone(),
+        Path::new(launcher.workspace()),
+    )
+    .map_err(|error| not_configured(RunError::Agent(error.to_string())))?;
     Ok(Composed {
         launcher: Arc::new(launcher),
         commands,
         ledger: Arc::new(ledger),
+        outbox: Arc::new(outbox),
+        sockets,
         lock,
     })
 }

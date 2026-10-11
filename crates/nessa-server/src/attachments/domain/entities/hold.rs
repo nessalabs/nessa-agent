@@ -1,6 +1,7 @@
 use crate::attachments::domain::{Attachment, Caller, UploadTicket};
 use nessa_auth::domain::OrganizationId;
 use nessa_protocol::conversation::domain::ConversationId;
+use nessa_sdk::domain::agent_execution::leases::LeaseId;
 
 /// Whether a conversation held a stored file before or after a transition.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,6 +38,13 @@ impl From<RetiredFrom> for HoldState {
 /// an image is the normalized result. Messages refer to `stored`; a repeated
 /// upload is recognized by `uploaded`. Any other kind of file is stored as it
 /// was uploaded, so there the two are equal.
+///
+/// A hold has one of two causes. An upload: a surface sent the bytes under a
+/// ticket. A publish: an environment running the conversation's agent under
+/// a lease offered a file by digest, and the gateway read it over the
+/// artifact channel (issue #701). A published file is kept exactly as it
+/// arrived, image or not: it is the agent's output, not a prompt's input, so
+/// nothing fits it to a model.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Hold {
     organization_id: OrganizationId,
@@ -46,6 +54,7 @@ pub struct Hold {
     uploaded_by: Caller,
     ticket_issued_at_ms: u64,
     uploaded_at_ms: u64,
+    lease: Option<Box<str>>,
 }
 impl Hold {
     /// The hold a verified upload earns. Owner, conversation, caller, and the
@@ -94,7 +103,39 @@ impl Hold {
             uploaded_by,
             ticket_issued_at_ms,
             uploaded_at_ms,
+            lease: None,
         })
+    }
+    /// The hold a file published under `lease` earns: kept as it arrived,
+    /// so what was offered and what is stored are one file. `published_by`
+    /// is who asked for the work the lease runs; `offered_at_ms` is when the
+    /// environment's offer arrived, and `kept_at_ms` when its bytes were
+    /// verified. `None` for a lease id no record could carry: one
+    /// [`LeaseId::new`] refuses.
+    pub fn published(
+        organization_id: OrganizationId,
+        conversation_id: ConversationId,
+        file: Attachment,
+        published_by: Caller,
+        lease: &str,
+        offered_at_ms: u64,
+        kept_at_ms: u64,
+    ) -> Option<Self> {
+        LeaseId::new(lease).is_ok().then(|| Self {
+            organization_id,
+            conversation_id,
+            uploaded: file.clone(),
+            stored: file,
+            uploaded_by: published_by,
+            ticket_issued_at_ms: offered_at_ms,
+            uploaded_at_ms: kept_at_ms,
+            lease: Some(lease.into()),
+        })
+    }
+    /// The lease whose environment published this file, when it was
+    /// published rather than uploaded.
+    pub fn lease(&self) -> Option<&str> {
+        self.lease.as_deref()
     }
     pub fn organization_id(&self) -> &OrganizationId {
         &self.organization_id

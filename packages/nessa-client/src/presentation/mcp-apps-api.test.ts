@@ -252,6 +252,7 @@ function viewWithAppReview(argumentsJson: string) {
     truncated: false,
     queueComplete: true,
     transcriptState: "complete",
+    artifacts: [],
     messages: [
       {
         executionId: app.executionId,
