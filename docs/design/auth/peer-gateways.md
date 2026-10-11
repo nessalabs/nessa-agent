@@ -131,7 +131,7 @@ sequenceDiagram
     Peer->>GW: Hello (same native listener)
     GW-->>Peer: PublicIntent (class = PeerRead)
     Peer->>Peer: class is the one it enrolls as, else OtherEnrollee
-    Peer->>GW: Begin / Confirm (OPAQUE; class bound in the transcript)
+    Peer->>GW: Begin / Confirm (OPAQUE, class bound in the transcript)
     GW->>GW: claim the peer's key
     Owner->>GW: pairing.approve (exact key)
     GW->>GW: stage, pair receiver, publish
@@ -151,7 +151,7 @@ sequenceDiagram
     Peer->>GW: conversation.watchCatalogue
     GW-->>Peer: forbidden (fires on all of the owner's work)
     Owner->>GW: conversation.unshare
-    GW-->>Peer: head moves forward; the row leaves its catalogue
+    GW-->>Peer: head moves forward, the row leaves its catalogue
     Owner->>GW: credential.revoke (or pairing.cancel)
     Peer->>GW: openProduct
     GW-->>Peer: Refused
@@ -192,7 +192,7 @@ sequenceDiagram
     participant U as B's peer audit
     O->>B: peer.enroll {address, code} (Cedar: credential.manage)
     B->>U: intent {operation, address, owner} (not kept: peer_audit_unavailable, nothing checked or dialed)
-    B->>B: take the turn (a poller cycle: stop it and take it; another command: peer_busy, outcome audited)
+    B->>B: take the turn (a poller cycle: stop it and take it, another command: peer_busy, outcome audited)
     B->>A: TCP connect via PeerConnector, bounded by the deadline clock (passed: peer_unreachable)
     B->>A: TLS with B's own native key
     B->>R: enrollment key?
@@ -344,10 +344,10 @@ sequenceDiagram
     P->>A: record pages for the rest (cache full: heads only, to withdraw)
     C-->>P: ResetRequired or damaged: empty the cache, read once more
     A-->>P: openProduct refused (redacted)
-    P->>A: pinned status again; only Terminal ends the enrollment
+    P->>A: pinned status again, only Terminal ends the enrollment
     O->>P: peer.forget or peer.enroll while the cycle holds the turn
     P->>P: cycle stopped: read sockets shut, its stop flag asked every 50 ms, waits woken, turn given back
-    P-->>O: the command runs; the read carries on at the next cycle
+    P-->>O: the command runs, the read carries on at the next cycle
     P->>U: each change as it is made (status, reset, conversations withdrawn): queued, in turn order
     P->>P: give back the turn
     P->>U: wait for those records, all within one AUDIT_DEADLINE
@@ -464,7 +464,7 @@ sequenceDiagram
     participant W as its writer thread
     participant O as peer.forget
     P->>Q: record(PollerChanged): sequence 7, queued at once
-    O->>Q: record(ForgetRequested): sequence 8; waits for its answer
+    O->>Q: record(ForgetRequested): sequence 8, waits for its answer
     O->>P: stop the cycle
     P->>P: give back the turn, then wait for sequence 7's answer
     O->>O: take the turn, remove the record and its cache
