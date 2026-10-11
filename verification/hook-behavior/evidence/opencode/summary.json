@@ -2,7 +2,7 @@
   "harness": "opencode",
   "version": "1.18.31",
   "label": "real harness, scripted model",
-  "row_count": 36,
+  "row_count": 37,
   "rows": [
     {
       "row": "events-plain",
@@ -25,26 +25,31 @@
         "event:session.idle"
       ],
       "event_counts": {
-        "event:session.created": 1,
-        "event:session.updated": 4,
-        "chat.message": 1,
-        "event:message.updated": 5,
-        "event:message.part.updated": 5,
-        "event:session.status": 4,
-        "event:session.diff": 1,
-        "experimental.chat.system.transform": 2,
-        "event:plugin.added": 45,
-        "event:catalog.updated": 3,
-        "event:reference.updated": 2,
-        "event:integration.updated": 2,
-        "event:message.part.delta": 1,
-        "event:session.idle": 1
+        "event:session.created": 2,
+        "event:session.updated": 8,
+        "chat.message": 2,
+        "event:message.updated": 10,
+        "event:message.part.updated": 10,
+        "event:session.status": 8,
+        "event:session.diff": 2,
+        "experimental.chat.system.transform": 4,
+        "event:plugin.added": 90,
+        "event:catalog.updated": 6,
+        "event:reference.updated": 4,
+        "event:integration.updated": 4,
+        "event:message.part.delta": 2,
+        "event:session.idle": 2
       },
       "tool_names": [],
       "sources": [],
+      "hook_sources": [
+        "user",
+        "project"
+      ],
       "sentinel_files": [],
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
+      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -55,9 +60,11 @@
       "event_counts": {},
       "tool_names": [],
       "sources": [],
+      "hook_sources": [],
       "sentinel_files": [],
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
+      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -83,32 +90,37 @@
         "event:session.idle"
       ],
       "event_counts": {
-        "event:session.created": 1,
-        "event:session.updated": 5,
-        "chat.message": 1,
-        "event:message.updated": 9,
-        "event:message.part.updated": 11,
-        "event:session.status": 6,
-        "event:session.diff": 2,
-        "experimental.chat.system.transform": 3,
-        "event:plugin.added": 45,
-        "event:catalog.updated": 3,
-        "event:reference.updated": 2,
-        "event:integration.updated": 2,
-        "tool.execute.before": 1,
-        "tool.execute.after": 1,
-        "event:message.part.delta": 1,
-        "event:session.idle": 1
+        "event:session.created": 2,
+        "event:session.updated": 10,
+        "chat.message": 2,
+        "event:message.updated": 18,
+        "event:message.part.updated": 22,
+        "event:session.status": 12,
+        "event:session.diff": 4,
+        "experimental.chat.system.transform": 6,
+        "event:plugin.added": 90,
+        "event:catalog.updated": 6,
+        "event:reference.updated": 4,
+        "event:integration.updated": 4,
+        "tool.execute.before": 2,
+        "tool.execute.after": 2,
+        "event:message.part.delta": 2,
+        "event:session.idle": 2
       },
       "tool_names": [
         "bash"
       ],
       "sources": [],
+      "hook_sources": [
+        "user",
+        "project"
+      ],
       "sentinel_files": [
         "hook-sentinel-original"
       ],
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
+      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -119,11 +131,13 @@
       "event_counts": {},
       "tool_names": [],
       "sources": [],
+      "hook_sources": [],
       "sentinel_files": [
         "hook-sentinel-original"
       ],
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
+      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -148,29 +162,34 @@
         "event:session.idle"
       ],
       "event_counts": {
-        "event:session.created": 1,
-        "event:session.updated": 5,
-        "chat.message": 1,
-        "event:message.updated": 9,
-        "event:message.part.updated": 10,
-        "event:session.status": 6,
-        "event:session.diff": 2,
-        "experimental.chat.system.transform": 3,
-        "event:plugin.added": 45,
-        "event:catalog.updated": 3,
-        "event:reference.updated": 2,
-        "event:integration.updated": 2,
-        "tool.execute.before": 1,
-        "event:message.part.delta": 1,
-        "event:session.idle": 1
+        "event:session.created": 2,
+        "event:session.updated": 10,
+        "chat.message": 2,
+        "event:message.updated": 18,
+        "event:message.part.updated": 20,
+        "event:session.status": 12,
+        "event:session.diff": 4,
+        "experimental.chat.system.transform": 6,
+        "event:plugin.added": 90,
+        "event:catalog.updated": 6,
+        "event:reference.updated": 4,
+        "event:integration.updated": 4,
+        "tool.execute.before": 2,
+        "event:message.part.delta": 2,
+        "event:session.idle": 2
       },
       "tool_names": [
         "task"
       ],
       "sources": [],
+      "hook_sources": [
+        "user",
+        "project"
+      ],
       "sentinel_files": [],
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
+      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -181,9 +200,11 @@
       "event_counts": {},
       "tool_names": [],
       "sources": [],
+      "hook_sources": [],
       "sentinel_files": [],
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
+      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -207,26 +228,31 @@
         "event:session.idle"
       ],
       "event_counts": {
-        "event:session.created": 1,
-        "event:session.updated": 6,
-        "chat.message": 2,
-        "event:message.updated": 10,
-        "event:message.part.updated": 10,
-        "event:session.status": 8,
-        "event:session.diff": 2,
-        "experimental.chat.system.transform": 3,
-        "event:plugin.added": 90,
-        "event:catalog.updated": 6,
-        "event:reference.updated": 4,
-        "event:integration.updated": 4,
-        "event:message.part.delta": 2,
-        "event:session.idle": 2
+        "event:session.created": 2,
+        "event:session.updated": 12,
+        "chat.message": 4,
+        "event:message.updated": 20,
+        "event:message.part.updated": 20,
+        "event:session.status": 16,
+        "event:session.diff": 4,
+        "experimental.chat.system.transform": 6,
+        "event:plugin.added": 180,
+        "event:catalog.updated": 12,
+        "event:reference.updated": 8,
+        "event:integration.updated": 8,
+        "event:message.part.delta": 4,
+        "event:session.idle": 4
       },
       "tool_names": [],
       "sources": [],
+      "hook_sources": [
+        "user",
+        "project"
+      ],
       "sentinel_files": [],
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
+      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -237,9 +263,11 @@
       "event_counts": {},
       "tool_names": [],
       "sources": [],
+      "hook_sources": [],
       "sentinel_files": [],
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
+      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -263,26 +291,31 @@
         "event:session.idle"
       ],
       "event_counts": {
-        "event:session.created": 1,
-        "event:session.updated": 6,
-        "chat.message": 2,
-        "event:message.updated": 10,
-        "event:message.part.updated": 10,
-        "event:session.status": 8,
-        "event:session.diff": 2,
-        "experimental.chat.system.transform": 3,
-        "event:plugin.added": 90,
-        "event:catalog.updated": 6,
-        "event:reference.updated": 4,
-        "event:integration.updated": 4,
-        "event:message.part.delta": 2,
-        "event:session.idle": 2
+        "event:session.created": 2,
+        "event:session.updated": 12,
+        "chat.message": 4,
+        "event:message.updated": 20,
+        "event:message.part.updated": 20,
+        "event:session.status": 16,
+        "event:session.diff": 4,
+        "experimental.chat.system.transform": 6,
+        "event:plugin.added": 180,
+        "event:catalog.updated": 12,
+        "event:reference.updated": 8,
+        "event:integration.updated": 8,
+        "event:message.part.delta": 4,
+        "event:session.idle": 4
       },
       "tool_names": [],
       "sources": [],
+      "hook_sources": [
+        "user",
+        "project"
+      ],
       "sentinel_files": [],
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
+      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -293,9 +326,11 @@
       "event_counts": {},
       "tool_names": [],
       "sources": [],
+      "hook_sources": [],
       "sentinel_files": [],
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
+      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -321,32 +356,37 @@
         "event:session.idle"
       ],
       "event_counts": {
-        "event:session.created": 1,
-        "event:session.updated": 5,
-        "chat.message": 1,
-        "event:message.updated": 9,
-        "event:message.part.updated": 11,
-        "event:session.status": 6,
-        "event:session.diff": 2,
-        "experimental.chat.system.transform": 3,
-        "event:plugin.added": 45,
-        "event:catalog.updated": 3,
-        "event:reference.updated": 2,
-        "event:integration.updated": 2,
-        "tool.execute.before": 1,
-        "tool.execute.after": 1,
-        "event:message.part.delta": 1,
-        "event:session.idle": 1
+        "event:session.created": 2,
+        "event:session.updated": 10,
+        "chat.message": 2,
+        "event:message.updated": 18,
+        "event:message.part.updated": 22,
+        "event:session.status": 12,
+        "event:session.diff": 4,
+        "experimental.chat.system.transform": 6,
+        "event:plugin.added": 90,
+        "event:catalog.updated": 6,
+        "event:reference.updated": 4,
+        "event:integration.updated": 4,
+        "tool.execute.before": 2,
+        "tool.execute.after": 2,
+        "event:message.part.delta": 2,
+        "event:session.idle": 2
       },
       "tool_names": [
         "bash"
       ],
       "sources": [],
+      "hook_sources": [
+        "user",
+        "project"
+      ],
       "sentinel_files": [
         "hook-sentinel-original"
       ],
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
+      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -357,11 +397,13 @@
       "event_counts": {},
       "tool_names": [],
       "sources": [],
+      "hook_sources": [],
       "sentinel_files": [
         "hook-sentinel-original"
       ],
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
+      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -386,29 +428,34 @@
         "event:session.idle"
       ],
       "event_counts": {
-        "event:session.created": 1,
-        "event:session.updated": 5,
-        "chat.message": 1,
-        "event:message.updated": 9,
-        "event:message.part.updated": 10,
-        "event:session.status": 6,
-        "event:session.diff": 2,
-        "experimental.chat.system.transform": 3,
-        "event:plugin.added": 45,
-        "event:catalog.updated": 3,
-        "event:reference.updated": 2,
-        "event:integration.updated": 2,
+        "event:session.created": 2,
+        "event:session.updated": 10,
+        "chat.message": 2,
+        "event:message.updated": 18,
+        "event:message.part.updated": 20,
+        "event:session.status": 12,
+        "event:session.diff": 4,
+        "experimental.chat.system.transform": 6,
+        "event:plugin.added": 90,
+        "event:catalog.updated": 6,
+        "event:reference.updated": 4,
+        "event:integration.updated": 4,
         "tool.execute.before": 1,
-        "event:message.part.delta": 1,
-        "event:session.idle": 1
+        "event:message.part.delta": 2,
+        "event:session.idle": 2
       },
       "tool_names": [
         "bash"
       ],
       "sources": [],
+      "hook_sources": [
+        "user",
+        "project"
+      ],
       "sentinel_files": [],
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
+      "deny_reason_quoted": true,
       "deny_reason_in_stdout": true
     },
     {
@@ -419,11 +466,13 @@
       "event_counts": {},
       "tool_names": [],
       "sources": [],
+      "hook_sources": [],
       "sentinel_files": [
         "hook-sentinel-original"
       ],
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
+      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -449,32 +498,37 @@
         "event:session.idle"
       ],
       "event_counts": {
-        "event:session.created": 1,
-        "event:session.updated": 5,
-        "chat.message": 1,
-        "event:message.updated": 9,
-        "event:message.part.updated": 11,
-        "event:session.status": 6,
-        "event:session.diff": 2,
-        "experimental.chat.system.transform": 3,
-        "event:plugin.added": 45,
-        "event:catalog.updated": 3,
-        "event:reference.updated": 2,
-        "event:integration.updated": 2,
-        "tool.execute.before": 1,
-        "tool.execute.after": 1,
-        "event:message.part.delta": 1,
-        "event:session.idle": 1
+        "event:session.created": 2,
+        "event:session.updated": 10,
+        "chat.message": 2,
+        "event:message.updated": 18,
+        "event:message.part.updated": 22,
+        "event:session.status": 12,
+        "event:session.diff": 4,
+        "experimental.chat.system.transform": 6,
+        "event:plugin.added": 90,
+        "event:catalog.updated": 6,
+        "event:reference.updated": 4,
+        "event:integration.updated": 4,
+        "tool.execute.before": 2,
+        "tool.execute.after": 2,
+        "event:message.part.delta": 2,
+        "event:session.idle": 2
       },
       "tool_names": [
         "bash"
       ],
       "sources": [],
+      "hook_sources": [
+        "user",
+        "project"
+      ],
       "sentinel_files": [
         "hook-sentinel-rewritten"
       ],
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
+      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -485,81 +539,17 @@
       "event_counts": {},
       "tool_names": [],
       "sources": [],
+      "hook_sources": [],
       "sentinel_files": [
         "hook-sentinel-original"
       ],
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
+      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
       "row": "pretool-ask",
-      "suppression": "off",
-      "exit_code": 0,
-      "events": [
-        "event:session.created",
-        "event:session.updated",
-        "chat.message",
-        "event:message.updated",
-        "event:message.part.updated",
-        "event:session.status",
-        "event:session.diff",
-        "experimental.chat.system.transform",
-        "event:plugin.added",
-        "tool.execute.before",
-        "event:catalog.updated",
-        "event:reference.updated",
-        "tool.execute.after",
-        "event:integration.updated",
-        "event:message.part.delta",
-        "event:session.idle"
-      ],
-      "event_counts": {
-        "event:session.created": 1,
-        "event:session.updated": 5,
-        "chat.message": 1,
-        "event:message.updated": 9,
-        "event:message.part.updated": 11,
-        "event:session.status": 6,
-        "event:session.diff": 2,
-        "experimental.chat.system.transform": 3,
-        "event:plugin.added": 45,
-        "tool.execute.before": 1,
-        "event:catalog.updated": 3,
-        "event:reference.updated": 2,
-        "tool.execute.after": 1,
-        "event:integration.updated": 2,
-        "event:message.part.delta": 1,
-        "event:session.idle": 1
-      },
-      "tool_names": [
-        "bash"
-      ],
-      "sources": [],
-      "sentinel_files": [
-        "hook-sentinel-original"
-      ],
-      "context_nonce_in_model_request": false,
-      "system_nonce_in_model_request": false,
-      "deny_reason_in_stdout": false
-    },
-    {
-      "row": "pretool-ask",
-      "suppression": "on",
-      "exit_code": 0,
-      "events": [],
-      "event_counts": {},
-      "tool_names": [],
-      "sources": [],
-      "sentinel_files": [
-        "hook-sentinel-original"
-      ],
-      "context_nonce_in_model_request": false,
-      "system_nonce_in_model_request": false,
-      "deny_reason_in_stdout": false
-    },
-    {
-      "row": "pretool-defer",
       "suppression": "off",
       "exit_code": 0,
       "events": [
@@ -581,32 +571,110 @@
         "event:session.idle"
       ],
       "event_counts": {
-        "event:session.created": 1,
-        "event:session.updated": 5,
-        "chat.message": 1,
-        "event:message.updated": 9,
-        "event:message.part.updated": 11,
-        "event:session.status": 6,
-        "event:session.diff": 2,
-        "experimental.chat.system.transform": 3,
-        "event:plugin.added": 45,
-        "event:catalog.updated": 3,
-        "event:reference.updated": 2,
-        "event:integration.updated": 2,
-        "tool.execute.before": 1,
-        "tool.execute.after": 1,
-        "event:message.part.delta": 1,
-        "event:session.idle": 1
+        "event:session.created": 2,
+        "event:session.updated": 10,
+        "chat.message": 2,
+        "event:message.updated": 18,
+        "event:message.part.updated": 22,
+        "event:session.status": 12,
+        "event:session.diff": 4,
+        "experimental.chat.system.transform": 6,
+        "event:plugin.added": 90,
+        "event:catalog.updated": 6,
+        "event:reference.updated": 4,
+        "event:integration.updated": 4,
+        "tool.execute.before": 2,
+        "tool.execute.after": 2,
+        "event:message.part.delta": 2,
+        "event:session.idle": 2
       },
       "tool_names": [
         "bash"
       ],
       "sources": [],
+      "hook_sources": [
+        "user",
+        "project"
+      ],
       "sentinel_files": [
         "hook-sentinel-original"
       ],
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
+      "deny_reason_quoted": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "pretool-ask",
+      "suppression": "on",
+      "exit_code": 0,
+      "events": [],
+      "event_counts": {},
+      "tool_names": [],
+      "sources": [],
+      "hook_sources": [],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_quoted": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "pretool-defer",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "event:session.created",
+        "event:session.updated",
+        "chat.message",
+        "event:message.updated",
+        "event:message.part.updated",
+        "event:session.status",
+        "event:session.diff",
+        "experimental.chat.system.transform",
+        "event:plugin.added",
+        "tool.execute.before",
+        "event:catalog.updated",
+        "event:reference.updated",
+        "event:integration.updated",
+        "tool.execute.after",
+        "event:message.part.delta",
+        "event:session.idle"
+      ],
+      "event_counts": {
+        "event:session.created": 2,
+        "event:session.updated": 10,
+        "chat.message": 2,
+        "event:message.updated": 18,
+        "event:message.part.updated": 22,
+        "event:session.status": 12,
+        "event:session.diff": 4,
+        "experimental.chat.system.transform": 6,
+        "event:plugin.added": 90,
+        "tool.execute.before": 2,
+        "event:catalog.updated": 6,
+        "event:reference.updated": 4,
+        "event:integration.updated": 4,
+        "tool.execute.after": 2,
+        "event:message.part.delta": 2,
+        "event:session.idle": 2
+      },
+      "tool_names": [
+        "bash"
+      ],
+      "sources": [],
+      "hook_sources": [
+        "user",
+        "project"
+      ],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -617,11 +685,13 @@
       "event_counts": {},
       "tool_names": [],
       "sources": [],
+      "hook_sources": [],
       "sentinel_files": [
         "hook-sentinel-original"
       ],
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
+      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -647,32 +717,37 @@
         "event:session.idle"
       ],
       "event_counts": {
-        "event:session.created": 1,
-        "event:session.updated": 5,
-        "chat.message": 1,
-        "event:message.updated": 9,
-        "event:message.part.updated": 11,
-        "event:session.status": 6,
-        "event:session.diff": 2,
-        "experimental.chat.system.transform": 3,
-        "event:plugin.added": 45,
-        "event:catalog.updated": 3,
-        "event:reference.updated": 2,
-        "event:integration.updated": 2,
-        "tool.execute.before": 1,
-        "tool.execute.after": 1,
-        "event:message.part.delta": 1,
-        "event:session.idle": 1
+        "event:session.created": 2,
+        "event:session.updated": 10,
+        "chat.message": 2,
+        "event:message.updated": 18,
+        "event:message.part.updated": 22,
+        "event:session.status": 12,
+        "event:session.diff": 4,
+        "experimental.chat.system.transform": 6,
+        "event:plugin.added": 90,
+        "event:catalog.updated": 6,
+        "event:reference.updated": 4,
+        "event:integration.updated": 4,
+        "tool.execute.before": 2,
+        "tool.execute.after": 2,
+        "event:message.part.delta": 2,
+        "event:session.idle": 2
       },
       "tool_names": [
         "bash"
       ],
       "sources": [],
+      "hook_sources": [
+        "user",
+        "project"
+      ],
       "sentinel_files": [
         "hook-sentinel-original"
       ],
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
+      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -683,11 +758,13 @@
       "event_counts": {},
       "tool_names": [],
       "sources": [],
+      "hook_sources": [],
       "sentinel_files": [
         "hook-sentinel-original"
       ],
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
+      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -713,32 +790,37 @@
         "event:session.idle"
       ],
       "event_counts": {
-        "event:session.created": 1,
-        "event:session.updated": 5,
-        "chat.message": 1,
-        "event:message.updated": 9,
-        "event:message.part.updated": 11,
-        "event:session.status": 6,
-        "event:session.diff": 2,
-        "experimental.chat.system.transform": 3,
-        "event:plugin.added": 45,
-        "event:catalog.updated": 3,
-        "event:reference.updated": 2,
-        "event:integration.updated": 2,
-        "tool.execute.before": 1,
-        "tool.execute.after": 1,
-        "event:message.part.delta": 1,
-        "event:session.idle": 1
+        "event:session.created": 2,
+        "event:session.updated": 10,
+        "chat.message": 2,
+        "event:message.updated": 18,
+        "event:message.part.updated": 22,
+        "event:session.status": 12,
+        "event:session.diff": 4,
+        "experimental.chat.system.transform": 6,
+        "event:plugin.added": 90,
+        "event:catalog.updated": 6,
+        "event:reference.updated": 4,
+        "event:integration.updated": 4,
+        "tool.execute.before": 2,
+        "tool.execute.after": 2,
+        "event:message.part.delta": 2,
+        "event:session.idle": 2
       },
       "tool_names": [
         "bash"
       ],
       "sources": [],
+      "hook_sources": [
+        "user",
+        "project"
+      ],
       "sentinel_files": [
         "hook-sentinel-original"
       ],
       "context_nonce_in_model_request": true,
       "system_nonce_in_model_request": false,
+      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -749,11 +831,13 @@
       "event_counts": {},
       "tool_names": [],
       "sources": [],
+      "hook_sources": [],
       "sentinel_files": [
         "hook-sentinel-original"
       ],
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
+      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -779,32 +863,37 @@
         "event:session.idle"
       ],
       "event_counts": {
-        "event:session.created": 1,
-        "event:session.updated": 5,
-        "chat.message": 1,
-        "event:message.updated": 9,
-        "event:message.part.updated": 11,
-        "event:session.status": 6,
-        "event:session.diff": 2,
-        "experimental.chat.system.transform": 3,
-        "event:plugin.added": 45,
-        "event:catalog.updated": 3,
-        "event:reference.updated": 2,
-        "event:integration.updated": 2,
-        "tool.execute.before": 1,
-        "tool.execute.after": 1,
-        "event:message.part.delta": 1,
-        "event:session.idle": 1
+        "event:session.created": 2,
+        "event:session.updated": 10,
+        "chat.message": 2,
+        "event:message.updated": 18,
+        "event:message.part.updated": 22,
+        "event:session.status": 12,
+        "event:session.diff": 4,
+        "experimental.chat.system.transform": 6,
+        "event:plugin.added": 90,
+        "event:catalog.updated": 6,
+        "event:reference.updated": 4,
+        "event:integration.updated": 4,
+        "tool.execute.before": 2,
+        "tool.execute.after": 2,
+        "event:message.part.delta": 2,
+        "event:session.idle": 2
       },
       "tool_names": [
         "bash"
       ],
       "sources": [],
+      "hook_sources": [
+        "user",
+        "project"
+      ],
       "sentinel_files": [
         "hook-sentinel-original"
       ],
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": true,
+      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -815,11 +904,13 @@
       "event_counts": {},
       "tool_names": [],
       "sources": [],
+      "hook_sources": [],
       "sentinel_files": [
         "hook-sentinel-original"
       ],
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
+      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -845,32 +936,37 @@
         "event:session.idle"
       ],
       "event_counts": {
-        "event:session.created": 1,
-        "event:session.updated": 5,
-        "chat.message": 1,
-        "event:message.updated": 9,
-        "event:message.part.updated": 11,
-        "event:session.status": 6,
-        "event:session.diff": 2,
-        "experimental.chat.system.transform": 3,
-        "event:plugin.added": 45,
-        "event:catalog.updated": 3,
-        "event:reference.updated": 2,
-        "event:integration.updated": 2,
-        "tool.execute.before": 1,
-        "tool.execute.after": 1,
-        "event:message.part.delta": 1,
-        "event:session.idle": 1
+        "event:session.created": 2,
+        "event:session.updated": 10,
+        "chat.message": 2,
+        "event:message.updated": 18,
+        "event:message.part.updated": 22,
+        "event:session.status": 12,
+        "event:session.diff": 4,
+        "experimental.chat.system.transform": 6,
+        "event:plugin.added": 90,
+        "event:catalog.updated": 6,
+        "event:reference.updated": 4,
+        "event:integration.updated": 4,
+        "tool.execute.before": 2,
+        "tool.execute.after": 2,
+        "event:message.part.delta": 2,
+        "event:session.idle": 2
       },
       "tool_names": [
         "bash"
       ],
       "sources": [],
+      "hook_sources": [
+        "user",
+        "project"
+      ],
       "sentinel_files": [
         "hook-sentinel-original"
       ],
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
+      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -881,11 +977,13 @@
       "event_counts": {},
       "tool_names": [],
       "sources": [],
+      "hook_sources": [],
       "sentinel_files": [
         "hook-sentinel-original"
       ],
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
+      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -910,29 +1008,34 @@
         "event:session.idle"
       ],
       "event_counts": {
-        "event:session.created": 1,
-        "event:session.updated": 5,
-        "chat.message": 1,
-        "event:message.updated": 9,
-        "event:message.part.updated": 10,
-        "event:session.status": 6,
-        "event:session.diff": 2,
-        "experimental.chat.system.transform": 3,
-        "event:plugin.added": 45,
-        "event:catalog.updated": 3,
-        "event:reference.updated": 2,
-        "event:integration.updated": 2,
+        "event:session.created": 2,
+        "event:session.updated": 10,
+        "chat.message": 2,
+        "event:message.updated": 18,
+        "event:message.part.updated": 20,
+        "event:session.status": 12,
+        "event:session.diff": 4,
+        "experimental.chat.system.transform": 6,
+        "event:plugin.added": 90,
+        "event:catalog.updated": 6,
+        "event:reference.updated": 4,
+        "event:integration.updated": 4,
         "tool.execute.before": 1,
-        "event:message.part.delta": 1,
-        "event:session.idle": 1
+        "event:message.part.delta": 2,
+        "event:session.idle": 2
       },
       "tool_names": [
         "bash"
       ],
       "sources": [],
+      "hook_sources": [
+        "user",
+        "project"
+      ],
       "sentinel_files": [],
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
+      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -943,11 +1046,13 @@
       "event_counts": {},
       "tool_names": [],
       "sources": [],
+      "hook_sources": [],
       "sentinel_files": [
         "hook-sentinel-original"
       ],
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
+      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -961,40 +1066,45 @@
         "event:message.updated",
         "event:message.part.updated",
         "event:session.status",
-        "event:plugin.added",
         "event:session.diff",
         "experimental.chat.system.transform",
+        "event:plugin.added",
+        "event:catalog.updated",
+        "event:reference.updated",
+        "event:integration.updated",
         "tool.execute.before",
         "event:message.part.delta",
-        "event:session.idle",
-        "event:catalog.updated",
-        "event:integration.updated",
-        "event:reference.updated"
+        "event:session.idle"
       ],
       "event_counts": {
-        "event:session.created": 1,
-        "event:session.updated": 5,
-        "chat.message": 1,
-        "event:message.updated": 9,
-        "event:message.part.updated": 10,
-        "event:session.status": 6,
-        "event:plugin.added": 37,
-        "event:session.diff": 2,
-        "experimental.chat.system.transform": 3,
+        "event:session.created": 2,
+        "event:session.updated": 10,
+        "chat.message": 2,
+        "event:message.updated": 18,
+        "event:message.part.updated": 20,
+        "event:session.status": 12,
+        "event:session.diff": 4,
+        "experimental.chat.system.transform": 6,
+        "event:plugin.added": 90,
+        "event:catalog.updated": 6,
+        "event:reference.updated": 4,
+        "event:integration.updated": 4,
         "tool.execute.before": 1,
-        "event:message.part.delta": 1,
-        "event:session.idle": 1,
-        "event:catalog.updated": 1,
-        "event:integration.updated": 1,
-        "event:reference.updated": 1
+        "event:message.part.delta": 2,
+        "event:session.idle": 2
       },
       "tool_names": [
         "bash"
       ],
       "sources": [],
+      "hook_sources": [
+        "user",
+        "project"
+      ],
       "sentinel_files": [],
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
+      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -1005,11 +1115,13 @@
       "event_counts": {},
       "tool_names": [],
       "sources": [],
+      "hook_sources": [],
       "sentinel_files": [
         "hook-sentinel-original"
       ],
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
+      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -1035,32 +1147,37 @@
         "event:session.idle"
       ],
       "event_counts": {
-        "event:session.created": 1,
-        "event:session.updated": 5,
-        "chat.message": 1,
-        "event:message.updated": 9,
-        "event:message.part.updated": 11,
-        "event:session.status": 6,
-        "event:session.diff": 2,
-        "experimental.chat.system.transform": 3,
-        "event:plugin.added": 45,
-        "event:catalog.updated": 3,
-        "event:reference.updated": 2,
-        "event:integration.updated": 2,
-        "tool.execute.before": 1,
-        "tool.execute.after": 1,
-        "event:message.part.delta": 1,
-        "event:session.idle": 1
+        "event:session.created": 2,
+        "event:session.updated": 10,
+        "chat.message": 2,
+        "event:message.updated": 18,
+        "event:message.part.updated": 22,
+        "event:session.status": 12,
+        "event:session.diff": 4,
+        "experimental.chat.system.transform": 6,
+        "event:plugin.added": 90,
+        "event:catalog.updated": 6,
+        "event:reference.updated": 4,
+        "event:integration.updated": 4,
+        "tool.execute.before": 2,
+        "tool.execute.after": 2,
+        "event:message.part.delta": 2,
+        "event:session.idle": 2
       },
       "tool_names": [
         "bash"
       ],
       "sources": [],
+      "hook_sources": [
+        "user",
+        "project"
+      ],
       "sentinel_files": [
         "hook-sentinel-original"
       ],
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
+      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -1071,11 +1188,13 @@
       "event_counts": {},
       "tool_names": [],
       "sources": [],
+      "hook_sources": [],
       "sentinel_files": [
         "hook-sentinel-original"
       ],
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
+      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -1101,32 +1220,37 @@
         "event:session.idle"
       ],
       "event_counts": {
-        "event:session.created": 1,
-        "event:session.updated": 5,
-        "chat.message": 1,
-        "event:message.updated": 9,
-        "event:message.part.updated": 11,
-        "event:session.status": 6,
-        "event:session.diff": 2,
-        "experimental.chat.system.transform": 3,
-        "event:plugin.added": 45,
-        "event:catalog.updated": 3,
-        "event:reference.updated": 2,
-        "event:integration.updated": 2,
-        "tool.execute.before": 1,
-        "tool.execute.after": 1,
-        "event:message.part.delta": 1,
-        "event:session.idle": 1
+        "event:session.created": 2,
+        "event:session.updated": 10,
+        "chat.message": 2,
+        "event:message.updated": 18,
+        "event:message.part.updated": 22,
+        "event:session.status": 12,
+        "event:session.diff": 4,
+        "experimental.chat.system.transform": 6,
+        "event:plugin.added": 90,
+        "event:catalog.updated": 6,
+        "event:reference.updated": 4,
+        "event:integration.updated": 4,
+        "tool.execute.before": 2,
+        "tool.execute.after": 2,
+        "event:message.part.delta": 2,
+        "event:session.idle": 2
       },
       "tool_names": [
         "bash"
       ],
       "sources": [],
+      "hook_sources": [
+        "user",
+        "project"
+      ],
       "sentinel_files": [
         "hook-sentinel-original"
       ],
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
+      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -1137,11 +1261,30 @@
       "event_counts": {},
       "tool_names": [],
       "sources": [],
+      "hook_sources": [],
       "sentinel_files": [
         "hook-sentinel-original"
       ],
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
+      "deny_reason_quoted": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "suppress-pure",
+      "suppression": "pure",
+      "exit_code": 0,
+      "events": [],
+      "event_counts": {},
+      "tool_names": [],
+      "sources": [],
+      "hook_sources": [],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     }
   ]
