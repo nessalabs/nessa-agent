@@ -341,6 +341,9 @@ impl ProviderSessionBackend for InMemoryPermissionBackend {
                             ExecutionAuditRecord::QuestionRefused(_) => {
                                 panic!("close cannot refuse a question")
                             }
+                            ExecutionAuditRecord::LateProviderResult(_) => {
+                                panic!("close cannot record a late provider result")
+                            }
                         }
                     }
                     Ok(CloseOutcome { forced: false })

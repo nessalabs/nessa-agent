@@ -4,6 +4,7 @@
 use super::StandInSessions;
 use crate::application::agent_execution::{
     agents::AgentError,
+    permissions::ConfiguredRefusal,
     providers::{ExecutableUseSnapshot, UserImageSource},
 };
 use crate::domain::agent_execution::permissions::PermissionOfferPolicy;
@@ -346,6 +347,9 @@ pub struct AcpConfig {
     /// restricted to this policy; the selected profile must support every configured scope. An
     /// answer still requires verified caller attribution and audit delivery.
     pub permissions: PermissionOfferPolicy,
+    /// What a refusal does. Continue leaves the turn running. A stopping
+    /// outcome is refused at startup when this binding cannot honor it.
+    pub refusal: ConfiguredRefusal,
     /// Deadline for the whole `initialize` exchange, which is mostly the operating system's work
     /// rather than the provider's: `exec`, any first-execution scan of a newly written
     /// executable, the runtime's own boot, and only then a short protocol round trip. A freshly

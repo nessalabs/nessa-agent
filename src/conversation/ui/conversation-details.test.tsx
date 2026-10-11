@@ -99,7 +99,7 @@ it("says in a word whether approvals work here, without the capability jargon", 
   show(attached())
 
   expect(group("Approvals")).toBe(
-    "ApprovalsTool callsProvider asksDeny a requestSupportedAnswer laterNot yet in Nessa",
+    "ApprovalsTool callsProvider asksDeny a requestSupportedAnswer laterNot yet in NessaEnd a turnNot yet in NessaClose the sessionNot yet in Nessa",
   )
   expect(group("Model")).toBe("ModelImagesNot supported")
   expect(document.body.textContent).not.toContain("turn correlation")

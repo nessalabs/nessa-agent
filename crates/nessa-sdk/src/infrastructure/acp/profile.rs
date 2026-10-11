@@ -3,7 +3,8 @@ use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::ExecutionRequest;
 use crate::application::agent_execution::providers::{
     ApprovalMode, NativeHookSuppressionCapability, PermissionDenialCapability,
-    ProviderOperationCapabilities, ProviderPermissionDeferralCapability,
+    ProviderOperationCapabilities, ProviderPermissionDeferralCapability, SessionCloseOwnership,
+    TurnStopCleanup,
 };
 use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::domain::agent_execution::tools::ToolCallUpdate;
@@ -20,6 +21,10 @@ pub(crate) trait AcpProfile: Send + Sync + 'static {
             permission_denial: PermissionDenialCapability::SupportedForOfferedPermissionReviews,
             permission_deferral: ProviderPermissionDeferralCapability::Unsupported,
             native_hook_suppression: self.native_hook_suppression(),
+            // The shared worker records a local stop before cleanup and leaves
+            // the session usable for another turn. Session close is this binding's.
+            turn_stop_cleanup: TurnStopCleanup::ProvenWithSessionReuse,
+            session_close_ownership: SessionCloseOwnership::Proven,
             ..ProviderOperationCapabilities::default()
         }
     }

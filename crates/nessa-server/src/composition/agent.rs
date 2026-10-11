@@ -1090,6 +1090,7 @@ pub(super) mod build {
                 StandInSessions::none()
             },
             permissions: PermissionOfferPolicy::once_only(),
+            refusal: nessa_sdk::application::agent_execution::permissions::ConfiguredRefusal::continue_turn(),
             // All four from protocol/defaults/agent-startup-budgets.json,
             // which the client compiles in too: a client that gives up before
             // the gateway has finished failing never sees the typed answer.

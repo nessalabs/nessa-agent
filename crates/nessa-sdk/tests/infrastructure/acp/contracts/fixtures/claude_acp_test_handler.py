@@ -486,6 +486,20 @@ for line in sys.stdin:
                     {"optionId": "allow-with-updates", "kind": "allow_always",
                      "name": "Yes, and don't ask again for WebSearch commands"},
                     {"optionId": "reject", "kind": "reject_once", "name": "No"}]}})
+        elif mode in ("refusal-end-turn", "refusal-close-session"):
+            # The review is answered, and the prompt stays open until
+            # session/cancel. That later result is a reply after the local stop.
+            if (root / "cancel-observed").exists():
+                text(user_text)
+                result(pending, {"stopReason": "end_turn"})
+                pending = None
+            else:
+                update({"sessionUpdate": "tool_call", **tool("Bash")})
+                call = {key: value for key, value in tool("Bash").items() if key != "title"}
+                send({"id": permission_id, "method": "session/request_permission", "params": {
+                    "sessionId": session, "toolCall": call, "options": [
+                        {"optionId": "approve-one", "kind": "allow_once", "name": "Allow once"},
+                        {"optionId": "deny-one", "kind": "reject_once", "name": "Deny once"}]}})
         elif mode.startswith("declined-"):
             # A review this binding will not put to a host. The call is still
             # observed, the review is answered "no", and the turn finishes —
@@ -591,7 +605,10 @@ for line in sys.stdin:
                 "sessionId": session, "mode": "form", "message": "One more thing?",
                 "requestedSchema": {"type": "object", "properties": {
                     "question_0": {"type": "string", "oneOf": [{"const": "yes"}]}}}}})
-        if pending is not None and mode not in ("ignore-stop", "consumer-loss-during-close"):
+        if mode in ("refusal-end-turn", "refusal-close-session") and pending is not None:
+            result(pending, {"stopReason": "end_turn"})
+            pending = None
+        elif pending is not None and mode not in ("ignore-stop", "consumer-loss-during-close"):
             if mode == "late-tool-close":
                 update({"sessionUpdate": "tool_call_update", "toolCallId": "file-1", "status": "completed", "content": []})
                 update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "late message"}})
@@ -640,6 +657,8 @@ for line in sys.stdin:
         text("search denied")
         result(pending, {"stopReason": "end_turn"})
         pending = None
+    elif mode in ("refusal-end-turn", "refusal-close-session") and msg.get("id") == permission_id:
+        record("permission-outcome", json.dumps(msg["result"]["outcome"]))
     elif mode.startswith("declined-") and msg.get("id") == permission_id:
         # Every answer for this review, in order: one refusal must not be able
         # to hide behind a later one.

@@ -8,11 +8,12 @@ use crate::application::agent_execution::permissions::{
 };
 use crate::application::agent_execution::providers::ApprovalMode;
 use crate::domain::agent_execution::executions::{
-    ExecutionId, InvocationKind, InvocationStage, QueueOrderChange, SchedulingCause,
-    SchedulingInitiator, SchedulingTransition, SchedulingTransitionError, SubmissionMode,
+    ExecutionId, ExecutionOutcome, InvocationKind, InvocationStage, QueueOrderChange,
+    SchedulingCause, SchedulingInitiator, SchedulingTransition, SchedulingTransitionError,
+    SubmissionMode,
 };
 use crate::domain::agent_execution::sessions::{
-    AttachmentCause, ExecutionFinish, SessionClosure, SessionId,
+    AttachmentCause, ExecutionFinish, ExecutionSessionId, SessionClosure, SessionId,
 };
 use crate::domain::model_metadata::value_objects::EffortLevel;
 
@@ -614,6 +615,46 @@ impl SessionClosureRecord {
     }
 }
 
+/// A provider terminal result that arrived after a refusal had already stopped the invocation.
+///
+/// It is not a second outcome. The local stop stands. This record is only the
+/// reply that showed up later, kept so the two facts are not collapsed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LateProviderResultRecord {
+    session_id: ExecutionSessionId,
+    execution_id: ExecutionId,
+    result: Result<ExecutionOutcome, AgentError>,
+}
+impl LateProviderResultRecord {
+    /// Record `result` for the invocation `execution_id` inside `session_id`.
+    ///
+    /// The constructor consumes those identities and the provider's result. It
+    /// performs no I/O and does not replace the local stop.
+    pub fn new(
+        session_id: ExecutionSessionId,
+        execution_id: ExecutionId,
+        result: Result<ExecutionOutcome, AgentError>,
+    ) -> Self {
+        Self {
+            session_id,
+            execution_id,
+            result: result.map_err(AgentError::bounded),
+        }
+    }
+    /// Provider session the late reply named.
+    pub fn session_id(&self) -> &ExecutionSessionId {
+        &self.session_id
+    }
+    /// Invocation the reply belonged to, already stopped locally.
+    pub fn execution_id(&self) -> &ExecutionId {
+        &self.execution_id
+    }
+    /// What the provider reported after the local stop.
+    pub fn result(&self) -> &Result<ExecutionOutcome, AgentError> {
+        &self.result
+    }
+}
+
 /// Evidence supplied to the mandatory audit sink in causal order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[must_use = "execution evidence must be recorded or its delivery failure reported"]
@@ -648,6 +689,8 @@ pub enum ExecutionAuditRecord {
     /// An agent's question refused by this binding before anybody was asked,
     /// with the same separation of local decision from observed delivery.
     QuestionRefused(QuestionRefusalRecord),
+    /// A provider terminal result observed after a refusal had already stopped the invocation.
+    LateProviderResult(LateProviderResultRecord),
 }
 
 /// Required audit boundary, independent of bounded UI streams and caller waits.

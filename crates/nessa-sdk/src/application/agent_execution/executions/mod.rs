@@ -33,6 +33,7 @@ pub use audit::{
     EffortLevelChangeRecord, ExecutionAudit, ExecutionAuditRecord, QueueAdmissionRecord,
     QueueOrderCause, QueueOrderRecord, QueueSettlementRecord, SessionClosureRecord,
     SteeringAcknowledgementRecord, SteeringAuditCause, SteeringAuditStage,
+    LateProviderResultRecord,
 };
 pub use controller::ExecutionController;
 pub use events::{ExecutionEvent, ExecutionUpdate};

@@ -22,6 +22,6 @@ pub use value_objects::{
     CustomPermissionCancellationReason, PermissionApplicationId, PermissionCancellationReason,
     PermissionCancellationReasonView, PermissionDecision, PermissionEffect, PermissionId,
     PermissionOfferPolicy, PermissionOption, PermissionOptionId, PermissionOptions,
-    PermissionScope, PermissionScopeView, PermissionSessionId, ReviewDecline, ReviewDeclineId,
-    ReviewDeclineObservation, ReviewDeclineReason, ReviewDeclineStage,
+    PermissionScope, PermissionScopeView, PermissionSessionId, RefusalOutcome, ReviewDecline,
+    ReviewDeclineId, ReviewDeclineObservation, ReviewDeclineReason, ReviewDeclineStage,
 };

@@ -247,7 +247,7 @@ impl Shape {
             (Review, "options") => Options,
             (Decline, "id") => Text(20),
             (Decline, "tool") => Text(128),
-            (Decline, "reason" | "delivery") => Text(32),
+            (Decline, "reason" | "delivery" | "outcome") => Text(32),
             (Error, "BeforeInvocationHook") => Generic,
             (Error, "Provider") => ProviderError,
             (Error, "AuthenticationRequired") => AuthenticationError,

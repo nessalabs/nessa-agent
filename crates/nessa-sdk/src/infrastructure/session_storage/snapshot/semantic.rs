@@ -762,7 +762,11 @@ mod tests {
         ] {
             let selected = ReviewDeclineObservation::selected(
                 ReviewDeclineId::new(decline_id).unwrap(),
-                ReviewDecline::new(Some("Read"), ReviewDeclineReason::ToolNotReviewable),
+                ReviewDecline::new(
+                    Some("Read"),
+                    ReviewDeclineReason::ToolNotReviewable,
+                    crate::domain::agent_execution::permissions::RefusalOutcome::Continue,
+                ),
             );
             events.push(ExecutionEvent::new(
                 id.clone(),

@@ -252,6 +252,8 @@ pub enum ExecutionReportSource {
     Provider,
     /// The application stopped the invocation locally; there need not be a provider reply.
     LocalCancellation,
+    /// A refusal stopped this invocation. The provider's later reply is not this result.
+    PolicyStop,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -468,6 +470,22 @@ impl ExecutionReport {
             session_state,
         ))
     }
+    /// A refusal stopped the invocation. There is no provider result.
+    ///
+    /// `session_state` is [`ProviderSessionState::Usable`] when another turn may
+    /// run, and [`ProviderSessionState::CleanupRequired`] when the binding must
+    /// close. This does not authorize a local cancellation and does not invent
+    /// a provider terminal result.
+    pub fn stopped_by_policy(session_state: ProviderSessionState) -> Self {
+        Self {
+            state: Box::new(ExecutionReportState::Independent {
+                provider_result: None,
+                failure: None,
+                session_state,
+                source: ExecutionReportSource::PolicyStop,
+            }),
+        }
+    }
     /// Record local cancellation and separate cleanup evidence without inventing a provider reply.
     /// Use this only when settling an invocation stopped by its owning Agent. The
     /// Agent requires its own captured stop and persists that cause and caller; the
@@ -588,7 +606,10 @@ impl ExecutionReport {
                 execution_result: result.map(Box::new),
             }),
             (Some(result), None) => result,
-            (None, None) if source == ExecutionReportSource::LocalCancellation => {
+            (None, None)
+                if source == ExecutionReportSource::LocalCancellation
+                    || source == ExecutionReportSource::PolicyStop =>
+            {
                 Ok(ExecutionOutcome::Cancelled)
             }
             (None, None) => Err(AgentError::SubmissionUnresolved),

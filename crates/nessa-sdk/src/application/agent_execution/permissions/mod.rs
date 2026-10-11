@@ -7,6 +7,7 @@
 //! host --> permission command --> adapter --> ExecutionController
 //!                                   |
 //!                                   +--> ExecutionAudit
+//! configured refusal --> admit_configured_outcome --> OperationCapabilities
 //! ```
 //!
 //! Arrows show control flow. The adapter asks the controller to resolve a review
@@ -20,6 +21,7 @@ mod answer;
 mod approval;
 mod audit;
 mod cancellation;
+mod outcome;
 pub use answer::{
     PermissionAnswer, PermissionAnswerFailure, PermissionAnswerFuture, PermissionAnswerResult,
     PermissionSelectionState, QuestionAnswer,
@@ -33,3 +35,4 @@ pub use audit::{
     RefusedAsk, ReviewDeclineRecord,
 };
 pub use cancellation::{CancellationOrigin, PermissionCancellation, PermissionCancellationRequest};
+pub use outcome::{admit_configured_outcome, ConfiguredRefusal};

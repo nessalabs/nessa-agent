@@ -19,6 +19,6 @@ pub use permission::{
     PermissionOption, PermissionOptions, PermissionScope, PermissionScopeView,
 };
 pub use review_decline::{
-    ReviewDecline, ReviewDeclineId, ReviewDeclineObservation, ReviewDeclineReason,
+    RefusalOutcome, ReviewDecline, ReviewDeclineId, ReviewDeclineObservation, ReviewDeclineReason,
     ReviewDeclineStage,
 };

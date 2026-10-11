@@ -113,6 +113,9 @@ fn answers(audit: &AnswerAudit) -> Vec<PermissionAnswerRecord> {
             ExecutionAuditRecord::QuestionRefused(record) => {
                 panic!("a review is not a question: {record:?}")
             }
+            ExecutionAuditRecord::LateProviderResult(record) => {
+                panic!("a review is not a late provider result: {record:?}")
+            }
         })
         .collect()
 }

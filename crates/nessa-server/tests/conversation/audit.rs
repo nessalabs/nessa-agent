@@ -2,15 +2,30 @@ use super::*;
 use nessa_sdk::application::agent_execution::{
     executions::{
         AdmittedQuestion, AttachmentAuditCause, AttachmentAuditRecord, AttachmentAuditStage,
-        ExecutionController, ExecutionUpdate, QueueAdmissionRecord, QueueOrderRecord,
-        QueueSettlementRecord, SessionClosureRecord, SteeringAcknowledgementRecord,
+        ExecutionController, ExecutionUpdate, LateProviderResultRecord, QueueAdmissionRecord,
+        QueueOrderRecord, QueueSettlementRecord, SessionClosureRecord,
+        SteeringAcknowledgementRecord,
     },
     permissions::{
-        ActionContext, ApprovalAttribution, ApprovalBasis, CancellationOrigin, PermissionAnswer,
-        PermissionAnswerDelivery, PermissionAnswerRecord, QuestionAnswerRecord,
-        QuestionRefusalRecord, RefusedAsk, ReviewDeclineRecord,
+        ActionContext, ApprovalAttribution, ApprovalBasis, ApprovalRuleReference,
+        CancellationOrigin, PermissionAnswer, PermissionAnswerDelivery, PermissionAnswerRecord,
+        QuestionAnswerRecord, QuestionRefusalRecord, RefusedAsk, ReviewDeclineRecord,
     },
     tools::ToolReviewInput,
+};
+use nessa_sdk::domain::agent_execution::{
+    ExecutionError,
+    permissions::{
+        CustomPermissionCancellationReason, PermissionCancellationReason, PermissionDecision,
+        PermissionEffect, PermissionId, PermissionOfferPolicy, PermissionOption,
+        PermissionOptionId, PermissionOptions, PermissionScope, RefusalOutcome, ReviewDecline,
+        ReviewDeclineId, ReviewDeclineReason,
+    },
+    questions::{
+        AgentQuestion, AnswerOption, AnswerShape, MAX_OPEN_ASK_COST, MAX_OPEN_QUESTIONS, Question,
+        QuestionCancellation, QuestionChoice, QuestionId, QuestionRefusalReason,
+    },
+    tools::{ToolCallId, ToolCallUpdate},
 };
 use nessa_sdk::domain::agent_execution::{
     executions::{
@@ -18,20 +33,6 @@ use nessa_sdk::domain::agent_execution::{
         SubmissionMode,
     },
     sessions::{AttachmentCause, ExecutionSession, ExecutionSessionId, SessionId},
-};
-use nessa_sdk::domain::agent_execution::{
-    permissions::{
-        CustomPermissionCancellationReason, PermissionCancellationReason, PermissionDecision,
-        PermissionEffect, PermissionId, PermissionOfferPolicy, PermissionOption,
-        PermissionOptionId, PermissionOptions, PermissionScope, ReviewDecline, ReviewDeclineId,
-        ReviewDeclineReason,
-    },
-    questions::{
-        AgentQuestion, AnswerOption, AnswerShape, Question, QuestionCancellation, QuestionChoice,
-        QuestionId, QuestionRefusalReason, MAX_OPEN_ASK_COST, MAX_OPEN_QUESTIONS,
-    },
-    tools::{ToolCallId, ToolCallUpdate},
-    ExecutionError,
 };
 use std::fs;
 struct TestClock;
@@ -422,8 +423,13 @@ fn audit_maps_a_declined_review_as_a_claim_about_a_tool_nobody_was_offered() {
                 ExecutionSessionId::new("session").unwrap(),
                 ExecutionId::new("run").unwrap(),
                 ReviewDeclineId::new("1").unwrap(),
-                ReviewDecline::new(tool, reason),
+                ReviewDecline::new(
+                    tool,
+                    reason,
+                    nessa_sdk::domain::agent_execution::permissions::RefusalOutcome::Continue,
+                ),
                 delivery,
+                None,
             ),
         ))
     };
@@ -464,10 +470,76 @@ fn audit_maps_a_declined_review_as_a_claim_about_a_tool_nobody_was_offered() {
         PermissionAnswerDelivery::Failed(AgentError::Transport("stdin write failed".into())),
     );
     assert_eq!(failed["delivery"]["stage"], "failed");
-    assert!(failed["delivery"]["diagnostic"]
-        .as_str()
-        .unwrap()
-        .contains("stdin write failed"));
+    assert!(
+        failed["delivery"]["diagnostic"]
+            .as_str()
+            .unwrap()
+            .contains("stdin write failed")
+    );
+    assert_eq!(value["outcome"], "continue");
+    assert!(value.get("stop").is_none());
+}
+
+#[test]
+fn audit_maps_a_stopping_refusal_as_the_cause_of_the_stop() {
+    let rule = ApprovalRuleReference::new("refuse-shell", "3", actor()).unwrap();
+    let value = record_value(&ExecutionAuditRecord::ReviewDeclined(
+        ReviewDeclineRecord::new(
+            ExecutionSessionId::new("session").unwrap(),
+            ExecutionId::new("run").unwrap(),
+            ReviewDeclineId::new("9").unwrap(),
+            ReviewDecline::new(
+                Some("Bash"),
+                ReviewDeclineReason::ToolNotReviewable,
+                RefusalOutcome::EndTurn,
+            ),
+            PermissionAnswerDelivery::Selected,
+            Some(rule),
+        ),
+    ));
+    assert_eq!(value["outcome"], "end_turn");
+    assert_eq!(value["origin"]["kind"], "rule");
+    assert_eq!(value["origin"]["ruleId"], "refuse-shell");
+    assert_eq!(value["origin"]["revision"], "3");
+    assert_eq!(value["stop"]["before"], "running");
+    assert_eq!(value["stop"]["after"], "ended");
+    assert_eq!(value["stop"]["target"]["executionId"], "run");
+    assert_eq!(value["stop"]["target"]["declaredTool"], "Bash");
+    assert_eq!(value["stop"]["cause"]["kind"], "refusal");
+    assert_eq!(value["stop"]["cause"]["reason"], "tool_not_reviewable");
+    assert_eq!(value["stop"]["cause"]["declineId"], "9");
+    assert_eq!(value["stop"]["initiator"]["kind"], "rule");
+    assert_eq!(value["stop"]["initiator"]["ruleId"], "refuse-shell");
+    assert!(value.get("actor").is_none());
+
+    let closed = record_value(&ExecutionAuditRecord::ReviewDeclined(
+        ReviewDeclineRecord::new(
+            ExecutionSessionId::new("session").unwrap(),
+            ExecutionId::new("run").unwrap(),
+            ReviewDeclineId::new("9").unwrap(),
+            ReviewDecline::new(
+                None,
+                ReviewDeclineReason::UnusableOptions,
+                RefusalOutcome::CloseSession,
+            ),
+            PermissionAnswerDelivery::Written,
+            Some(ApprovalRuleReference::new("refuse-shell", "3", actor()).unwrap()),
+        ),
+    ));
+    assert_eq!(closed["outcome"], "close_session");
+    assert_eq!(closed["stop"]["after"], "closed");
+    assert!(closed["stop"]["target"]["declaredTool"].is_null());
+
+    let late = record_value(&ExecutionAuditRecord::LateProviderResult(
+        LateProviderResultRecord::new(
+            ExecutionSessionId::new("session").unwrap(),
+            ExecutionId::new("run").unwrap(),
+            Ok(ExecutionOutcome::Completed),
+        ),
+    ));
+    assert_eq!(late["kind"], "late_provider_result");
+    assert_eq!(late["result"], "completed");
+    assert_eq!(late["executionId"], "run");
 }
 
 #[test]

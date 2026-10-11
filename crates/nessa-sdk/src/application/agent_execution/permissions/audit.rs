@@ -1,7 +1,7 @@
 //! Mandatory permission evidence, independent of live event consumers.
 #![deny(missing_docs)]
 
-use super::{ActionContext, PermissionResolution};
+use super::{ActionContext, ApprovalRuleReference, PermissionResolution};
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::AdmittedQuestion;
 use crate::domain::agent_execution::executions::ExecutionId;
@@ -76,6 +76,7 @@ pub struct ReviewDeclineRecord {
     id: ReviewDeclineId,
     decline: ReviewDecline,
     delivery: PermissionAnswerDelivery,
+    rule: Option<ApprovalRuleReference>,
 }
 impl ReviewDeclineRecord {
     /// Record that `decline` was decided for `execution_id` within `session_id`.
@@ -104,6 +105,7 @@ impl ReviewDeclineRecord {
         id: ReviewDeclineId,
         decline: ReviewDecline,
         delivery: PermissionAnswerDelivery,
+        rule: Option<ApprovalRuleReference>,
     ) -> Self {
         Self {
             session_id,
@@ -111,6 +113,7 @@ impl ReviewDeclineRecord {
             id,
             decline,
             delivery,
+            rule,
         }
     }
     /// Provider session whose agent was refused.
@@ -132,6 +135,10 @@ impl ReviewDeclineRecord {
     /// Local decision or observed write result; never provider acknowledgement.
     pub fn delivery(&self) -> &PermissionAnswerDelivery {
         &self.delivery
+    }
+    /// The rule that required this refusal to stop work, when one did.
+    pub fn rule(&self) -> Option<&ApprovalRuleReference> {
+        self.rule.as_ref()
     }
 }
 

@@ -1688,3 +1688,145 @@ async fn an_ask_reusing_an_open_asks_identity_fails_the_session_and_ends_the_fir
         .shutdown(SessionCloseRequest::Explicit(close_action()))
         .await;
 }
+
+fn stopping_rule() -> ApprovalRuleReference {
+    ApprovalRuleReference::new(
+        "refuse-shell",
+        "1",
+        ActionContext::new("host", "policy", "grant").unwrap(),
+    )
+    .unwrap()
+}
+
+fn binding_that_stops(
+    mode: &str,
+    outcome: RefusalOutcome,
+    audit: Arc<RecordingAudit>,
+) -> (tempfile::TempDir, ClaudeAcpProvider) {
+    let (root, mut config, model) = test_acp_configuration(mode, 16);
+    config.refusal = ConfiguredRefusal::stopping(outcome, stopping_rule()).unwrap();
+    (
+        root,
+        ClaudeAcpProvider::new(config, &model, TokenLimits::new(900, 100).unwrap(), audit).unwrap(),
+    )
+}
+
+#[tokio::test]
+async fn a_refusal_can_end_the_turn_and_leave_the_session_usable() {
+    let _process_slot = process_test_slot().await;
+    let audit = Arc::new(RecordingAudit::default());
+    let (root, binding) =
+        binding_that_stops("refusal-end-turn", RefusalOutcome::EndTurn, audit.clone());
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
+    let active = start(&opened, "stop-this").await;
+    assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
+    let ExecutionUpdate::ReviewDeclined(selected) = next(&mut opened).await else {
+        panic!("expected the refusal notice");
+    };
+    assert_eq!(selected.decline().outcome(), RefusalOutcome::EndTurn);
+    assert!(matches!(
+        next(&mut opened).await,
+        ExecutionUpdate::Finished(ExecutionOutcome::Cancelled)
+    ));
+    assert_eq!(
+        timeout(Duration::from_secs(3), active)
+            .await
+            .unwrap()
+            .unwrap(),
+        Ok(ExecutionOutcome::Cancelled)
+    );
+    let declined = audit.declines.lock().unwrap().clone();
+    assert!(
+        declined.iter().any(|record| {
+            record.decline().outcome() == RefusalOutcome::EndTurn
+                && record.rule().is_some_and(|rule| rule.rule_id() == "refuse-shell")
+        }),
+        "{declined:?}"
+    );
+    let again = start(&opened, "second").await;
+    assert_eq!(
+        timeout(Duration::from_secs(3), again)
+            .await
+            .unwrap()
+            .unwrap(),
+        Ok(ExecutionOutcome::Completed)
+    );
+    let late = audit.late_results.lock().unwrap().clone();
+    assert_eq!(late.len(), 1, "{late:?}");
+    assert_eq!(late[0].result(), &Ok(ExecutionOutcome::Completed));
+    assert!(root.path().join("cancel-observed").exists());
+    let _ = opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await;
+}
+
+#[tokio::test]
+async fn a_refusal_can_close_the_session() {
+    let _process_slot = process_test_slot().await;
+    let audit = Arc::new(RecordingAudit::default());
+    let (_root, binding) = binding_that_stops(
+        "refusal-close-session",
+        RefusalOutcome::CloseSession,
+        audit.clone(),
+    );
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
+    let active = start(&opened, "close-this").await;
+    assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
+    let ExecutionUpdate::ReviewDeclined(selected) = next(&mut opened).await else {
+        panic!("expected the refusal notice");
+    };
+    assert_eq!(selected.decline().outcome(), RefusalOutcome::CloseSession);
+    assert_eq!(
+        timeout(Duration::from_secs(3), active)
+            .await
+            .unwrap()
+            .unwrap(),
+        Ok(ExecutionOutcome::Cancelled)
+    );
+    let again = start(&opened, "after-close").await;
+    assert!(timeout(Duration::from_secs(3), again)
+        .await
+        .unwrap()
+        .unwrap()
+        .is_err());
+}
+
+#[tokio::test]
+async fn ending_the_turn_does_not_wait_for_a_stalled_audit() {
+    let _process_slot = process_test_slot().await;
+    let audit = Arc::new(RecordingAudit {
+        stall: true,
+        ..RecordingAudit::default()
+    });
+    let (_root, mut config, model) = test_acp_configuration("refusal-end-turn", 16);
+    config.shutdown_grace = Duration::from_secs(5);
+    config.refusal = ConfiguredRefusal::stopping(RefusalOutcome::EndTurn, stopping_rule()).unwrap();
+    let binding =
+        ClaudeAcpProvider::new(config, &model, TokenLimits::new(900, 100).unwrap(), audit).unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
+    let active = start(&opened, "stop-without-audit").await;
+    assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
+    assert!(matches!(
+        next(&mut opened).await,
+        ExecutionUpdate::ReviewDeclined(_)
+    ));
+    let result = timeout(Duration::from_secs(1), active).await;
+    assert_eq!(
+        result.expect("the turn result waited on the audit").unwrap(),
+        Ok(ExecutionOutcome::Cancelled)
+    );
+    let _ = opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await;
+}

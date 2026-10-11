@@ -41,11 +41,11 @@ fn application_absences_stay_disabled_while_questions_follow_the_verified_bindin
     );
     assert_eq!(
         capabilities.policy_end_turn(),
-        PolicyEndTurnCapability::UnsupportedNotImplemented
+        PolicyEndTurnCapability::Unknown
     );
     assert_eq!(
         capabilities.policy_close_session(),
-        PolicyCloseSessionCapability::UnsupportedNotImplemented
+        PolicyCloseSessionCapability::Unknown
     );
     assert_eq!(
         capabilities.incoming_elicitation(),
@@ -83,6 +83,50 @@ fn provider_features_are_unknown_until_negotiation_completes() {
     assert_eq!(
         capabilities.incoming_elicitation(),
         IncomingElicitationCapability::Unknown
+    );
+    assert_eq!(
+        capabilities.policy_end_turn(),
+        PolicyEndTurnCapability::Unknown
+    );
+    assert_eq!(
+        capabilities.policy_close_session(),
+        PolicyCloseSessionCapability::Unknown
+    );
+}
+
+#[test]
+fn proven_turn_cleanup_is_the_only_fact_that_supports_ending_the_turn() {
+    let proven = OperationCapabilities::resolve(ProviderOperationCapabilities {
+        negotiated: true,
+        turn_stop_cleanup: TurnStopCleanup::ProvenWithSessionReuse,
+        session_close_ownership: SessionCloseOwnership::Proven,
+        ..ProviderOperationCapabilities::default()
+    });
+    assert_eq!(
+        proven.policy_end_turn(),
+        PolicyEndTurnCapability::SupportedForCurrentInvocation
+    );
+    assert_eq!(
+        proven.policy_close_session(),
+        PolicyCloseSessionCapability::SupportedForSession
+    );
+    let unsupported = OperationCapabilities::resolve(ProviderOperationCapabilities {
+        negotiated: true,
+        turn_stop_cleanup: TurnStopCleanup::Unsupported,
+        session_close_ownership: SessionCloseOwnership::Unsupported,
+        ..ProviderOperationCapabilities::default()
+    });
+    assert_eq!(
+        unsupported.policy_end_turn(),
+        PolicyEndTurnCapability::UnsupportedNotImplemented
+    );
+    assert_eq!(
+        unsupported.policy_close_session(),
+        PolicyCloseSessionCapability::UnsupportedNotImplemented
+    );
+    assert_eq!(
+        OperationCapabilities::default().policy_end_turn(),
+        PolicyEndTurnCapability::Unknown
     );
 }
 

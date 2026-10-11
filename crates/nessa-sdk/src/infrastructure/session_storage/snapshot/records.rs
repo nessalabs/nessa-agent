@@ -17,7 +17,7 @@ use crate::domain::{
     agent_execution::{
         executions::{ExecutionId, MessageChunk, MessageId, MessageKind},
         permissions::{
-            PermissionId, ReviewDecline, ReviewDeclineId, ReviewDeclineObservation,
+            PermissionId, RefusalOutcome, ReviewDecline, ReviewDeclineId, ReviewDeclineObservation,
             ReviewDeclineReason, ReviewDeclineStage,
         },
         prompts::{
@@ -245,6 +245,7 @@ pub(super) enum Update<T = String> {
         id: String,
         tool: Option<String>,
         reason: DeclineReason,
+        outcome: DeclineOutcome,
         delivery: DeclineDelivery,
     },
     PermissionRequested {
@@ -291,6 +292,12 @@ pub(super) enum DeclineReason {
     ToolNotReviewable,
     UnreadableRequest,
     UnusableOptions,
+}
+#[derive(Serialize, Deserialize)]
+pub(super) enum DeclineOutcome {
+    Continue,
+    EndTurn,
+    CloseSession,
 }
 #[derive(Serialize, Deserialize)]
 pub(super) enum DeclineDelivery {
@@ -371,6 +378,11 @@ impl<'a> From<&'a ExecutionEvent> for Event<&'a str> {
                         ReviewDeclineReason::ToolNotReviewable => DeclineReason::ToolNotReviewable,
                         ReviewDeclineReason::UnreadableRequest => DeclineReason::UnreadableRequest,
                         ReviewDeclineReason::UnusableOptions => DeclineReason::UnusableOptions,
+                    },
+                    outcome: match observation.decline().outcome() {
+                        RefusalOutcome::Continue => DeclineOutcome::Continue,
+                        RefusalOutcome::EndTurn => DeclineOutcome::EndTurn,
+                        RefusalOutcome::CloseSession => DeclineOutcome::CloseSession,
                     },
                     delivery: match observation.stage() {
                         ReviewDeclineStage::Selected => DeclineDelivery::Selected,
@@ -517,6 +529,7 @@ impl Event {
                 id,
                 tool,
                 reason,
+                outcome,
                 delivery,
             } => ExecutionUpdate::ReviewDeclined(ReviewDeclineObservation::restore(
                 ReviewDeclineId::new(id).map_err(corrupt)?,
@@ -526,6 +539,11 @@ impl Event {
                         DeclineReason::ToolNotReviewable => ReviewDeclineReason::ToolNotReviewable,
                         DeclineReason::UnreadableRequest => ReviewDeclineReason::UnreadableRequest,
                         DeclineReason::UnusableOptions => ReviewDeclineReason::UnusableOptions,
+                    },
+                    match outcome {
+                        DeclineOutcome::Continue => RefusalOutcome::Continue,
+                        DeclineOutcome::EndTurn => RefusalOutcome::EndTurn,
+                        DeclineOutcome::CloseSession => RefusalOutcome::CloseSession,
                     },
                 )
                 .map_err(corrupt)?,

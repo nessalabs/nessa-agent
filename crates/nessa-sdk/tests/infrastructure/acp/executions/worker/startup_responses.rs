@@ -174,6 +174,7 @@ async fn nested_startup_response_writes_observe_remaining_rpc_deadline() {
                     startup_advisory_session: None,
                     questions: HashMap::new(),
                     declined: None,
+                    stopped_prompt: None,
                     shutdown_deadline: None,
                     configured: true,
                     closing: false,

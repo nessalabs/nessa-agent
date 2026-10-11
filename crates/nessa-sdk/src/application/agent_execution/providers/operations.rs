@@ -126,6 +126,10 @@ pub struct ProviderOperationCapabilities {
     pub permission_deferral: ProviderPermissionDeferralCapability,
     /// Correlated provider forwarding of MCP elicitation.
     pub elicitation_forwarding: ElicitationForwardingCapability,
+    /// Whether this binding can stop the current invocation and then run another.
+    pub turn_stop_cleanup: TurnStopCleanup,
+    /// Whether this binding owns closing the provider session.
+    pub session_close_ownership: SessionCloseOwnership,
     /// The verified agent can ask through ACP form elicitation with tools enabled.
     pub supports_questions: bool,
     /// Which of the model's catalogue effort levels the connected agent also
@@ -147,12 +151,44 @@ pub enum PreToolPolicyCapability {
     SupportedAtPermissionGate,
 }
 
+/// Whether stopping the current invocation leaves the provider session reusable.
+///
+/// [`ProvenWithSessionReuse`] is the only fact that lets a configured refusal
+/// end the turn. Anything weaker stays unknown or unsupported, and a policy
+/// that requires the stop is refused rather than promoted to closing the session.
+///
+/// [`ProvenWithSessionReuse`]: TurnStopCleanup::ProvenWithSessionReuse
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TurnStopCleanup {
+    /// Cleanup and a later turn on the same session have not been verified.
+    #[default]
+    Unknown,
+    /// This binding cannot stop one invocation and keep the session.
+    Unsupported,
+    /// A local stop ends the invocation, and a later turn can run here.
+    ProvenWithSessionReuse,
+}
+
+/// Whether this binding is the owner that closes the provider session.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SessionCloseOwnership {
+    /// Session-close ownership has not been verified.
+    #[default]
+    Unknown,
+    /// This binding cannot close its provider session.
+    Unsupported,
+    /// This binding closes the provider session it opened.
+    Proven,
+}
+
 /// Whether a Nessa policy can end its current invocation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PolicyEndTurnCapability {
     /// Correlation and target fencing have not been established.
     Unknown,
-    /// Policy integration for ending an invocation is not implemented.
+    /// This binding cannot end the current invocation.
+    ///
+    /// The variant name is the published wire value from before this stop existed.
     UnsupportedNotImplemented,
     /// A policy can stop its correlated current invocation.
     SupportedForCurrentInvocation,
@@ -163,7 +199,9 @@ pub enum PolicyEndTurnCapability {
 pub enum PolicyCloseSessionCapability {
     /// Correlation and cleanup ownership have not been established.
     Unknown,
-    /// Policy integration for closing a session is not implemented.
+    /// This binding cannot close its session.
+    ///
+    /// The variant name is the published wire value from before this stop existed.
     UnsupportedNotImplemented,
     /// A policy can close its correlated session through the lifecycle owner.
     SupportedForSession,
@@ -243,6 +281,8 @@ impl OperationCapabilities {
                 model_switch_reporting: ProviderModelSwitchReportingCapability::Unknown,
                 permission_deferral: ProviderPermissionDeferralCapability::Unknown,
                 elicitation_forwarding: ElicitationForwardingCapability::Unknown,
+                turn_stop_cleanup: TurnStopCleanup::Unknown,
+                session_close_ownership: SessionCloseOwnership::Unknown,
                 effort_levels: OfferedEffortLevels::default(),
                 ..provider
             }
@@ -253,8 +293,8 @@ impl OperationCapabilities {
             model_switch_reporting: ModelSwitchReportingCapability::UnsupportedNotImplemented,
             permission_deferral: PermissionDeferralCapability::UnsupportedNotImplemented,
             pre_tool_policy: PreToolPolicyCapability::UnsupportedNotImplemented,
-            policy_end_turn: PolicyEndTurnCapability::UnsupportedNotImplemented,
-            policy_close_session: PolicyCloseSessionCapability::UnsupportedNotImplemented,
+            policy_end_turn: end_turn_capability(provider.turn_stop_cleanup),
+            policy_close_session: close_session_capability(provider.session_close_ownership),
             incoming_elicitation: if !provider.negotiated {
                 IncomingElicitationCapability::Unknown
             } else if provider.supports_questions {
@@ -341,6 +381,30 @@ impl OperationCapabilities {
     /// [`Agent::effort_levels`](crate::application::agent_execution::agents::Agent::effort_levels).
     pub fn effort_levels(self) -> OfferedEffortLevels {
         self.provider.effort_levels
+    }
+}
+
+/// Map a binding's turn-cleanup fact onto the one capability the rest of Nessa reads.
+///
+/// `UnsupportedNotImplemented` is that published unsupported value. The
+/// integration exists; the variant now means this binding cannot honor the stop.
+fn end_turn_capability(fact: TurnStopCleanup) -> PolicyEndTurnCapability {
+    match fact {
+        TurnStopCleanup::Unknown => PolicyEndTurnCapability::Unknown,
+        TurnStopCleanup::Unsupported => PolicyEndTurnCapability::UnsupportedNotImplemented,
+        TurnStopCleanup::ProvenWithSessionReuse => {
+            PolicyEndTurnCapability::SupportedForCurrentInvocation
+        }
+    }
+}
+
+fn close_session_capability(fact: SessionCloseOwnership) -> PolicyCloseSessionCapability {
+    match fact {
+        SessionCloseOwnership::Unknown => PolicyCloseSessionCapability::Unknown,
+        SessionCloseOwnership::Unsupported => {
+            PolicyCloseSessionCapability::UnsupportedNotImplemented
+        }
+        SessionCloseOwnership::Proven => PolicyCloseSessionCapability::SupportedForSession,
     }
 }
 

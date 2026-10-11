@@ -172,8 +172,8 @@ fn application_absences_project_as_not_implemented() {
     assert_eq!(value["modelSwitchReporting"], "unsupported_not_implemented");
     assert_eq!(value["permissionDeferral"], "unsupported_not_implemented");
     assert_eq!(value["preToolPolicy"], "unsupported_not_implemented");
-    assert_eq!(value["policyEndTurn"], "unsupported_not_implemented");
-    assert_eq!(value["policyCloseSession"], "unsupported_not_implemented");
+    assert_eq!(value["policyEndTurn"], "unknown");
+    assert_eq!(value["policyCloseSession"], "unknown");
     assert_eq!(value["incomingElicitation"], "unknown");
 }
 
@@ -1966,12 +1966,56 @@ fn shown(events: Vec<ExecutionEvent>) -> ConversationView {
 fn refusal(tool: &str) -> ReviewDeclineObservation {
     ReviewDeclineObservation::selected(
         ReviewDeclineId::new("1").unwrap(),
-        ReviewDecline::new(Some(tool), ReviewDeclineReason::ToolNotReviewable),
+        ReviewDecline::new(
+            Some(tool),
+            ReviewDeclineReason::ToolNotReviewable,
+            nessa_sdk::domain::agent_execution::permissions::RefusalOutcome::Continue,
+        ),
     )
 }
 
 fn declined(observation: ReviewDeclineObservation) -> ExecutionEvent {
     event(ExecutionUpdate::ReviewDeclined(observation))
+}
+
+#[test]
+fn a_stopping_refusal_says_why_the_turn_stopped() {
+    use nessa_sdk::domain::agent_execution::permissions::RefusalOutcome;
+    let ended = ReviewDeclineObservation::selected(
+        ReviewDeclineId::new("4").unwrap(),
+        ReviewDecline::new(
+            Some("Bash"),
+            ReviewDeclineReason::ToolNotReviewable,
+            RefusalOutcome::EndTurn,
+        ),
+    );
+    let mut snapshot = review_snapshot(vec![
+        declined(ended),
+        event(ExecutionUpdate::Finished(ExecutionOutcome::Cancelled)),
+    ]);
+    snapshot.invocations[0].result = Some(Ok(ExecutionOutcome::Cancelled));
+    let mut projection = projection();
+    projection.replace_committed(
+        &committed("incarnation", 1, 1, 1, Some(&snapshot)),
+        &[],
+        Some(&ExecutionId::new("execution").unwrap()),
+    );
+    let view = projection.read();
+    let message = &view.messages[0];
+    assert_eq!(message.status, ConversationMessageStatus::Cancelled);
+    let notice = message
+        .parts
+        .iter()
+        .find(|part| part.kind == "local_notice")
+        .expect("the stop has a notice");
+    assert!(
+        notice
+            .text
+            .contains("The turn stopped because of that refusal."),
+        "{}",
+        notice.text
+    );
+    assert!(!notice.text.is_empty());
 }
 
 fn text_len(message: &crate::conversation::view::ConversationMessage) -> usize {

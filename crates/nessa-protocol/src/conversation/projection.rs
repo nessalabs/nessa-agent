@@ -27,7 +27,9 @@ use nessa_sdk::domain::agent_execution::leases::{
 use nessa_sdk::domain::agent_execution::tools::McpTool;
 use nessa_sdk::domain::agent_execution::{
     executions::{ExecutionId, ExecutionOutcome, InvocationStage, MessageKind},
-    permissions::{PermissionScope, ReviewDecline, ReviewDeclineReason, ReviewDeclineStage},
+    permissions::{
+        PermissionScope, RefusalOutcome, ReviewDecline, ReviewDeclineReason, ReviewDeclineStage,
+    },
     questions::{AnswerShape, MAX_OPEN_QUESTIONS},
     tools::{ToolContentView, ToolKind, ToolStatus},
 };
@@ -274,19 +276,36 @@ fn decline_notice(decline: &ReviewDecline, delivery: ReviewDeclineStage) -> Stri
         ReviewDeclineReason::UnreadableRequest => "the request could not be read safely",
         ReviewDeclineReason::UnusableOptions => "the request offered no usable choices",
     };
-    let delivery = match delivery {
-        ReviewDeclineStage::Selected => "Nessa has not confirmed writing the refusal to the agent.",
-        ReviewDeclineStage::WriteConfirmed => "",
-        ReviewDeclineStage::WriteUnconfirmed => {
-            "Nessa could not confirm writing the refusal to the agent."
-        }
-        ReviewDeclineStage::WriteNotAttempted => {
-            "Nessa did not attempt to write the refusal to the agent."
-        }
+    let delivery = match decline.outcome() {
+        RefusalOutcome::Continue => match delivery {
+            ReviewDeclineStage::Selected => {
+                "Nessa has not confirmed writing the refusal to the agent."
+            }
+            ReviewDeclineStage::WriteConfirmed => "",
+            ReviewDeclineStage::WriteUnconfirmed => {
+                "Nessa could not confirm writing the refusal to the agent."
+            }
+            ReviewDeclineStage::WriteNotAttempted => {
+                "Nessa did not attempt to write the refusal to the agent."
+            }
+        },
+        // The stop is published once, before the turn finishes. A later
+        // delivery stage would be output after that finish, so the write
+        // stays in the audit and the panel keeps the reason.
+        RefusalOutcome::EndTurn | RefusalOutcome::CloseSession => "",
     };
-    format!("Nessa declined a tool review{target} because {reason}. {delivery}")
-        .trim_end()
-        .to_owned()
+    let stopped = match decline.outcome() {
+        RefusalOutcome::Continue => "",
+        RefusalOutcome::EndTurn => " The turn stopped because of that refusal.",
+        RefusalOutcome::CloseSession => " The session closed because of that refusal.",
+    };
+    let mut text = format!("Nessa declined a tool review{target} because {reason}.");
+    if !delivery.is_empty() {
+        text.push(' ');
+        text.push_str(delivery);
+    }
+    text.push_str(stopped);
+    text
 }
 // A provider report owns dispatched settlement. Before dispatch, the retained
 // terminal result owns automatic-attachment failure, including its primary cause
@@ -1073,8 +1092,10 @@ impl Projection {
                 self.view.messages[index].status = ConversationMessageStatus::Running;
             }
             ExecutionUpdate::PermissionCancelled(_) | ExecutionUpdate::QuestionClosed { .. } => {}
-            ExecutionUpdate::ReviewDeclined(_) => {
-                self.view.messages[index].status = ConversationMessageStatus::Running;
+            ExecutionUpdate::ReviewDeclined(observation) => {
+                if observation.decline().outcome() == RefusalOutcome::Continue {
+                    self.view.messages[index].status = ConversationMessageStatus::Running;
+                }
             }
             ExecutionUpdate::Tool(update) => {
                 self.view.messages[index].status = ConversationMessageStatus::Running;

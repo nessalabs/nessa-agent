@@ -116,6 +116,7 @@ async fn blocked_worker(
         startup_advisory_session: None,
         questions: HashMap::new(),
         declined: None,
+        stopped_prompt: None,
         shutdown_deadline: None,
         configured: true,
         closing: false,

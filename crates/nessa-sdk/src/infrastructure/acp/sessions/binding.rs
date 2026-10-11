@@ -2,14 +2,14 @@ use super::super::{
     executions::{
         event_queue::{EventQueueBudget, EventReceiver},
         prompt_content::{
-            encoded_image_bytes, fits_one_frame, read_images, ImageBlocks, IMAGE_READ_TIMEOUT,
+            IMAGE_READ_TIMEOUT, ImageBlocks, encoded_image_bytes, fits_one_frame, read_images,
         },
         steering::RESPONSE_TIMEOUT,
         worker,
     },
     profile::AcpProfile,
 };
-use super::{cleanup::ProcessCleanup, AcpConfig, StandInGrant};
+use super::{AcpConfig, StandInGrant, cleanup::ProcessCleanup};
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::{
     ExecutionAudit, ExecutionEvent, ExecutionRequest, PermissionAuthoritySource,
@@ -21,13 +21,13 @@ use crate::application::agent_execution::permissions::{
     PermissionSelectionState, QuestionAnswer,
 };
 use crate::application::agent_execution::providers::{
-    CleanupFuture, CleanupReport, ExecutionEventStream, ExecutionReport, FailedOpenCauseSource,
-    FailedOpenCleanup, ImageInputRefusal, ObservationFailure, ObservationFailureCause,
-    OpenedProviderSession, ProviderCleanup, ProviderExecutionFuture, ProviderExecutionReply,
-    ProviderObservationFuture, ProviderOpenControl, ProviderOpenError, ProviderOpenRequest,
-    ProviderOperationCapabilities, ProviderOperationFailure, ProviderOperationFuture,
-    ProviderOperationResult, ProviderSession, ProviderSessionBackend, ProviderSessionState,
-    ResourceCleanup, SessionCloseRequest, SteeringOutcome,
+    CleanupFuture, CleanupReport, ExecutionEventStream, ExecutionReport, ExecutionReportSource,
+    FailedOpenCauseSource, FailedOpenCleanup, ImageInputRefusal, ObservationFailure,
+    ObservationFailureCause, OpenedProviderSession, ProviderCleanup, ProviderExecutionFuture,
+    ProviderExecutionReply, ProviderObservationFuture, ProviderOpenControl, ProviderOpenError,
+    ProviderOpenRequest, ProviderOperationCapabilities, ProviderOperationFailure,
+    ProviderOperationFuture, ProviderOperationResult, ProviderSession, ProviderSessionBackend,
+    ProviderSessionState, ResourceCleanup, SessionCloseRequest, SteeringOutcome,
 };
 use crate::domain::agent_execution::executions::ExecutionId;
 use crate::domain::agent_execution::prompts::UserMessage;
@@ -37,12 +37,12 @@ use crate::infrastructure::clock::ClockInstant;
 use crate::infrastructure::process::{ProcessScope, ProcessStartFailure};
 use std::{
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc, Mutex as ControlMutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
-use tokio::sync::{mpsc, oneshot, watch, Mutex, MutexGuard, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{Mutex, MutexGuard, OwnedSemaphorePermit, Semaphore, mpsc, oneshot, watch};
 
 use tracing::Instrument;
 
@@ -145,6 +145,7 @@ pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
         close_activity,
         event_generations,
         image_budget,
+        policy_closed: AtomicBool::new(false),
     });
     Ok(OpenedProviderSession {
         session: ProviderSession::new(session_id, session, capabilities),
@@ -536,12 +537,19 @@ struct AcpSession<P> {
     event_generations: mpsc::Sender<EventStream>,
     // Retained by the blocks of every message read but not yet written.
     image_budget: Arc<Semaphore>,
+    /// A refusal closed this binding. A later prompt must not restore it.
+    policy_closed: AtomicBool,
 }
 impl<P: AcpProfile + Clone> AcpSession<P> {
     async fn live_generation(&self) -> Result<MutexGuard<'_, Generation>, LiveGenerationFailure> {
+        if self.policy_closed.load(Ordering::Acquire) {
+            return Err(AgentError::Closed.into());
+        }
         let close_activity = self.close_activity.subscribe();
         let mut generation = self.generation.lock().await;
-        if close_activity.has_changed().unwrap_or(true) {
+        if self.policy_closed.load(Ordering::Acquire)
+            || close_activity.has_changed().unwrap_or(true)
+        {
             return Err(AgentError::Closed.into());
         }
         if generation.startup.is_some() && !generation.stopped() {
@@ -583,6 +591,9 @@ impl<P: AcpProfile + Clone> AcpSession<P> {
                     return Err(recovery.failure(ProviderSessionState::CleanupReported(report)));
                 }
                 generation.restoration = None;
+            }
+            if self.policy_closed.load(Ordering::Acquire) {
+                return Err(AgentError::Closed.into());
             }
             // Reserve the reader before starting another process. A dropped consumer
             // or an undrained sequence of generations cannot create hidden workers.
@@ -846,6 +857,24 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
                     ProviderSessionState::CleanupRequired,
                 ))
             });
+            // The turn is already finished. Retire the attachment before this
+            // call returns, so the next prompt cannot restore a closed binding.
+            // The refusal record is the cause; this request only ends the process.
+            if matches!(
+                &result,
+                ProviderExecutionReply::Finished(report)
+                    if report.source() == ExecutionReportSource::PolicyStop
+                        && matches!(
+                            report.session_state(),
+                            ProviderSessionState::CleanupRequired
+                        )
+            ) {
+                self.policy_closed.store(true, Ordering::Release);
+                let cleanup = self.close(SessionCloseRequest::SessionFailed).await;
+                if !cleanup.is_confirmed() {
+                    tracing::warn!("policy session close did not confirm cleanup");
+                }
+            }
             if let Err(error) = result.clone().into_result() {
                 observations
                     .lock()
