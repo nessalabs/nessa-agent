@@ -1093,17 +1093,20 @@ fn committed_source_error(error: SourceError) -> StorageError {
 
 fn committed_fold_error(error: super::transcript::TranscriptError) -> StorageError {
     // A decision keeps its cause: another version, and a body that does not
-    // decode, stay those errors. A malformed frame is stored data, so it stays
-    // corrupt and the chat can be deleted. A race (`Position`, `Scope`,
-    // `Checkpoint`, `CheckpointTooLarge`) used to be flattened into `Corrupt`,
-    // which this build treats as unreadable. Those stay retryable I/O.
+    // decode, stay those errors. A malformed frame is stored data. So is
+    // `Scope`: the only way this read produces it is a saved header or
+    // snapshot whose identity is another stream (`apply_one`). Those bytes
+    // will not match on a retry, so the chat stays corrupt and can be
+    // deleted. `Position` is a lifecycle race: this read stamps contiguous
+    // positions itself, and a head behind downloaded progress can catch up.
+    // `Checkpoint` and `CheckpointTooLarge` are not produced here. They stay
+    // retryable I/O.
     match error {
         super::transcript::TranscriptError::Decision(cause) => cause,
-        super::transcript::TranscriptError::Frame => {
-            StorageError::Corrupt("committed transcript: Frame".into())
+        super::transcript::TranscriptError::Frame | super::transcript::TranscriptError::Scope => {
+            StorageError::Corrupt(format!("committed transcript: {error:?}"))
         }
         super::transcript::TranscriptError::Position
-        | super::transcript::TranscriptError::Scope
         | super::transcript::TranscriptError::Checkpoint
         | super::transcript::TranscriptError::CheckpointTooLarge => {
             StorageError::Io(format!("committed transcript: {error:?}"))
@@ -1416,9 +1419,12 @@ mod tests {
             committed_fold_error(TranscriptError::Frame),
             StorageError::Corrupt("committed transcript: Frame".into())
         );
+        assert_eq!(
+            committed_fold_error(TranscriptError::Scope),
+            StorageError::Corrupt("committed transcript: Scope".into())
+        );
         for error in [
             TranscriptError::Position,
-            TranscriptError::Scope,
             TranscriptError::Checkpoint,
             TranscriptError::CheckpointTooLarge,
         ] {
@@ -1464,6 +1470,54 @@ mod tests {
         assert_eq!(
             error,
             StorageError::Corrupt("committed transcript: Frame".into())
+        );
+        storage.shutdown().await.unwrap();
+    }
+
+    /// A save group written for one stream, copied as the same raw frames
+    /// into another, is corrupt from a committed read. The header's stream
+    /// and incarnation are stored bytes. They will not match the stream
+    /// being read, and a retry sees the same bytes.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_save_group_from_another_stream_is_corrupt_from_read_committed() {
+        use event_stream::{Cursor, PageLimits};
+        let directory = tempfile::tempdir().unwrap();
+        let storage = RecordStorage::new(directory.path().join("sessions")).unwrap();
+        let runtime = storage.runtime().await.unwrap().clone();
+        let source = SessionId::new("conversation-a").unwrap();
+        let source_stream = runtime
+            .create_stream(&StreamId::new(source.as_str()).unwrap())
+            .await
+            .unwrap();
+        append_opening(&runtime, &source_stream, &source).await;
+        let bounds = runtime.bounds(&source_stream).await.unwrap();
+        let page = runtime
+            .read_after(
+                &Cursor::new(source_stream, 0),
+                PageLimits {
+                    max_records: 64,
+                    max_bytes: 1024 * 1024,
+                },
+                Some(&bounds.tail),
+            )
+            .await
+            .unwrap();
+        assert!(!page.records.is_empty());
+        let foreign = SessionId::new("conversation-b").unwrap();
+        let foreign_stream = runtime
+            .create_stream(&StreamId::new(foreign.as_str()).unwrap())
+            .await
+            .unwrap();
+        for record in page.records {
+            runtime
+                .append(&foreign_stream, record.event.clone())
+                .await
+                .unwrap();
+        }
+        let error = storage.read_committed(foreign).await.unwrap_err();
+        assert_eq!(
+            error,
+            StorageError::Corrupt("committed transcript: Scope".into())
         );
         storage.shutdown().await.unwrap();
     }
