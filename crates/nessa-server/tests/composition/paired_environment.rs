@@ -520,11 +520,25 @@ async fn an_enrolled_environment_waits_for_approval_then_stays_dialed_in() {
 
     let host = Arc::new(Host::open(&directory.path().join("e")));
     let served = Arc::new(Mutex::new(Vec::new()));
+    // Dials after the first wait for this, so the test sees the gateway
+    // drop the cut connection before another one is made.
+    let (release, released) = watch::channel(false);
+    let dials = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let (stop, stopping) = watch::channel(false);
     let dialing = {
         let served = served.clone();
         tokio::spawn(redial(
-            move || dial(native, identity.clone(), pin, clock()),
+            move || {
+                let identity = identity.clone();
+                let mut released = released.clone();
+                let n = dials.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    if n > 0 {
+                        let _ = released.wait_for(|go| *go).await;
+                    }
+                    dial(native, identity, pin, clock()).await
+                }
+            },
             move |stream, stopping| {
                 served.lock().unwrap().push(stream.closer());
                 let host = host.clone();
@@ -548,6 +562,8 @@ async fn an_enrolled_environment_waits_for_approval_then_stays_dialed_in() {
 
     // The first connection is cut: E dials again, and the same host serves.
     served.lock().unwrap()[0].close();
+    a.until_connected(peer, false).await;
+    release.send(true).unwrap();
     tokio::time::timeout(WAIT, async {
         while served.lock().unwrap().len() < 2 {
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -571,7 +587,8 @@ async fn an_enrolled_environment_waits_for_approval_then_stays_dialed_in() {
 }
 
 /// Part 1c: waiting for approval ends, with a reason, when the owner denies
-/// the machine, and when nothing was ever paired here.
+/// the machine, and when nothing was ever paired here, even with the
+/// gateway out of reach.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn waiting_for_approval_ends_when_denied_or_never_paired() {
     use super::env_dial_command::EnvironmentPairing;
@@ -585,10 +602,17 @@ async fn waiting_for_approval_ends_when_denied_or_never_paired() {
     let unpaired = directory.path().join("unpaired");
     nessa_local_storage::create_directory(&unpaired).unwrap();
     let pairing = EnvironmentPairing::open(&unpaired, clock()).unwrap();
-    let never = tokio::time::timeout(WAIT, pairing.approved(connect, Duration::from_millis(20)))
-        .await
-        .unwrap()
-        .expect_err("nothing was paired here");
+    // Told at once, with no gateway to ask.
+    let unreachable = || async {
+        Err::<std::net::TcpStream, _>(std::io::Error::from(ErrorKind::ConnectionRefused))
+    };
+    let never = tokio::time::timeout(
+        WAIT,
+        pairing.approved(unreachable, Duration::from_millis(20)),
+    )
+    .await
+    .unwrap()
+    .expect_err("nothing was paired here");
     assert!(never.to_string().contains("not paired"), "{never}");
     pairing.shutdown().await;
 

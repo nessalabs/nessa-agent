@@ -117,10 +117,15 @@ impl EnvironmentPairing {
         let mut said = false;
         loop {
             let store = self.store.clone();
-            let saved = tokio::task::spawn_blocking(move || store.load_credential())
-                .await
-                .map_err(|error| RunError::Agent(error.to_string()))?
-                .map_err(|error| RunError::Agent(format!("{error:?}")))?;
+            let (saved, pending) = tokio::task::spawn_blocking(move || {
+                Ok::<_, PrivateStateError>((store.load_credential()?, store.load_pending()?))
+            })
+            .await
+            .map_err(|error| RunError::Agent(error.to_string()))?
+            .map_err(|error| RunError::Agent(format!("the pairing was not read: {error:?}")))?;
+            if saved.is_none() && pending.is_none() {
+                return Err(not_paired());
+            }
             if let Some(saved) = saved {
                 let (key, pin, _) = saved.into_enrollment().into_parts();
                 let identity = NativeIdentity::restore(key)
@@ -150,12 +155,30 @@ impl EnvironmentPairing {
                         tracing::info!("waiting for the owner to approve this machine");
                     }
                     Ok(_) => {}
-                    Err(NativeClientError::NoPending) => {
-                        return Err(RunError::Agent(
-                            "this machine is not paired: run nessa env enroll first".into(),
-                        ))
+                    Err(NativeClientError::NoPending) => return Err(not_paired()),
+                    // Asking again can answer these.
+                    Err(
+                        error @ (NativeClientError::Io(_)
+                        | NativeClientError::Handshake(_)
+                        | NativeClientError::Busy
+                        | NativeClientError::Refused
+                        | NativeClientError::Entropy
+                        | NativeClientError::WorkerFault(_)
+                        | NativeClientError::Storage(
+                            PrivateStateError::Locked
+                            | PrivateStateError::Unavailable
+                            | PrivateStateError::Uncertain,
+                        )),
+                    ) => tracing::warn!(?error, "the pairing's status was not read"),
+                    // A pairing record this machine cannot use, or a
+                    // gateway answering out of turn: no later ask changes it.
+                    Err(error) => {
+                        return Err(RunError::Agent(format!(
+                            "the pairing's status cannot be read: {error:?}; remove {} and \
+                             enroll again",
+                            self.directory.display()
+                        )))
                     }
-                    Err(error) => tracing::warn!(?error, "the pairing's status was not read"),
                 },
             }
             tokio::time::sleep(poll).await;
@@ -275,12 +298,19 @@ async fn serve_dialing(
         || {
             let identity = identity.clone();
             async move {
-                // Resolved on every dial: the gateway's address may move.
-                let gateway = tokio::net::lookup_host(address)
-                    .await?
-                    .next()
-                    .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no address"))?;
-                dial(gateway, identity, pin, clock()).await
+                // Resolved on every dial, the gateway's address may move;
+                // each address is tried, as a TCP connect by name does.
+                let mut failed = io::Error::new(io::ErrorKind::NotFound, "no address");
+                for gateway in tokio::net::lookup_host(address).await? {
+                    match dial(gateway, identity.clone(), pin, clock()).await {
+                        Ok(stream) => return Ok(stream),
+                        Err(error) if error.kind() == io::ErrorKind::InvalidInput => {
+                            return Err(error)
+                        }
+                        Err(error) => failed = error,
+                    }
+                }
+                Err(failed)
             }
         },
         |stream, stopping| {
@@ -368,6 +398,10 @@ async fn connect(address: &str) -> io::Result<TcpStream> {
         .into_std()?;
     stream.set_nonblocking(false)?;
     Ok(stream)
+}
+
+fn not_paired() -> RunError {
+    RunError::Agent("this machine is not paired: run nessa env enroll first".into())
 }
 
 fn clock() -> Arc<dyn Clock> {

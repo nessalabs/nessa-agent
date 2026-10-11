@@ -290,16 +290,19 @@ sequenceDiagram
         alt Serving
             E->>GW: env serve's frame loop until the connection ends
         else refused, unreachable or cut
-            E->>E: wait 1 s, doubling to 60 s
+            E->>E: counts as a failure
         end
+        E->>E: wait 1 s, doubling to 60 s (back to 1 s after 60 s served)
     end
 ```
 
 - **Approval first.** `env dial` asks the pairing's status until the owner
   approves, and only then composes, so an unpaired machine is told so at once
-  and `env serve` is not locked out while the owner decides. A denied,
-  cancelled or expired pairing stops it with that reason; reading that status
-  ends the enrollment here, so `env enroll` with a new code works at once.
+  (before any connection) and `env serve` is not locked out while the owner
+  decides. A denied, cancelled or expired pairing stops it with that reason;
+  reading that status ends the enrollment here, so `env enroll` with a new
+  code works at once. A gateway out of reach, busy or refusing is asked
+  again; a pairing record this machine cannot use stops it.
   The address is checked for its `HOST:PORT` form only: the name is looked up
   on every dial, so a machine started before names resolve keeps trying.
 - **The same serving.** `env dial` then composes what `env serve` does (the
@@ -313,7 +316,8 @@ sequenceDiagram
   ends sooner counts as a failure, so a gateway that drops each connection
   is not dialed in a loop. Only a failure no dial can change stops it
   (`InvalidInput`: a pin that is not a key, a gateway that does not speak
-  this protocol, a TLS setup this build cannot make).
+  this protocol, a TLS setup this build cannot make). Each address the name
+  resolves to is tried in turn.
 - **Stopping.** SIGINT or SIGTERM closes the connection being served, so its
   leases end as they do when a gateway goes away, and then dialing stops. A
   second signal while that drains exits at once.
@@ -339,7 +343,7 @@ Each row has at least one test.
 | H9 | A paired reader's catalogue head as the owner works, grants and revokes | An ungranted change and a grant to another receiver leave it; a grant, a change to a granted row and a revoke each move it; a revoke moves it forward, never back to an older granted row | `a_paired_readers_head_moves_only_with_what_it_was_granted` |
 | I1 | The owner creates an environment invitation; a gateway claims it; the owner approves its key | Same enrollment and listener; the credential names the same `gateway:<key hex>` a reading enrollment of that key would, an active member, holding only `environment.serve`, bound to that key; the owner needs `credential.manage` and never holds the grant; the record keeps `class: "environment"`. A registry in which that credential also or instead reads, or a person's credential serves, is refused on open; `credential.issue` of `environment.serve` to anyone is refused `Conflict`, nothing written; a share to its credential is refused `share_target_not_paired`, nothing granted; Cedar allows the action only to an active member holding it | `owner_route_creates_an_environment_invitation`; `owner_route_without_the_consent_grant_is_forbidden`; `owner_route_refuses_a_member_before_disclosure`; `an_environment_enrollment_issues_the_peer_principal_holding_only_serve`; `an_environment_is_paired_but_never_shared_with`; `cedar_allows_serving_only_to_a_member_holding_the_grant`; `each_class_discloses_only_its_own_grant`; `an_enrollment_record_keeps_its_class`; `the_enrollment_class_is_carried_and_never_changes_in_transit` |
 | I2 | A paired environment dials the native listener and asks for `openEnvironment`; the gateway runs a command there; the environment dials again; then its credential is revoked | Admitted only for a key whose credential is allowed `environment.serve` now: a key paired to read is refused before it takes a permit. The command runs on the environment over its own connection and answers its exit, output and cleanup; a second connection takes the place of the first, whose serving ends; once revoked, the next command is refused unreachable, the connection is closed, and the next dial is refused | `a_paired_environment_dials_in_serves_and_stops_at_revocation`; `a_key_paired_to_read_is_refused_at_open_environment` |
-| I3 | A machine pairs with `env enroll`'s pairing and waits as `env dial` does; the owner approves it, or denies it; one host serves what it dials; its first connection is cut, and it is stopped later | It waits while the pairing is pending and gets its key and the gateway's pin once approved; a denied pairing, or a machine never paired, stops waiting with that reason; a cut connection is dialed again and served by the same host; failed dials wait twice as long each time up to the most, a connection served at least that long starts the wait over, and a failure no dial can change stops it (a pin that is not a key is `InvalidInput`, a key that is not the gateway's is dialed again); stop closes the connection being served, which the gateway sees disconnected | `an_enrolled_environment_waits_for_approval_then_stays_dialed_in`; `waiting_for_approval_ends_when_denied_or_never_paired`; `a_pin_that_is_not_a_key_is_invalid_input_and_another_key_is_not`; `failed_dials_wait_twice_as_long_each_time_up_to_the_most`; `each_connection_is_served_and_a_long_one_starts_the_wait_over`; `a_setup_dialing_again_cannot_change_stops_it`; `stop_closes_the_connection_being_served_and_dials_no_more` |
+| I3 | A machine pairs with `env enroll`'s pairing and waits as `env dial` does; the owner approves it, or denies it; one host serves what it dials; its first connection is cut, and it is stopped later | It waits while the pairing is pending and gets its key and the gateway's pin once approved; a denied pairing, or a machine never paired, stops waiting with that reason; a cut connection is dialed again and served by the same host; failed dials wait twice as long each time up to the most, a connection served at least that long starts the wait over, and a failure no dial can change stops it (a pin that is not a key is `InvalidInput`, a key that is not the gateway's is dialed again); stop closes the connection being served, which the gateway sees disconnected | `an_enrolled_environment_waits_for_approval_then_stays_dialed_in`; `waiting_for_approval_ends_when_denied_or_never_paired`; `a_pin_that_is_not_a_key_is_invalid_input_and_another_key_is_not`; `failed_dials_wait_twice_as_long_each_time_up_to_the_most`; `each_connection_is_served_and_a_long_one_starts_the_wait_over`; `a_setup_dialing_again_cannot_change_stops_it`; `stop_closes_the_connection_being_served_and_dials_no_more`; `stop_asked_while_waiting_ends_the_wait` |
 | H10 | A registry whose owner membership is disabled or not an admin | Refused on open (`owner_membership`). The pairing initiator's membership is what keeps a grantor live; the owner's is the one the registry pins | `a_registry_whose_owner_is_not_an_active_admin_does_not_open` |
 
 ## The dialing side

@@ -144,7 +144,9 @@ pub(super) async fn compose() -> Result<Composed, (Unavailability, RunError)> {
         Err(ServeLockError::Busy) => {
             return Err((
                 Unavailability::Busy,
-                RunError::Agent("another nessa env serve holds this data directory".into()),
+                RunError::Agent(
+                    "another nessa env serve or nessa env dial holds this data directory".into(),
+                ),
             ))
         }
         Err(ServeLockError::Io(error)) => {
