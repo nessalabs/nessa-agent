@@ -6,7 +6,8 @@
 //! (`environment/outbox/`) and serves each lease's publish point. `dial.rs`
 //! is how a paired environment reaches its gateway instead of being reached,
 //! and `pairing.rs` is that machine's pairing (`environment/pairing`),
-//! enrolled and asked whether the owner approved it.
+//! enrolled and asked whether the owner approved it. `timer.rs` is the
+//! runtime's clock, which every wait in the application is measured on.
 mod commands;
 mod dial;
 mod launcher;
@@ -14,6 +15,7 @@ mod ledger;
 mod lock;
 mod outbox;
 mod pairing;
+mod timer;
 pub(crate) use commands::{ShepherdCommands, COMMAND_VARIABLES};
 pub(crate) use dial::dial;
 pub(crate) use launcher::{ConfiguredLauncher, LaunchSpec};
@@ -21,3 +23,4 @@ pub(crate) use ledger::FileLedger;
 pub(crate) use lock::{ServeLock, ServeLockError};
 pub(crate) use outbox::FileOutbox;
 pub(crate) use pairing::{Approved, FilePairingEnvironment};
+pub(crate) use timer::TokioTimer;

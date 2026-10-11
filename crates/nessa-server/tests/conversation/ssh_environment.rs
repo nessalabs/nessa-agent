@@ -19,6 +19,7 @@ use crate::env_serve::application::{
     serve, CommandRan, CommandRunner, CommandStop, HarnessLauncher, LeaseLedger, LedgerEntry,
     Runners, ServeTimings,
 };
+use crate::env_serve::infrastructure::TokioTimer;
 use crate::env_serve::install::Platform;
 use nessa_protocol::lease::{
     decode, encode, Cleanup, CommandEnd, Data, FromEnvironment, ToEnvironment,
@@ -264,6 +265,7 @@ impl LeaseConnector for Connector {
                         kill: Duration::from_millis(100),
                         ..ServeTimings::default()
                     },
+                    Arc::new(TokioTimer::new()),
                 ));
             }
             Reach::Stalling(mut gate) => {

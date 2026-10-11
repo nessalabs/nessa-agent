@@ -1,6 +1,8 @@
 //! The environment role's frame loop, driven in process over a pipe: what it
 //! answers, what it records, and what it does when the gateway goes away.
 use super::*;
+use crate::env_serve::{application::timer::manual::ManualTimer, infrastructure::TokioTimer};
+use nessa_protocol::lease::{KEEPALIVE_INTERVAL, SILENCE_LIMIT};
 use nessa_sdk::application::agent_execution::providers::{CloseOutcome, HarnessCleanupFuture};
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -222,6 +224,13 @@ impl LeaseLedger for MemoryLedger {
     }
 }
 
+/// What most tests here are served on: what they check is frames, and the
+/// harnesses they stop leave on the runtime's clock, which a stop's grace and
+/// kill bounds have to be measured against.
+fn real_time() -> Arc<dyn Timer> {
+    Arc::new(TokioTimer::new())
+}
+
 struct Gateway {
     frames: FrameStream<ReadHalf<DuplexStream>>,
     writer: WriteHalf<DuplexStream>,
@@ -240,12 +249,22 @@ impl Gateway {
         Self::serving(ledger, true)
     }
     fn serving(ledger: Arc<MemoryLedger>, runs_commands: bool) -> Self {
-        Self::over(ledger, Arc::new(NoOutbox), runs_commands)
+        Self::over(ledger, Arc::new(NoOutbox), runs_commands, real_time())
+    }
+    /// Served on `timer`, which only the test moves.
+    fn timed(timer: Arc<ManualTimer>) -> Self {
+        Self::over(
+            Arc::new(MemoryLedger::default()),
+            Arc::new(NoOutbox),
+            true,
+            timer,
+        )
     }
     fn over(
         ledger: Arc<MemoryLedger>,
         outbox: Arc<dyn ArtifactOutbox>,
         runs_commands: bool,
+        timer: Arc<dyn Timer>,
     ) -> Self {
         let (gateway, environment) = duplex(1 << 20);
         let (environment_in, environment_out) = split(environment);
@@ -276,6 +295,7 @@ impl Gateway {
                 kill: Duration::from_millis(100),
                 ..ServeTimings::default()
             },
+            timer,
         ));
         let (reader, writer) = split(gateway);
         Self {
@@ -811,19 +831,17 @@ async fn a_host_that_cannot_serve_says_its_protocol_then_why() {
 /// the network, is noticed: past the silence bound every lease it held is
 /// ended as lost and recorded, and serving ends, so the next connection is
 /// not refused as busy for as long as TCP takes to give up.
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn a_silent_gateway_is_lost_and_serving_ends() {
-    let mut gateway = Gateway::start();
-    assert_eq!(gateway.next().await, hello());
-    gateway.granted(LEASE).await;
-    gateway
-        .send(ToEnvironment::Start {
-            lease: LEASE.into(),
-            channel: 1,
-            environment: BTreeMap::new(),
-        })
-        .await;
-    // Its stream stays open; nothing more arrives on it.
+    let timer = Arc::new(ManualTimer::default());
+    let mut gateway = Gateway::timed(timer.clone());
+    gateway.started(LEASE).await;
+    // Just short of the bound after the last frame it is still served, as
+    // the account answered here shows; that account is the last frame the
+    // gateway sends. Its stream stays open, and the bound runs from it.
+    timer.advance(SILENCE_LIMIT - Duration::from_millis(1));
+    gateway.settled().await;
+    timer.advance(SILENCE_LIMIT);
     let Gateway {
         writer: _writer,
         frames: _frames,
@@ -832,7 +850,7 @@ async fn a_silent_gateway_is_lost_and_serving_ends() {
         stopped,
         ..
     } = gateway;
-    tokio::time::timeout(Duration::from_secs(120), served)
+    tokio::time::timeout(Duration::from_secs(5), served)
         .await
         .expect("serving ends once the gateway is silent past its bound")
         .unwrap();
@@ -849,14 +867,21 @@ async fn a_silent_gateway_is_lost_and_serving_ends() {
 
 /// A gateway's keepalives are what keep a quiet connection served, and a
 /// quiet host sends its own, so the gateway does not take it for lost.
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn keepalives_keep_a_quiet_gateway_served() {
-    let mut gateway = Gateway::start();
+    let timer = Arc::new(ManualTimer::default());
+    let mut gateway = Gateway::timed(timer.clone());
     assert_eq!(gateway.next().await, hello());
     gateway.granted(LEASE).await;
+    // Eight intervals, far past the silence bound, with only keepalives.
     for _ in 0..8 {
-        tokio::time::sleep(nessa_protocol::lease::KEEPALIVE_INTERVAL).await;
+        timer.advance(KEEPALIVE_INTERVAL);
         gateway.send(ToEnvironment::Keepalive).await;
+        // Read: what it is waited on for is measured from now.
+        let heard = timer.now();
+        timer
+            .started(|_, wait| wait.deadline == heard + SILENCE_LIMIT)
+            .await;
     }
     assert!(!gateway.served.is_finished());
     assert_eq!(gateway.frame().await, FromEnvironment::Keepalive);
@@ -1133,6 +1158,10 @@ async fn an_unrecorded_input_overflow_stops_the_harness_uncertain() {
 /// A stop gives the harness its grace after the input it already accepted,
 /// and the end of it, reached it: a harness that leaves by itself once its
 /// input ends is not forced for input still on its way.
+///
+/// The one test here on the runtime's paused clock: what it measures is the
+/// harness's own reading and leaving against the grace its cleanup is given,
+/// and the harness runs on that clock, not on the host's timer.
 #[tokio::test(start_paused = true)]
 async fn a_stop_starts_its_grace_after_the_harness_has_its_input() {
     let mut gateway = Gateway::start();
@@ -1293,7 +1322,12 @@ async fn answer_of(
 impl Gateway {
     fn publishing() -> (Self, Arc<RecordingOutbox>) {
         let outbox = Arc::new(RecordingOutbox::default());
-        let gateway = Self::over(Arc::new(MemoryLedger::default()), outbox.clone(), true);
+        let gateway = Self::over(
+            Arc::new(MemoryLedger::default()),
+            outbox.clone(),
+            true,
+            real_time(),
+        );
         (gateway, outbox)
     }
     /// A granted lease with one harness started under it.
