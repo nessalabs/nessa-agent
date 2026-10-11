@@ -193,7 +193,10 @@ pub use passive_read::{AdmitPassiveRead, PassiveRead, PassiveReadGrants, Receive
 #[cfg(any(unix, test))]
 pub(crate) use placement::Environments;
 #[cfg(any(unix, test))]
-pub(crate) use placement::{ConversationPlacements, PairedEnvironments, PlacementError};
+pub(crate) use placement::{ConversationPlacements, PlacementError};
+// For the paired environment adapter, which lives with the Unix-only SSH one.
+#[cfg(unix)]
+pub(crate) use placement::PairedEnvironments;
 pub use ports::{
     ArtifactKept, ArtifactRecordGate, AttachmentRelease, AttachmentReleaseCause,
     ConversationAttachments, ConversationCreation, ConversationCreationAudit,
