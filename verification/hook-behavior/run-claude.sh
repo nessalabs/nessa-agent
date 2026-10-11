@@ -21,12 +21,11 @@
 #
 # --managed plants /etc/claude-code/managed-settings.json for two rows and
 # restores or removes it before publishing evidence. An exclusive lock at
-# /tmp/nessa-claude-managed-settings.lock is held from before that backup
-# until the restore succeeds. A second --managed run exits immediately
-# instead of waiting. The exit trap restores under that lock and then
-# releases it. If that restore fails,
-# nothing is published, the backup and work directory are kept, and the script
-# exits non-zero. This script
+# /tmp/nessa-claude-managed-settings.lock is held from before that backup.
+# A second --managed run exits immediately instead of waiting. The exit trap
+# restores under that lock. After a failed restore, the lock is released when
+# the script exits, and the backup and work directory are kept. Nothing is
+# published, and the script exits non-zero. This script
 # is not run in CI: it needs the Claude Max login on the machine that holds it.
 # stdout is the summary JSON. The reference checks exit non-zero when they fail.
 
