@@ -6,6 +6,7 @@
 //! once, in [`ShutdownReport::stage`]. The rows this module answers to are the
 //! shutdown report table (SR1–SR12) in
 //! `docs/design/authorized-record-reads.md`.
+use crate::attachments::application::ArtifactReadError;
 use crate::conversation::application::{CatalogueReadError, ConversationError, RecordReadError};
 use crate::device_pairing::infrastructure::PairingRuntimeError;
 use crate::mcp_servers::application::Unfinished;
@@ -165,6 +166,10 @@ pub struct ShutdownReport {
     watches: WatchDrain,
     /// Absent conversations are recorded as `Ok`: successful no-work evidence.
     conversations: Outcome<ConversationError>,
+    /// Held-file reads end with the conversations (their drain is part of
+    /// that stage), so only a failed drain is kept: without one, the stage's
+    /// outcome is the conversations' alone.
+    held_reads: Option<ArtifactReadError>,
     servers: ServersOutcome,
     native: Outcome<NativeShutdownFailure>,
 }
@@ -180,6 +185,10 @@ impl ShutdownReport {
     /// Conversation cleanup.
     pub fn conversations(&self) -> &Outcome<ConversationError> {
         &self.conversations
+    }
+    /// The held-file reads' drain failure, when it failed.
+    pub fn held_reads(&self) -> Option<&ArtifactReadError> {
+        self.held_reads.as_ref()
     }
     /// MCP stop: returned or not.
     pub fn servers(&self) -> ServersOutcome {
@@ -209,6 +218,7 @@ impl ShutdownReport {
         self.readers.confirmed()
             && self.watches.confirmed()
             && self.conversations.is_ok()
+            && self.held_reads.is_none()
             && self.servers.is_ok()
             && self.native.is_ok()
     }
@@ -223,6 +233,11 @@ impl ShutdownReport {
     }
     pub(crate) fn observe_conversations(&mut self, result: Result<(), ConversationError>) {
         self.conversations.observe(result);
+    }
+    pub(crate) fn observe_held_reads(&mut self, result: Result<(), ArtifactReadError>) {
+        if let Err(error) = result {
+            self.held_reads = Some(error);
+        }
     }
     pub(crate) fn observe_servers(&mut self, result: Result<(), Unfinished>) {
         self.servers.observe(result);
@@ -283,6 +298,9 @@ impl Display for ShutdownReport {
             &self.conversations,
             at(ShutdownStage::Conversations),
         )?;
+        if let Some(error) = &self.held_reads {
+            write!(f, "; held reads failed {error:?}")?;
+        }
         write_outcome(f, "MCP stop", &self.servers, at(ShutdownStage::Servers))?;
         write_outcome(f, "native drain", &self.native, at(ShutdownStage::Native))
     }
@@ -406,6 +424,38 @@ mod tests {
         assert_eq!(report.stage(), ShutdownStage::Complete);
         assert!(report.confirmed());
         assert!(report.into_result().is_ok());
+    }
+
+    /// A held-file read drain that failed keeps an otherwise clean shutdown
+    /// from confirming, and is named beside the conversations it ends with.
+    #[test]
+    fn a_failed_held_read_drain_is_not_a_confirmed_shutdown() {
+        let mut report = ShutdownReport::default();
+        report.observe_record(Ok(()));
+        report.observe_catalogue(Ok(()));
+        report.observe_watches(Ok(()));
+        report.observe_held_reads(Ok(()));
+        report.observe_conversations(Ok(()));
+        report.observe_servers(Ok(()));
+        report.observe_native(Ok(()));
+        assert!(report.confirmed(), "a drained one is success");
+        let mut report = ShutdownReport::default();
+        report.observe_record(Ok(()));
+        report.observe_catalogue(Ok(()));
+        report.observe_watches(Ok(()));
+        report.observe_held_reads(Err(ArtifactReadError::WorkerPanicked));
+        report.observe_conversations(Ok(()));
+        report.observe_servers(Ok(()));
+        report.observe_native(Ok(()));
+        assert_eq!(report.stage(), ShutdownStage::Complete);
+        assert_eq!(
+            report.held_reads(),
+            Some(&ArtifactReadError::WorkerPanicked)
+        );
+        assert_eq!(
+            report.into_result().unwrap_err().to_string(),
+            "stage reached: complete; record reader ok; catalogue reader ok; watch drain ok; conversations ok; held reads failed WorkerPanicked; MCP stop ok; native drain ok"
+        );
     }
 
     /// Row SR2: a second observation of the same owner is a composition defect.

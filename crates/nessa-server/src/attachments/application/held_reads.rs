@@ -119,12 +119,10 @@ impl HeldReads {
             .map_err(refusal)
     }
 
-    /// Fence new reads and wait for the one under way to finish. What could
-    /// not be confirmed is logged: the store is let go of either way.
-    pub async fn shutdown(&self) {
-        if let Err(error) = self.source.shutdown().await {
-            tracing::error!(?error, "held file reads did not drain at shutdown");
-        }
+    /// Fence new reads and wait for the one under way to finish. A drain
+    /// that could not be confirmed is the caller's to report.
+    pub async fn shutdown(&self) -> Result<(), ArtifactReadError> {
+        self.source.shutdown().await
     }
 }
 
