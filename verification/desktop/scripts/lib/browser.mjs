@@ -108,6 +108,11 @@ export async function waitUntilSettled(page, timeout = 30_000) {
  *        can disable the cache or enable performance metrics for that load.
  */
 export async function openPage(browser, o) {
+  const lineBase = {
+    engine: browser.browserType().name(),
+    layout: o.layout ?? "columns",
+    ...o.lines,
+  }
   const context = await browser.newContext({
     viewport: { width: o.width ?? 1440, height: o.height ?? 900 },
     deviceScaleFactor: o.dsf ?? 2,
@@ -183,7 +188,7 @@ export async function openPage(browser, o) {
     await settleSizeReports(sizeReports)
     await context.close().catch(() => {})
     if (reporterBound()) {
-      reportDetached(o.lines ?? {}, lines.errors, lines.harmless)
+      reportDetached(lineBase, lines.errors, lines.harmless)
       throw new CannotRun(message)
     }
     const extra =
@@ -223,7 +228,7 @@ export async function openPage(browser, o) {
     close: () => context.close(),
     settleRequests: () => settleSizeReports(sizeReports),
   }
-  attachLines(opened, o.lines ?? {})
+  attachLines(opened, lineBase)
   return opened
 }
 

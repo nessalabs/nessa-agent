@@ -49,6 +49,16 @@ stateDiagram-v2
     end note
 ```
 
+## Layout observer orderings (#693)
+
+| Ordering | Result | Regression |
+| --- | --- | --- |
+| Column title widths arrive during ResizeObserver delivery | Record widths without changing DOM. One animation-frame callback commits the latest placement before the next paint. | `column-header.test.tsx`, latest-width delivery |
+| Several width reports arrive before that frame | Use the newest measurements with one pending frame. | Same test, `width.test.tsx` |
+| Overview layer crosses its width threshold | Commit the arrangement outside observer delivery. Focus follows the resulting layout commit. | `width.test.tsx`, overview narrowing regression |
+| An observed header or layer unmounts with a frame pending | Disconnect its observer and cancel the frame. | Header and width cleanup assertions |
+| A late page error remains at close | Its console result keeps the actual engine and selected layout, so the engine summary also fails. | Scripted WebKit observer revert probe |
+
 ## Further reading
 
 [Source](../../../../../src/desktop/workspace/application/usecases/navigation.ts) · [Related source](../../../../../src/desktop/workspace/model/window-fit.ts) · [Related tests](../../../../../src/desktop/workspace/application/usecases/navigation.test.ts)

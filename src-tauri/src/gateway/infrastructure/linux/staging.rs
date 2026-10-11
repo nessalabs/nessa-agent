@@ -290,7 +290,7 @@ pub(super) fn publish_bytes(
     let parent = path
         .parent()
         .ok_or_else(|| "Published file has no parent".to_string())?;
-    let directory = open_owned_directory_chain(parent)?;
+    let directory = open_shared_directory_chain(parent)?;
     match read_owned_file(path) {
         Ok(Some(existing)) => {
             return (existing == bytes)
@@ -364,7 +364,7 @@ pub(super) fn replace_owned_bytes(
     let parent = path
         .parent()
         .ok_or_else(|| "Published file has no parent".to_string())?;
-    let directory = open_owned_directory_chain(parent)?;
+    let directory = open_shared_directory_chain(parent)?;
     let destination = CString::new(
         path.file_name()
             .ok_or_else(|| "Gateway definition has no file name".to_string())?
@@ -547,7 +547,7 @@ pub(super) fn publish_wants_link(
         os::{fd::AsRawFd, unix::ffi::OsStrExt},
     };
 
-    let directory_file = open_owned_directory_chain(directory)?;
+    let directory_file = open_shared_directory_chain(directory)?;
     if link.parent() != Some(directory) || unit_file.parent() != directory.parent() {
         return Err("Persistent gateway link is outside its owned sibling directory".into());
     }
@@ -627,7 +627,7 @@ pub(super) fn wants_link_matches(link: &Path, unit_file: &Path) -> Result<bool, 
     if !parent.try_exists().map_err(|error| error.to_string())? {
         return Ok(false);
     }
-    let directory = open_owned_directory_chain_existing(parent)?;
+    let directory = open_shared_directory_chain_existing(parent)?;
     let name = CString::new(
         link.file_name()
             .ok_or_else(|| "Persistent gateway link has no name".to_string())?
@@ -660,7 +660,7 @@ pub(super) fn settle_wants_link_transaction(
     if link.parent() != Some(directory) || unit_file.parent() != directory.parent() {
         return Err("Persistent gateway link is outside its owned sibling directory".into());
     }
-    let parent = open_owned_directory_chain_existing(directory)?;
+    let parent = open_shared_directory_chain_existing(directory)?;
     let link_name = CString::new(
         link.file_name()
             .ok_or_else(|| "Persistent gateway link has no name".to_string())?
@@ -752,7 +752,7 @@ pub(super) fn discard_wants_link_temporary(
     if link.parent() != Some(directory) || unit_file.parent() != directory.parent() {
         return Err("Persistent gateway link is outside its owned sibling directory".into());
     }
-    let parent = open_owned_directory_chain_existing(directory)?;
+    let parent = open_shared_directory_chain_existing(directory)?;
     let temporary = CString::new(format!(".nessa-link-{transaction}"))
         .map_err(|_| "Temporary gateway link name contains NUL".to_string())?;
     let Some(identity) = entry_identity_at(&parent, &temporary)? else {
@@ -810,7 +810,7 @@ pub(super) fn definition_transaction(
             replace_temporary: None,
         });
     }
-    let directory = open_owned_directory_chain_existing(parent)?;
+    let directory = open_shared_directory_chain_existing(parent)?;
     let current = CString::new(
         path.file_name()
             .ok_or_else(|| "Gateway definition has no name".to_string())?
@@ -863,7 +863,7 @@ pub(super) fn settle_definition_transaction(
     let parent = path
         .parent()
         .ok_or_else(|| "Gateway definition has no parent".to_string())?;
-    let directory = open_owned_directory_chain_existing(parent)?;
+    let directory = open_shared_directory_chain_existing(parent)?;
     let current_name = CString::new(
         path.file_name()
             .ok_or_else(|| "Gateway definition has no name".to_string())?
@@ -1093,15 +1093,47 @@ pub(super) fn create_owned_directory_transaction(
     path: &Path,
     generation: &str,
 ) -> OwnedDirectoryTransactionOutcome {
-    create_owned_directory_transaction_with(path, generation, &mut |_| Ok(()))
+    create_owned_directory_transaction_with_mode(
+        path,
+        generation,
+        DirectoryPermissions::Private,
+        &mut |_| Ok(()),
+    )
 }
 
+pub(super) fn create_shared_directory_transaction(
+    path: &Path,
+    generation: &str,
+) -> OwnedDirectoryTransactionOutcome {
+    create_owned_directory_transaction_with_mode(
+        path,
+        generation,
+        DirectoryPermissions::Shared,
+        &mut |_| Ok(()),
+    )
+}
+
+#[cfg(test)]
 fn create_owned_directory_transaction_with(
     path: &Path,
     generation: &str,
     boundary: &mut impl FnMut(DirectoryTransactionBoundary) -> Result<(), String>,
 ) -> OwnedDirectoryTransactionOutcome {
-    match prepare_owned_directory_transaction(path, generation, boundary) {
+    create_owned_directory_transaction_with_mode(
+        path,
+        generation,
+        DirectoryPermissions::Private,
+        boundary,
+    )
+}
+
+fn create_owned_directory_transaction_with_mode(
+    path: &Path,
+    generation: &str,
+    permissions: DirectoryPermissions,
+    boundary: &mut impl FnMut(DirectoryTransactionBoundary) -> Result<(), String>,
+) -> OwnedDirectoryTransactionOutcome {
+    match prepare_owned_directory_transaction(path, generation, permissions, boundary) {
         Ok(None) => OwnedDirectoryTransactionOutcome {
             transaction: None,
             result: Ok(()),
@@ -1126,6 +1158,7 @@ fn create_owned_directory_transaction_with(
 fn prepare_owned_directory_transaction(
     path: &Path,
     generation: &str,
+    permissions: DirectoryPermissions,
     boundary: &mut impl FnMut(DirectoryTransactionBoundary) -> Result<(), String>,
 ) -> Result<Option<PreparedOwnedDirectoryTransaction>, String> {
     use std::{
@@ -1207,8 +1240,7 @@ fn prepare_owned_directory_transaction(
         return Err("Gateway directory has an unresolved earlier transaction".into());
     }
     if missing.is_empty() {
-        let metadata = directory.metadata().map_err(|error| error.to_string())?;
-        if metadata.uid() != effective_uid || metadata.permissions().mode() & 0o777 != 0o700 {
+        if permissions.verify(&directory).is_err() {
             return Err(format!(
                 "Gateway directory is not private to the effective account: {}",
                 path.display()
@@ -1269,7 +1301,7 @@ fn create_owned_directory_suffix(
         .marker_path
         .parent()
         .ok_or_else(|| "Gateway directory transaction marker has no parent".to_string())?;
-    let mut directory = open_owned_directory_chain_existing(existing_parent)?;
+    let mut directory = open_shared_directory_chain_existing(existing_parent)?;
     let relative = transaction
         .target
         .strip_prefix(existing_parent)
@@ -1655,14 +1687,52 @@ pub(super) fn settle_recovered_owned_directory_transaction(
 }
 
 fn open_owned_directory_chain(path: &Path) -> Result<File, String> {
-    open_owned_directory_chain_inner(path, true).map(|(directory, _)| directory)
+    open_owned_directory_chain_inner(path, true, DirectoryPermissions::Private)
+        .map(|(directory, _)| directory)
 }
 
+#[cfg(test)]
 fn open_owned_directory_chain_existing(path: &Path) -> Result<File, String> {
-    open_owned_directory_chain_inner(path, false).map(|(directory, _)| directory)
+    open_owned_directory_chain_inner(path, false, DirectoryPermissions::Private)
+        .map(|(directory, _)| directory)
 }
 
-fn open_owned_directory_chain_inner(path: &Path, create: bool) -> Result<(File, bool), String> {
+#[derive(Clone, Copy)]
+enum DirectoryPermissions {
+    Private,
+    Shared,
+}
+impl DirectoryPermissions {
+    fn verify(self, directory: &File) -> Result<(), String> {
+        match self {
+            Self::Private => {
+                let metadata = directory.metadata().map_err(|error| error.to_string())?;
+                if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o777 != 0o700
+                {
+                    return Err("Gateway directory is not private to the effective account".into());
+                }
+                Ok(())
+            }
+            Self::Shared => nessa_local_storage::verify_shared_directory_file(directory)
+                .map_err(|error| error.to_string()),
+        }
+    }
+}
+
+fn open_shared_directory_chain(path: &Path) -> Result<File, String> {
+    open_owned_directory_chain_inner(path, true, DirectoryPermissions::Shared)
+        .map(|(directory, _)| directory)
+}
+fn open_shared_directory_chain_existing(path: &Path) -> Result<File, String> {
+    open_owned_directory_chain_inner(path, false, DirectoryPermissions::Shared)
+        .map(|(directory, _)| directory)
+}
+
+fn open_owned_directory_chain_inner(
+    path: &Path,
+    create: bool,
+    permissions: DirectoryPermissions,
+) -> Result<(File, bool), String> {
     use std::{
         ffi::CString,
         os::{
@@ -1735,8 +1805,7 @@ fn open_owned_directory_chain_inner(path: &Path, create: bool) -> Result<(File, 
     if !saw_root {
         return Err("Gateway directory must be absolute".into());
     }
-    let metadata = directory.metadata().map_err(|error| error.to_string())?;
-    if metadata.uid() != effective_uid || metadata.permissions().mode() & 0o777 != 0o700 {
+    if permissions.verify(&directory).is_err() {
         return Err(format!(
             "Gateway directory is not private to the effective account: {}",
             path.display()
@@ -1867,7 +1936,7 @@ fn remove_exact_tree_linux(path: &Path) -> Result<bool, String> {
     let parent = path
         .parent()
         .ok_or_else(|| "Temporary gateway runtime has no parent".to_string())?;
-    let parent = open_owned_directory_chain_existing(parent)?;
+    let parent = open_shared_directory_chain_existing(parent)?;
     let name = CString::new(
         path.file_name()
             .ok_or_else(|| "Temporary gateway runtime has no name".to_string())?

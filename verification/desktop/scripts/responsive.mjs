@@ -745,6 +745,7 @@ checks["overview-header"] = async ({ page, engine, options }) => {
   await page.setViewportSize({ width: 1440, height: 560 })
   await page.keyboard.press(keys.overview)
   await need(page, css.overview, "the Agents overview")
+  await need(page, css.overviewListed, "the overview's whole list")
   await frames(page, 2)
   await settled(page)
   const read = () =>
@@ -1337,6 +1338,7 @@ checks["overview-counts"] = async ({ page, engine, options }) => {
   // The header draws its counts a few frames after the overview opens
   // (`overview.tsx`); WebKit's frames can outrun two.
   await need(page, css.overviewCount, "the header's counts")
+  await need(page, css.overviewListed, "the overview's whole list")
   await frames(page, 2)
   await settled(page)
   const read = () =>
@@ -1430,6 +1432,7 @@ checks["overview-counts"] = async ({ page, engine, options }) => {
   // group's table: its last session moves to another group).
   await page.keyboard.press(keys.overview)
   await need(page, css.overview, "the Agents overview")
+  await need(page, css.overviewListed, "the overview's whole list")
   await frames(page, 2)
   await settled(page)
   const needsYou = page.locator(`${css.overviewCount}[data-group="needsYou"]`)

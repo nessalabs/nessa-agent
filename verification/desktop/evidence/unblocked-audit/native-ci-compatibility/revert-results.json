@@ -1,0 +1,15 @@
+{
+  "sourceAsserted": true,
+  "command": [
+    "cargo",
+    "test",
+    "-p",
+    "nessa-app",
+    "--no-default-features",
+    "an_unconfirmed_settings_publication_restores_its_known_prior_before_native_dispatch",
+    "--",
+    "--nocapture"
+  ],
+  "exit": 101,
+  "behavioralFailure": true
+}

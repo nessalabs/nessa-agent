@@ -8,7 +8,7 @@ import {
 import {
   archiveConversation,
   deleteConversation,
-  listConversations,
+  followConversations,
 } from "../adapters/store/history"
 import { useConversationDispatch, useConversationSelector } from "../adapters/store/hooks"
 import { canUseGateway } from "../../session"
@@ -51,10 +51,9 @@ const verb = { archive: "Archived", unarchive: "Unarchived", delete: "Deleted" }
  * own tab, so a thread is only ever drawn in one place. Archiving and deleting
  * are the gateway's, asked for from each row's actions.
  *
- * The list is read from the gateway each time it is shown, and again if the
- * gateway only arrives after. Listing starts nothing on the gateway, so reading
- * on every opening is cheap; it is not polled, because the list is somewhere a
- * person glances, and it is the active conversation that has to stay live.
+ * While shown, the history slice follows explicit active and archived lists.
+ * Reconnecting replaces that pair; leaving closes it. The gateway owns the
+ * catalogue and no timer asks for it (record-subscriptions table PL1–PL10).
  */
 export function ConversationList({
   onSelect,
@@ -71,9 +70,7 @@ export function ConversationList({
   const gatewayAvailable = useConversationSelector((state) =>
     canUseGateway(state.session),
   )
-  React.useEffect(() => {
-    void dispatch(listConversations())
-  }, [dispatch, gatewayAvailable])
+  React.useEffect(() => dispatch(followConversations()), [dispatch, gatewayAvailable])
   // Rows an archive or delete was asked for and has not answered: out of the
   // list at once, so the row goes where the gesture sent it and focus moves to
   // the row that took its place. A refusal puts the row back.

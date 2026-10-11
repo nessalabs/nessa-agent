@@ -102,8 +102,9 @@ const following = (bar: HTMLElement) => {
 /**
  * The title's row, from the widths the page lays out: the titlebar row's
  * content (after the controls), the column's action, and the title set
- * inline. Decided before the frame paints, so no frame shows the title in the
- * row it is leaving.
+ * inline. Observer delivery only records widths. Placement commits in the
+ * next animation frame before paint, outside the observer broadcast that
+ * relocating the title would otherwise invalidate (#693).
  */
 function useTitlePlacement(
   bar: RefObject<HTMLElement | null>,
@@ -120,8 +121,9 @@ function useTitlePlacement(
     if (!titled || !row || !title || !action || typeof ResizeObserver === "undefined")
       return
     const widths = new Map<Element, number>()
-    const observer = new ResizeObserver((entries) => {
-      for (const entry of entries) widths.set(entry.target, entry.contentRect.width)
+    let frame: number | null = null
+    const place = () => {
+      frame = null
       const next = titlePlacement({
         room: (widths.get(row) ?? 0) - (widths.get(action) ?? 0),
         title: widths.get(title) ?? 0,
@@ -154,9 +156,16 @@ function useTitlePlacement(
           { duration, easing, composite: "add" },
         )
       })
+    }
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) widths.set(entry.target, entry.contentRect.width)
+      frame ??= requestAnimationFrame(place)
     })
     for (const element of [row, title, action]) observer.observe(element)
-    return () => observer.disconnect()
+    return () => {
+      observer.disconnect()
+      if (frame !== null) cancelAnimationFrame(frame)
+    }
   }, [bar, sizer, end, titled])
   return placement
 }

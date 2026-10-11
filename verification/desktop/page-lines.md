@@ -8,7 +8,10 @@ does not splice those arrays and does not copy them onto a result.
 reporter is bound. `report().add` takes the lines of the page opened in the
 async work that produced the result. Two pages open at once stay apart: a
 worker's result does not take another worker's lines. Close takes whatever
-that page still holds and reports it as `console`.
+that page still holds and reports it as `console`. `openPage` supplies the
+actual browser engine and selected layout even when the caller omits explicit
+line metadata, so a late console failure also fails that engine's summary cell
+(#693).
 
 | what is ready | what happens |
 | --- | --- |

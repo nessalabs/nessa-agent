@@ -1,7 +1,8 @@
 //! Submit and exact-turn Stop consume the SDK mutation coordinator.
 use super::{
-    conversation_session, ConversationCaller, ConversationDisposition, ConversationError,
-    ConversationId, ConversationService, SubmissionMode, SubmissionReceipt, SubmittedMessage,
+    conversation_session, load_conversation, ConversationCaller, ConversationDisposition,
+    ConversationError, ConversationId, ConversationService, SubmissionMode, SubmissionReceipt,
+    SubmittedMessage,
 };
 use nessa_sdk::application::agent_execution::agents::{AgentError, QueueRemoval};
 use nessa_sdk::application::agent_execution::commands::{
@@ -424,7 +425,7 @@ async fn refuse_deleted(
     id: &ConversationId,
     caller: &ConversationCaller,
 ) -> Result<(), ConversationError> {
-    let Some(record) = service.inner.metadata.load(id).await? else {
+    let Some(record) = load_conversation(service.inner.metadata.as_ref(), id).await? else {
         return Ok(());
     };
     match record.check_access(&caller.organization_id, &caller.principal_id) {
@@ -440,10 +441,7 @@ async fn ensure_live(
     id: &ConversationId,
     caller: &ConversationCaller,
 ) -> Result<(), ConversationError> {
-    let record = service
-        .inner
-        .metadata
-        .load(id)
+    let record = load_conversation(service.inner.metadata.as_ref(), id)
         .await?
         .ok_or(ConversationError::NotFound)?;
     record.check_access(&caller.organization_id, &caller.principal_id)?;

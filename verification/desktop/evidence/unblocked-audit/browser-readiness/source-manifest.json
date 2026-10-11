@@ -1,0 +1,12 @@
+{
+  "head": "4a3c9a900697d02bfd83e90237c07ae11ed140b0",
+  "base": "9c1c672f2f20e39f63ff9745a32d6467259d328d",
+  "clean": true,
+  "files": {
+    "docs/design/ui-workspace-load.md": "73c3de74a3eab584a6e842c420a3d162d5b6d35fac82a4c4d1f39f52f9b85ef8",
+    "verification/desktop/scripts/command-order.mjs": "4cbef5dc10cc379699e283ef09e8fb17fc93990694494cae1d22efc29c2b07e3",
+    "verification/desktop/scripts/drag.mjs": "72ac1ed0bc46eb30936c8f4c4dace56f15c7c0923c3b5110bac13d83a862abee",
+    "verification/desktop/scripts/columns.mjs": "b0b81e5a3dea9158e342f45a65542924923daaaf5ec5cc6ce75fc1bff632237b"
+  },
+  "productionUnchanged": true
+}

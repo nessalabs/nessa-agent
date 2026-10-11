@@ -6,6 +6,7 @@ import {
   SubmissionRefusedError,
   type ConversationEffects,
   type ConversationFollower,
+  type ConversationListFollower,
 } from "../../application/ports"
 import type { ConversationView, Submission } from "../../application/view"
 import { STORED_IMAGE_TYPES } from "../../model"
@@ -57,6 +58,62 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
     if (!view) throw new Error("Scenario conversation not found")
     return view
   }
+  const listFollowers = new Set<{
+    archived: boolean
+    follower: ConversationListFollower
+  }>()
+  const listing = (listArchived: boolean) => {
+    if (scenario === "offline")
+      throw new ConversationReadFailedError(
+        "unavailable",
+        new Error("Scenario: backend offline"),
+      )
+    // Newest first, as the gateway lists them; a scenario keeps no clock, so
+    // the order conversations were created in stands in for recency. It keeps
+    // no titles either — the gateway derives those — so it has none to give.
+    const rows = [...views.values()].reverse().map((view, index) => {
+      const last = view.messages.at(-1)
+      const said =
+        last?.parts.filter((part) => part.kind === "text").at(-1)?.text || last?.userText
+      // As the gateway says of a message that carried files and no text.
+      const folded = said ? said.replace(/\s+/g, " ").trim() : ""
+      return {
+        conversationId: view.conversationId,
+        title: null,
+        preview: folded || (last ? "Attachment" : null),
+        updatedAtMs: views.size - index,
+        running: false,
+        archived: archived.has(view.conversationId),
+      }
+    })
+    // As the gateway does: a conversation nothing was said in is not listed.
+    // A scenario holds far fewer than the gateway's bound: its list is whole.
+    return {
+      conversations: rows.filter(
+        (row) => row.archived === listArchived && row.preview !== null,
+      ),
+      complete: true,
+    }
+  }
+  const tellList = (registration: {
+    archived: boolean
+    follower: ConversationListFollower
+  }) => {
+    void Promise.resolve().then(() => {
+      if (!listFollowers.has(registration)) return
+      try {
+        registration.follower.list(listing(registration.archived))
+      } catch (error) {
+        registration.follower.failed(
+          error instanceof ConversationReadFailedError ? error.reason : "unavailable",
+          error,
+        )
+      }
+    })
+  }
+  const listsChanged = () => {
+    for (const registration of listFollowers) tellList(registration)
+  }
   const send = async (input: Submission) => {
     if (deleted.has(input.conversationId))
       throw new SubmissionRefusedError("conversation-deleted")
@@ -93,6 +150,7 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
       view.transcriptState = "complete"
       view.revision = String(Number(view.revision) + 1)
       changed(input.conversationId)
+      listsChanged()
     }
     return { executionId: input.executionId, disposition: "queued" }
   }
@@ -149,37 +207,14 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
       return { conversationId }
     },
     async list(listArchived) {
-      if (scenario === "offline")
-        throw new ConversationReadFailedError(
-          "unavailable",
-          new Error("Scenario: backend offline"),
-        )
-      // Newest first, as the gateway lists them; a scenario keeps no clock, so
-      // the order conversations were created in stands in for recency. It keeps
-      // no titles either — the gateway derives those — so it has none to give.
-      const rows = [...views.values()].reverse().map((view, index) => {
-        const last = view.messages.at(-1)
-        const said =
-          last?.parts.filter((part) => part.kind === "text").at(-1)?.text ||
-          last?.userText
-        // As the gateway says of a message that carried files and no text.
-        const folded = said ? said.replace(/\s+/g, " ").trim() : ""
-        return {
-          conversationId: view.conversationId,
-          title: null,
-          preview: folded || (last ? "Attachment" : null),
-          updatedAtMs: views.size - index,
-          running: false,
-          archived: archived.has(view.conversationId),
-        }
-      })
-      // As the gateway does: a conversation nothing was said in is not listed.
-      // A scenario holds far fewer than the gateway's bound: its list is whole.
-      return {
-        conversations: rows.filter(
-          (row) => row.archived === listArchived && row.preview !== null,
-        ),
-        complete: true,
+      return listing(listArchived)
+    },
+    followList(archived, follower) {
+      const registration = { archived, follower }
+      listFollowers.add(registration)
+      tellList(registration)
+      return () => {
+        listFollowers.delete(registration)
       }
     },
     async archive(id, archive) {
@@ -189,6 +224,7 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
       const changed = archived.has(id) !== archive
       if (archive) archived.add(id)
       else archived.delete(id)
+      if (changed) listsChanged()
       return changed
     },
     async delete(id) {
@@ -203,6 +239,7 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
       archived.delete(id)
       deleted.add(id)
       changed(id)
+      listsChanged()
     },
     follow(id, follower) {
       const following = followers.get(id) ?? new Set<ConversationFollower>()

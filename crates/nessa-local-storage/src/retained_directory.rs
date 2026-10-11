@@ -1,4 +1,4 @@
-//! Retained private-directory authority and origin-bound publication.
+//! Retained authority for private-file publication and origin-bound cleanup.
 //!
 //! A [`PrivateDirectory`] keeps the directory object acquired beneath a trusted
 //! root. Operations never reacquire authority from a replacement absolute path.
@@ -15,7 +15,8 @@ use std::{
     path::Path,
 };
 
-/// A retained handle to one private directory beneath a caller-trusted root.
+/// A retained handle to private-file storage beneath a caller-trusted root.
+/// `open_shared_path` also supports owned service directories with shared read/search bits.
 pub struct PrivateDirectory {
     inner: platform::RetainedDirectory,
 }
@@ -45,6 +46,18 @@ impl PrivateDirectory {
     pub fn open_path(private_root: &Path, directory: &Path) -> io::Result<Self> {
         Ok(Self {
             inner: platform::RetainedDirectory::open_path(private_root, directory)?,
+        })
+    }
+
+    /// Retain private-file publication authority in a shared service directory.
+    ///
+    /// The final directory must belong to the current user, with no group/other
+    /// write bits. Ancestors follow the locator ownership rules of `open_path`.
+    /// Files opened or published through this handle remain private and unaliased.
+    #[cfg(unix)]
+    pub fn open_shared_path(directory: &Path) -> io::Result<Self> {
+        Ok(Self {
+            inner: platform::RetainedDirectory::open_shared_path(directory)?,
         })
     }
 

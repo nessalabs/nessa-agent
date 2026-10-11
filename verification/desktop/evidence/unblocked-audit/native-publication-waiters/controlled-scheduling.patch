@@ -1,0 +1,55 @@
+--- exact05bc
++++ scratch-controlled-schedule
+@@ -2444,9 +2444,17 @@
+         ))
+     });
+     host.wait_until_registered();
++    // Injected test scheduling: the first receipt waits before second admission.
++    let first_receipt_deadline = Instant::now() + Duration::from_secs(2);
++    while gateway.claude_publication_waiters() == 0 {
++        assert!(Instant::now() < first_receipt_deadline);
++        thread::yield_now();
++    }
++    let (admit_second, second_permission) = mpsc::sync_channel(1);
+     let second_gateway = Arc::clone(&gateway);
+     let second_directory = directory.clone();
+     let second = thread::spawn(move || {
++        second_permission.recv().unwrap();
+         tauri::async_runtime::block_on(second_gateway.change_claude_configuration(
+             BundledSurface::Main,
+             Some(second_directory),
+@@ -2454,7 +2462,12 @@
+         ))
+     });
+     let started = Instant::now();
++    let mut second_admitted = false;
+     while gateway.claude_publication_waiters() == 0 {
++        if !second_admitted {
++            admit_second.send(()).unwrap();
++            second_admitted = true;
++        }
+         assert!(
+             started.elapsed() < Duration::from_secs(2),
+             "identical directory change did not join the in-flight attempt"
+@@ -2463,8 +2476,19 @@
+     }
+     assert_eq!(host.attempts.load(Ordering::SeqCst), 1);
+     host.release();
+-    assert!(first.join().unwrap().is_err());
+-    assert!(second.join().unwrap().is_err());
++    let first_result = first.join().unwrap();
++    eprintln!("publication_waiter_schedule first={first_result:?}");
++    assert!(first_result.is_err());
++    if !second_admitted {
++        admit_second.send(()).unwrap();
++    }
++    let second_result = second.join().unwrap();
++    eprintln!(
++        "publication_waiter_schedule second={second_result:?} directory={:?} attempts={}",
++        *host.directory.lock().unwrap(),
++        host.attempts.load(Ordering::SeqCst),
++    );
++    assert!(second_result.is_err());
+     assert_eq!(host.directory.lock().unwrap().as_deref(), None);
+     assert_eq!(host.attempts.load(Ordering::SeqCst), 1);
+ }

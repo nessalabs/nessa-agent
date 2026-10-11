@@ -1,0 +1,22 @@
+{
+  "expected": "both consumers report unavailable complete-list publication",
+  "held": false,
+  "witnessExit": 1,
+  "actualCanonicalRows": [
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "command"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "direction"
+    }
+  ],
+  "injectedObservationFailure": true
+}

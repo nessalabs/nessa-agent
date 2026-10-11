@@ -234,9 +234,11 @@ impl Agent {
     }
     /// Apply and verify a native approval preset on an attached, idle provider
     /// generation. The scheduler lock excludes queued admission and dispatch
-    /// until the response is checked. A failed application carries explicit
-    /// session status; callers must retire an uncertain generation before
-    /// admitting another turn.
+    /// until the response is checked. The owned task continues after the
+    /// caller drops its waiter; concurrent close interrupts a pending response.
+    /// `agents::approval` tests both orderings. A failed application carries
+    /// explicit session status, and the lifecycle control runner fences an
+    /// uncertain generation before another turn can dispatch.
     ///
     /// A verified change is recorded against this attachment's provider
     /// generation. [`Self::approval_mode`] reports it only while that
@@ -245,13 +247,29 @@ impl Agent {
     /// records that mode
     /// ([`QueueAdmissionRecord::approval_mode`](crate::application::agent_execution::executions::QueueAdmissionRecord::approval_mode)).
     ///
-    /// Waiting for the scheduler lock registers the polling task's `Waker`
-    /// with it. A panic from that waker when another task releases the lock
-    /// is logged and does not fail that task. See "Caller wakers" in
+    /// The caller's `Waker` is woken by the operation's owned task. Its panic
+    /// is logged and does not affect the operation; see "Caller wakers" in
     /// docs/agent_execution/lifecycle.md.
+    ///
+    /// # Errors
+    /// Returns the provider's typed failure and lifecycle status. A pending
+    /// response interrupted by close returns [`AgentError::Closed`] with
+    /// [`ProviderSessionState::CleanupRequired`]. If the owned task is cancelled
+    /// or panics, returns [`AgentError::SubmissionUnresolved`] with that status.
     pub async fn set_approval_mode(&self, mode: ApprovalMode) -> ProviderOperationResult<()> {
+        let agent = self.clone();
         let waiter = CallerWaiter::ApprovalModeChange(self.inner.manager.id().clone());
-        contain_caller_wake(waiter, self.apply_approval_mode(mode)).await
+        contain_caller_wake(
+            waiter,
+            tokio::spawn(async move { agent.apply_approval_mode(mode).await }),
+        )
+        .await
+        .unwrap_or_else(|_| {
+            Err(ProviderOperationFailure::new(
+                AgentError::SubmissionUnresolved,
+                ProviderSessionState::CleanupRequired,
+            ))
+        })
     }
     async fn apply_approval_mode(&self, mode: ApprovalMode) -> ProviderOperationResult<()> {
         let scheduler = self.inner.scheduler.lock().await;
@@ -271,7 +289,13 @@ impl Agent {
             .map_err(|error| {
                 ProviderOperationFailure::new(error, ProviderSessionState::CleanupRequired)
             })?;
-        let result = attached.session.set_approval_mode(mode).await;
+        let result = self
+            .inner
+            .lifecycle
+            .run_control_observed(&permit, async {
+                attached.session.set_approval_mode(mode).await
+            })
+            .await;
         if result.is_ok() {
             *self
                 .inner

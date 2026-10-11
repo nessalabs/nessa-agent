@@ -207,9 +207,10 @@ export function draftMessage(
  *
  * Every local reason a send is declined that has somewhere to be said, in one
  * pure function, in the order somebody would want to hear them: there is no
- * session, the caller named a file this draft does not hold, the files cannot
- * go, there is nothing to say, the text is too long, and finally what the agent
- * takes. The caller shows and rejects in one place, so "was this draft taken"
+ * session, a bound conversation's view failed, the caller named a file this
+ * draft does not hold, the files cannot go, there is nothing to say, the text
+ * is too long, and finally what the agent takes. The caller shows and rejects
+ * in one place, so "was this draft taken"
  * has one answer wherever it is asked. A send into a conversation that is no
  * longer open is the caller's own: there is nowhere to show a sentence.
  *
@@ -226,6 +227,12 @@ export function declineReason(
     return {
       kind: "not-connected",
       message: "Not connected to the gateway yet. Your draft has been kept.",
+    }
+  if (conv.serverConversationId && conv.readError !== undefined)
+    return {
+      kind: "view-unavailable",
+      message: "This conversation could not be refreshed. Your draft has been kept.",
+      askAgain: true,
     }
   // Files are the draft's. Their upload state lives there and nowhere else, so
   // a caller's copy of a file part is never what gets sent — and one the draft

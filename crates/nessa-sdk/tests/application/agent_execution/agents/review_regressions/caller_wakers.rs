@@ -691,12 +691,13 @@ enum JoinedOperation {
     ReorderQueued,
     RemoveQueued,
     Close,
+    SetApprovalMode,
     SetEffortLevel,
     AnswerPermission,
     CancelPermission,
     AnswerQuestion,
 }
-const JOINED_OPERATIONS: [JoinedOperation; 11] = [
+const JOINED_OPERATIONS: [JoinedOperation; 12] = [
     JoinedOperation::Invoke,
     JoinedOperation::Enqueue,
     JoinedOperation::EnqueueSteering,
@@ -704,6 +705,7 @@ const JOINED_OPERATIONS: [JoinedOperation; 11] = [
     JoinedOperation::ReorderQueued,
     JoinedOperation::RemoveQueued,
     JoinedOperation::Close,
+    JoinedOperation::SetApprovalMode,
     JoinedOperation::SetEffortLevel,
     JoinedOperation::AnswerPermission,
     JoinedOperation::CancelPermission,
@@ -757,6 +759,12 @@ impl JoinedOperation {
                     let _ = agent.close(actor()).await;
                 }),
                 format!("close of session {session}"),
+            ),
+            Self::SetApprovalMode => (
+                Box::pin(async {
+                    let _ = agent.set_approval_mode(ApprovalMode::Ask).await;
+                }),
+                format!("approval mode change of session {session}"),
             ),
             Self::SetEffortLevel => (
                 Box::pin(async {

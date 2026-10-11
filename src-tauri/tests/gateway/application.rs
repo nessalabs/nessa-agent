@@ -12,11 +12,13 @@ use crate::gateway::{
     },
 };
 use std::{
+    future::Future,
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc, Condvar, Mutex, Weak,
     },
+    task::{Context, Poll, Waker},
     thread,
     time::{Duration, Instant},
 };
@@ -2113,7 +2115,7 @@ fn settings_change_reregisters_once_and_records_the_reason() {
         causes: Mutex::new(Vec::new()),
     });
     let audit = Arc::new(RecordingAudit::default());
-    let gateway = Gateway::bootstrap(
+    let gateway = Arc::new(Gateway::bootstrap(
         host.clone(),
         login_shell("/usr/bin"),
         testing::discard_startup_events(),
@@ -2121,16 +2123,20 @@ fn settings_change_reregisters_once_and_records_the_reason() {
         audit.clone(),
         "/runtime".into(),
         "ci".into(),
-    );
+    ));
     let directory = absolute_claude_directory(".claude-work");
 
-    tauri::async_runtime::block_on(
-        gateway.change_claude_configuration(BundledSurface::Main, Some(directory.clone())),
-    )
+    tauri::async_runtime::block_on(gateway.change_claude_configuration(
+        BundledSurface::Main,
+        Some(directory.clone()),
+        Arc::new(DirectorySettings::default()),
+    ))
     .unwrap();
-    tauri::async_runtime::block_on(
-        gateway.change_claude_configuration(BundledSurface::Main, Some(directory.clone())),
-    )
+    tauri::async_runtime::block_on(gateway.change_claude_configuration(
+        BundledSurface::Main,
+        Some(directory.clone()),
+        Arc::new(DirectorySettings::default()),
+    ))
     .unwrap();
 
     assert_eq!(
@@ -2234,7 +2240,7 @@ fn a_failed_registration_restores_the_directory_and_can_be_repeated() {
         attempts: AtomicUsize::new(0),
     });
     let audit = Arc::new(RecordingAudit::default());
-    let gateway = Gateway::bootstrap(
+    let gateway = Arc::new(Gateway::bootstrap(
         host.clone(),
         login_shell("/usr/bin"),
         testing::discard_startup_events(),
@@ -2242,17 +2248,23 @@ fn a_failed_registration_restores_the_directory_and_can_be_repeated() {
         audit.clone(),
         "/runtime".into(),
         "ci".into(),
-    );
+    ));
     let directory = absolute_claude_directory(".claude-work");
 
-    assert!(tauri::async_runtime::block_on(
-        gateway.change_claude_configuration(BundledSurface::Setup, Some(directory.clone())),
-    )
-    .is_err());
+    assert!(
+        tauri::async_runtime::block_on(gateway.change_claude_configuration(
+            BundledSurface::Setup,
+            Some(directory.clone()),
+            Arc::new(DirectorySettings::default())
+        ),)
+        .is_err()
+    );
     assert_eq!(host.directory.lock().unwrap().as_deref(), None);
-    tauri::async_runtime::block_on(
-        gateway.change_claude_configuration(BundledSurface::Setup, Some(directory.clone())),
-    )
+    tauri::async_runtime::block_on(gateway.change_claude_configuration(
+        BundledSurface::Setup,
+        Some(directory.clone()),
+        Arc::new(DirectorySettings::default()),
+    ))
     .unwrap();
     assert_eq!(
         host.directory.lock().unwrap().as_deref(),
@@ -2307,6 +2319,7 @@ struct GatedDirectoryHost {
     release: Mutex<bool>,
     release_changed: Condvar,
     fail_first: bool,
+    reject_restore: bool,
 }
 
 impl GatedDirectoryHost {
@@ -2319,6 +2332,7 @@ impl GatedDirectoryHost {
             release: Mutex::new(false),
             release_changed: Condvar::new(),
             fail_first,
+            reject_restore: false,
         })
     }
 
@@ -2359,6 +2373,11 @@ impl GatewayHost for GatedDirectoryHost {
         expected: &Option<PathBuf>,
         previous: Option<PathBuf>,
     ) -> Result<bool, GatewayError> {
+        if self.reject_restore {
+            return Err(GatewayError::Registration(
+                "configuration restore refused".into(),
+            ));
+        }
         restore_owned_directory(&self.directory, expected, previous)
     }
 
@@ -2418,21 +2437,24 @@ fn an_identical_in_flight_directory_change_waits_for_that_attempt() {
     let first_gateway = Arc::clone(&gateway);
     let first_directory = directory.clone();
     let first = thread::spawn(move || {
-        tauri::async_runtime::block_on(
-            first_gateway.change_claude_configuration(BundledSurface::Main, Some(first_directory)),
-        )
+        tauri::async_runtime::block_on(first_gateway.change_claude_configuration(
+            BundledSurface::Main,
+            Some(first_directory),
+            Arc::new(DirectorySettings::default()),
+        ))
     });
     host.wait_until_registered();
     let second_gateway = Arc::clone(&gateway);
     let second_directory = directory.clone();
     let second = thread::spawn(move || {
-        tauri::async_runtime::block_on(
-            second_gateway
-                .change_claude_configuration(BundledSurface::Main, Some(second_directory)),
-        )
+        tauri::async_runtime::block_on(second_gateway.change_claude_configuration(
+            BundledSurface::Main,
+            Some(second_directory),
+            Arc::new(DirectorySettings::default()),
+        ))
     });
     let started = Instant::now();
-    while gateway.claude_publication_waiters() == 0 {
+    while gateway.claude_publication_waiters() < 2 {
         assert!(
             started.elapsed() < Duration::from_secs(2),
             "identical directory change did not join the in-flight attempt"
@@ -2456,10 +2478,11 @@ fn a_failed_registration_does_not_restore_a_newer_directory() {
     let attempt_gateway = Arc::clone(&gateway);
     let attempt_directory = first.clone();
     let attempt = thread::spawn(move || {
-        tauri::async_runtime::block_on(
-            attempt_gateway
-                .change_claude_configuration(BundledSurface::Main, Some(attempt_directory)),
-        )
+        tauri::async_runtime::block_on(attempt_gateway.change_claude_configuration(
+            BundledSurface::Main,
+            Some(attempt_directory),
+            Arc::new(DirectorySettings::default()),
+        ))
     });
     host.wait_until_registered();
     assert!(matches!(
@@ -2478,26 +2501,32 @@ fn a_failed_registration_does_not_restore_a_newer_directory() {
 fn a_different_directory_waits_until_the_in_flight_attempt_finishes() {
     let host = GatedDirectoryHost::new(true);
     let gateway = gated_gateway(host.clone());
+    let settings = Arc::new(DirectorySettings::default());
+    let first_settings = Arc::clone(&settings);
+    let second_settings = Arc::clone(&settings);
     let first = absolute_claude_directory(".claude-a");
     let second = absolute_claude_directory(".claude-b");
     let first_gateway = Arc::clone(&gateway);
     let first_directory = first.clone();
     let attempt = thread::spawn(move || {
-        tauri::async_runtime::block_on(
-            first_gateway.change_claude_configuration(BundledSurface::Main, Some(first_directory)),
-        )
+        tauri::async_runtime::block_on(first_gateway.change_claude_configuration(
+            BundledSurface::Main,
+            Some(first_directory),
+            first_settings,
+        ))
     });
     host.wait_until_registered();
     let second_gateway = Arc::clone(&gateway);
     let second_directory = second.clone();
     let newer = thread::spawn(move || {
-        tauri::async_runtime::block_on(
-            second_gateway
-                .change_claude_configuration(BundledSurface::Setup, Some(second_directory)),
-        )
+        tauri::async_runtime::block_on(second_gateway.change_claude_configuration(
+            BundledSurface::Setup,
+            Some(second_directory),
+            second_settings,
+        ))
     });
     let started = Instant::now();
-    while gateway.claude_publication_waiters() == 0 {
+    while gateway.claude_publication_waiters() < 2 {
         assert!(
             started.elapsed() < Duration::from_secs(2),
             "later directory change did not wait"
@@ -2516,6 +2545,10 @@ fn a_different_directory_waits_until_the_in_flight_attempt_finishes() {
         Some(second.as_path())
     );
     assert_eq!(host.attempts.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        settings.0.lock().unwrap().as_deref(),
+        Some(second.as_path())
+    );
 }
 
 #[test]
@@ -4902,3 +4935,148 @@ fn invalid_history_cannot_hide_an_ineligible_claimed_identity() {
         Err(GatewayError::NotReconciled)
     );
 }
+
+#[derive(Default)]
+struct DirectorySettings(Mutex<Option<PathBuf>>);
+impl ClaudeDirectorySettings for DirectorySettings {
+    fn publish(
+        &self,
+        directory: Option<PathBuf>,
+    ) -> Result<Option<PathBuf>, ClaudeSettingsPublishError> {
+        Ok(std::mem::replace(&mut *self.0.lock().unwrap(), directory))
+    }
+    fn restore(&self, expected: &Option<PathBuf>, previous: Option<PathBuf>) -> Result<(), String> {
+        let mut current = self.0.lock().unwrap();
+        if &*current == expected {
+            *current = previous;
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn a_failed_directory_change_preserves_rollback_failure_beside_the_native_failure() {
+    struct RejectRollback;
+    impl ClaudeDirectorySettings for RejectRollback {
+        fn publish(
+            &self,
+            _: Option<PathBuf>,
+        ) -> Result<Option<PathBuf>, ClaudeSettingsPublishError> {
+            Ok(None)
+        }
+        fn restore(&self, _: &Option<PathBuf>, _: Option<PathBuf>) -> Result<(), String> {
+            Err("settings write refused".into())
+        }
+    }
+    let host = GatedDirectoryHost::new(true);
+    host.release();
+    let gateway = gated_gateway(host.clone());
+    let outcome = tauri::async_runtime::block_on(gateway.change_claude_configuration(
+        BundledSurface::Main,
+        Some(absolute_claude_directory(".claude-failed")),
+        Arc::new(RejectRollback),
+    ));
+    assert!(
+        matches!(outcome, Err(ClaudeConfigurationChangeError::Rollback { failure, settings, gateway: None })
+        if matches!(*failure, ClaudeConfigurationChangeError::Gateway(GatewayError::Registration(_))) && settings.as_deref() == Some("settings write refused"))
+    );
+    assert_eq!(host.directory.lock().unwrap().as_deref(), None);
+}
+
+#[test]
+fn a_live_configuration_rollback_failure_is_returned_with_the_original_failure() {
+    let mut host = GatedDirectoryHost::new(true);
+    Arc::get_mut(&mut host).unwrap().reject_restore = true;
+    host.release();
+    let gateway = gated_gateway(host);
+    let settings = Arc::new(DirectorySettings::default());
+    let outcome = tauri::async_runtime::block_on(gateway.change_claude_configuration(
+        BundledSurface::Main,
+        Some(absolute_claude_directory(".claude-failed")),
+        settings.clone(),
+    ));
+    assert!(
+        matches!(outcome, Err(ClaudeConfigurationChangeError::Rollback { failure, settings: None, gateway: Some(GatewayError::Registration(_)) })
+        if matches!(*failure, ClaudeConfigurationChangeError::Gateway(GatewayError::Registration(_))))
+    );
+    assert_eq!(settings.0.lock().unwrap().as_deref(), None);
+}
+
+#[test]
+fn an_unchanged_directory_save_holds_publication_ownership_until_it_is_durable() {
+    struct BlockingSettings {
+        inner: DirectorySettings,
+        calls: AtomicUsize,
+        entered: mpsc::SyncSender<()>,
+        release: Mutex<mpsc::Receiver<()>>,
+    }
+    impl ClaudeDirectorySettings for BlockingSettings {
+        fn publish(
+            &self,
+            directory: Option<PathBuf>,
+        ) -> Result<Option<PathBuf>, ClaudeSettingsPublishError> {
+            if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                self.entered.send(()).unwrap();
+                self.release.lock().unwrap().recv().unwrap();
+            }
+            self.inner.publish(directory)
+        }
+        fn restore(
+            &self,
+            expected: &Option<PathBuf>,
+            previous: Option<PathBuf>,
+        ) -> Result<(), String> {
+            self.inner.restore(expected, previous)
+        }
+    }
+    let host = GatedDirectoryHost::new(false);
+    host.release();
+    let gateway = gated_gateway(host.clone());
+    let (entered, arrival) = mpsc::sync_channel(1);
+    let (release, wait) = mpsc::sync_channel(1);
+    let settings = Arc::new(BlockingSettings {
+        inner: DirectorySettings::default(),
+        calls: AtomicUsize::new(0),
+        entered,
+        release: Mutex::new(wait),
+    });
+    let first_gateway = gateway.clone();
+    let first_settings = settings.clone();
+    let first = thread::spawn(move || {
+        tauri::async_runtime::block_on(first_gateway.change_claude_configuration(
+            BundledSurface::Main,
+            None,
+            first_settings,
+        ))
+    });
+    arrival.recv_timeout(Duration::from_secs(2)).unwrap();
+    let next = absolute_claude_directory(".claude-later");
+    let second_gateway = gateway.clone();
+    let second_settings = settings.clone();
+    let second_directory = next.clone();
+    let second = thread::spawn(move || {
+        tauri::async_runtime::block_on(second_gateway.change_claude_configuration(
+            BundledSurface::Setup,
+            Some(second_directory),
+            second_settings,
+        ))
+    });
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while gateway.claude_publication_waiters() < 2 {
+        assert!(
+            Instant::now() < deadline,
+            "changed directory did not wait for unchanged save"
+        );
+        thread::yield_now();
+    }
+    assert_eq!(settings.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(host.attempts.load(Ordering::SeqCst), 0);
+    release.send(()).unwrap();
+    first.join().unwrap().unwrap();
+    second.join().unwrap().unwrap();
+    assert_eq!(*settings.inner.0.lock().unwrap(), Some(next));
+    assert_eq!(settings.calls.load(Ordering::SeqCst), 2);
+}
+
+#[path = "application/claude_publication.rs"]
+mod claude_publication;
