@@ -43,10 +43,11 @@ const DESCENDANT_EXIT_POLL: Duration = Duration::from_millis(DESCENDANT_EXIT_POL
 const DESCENDANT_EXIT_DEADLINE: Duration =
     Duration::from_millis(DESCENDANT_EXIT_POLLS * DESCENDANT_EXIT_POLL_MS);
 
-/// `true` once a sample shows `pid` has exited, including a zombie `/proc`
-/// still lists. Sampling continues until then, or until a sample taken at or
-/// just after `limit` still shows it executing. A late wake takes that last
-/// sample, so an exit during the wake counts.
+/// `true` once a sample shows `pid` has exited, including a zombie or dead
+/// task `/proc` still lists (`Z`, `X`, or `x`). Sampling continues until
+/// then, or until a sample taken at or just after `limit` still shows it
+/// executing. A late wake takes that last sample, so an exit during the wake
+/// counts.
 async fn descendant_exits_within(pid: i32, limit: Duration) -> bool {
     let deadline = tokio::time::Instant::now() + limit;
     loop {
@@ -61,10 +62,12 @@ async fn descendant_exits_within(pid: i32, limit: Duration) -> bool {
     }
 }
 
-/// Whether `pid` is still executing. A zombie is not: it has exited and is
-/// only waiting to be reaped, which `proc_stat_is_running` reads from
-/// `/proc/<pid>/stat`. `a_zombie_listed_in_proc_has_exited` checks a real
-/// zombie on Linux. A host with no `/proc` can only ask whether the pid exists.
+/// Whether `pid` is still executing. A zombie (`Z`) or a dead task (`X`, and
+/// `x` on older kernels) is not: it has exited, which `proc_stat_is_running`
+/// reads from `/proc/<pid>/stat`. `a_zombie_listed_in_proc_has_exited` checks
+/// a real zombie on Linux.
+/// `proc_stat_reads_a_zombie_as_exited_and_any_other_state_as_running` checks
+/// `X` and `x`. A host with no `/proc` can only ask whether the pid exists.
 fn descendant_is_running(pid: i32) -> bool {
     if std::path::Path::new("/proc/self/stat").exists() {
         return linux_descendant_is_running(pid);
@@ -91,11 +94,13 @@ fn proc_stat_state(stat: &str) -> Option<char> {
         .and_then(|(_, rest)| rest.chars().next())
 }
 
-/// `Z` is a zombie: exited, still listed until its parent reaps it. A line
-/// that does not parse is treated as still running, so a survivor is not
-/// reported gone.
+/// `Z` (zombie), `X` (dead), and `x` (dead on older kernels) have exited and
+/// may still be listed. Any other state is still executing.
+/// [`proc_stat_reads_a_zombie_as_exited_and_any_other_state_as_running`]
+/// checks that. A line that does not parse is treated as still running, so a
+/// survivor is not reported gone.
 fn proc_stat_is_running(stat: &str) -> bool {
-    !matches!(proc_stat_state(stat), Some('Z'))
+    !matches!(proc_stat_state(stat), Some('Z' | 'X' | 'x'))
 }
 
 #[tokio::test]
@@ -205,9 +210,9 @@ async fn a_stop_ends_a_running_command_and_its_descendants() {
         .parse()
         .unwrap();
     // The descendant may still look alive for a moment after the stop
-    // returns. The last sample is at or just after the deadline. A zombie
-    // `/proc` still lists has already exited. A process still executing on
-    // that sample has not.
+    // returns. The last sample is at or just after the deadline. A zombie or
+    // dead task `/proc` still lists (`Z`, `X`, or `x`) has already exited. A
+    // process still executing on that sample has not.
     assert!(
         descendant_exits_within(child, DESCENDANT_EXIT_DEADLINE).await,
         "the command's descendant was still executing at or just after the deadline"
@@ -225,11 +230,16 @@ async fn a_stop_ends_a_running_command_and_its_descendants() {
 #[test]
 fn proc_stat_reads_a_zombie_as_exited_and_any_other_state_as_running() {
     assert!(!proc_stat_is_running("1 (sleep) Z 1 1"));
+    assert!(!proc_stat_is_running("1 (sleep) X 1 1"));
+    assert!(!proc_stat_is_running("1 (sleep) x 1 1"));
     assert!(proc_stat_is_running("1 (sleep) S 1 1"));
     assert!(proc_stat_is_running("1 (sleep) R 1 1"));
     // The command name may contain ") ". The state is the character after
-    // the last one, so a zombie is not hidden behind an earlier ") ".
+    // the last one, so a zombie or dead task is not hidden behind an earlier
+    // ") ".
     assert!(!proc_stat_is_running("1 (a) b) Z 1 1"));
+    assert!(!proc_stat_is_running("1 (a) b) X 1 1"));
+    assert!(!proc_stat_is_running("1 (a) b) x 1 1"));
     assert!(proc_stat_is_running("1 (a) b) S 1 1"));
     // An unreadable line is not evidence the process exited.
     assert!(proc_stat_is_running("not a stat line"));
