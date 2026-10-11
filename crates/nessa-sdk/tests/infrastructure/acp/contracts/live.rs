@@ -257,12 +257,17 @@ async fn selected_codex_preset_survives_a_real_agent_close_and_restore() {
 /// is that login directory (`CLAUDE_CONFIG_DIR`, or `$HOME/.claude`). Credential
 /// files are not copied.
 ///
-/// The positive control runs the same user hook through the raw `claude` CLI,
-/// with `--settings`, from inside the scratch workspace. The log must contain
-/// `user`. It is then truncated. The ACP open, prompt, restore, and second
-/// prompt must leave it empty. The test is ignored because it needs the real
-/// `claude-agent-acp`, the `claude` CLI, and a Claude login that is not on
-/// this machine.
+/// The positive control runs the raw `claude` CLI inside the scratch workspace,
+/// so both the project settings and the `--settings` user hook are loaded. The
+/// log must contain a line that is exactly `project` and a line that is exactly
+/// `user`. It is then truncated.
+///
+/// Only the project hook is a negative over ACP. The user hook is loaded
+/// through `--settings`, and the ACP launch has no such argument, so a quiet
+/// log does not show that a user hook was suppressed. The ACP open, prompt,
+/// restore, and second prompt must leave the log empty. The test is ignored
+/// because it needs the real `claude-agent-acp`, the `claude` CLI, and a
+/// Claude login that is not on this machine.
 #[tokio::test]
 #[ignore = "requires NESSA_LIVE_CLAUDE_ACP and existing local Claude authentication"]
 async fn claude_project_and_user_hooks_stay_quiet_across_prompt_and_restore() {
@@ -334,8 +339,12 @@ async fn claude_project_and_user_hooks_stay_quiet_across_prompt_and_restore() {
     );
     let control_log = std::fs::read_to_string(&log).unwrap();
     assert!(
-        control_log.contains("user"),
-        "planted user hook did not write to the log: {control_log}"
+        control_log.lines().any(|line| line == "project"),
+        "control log has no line that is exactly project"
+    );
+    assert!(
+        control_log.lines().any(|line| line == "user"),
+        "control log has no line that is exactly user"
     );
     std::fs::write(&log, "").unwrap();
 
@@ -408,7 +417,7 @@ async fn claude_project_and_user_hooks_stay_quiet_across_prompt_and_restore() {
     assert_eq!(
         std::fs::read_to_string(&log).unwrap(),
         "",
-        "a project or user hook appended during open, prompt, or restore"
+        "the project hook appended during open, prompt, or restore"
     );
 }
 
