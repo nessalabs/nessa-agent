@@ -50,12 +50,17 @@ struct Gateway {
     root: TempDir,
     /// The owner credential `auth init --local` writes, as provisioned by default.
     token: String,
-    product: SocketAddr,
+    /// Bound product socket. Set by [`Self::start`] from this process's publication.
+    product: Option<SocketAddr>,
+    /// Config asks the process to bind `127.0.0.1:0` for native enrollment.
+    native_enabled: bool,
+    /// Bound native socket. Set by [`Self::start`] from the process's own report.
     native: Option<SocketAddr>,
 }
 impl Gateway {
     /// Initialize local access and write `config.json`, naming a native
-    /// address only when `native` is set.
+    /// listener only when `native` is set. The process binds port 0 itself
+    /// and reports the address it got.
     fn new(native: bool) -> Self {
         let root = tempfile::tempdir().unwrap();
         // The data directory is private, as an installation's is.
@@ -75,10 +80,10 @@ impl Gateway {
             .unwrap()
             .trim()
             .to_owned();
-        let native = native.then(free_address);
-        let config = match native {
-            Some(address) => json!({"native": {"listenAddress": address.to_string()}}),
-            None => json!({}),
+        let config = if native {
+            json!({"native": {"listenAddress": "127.0.0.1:0"}})
+        } else {
+            json!({})
         };
         let mut file = nessa_local_storage::open(
             &root.path().join("data/ci/config.json"),
@@ -90,8 +95,9 @@ impl Gateway {
         Self {
             root,
             token,
-            product: free_address(),
-            native,
+            product: None,
+            native_enabled: native,
+            native: None,
         }
     }
     fn private_directory(&self) -> PathBuf {
@@ -100,65 +106,142 @@ impl Gateway {
     fn key(&self) -> Vec<u8> {
         std::fs::read(self.private_directory().join("gateway-key")).unwrap()
     }
-    /// Start `nessa server` and wait until the product socket accepts.
-    fn start(&self) -> Server {
-        let log = std::fs::File::create(self.root.path().join("server.log")).unwrap();
+    /// Start `nessa server` and wait until this process has published the
+    /// address it bound. `NESSA_PORT=0` and a native `listenAddress` of
+    /// `127.0.0.1:0` make the process the one that chooses the ports, so this
+    /// test does not probe a port and drop it before the process binds.
+    fn start(&mut self) -> Server {
+        let log_path = self.root.path().join("server.log");
+        let log = std::fs::File::create(&log_path).unwrap();
         let child = command(&self.root.path().join("data"))
             .arg("server")
-            .env("NESSA_PORT", self.product.port().to_string())
+            .env("NESSA_PORT", "0")
             .stdout(Stdio::null())
             .stderr(log)
             .spawn()
             .unwrap();
         let mut server = Server(Some(child));
+        let pid = server.0.as_ref().unwrap().id();
+        // `WAIT` is the hang detector for a process that neither publishes
+        // its endpoint nor exits. The sleep is how often the publication is
+        // re-read, not a guess that the port is free.
         let deadline = Instant::now() + WAIT;
-        while TcpStream::connect(self.product).is_err() {
-            assert!(Instant::now() < deadline, "the gateway did not start");
-            if let Some(status) = server.0.as_mut().unwrap().try_wait().unwrap() {
-                panic!(
-                    "the gateway exited during startup: {status}\n{}",
-                    std::fs::read_to_string(self.root.path().join("server.log")).unwrap()
-                );
+        let product = loop {
+            self.fail_if_exited(&mut server);
+            if let Some(address) = self.published_product(pid) {
+                if TcpStream::connect(address).is_ok()
+                    && server.0.as_mut().unwrap().try_wait().unwrap().is_none()
+                {
+                    break address;
+                }
             }
+            self.fail_if_exited(&mut server);
+            assert!(
+                Instant::now() < deadline,
+                "the gateway did not publish its address\n{}",
+                std::fs::read_to_string(&log_path).unwrap_or_default()
+            );
             std::thread::sleep(Duration::from_millis(50));
+        };
+        self.product = Some(product);
+        if self.native_enabled {
+            let native = loop {
+                self.fail_if_exited(&mut server);
+                if let Some(address) = reported_native(&log_path) {
+                    if TcpStream::connect(address).is_ok()
+                        && server.0.as_mut().unwrap().try_wait().unwrap().is_none()
+                    {
+                        break address;
+                    }
+                }
+                self.fail_if_exited(&mut server);
+                assert!(
+                    Instant::now() < deadline,
+                    "the gateway did not report its native address\n{}",
+                    std::fs::read_to_string(&log_path).unwrap_or_default()
+                );
+                std::thread::sleep(Duration::from_millis(50));
+            };
+            self.native = Some(native);
         }
         server
     }
     /// Spawn `nessa server` and return once it has exited. A process that
-    /// accepts the product socket is killed: this start was required to stop.
-    fn start_until_exit(&self) -> ExitStatus {
-        let log = std::fs::File::create(self.root.path().join("server.log")).unwrap();
+    /// publishes its endpoint is killed: this start was required to stop.
+    fn start_until_exit(&mut self) -> ExitStatus {
+        let log_path = self.root.path().join("server.log");
+        let log = std::fs::File::create(&log_path).unwrap();
         let mut child = command(&self.root.path().join("data"))
             .arg("server")
-            .env("NESSA_PORT", self.product.port().to_string())
+            .env("NESSA_PORT", "0")
             .stdout(Stdio::null())
             .stderr(log)
             .spawn()
             .unwrap();
+        let pid = child.id();
         let deadline = Instant::now() + WAIT;
         loop {
             if let Some(status) = child.try_wait().unwrap() {
                 return status;
             }
-            if TcpStream::connect(self.product).is_ok() {
+            if self.published_product(pid).is_some() {
                 let _ = child.kill();
                 let _ = child.wait();
                 panic!(
                     "the gateway started\n{}",
-                    std::fs::read_to_string(self.root.path().join("server.log")).unwrap()
+                    std::fs::read_to_string(&log_path).unwrap_or_default()
                 );
             }
             assert!(
                 Instant::now() < deadline,
                 "the gateway neither started nor stopped\n{}",
-                std::fs::read_to_string(self.root.path().join("server.log")).unwrap()
+                std::fs::read_to_string(&log_path).unwrap_or_default()
             );
+            // Same publication poll as `start`.
             std::thread::sleep(Duration::from_millis(50));
         }
     }
-    fn owner(&self) -> ProductClient {
-        ProductClient::connect(self.product, &self.token)
+    fn fail_if_exited(&self, server: &mut Server) {
+        if let Some(status) = server.0.as_mut().unwrap().try_wait().unwrap() {
+            panic!(
+                "the gateway exited during startup: {status}\n{}",
+                std::fs::read_to_string(self.root.path().join("server.log")).unwrap_or_default()
+            );
+        }
     }
+    /// The product address this process published after it bound. The record's
+    /// `processId` has to be this child, which a neighbor's listener is not.
+    fn published_product(&self, pid: u32) -> Option<SocketAddr> {
+        let path = self.root.path().join("data/ci/logs/gateway-endpoint.json");
+        let value: Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+        if value.get("processId").and_then(Value::as_u64)? != u64::from(pid) {
+            return None;
+        }
+        value
+            .get("webSocketUrl")
+            .and_then(Value::as_str)
+            .and_then(|url| url.strip_prefix("ws://"))
+            .and_then(|address| address.parse().ok())
+    }
+    fn product(&self) -> SocketAddr {
+        self.product.expect("start publishes the product address")
+    }
+    fn owner(&self) -> ProductClient {
+        ProductClient::connect(self.product(), &self.token)
+    }
+}
+
+/// The native address the process logged after binding port 0.
+///
+/// The field is the listener's `local_addr`, written by this process into
+/// its own stderr. It is not a port this test probed and released.
+fn reported_native(log: &Path) -> Option<SocketAddr> {
+    let text = std::fs::read_to_string(log).ok()?;
+    let marker = "native_listen_addr=";
+    let start = text.rfind(marker)? + marker.len();
+    let rest = text[start..].trim_start_matches('"');
+    let end = rest.find([' ', '\n', '"']).unwrap_or(rest.len());
+    rest[..end].parse().ok()
 }
 
 /// The running process. Dropping it without `stop` kills it.
@@ -195,13 +278,6 @@ fn command(root: &Path) -> Command {
         .env("NESSA_DATA_DIR", root)
         .env("NESSA_STAGE", "ci");
     command
-}
-
-fn free_address() -> SocketAddr {
-    TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
 }
 
 fn invitation(status: &Value) -> Value {
@@ -320,9 +396,9 @@ impl Clock for RuntimeClock {
 /// peer still connected stops it cleanly.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mounted_gateway_issues_a_device_credential_and_revokes_it() {
-    let gateway = Gateway::new(true);
-    let native = gateway.native.unwrap();
+    let mut gateway = Gateway::new(true);
     let server = tokio::task::block_in_place(|| gateway.start());
+    let mut native = gateway.native.expect("start reports the native address");
     assert!(
         !gateway.key().is_empty(),
         "the first start publishes the key"
@@ -438,8 +514,10 @@ async fn mounted_gateway_issues_a_device_credential_and_revokes_it() {
     );
     assert!(ended.receiver_active);
     assert!(ended.cleanup_pending);
-    // Row S7: the next start settles it before serving.
+    // Row S7: the next start settles it before serving. Port 0 assigns a new
+    // native address, so the socket from the previous process is not this one.
     let server = tokio::task::block_in_place(|| gateway.start());
+    native = gateway.native.expect("start reports the native address");
     let settled = tokio::task::block_in_place(|| {
         gateway
             .owner()
@@ -532,9 +610,9 @@ async fn mounted_gateway_issues_a_device_credential_and_revokes_it() {
 /// journal's own reason.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_missing_journal_stops_a_gateway_that_still_owes_cleanup() {
-    let gateway = Gateway::new(true);
-    let native = gateway.native.unwrap();
+    let mut gateway = Gateway::new(true);
     let server = tokio::task::block_in_place(|| gateway.start());
+    let native = gateway.native.expect("start reports the native address");
     let created = tokio::task::block_in_place(|| gateway.owner().ok("pairing.create", json!({})));
     let id = invitation(&created["status"]);
     let client_root = tempfile::tempdir().unwrap();
@@ -597,7 +675,7 @@ async fn a_missing_journal_stops_a_gateway_that_still_owes_cleanup() {
 /// binds no native socket, and the pairing methods are not configured.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_disabled_has_no_native_effect() {
-    let gateway = Gateway::new(false);
+    let mut gateway = Gateway::new(false);
     let server = tokio::task::block_in_place(|| gateway.start());
     let refused =
         tokio::task::block_in_place(|| gateway.owner().refused("pairing.create", json!({})));
@@ -611,7 +689,7 @@ async fn native_disabled_has_no_native_effect() {
 /// gateway, keeps the same key, and frees the slot for a new code.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_restart_ends_available_and_keeps_the_key() {
-    let gateway = Gateway::new(true);
+    let mut gateway = Gateway::new(true);
     let server = tokio::task::block_in_place(|| gateway.start());
     let created = tokio::task::block_in_place(|| gateway.owner().ok("pairing.create", json!({})));
     let key = gateway.key();
@@ -739,24 +817,24 @@ async fn recovered_old_owner_can_pair_devices() {
             .unwrap();
         String::from_utf8(issued.evidence.expose_bytes().to_vec()).unwrap()
     };
-    let native = free_address();
     let mut file = nessa_local_storage::open(
         &data.join("ci/config.json"),
         nessa_local_storage::OpenMode::CreateNew,
     )
     .unwrap();
     file.write_all(
-        json!({"native": {"listenAddress": native.to_string()}})
+        json!({"native": {"listenAddress": "127.0.0.1:0"}})
             .to_string()
             .as_bytes(),
     )
     .unwrap();
     file.sync_all().unwrap();
-    let gateway = Gateway {
+    let mut gateway = Gateway {
         root,
         token: old.clone(),
-        product: free_address(),
-        native: Some(native),
+        product: None,
+        native_enabled: true,
+        native: None,
     };
     let server = tokio::task::block_in_place(|| gateway.start());
     let refused =
@@ -782,7 +860,7 @@ async fn recovered_old_owner_can_pair_devices() {
         .trim()
         .to_owned();
     assert_eq!(grants(&data, &next).await, OWNER_GRANTS);
-    let gateway = Gateway {
+    let mut gateway = Gateway {
         token: next,
         ..gateway
     };
@@ -800,7 +878,7 @@ async fn recovered_old_owner_can_pair_devices() {
     });
     // The earlier owner credential is revoked.
     let (answer, close) =
-        tokio::task::block_in_place(|| refused_authentication(gateway.product, &old));
+        tokio::task::block_in_place(|| refused_authentication(gateway.product(), &old));
     assert_eq!(answer["id"], "1");
     assert_eq!(answer["ok"], false);
     assert_eq!(
@@ -874,11 +952,14 @@ fn native_key(gateway: &Gateway) -> ([u8; 44], [u8; 32]) {
 /// lists the peer and forgets it locally.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_composed_gateway_enrolls_into_another_with_its_own_key() {
-    let a = Gateway::new(true);
-    let b = Gateway::new(true);
-    let native = a.native.unwrap().to_string();
+    let mut a = Gateway::new(true);
+    let mut b = Gateway::new(true);
     let server_a = tokio::task::block_in_place(|| a.start());
     let server_b = tokio::task::block_in_place(|| b.start());
+    let native = a
+        .native
+        .expect("start reports the native address")
+        .to_string();
     let (a_pin, _) = native_key(&a);
     let (b_pin, b_seed) = native_key(&b);
     let records = b.root.path().join("data/ci/peer-gateways");
