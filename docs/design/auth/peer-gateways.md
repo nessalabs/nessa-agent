@@ -283,7 +283,7 @@ sequenceDiagram
     E->>GW: env enroll: native pairing as PeerEnvironment (key and pin saved in environment/pairing)
     E->>GW: env dial: status, every 5 s, until approved
     O->>GW: pairing.approve (exact key)
-    GW-->>E: Active (the credential is saved; it is never sent again)
+    GW-->>E: Active (the credential is saved, never sent again)
     E->>E: let go of the pairing, then compose as env serve does
     loop until SIGINT or SIGTERM
         E->>GW: dial (TLS with its key, the gateway pinned) + openEnvironment
