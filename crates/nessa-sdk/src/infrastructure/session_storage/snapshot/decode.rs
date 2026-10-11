@@ -330,6 +330,7 @@ fn preflight_shape(reader: impl Read, shape: Shape) -> Result<(), StorageError> 
 /// [`RecordVersion::Other`] of 2, and `"schemaVersion":2` then
 /// `"schemaVersion":1` is that same other version because the walk stops at 2.
 /// A value that is not an unsigned integer is [`RecordVersion::Invalid`].
+/// An array or object is marked invalid without reading its contents.
 /// [`RecordVersion::Absent`] means the root value was a JSON object and the
 /// field was not present. [`RecordVersion::Unseen`] means the walk never
 /// entered that object.
@@ -433,16 +434,14 @@ impl<'de> Visitor<'de> for VersionSeed {
         self.mark_invalid(0)
     }
 
-    fn visit_seq<S: SeqAccess<'de>>(self, sequence: S) -> Result<(), S::Error> {
-        self.discard.visit_seq(sequence)?;
-        self.version.set(RecordVersion::Invalid);
-        Ok(())
+    fn visit_seq<S: SeqAccess<'de>>(self, _sequence: S) -> Result<(), S::Error> {
+        // The `[` is already consumed. Do not read elements: `end_seq` only
+        // peeks the next byte when this returns an error.
+        self.refuse_compound()
     }
 
-    fn visit_map<M: MapAccess<'de>>(self, map: M) -> Result<(), M::Error> {
-        self.discard.visit_map(map)?;
-        self.version.set(RecordVersion::Invalid);
-        Ok(())
+    fn visit_map<M: MapAccess<'de>>(self, _map: M) -> Result<(), M::Error> {
+        self.refuse_compound()
     }
 }
 
@@ -461,6 +460,14 @@ impl VersionSeed {
         self.discard.charge(bytes)?;
         self.version.set(RecordVersion::Invalid);
         Ok(())
+    }
+
+    /// An array or object is not an unsigned integer. Mark it invalid and
+    /// stop. [`classify_record_version`] reports that invalid marker and
+    /// ignores this error.
+    fn refuse_compound<E: de::Error>(self) -> Result<(), E> {
+        self.version.set(RecordVersion::Invalid);
+        Err(E::custom("schemaVersion is not an unsigned integer"))
     }
 }
 
@@ -625,7 +632,9 @@ mod tests {
     }
 
     /// An unsupported marker ends the walk. The rest of a large record is not
-    /// read.
+    /// read. An array or object used as `schemaVersion` is invalid and is not
+    /// entered. A long string is refused by the token reader before its
+    /// scratch buffer can hold it.
     #[test]
     fn an_unsupported_marker_stops_the_preflight_walk() {
         let filler = "x".repeat(1024 * 1024);
@@ -644,5 +653,45 @@ mod tests {
             Err(StorageError::AnotherVersion { found: Some(2) })
         );
         assert!(read.get() < 4 * 1024, "checkpoint read {}", read.get());
+
+        let invalid = Err(StorageError::Corrupt(
+            "schemaVersion is not an unsigned integer".into(),
+        ));
+        for (label, bytes) in [
+            (
+                "batch array",
+                format!(r#"{{"schemaVersion":["{filler}"],"changes":[]}}"#),
+            ),
+            (
+                "checkpoint array",
+                format!(r#"{{"schemaVersion":["{filler}"],"snapshot":null}}"#),
+            ),
+            (
+                "batch object",
+                format!(r#"{{"schemaVersion":{{"pad":"{filler}"}},"changes":[]}}"#),
+            ),
+            (
+                "checkpoint object",
+                format!(r#"{{"schemaVersion":{{"pad":"{filler}"}}}}"#),
+            ),
+        ] {
+            let (reader, read) = counted(bytes.as_bytes());
+            let result = if label.starts_with("batch") {
+                preflight_semantic_batch(reader)
+            } else {
+                preflight_checkpoint(reader)
+            };
+            assert_eq!(result, invalid, "{label}");
+            assert!(read.get() < 4 * 1024, "{label} read {}", read.get());
+        }
+
+        let long_string = format!(r#"{{"schemaVersion":"{filler}","changes":[]}}"#);
+        let (reader, read) = counted(long_string.as_bytes());
+        let result = preflight_semantic_batch(reader);
+        assert!(
+            matches!(result, Err(StorageError::Corrupt(_))),
+            "{result:?}"
+        );
+        assert!(read.get() < 4 * 1024, "long string read {}", read.get());
     }
 }
