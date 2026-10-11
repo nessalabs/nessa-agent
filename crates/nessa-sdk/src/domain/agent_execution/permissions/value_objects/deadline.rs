@@ -276,6 +276,8 @@ mod tests {
         assert_eq!(other.wait(), Duration::from_secs(30));
         assert_eq!(other.effect(), PermissionEffect::Deny);
         assert!(other.reason().contains("Continue without this tool"));
+        assert_eq!(PermissionToolClass::ReadOnly.as_str(), "read_only");
+        assert_eq!(PermissionToolClass::Other.as_str(), "other");
         assert_eq!(
             PermissionToolClass::of(Some(ToolKind::Read)),
             PermissionToolClass::ReadOnly
@@ -355,6 +357,41 @@ mod tests {
             PermissionDeadlinePolicy::new(other.clone(), other),
             Err(ExecutionError::MismatchedPermissionDeadline)
         );
+        for error in [
+            ExecutionError::ZeroPermissionDeadline,
+            ExecutionError::PermissionDeadlineTooLong,
+            ExecutionError::ControlCharacterInPermissionReason,
+            ExecutionError::MismatchedPermissionDeadline,
+        ] {
+            assert!(error.to_string().starts_with("agent execution: "));
+        }
+    }
+
+    #[test]
+    fn a_missing_allow_keeps_the_read_only_sentence_when_nothing_denies() {
+        let read_only = PermissionReviewDeadline::new(
+            PermissionToolClass::ReadOnly,
+            Duration::from_secs(8),
+            PermissionEffect::Allow,
+            "read sentence",
+        )
+        .unwrap();
+        let other = PermissionReviewDeadline::new(
+            PermissionToolClass::Other,
+            Duration::from_secs(30),
+            PermissionEffect::Allow,
+            "other sentence",
+        )
+        .unwrap();
+        let policy = PermissionDeadlinePolicy::new(read_only, other).unwrap();
+        let settled = policy.settlement(
+            PermissionToolClass::ReadOnly,
+            &options(&[PermissionEffect::Deny]),
+        );
+        assert_eq!(settled.deadline().effect(), PermissionEffect::Deny);
+        assert_eq!(settled.deadline().reason(), "read sentence");
+        assert_eq!(settled.deadline().wait(), Duration::from_secs(8));
+        assert!(settled.option().is_some());
     }
 
     #[test]
