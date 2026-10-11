@@ -1755,12 +1755,14 @@ pub struct ConversationCatalogueResolveResult {
 pub enum PairingEnrollee {
     Device,
     Gateway,
+    Environment,
 }
 impl PairingEnrollee {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Device => "device",
             Self::Gateway => "gateway",
+            Self::Environment => "environment",
         }
     }
 }

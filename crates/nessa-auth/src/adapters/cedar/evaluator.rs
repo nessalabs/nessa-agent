@@ -84,7 +84,11 @@ impl PolicyEvaluator for CedarPolicyEvaluator {
     ) -> Result<Decision, AccessError> {
         if !matches!(
             action.as_str(),
-            SERVER_READ | CREDENTIAL_MANAGE | "conversation.read" | "conversation.write"
+            SERVER_READ
+                | CREDENTIAL_MANAGE
+                | "conversation.read"
+                | "conversation.write"
+                | "environment.serve"
         ) {
             return Ok(Decision::Deny);
         }

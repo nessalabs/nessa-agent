@@ -188,8 +188,10 @@ pub struct ShareConversation<'a> {
 
 impl ShareConversation<'_> {
     /// Grant `credential`'s receiver Read on `id`. The credential must be an
-    /// active paired device or peer gateway of the caller, or
-    /// `ShareTargetNotPaired`; the store refuses a conversation that is not
+    /// active paired device or peer gateway of the caller that holds
+    /// `conversation.read`, or `ShareTargetNotPaired`: an environment's
+    /// credential serves and can never read, so a share to it would record a
+    /// reader that is not one; the store refuses a conversation that is not
     /// the caller's or is deleted, in the transaction that writes the grant
     /// (row G8). Either kind of party reads only what it is granted
     /// (`docs/design/auth/peer-gateways.md`, row H8).
@@ -228,6 +230,10 @@ impl ShareConversation<'_> {
             || named.organization_id() != &binding.organization_id
             || named.principal_id() != target.membership.principal_id()
             || named.organization_id() != target.membership.organization_id()
+            || !named
+                .grants()
+                .iter()
+                .any(|grant| grant.action().as_str() == "conversation.read")
         {
             return Err(ConversationError::ShareTargetNotPaired);
         }

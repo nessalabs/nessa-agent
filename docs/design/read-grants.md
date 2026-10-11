@@ -33,6 +33,8 @@ The owner manages grants with three socket methods, each admitted by Cedar for
   active paired device of the same owner (`share_target_not_paired`
   otherwise). A paired peer gateway is shared with the same way, and reads
   only what it is granted ([peer gateways](auth/peer-gateways.md), row H8).
+  A credential that does not hold `conversation.read`, such as an
+  environment's (row I1), is refused the same way.
 - `conversation.unshare {requestId, conversationId, credentialId}` revokes. It
   needs only ownership, so access can be taken away from a deleted
   conversation or an unpaired device.
@@ -192,7 +194,7 @@ otherwise.
 | G5 | A grant on a conversation older than the device's completed pass | The row's revision and the owner's head move past it; the next pass sends the row | `a_grant_moves_the_row_past_what_a_device_completed` |
 | G6 | A revoke | The row leaves the device's pages and resolve, not as deleted; the head moves | `a_revoke_takes_the_row_out_of_the_devices_catalogue` |
 | G7 | A grant on one conversation; another exists or is created later | The other is not visible | `a_grant_names_one_conversation_and_nothing_else` |
-| G8 | Share on a conversation not the caller's, a deleted one, or naming a credential that is not an active paired device of the owner; ownership and deletion are checked in the transaction that writes the grant | `conversation_not_found`, `conversation_deleted`, `share_target_not_paired`; nothing written | `share_refuses_what_the_owner_cannot_grant` |
+| G8 | Share on a conversation not the caller's, a deleted one, or naming a credential that is not an active paired device or peer gateway of the owner holding `conversation.read` (an environment's credential never does, [peer gateways](auth/peer-gateways.md) row I1); ownership and deletion are checked in the transaction that writes the grant | `conversation_not_found`, `conversation_deleted`, `share_target_not_paired`; nothing written | `share_refuses_what_the_owner_cannot_grant` |
 | G9 | Share twice; unshare what is not granted | `applied: false`; no revision; journaled with before equal to after, so a retry replays it | `a_repeated_share_or_unshare_changes_nothing` |
 | G10 | A grant and a revoke that change something | One journal row each: before, after, initiator, surface, request, revision | `every_grant_change_is_journaled_with_its_initiator` |
 | G11 | The owner's own surface (no receiver binding), or a gateway that pairs nothing | Reads, lists and subscribes as before; a receiver lookup that cannot be verified is retried as a read slot is, so it does not end a subscription | the existing subscription and conversation suites, which compose no receiver binding; `an_owner_surface_reads_everything_it_owns`; `an_owner_subscription_outlasts_one_failed_receiver_lookup` |

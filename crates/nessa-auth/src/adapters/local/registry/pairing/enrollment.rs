@@ -19,9 +19,9 @@ use crate::{
     },
     domain::{
         pairing::{
-            validate_pairing_collection, AttemptFailure, AttemptId, AttemptOutcome, ConsentClass,
-            InvitationId, PairingError, PairingEvent, PairingInitiator, PairingPhase,
-            PairingRecord, PairingTransition, TerminalCause,
+            validate_pairing_collection, AttemptFailure, AttemptId, AttemptOutcome, InvitationId,
+            PairingError, PairingEvent, PairingInitiator, PairingPhase, PairingRecord,
+            PairingTransition, TerminalCause,
         },
         AudienceId, CredentialId, Initiator, IssuanceCause, OrganizationId, PrincipalId,
     },
@@ -418,7 +418,7 @@ impl PairingStore for LocalCredentialStore {
                 let principal = record
                     .credential_principal()
                     .ok_or(PairingStoreError::Domain(PairingError::Invalid))?;
-                if intent.class() == ConsentClass::PeerRead {
+                if intent.class().is_peer() {
                     enroll_peer_principal(next, &principal, intent.resource().organization_id())?;
                 }
                 let metadata = CredentialMetadataDto {

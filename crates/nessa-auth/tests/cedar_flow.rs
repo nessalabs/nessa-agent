@@ -372,3 +372,72 @@ fn authentication_rejects_wrong_secret_and_audience() {
         Err(AccessError::InvalidCredential)
     );
 }
+
+/// Row I1 (`docs/design/auth/peer-gateways.md`, "Environment peers"):
+/// `environment.serve` is allowed only to an active member whose credential
+/// holds it on that exact resource. An admin, a credential holding only the
+/// read, another gateway and another organization are each refused.
+#[test]
+fn cedar_allows_serving_only_to_a_member_holding_the_grant() {
+    let fixture = Fixture::new(
+        MembershipRole::Member,
+        vec![grant("environment.serve", "gateway-a")],
+    );
+    let session = fixture.authenticate(b"correct secret", "server-1").unwrap();
+    let serve = |resource| fixture.authorize(&session, "environment.serve", resource);
+    assert_eq!(
+        serve(resource("organization-1", "gateway-a")),
+        Ok(Decision::Allow)
+    );
+    assert_eq!(
+        serve(resource("organization-1", "gateway-b")),
+        Ok(Decision::Deny)
+    );
+    assert_eq!(
+        serve(resource("organization-2", "gateway-a")),
+        Ok(Decision::Deny)
+    );
+    assert_eq!(
+        fixture.authorize(
+            &session,
+            "conversation.read",
+            resource("organization-1", "gateway-a")
+        ),
+        Ok(Decision::Deny)
+    );
+    for (role, grants) in [
+        (
+            MembershipRole::Admin,
+            vec![grant("environment.serve", "gateway-a")],
+        ),
+        (
+            MembershipRole::Member,
+            vec![grant("conversation.read", "gateway-a")],
+        ),
+    ] {
+        fixture
+            .store
+            .replace(snapshot(role, MembershipStatus::Active, grants));
+        assert_eq!(
+            fixture.authorize(
+                &session,
+                "environment.serve",
+                resource("organization-1", "gateway-a")
+            ),
+            Ok(Decision::Deny)
+        );
+    }
+    fixture.store.replace(snapshot(
+        MembershipRole::Member,
+        MembershipStatus::Disabled,
+        vec![grant("environment.serve", "gateway-a")],
+    ));
+    assert_eq!(
+        fixture.authorize(
+            &session,
+            "environment.serve",
+            resource("organization-1", "gateway-a")
+        ),
+        Err(AccessError::InactiveMembership)
+    );
+}

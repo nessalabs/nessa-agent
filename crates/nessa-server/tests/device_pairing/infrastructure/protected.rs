@@ -548,6 +548,82 @@ impl<A: AccessReader> AccessReader for ContradictoryAccess<A> {
     }
 }
 
+/// Row I1 (`docs/design/auth/peer-gateways.md`, "Environment peers"): a
+/// gateway paired as an environment enrolls over the native listener as the
+/// peer principal holding `environment.serve` alone. A share to it is refused
+/// `ShareTargetNotPaired` and grants nothing, since it can never read.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_environment_is_paired_but_never_shared_with() {
+    let fixture = Fixture::new().await;
+    let metadata = conversation_store(&fixture);
+    let sessions = sessions_on(
+        &fixture,
+        Arc::new(Devices(fixture.registry.clone())),
+        metadata.clone(),
+    );
+    let (address, stop, listener, _) = fixture.listener_serving(Some(sessions)).await;
+    let environment = pair_as(
+        &fixture,
+        address,
+        "environment",
+        ConsentClass::PeerEnvironment,
+    )
+    .await;
+    let credential = CredentialId::new(environment.credential.clone()).unwrap();
+    let snapshot = fixture.registry.read(&credential).await.unwrap();
+    assert!(snapshot
+        .credential
+        .principal_id()
+        .as_str()
+        .starts_with("gateway:"));
+    assert_eq!(
+        snapshot
+            .credential
+            .grants()
+            .iter()
+            .map(|grant| grant.action().as_str())
+            .collect::<Vec<_>>(),
+        ["environment.serve"]
+    );
+    let conversation = Conversation::new(
+        ConversationId::new(&Uuid::new_v4().to_string()).unwrap(),
+        fixture.session.context().organization_id().clone(),
+        fixture.session.context().principal_id().clone(),
+        "panel".into(),
+        "create".into(),
+        1,
+        AgentId::Claude,
+        ConversationModelId::new("model").unwrap(),
+        ConversationApprovalMode::Ask,
+    )
+    .unwrap();
+    let id = conversation.id().clone();
+    metadata.create(conversation).await.unwrap();
+    let shares = ShareConversation {
+        conversations: metadata.as_ref(),
+        receivers: fixture.receivers.as_ref(),
+        grants: metadata.as_ref(),
+        access: fixture.registry.as_ref(),
+    };
+    let caller = ConversationCaller {
+        organization_id: fixture.session.context().organization_id().clone(),
+        principal_id: fixture.session.context().principal_id().clone(),
+        surface_id: "panel".into(),
+        action_id: "share-environment".into(),
+    };
+    assert!(matches!(
+        shares.share(caller, id.clone(), credential, 110).await,
+        Err(ConversationError::ShareTargetNotPaired)
+    ));
+    assert!(!metadata
+        .is_granted(&id, &environment.receiver)
+        .await
+        .unwrap());
+    assert!(metadata.grants(&id).await.unwrap().is_empty());
+    stop.send(()).unwrap();
+    listener.await.unwrap().unwrap();
+}
+
 /// Row H8 (`docs/design/auth/peer-gateways.md`): a paired peer reads, on the
 /// native channel, exactly what the owner granted it, as a device does. The
 /// owner shares one of two conversations with the peer's credential, which

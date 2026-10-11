@@ -44,6 +44,7 @@ enum StoredClass {
     #[default]
     Device,
     Peer,
+    Environment,
 }
 impl StoredClass {
     fn is_device(&self) -> bool {
@@ -53,12 +54,14 @@ impl StoredClass {
         match class {
             ConsentClass::DeviceRead => Self::Device,
             ConsentClass::PeerRead => Self::Peer,
+            ConsentClass::PeerEnvironment => Self::Environment,
         }
     }
     fn domain(self) -> ConsentClass {
         match self {
             Self::Device => ConsentClass::DeviceRead,
             Self::Peer => ConsentClass::PeerRead,
+            Self::Environment => ConsentClass::PeerEnvironment,
         }
     }
 }
