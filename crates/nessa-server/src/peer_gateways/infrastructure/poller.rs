@@ -428,17 +428,10 @@ impl Poller {
         let stream = tokio::select! {
             connected = self.commands.dial(record.address()) => match connected {
                 Ok(stream) => stream,
-                Err(error) => {
-                    return AskedStatus {
-                        status: Some(Err(NativeClientError::Io(error.kind()))),
-                        transition: None,
-                        landed: None,
-                        stopped: false,
-                    }
-                }
+                Err(error) => return AskedStatus::dial_failed(error),
             },
-            () = cycle.stopped() => return AskedStatus::none(true),
-            () = until_stopped(&mut stopped) => return AskedStatus::none(true),
+            () = cycle.stopped() => return AskedStatus::stopped_before_dial(),
+            () = until_stopped(&mut stopped) => return AskedStatus::stopped_before_dial(),
         };
         let slot = Arc::new(self.commands.records().slot(*record.key()));
         let client = NativeEnrollmentClient::new(slot.clone(), self.commands.clock.clone());
@@ -648,13 +641,23 @@ struct AskedStatus {
     stopped: bool,
 }
 impl AskedStatus {
-    /// No status was started. `stopped` is the dial wait's outcome.
-    fn none(stopped: bool) -> Self {
+    /// The dial wait stopped before a status was asked.
+    fn stopped_before_dial() -> Self {
         Self {
             status: None,
             transition: None,
             landed: None,
-            stopped,
+            stopped: true,
+        }
+    }
+
+    /// The dial failed before a status was asked. No transition began.
+    fn dial_failed(error: std::io::Error) -> Self {
+        Self {
+            status: Some(Err(NativeClientError::Io(error.kind()))),
+            transition: None,
+            landed: None,
+            stopped: false,
         }
     }
 }
