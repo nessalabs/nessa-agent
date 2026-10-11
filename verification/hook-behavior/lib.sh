@@ -88,6 +88,16 @@ print(found)
 PY
 }
 
+# Copy src onto dest only after the copy is complete. A failed copy leaves dest.
+publish_evidence() {
+  local src="$1" dest="$2" staging="${2}.new"
+  if ! cp -f "$src" "$staging"; then
+    rm -f "$staging"
+    return 1
+  fi
+  mv -f "$staging" "$dest"
+}
+
 append_row() {
   python3 "$HOOK_BEHAVIOR_ROOT/evidence.py" append \
     --rows "$ROWS" \

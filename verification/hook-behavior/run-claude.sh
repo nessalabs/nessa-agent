@@ -78,9 +78,72 @@ trap cleanup EXIT
 
 OUT="${OUT:-$HOOK_BEHAVIOR_ROOT/evidence/claude}"
 mkdir -p "$OUT"
-ROWS="$OUT/rows.jsonl"
-rm -f "$ROWS"
+ROWS="$WORKDIR/rows.jsonl"
+SUMMARY="$WORKDIR/summary.json"
+: >"$ROWS"
 VERSION="$(cd "$WORKDIR" && claude --version | head -n 1)"
+
+# Stored Claude fields only. A work directory under $HOME would otherwise
+# land in result and permission_denials. /tmp paths are left as they are.
+redact_home_fields() {
+  python3 - "$HOME" "$1" <<'PY'
+import json
+import pathlib
+import sys
+
+home, raw = sys.argv[1:]
+if len(home) <= 1:
+    raise SystemExit(0)
+path = pathlib.Path(raw)
+if not path.is_file():
+    raise SystemExit(0)
+text = path.read_text(encoding="utf-8", errors="replace")
+decoder = json.JSONDecoder()
+values = []
+index = 0
+length = len(text)
+while index < length:
+    while index < length and text[index].isspace():
+        index += 1
+    if index >= length:
+        break
+    try:
+        value, end = decoder.raw_decode(text, index)
+    except json.JSONDecodeError:
+        break
+    index = end
+    values.append(value)
+
+def rewrite(value):
+    if isinstance(value, str):
+        return value.replace(home, "<home>")
+    if isinstance(value, list):
+        return [rewrite(item) for item in value]
+    if isinstance(value, dict):
+        return {key: rewrite(item) for key, item in value.items()}
+    return value
+
+changed = False
+for value in values:
+    if not isinstance(value, dict):
+        continue
+    result = value.get("result")
+    if isinstance(result, str) and home in result:
+        value["result"] = result.replace(home, "<home>")
+        changed = True
+    denials = value.get("permission_denials")
+    if isinstance(denials, list):
+        updated = rewrite(denials)
+        if updated != denials:
+            value["permission_denials"] = updated
+            changed = True
+if changed:
+    path.write_text(
+        "".join(json.dumps(value, ensure_ascii=False) + "\n" for value in values),
+        encoding="utf-8",
+    )
+PY
+}
 
 ROWS_AND_MODES=(
   "events-plain log"
@@ -218,6 +281,7 @@ for entry in "${ROWS_AND_MODES[@]}"; do
   if [[ -z "$SESSION_ID" ]]; then
     SESSION_ID="$(thread_id_from "$stdout")"
   fi
+  redact_home_fields "$stdout"
   append_row "$row" "$suppression" "$code" "$log" "$stdout" "$stderr" "$sentinel" "$(sanitize_notes "$notes")"
 done
 
@@ -246,15 +310,24 @@ if [[ "$MANAGED" -eq 1 ]]; then
       "NESSA_HOOK_ROW=${row} NESSA_SUPPRESSION=${row} NESSA_PHASE=first NESSA_SENTINEL=${sentinel} Reply with OK only." \
       "$project/stdout.txt" "$project/stderr.txt" write "${extra[@]}")"
     SESSION_ID="$(thread_id_from "$project/stdout.txt")"
+    redact_home_fields "$project/stdout.txt"
     append_row "$row" "$row" "$code" "$log" \
       "$project/stdout.txt" "$project/stderr.txt" "$sentinel" "$(sanitize_notes "$notes")"
   done
 fi
 
+set +e
 python3 "$HOOK_BEHAVIOR_ROOT/evidence.py" finalize \
   --rows "$ROWS" \
-  --summary "$OUT/summary.json" \
+  --summary "$SUMMARY" \
   --harness "$HARNESS" \
   --version "$VERSION" \
   --label "$LABEL" \
   --claude-reference
+finalize_status=$?
+set -e
+if [[ "$finalize_status" -eq 0 ]]; then
+  publish_evidence "$ROWS" "$OUT/rows.jsonl"
+  publish_evidence "$SUMMARY" "$OUT/summary.json"
+fi
+exit "$finalize_status"

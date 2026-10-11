@@ -73,8 +73,9 @@ mkdir -p "${HOME}/.cache/nessa-hook-behavior"
 WORKDIR="$(mktemp -d "${HOME}/.cache/nessa-hook-behavior/codex.XXXXXX")"
 OUT="${OUT:-$HOOK_BEHAVIOR_ROOT/evidence/codex}"
 mkdir -p "$OUT"
-ROWS="$OUT/rows.jsonl"
-rm -f "$ROWS"
+ROWS="$WORKDIR/rows.jsonl"
+SUMMARY="$WORKDIR/summary.json"
+: >"$ROWS"
 PREFIX="$WORKDIR/prefix"
 trap 'stop_scripted_server; rm -rf "$WORKDIR"' EXIT
 
@@ -208,9 +209,17 @@ for entry in "${ROWS_AND_MODES[@]}"; do
   done
 done
 
+set +e
 python3 "$HOOK_BEHAVIOR_ROOT/evidence.py" finalize \
   --rows "$ROWS" \
-  --summary "$OUT/summary.json" \
+  --summary "$SUMMARY" \
   --harness "$HARNESS" \
   --version "$VERSION" \
   --label "$LABEL"
+finalize_status=$?
+set -e
+if [[ "$finalize_status" -eq 0 ]]; then
+  publish_evidence "$ROWS" "$OUT/rows.jsonl"
+  publish_evidence "$SUMMARY" "$OUT/summary.json"
+fi
+exit "$finalize_status"
