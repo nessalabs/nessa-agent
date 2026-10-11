@@ -20,7 +20,11 @@
 # invocations. events-permission omits it.
 #
 # --managed plants /etc/claude-code/managed-settings.json for two rows and
-# restores or removes it before publishing evidence. If that restore fails,
+# restores or removes it before publishing evidence. An exclusive lock at
+# /tmp/nessa-claude-managed-settings.lock is held from before that backup
+# until the restore succeeds. A second --managed run exits immediately
+# instead of waiting. The exit trap restores under that lock and then
+# releases it. If that restore fails,
 # nothing is published, the backup and work directory are kept, and the script
 # exits non-zero. This script
 # is not run in CI: it needs the Claude Max login on the machine that holds it.
@@ -84,12 +88,44 @@ HARNESS="claude"
 LABEL="real harness, live model"
 LOGIN_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 TRANSCRIPT_DIR="$LOGIN_DIR"
-WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/nessa-claude-hooks.XXXXXX")"
 MANAGED_PATH="/etc/claude-code/managed-settings.json"
-MANAGED_BACKUP="$WORKDIR/managed-settings.backup"
+MANAGED_LOCK_PATH="/tmp/nessa-claude-managed-settings.lock"
+MANAGED_LOCK_FD=""
 MANAGED_EXISTED=0
 MANAGED_PLANTED=0
 KEEP_WORKDIR=0
+
+# One --managed run owns the system file. The lock is not inside the work
+# directory: that directory is removed on exit, and a second run must still
+# see the lock. flock -n fails immediately when another run holds it.
+acquire_managed_lock() {
+  if ! : >>"$MANAGED_LOCK_PATH"; then
+    echo "error: cannot create $MANAGED_LOCK_PATH" >&2
+    return 1
+  fi
+  exec {MANAGED_LOCK_FD}>>"$MANAGED_LOCK_PATH" || return 1
+  if ! flock -n "$MANAGED_LOCK_FD"; then
+    echo "error: another --managed run holds $MANAGED_PATH" >&2
+    exec {MANAGED_LOCK_FD}<&-
+    MANAGED_LOCK_FD=""
+    return 1
+  fi
+}
+
+release_managed_lock() {
+  if [[ -n "${MANAGED_LOCK_FD}" ]]; then
+    flock -u "$MANAGED_LOCK_FD" || true
+    exec {MANAGED_LOCK_FD}<&-
+    MANAGED_LOCK_FD=""
+  fi
+}
+
+if [[ "$MANAGED" -eq 1 ]]; then
+  acquire_managed_lock || exit $?
+fi
+
+WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/nessa-claude-hooks.XXXXXX")"
+MANAGED_BACKUP="$WORKDIR/managed-settings.backup"
 
 # Put the managed file back. On success MANAGED_PLANTED is 0. On failure the
 # backup is still in the work directory and the caller must not publish.
@@ -115,19 +151,24 @@ restore_managed_settings() {
 }
 
 # A failed restore leaves the work directory in place. The backup lives there.
+# The restore runs while the managed-settings lock is still held, then the
+# lock is released on every exit from this trap.
 cleanup() {
   local status=$?
   if [[ "$KEEP_WORKDIR" -eq 1 ]]; then
+    release_managed_lock
     exit "$status"
   fi
   if [[ "$MANAGED_PLANTED" -eq 1 ]]; then
     local restore_status=0
     restore_managed_settings || restore_status=$?
     if [[ "$restore_status" -ne 0 ]]; then
+      release_managed_lock
       exit "$restore_status"
     fi
   fi
   rm -rf "$WORKDIR"
+  release_managed_lock
   exit "$status"
 }
 trap cleanup EXIT
@@ -397,6 +438,7 @@ if [[ "$MANAGED_PLANTED" -eq 1 ]]; then
     KEEP_WORKDIR=1
     exit "$restore_status"
   fi
+  release_managed_lock
 fi
 if [[ "$finalize_status" -eq 0 ]]; then
   publish_snapshot "$OUT" "$ROWS" "$SUMMARY"

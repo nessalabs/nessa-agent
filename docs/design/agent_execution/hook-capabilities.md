@@ -24,7 +24,9 @@ an implementation or live-provider certification.
 Codex 0.154.0 and OpenCode 1.18.31 ran here against a scripted model, with
 native hook configuration planted and again with the suppression request the
 binding sends. Those rows are labeled real harness, scripted model. They are
-not a provider login. No Claude login ran for this refresh. Source-supported,
+not a provider login. Claude Code 2.1.257 ran here against a logged-in
+account; the stored evidence is redacted. Those rows are labeled real harness,
+live model. Source-supported,
 declaration-only, and runtime-verified are different evidence classes. No entry
 below upgrades native support into a Nessa capability merely because the event
 name resembles one Nessa observes.
@@ -340,7 +342,9 @@ alone. The limits that remain are on the binding's `SESSION_POLICY` constant.
 
 ### Kiro
 
-Kiro is installed here but not pinned or integrated by Nessa. Local CLI 2.22.0
+Kiro is installed here but not pinned or integrated by Nessa. Pinning it and
+recording its hook behaviour is
+[#742](https://github.com/nessalabs/nessa-agent/issues/742). Local CLI 2.22.0
 help offers ACP; static strings include legacy `agentSpawn`, `userPromptSubmit`,
 `preToolUse`, `postToolUse`, and `stop`. The installed chat binary SHA-256 is
 `0dfe351ac7afd99a16210b66429e255d3f13fa0701bce7a9225ee88e71f1b58f`.
@@ -450,8 +454,9 @@ emit hook events.
 Codex and OpenCode behaviour below is the committed log from the real pinned
 binary against `verification/hook-behavior/scripted_openai.py`. The label is
 real harness, scripted model. Claude's cells are the committed live log.
-Kiro has no repository pin and no adapter. Pinning it is not
-part of this refresh.
+Kiro has no repository pin and no adapter. Pinning it is
+[#742](https://github.com/nessalabs/nessa-agent/issues/742), not part of this
+refresh. This refresh covers the bindings Nessa ships today.
 
 | Harness | Events that fire | Output the harness accepts | Native-hook suppression |
 | --- | --- | --- | --- |
@@ -459,7 +464,8 @@ part of this refresh.
 | Codex 0.154.0 (`codex-cli 0.154.0`) | Real harness, scripted model. Log: [rows.jsonl](../../../verification/hook-behavior/evidence/codex/rows.jsonl). Hooks on: `$CODEX_HOME/hooks.json` records `hook_source` user and the project `.codex/hooks.json` records `hook_source` project. A plain turn fires SessionStart (`source` startup), UserPromptSubmit, Stop, and SessionEnd, once from each hook. A Bash turn also fires PreToolUse and PostToolUse and creates the original sentinel. `codex exec resume` adds SessionStart `source` resume. A follow-up whose whole text is `/compact` is that resume turn: PreCompact and PostCompact were not triggered by this run. The subagent row logs `unsupported call: close_agent`. SubagentStart and SubagentStop were not triggered by this run. Without the sandbox bypass the sentinel touch fails with `Read-only file system`, the hook log has one copy of each event and only `hook_source` user, and PermissionRequest does not fire. Suppression on is `-c features.hooks=false -c 'notify=[]'` on exec and on resume. `config.toml` leaves hooks enabled and does not set `notify`. Every row's hook log is empty. A Bash turn still creates the original sentinel. The permission row's touch still fails read-only. The ACP adapter still discards `hook/started` and `hook/completed`; this log is the CLI, not that stream. | Real harness, scripted model, same log. A bare `permissionDecision:allow` without `updatedInput` is rejected by the parser at `output_parser.rs` lines 441-457 (`6b9826e3`); this run did not send that output. Deny with a reason: no PostToolUse and no sentinel; the scripted model does not quote the reason. Allow with `updatedInput`: only the rewritten sentinel is created. `ask`, `defer`, and `continue: false` do not stop the tool. The additionalContext nonce appears in a later model request. The hook emits `systemMessage` and that nonce is absent from every model request. Stop `decision: block` loops (2360 Stop events) until the runner's 75s timeout, exit 124, and SessionEnd does not fire. PreToolUse exit 2 stops the tool. Exit 1, malformed JSON, and a 1s timeout do not: PreToolUse is logged, then PostToolUse, and the original sentinel is created. With suppression on, the deny and exit-2 rows create the original sentinel. | `codex_startup_and_restoration_continue_when_native_hook_suppression_is_unsupported`. The fixture requires `features.hooks: false` and `notify: []`. The negotiated fact stays `Unsupported`. The open, the prompt, the restore, and the second prompt complete. Suppression on in the script is `-c features.hooks=false -c 'notify=[]'` on exec and on resume, while config.toml leaves hooks enabled. That is the hooks portion of the thread/start override, not the full `CODEX_CONFIG` document. It does not close [#147](https://github.com/nessalabs/nessa-agent/issues/147). |
 | OpenCode 1.18.31 | Real harness, scripted model. Log: [rows.jsonl](../../../verification/hook-behavior/evidence/opencode/rows.jsonl). Hooks on: the project plugin and the user plugin under the private `XDG_CONFIG_HOME` both record callbacks (`hook_source` project and user). A plain turn fires `chat.message`, `experimental.chat.system.transform`, and `event` callbacks (`session.created`, `session.updated`, `message.updated`, `message.part.updated`, `session.status`, `session.diff`, `plugin.added`, `catalog.updated`, `reference.updated`, `integration.updated`, `message.part.delta`, `session.idle`) from both plugins. `chat.message`, `session.created`, `session.diff`, `message.part.delta`, and `session.idle` fire once per plugin. The others repeat within one turn (for example `experimental.chat.system.transform` twice and `session.updated` four times per plugin, and `plugin.added` 90 times in total), so callback counts are not lifecycle boundaries. A bash turn also fires `tool.execute.before` and `tool.execute.after` and creates the original sentinel. `--session` does not add another `session.created`; `chat.message` fires again. A follow-up message `/compact` does not fire `experimental.session.compacting` or `command.execute.before`. The subagent row calls `task`: `tool.execute.before` fires from both plugins, `tool.execute.after` does not, and the sentinel is not created. Without `--auto` the bash tool still runs and both plugins record it. `permission.ask` has no trigger. Suppression (`OPENCODE_PURE=1` and `OPENCODE_DISABLE_PROJECT_CONFIG=1`, the three config inputs unset): every row's plugin log is empty, and a requested bash tool still runs. `suppress-pure` sets only `OPENCODE_PURE=1`. Its plugin log is empty and the original sentinel is created. | Real harness, scripted model, same log. OpenCode has no `permissionDecision` vocabulary. A thrown deny stops the tool: `tool.execute.before` fires once, `tool.execute.after` does not, the sentinel is not created, and the deny reason is in stdout. The exit-2 and exit-1 throws also stop the tool: before fires once, after does not, and the sentinel is not created. An in-place rewrite of the arguments creates only the rewritten sentinel. `ask`, `defer`, and `continue: false` are not a plugin output; the tool runs. Replacing `output.args` is not read back; the original sentinel is created. A 30s wait inside `tool.execute.before` still reaches `tool.execute.after`. The additionalContext nonce and the system-transform nonce both appear in a model request. There is no Stop `decision: block` path; that row completes and the tool runs. | `opencode_startup_and_restoration_continue_when_native_hook_suppression_is_unknown`. The fixture requires `OPENCODE_PURE=1`, project config disabled, the three alternate config inputs absent, and a home other than the caller's. The negotiated fact stays `Unknown`. The open, the prompt, the restore, and the second prompt complete. The scripted log shows both planted plugins stay silent under that request, and `suppress-pure` shows `OPENCODE_PURE=1` alone does the same. Default plugins inside the binary are outside it. `pinned_binary_cannot_load_caller_config_tools_mcp_or_native_hooks` is ignored unless `NESSA_PINNED_OPENCODE_BINARY` is set. |
 
-Kiro has no repository pin and no adapter. Pinning it is not part of this
+Kiro has no repository pin and no adapter. Pinning it is
+[#742](https://github.com/nessalabs/nessa-agent/issues/742), not part of this
 refresh. Its local strings and help remain observations, not a behavior test.
 
 A callback result or parser acceptance alone cannot prove that a tool did not

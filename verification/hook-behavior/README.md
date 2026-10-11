@@ -75,7 +75,11 @@ and `suppress-managed-plus-flag` (that file plus
 `--settings '{"disableAllHooks":true}'`). Managed hooks still fire with that
 flag, and the two rows match. The reference check does not require those logs
 to be empty. Before evidence is published, the script restores or removes
-`/etc/claude-code/managed-settings.json`. If that restore fails, nothing is
+`/etc/claude-code/managed-settings.json`. An exclusive lock at
+`/tmp/nessa-claude-managed-settings.lock` is held from before that backup
+until the restore succeeds. A second `--managed` run exits immediately if
+the lock is already held. The exit trap restores under the lock and then
+releases it. If that restore fails, nothing is
 published, the backup and work directory stay, and the script exits non-zero.
 The exit trap does that restore when the script stops earlier. A failed
 restore or removal leaves the work directory in place and exits non-zero.
