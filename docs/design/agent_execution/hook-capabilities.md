@@ -3,7 +3,7 @@
 Source survey for [#134](https://github.com/nessalabs/nessa-agent/issues/134).
 First recorded 2026-09-22 against Nessa
 `1b244f9be4cdc64c1298633422596a1a1e00fc6c`. Refreshed 2026-10-11 against Nessa
-`8c1161697d9bf8c21b3bdb8bd9848a116de1f352` so the OpenCode binding matches
+`4b97f0728a2f5dd4660d59970bfb5072b92ccd09` so the OpenCode binding matches
 [#162](https://github.com/nessalabs/nessa-agent/pull/162) and the Codex binding
 matches [#571](https://github.com/nessalabs/nessa-agent/pull/571) and
 [#602](https://github.com/nessalabs/nessa-agent/pull/602). The harness pins
@@ -21,10 +21,13 @@ an implementation or live-provider certification.
 | Opencode | 1.18.31 | Repository [release pins](../../../crates/nessa-server/data/agent-releases.json), upstream commit `014614d35b397775e5d397a490fc72368c894ec2`. Local Homebrew 1.18.20 was not used as evidence of pinned runtime behavior. |
 | Kiro | No repository pin or adapter | Local signed CLI 2.22.0 installation/help/static strings; current official documentation is supplementary and not pinned behavior. No Nessa support claim. |
 
-No authenticated model calls or arbitrary native hooks ran in this survey.
-Source-supported, declaration-only, and runtime-verified are different evidence
-classes. No entry below upgrades native support into a Nessa capability merely
-because the event name resembles one Nessa observes.
+Codex 0.154.0 and OpenCode 1.18.31 ran here against a scripted model, with
+native hook configuration planted and again with the suppression request the
+binding sends. Those rows are labeled real harness, scripted model. They are
+not a provider login. No Claude login ran for this refresh. Source-supported,
+declaration-only, and runtime-verified are different evidence classes. No entry
+below upgrades native support into a Nessa capability merely because the event
+name resembles one Nessa observes.
 
 ## Claude target and native equivalents
 
@@ -100,14 +103,23 @@ requests `disableAllHooks: true` and empty `settingSources` for native configure
 hooks. The negotiated fact stays `Unknown`: this profile has no checked answer
 for the effective setting, and a requested override is not reported as supported.
 `claude_startup_and_restoration_continue_when_native_hook_suppression_is_unknown`
-reads that request from the fixture and runs a prompt, a restore, and a second
-prompt while the fact stays unknown. Neither the setting nor the SDK event enum
-exposes 33 enforceable Nessa hooks through ACP. Reviewed tools can receive a
-selected rejection; tools not routed through that gate do not gain a veto
-through a later tool notification. Which of the 33 events fire on a turn, which
-output combinations the CLI accepts, and whether a deny stops a tool were not
-run: they need the pinned Claude CLI and a live model. The fixture does not
-emit those events, and this survey does not treat that silence as the CLI.
+checks that fact across an open, a prompt, a restore, and a second prompt. The
+fixture accepts the launch only after `disableAllHooks` is true and setting
+sources are empty. The test does not read that request back, and the fixture
+does not emit hook events. Neither the setting nor the SDK event enum exposes
+33 enforceable Nessa hooks through ACP. Reviewed tools can receive a selected
+rejection; tools not routed through that gate do not gain a veto through a
+later tool notification. Which of the 33 events fire on a turn, which output
+combinations the CLI accepts, and whether a deny stops a tool were not run.
+`verification/hook-behavior/run-claude.sh` is the reproduction for the Claude
+2.1.257 Haiku observation already captured on the machine that holds the login:
+SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop, and SessionEnd
+fire; `disableAllHooks` via `--settings` produces no events; a PreToolUse deny
+stops the Read and the model quotes the reason. That log is not in this
+commit, so the Claude behaviour cells below stay pending. The ignored test
+`claude_project_and_user_hooks_stay_quiet_across_prompt_and_restore` plants a
+project hook and a user hook and asserts the log stays empty across the same
+open, prompt, restore, and prompt. It was not run.
 
 The packaged native implementation contains conditional park/resume handling for
 `defer`, so the earlier hypothesis in #134 that it simply means no opinion is not
@@ -125,12 +137,16 @@ fail-closed flag would erase this distinction; Nessa must enforce its own defaul
 
 Native hooks use Claude-shaped configuration and
 [output validation](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/hooks/src/engine/output_parser.rs#L369-L510) but reject unsupported
-combinations. Pre-tool output supports denial and an allowance with rewritten
-input; `ask` and legacy `approve` are not accepted there. Permission hooks accept
+combinations. Pre-tool output supports denial and an allowance that carries
+rewritten input. A bare `permissionDecision:allow` without `updatedInput` is
+rejected, and `updatedInput` without `permissionDecision:allow` is rejected, in
+[`unsupported_pre_tool_use_hook_specific_output`](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/hooks/src/engine/output_parser.rs#L441-L457).
+`ask` and legacy `approve` are not accepted there. Permission hooks accept
 allow/deny; no decision falls through to ordinary approval. Native hook failure,
 timeout and malformed JSON generally record failure and continue; explicit
 supported blocking output is different. That default cannot implement Nessa's
-fail-closed enforcement policy unchanged.
+fail-closed enforcement policy unchanged. The scripted run below did not send a
+bare allow.
 
 The ACP adapter [discards `hook/started` and `hook/completed`](https://github.com/agentclientprotocol/codex-acp/blob/a7afd2ae077d625710194d9701b83595494449de/src/CodexEventHandler.ts#L604-L605)
 and [drops hook history entries](https://github.com/agentclientprotocol/codex-acp/blob/a7afd2ae077d625710194d9701b83595494449de/src/ResponseItemHistoryFallback.ts#L182).
@@ -150,8 +166,9 @@ config override. A negotiated session reports native hook suppression as
 `Unsupported`. Startup and restoration still complete, and a prompt runs both
 times.
 `codex_startup_and_restoration_continue_when_native_hook_suppression_is_unsupported`
-reads the request the fixture recorded and is that contract. It does not close
-[#147](https://github.com/nessalabs/nessa-agent/issues/147).
+is that contract. The fixture accepts the launch only after `features.hooks` is
+false and `notify` is empty. The test does not read that request back. It does
+not close [#147](https://github.com/nessalabs/nessa-agent/issues/147).
 
 The upstream pin is still Codex 0.154.0 at
 `6b9826e3aa83b1a5947db50f4332cb9c65f1b340`. Rechecked there, the request and the
@@ -195,10 +212,11 @@ not close [#147](https://github.com/nessalabs/nessa-agent/issues/147) by
 claiming proof.
 No attestation mechanism is claimed implemented in this survey. The loader
 order above is why the negotiated fact stays unsupported after the request was
-added. Which of the twelve native events fire on a turn, and whether a parsed
-output actually stops a tool or reaches the model, were not run: the fixture is
-not the Codex process, and those rows need a live provider. The pinned parser's
-own unit tests were not executed in this repository.
+added. The fixture is not the Codex process. Which events fire, and which
+outputs stop a tool, are the scripted-model rows in the behaviour table. The
+pinned parser's own unit tests were not executed in this repository. The bare
+`permissionDecision:allow` rejection above is that parser source, not one of
+those rows.
 
 ### Opencode
 
@@ -227,9 +245,10 @@ Call sites that do exist, rechecked at the same commit:
 this pin. `auth` is collected from the plugin list by the provider auth loader;
 that path is not `Plugin.trigger`.
 
-None of those call sites were executed here. Which of them fire on a turn, and
-whether an in-place edit is what the model sees, need the pinned binary and a
-live model. The ACP fixture does not emit plugin callbacks.
+The ACP fixture does not emit plugin callbacks. Which of those call sites fire
+on a turn, and whether an in-place edit is what the process executes, are the
+scripted-model rows in the behaviour table. `permission.ask` remains without a
+trigger in this pin; the scripted run did not produce one.
 
 Nessa's [binding](../../../crates/nessa-sdk/src/infrastructure/opencode_acp/sessions/binding.rs),
 after [#162](https://github.com/nessalabs/nessa-agent/pull/162), gives the
@@ -240,8 +259,10 @@ external plugin list. It does not disable the default plugins compiled into
 the binary. The negotiated fact stays `Unknown`: the profile has no checked
 answer, and this request is not reported as supported.
 `opencode_startup_and_restoration_continue_when_native_hook_suppression_is_unknown`
-reads the request from the fixture and runs a prompt, a restore, and a second
-prompt while the fact stays unknown. The ignored test
+checks that fact across an open, a prompt, a restore, and a second prompt. The
+fixture accepts the launch only after external plugins are off, project config
+is disabled, the three alternate config inputs are absent, and the home is not
+the caller's. The test does not read that request back. The ignored test
 `pinned_binary_cannot_load_caller_config_tools_mcp_or_native_hooks` is the
 check against the real 1.18.31 binary, and it runs only when
 `NESSA_PINNED_OPENCODE_BINARY` is set. It was not run for this refresh.
@@ -360,25 +381,33 @@ lifecycle delivery. Those consuming boundaries are the live-provider rows
 below. The probe was not turned into a regression test: a fake CLI that supplies
 the event frames would be a claim about the CLI.
 
-### What the contract tests pin, and what needs a live provider
+### What the contract tests pin, and what the harness logs show
 
-The tests use the existing ACP fixtures. Each fixture accepts the launch only
-after it has seen that binding's suppression request, and writes `hook-request`
-for the test to read. A prompt completes, the session is restored, and a prompt
-completes again. The negotiated fact is the profile's checked answer.
+The ACP fixtures accept the launch only after they have seen that binding's
+suppression request. They do not write the request back out, and the Rust tests
+do not read it. Each test checks the negotiated fact, then a prompt, a restore,
+and a second prompt. The fixtures are not the upstream harness. They do not
+emit hook events.
+
+Codex and OpenCode behaviour below is the committed log from the real pinned
+binary against `verification/hook-behavior/scripted_openai.py`. The label is
+real harness, scripted model. Claude's cells stay pending until that machine's
+log is committed. Kiro has no repository pin and no adapter. Pinning it is not
+part of this refresh.
 
 | Harness | Events that fire | Output the harness accepts | Native-hook suppression |
 | --- | --- | --- | --- |
-| Claude ACP 0.76.0, SDK 0.3.257 | Not run. The adapter does not request SDK hook-event reporting, and the fixture does not emit hook events. Which of the 33 declared events fire on a turn needs the pinned CLI and a live model. | Not run. SDK 0.3.257 declares `allow \| deny \| ask \| defer`, `continue`, `stopReason`, `decision`, `systemMessage`, and `hookSpecificOutput`. The CLI's acceptance of a combination needs that live process. The four-callback probe above is bridge serialization, not CLI acceptance. | `claude_startup_and_restoration_continue_when_native_hook_suppression_is_unknown`. The fixture records `disableAllHooks: true` and empty `settingSources`. The negotiated fact stays `Unknown`. The open, the prompt, the restore, and the second prompt complete. |
-| Codex ACP 1.12.0, Codex 0.154.0 | Not run. The adapter discards `hook/started` and `hook/completed`. Which of the twelve native events fire on a turn needs a live provider. | Not run as behavior. The pinned parser rejects `permissionDecision:ask`, legacy `decision:approve`, and `continue: false` on pre-tool, and rejects a deny without a reason. Those upstream unit tests were not executed here, and parser acceptance is not a tool that stayed unrun. | `codex_startup_and_restoration_continue_when_native_hook_suppression_is_unsupported`. The fixture records `features.hooks: false` and `notify: []`. The negotiated fact stays `Unsupported`. The open, the prompt, the restore, and the second prompt complete. |
-| OpenCode 1.18.31 | Not run. The call-site table above is source. `permission.ask` has no trigger. Which of the triggered hooks fire on a turn needs the pinned binary and a live model. | Not run. The same table says which call sites use the trigger's return and which keep the original object. An in-place edit reaching the model was not observed. | `opencode_startup_and_restoration_continue_when_native_hook_suppression_is_unknown`. The fixture records `OPENCODE_PURE=1`, project config disabled, the three alternate config inputs absent, and a home other than the caller's. The negotiated fact stays `Unknown`. The open, the prompt, the restore, and the second prompt complete. Default plugins inside the binary are outside that request. `pinned_binary_cannot_load_caller_config_tools_mcp_or_native_hooks` checks the real binary and is ignored unless `NESSA_PINNED_OPENCODE_BINARY` is set. |
+| Claude ACP 0.76.0, SDK 0.3.257 | Not run. The adapter does not request SDK hook-event reporting, and the fixture does not emit hook events. `run-claude.sh` is able to reproduce the 2.1.257 Haiku observation (SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop, SessionEnd; `--settings '{"disableAllHooks":true}'` produces no events; a PreToolUse deny stops the Read and the model quotes the reason). That log is not committed here. | Not run. SDK 0.3.257 declares `allow \| deny \| ask \| defer`, `continue`, `stopReason`, `decision`, `systemMessage`, and `hookSpecificOutput`. The four-callback probe above is bridge serialization, not CLI acceptance. | `claude_startup_and_restoration_continue_when_native_hook_suppression_is_unknown`. The fixture requires `disableAllHooks: true` and empty `settingSources`. The negotiated fact stays `Unknown`. The open, the prompt, the restore, and the second prompt complete. `claude_project_and_user_hooks_stay_quiet_across_prompt_and_restore` is ignored and was not run. |
+| Codex 0.154.0 (`codex-cli 0.154.0`) | Real harness, scripted model. Log: [rows.jsonl](../../../verification/hook-behavior/evidence/codex/rows.jsonl). Hooks on: a plain turn fires SessionStart (`source` startup), UserPromptSubmit, Stop, and SessionEnd, twice, from `$CODEX_HOME/hooks.json` and the project `.codex/hooks.json`. A Bash turn also fires PreToolUse and PostToolUse and creates the original sentinel. `codex exec resume` adds SessionStart `source` resume. A follow-up whose whole text is `/compact` is that resume turn: PreCompact and PostCompact do not fire. The subagent row logs `unsupported call: close_agent` and does not fire SubagentStart or SubagentStop. Without the sandbox bypass the command hits a read-only filesystem, the hook log has one copy of each event where the other rows have two, and PermissionRequest does not fire. `features.hooks` false and `notify` empty: every row's hook log is empty, and a requested tool still runs. The ACP adapter still discards `hook/started` and `hook/completed`; this log is the CLI, not that stream. | Real harness, scripted model, same log. A bare `permissionDecision:allow` without `updatedInput` is rejected by the parser at `output_parser.rs` lines 441-457 (`6b9826e3`); this run did not send that output. Deny with a reason: no PostToolUse and no sentinel; the scripted model does not quote the reason. Allow with `updatedInput`: only the rewritten sentinel is created. `ask`, `defer`, and `continue: false` do not stop the tool. The additionalContext nonce appears in a later model request. The hook emits `systemMessage` and that nonce is absent from every model request. Stop `decision: block` loops (2348 Stop events) until the runner's 75s timeout, and SessionEnd does not fire. PreToolUse exit 2 stops the tool. Exit 1, malformed JSON, and a 1s timeout do not: PreToolUse is logged, then PostToolUse, and the original sentinel is created. With suppression on, the deny and exit-2 rows run the tool. | `codex_startup_and_restoration_continue_when_native_hook_suppression_is_unsupported`. The fixture requires `features.hooks: false` and `notify: []`. The negotiated fact stays `Unsupported`. The open, the prompt, the restore, and the second prompt complete. The scripted log is the same request against the real CLI. It does not close [#147](https://github.com/nessalabs/nessa-agent/issues/147). |
+| OpenCode 1.18.31 | Real harness, scripted model. Log: [rows.jsonl](../../../verification/hook-behavior/evidence/opencode/rows.jsonl). Hooks on: a plain turn fires `chat.message`, `experimental.chat.system.transform`, and `event` callbacks (`session.created`, `session.updated`, `message.updated`, `message.part.updated`, `session.status`, `session.diff`, `plugin.added`, `catalog.updated`, `reference.updated`, `integration.updated`, `message.part.delta`, `session.idle`). A bash turn also fires `tool.execute.before` and `tool.execute.after` and creates the original sentinel. `--session` keeps one `session.created` and fires `chat.message` again. A follow-up message `/compact` does not fire `experimental.session.compacting` or `command.execute.before`. The subagent row calls `task`: `tool.execute.before` fires, the call errors, `tool.execute.after` does not, and the sentinel is not created. Without `--auto` the bash tool still runs. `permission.ask` has no trigger. Suppression (`OPENCODE_PURE=1`, project config disabled, the three config inputs unset): every row's plugin log is empty, and a requested bash tool still runs. | Real harness, scripted model, same log. OpenCode has no `permissionDecision` vocabulary. A thrown deny, and the exit-2 and exit-1 throws, stop the tool: before fires, after does not, and the deny reason is in stdout. An in-place rewrite of the arguments creates only the rewritten sentinel. `ask`, `defer`, and `continue: false` are not a plugin output; the tool runs. Replacing `output.args` is not read back; the original sentinel is created. A 30s wait inside `tool.execute.before` still reaches `tool.execute.after`. The additionalContext nonce and the system-transform nonce both appear in a model request. There is no Stop `decision: block` path; that row completes and the tool runs. | `opencode_startup_and_restoration_continue_when_native_hook_suppression_is_unknown`. The fixture requires `OPENCODE_PURE=1`, project config disabled, the three alternate config inputs absent, and a home other than the caller's. The negotiated fact stays `Unknown`. The open, the prompt, the restore, and the second prompt complete. The scripted log shows the planted project plugin stays silent under that request. Default plugins inside the binary are outside it. `pinned_binary_cannot_load_caller_config_tools_mcp_or_native_hooks` is ignored unless `NESSA_PINNED_OPENCODE_BINARY` is set. |
 
 Kiro has no repository pin and no adapter. Pinning it is not part of this
 refresh. Its local strings and help remain observations, not a behavior test.
 
-A callback result or parser acceptance alone cannot prove that a tool did not run
-or that the model received injected text. Those claims stay unmade until the
-consuming execution boundary is checked against a live provider.
+A callback result or parser acceptance alone cannot prove that a tool did not
+run or that the model received injected text. The Codex and OpenCode cells
+above are that check against a scripted model. The Claude cells are still that
+gap.
 
 ## Output support and explicit degradation
 
@@ -387,7 +416,7 @@ consuming execution boundary is checked against a live provider.
 | Allow/deny/ask | Claude declares all; Codex accepts event-specific subset; Opencode declared permission callback inactive | Select only an actual offered option at a proven gate. Ask means a pending Nessa review; never bypass enforcing policy. |
 | Defer | Claude declares conditional native handling; ACP has no later-answer outcome | Unsupported permission deferral; do not emulate with steering. |
 | Approve/block | Claude declares; Codex validates by event and rejects some combinations | Import only with exact event-specific mapping; otherwise unsupported. |
-| Updated input | Claude/Codex pre-tool parsers accept a rewrite with an allow. Opencode's `tool.execute.before` call sites discard the returned output and execute the original `args`; only an in-place edit of that object is visible in source, and it was not executed | Unsupported on a binding lacking a proven rewrite-before-execution path. |
+| Updated input | Claude/Codex pre-tool parsers accept a rewrite with an allow. A bare Codex `permissionDecision:allow` without `updatedInput` is rejected at `output_parser.rs` lines 441-457. The scripted Codex run's allow-plus-`updatedInput` created only the rewritten sentinel. Opencode's `tool.execute.before` call sites discard the returned output and execute the original `args`. The scripted run's in-place edit of that object created only the rewritten sentinel. Replacing `output.args` left the original command in place | Unsupported on a binding lacking a proven rewrite-before-execution path. |
 | Additional context/system message | Native event-specific Claude/Codex outputs and Opencode transforms | Refuse required model delivery unless that exact boundary delivers it; UI text is a separate lesser behavior. |
 | Stop/end turn/close session | Native output and local lifecycle are different authorities | Use attributed local stop; require proven target fencing, cleanup and reuse behavior. No synthetic provider terminal result. |
 | Matcher | Claude/Codex native matching; no Opencode dispatcher matcher | Nessa-owned bounded matcher over validated tool identity; provider aliases need explicit translation evidence. |
