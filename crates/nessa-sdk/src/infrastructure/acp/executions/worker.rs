@@ -925,19 +925,42 @@ impl<P: AcpProfile> Worker<P> {
         cancelled.and(closed)
     }
     fn current_deadline(&self) -> Option<ClockInstant> {
-        // An absolute shutdown grace is the deadline. A sooner steering or
-        // prompt timer must not cut it short, and must not start another one.
+        // An absolute shutdown grace is the deadline. A sooner steering,
+        // prompt, or held-prompt timer must not cut it short, and must not
+        // start another one.
         if let Some(deadline) = self.shutdown_deadline {
             return Some(deadline);
         }
+        let held = self
+            .held_prompts
+            .iter()
+            .filter_map(|(prompt, _)| prompt.deadline)
+            .min();
         [
             self.stop_reply_deadline,
             self.active.as_ref().and_then(|active| active.deadline),
             self.steering.as_ref().map(|pending| pending.deadline),
+            held,
         ]
         .into_iter()
         .flatten()
         .min()
+    }
+    /// A deadline that ends this worker, apart from a stopped reply's grace
+    /// and a held prompt's own bound.
+    fn operation_deadline_due(&self) -> bool {
+        let now = self.config.clock.now();
+        self.shutdown_deadline
+            .is_some_and(|deadline| now >= deadline)
+            || self
+                .active
+                .as_ref()
+                .and_then(|active| active.deadline)
+                .is_some_and(|deadline| now >= deadline)
+            || self
+                .steering
+                .as_ref()
+                .is_some_and(|pending| now >= pending.deadline)
     }
     async fn send(&mut self, value: Value) -> Result<(), AgentError> {
         self.send_before(value, self.current_deadline()).await
@@ -1300,9 +1323,16 @@ impl<P: AcpProfile> Worker<P> {
                     if self.closing {
                         return Ok(());
                     }
+                    // A held prompt's bound can pass while the stopped turn is
+                    // still inside its grace. That prompt is refused here and
+                    // is not dispatched; the wake is not itself a worker failure.
+                    self.refuse_expired_held_prompts();
                     if self.stop_reply_due() {
                         self.expire_stopped_prompts();
                         self.flush_held_prompts(execution).await?;
+                        continue;
+                    }
+                    if !self.operation_deadline_due() {
                         continue;
                     }
                     self.failure_cause = ObservationFailureCause::DeadlineExceeded;
@@ -2905,14 +2935,24 @@ impl<P: AcpProfile> Worker<P> {
     }
     /// Record the provider reply for a prompt this worker already stopped.
     ///
-    /// The session report is the local stop's report. It is sent before the
-    /// late-result audit, so a stalled audit cannot relabel the session, and
-    /// an audit failure still fails the operation after that report.
+    /// The reply is read before any session report. A result or a provider
+    /// error keeps the local stop's report, sent before the late-result audit
+    /// so a stalled audit cannot relabel the session. Anything else is a
+    /// protocol failure: the stopped execution and anything held behind it
+    /// are refused, and the error fails the worker the way a live prompt's
+    /// malformed reply does.
     async fn complete_stopped_prompt(
         &mut self,
         stopped: StoppedPrompt,
         message: &Envelope,
     ) -> Result<(), WorkerFailure> {
+        let reply = match prompt_reply(message) {
+            Ok(reply) => reply,
+            Err(error) => {
+                self.fail_stopped_reply(stopped);
+                return Err(error.into());
+            }
+        };
         if stopped.kind == StopKind::CloseSession {
             self.stop_cleanup = StopCleanup::Policy;
         }
@@ -2927,8 +2967,48 @@ impl<P: AcpProfile> Worker<P> {
         if self.stopped_prompts.is_empty() {
             self.stop_reply_deadline = None;
         }
-        self.record_late_reply(stopped.session_id, stopped.execution_id, message)
+        self.record_parsed_late_reply(stopped.session_id, stopped.execution_id, reply)
             .await
+    }
+    /// Refuse a stopped prompt whose reply is not a terminal provider result.
+    ///
+    /// Cleanup sticks for this generation. Held prompts are answered only once
+    /// nothing stopped is still waiting; until then the cleanup flag is what
+    /// refuses them.
+    fn fail_stopped_reply(&mut self, stopped: StoppedPrompt) {
+        if self.stop_cleanup == StopCleanup::None {
+            self.stop_cleanup = StopCleanup::Policy;
+        }
+        let _ = stopped.reply.send(ProviderExecutionReply::Finished(
+            ExecutionReport::stopped_by_policy(ProviderSessionState::CleanupRequired),
+        ));
+        if self.stopped_prompts.is_empty() {
+            self.stop_reply_deadline = None;
+            let report = self.cleanup_refusal();
+            for (_, reply) in std::mem::take(&mut self.held_prompts) {
+                let _ = reply.send(ProviderExecutionReply::Finished(report.clone()));
+            }
+        }
+    }
+    /// Answer held prompts whose own execution bound has passed.
+    ///
+    /// The report is the one a dispatch uses when its deadline passes. The
+    /// prompt is not sent. Prompts that are still inside their bound stay held.
+    fn refuse_expired_held_prompts(&mut self) {
+        let now = self.config.clock.now();
+        let mut kept = VecDeque::new();
+        for (prompt, reply) in std::mem::take(&mut self.held_prompts) {
+            if prompt.deadline.is_some_and(|deadline| now >= deadline) {
+                let _ = reply.send(ProviderExecutionReply::Finished(ExecutionReport::new(
+                    None,
+                    Some(AgentError::Deadline),
+                    ProviderSessionState::CleanupRequired,
+                )));
+            } else {
+                kept.push_back((prompt, reply));
+            }
+        }
+        self.held_prompts = kept;
     }
     async fn record_late_reply(
         &mut self,
@@ -2936,9 +3016,19 @@ impl<P: AcpProfile> Worker<P> {
         execution_id: ExecutionId,
         message: &Envelope,
     ) -> Result<(), WorkerFailure> {
-        let result = match prompt_reply(message) {
-            Ok(PromptReply::Outcome(outcome)) => Ok(outcome),
-            Ok(PromptReply::Failed(error)) | Err(error) => Err(error),
+        let reply = prompt_reply(message)?;
+        self.record_parsed_late_reply(session_id, execution_id, reply)
+            .await
+    }
+    async fn record_parsed_late_reply(
+        &mut self,
+        session_id: ExecutionSessionId,
+        execution_id: ExecutionId,
+        reply: PromptReply,
+    ) -> Result<(), WorkerFailure> {
+        let result = match reply {
+            PromptReply::Outcome(outcome) => Ok(outcome),
+            PromptReply::Failed(error) => Err(error),
         };
         self.record_audit(
             ExecutionAuditRecord::LateProviderResult(LateProviderResultRecord::new(

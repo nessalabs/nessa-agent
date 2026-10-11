@@ -2,6 +2,7 @@
 import json
 import os
 import pathlib
+import select
 import signal
 import subprocess
 import sys
@@ -21,13 +22,71 @@ def record(name, value):
     temporary = root / (name + ".tmp")
     temporary.write_text(value)
     temporary.replace(root / name)
-def wait_for(name, seconds=5):
-    deadline = time.time() + seconds
-    while time.time() < deadline:
-        if (root / name).exists():
-            return True
-        time.sleep(0.01)
-    return False
+class StdinLines:
+    """Lines from stdin, read without the text wrapper pulling the next one ahead.
+
+    The stopped-reply wait has to notice a session/prompt that arrives while
+    it is waiting, and still hand every other line to the main loop.
+    """
+    def __init__(self, fd):
+        self.fd = fd
+        self.pending = []
+        self.partial = b""
+        self.eof = False
+        os.set_blocking(fd, False)
+
+    def _consume(self):
+        while True:
+            try:
+                chunk = os.read(self.fd, 65536)
+            except BlockingIOError:
+                return
+            if chunk == b"":
+                self.eof = True
+                if self.partial:
+                    self.pending.append(self.partial.decode())
+                    self.partial = b""
+                return
+            self.partial += chunk
+            while b"\n" in self.partial:
+                line, self.partial = self.partial.split(b"\n", 1)
+                self.pending.append(line.decode())
+
+    def next_line(self):
+        while not self.pending and not self.eof:
+            try:
+                select.select([self.fd], [], [])
+            except InterruptedError:
+                continue
+            self._consume()
+        if self.pending:
+            return self.pending.pop(0)
+        return ""
+
+    def wait_for_file(self, name, seconds=5):
+        deadline = time.time() + seconds
+        seen = 0
+        while time.time() < deadline:
+            if (root / name).exists():
+                return
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                break
+            try:
+                select.select([self.fd], [], [], min(0.01, remaining))
+            except InterruptedError:
+                continue
+            self._consume()
+            for line in self.pending[seen:]:
+                try:
+                    incoming = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if incoming.get("method") == "session/prompt":
+                    record("prompt-before-release", line)
+            seen = len(self.pending)
+        record("release-wait-expired", "yes")
+        sys.exit(1)
 
 if mode == "identity-credentials":
     assert os.environ["NESSA_FIXTURE_CREDENTIAL"] in ("synthetic-secret-one", "synthetic-secret-two")
@@ -105,7 +164,15 @@ if mode == "ignore-stop":
             pass
     signal.signal(signal.SIGCHLD, reap)
 
-for line in sys.stdin:
+stdin_lines = StdinLines(sys.stdin.fileno())
+
+def wait_for_release(name):
+    stdin_lines.wait_for_file(name)
+
+while True:
+    line = stdin_lines.next_line()
+    if line == "":
+        break
     msg = json.loads(line)
     method = msg.get("method")
     if method == "initialize":
@@ -497,6 +564,7 @@ for line in sys.stdin:
             "refusal-end-turn",
             "refusal-close-session",
             "refusal-stale-next",
+            "refusal-malformed-stopped",
             "refusal-open-work",
             "refusal-silent",
         ):
@@ -645,6 +713,7 @@ for line in sys.stdin:
             "refusal-end-turn",
             "refusal-close-session",
             "refusal-stale-next",
+            "refusal-malformed-stopped",
             "refusal-open-work",
             "refusal-silent",
         ) and pending is not None:
@@ -660,8 +729,14 @@ for line in sys.stdin:
                     "sessionId": session, "toolCall": call, "options": [
                         {"optionId": "approve-one", "kind": "allow_once", "name": "Allow once"},
                         {"optionId": "deny-one", "kind": "reject_once", "name": "Deny once"}]}})
-                wait_for("release-stopped-result")
-            if mode != "refusal-silent":
+                wait_for_release("release-stopped-result")
+            if mode == "refusal-malformed-stopped":
+                # The stopped prompt is answered with an id and neither a result
+                # nor an error. That is a protocol failure, not a late outcome.
+                wait_for_release("release-stopped-result")
+                send({"id": pending})
+                pending = None
+            elif mode != "refusal-silent":
                 result(pending, {"stopReason": "cancelled"})
                 pending = None
         elif pending is not None and mode not in ("ignore-stop", "consumer-loss-during-close"):
@@ -717,6 +792,7 @@ for line in sys.stdin:
         "refusal-end-turn",
         "refusal-close-session",
         "refusal-stale-next",
+        "refusal-malformed-stopped",
         "refusal-open-work",
         "refusal-silent",
     ) and msg.get("id") in (permission_id, "write-review", "bash-review", "stale-review", "ask"):

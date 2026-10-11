@@ -1871,6 +1871,10 @@ async fn a_stopped_turn_holds_the_next_prompt_until_the_provider_answers() {
     // domain's one-execution Busy, which is a different refusal.
     let second = start(&opened, "second-turn").await;
     tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(
+        !second.is_finished(),
+        "the next prompt ran before the stopped reply"
+    );
     std::fs::write(root.path().join("release-stopped-result"), "yes").unwrap();
     assert_eq!(
         timeout(Duration::from_secs(3), first)
@@ -1908,10 +1912,188 @@ async fn a_stopped_turn_holds_the_next_prompt_until_the_provider_answers() {
         "a permission from the stopped turn was admitted"
     );
     assert!(root.path().join("cancel-observed").exists());
+    assert!(
+        !root.path().join("prompt-before-release").exists(),
+        "a prompt reached the provider before the stopped reply was released"
+    );
+    assert!(
+        !root.path().join("release-wait-expired").exists(),
+        "the fixture gave up waiting for the stopped reply"
+    );
     let _ = opened
         .session
         .shutdown(SessionCloseRequest::Explicit(close_action()))
         .await;
+}
+
+#[tokio::test]
+async fn a_malformed_stopped_reply_fails_the_worker_and_refuses_the_held_prompt() {
+    let _process_slot = process_test_slot().await;
+    let audit = Arc::new(RecordingAudit::default());
+    let (root, binding) = binding_that_stops(
+        "refusal-malformed-stopped",
+        StopKind::EndTurn,
+        audit.clone(),
+    );
+    let mut opened = open_that_stops(&binding, audit.clone()).await;
+    let session = opened.session.clone();
+    let first = tokio::spawn(async move { session.execute(prompt("stop-this")).await });
+    assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
+    assert!(matches!(
+        next(&mut opened).await,
+        ExecutionUpdate::ReviewDeclined(_)
+    ));
+    assert!(matches!(
+        next(&mut opened).await,
+        ExecutionUpdate::Finished(ExecutionOutcome::Cancelled)
+    ));
+    let session = opened.session.clone();
+    let second = tokio::spawn(async move { session.execute(prompt("held-after-malformed")).await });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    std::fs::write(root.path().join("release-stopped-result"), "yes").unwrap();
+    let first = timeout(Duration::from_secs(3), first)
+        .await
+        .unwrap()
+        .unwrap();
+    let ProviderExecutionReply::Finished(report) = first else {
+        panic!("{first:?}");
+    };
+    assert_eq!(report.source(), ExecutionReportSource::PolicyStop);
+    assert!(matches!(
+        report.session_state(),
+        ProviderSessionState::CleanupRequired
+    ));
+    let second = timeout(Duration::from_secs(3), second)
+        .await
+        .unwrap()
+        .unwrap();
+    let ProviderExecutionReply::Finished(report) = second else {
+        panic!("{second:?}");
+    };
+    assert_eq!(report.source(), ExecutionReportSource::PolicyStop);
+    assert!(matches!(
+        report.session_state(),
+        ProviderSessionState::CleanupRequired
+    ));
+    assert!(
+        audit.late_results.lock().unwrap().is_empty(),
+        "a reply with neither result nor error was recorded as a late result"
+    );
+    let observed = std::fs::read_to_string(root.path().join("prompt-observed")).unwrap();
+    assert!(
+        !observed.contains("held-after-malformed"),
+        "the held prompt was dispatched: {observed}"
+    );
+    let failure = loop {
+        match timeout(Duration::from_secs(3), opened.events.next())
+            .await
+            .unwrap()
+        {
+            Ok(Some(_)) => continue,
+            Ok(None) => panic!("the malformed reply did not fail the worker"),
+            Err(failure) => break failure,
+        }
+    };
+    assert_eq!(
+        failure.error(),
+        &AgentError::Protocol("missing prompt result".into())
+    );
+    assert_eq!(failure.cause(), ObservationFailureCause::ExecutionFailed);
+    let _ = opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await;
+}
+
+#[tokio::test]
+async fn a_held_prompt_expires_before_the_stop_grace() {
+    let _process_slot = process_test_slot().await;
+    let audit = Arc::new(RecordingAudit::default());
+    let limit = Duration::from_millis(20);
+    assert!(limit < SHUTDOWN_GRACE);
+    let (root, mut config, model) = test_acp_configuration("refusal-stale-next", 16);
+    config.execution_timeout = Some(limit);
+    config.refusal = ConfiguredRefusal::stopping(StopKind::EndTurn, stopping_rule());
+    let clock = manual_clock(&mut config);
+    let binding = ClaudeAcpProvider::new(
+        config,
+        &model,
+        TokenLimits::new(900, 100).unwrap(),
+        audit.clone(),
+    )
+    .unwrap();
+    let mut opened = open_that_stops(&binding, audit.clone()).await;
+    let session = opened.session.clone();
+    let first = tokio::spawn(async move { session.execute(prompt("stop-this")).await });
+    assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
+    assert!(matches!(
+        next(&mut opened).await,
+        ExecutionUpdate::ReviewDeclined(_)
+    ));
+    assert!(matches!(
+        next(&mut opened).await,
+        ExecutionUpdate::Finished(ExecutionOutcome::Cancelled)
+    ));
+    let waits_before_hold = clock.waits().len();
+    let session = opened.session.clone();
+    let second = tokio::spawn(async move { session.execute(prompt("held-timeout")).await });
+    timeout(Duration::from_secs(10), async {
+        loop {
+            if let Some(wait) = clock
+                .waits()
+                .into_iter()
+                .skip(waits_before_hold)
+                .find(|wait| wait.limit() == limit)
+            {
+                clock.advance_to(wait.deadline);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the held prompt did not wait on its execution timeout");
+    let second = timeout(Duration::from_secs(3), second)
+        .await
+        .expect("the held prompt waited out the stop grace")
+        .unwrap();
+    let ProviderExecutionReply::Finished(report) = second else {
+        panic!("{second:?}");
+    };
+    assert_eq!(report.failure(), Some(&AgentError::Deadline));
+    assert_eq!(report.source(), ExecutionReportSource::Provider);
+    assert!(matches!(
+        report.session_state(),
+        ProviderSessionState::CleanupRequired
+    ));
+    let observed = std::fs::read_to_string(root.path().join("prompt-observed")).unwrap();
+    assert!(
+        !observed.contains("held-timeout"),
+        "the expired prompt was dispatched: {observed}"
+    );
+    std::fs::write(root.path().join("release-stopped-result"), "yes").unwrap();
+    let first = timeout(Duration::from_secs(3), first)
+        .await
+        .unwrap()
+        .unwrap();
+    let ProviderExecutionReply::Finished(report) = first else {
+        panic!("{first:?}");
+    };
+    assert_eq!(report.source(), ExecutionReportSource::PolicyStop);
+    assert!(matches!(
+        report.session_state(),
+        ProviderSessionState::Usable
+    ));
+    let _ = timeout(
+        Duration::from_secs(10),
+        clock.passing(
+            a_grace,
+            opened
+                .session
+                .shutdown(SessionCloseRequest::Explicit(close_action())),
+        ),
+    )
+    .await;
 }
 
 #[tokio::test]

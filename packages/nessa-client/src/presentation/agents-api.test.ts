@@ -48,8 +48,8 @@ describe("authenticated agent choices", () => {
       ],
     },
     { ...offered, agents: [...offered.agents, offered.agents[0]] },
-    // Places a conversation may run: each named once, each a destination's
-    // text, at most 24 (16 SSH destinations and 8 paired environments).
+    // The environments: each named once, each a destination's text, at most 24
+    // (16 SSH hosts and 8 connected paired machines).
     { ...offered, environments: undefined },
     { ...offered, environments: ["devbox", "devbox"] },
     { ...offered, environments: [""] },
