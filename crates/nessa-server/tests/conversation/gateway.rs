@@ -47,6 +47,19 @@ mod gateway {
         organization: &str,
         chat: bool,
     ) -> AccessSnapshot {
+        granted(credential, principal, organization, chat, false)
+    }
+    /// A credential that may read conversations, as a paired device's does.
+    fn read_snapshot(credential: &str, principal: &str, organization: &str) -> AccessSnapshot {
+        granted(credential, principal, organization, false, true)
+    }
+    fn granted(
+        credential: &str,
+        principal: &str,
+        organization: &str,
+        chat: bool,
+        read: bool,
+    ) -> AccessSnapshot {
         let organization = OrganizationId::new(organization).unwrap();
         let principal = PrincipalId::new(principal).unwrap();
         let mut grants = vec![Grant::new(
@@ -56,6 +69,15 @@ mod gateway {
                 ResourceId::new("gateway-resource").unwrap(),
             ),
         )];
+        if read {
+            grants.push(Grant::new(
+                Action::new("conversation.read").unwrap(),
+                Resource::new(
+                    organization.clone(),
+                    ResourceId::new("gateway-resource").unwrap(),
+                ),
+            ));
+        }
         if chat {
             grants.push(Grant::new(
                 Action::new("conversation.write").unwrap(),
@@ -94,6 +116,8 @@ mod gateway {
             chat_snapshot("other", "other", "organization", true),
             chat_snapshot("foreign", "owner", "foreign", true),
             chat_snapshot("reader", "owner", "organization", false),
+            read_snapshot("owner-device", "owner", "organization"),
+            read_snapshot("other-device", "other", "organization"),
         ]
         .into_iter()
         .map(|snapshot| (snapshot.credential.id().clone(), snapshot))

@@ -2,7 +2,10 @@ use super::operational_limits::OperationalLimits;
 use super::{change_watch::WatchOwners, WatchTaskFault};
 use crate::agent_install::application::AgentInstallations;
 use crate::agents::application::{AgentProbe, SharedAgentReadiness};
-use crate::attachments::{application::AttachmentService, entrypoint::http::UploadRoute};
+use crate::attachments::{
+    application::{AttachmentService, HeldReads},
+    entrypoint::http::UploadRoute,
+};
 use crate::conversation::application::{
     CatalogueReadSource, ConversationRepository, ConversationService, McpAppAudit, ReadGrants,
     ReceiverAuthority, RecordReadSource, WatchCatalogue, WatchNamespaces, WatchRecords,
@@ -67,6 +70,10 @@ pub struct ProductRouteState {
     /// holds, and writes audit records, so it must never be what keeps a
     /// permission answer or a close from being admitted.
     pub(crate) upload_begins: Arc<Semaphore>,
+    /// Reading a held file back has capacity of its own, so ranges waiting
+    /// on the store's one read slot never hold the requests every other
+    /// ordinary method needs.
+    pub(crate) artifact_reads: Arc<Semaphore>,
     /// Deleting a conversation has capacity of its own, apart from the
     /// controls. A delete can take minutes — it may launch the agent to ask it
     /// about its own record of the session — and a burst of them must never be
@@ -99,6 +106,8 @@ pub struct ProductRouteState {
     /// catalog's places each time it is asked, since they come and go.
     pub(crate) connected_environments: Option<ConnectedEnvironments>,
     pub(crate) attachments: Option<AttachmentService>,
+    /// Where `artifact.read` reads a held file back, over the same store.
+    pub(crate) held_reads: Option<HeldReads>,
     /// The MCP App resources held behind tickets: issued by the conversation
     /// service, redeemed at `GET /mcp-resources`, which records each
     /// redemption in the audit beside it before serving. `None` when no MCP server is
@@ -228,6 +237,7 @@ impl ProductRouteState {
             catalogue_watches: None,
             watch_namespaces: Arc::new(UuidWatchNamespaces),
             upload_begins: Arc::new(Semaphore::new(limits.upload_begins())),
+            artifact_reads: Arc::new(Semaphore::new(HeldReads::CONCURRENT_READS)),
             deletions: Arc::new(Semaphore::new(limits.deletions())),
             gateway: Resource::new(gateway_organization_id, gateway_id),
             audience,
@@ -249,6 +259,7 @@ impl ProductRouteState {
             agent_installations: None,
             installs: Arc::new(Semaphore::new(1)),
             attachments: None,
+            held_reads: None,
             resource_tickets: None,
             uptime_clock: dependencies.uptime_clock,
             agent_readiness: Arc::new(SharedAgentReadiness::new(dependencies.agent_probe)),
@@ -384,9 +395,11 @@ impl ProductRouteState {
     }
 
     /// Share one attachment service between the socket that issues tickets and
-    /// the route that redeems them. Composed only alongside conversations.
-    pub fn with_attachments(mut self, service: AttachmentService) -> Self {
+    /// the route that redeems them, and read held files back over the same
+    /// store. Composed only alongside conversations.
+    pub fn with_attachments(mut self, service: AttachmentService, reads: HeldReads) -> Self {
         self.attachments = Some(service);
+        self.held_reads = Some(reads);
         self
     }
 

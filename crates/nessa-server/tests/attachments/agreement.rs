@@ -92,6 +92,17 @@ fn the_protocol_schema_states_the_same_numbers_the_sdk_enforces() {
         Some(Attachment::MAX_BYTES)
     );
     const { assert!(Attachment::MAX_BYTES > ImageReference::MAX_BYTES) }
+    // A held file is read back by the same bound: its size, and so the last
+    // offset a range may start at.
+    let read = &definition(&schema, "ArtifactReadParams")["properties"];
+    assert_eq!(
+        read["size"]["maximum"].as_u64(),
+        Some(Attachment::MAX_BYTES)
+    );
+    assert_eq!(
+        read["offset"]["maximum"].as_u64(),
+        Some(Attachment::MAX_BYTES - 1)
+    );
 
     // A linked file has no size at all — nothing is uploaded for it — so the
     // only numbers to agree on are how long a path may be and how many of them

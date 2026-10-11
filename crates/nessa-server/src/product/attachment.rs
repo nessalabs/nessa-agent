@@ -1,14 +1,24 @@
-//! `attachment.begin` translates into the attachment service. The socket has
-//! already checked current access and the `conversation.write` grant.
+//! `attachment.begin` translates into the attachment service, and
+//! `artifact.read` into its held reads. The socket has already checked
+//! current access and the method's grant: `conversation.write` to upload,
+//! `conversation.read` to read back.
 use super::{
     socket::{failure, success},
     state::ProductRouteState,
 };
-use crate::attachments::application::{AttachmentCaller, BeginError, BeginOutcome, BeginUpload};
+use crate::attachments::application::{
+    AttachmentCaller, BeginError, BeginOutcome, BeginUpload, HeldReadError,
+};
+use crate::attachments::domain::{Attachment, MediaType};
+use base64::{engine::general_purpose::STANDARD, Engine};
 use nessa_auth::application::session::AuthenticatedSession;
-use nessa_protocol::product::generated::{AttachmentBeginParams, AttachmentBeginResult};
+use nessa_protocol::conversation::domain::ConversationId;
+use nessa_protocol::product::generated::{
+    ArtifactReadParams, ArtifactReadResult, AttachmentBeginParams, AttachmentBeginResult,
+};
 use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
+use nessa_sdk::domain::common::value_objects::Sha256Digest;
 
 pub(super) async fn dispatch(
     state: &ProductRouteState,
@@ -58,6 +68,87 @@ pub(super) async fn dispatch(
     match outcome {
         Ok(outcome) => success(&frame.id, &begin_result(request_id, outcome)),
         Err(error) => failure(&frame.id, error_code(error).as_str()),
+    }
+}
+
+/// `artifact.read`: one range of a file the conversation holds.
+///
+/// The caller is admitted to the conversation first, as `conversation.read`
+/// admits it, so a paired device reads only what it was shared, and an
+/// ungranted conversation answers `conversation_not_found` as one that does
+/// not exist does. What it may read there is the hold's to say
+/// ([`crate::attachments::application::HeldReads`]): only in a conversation
+/// that is the caller's, as for an upload, and only exactly the file it
+/// keeps now, named by digest, media type and size.
+pub(super) async fn dispatch_read(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+    frame: RequestFrame,
+) -> OutgoingMessage {
+    let Some(reads) = state.held_reads.as_ref() else {
+        return failure(
+            &frame.id,
+            ConversationErrorCode::ConversationsNotConfigured.as_str(),
+        );
+    };
+    let Some((conversation, stored, offset, max_bytes)) =
+        serde_json::from_value::<ArtifactReadParams>(frame.params)
+            .ok()
+            .and_then(read_request)
+    else {
+        return failure(&frame.id, ConversationErrorCode::InvalidRequest.as_str());
+    };
+    if let Err(code) = super::read_access::admit_conversation(state, session, &conversation).await {
+        return failure(&frame.id, code);
+    }
+    let context = session.context();
+    match reads
+        .read(
+            context.organization_id(),
+            context.principal_id(),
+            &conversation,
+            &stored,
+            offset,
+            max_bytes,
+        )
+        .await
+    {
+        Ok(bytes) => success(
+            &frame.id,
+            &ArtifactReadResult {
+                offset,
+                data: STANDARD.encode(bytes.as_bytes()),
+            },
+        ),
+        Err(error) => failure(&frame.id, read_error_code(error).as_str()),
+    }
+}
+
+/// The request's conversation, file and range, when each is well formed.
+/// The range's bounds are the held reads' to check.
+fn read_request(params: ArtifactReadParams) -> Option<(ConversationId, Attachment, u64, usize)> {
+    Some((
+        ConversationId::new(&params.conversation_id).ok()?,
+        Attachment::new(
+            Sha256Digest::parse(&params.digest).ok()?,
+            MediaType::parse(&params.mime_type).ok()?,
+            params.size,
+        )
+        .ok()?,
+        params.offset,
+        usize::try_from(params.max_bytes).ok()?,
+    ))
+}
+
+fn read_error_code(error: HeldReadError) -> ConversationErrorCode {
+    match error {
+        HeldReadError::InvalidRequest => ConversationErrorCode::InvalidRequest,
+        HeldReadError::ConversationNotFound => ConversationErrorCode::ConversationNotFound,
+        HeldReadError::ConversationDeleted => ConversationErrorCode::ConversationDeleted,
+        HeldReadError::OwnershipUnavailable => ConversationErrorCode::TemporarilyUnavailable,
+        HeldReadError::NotHeld => ConversationErrorCode::AttachmentNotFound,
+        HeldReadError::Busy => ConversationErrorCode::TemporarilyUnavailable,
+        HeldReadError::Unavailable => ConversationErrorCode::AttachmentUnavailable,
     }
 }
 

@@ -2,15 +2,16 @@
 //! its real counterpart can, because those are the paths nothing else reaches.
 use crate::attachments::{
     application::{
-        AttachmentAudit, AttachmentAuditRecord, AttachmentCaller, AttachmentDependencies,
-        AttachmentLimits, AttachmentService, AttachmentStore, AuditUnavailable, BeginOutcome,
-        BeginUpload, Confirmation, ConversationOwnership, Discard, HoldClaim, ImageNormalizer,
-        Kept, NormalizeError, NormalizeFuture, NormalizedImage, Ownership, OwnershipUnavailable,
+        ArtifactBytes, ArtifactRange, ArtifactReadError, AttachmentArtifacts, AttachmentAudit,
+        AttachmentAuditRecord, AttachmentCaller, AttachmentDependencies, AttachmentLimits,
+        AttachmentService, AttachmentStore, AuditUnavailable, BeginOutcome, BeginUpload,
+        Confirmation, ConversationOwnership, Discard, HeldReads, HoldClaim, ImageNormalizer, Kept,
+        NormalizeError, NormalizeFuture, NormalizedImage, Ownership, OwnershipUnavailable,
         PortFuture, ReceivedBytes, ReleaseEvidence, ReleaseReport, RemovedBlob, RetiredHold,
         RetirementEvidence, RevertCause, SecretsUnavailable, StagedUpload, StoreUnavailable,
         TicketSecrets, UploadBody, UploadInterrupted,
     },
-    domain::{Attachment, Hold, MediaType, RetiredFrom},
+    domain::{ArtifactId, Attachment, Hold, MediaType, RetiredFrom},
 };
 use nessa_auth::{
     application::ports::Clock,
@@ -778,6 +779,90 @@ impl StagedUpload for MemoryStaged {
     }
 }
 
+/// One file a conversation keeps, as [`HeldFiles`] serves it.
+struct HeldFile {
+    organization: OrganizationId,
+    conversation: ConversationId,
+    stored: Attachment,
+    bytes: Vec<u8>,
+}
+
+/// Held files as `artifact.read` reads them back.
+#[derive(Default)]
+pub(crate) struct HeldFiles {
+    files: Mutex<Vec<HeldFile>>,
+}
+impl HeldFiles {
+    pub(crate) fn hold(
+        &self,
+        organization_id: &str,
+        conversation_id: &str,
+        bytes: &[u8],
+        media_type: &str,
+    ) -> Attachment {
+        let stored = attachment(bytes, media_type);
+        self.files.lock().unwrap().push(HeldFile {
+            organization: organization(organization_id),
+            conversation: conversation(conversation_id),
+            stored: stored.clone(),
+            bytes: bytes.to_vec(),
+        });
+        stored
+    }
+    pub(crate) fn release_all(&self) {
+        self.files.lock().unwrap().clear();
+    }
+}
+impl AttachmentArtifacts for HeldFiles {
+    fn read_held<'a>(
+        &'a self,
+        organization: &'a OrganizationId,
+        conversation: &'a ConversationId,
+        stored: &'a Attachment,
+        offset: u64,
+        max_bytes: usize,
+        _: Duration,
+    ) -> PortFuture<'a, ArtifactBytes, ArtifactReadError> {
+        let read = self
+            .files
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|file| {
+                file.organization == *organization
+                    && file.conversation == *conversation
+                    && file.stored == *stored
+            })
+            .map(|file| {
+                let start = offset as usize;
+                let end = file.bytes.len().min(start + max_bytes);
+                ArtifactBytes::new(file.bytes[start..end].to_vec())
+            })
+            .ok_or(ArtifactReadError::Missing);
+        Box::pin(async move { read })
+    }
+    fn manifest<'a>(
+        &'a self,
+        _: &'a OrganizationId,
+        _: &'a ConversationId,
+        _: &'a ArtifactId,
+    ) -> PortFuture<'a, Option<crate::attachments::application::ArtifactState>, ArtifactReadError>
+    {
+        Box::pin(async { Err(ArtifactReadError::Unavailable) })
+    }
+    fn chunk<'a>(
+        &'a self,
+        _: &'a OrganizationId,
+        _: &'a ConversationId,
+        _: &'a ArtifactRange,
+    ) -> PortFuture<'a, ArtifactBytes, ArtifactReadError> {
+        Box::pin(async { Err(ArtifactReadError::Unavailable) })
+    }
+    fn shutdown(&self) -> PortFuture<'_, (), ArtifactReadError> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
 /// A service over doubles, with every double reachable.
 pub(crate) struct Fixture {
     pub(crate) service: AttachmentService,
@@ -787,6 +872,7 @@ pub(crate) struct Fixture {
     pub(crate) secrets: Arc<CountingSecrets>,
     pub(crate) normalizer: Arc<StubNormalizer>,
     pub(crate) clock: Arc<ManualClock>,
+    pub(crate) held: Arc<HeldFiles>,
 }
 pub(crate) const NOW_MS: u64 = 1_700_000_000_000;
 
@@ -824,6 +910,7 @@ impl Fixture {
             limits,
         );
         Self {
+            held: Arc::new(HeldFiles::default()),
             service,
             store: memory,
             audit,
@@ -832,6 +919,10 @@ impl Fixture {
             normalizer,
             clock,
         }
+    }
+    /// Reads back the files [`Self::held`] keeps.
+    pub(crate) fn reads(&self) -> HeldReads {
+        HeldReads::new(self.held.clone(), self.ownership.clone())
     }
     /// Begin an upload as the owner and return the ticket's text.
     pub(crate) async fn ticket(

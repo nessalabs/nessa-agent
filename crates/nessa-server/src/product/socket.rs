@@ -1280,6 +1280,8 @@ where
             (Some(&state.deletions), "server.deletions")
         } else if frame.method == "attachment.begin" {
             (Some(&state.upload_begins), "server.upload_begins")
+        } else if frame.method == "artifact.read" {
+            (Some(&state.artifact_reads), "server.artifact_reads")
         } else {
             (Some(&state.requests), "server.requests")
         };
@@ -1570,6 +1572,7 @@ async fn dispatch_authorized(
         method if method.starts_with("attachment.") => {
             super::attachment::dispatch(state, session, frame).await
         }
+        "artifact.read" => super::attachment::dispatch_read(state, session, frame).await,
         method if method.starts_with("mcp.") => {
             super::mcp_apps::dispatch(state, session, frame).await
         }
@@ -5765,6 +5768,11 @@ mod tests {
                 "server.upload_begins",
                 AssignLimit::Uploads,
             ),
+            (
+                "artifact.read",
+                "server.artifact_reads",
+                AssignLimit::ArtifactReads,
+            ),
         ] {
             let (captured, _guard) = limit_log();
             let (mut state, _) = fixture(MembershipRole::Member);
@@ -5775,6 +5783,7 @@ mod tests {
                 AssignLimit::RecordReads => state.record_reads = closed,
                 AssignLimit::Deletions => state.deletions = closed,
                 AssignLimit::Uploads => state.upload_begins = closed,
+                AssignLimit::ArtifactReads => state.artifact_reads = closed,
             }
             let session = authenticate(&state).await;
             let (socket, mut peer) = test_socket(None);
@@ -6061,6 +6070,7 @@ mod tests {
         RecordReads,
         Deletions,
         Uploads,
+        ArtifactReads,
     }
 
     include!("../../tests/conversation/gateway.rs");

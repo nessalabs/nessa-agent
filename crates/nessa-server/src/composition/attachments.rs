@@ -1,10 +1,11 @@
-//! Builds the attachment store once and hands out the three things made from
-//! it: the service the socket and the upload route share, what conversations
-//! ask, and where the agent adapter reads image bytes.
+//! Builds the attachment store once and hands out the four things made from
+//! it: the service the socket and the upload route share, where a surface
+//! reads back a held file, what conversations ask, and where the agent
+//! adapter reads image bytes.
 use crate::{
     attachments::{
         application::{
-            AttachmentDependencies, AttachmentLimits, AttachmentService, ImageNormalizer,
+            AttachmentDependencies, AttachmentLimits, AttachmentService, HeldReads, ImageNormalizer,
         },
         infrastructure::{
             ConversationHolds, DurableAttachmentAudit, LocalAttachmentStore, OsTicketSecrets,
@@ -18,9 +19,11 @@ use nessa_auth::application::ports::Clock;
 use nessa_sdk::application::agent_execution::providers::UserImageSource;
 use std::{path::Path, sync::Arc};
 
-/// One store, seen three ways.
+/// One store, seen four ways.
 pub(super) struct Attachments {
     pub service: AttachmentService,
+    /// Where a surface reads back a file a conversation holds.
+    pub reads: HeldReads,
     pub conversations: Arc<dyn ConversationAttachments>,
     pub images: Arc<dyn UserImageSource>,
 }
@@ -44,11 +47,12 @@ pub(super) fn attachments(
         DurableAttachmentAudit::new(root.join("audit"), clock.clone())
             .map_err(|_| RunError::Agent("attachment audit storage is not private".into()))?,
     );
+    let ownership = Arc::new(RepositoryOwnership::new(conversations));
     let service = AttachmentService::new(
         AttachmentDependencies {
             store: store.clone(),
             audit,
-            ownership: Arc::new(RepositoryOwnership::new(conversations)),
+            ownership: ownership.clone(),
             secrets: Arc::new(OsTicketSecrets),
             normalizer,
             clock,
@@ -56,6 +60,7 @@ pub(super) fn attachments(
         AttachmentLimits::default(),
     );
     Ok(Attachments {
+        reads: HeldReads::new(store.clone(), ownership),
         conversations: Arc::new(ConversationHolds::new(service.clone())),
         images: Arc::new(StoredUserImages::new(store)),
         service,

@@ -27,6 +27,7 @@
 //! An arrow is a call. Nothing on the right knows about the service.
 mod artifacts;
 mod error;
+mod held_reads;
 mod ports;
 mod service;
 mod ticket_secret;
@@ -35,6 +36,7 @@ pub use artifacts::{
     ArtifactBytes, ArtifactRange, ArtifactReadError, ArtifactState, AttachmentArtifacts,
 };
 pub use error::{AuditDelivery, BeginError, ReleaseError, UploadError};
+pub use held_reads::{HeldReadError, HeldReads};
 pub use ports::{
     AttachmentAudit, AttachmentAuditRecord, AttachmentStore, AuditUnavailable, Confirmation,
     ConversationOwnership, Discard, HoldClaim, ImageNormalizer, Kept, NormalizeError,

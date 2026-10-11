@@ -481,6 +481,22 @@ pub struct AttachmentBeginParams {
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ArtifactReadParams {
+    pub conversation_id: String,
+    pub digest: String,
+    pub mime_type: String,
+    pub size: u64,
+    pub offset: u64,
+    pub max_bytes: u64,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ArtifactReadResult {
+    pub offset: u64,
+    pub data: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AttachmentBeginResult {
     pub request_id: String,
     pub state: String,
@@ -2265,6 +2281,7 @@ pub mod product_method {
     pub const CONVERSATION_UNARCHIVE: &str = "conversation.unarchive";
     pub const CONVERSATION_DELETE: &str = "conversation.delete";
     pub const CONVERSATION_REORDER: &str = "conversation.reorder";
+    pub const ARTIFACT_READ: &str = "artifact.read";
     pub const ATTACHMENT_BEGIN: &str = "attachment.begin";
     pub const AGENTS_LIST: &str = "agents.list";
     pub const CONVERSATION_SET_APPROVAL_MODE: &str = "conversation.setApprovalMode";
@@ -2490,7 +2507,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 61
+                items.len() <= 62
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -2539,6 +2556,7 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "conversation.unarchive",
     "conversation.delete",
     "conversation.reorder",
+    "artifact.read",
     "attachment.begin",
     "agents.list",
     "conversation.setApprovalMode",
@@ -2641,6 +2659,7 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "conversation.unsubscribe" => Some("conversation.write"),
         "conversation.recordsHead"
         | "conversation.recordsPage"
+        | "artifact.read"
         | "conversation.catalogueHead"
         | "conversation.catalogueManifest"
         | "conversation.catalogueResolve" => Some("conversation.read"),
