@@ -302,6 +302,7 @@ fn state_this_gateway_cannot_read_is_permanent_and_says_so_on_the_wire() {
     for transient in [
         StorageError::Busy,
         StorageError::Io("the disk is full".into()),
+        StorageError::Store("event identity points to a missing record".into()),
     ] {
         assert_eq!(
             error_code(&ConversationError::Agent(AgentError::Storage(

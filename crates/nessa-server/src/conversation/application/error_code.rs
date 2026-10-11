@@ -106,8 +106,10 @@ pub fn error_code(error: &ConversationError) -> ConversationErrorCode {
         // A record this build cannot read will not become readable later.
         // `AnotherVersion` is that marker. `Corrupt` on this path is stored
         // data that does not decode. Opening that chat answers the permanent
-        // code the panel already shows as can't-open. A fold race is `Io`,
-        // and a lease someone else holds stays the retryable code.
+        // code the panel already shows as can't-open. `Store` is the records
+        // database, not those bytes, so it stays the retryable storage code
+        // with every other storage failure. A fold race is `Io`, and a lease
+        // someone else holds stays the retryable code.
         ConversationError::Storage(
             StorageError::Corrupt(_) | StorageError::AnotherVersion { .. },
         ) => ConversationErrorCode::ConversationStateUnreadable,
@@ -162,6 +164,10 @@ pub fn error_code(error: &ConversationError) -> ConversationErrorCode {
             // which is what it means and already says "start a new one".
             AgentError::Storage(StorageError::Corrupt(_) | StorageError::AnotherVersion { .. }) => {
                 ConversationErrorCode::ConversationStateUnreadable
+            }
+            // The records database, not this conversation's saved bytes.
+            AgentError::Storage(StorageError::Store(_)) => {
+                ConversationErrorCode::AgentOperationFailed
             }
             _ => ConversationErrorCode::AgentOperationFailed,
         },

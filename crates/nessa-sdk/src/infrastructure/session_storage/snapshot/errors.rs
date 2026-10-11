@@ -151,6 +151,9 @@ impl From<StorageError> for StorageFailure {
             // A failed save never records another version. Keeping that variant
             // out of the saved failure leaves the acknowledgement shape unchanged.
             StorageError::AnotherVersion { .. } => Self::Corrupt("record version".into()),
+            // A store failure is retryable. Saving it as I/O keeps that, and
+            // leaves the acknowledgement shape unchanged.
+            StorageError::Store(value) => Self::Io(value),
             StorageError::ChangesRequired => Self::ChangesRequired,
             StorageError::Unresolved => Self::Unresolved,
             StorageError::TooLarge => Self::TooLarge,
@@ -710,6 +713,18 @@ mod storage_failure_tests {
             "AnotherVersion": {"found": null}
         }))
         .is_err());
+    }
+
+    #[test]
+    fn a_store_failure_is_saved_as_io() {
+        let encoded = serde_json::to_value(StorageFailure::from(StorageError::Store(
+            "event identity points to a missing record".into(),
+        )))
+        .unwrap();
+        assert_eq!(
+            encoded,
+            serde_json::json!({"Io": "event identity points to a missing record"})
+        );
     }
 }
 

@@ -205,7 +205,7 @@ impl RecordStorage {
             .is_none()
             .then(|| Arc::clone(&self.saves));
         let stream_id =
-            StreamId::new(id.as_str()).map_err(|error| StorageError::Corrupt(error.to_string()))?;
+            StreamId::new(id.as_str()).map_err(|error| StorageError::Io(error.to_string()))?;
         let stream = if existing {
             match runtime.find_stream(&stream_id).await.map_err(store_error)? {
                 Some(stream) => stream,
@@ -630,11 +630,14 @@ impl SessionStorageLease for RecordLease {
 
 pub(super) fn store_error(error: event_stream::Error) -> StorageError {
     match error {
-        event_stream::Error::StoreCorrupt(detail) => StorageError::Corrupt(detail),
+        // The database failed its own checks. That is not this conversation's
+        // saved bytes, so it stays [`StorageError::Store`] and a delete can
+        // retry it. `StoreInUse` is the database lock, answered as [`Busy`].
+        event_stream::Error::StoreCorrupt(detail) => StorageError::Store(detail),
         event_stream::Error::StoreInUse => StorageError::Busy,
         event_stream::Error::StreamUnavailable { .. }
         | event_stream::Error::StaleIncarnation { .. }
-        | event_stream::Error::StreamNotFound => StorageError::Corrupt(error.to_string()),
+        | event_stream::Error::StreamNotFound => StorageError::Store(error.to_string()),
         other => StorageError::Io(other.to_string()),
     }
     .bounded()
@@ -714,6 +717,21 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap()
+    }
+
+    #[test]
+    fn a_records_database_failure_is_the_store_not_a_corrupt_record() {
+        for error in [
+            event_stream::Error::StoreCorrupt("event identity points to a missing record".into()),
+            event_stream::Error::StoreCorrupt("memory store lock poisoned".into()),
+            event_stream::Error::StoreCorrupt("inspect snapshot schema: no such table".into()),
+            event_stream::Error::StreamNotFound,
+        ] {
+            assert!(
+                matches!(store_error(error), StorageError::Store(_)),
+                "a store failure is not a corrupt record"
+            );
+        }
     }
 
     fn opening(id: &SessionId) -> (SessionChange, SessionSnapshot) {

@@ -1389,6 +1389,81 @@ async fn a_history_that_cannot_be_opened_at_all_is_left_not_carried_on() {
     service.shutdown().await.unwrap();
 }
 
+/// Opens fail once with a records-database failure, then the inner store.
+struct StoreFailsOnce {
+    storage: Arc<InMemoryStorage>,
+    fail: std::sync::atomic::AtomicBool,
+    discarded: AtomicUsize,
+}
+impl SessionStorage for StoreFailsOnce {
+    fn open(&self, id: SessionId) -> StorageFuture<'_, Box<dyn SessionStorageLease>> {
+        self.storage.open(id)
+    }
+    fn open_existing(
+        &self,
+        id: SessionId,
+    ) -> StorageFuture<'_, Option<Box<dyn SessionStorageLease>>> {
+        if self.fail.swap(false, Ordering::SeqCst) {
+            return Box::pin(async {
+                Err(StorageError::Store(
+                    "event identity points to a missing record".into(),
+                ))
+            });
+        }
+        self.storage.open_existing(id)
+    }
+    fn discard_unreadable(&self, id: SessionId) -> StorageFuture<'_, ()> {
+        self.discarded.fetch_add(1, Ordering::SeqCst);
+        self.storage.discard_unreadable(id)
+    }
+}
+
+#[tokio::test]
+async fn a_store_failure_while_opening_history_leaves_the_delete_retryable() {
+    let fixture = deleting();
+    let id = talked_in(&fixture).await;
+    fixture.service.shutdown().await.unwrap();
+    let provider_session = history(&fixture.storage, &id)
+        .await
+        .expect("the turn saved a history")
+        .provider_context
+        .recorded()
+        .cloned()
+        .expect("the history names a provider session");
+    let storage = Arc::new(StoreFailsOnce {
+        storage: fixture.storage.clone(),
+        fail: std::sync::atomic::AtomicBool::new(true),
+        discarded: AtomicUsize::new(0),
+    });
+    let service = service_with(&fixture, fixture.repository.clone(), storage.clone());
+    let failures = incomplete(service.delete(id.clone(), caller("delete-1")).await);
+    assert!(
+        matches!(
+            failures.history,
+            Some(ConversationError::Storage(StorageError::Store(_)))
+        ),
+        "{failures:?}"
+    );
+    assert!(fixture.audit.records.lock().unwrap().is_empty());
+    assert_eq!(storage.discarded.load(Ordering::SeqCst), 0);
+    assert!(history(&fixture.storage, &id).await.is_some());
+    assert_eq!(
+        tombstone(&fixture, &id).provider_session(),
+        &ProviderSessionLink::Unread
+    );
+    assert!(service
+        .delete(id.clone(), caller("delete-1"))
+        .await
+        .unwrap());
+    let records = fixture.audit.records.lock().unwrap().clone();
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        records[0].provider_session_id.as_ref(),
+        Some(&provider_session)
+    );
+    service.shutdown().await.unwrap();
+}
+
 /// Session storage whose leases open, and then answer `Busy` to reading or
 /// to erasing the history under the deletion's own lease.
 struct BusyUnderLease {

@@ -48,6 +48,12 @@ pub enum StorageError {
     Io(String),
     /// Stored evidence is invalid; the string describes the validation failure.
     Corrupt(String),
+    /// The records database failed its own checks.
+    ///
+    /// A schema or accounting check, a poisoned lock, or a stream the store
+    /// can no longer name. This is not a failure to decode one conversation's
+    /// saved bytes. A later attempt can succeed once the database is usable.
+    Store(String),
     /// The record's `schemaVersion` is missing or is not [`Self::SCHEMA_VERSION`].
     ///
     /// The reader does not decode the rest of that record. `found` is the
@@ -624,8 +630,10 @@ pub trait SessionStorage: Send + Sync {
     /// Remove history this build cannot open, without reading it.
     ///
     /// Delete calls this when opening the history returns
-    /// [`StorageError::AnotherVersion`] or [`StorageError::Corrupt`]. The
-    /// default refuses, so an adapter that can hold that history must
+    /// [`StorageError::AnotherVersion`] or [`StorageError::Corrupt`]: this
+    /// conversation's saved bytes do not decode. [`StorageError::Store`] is
+    /// the records database and is not discarded. The default refuses, so an
+    /// adapter that can hold that history must
     /// override it or the delete stays incomplete. The record adapter drops
     /// a legacy journal if one is there and resets the stream without replay.
     /// After that reset is acknowledged it publishes to the session's
@@ -804,7 +812,7 @@ impl StorageError {
                 return Err(Self::DiagnosticLimit);
             }
             match error {
-                Self::Io(text) | Self::Corrupt(text) => {
+                Self::Io(text) | Self::Corrupt(text) | Self::Store(text) => {
                     usage.allocations = usage.allocations.saturating_add(text.capacity());
                     usage.diagnostics = usage.diagnostics.saturating_add(text.capacity());
                     usage.text = usage.text.saturating_add(text.len());
@@ -834,7 +842,7 @@ impl StorageError {
             .map_or(usize::MAX, |usage| usage.allocations)
     }
     pub(crate) fn validate_retained_size(&self) -> Result<(), StorageError> {
-        if matches!(self, Self::Io(text) | Self::Corrupt(text) if text.capacity() > Self::DIAGNOSTIC_BYTES)
+        if matches!(self, Self::Io(text) | Self::Corrupt(text) | Self::Store(text) if text.capacity() > Self::DIAGNOSTIC_BYTES)
         {
             return Err(Self::Corrupt(
                 "stored acknowledgement diagnostic exceeds limit".into(),
@@ -849,7 +857,7 @@ impl StorageError {
         let mut pending = vec![self];
         while let Some(error) = pending.pop() {
             match error {
-                Self::Io(text) | Self::Corrupt(text) => {
+                Self::Io(text) | Self::Corrupt(text) | Self::Store(text) => {
                     *text = mem::take(text).into_boxed_str().into_string()
                 }
                 Self::ShutdownFailures(failure) => {
@@ -880,6 +888,7 @@ impl StorageError {
         match self {
             Self::Io(value) => Self::Io(text(value, limit)),
             Self::Corrupt(value) => Self::Corrupt(text(value, limit)),
+            Self::Store(value) => Self::Store(text(value, limit)),
             // Private construction already validated aggregate text and tree shape.
             Self::ShutdownFailures(failure) => Self::ShutdownFailures(failure),
             other => other,

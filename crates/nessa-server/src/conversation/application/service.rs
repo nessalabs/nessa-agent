@@ -3955,9 +3955,11 @@ impl ConversationService {
                 failures.history_leased_elsewhere = true;
                 None
             }
-            // The open could not read the history. Settle the provider link
-            // as unknown so the delete can be recorded. The bytes stay until
-            // that record is acknowledged.
+            // This conversation's saved bytes do not decode, or they name
+            // another `schemaVersion`. Settle the provider link as unknown so
+            // the delete can be recorded. The bytes stay until that record is
+            // acknowledged. A records-database failure is [`StorageError::Store`]
+            // and falls through: the tombstone stays unread and the delete retries.
             Err(ConversationError::Storage(
                 StorageError::Corrupt(_) | StorageError::AnotherVersion { .. },
             )) => {
