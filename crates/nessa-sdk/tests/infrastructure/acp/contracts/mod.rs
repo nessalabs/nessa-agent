@@ -5,8 +5,8 @@
 //!           -> sessions / executions / steering / permissions / audit / restoration
 //!           -> codex and opencode: the other profiles, each against a handler
 //!              speaking its own shapes
-//!           -> hooks: the native-hook suppression request each profile sends,
-//!              and the fact it reports, across open, prompt, and restoration
+//!           -> hooks: Claude and OpenCode report unknown across open, prompt,
+//!              and restoration. Codex's unsupported fact is in `codex`
 //!           -> images (advertised prompt capability, byte source, content blocks)
 //!           -> deletion (a connection of its own: initialize, session/delete)
 //!           -> effort (a selected level sent and read back; offered levels narrowed)

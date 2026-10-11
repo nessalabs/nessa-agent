@@ -94,18 +94,6 @@ assert pathlib.Path(os.environ["XDG_STATE_HOME"]).is_relative_to(pathlib.Path(os
 assert pathlib.Path(os.environ["XDG_DATA_HOME"]).is_relative_to(pathlib.Path(os.environ["HOME"]))
 for alternate in ("OPENCODE_CONFIG", "OPENCODE_CONFIG_CONTENT", "OPENCODE_CONFIG_DIR"):
     assert alternate not in os.environ
-# The request the binding sent. A Rust test reads this file; the asserts
-# above are what stop a launch that omitted it. External plugins are what
-# this request turns off. Default plugins inside the binary are not.
-(root / "hook-request").write_text(json.dumps({
-    "pure": os.environ["OPENCODE_PURE"],
-    "disableProjectConfig": os.environ["OPENCODE_DISABLE_PROJECT_CONFIG"],
-    "absent": [
-        name for name in ("OPENCODE_CONFIG", "OPENCODE_CONFIG_CONTENT", "OPENCODE_CONFIG_DIR")
-        if name not in os.environ
-    ],
-    "privateHome": os.environ["HOME"] != os.environ["NESSA_REFUSED_OPENCODE_HOME"],
-}))
 
 (root / "pid").write_text(str(os.getpid()))
 # What Opencode itself opens a session on: its gateway's current default, which

@@ -1,52 +1,44 @@
-//! Native-hook suppression as each integrated binding actually reports it.
+//! Native-hook suppression as Claude and OpenCode report it.
 //!
 //! ```text
-//! binding launch -> fixture checks the suppression request and writes hook-request
+//! binding launch -> fixture accepts only after that profile's request
 //!                -> open, prompt, restore, prompt
-//!                -> negotiated fact stays the profile's checked answer
+//!                -> negotiated fact stays unknown
 //! ```
 //!
-//! Arrows show the order these tests run. The fixture accepts the launch only
-//! after it has seen that binding's request. A prompt then completes, the
-//! session is restored, and a prompt completes again.
+//! Arrows show the order these tests run. The fixture refuses the launch when
+//! the request is missing. These tests do not read that request back. They
+//! check the fact the profile reports, and that an unknown fact does not
+//! refuse the first open or the restored one.
+//!
+//! Codex's open, prompt, and restoration contract is
+//! `codex_startup_and_restoration_continue_when_native_hook_suppression_is_unsupported`.
+//! That contract is unsupported, not unknown, so it does not cover these two.
 //!
 //! Which events the upstream harness fires, and which outputs it accepts, are
 //! properties of that process. These fixtures are not that process. They do
 //! not emit hook events, and a missing event here is not evidence the real
-//! harness stayed quiet. This module does not invent frames for those claims.
-//! The survey names the rows that need a live provider.
-//!
-//! Codex's open, prompt, and restoration contract is
-//! `codex_startup_and_restoration_continue_when_native_hook_suppression_is_unsupported`.
-//! This module reads the same `hook-request` file for Claude and OpenCode.
+//! harness stayed quiet.
 use super::support::*;
 
-fn hook_request(root: &TempDir) -> serde_json::Value {
-    serde_json::from_str(
-        &std::fs::read_to_string(root.path().join("hook-request"))
-            .expect("fixture records the suppression request it accepted"),
-    )
-    .expect("hook-request is JSON")
-}
-
-async fn prompt_restores_and_prompts_again(
-    binding: &impl AgentProvider,
-    expected: NativeHookSuppressionCapability,
-) {
+async fn prompt_restores_and_prompts_again(binding: &impl AgentProvider) {
     let opened = binding
         .open(ProviderOpenRequest::without_startup_control(None))
         .await
-        .expect("the reported suppression fact must not refuse the first open");
+        .expect("an unknown suppression fact must not refuse the first open");
     let capabilities = opened.session.operation_capabilities();
     assert!(capabilities.negotiated());
-    assert_eq!(capabilities.native_hook_suppression(), expected);
+    assert_eq!(
+        capabilities.native_hook_suppression(),
+        NativeHookSuppressionCapability::Unknown
+    );
     assert_eq!(
         opened
             .session
             .execute(prompt("with the hook request"))
             .await
             .into_result()
-            .expect("a prompt must run with the reported suppression fact"),
+            .expect("a prompt must run while suppression is unknown"),
         ExecutionOutcome::Completed
     );
     let id = opened.session.id().clone();
@@ -60,17 +52,20 @@ async fn prompt_restores_and_prompts_again(
     let restored = binding
         .open(ProviderOpenRequest::without_startup_control(Some(id)))
         .await
-        .expect("the reported suppression fact must not refuse restoration");
+        .expect("an unknown suppression fact must not refuse restoration");
     let restored_capabilities = restored.session.operation_capabilities();
     assert!(restored_capabilities.negotiated());
-    assert_eq!(restored_capabilities.native_hook_suppression(), expected);
+    assert_eq!(
+        restored_capabilities.native_hook_suppression(),
+        NativeHookSuppressionCapability::Unknown
+    );
     assert_eq!(
         restored
             .session
             .execute(prompt("restored with the hook request"))
             .await
             .into_result()
-            .expect("a restored prompt must run with the reported suppression fact"),
+            .expect("a restored prompt must run while suppression is unknown"),
         ExecutionOutcome::Completed
     );
     restored
@@ -89,10 +84,7 @@ async fn claude_startup_and_restoration_continue_when_native_hook_suppression_is
     // stays unknown. The open still completes.
     let _process_slot = process_test_slot().await;
     let (root, binding) = test_acp_binding("echo", 16);
-    prompt_restores_and_prompts_again(&binding, NativeHookSuppressionCapability::Unknown).await;
-    let request = hook_request(&root);
-    assert_eq!(request["disableAllHooks"], true);
-    assert_eq!(request["settingSources"].as_array().map(Vec::len), Some(0));
+    prompt_restores_and_prompts_again(&binding).await;
     assert!(root.path().join("resume-observed").is_file());
     assert_gone(&root, "pid");
 }
@@ -105,25 +97,7 @@ async fn opencode_startup_and_restoration_continue_when_native_hook_suppression_
     // request. The profile does not report the request as supported.
     let _process_slot = process_test_slot().await;
     let (root, binding) = test_opencode_binding("echo", 16);
-    prompt_restores_and_prompts_again(&binding, NativeHookSuppressionCapability::Unknown).await;
-    let request = hook_request(&root);
-    assert_eq!(request["pure"], "1");
-    assert_eq!(request["disableProjectConfig"], "1");
-    let absent: Vec<_> = request["absent"]
-        .as_array()
-        .expect("absent config inputs are a list")
-        .iter()
-        .filter_map(serde_json::Value::as_str)
-        .collect();
-    assert_eq!(
-        absent,
-        [
-            "OPENCODE_CONFIG",
-            "OPENCODE_CONFIG_CONTENT",
-            "OPENCODE_CONFIG_DIR",
-        ]
-    );
-    assert_eq!(request["privateHome"], true);
+    prompt_restores_and_prompts_again(&binding).await;
     assert!(root.path().join("resumed").is_file());
     assert_gone(&root, "pid");
 }
