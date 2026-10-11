@@ -1,7 +1,8 @@
 use crate::domain::pairing::{AttemptId, ConsentIntentId, DeviceKey, InvitationId};
 /// Possession of an Ed25519 device key proved by a complete native TLS handshake.
-/// Only the concrete cryptographic adapter can construct this evidence.
-#[derive(Debug)]
+/// Only the concrete cryptographic adapter can construct this evidence; a
+/// copy is the same evidence, kept by whoever holds the live connection.
+#[derive(Clone, Debug)]
 pub struct DeviceConnectionProof {
     key: DeviceKey,
 }

@@ -48,13 +48,14 @@ describe("authenticated agent choices", () => {
       ],
     },
     { ...offered, agents: [...offered.agents, offered.agents[0]] },
-    // The SSH hosts: each named once, each a destination's text, at most 16.
+    // The environments: each named once, each a destination's text, at most 24
+    // (16 SSH hosts and 8 connected paired machines).
     { ...offered, environments: undefined },
     { ...offered, environments: ["devbox", "devbox"] },
     { ...offered, environments: [""] },
     { ...offered, environments: [7] },
     { ...offered, environments: ["d".repeat(254)] },
-    { ...offered, environments: Array.from({ length: 17 }, (_, n) => `host-${n}`) },
+    { ...offered, environments: Array.from({ length: 25 }, (_, n) => `host-${n}`) },
   ])("rejects contradictory catalog facts before display", async (invalid) => {
     const api = createAgentsApi({ request: vi.fn().mockResolvedValue(invalid) })
     await expect(api.list()).rejects.toThrow()

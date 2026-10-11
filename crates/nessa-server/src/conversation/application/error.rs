@@ -170,9 +170,10 @@ pub struct DeletionFailures {
     /// leased elsewhere is [`Self::history_leased_elsewhere`].
     pub history: Option<ConversationError>,
     /// The history was still leased elsewhere once the delete's wait
-    /// for it ran out, so the history was neither read nor erased. Only that
-    /// wait sets this — storage answering `Busy` under the deletion's own
-    /// lease does not
+    /// for it ran out, so the history was neither read nor erased. That wait
+    /// sets this, and so does discarding history this build cannot read when
+    /// its writer reservation is already held. Storage answering `Busy`
+    /// under the deletion's own lease does not
     /// (`busy_under_the_deletion_s_own_lease_is_left_not_carried_on`) — and
     /// it is what a deletion is carried on for until the lease is let go
     /// (`a_deletion_left_for_a_held_lease_is_finished_once_it_is_let_go`).

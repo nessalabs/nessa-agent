@@ -51,9 +51,11 @@ export type ConversationRuntime = {
 export type ConversationLease = {
   state: "live" | "ending" | "ended" | "interrupted" | "refused" | "unreadable"
   revision?: number
-  /** `here` is the gateway's own machine; `ssh` a host reached over SSH. */
-  environment?: "here" | "ssh"
-  /** The SSH destination, exactly when `environment` is `ssh`. */
+  /** `here` is the gateway's own machine; `ssh` a host reached over SSH;
+   * `peer` a paired machine that dials the gateway. */
+  environment?: "here" | "ssh" | "peer"
+  /** The SSH destination, or the paired machine's `peer:<key>`, exactly when
+   * `environment` is `ssh` or `peer`. */
   host?: string
   /** `harness_default` is whatever the agent's harness encloses, and nothing
    * more; `none` is nothing beyond the account the environment runs as. */
@@ -104,11 +106,13 @@ export type ConversationSelection = {
  */
 export function linksFilesHere(conversation: {
   selection?: ConversationSelection
-  remote?: { lease?: { environment?: "here" | "ssh" } }
+  remote?: { lease?: { environment?: "here" | "ssh" | "peer" } }
 }): boolean {
+  const environment = conversation.remote?.lease?.environment
   return (
     !conversation.selection?.environment &&
-    conversation.remote?.lease?.environment !== "ssh"
+    environment !== "ssh" &&
+    environment !== "peer"
   )
 }
 

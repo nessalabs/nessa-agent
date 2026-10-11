@@ -258,53 +258,65 @@ pub(super) async fn product_state(
     // and its use depends on the order.
     let packaged_agents = bundle.is_some();
     let limits = settings.limits()?;
-    let (conversations, agent_probe, warm_ups, mcp) = match (&settings.agents, receivers) {
-        (Some(agents), Some(receivers)) => {
-            let mut built = conversations(
-                agents,
-                directory,
-                receivers,
-                agent_credentials.clone(),
-                packaged_agents,
-                record_origin.clone(),
-                ConversationSettings {
-                    read_work_budget: limits.read_work_budget(),
-                    ssh_hosts: settings.ssh_hosts()?,
-                    command_policy: settings.command_policy()?,
-                },
-            )
-            .await?;
-            (
-                Some((
-                    built.service,
-                    built.attachments,
-                    built.agents_catalog,
-                    built.receivers,
-                    built.metadata,
-                    built.read_grants,
-                    built.record_reader,
-                    built.catalogue_reader,
-                    built.resource_route,
-                    built.mcp_server_settings,
-                    built.mcp_authorization,
-                    built.record_watches,
-                    built.catalogue_watches,
-                )),
-                built.agent_probe,
-                built.warm_ups,
-                built.mcp.take(),
-            )
-        }
-        _ => (
-            None,
-            Arc::new(LocalAgentProbe::from_environment(
-                HashMap::new(),
-                agent_credentials.clone(),
-            )) as Arc<dyn AgentProbe>,
-            Vec::new(),
-            None,
-        ),
-    };
+    // Paired environments dial the native listener, so they are served only
+    // where it is.
+    let serving = settings.native.as_ref().map(|_| ServingAuth {
+        store: store.clone(),
+        policy: policy.clone(),
+        gateway: Resource::new(organization.clone(), gateway.clone()),
+        audience: audience.clone(),
+    });
+    let (conversations, agent_probe, warm_ups, mcp, environment_peers) =
+        match (&settings.agents, receivers) {
+            (Some(agents), Some(receivers)) => {
+                let mut built = conversations(
+                    agents,
+                    directory,
+                    receivers,
+                    agent_credentials.clone(),
+                    packaged_agents,
+                    record_origin.clone(),
+                    ConversationSettings {
+                        read_work_budget: limits.read_work_budget(),
+                        ssh_hosts: settings.ssh_hosts()?,
+                        command_policy: settings.command_policy()?,
+                        serving,
+                    },
+                )
+                .await?;
+                (
+                    Some((
+                        built.service,
+                        built.attachments,
+                        built.agents_catalog,
+                        built.receivers,
+                        built.metadata,
+                        built.read_grants,
+                        built.record_reader,
+                        built.catalogue_reader,
+                        built.resource_route,
+                        built.mcp_server_settings,
+                        built.mcp_authorization,
+                        built.record_watches,
+                        built.catalogue_watches,
+                    )),
+                    built.agent_probe,
+                    built.warm_ups,
+                    built.mcp.take(),
+                    built.environment_peers,
+                )
+            }
+            _ => (
+                None,
+                Arc::new(LocalAgentProbe::from_environment(
+                    HashMap::new(),
+                    agent_credentials.clone(),
+                )) as Arc<dyn AgentProbe>,
+                Vec::new(),
+                None,
+                None,
+            ),
+        };
     let admin = Arc::new(LocalAdmin {
         store: store.clone(),
     });
@@ -340,10 +352,14 @@ pub(super) async fn product_state(
             }));
     }
     product.browser_http_allowed = config.browser_http_allowed();
+    let (listener_environments, connected_environments) = environment_peers.unzip();
     let native = match native {
         Some((prepared, commands, peers)) => {
             product = product.with_pairing(Arc::new(commands)).with_peers(peers);
-            Some(prepared)
+            Some(match listener_environments {
+                Some(environments) => prepared.with_environments(environments),
+                None => prepared,
+            })
         }
         None => None,
     };
@@ -375,6 +391,9 @@ pub(super) async fn product_state(
             .with_catalogue_source(catalogue)
             .with_attachments(attachments)
             .with_agents_catalog(agents_catalog);
+        if let Some(connected) = connected_environments {
+            product = product.with_connected_environments(connected);
+        }
         // The route redeems on the store the conversation service issues on.
         if let Some((tickets, audit)) = resource_route {
             product = product.with_resource_tickets(tickets, audit);
@@ -473,7 +492,17 @@ struct BuiltConversations {
     /// in: the store the conversation service issues on, and the audit it
     /// records an app's calls in. `None` without MCP servers.
     resource_route: Option<(Arc<ResourceTicketStore>, Arc<dyn McpAppAudit>)>,
+    /// The paired environments the native listener serves, when it does,
+    /// and the names of those connected now, for the catalog.
+    environment_peers: Option<PairedParts>,
 }
+
+/// The paired environments as the native listener serves them, and the
+/// names of those connected now.
+type PairedParts = (
+    Arc<dyn crate::device_pairing::infrastructure::EnvironmentPeers>,
+    crate::product::ConnectedEnvironments,
+);
 
 /// What `config.json` says about conversations besides their agents.
 // Read only where conversations run: Unix process supervision.
@@ -486,6 +515,20 @@ struct ConversationSettings {
     /// Where the agent may run commands; `None` grants it no environment
     /// tools.
     command_policy: Option<crate::conversation::domain::CommandPolicy>,
+    /// What decides whether a paired environment may serve; `None` pairs
+    /// no environments.
+    serving: Option<ServingAuth>,
+}
+
+/// The registry, policy and identity a paired environment's key is asked
+/// of before it serves.
+#[cfg_attr(not(unix), allow(dead_code))]
+struct ServingAuth {
+    store: Arc<LocalCredentialStore>,
+    policy: Arc<CedarPolicyEvaluator>,
+    /// This gateway, the resource serving is allowed on.
+    gateway: Resource,
+    audience: AudienceId,
 }
 
 #[cfg(not(unix))]
@@ -805,6 +848,7 @@ async fn conversations(
         read_work_budget,
         ssh_hosts,
         command_policy,
+        serving,
     } = settings;
     let mut warm_ups = Vec::new();
     // The gateway holds the one connection to each MCP server (ADR 344), so
@@ -1094,6 +1138,8 @@ async fn conversations(
         )),
         None => Arc::new(NoMcpToolUis),
     };
+    let (environment, environment_peers) =
+        environments(&root, &ssh_hosts, command_policy, clock.clone(), serving)?;
     let dependencies = ConversationDependencies {
         agents: ConversationAgents::from_source(configured, selected, resolver.clone())
             .map_err(|error| RunError::Agent(error.to_string()))?,
@@ -1112,7 +1158,7 @@ async fn conversations(
             nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
         ),
         clock: clock.clone(),
-        environment: environments(&root, &ssh_hosts, command_policy, clock.clone())?,
+        environment,
     };
     let workspace = Some(agents.workspace.to_string_lossy().into_owned());
     // With MCP servers, an app's calls go through the conversation's own
@@ -1167,6 +1213,7 @@ async fn conversations(
         mcp_server_settings,
         mcp_authorization,
         resource_route,
+        environment_peers,
     })
 }
 
@@ -1175,20 +1222,25 @@ fn setup_error(error: impl std::fmt::Display) -> RunError {
 }
 
 #[cfg(unix)]
-/// Where conversations run: here, and each configured SSH host. A gateway
-/// that names no host builds nothing of the SSH adapter, so no conversation
-/// reaches it; placements are kept either way, so a conversation placed on
-/// a host since removed from the configuration is refused rather than run
-/// here.
+/// Where conversations run: here, each configured SSH host, and the paired
+/// environments that dial in, when the native listener serves them. A
+/// gateway that names no host and pairs no environment builds nothing of
+/// the adapter, so no conversation reaches it; placements are kept either
+/// way, so a conversation placed on a host since removed from the
+/// configuration is refused rather than run here. The paired environments
+/// are handed back too, for the native listener and the catalog.
 fn environments(
     root: &Path,
     hosts: &[SshDestination],
     commands: Option<crate::conversation::domain::CommandPolicy>,
     clock: Arc<dyn Clock>,
-) -> Result<Environments, RunError> {
+    serving: Option<ServingAuth>,
+) -> Result<(Environments, Option<PairedParts>), RunError> {
+    use super::paired_environments::{ListenerEnvironments, RegistryServing};
     use crate::conversation::infrastructure::{
         ssh_environment::{
-            DurableEnvironmentAudit, HostInstaller, OpenSshConnector, SshEnvironment, SshTimings,
+            DurableEnvironmentAudit, HostInstaller, OpenSshConnector, PeerEnvironments,
+            SshEnvironment, SshTimings,
         },
         FilePlacements,
     };
@@ -1196,9 +1248,29 @@ fn environments(
         .map_err(|error| RunError::Agent(error.to_string()))?;
     let mut environments: BTreeMap<String, Arc<dyn crate::conversation::application::Environment>> =
         BTreeMap::new();
-    if !hosts.is_empty() {
-        let audit = DurableEnvironmentAudit::new(root.join("audit").join("environments"), clock)
-            .map_err(|error| RunError::Agent(error.to_string()))?;
+    let audit = if hosts.is_empty() && serving.is_none() {
+        None
+    } else {
+        Some(
+            DurableEnvironmentAudit::new(root.join("audit").join("environments"), clock)
+                .map_err(|error| RunError::Agent(error.to_string()))?,
+        )
+    };
+    let peers = match (serving, &audit) {
+        (Some(serving), Some(audit)) => Some(Arc::new(PeerEnvironments::new(
+            Arc::new(RegistryServing {
+                store: serving.store,
+                policy: serving.policy,
+                clock: Arc::new(SystemClock),
+                gateway: serving.gateway,
+                audience: serving.audience,
+            }),
+            audit.clone(),
+            SshTimings::default(),
+        ))),
+        _ => None,
+    };
+    if let (false, Some(audit)) = (hosts.is_empty(), &audit) {
         let connector = Arc::new(OpenSshConnector::new());
         let installer = Arc::new(HostInstaller::this_build(connector.clone()));
         for host in hosts {
@@ -1214,15 +1286,33 @@ fn environments(
             );
         }
     }
-    let environments = Environments::new(
+    let mut environments = Environments::new(
         crate::conversation::infrastructure::in_process_environment(),
         environments,
         Arc::new(placements),
     );
-    Ok(match commands {
-        Some(policy) => environments.with_commands(policy),
-        None => environments,
-    })
+    if let Some(peers) = &peers {
+        environments = environments.with_peers(peers.clone());
+    }
+    if let Some(policy) = commands {
+        environments = environments.with_commands(policy);
+    }
+    let paired = peers.map(|peers| {
+        let connected = peers.clone();
+        (
+            Arc::new(ListenerEnvironments(peers))
+                as Arc<dyn crate::device_pairing::infrastructure::EnvironmentPeers>,
+            Arc::new(move || {
+                use crate::conversation::application::PairedEnvironments;
+                connected
+                    .connected()
+                    .iter()
+                    .map(nessa_sdk::domain::agent_execution::leases::PeerEnvironment::name)
+                    .collect()
+            }) as crate::product::ConnectedEnvironments,
+        )
+    });
+    Ok((environments, paired))
 }
 
 #[cfg(unix)]

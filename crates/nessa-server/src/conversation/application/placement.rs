@@ -1,11 +1,12 @@
-//! Where each conversation runs: in this process, or on an SSH host named
-//! when it was created (issue #699).
+//! Where each conversation runs: in this process, on an SSH host, or on a
+//! paired environment, named when it was created (issues #699, #706).
 //!
 //! ```text
 //! create(environment?) ──▶ Environments::place ──▶ ConversationPlacements::place
-//!                            (refused unless the host is configured)    (written before
-//!                                                                         the record)
+//!                            (refused unless the host is configured, (written before
+//!                             or the paired environment connected)    the record)
 //! start_slot ──▶ Environments::of(conversation) ──▶ placement ──▶ here | that host
+//!                                                                 | that peer
 //! delete ──▶ Environments::erase ──▶ ConversationPlacements::erase
 //! ```
 //!
@@ -16,11 +17,14 @@
 //! and a gateway whose configuration names none never reaches a host's code.
 //! A placement this build cannot read refuses that conversation's opening
 //! alone (ADR 202, record scope). A placement naming a host the configuration
-//! no longer names is refused the same way, never run somewhere else.
+//! no longer names is refused the same way, never run somewhere else. A
+//! paired environment is placed on only while it is connected, so a name
+//! nobody serves is never kept; once placed, the conversation waits for it
+//! to dial in again, and its key's credential is asked before every lease.
 use super::{ConversationError, Environment, EnvironmentFuture};
 use crate::conversation::domain::CommandPolicy;
 use nessa_protocol::conversation::domain::ConversationId;
-use nessa_sdk::domain::agent_execution::leases::EnvironmentRef;
+use nessa_sdk::domain::agent_execution::leases::{EnvironmentRef, PeerEnvironment};
 use std::{collections::BTreeMap, sync::Arc};
 
 /// Why a placement could not be read or written.
@@ -68,11 +72,22 @@ pub(crate) trait ConversationPlacements: Send + Sync {
     ) -> EnvironmentFuture<'a, Result<(), PlacementError>>;
 }
 
-/// Where this gateway's conversations can run: here, and each SSH host its
-/// configuration names.
+/// The paired environments that dial this gateway. Implemented in
+/// infrastructure.
+pub(crate) trait PairedEnvironments: Send + Sync {
+    /// The environment `peer` names, connected or not.
+    fn environment(&self, peer: &PeerEnvironment) -> Arc<dyn Environment>;
+    /// The paired environments connected now.
+    fn connected(&self) -> Vec<PeerEnvironment>;
+}
+
+/// Where this gateway's conversations can run: here, each SSH host its
+/// configuration names, and the paired environments that dial it.
 pub(crate) struct Environments {
     here: Arc<dyn Environment>,
     hosts: BTreeMap<String, Arc<dyn Environment>>,
+    /// `None` when this gateway pairs no environments.
+    peers: Option<Arc<dyn PairedEnvironments>>,
     placements: Option<Arc<dyn ConversationPlacements>>,
     /// Which commands an agent may run, and on which hosts; `None` when this
     /// gateway grants none, and the environment tools are absent.
@@ -86,6 +101,7 @@ impl From<Arc<dyn Environment>> for Environments {
         Self {
             here,
             hosts: BTreeMap::new(),
+            peers: None,
             placements: None,
             commands: None,
         }
@@ -104,9 +120,17 @@ impl Environments {
         Self {
             here,
             hosts,
+            peers: None,
             placements: Some(placements),
             commands: None,
         }
+    }
+
+    /// These environments, with the paired environments `peers`.
+    #[cfg_attr(not(unix), allow(dead_code, reason = "the Unix gateway composes it"))]
+    pub(crate) fn with_peers(mut self, peers: Arc<dyn PairedEnvironments>) -> Self {
+        self.peers = Some(peers);
+        self
     }
 
     /// These environments, with commands granted by `policy`.
@@ -126,15 +150,43 @@ impl Environments {
         &self.hosts
     }
 
+    /// The paired environments connected now, by name.
+    pub(crate) fn connected_peers(&self) -> Vec<(String, Arc<dyn Environment>)> {
+        self.peers.as_ref().map_or_else(Vec::new, |peers| {
+            peers
+                .connected()
+                .iter()
+                .map(|peer| (peer.name(), peers.environment(peer)))
+                .collect()
+        })
+    }
+
+    /// The environment away from here that `name` names: a configured host,
+    /// or a paired environment, connected or not.
+    pub(crate) fn named(&self, name: &str) -> Option<Arc<dyn Environment>> {
+        match PeerEnvironment::parse(name) {
+            Ok(peer) => self.peers.as_ref().map(|peers| peers.environment(&peer)),
+            Err(_) => self.hosts.get(name).cloned(),
+        }
+    }
+
     /// Record where a conversation about to be created runs: on `requested`,
-    /// which must be a configured host, or here.
+    /// which must be a configured host or a connected paired environment,
+    /// or here.
     pub(crate) async fn place(
         &self,
         conversation: &ConversationId,
         requested: Option<&str>,
     ) -> Result<(), ConversationError> {
-        if let Some(host) = requested {
-            if !self.hosts.contains_key(host) {
+        if let Some(name) = requested {
+            let known = match PeerEnvironment::parse(name) {
+                Ok(peer) => self
+                    .peers
+                    .as_ref()
+                    .is_some_and(|peers| peers.connected().contains(&peer)),
+                Err(_) => self.hosts.contains_key(name),
+            };
+            if !known {
                 return Err(ConversationError::EnvironmentNotConfigured);
             }
         }
@@ -163,10 +215,8 @@ impl Environments {
     ) -> Result<Arc<dyn Environment>, ConversationError> {
         match self.placement(conversation).await? {
             None => Ok(self.here.clone()),
-            Some(host) => self
-                .hosts
-                .get(&host)
-                .cloned()
+            Some(name) => self
+                .named(&name)
                 .ok_or(ConversationError::EnvironmentNotConfigured),
         }
     }

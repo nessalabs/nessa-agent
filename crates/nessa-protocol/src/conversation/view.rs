@@ -683,7 +683,8 @@ pub struct ConversationLeaseView {
     pub revision: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub environment: Option<ConversationLeaseEnvironment>,
-    /// The SSH destination, when the environment is one.
+    /// The environment's name when it is a machine of its own: its SSH
+    /// destination, or a paired environment's `peer:<key>`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub host: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -722,6 +723,8 @@ pub enum ConversationLeaseEnvironment {
     Here,
     /// A machine reached over SSH, named by `host`.
     Ssh,
+    /// A paired environment that dials in, named by `host`.
+    Peer,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]

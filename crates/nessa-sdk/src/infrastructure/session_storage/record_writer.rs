@@ -44,7 +44,10 @@ impl RecordWriter {
     ) -> Result<Self, StorageError> {
         let bounds = reader.bounds(&stream).await.map_err(store_error)?;
         if bounds.floor.offset != 0 || bounds.floor.stream != stream {
-            return Err(corrupt("conversation record prefix is unavailable"));
+            // The store's retained prefix, not a batch this conversation saved.
+            return Err(StorageError::Store(
+                "conversation record prefix is unavailable".into(),
+            ));
         }
         let next = binding(&stream, 0, 0)?;
         let mut writer = Self {
@@ -487,14 +490,13 @@ fn corrupt(message: &'static str) -> StorageError {
 }
 
 fn store_error(error: event_stream::Error) -> StorageError {
-    match error {
-        event_stream::Error::StoreCorrupt(detail) => StorageError::Corrupt(detail),
-        event_stream::Error::StreamUnavailable { .. }
-        | event_stream::Error::StaleIncarnation { .. }
-        | event_stream::Error::StreamNotFound => StorageError::Corrupt(error.to_string()),
-        other => StorageError::Io(other.to_string()),
+    // A database lock during replay is not this session's writer lease.
+    // [`super::record::store_error`] answers `StoreInUse` as [`StorageError::Busy`],
+    // which a delete reads as a history held elsewhere.
+    if matches!(error, event_stream::Error::StoreInUse) {
+        return StorageError::Io(error.to_string()).bounded();
     }
-    .bounded()
+    super::record::store_error(error)
 }
 
 fn fact_error(error: FactCommitError) -> StorageError {

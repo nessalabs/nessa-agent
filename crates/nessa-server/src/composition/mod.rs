@@ -62,6 +62,8 @@ mod desktop;
 mod environment_tools;
 #[cfg(unix)]
 mod mcp_servers;
+#[cfg(unix)]
+mod paired_environments;
 
 mod provisioning;
 
@@ -69,6 +71,9 @@ mod provisioning;
 mod warm_up;
 
 mod cli;
+#[cfg(all(test, unix))]
+#[path = "../../tests/composition/paired_environment.rs"]
+mod paired_environment_tests;
 #[cfg(test)]
 #[path = "../../tests/composition/peer_reading.rs"]
 mod peer_reading_tests;
