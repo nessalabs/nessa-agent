@@ -73,5 +73,9 @@ The `on` variant sets `OPENCODE_PURE=1` and `OPENCODE_DISABLE_PROJECT_CONFIG=1`.
 `suppress-pure` sets only `OPENCODE_PURE=1`. The three alternate config
 variables are unset on every row.
 
+Before `run-codex.sh` and `run-opencode.sh` record a row, they rewrite
+`$WORKDIR` to `<workdir>` and `$HOME` to `<home>` in that row's stdout, stderr,
+and request files. `run-claude.sh` does not do that rewrite.
+
 The committed logs are `evidence/codex`, `evidence/opencode`, and
 `evidence/claude`. The Claude log includes `live-acp-test.log`.

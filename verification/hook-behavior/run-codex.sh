@@ -37,6 +37,25 @@ CODEX="$PREFIX/node_modules/.bin/codex"
 VERSION="$("$CODEX" --version | head -n 1)"
 start_scripted_server
 
+redact_paths() {
+  python3 - "$WORKDIR" "$HOME" "$@" <<'PY'
+import pathlib
+import sys
+
+workdir, home, *paths = sys.argv[1:]
+work = workdir.encode()
+home_bytes = home.encode()
+for raw in paths:
+    path = pathlib.Path(raw)
+    if not path.is_file():
+        continue
+    data = path.read_bytes()
+    updated = data.replace(work, b"<workdir>").replace(home_bytes, b"<home>")
+    if updated != data:
+        path.write_bytes(updated)
+PY
+}
+
 ROWS_AND_MODES=(
   "events-plain log"
   "events-tool log"
@@ -158,6 +177,7 @@ for entry in "${ROWS_AND_MODES[@]}"; do
         notes="${notes} No thread id in the first exec, so resume was not attempted."
       fi
     fi
+    redact_paths "$stdout" "$stderr" ${REQUESTS:+"$REQUESTS"/*}
     append_row "$row" "$suppression" "$code" "$log" "$stdout" "$stderr" "$sentinel" "$notes"
   done
 done
