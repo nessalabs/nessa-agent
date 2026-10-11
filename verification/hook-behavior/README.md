@@ -60,8 +60,10 @@ and `suppress-managed-plus-flag` (that file plus
 flag, and the two rows match. The reference check does not require those logs
 to be empty. The exit trap restores or removes
 `/etc/claude-code/managed-settings.json` and then deletes the work directory.
-If that restore or removal fails, it names both paths, leaves the work
-directory in place, and exits non-zero.
+If restoring the original file fails, it names that path and the backup,
+leaves the work directory in place, and exits non-zero. If removing a file
+this script planted fails, it names that path, leaves the work directory in
+place, and exits non-zero.
 
 Codex and OpenCode results are labeled `real harness, scripted model`. Codex
 `config.toml` leaves hooks enabled and does not set `notify`. Suppression on

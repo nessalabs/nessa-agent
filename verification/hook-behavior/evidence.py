@@ -6,9 +6,10 @@ The summary JSON is the command's stdout. Progress stays off stdout.
 Claude prompt rows store only the nonce booleans. Every other Claude row
 stores `result` capped at 200 characters, plus `terminal_reason` and
 `permission_denials`. `*_nonce_in_result` is what the model echoed.
-`*_nonce_in_transcript` is presence in the session transcript under
-`CLAUDE_CONFIG_DIR/projects/**/*.jsonl`. Transcript presence is not a model
-request. Codex and OpenCode keep `*_nonce_in_model_request` from the scripted
+`*_nonce_in_transcript` is presence in
+`CLAUDE_CONFIG_DIR/projects/<project>/<session-id>.jsonl`. An empty session id
+leaves those booleans false. Transcript presence is not a model request.
+Codex and OpenCode keep `*_nonce_in_model_request` from the scripted
 request body, and they keep the excerpts. `finalize` refuses stored text that
 contains an email address or the home directory.
 """
@@ -109,20 +110,12 @@ def claude_results(path):
 
 
 def transcript_text(directory, session_id):
-    if not directory or not Path(directory).is_dir():
+    if not directory or not session_id or not Path(directory).is_dir():
         return ""
-    paths = sorted(Path(directory).glob("projects/**/*.jsonl"))
-    if session_id:
-        matched = []
-        for path in paths:
-            text = path.read_text(encoding="utf-8", errors="replace")
-            if session_id in text or session_id in path.name:
-                matched.append(text)
-        return "\n".join(matched)
-    if not paths:
-        return ""
-    newest = max(paths, key=lambda path: path.stat().st_mtime)
-    return newest.read_text(encoding="utf-8", errors="replace")
+    paths = sorted(Path(directory).glob(f"projects/*/{session_id}.jsonl"))
+    return "\n".join(
+        path.read_text(encoding="utf-8", errors="replace") for path in paths
+    )
 
 
 def sentinel_names(directory):

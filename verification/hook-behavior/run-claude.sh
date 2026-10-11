@@ -59,12 +59,16 @@ cleanup() {
     local restore_status=0
     if [[ "$MANAGED_EXISTED" -eq 1 ]]; then
       sudo cp "$MANAGED_BACKUP" "$MANAGED_PATH" || restore_status=$?
+      if [[ "$restore_status" -ne 0 ]]; then
+        echo "error: failed to restore $MANAGED_PATH from $MANAGED_BACKUP" >&2
+        exit "$restore_status"
+      fi
     else
       sudo rm -f "$MANAGED_PATH" || restore_status=$?
-    fi
-    if [[ "$restore_status" -ne 0 ]]; then
-      echo "error: failed to restore $MANAGED_PATH from $MANAGED_BACKUP" >&2
-      exit "$restore_status"
+      if [[ "$restore_status" -ne 0 ]]; then
+        echo "error: failed to remove $MANAGED_PATH" >&2
+        exit "$restore_status"
+      fi
     fi
   fi
   rm -rf "$WORKDIR"

@@ -20,8 +20,9 @@
 //! not emit hook events, and a missing event here is not evidence the real
 //! harness stayed quiet.
 use super::support::*;
+use crate::domain::agent_execution::sessions::ExecutionSessionId;
 
-async fn prompt_restores_and_prompts_again(binding: &impl AgentProvider) {
+async fn prompt_restores_and_prompts_again(binding: &impl AgentProvider) -> ExecutionSessionId {
     let opened = binding
         .open(ProviderOpenRequest::without_startup_control(None))
         .await
@@ -50,7 +51,9 @@ async fn prompt_restores_and_prompts_again(binding: &impl AgentProvider) {
         .unwrap();
 
     let restored = binding
-        .open(ProviderOpenRequest::without_startup_control(Some(id)))
+        .open(ProviderOpenRequest::without_startup_control(Some(
+            id.clone(),
+        )))
         .await
         .expect("an unknown suppression fact must not refuse restoration");
     let restored_capabilities = restored.session.operation_capabilities();
@@ -74,6 +77,7 @@ async fn prompt_restores_and_prompts_again(binding: &impl AgentProvider) {
         .await
         .into_result()
         .unwrap();
+    id
 }
 
 #[tokio::test]
@@ -97,7 +101,10 @@ async fn opencode_startup_and_restoration_continue_when_native_hook_suppression_
     // request. The profile does not report the request as supported.
     let _process_slot = process_test_slot().await;
     let (root, binding) = test_opencode_binding("echo", 16);
-    prompt_restores_and_prompts_again(&binding).await;
-    assert!(root.path().join("resumed").is_file());
+    let id = prompt_restores_and_prompts_again(&binding).await;
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("resumed")).unwrap(),
+        id.as_str()
+    );
     assert_gone(&root, "pid");
 }
