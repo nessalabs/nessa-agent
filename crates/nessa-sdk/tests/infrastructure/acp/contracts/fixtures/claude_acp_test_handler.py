@@ -162,6 +162,12 @@ for line in sys.stdin:
         # Native approval presets own their asks; explicit Nessa denials stay fixed.
         assert "ask" not in options["settings"]["permissions"]
         assert options["settings"]["disableAllHooks"] is True
+        # The request the binding sent. A Rust test reads this file; the
+        # assert above is what stops a launch that omitted it.
+        record("hook-request", json.dumps({
+            "disableAllHooks": options["settings"]["disableAllHooks"],
+            "settingSources": options["settingSources"],
+        }))
         servers = msg["params"]["mcpServers"]
         # In `stand-ins` mode, the MCP server entries each session request
         # carried, by method, for the test to read back; otherwise none.

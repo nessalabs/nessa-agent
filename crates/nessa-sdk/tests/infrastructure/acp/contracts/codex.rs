@@ -529,6 +529,11 @@ async fn codex_startup_and_restoration_continue_when_native_hook_suppression_is_
         capabilities.native_hook_suppression(),
         NativeHookSuppressionCapability::Unsupported
     );
+    let request: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(root.path().join("hook-request")).unwrap())
+            .unwrap();
+    assert_eq!(request["features"]["hooks"], false);
+    assert_eq!(request["notify"].as_array().map(Vec::len), Some(0));
     assert_eq!(
         opened
             .session

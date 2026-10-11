@@ -26,6 +26,13 @@ else:
 # and the binding reports native hook suppression as unsupported for that.
 assert config["features"] == {"hooks": False}
 assert config["notify"] == []
+# The request the binding sent. A Rust test reads this file; the asserts
+# above are what stop a launch that omitted it. Seeing the request is not
+# the effective configuration.
+(root / "hook-request").write_text(json.dumps({
+    "features": config["features"],
+    "notify": config["notify"],
+}))
 
 (root / "pid").write_text(str(os.getpid()))
 selected = "codex-default"
