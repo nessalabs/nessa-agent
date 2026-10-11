@@ -1,0 +1,928 @@
+{
+  "harness": "claude",
+  "version": "2.1.257 (Claude Code)",
+  "label": "real harness, live model",
+  "row_count": 22,
+  "rows": [
+    {
+      "row": "events-plain",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "Stop",
+        "SessionEnd"
+      ],
+      "event_counts": {
+        "SessionStart": 2,
+        "UserPromptSubmit": 2,
+        "Stop": 2,
+        "SessionEnd": 2
+      },
+      "tool_names": [],
+      "sources": [
+        "SessionStart:startup"
+      ],
+      "hook_sources": [
+        "project",
+        "user"
+      ],
+      "sentinel_files": [],
+      "deny_reason_quoted": false,
+      "context_nonce_in_result": false,
+      "system_nonce_in_result": false,
+      "context_nonce_in_transcript": false,
+      "system_nonce_in_transcript": false,
+      "result": [
+        "OK"
+      ],
+      "terminal_reason": [
+        "completed"
+      ],
+      "permission_denials": []
+    },
+    {
+      "row": "events-tool",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        "Stop",
+        "SessionEnd"
+      ],
+      "event_counts": {
+        "SessionStart": 2,
+        "UserPromptSubmit": 2,
+        "PreToolUse": 2,
+        "PostToolUse": 2,
+        "Stop": 2,
+        "SessionEnd": 2
+      },
+      "tool_names": [
+        "Read"
+      ],
+      "sources": [
+        "SessionStart:startup"
+      ],
+      "hook_sources": [
+        "user",
+        "project"
+      ],
+      "sentinel_files": [],
+      "deny_reason_quoted": false,
+      "context_nonce_in_result": false,
+      "system_nonce_in_result": false,
+      "context_nonce_in_transcript": false,
+      "system_nonce_in_transcript": false,
+      "result": [
+        "The first line of NOTES.txt is: **NOTES_LINE_ALPHA**"
+      ],
+      "terminal_reason": [
+        "completed"
+      ],
+      "permission_denials": []
+    },
+    {
+      "row": "events-subagent",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "SubagentStart",
+        "PostToolUse",
+        "Stop",
+        "SubagentStop",
+        "SessionEnd"
+      ],
+      "event_counts": {
+        "SessionStart": 2,
+        "UserPromptSubmit": 4,
+        "PreToolUse": 4,
+        "SubagentStart": 2,
+        "PostToolUse": 4,
+        "Stop": 4,
+        "SubagentStop": 2,
+        "SessionEnd": 2
+      },
+      "tool_names": [
+        "Agent",
+        "Read"
+      ],
+      "sources": [
+        "SessionStart:startup"
+      ],
+      "hook_sources": [
+        "project",
+        "user"
+      ],
+      "sentinel_files": [],
+      "deny_reason_quoted": false,
+      "context_nonce_in_result": false,
+      "system_nonce_in_result": false,
+      "context_nonce_in_transcript": false,
+      "system_nonce_in_transcript": false,
+      "result": [
+        "The subagent has completed reading NOTES.txt. The file contains a single line:\n\n```\nNOTES_LINE_ALPHA\n```"
+      ],
+      "terminal_reason": [
+        "completed"
+      ],
+      "permission_denials": []
+    },
+    {
+      "row": "events-compact",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "Stop",
+        "SessionEnd",
+        "PreCompact"
+      ],
+      "event_counts": {
+        "SessionStart": 4,
+        "UserPromptSubmit": 2,
+        "Stop": 2,
+        "SessionEnd": 4,
+        "PreCompact": 2
+      },
+      "tool_names": [],
+      "sources": [
+        "SessionStart:startup",
+        "SessionStart:resume",
+        "PreCompact:manual"
+      ],
+      "hook_sources": [
+        "project",
+        "user"
+      ],
+      "sentinel_files": [],
+      "deny_reason_quoted": false,
+      "context_nonce_in_result": false,
+      "system_nonce_in_result": false,
+      "context_nonce_in_transcript": false,
+      "system_nonce_in_transcript": false,
+      "result": [
+        "OK",
+        "Not enough messages to compact."
+      ],
+      "terminal_reason": [
+        "completed"
+      ],
+      "permission_denials": []
+    },
+    {
+      "row": "events-resume",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "Stop",
+        "SessionEnd"
+      ],
+      "event_counts": {
+        "SessionStart": 4,
+        "UserPromptSubmit": 4,
+        "Stop": 4,
+        "SessionEnd": 4
+      },
+      "tool_names": [],
+      "sources": [
+        "SessionStart:startup",
+        "SessionStart:resume"
+      ],
+      "hook_sources": [
+        "user",
+        "project"
+      ],
+      "sentinel_files": [],
+      "deny_reason_quoted": false,
+      "context_nonce_in_result": false,
+      "system_nonce_in_result": false,
+      "context_nonce_in_transcript": false,
+      "system_nonce_in_transcript": false,
+      "result": [
+        "OK",
+        "READY"
+      ],
+      "terminal_reason": [
+        "completed",
+        "completed"
+      ],
+      "permission_denials": []
+    },
+    {
+      "row": "events-permission",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "Stop",
+        "SessionEnd"
+      ],
+      "event_counts": {
+        "SessionStart": 2,
+        "UserPromptSubmit": 2,
+        "PreToolUse": 2,
+        "Stop": 2,
+        "SessionEnd": 2
+      },
+      "tool_names": [
+        "Bash"
+      ],
+      "sources": [
+        "SessionStart:startup"
+      ],
+      "hook_sources": [
+        "project",
+        "user"
+      ],
+      "sentinel_files": [],
+      "deny_reason_quoted": false,
+      "context_nonce_in_result": false,
+      "system_nonce_in_result": false,
+      "context_nonce_in_transcript": false,
+      "system_nonce_in_transcript": false,
+      "result": [
+        "The Bash tool encountered a permission hook that's preventing simple variable expansion. This appears to be part of the Nessa hooks testing environment (`NESSA_PHASE=first`). \n\nCould you clarify what "
+      ],
+      "terminal_reason": [
+        "completed"
+      ],
+      "permission_denials": [
+        {
+          "tool_name": "Bash",
+          "tool_use_id": "toolu_01DUvofPadnF2FwkNSyysqYw",
+          "tool_input": {
+            "command": "echo $PERMISSION_ROW",
+            "description": "Print the PERMISSION_ROW environment variable"
+          }
+        }
+      ]
+    },
+    {
+      "row": "pretool-deny",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "Stop",
+        "SessionEnd"
+      ],
+      "event_counts": {
+        "SessionStart": 2,
+        "UserPromptSubmit": 2,
+        "PreToolUse": 2,
+        "Stop": 2,
+        "SessionEnd": 2
+      },
+      "tool_names": [
+        "Read"
+      ],
+      "sources": [
+        "SessionStart:startup"
+      ],
+      "hook_sources": [
+        "project",
+        "user"
+      ],
+      "sentinel_files": [],
+      "deny_reason_quoted": false,
+      "context_nonce_in_result": false,
+      "system_nonce_in_result": false,
+      "context_nonce_in_transcript": false,
+      "system_nonce_in_transcript": false,
+      "result": [
+        "The Read tool was denied by the configured hook (NESSA_HOOK_ROW=pretool-deny). The system is blocking the attempt to read NOTES.txt, so I cannot quote its first line as requested.\n\nIf this is a test s"
+      ],
+      "terminal_reason": [
+        "completed"
+      ],
+      "permission_denials": [
+        {
+          "tool_name": "Read",
+          "tool_use_id": "toolu_01C1z3NXqmSoAR7rsdsjsMPj",
+          "tool_input": {
+            "file_path": "/tmp/nessa-claude-hooks.ac0Ykm/pretool-deny/NOTES.txt"
+          }
+        }
+      ]
+    },
+    {
+      "row": "pretool-allow-updated",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        "Stop",
+        "SessionEnd"
+      ],
+      "event_counts": {
+        "SessionStart": 2,
+        "UserPromptSubmit": 2,
+        "PreToolUse": 2,
+        "PostToolUse": 2,
+        "Stop": 2,
+        "SessionEnd": 2
+      },
+      "tool_names": [
+        "Bash"
+      ],
+      "sources": [
+        "SessionStart:startup"
+      ],
+      "hook_sources": [
+        "project",
+        "user"
+      ],
+      "sentinel_files": [
+        "hook-sentinel-rewritten"
+      ],
+      "deny_reason_quoted": false,
+      "context_nonce_in_result": false,
+      "system_nonce_in_result": false,
+      "context_nonce_in_transcript": false,
+      "system_nonce_in_transcript": false,
+      "result": [
+        "Done. The sentinel file has been created at `/tmp/nessa-claude-hooks.ac0Ykm/pretool-allow-updated/sentinel/hook-sentinel-original`."
+      ],
+      "terminal_reason": [
+        "completed"
+      ],
+      "permission_denials": []
+    },
+    {
+      "row": "pretool-ask",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "Stop",
+        "SessionEnd"
+      ],
+      "event_counts": {
+        "SessionStart": 2,
+        "UserPromptSubmit": 2,
+        "PreToolUse": 2,
+        "Stop": 2,
+        "SessionEnd": 2
+      },
+      "tool_names": [
+        "Read"
+      ],
+      "sources": [
+        "SessionStart:startup"
+      ],
+      "hook_sources": [
+        "project",
+        "user"
+      ],
+      "sentinel_files": [],
+      "deny_reason_quoted": false,
+      "context_nonce_in_result": false,
+      "system_nonce_in_result": false,
+      "context_nonce_in_transcript": false,
+      "system_nonce_in_transcript": false,
+      "result": [
+        "The Read tool returned an error: **NESSA_ASK**\n\nThis appears to be a response from the NESSA hook system rather than a standard file read. It seems the file either doesn't exist at `/tmp/nessa-claude-"
+      ],
+      "terminal_reason": [
+        "completed"
+      ],
+      "permission_denials": [
+        {
+          "tool_name": "Read",
+          "tool_use_id": "toolu_01DkpWFeqXv5K3nec9vC1XUY",
+          "tool_input": {
+            "file_path": "/tmp/nessa-claude-hooks.ac0Ykm/pretool-ask/NOTES.txt"
+          }
+        }
+      ]
+    },
+    {
+      "row": "pretool-defer",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "SessionEnd"
+      ],
+      "event_counts": {
+        "SessionStart": 2,
+        "UserPromptSubmit": 2,
+        "PreToolUse": 2,
+        "SessionEnd": 2
+      },
+      "tool_names": [
+        "Read"
+      ],
+      "sources": [
+        "SessionStart:startup"
+      ],
+      "hook_sources": [
+        "project",
+        "user"
+      ],
+      "sentinel_files": [],
+      "deny_reason_quoted": false,
+      "context_nonce_in_result": false,
+      "system_nonce_in_result": false,
+      "context_nonce_in_transcript": false,
+      "system_nonce_in_transcript": false,
+      "result": [
+        ""
+      ],
+      "terminal_reason": [
+        "tool_deferred"
+      ],
+      "permission_denials": []
+    },
+    {
+      "row": "pretool-continue-false",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        "SessionEnd"
+      ],
+      "event_counts": {
+        "SessionStart": 2,
+        "UserPromptSubmit": 2,
+        "PreToolUse": 2,
+        "PostToolUse": 2,
+        "SessionEnd": 2
+      },
+      "tool_names": [
+        "Read"
+      ],
+      "sources": [
+        "SessionStart:startup"
+      ],
+      "hook_sources": [
+        "user",
+        "project"
+      ],
+      "sentinel_files": [],
+      "deny_reason_quoted": false,
+      "context_nonce_in_result": false,
+      "system_nonce_in_result": false,
+      "context_nonce_in_transcript": false,
+      "system_nonce_in_transcript": false,
+      "result": [
+        ""
+      ],
+      "terminal_reason": [
+        "hook_stopped"
+      ],
+      "permission_denials": []
+    },
+    {
+      "row": "prompt-additional-context",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "Stop",
+        "SessionEnd"
+      ],
+      "event_counts": {
+        "SessionStart": 2,
+        "UserPromptSubmit": 2,
+        "Stop": 2,
+        "SessionEnd": 2
+      },
+      "tool_names": [],
+      "sources": [
+        "SessionStart:startup"
+      ],
+      "hook_sources": [
+        "user",
+        "project"
+      ],
+      "sentinel_files": [],
+      "deny_reason_quoted": false,
+      "context_nonce_in_result": true,
+      "system_nonce_in_result": false,
+      "context_nonce_in_transcript": true,
+      "system_nonce_in_transcript": false
+    },
+    {
+      "row": "prompt-system-message",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "Stop",
+        "SessionEnd"
+      ],
+      "event_counts": {
+        "SessionStart": 2,
+        "UserPromptSubmit": 2,
+        "Stop": 2,
+        "SessionEnd": 2
+      },
+      "tool_names": [],
+      "sources": [
+        "SessionStart:startup"
+      ],
+      "hook_sources": [
+        "project",
+        "user"
+      ],
+      "sentinel_files": [],
+      "deny_reason_quoted": false,
+      "context_nonce_in_result": false,
+      "system_nonce_in_result": false,
+      "context_nonce_in_transcript": false,
+      "system_nonce_in_transcript": true
+    },
+    {
+      "row": "stop-decision-block",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "Stop",
+        "SessionEnd"
+      ],
+      "event_counts": {
+        "SessionStart": 2,
+        "UserPromptSubmit": 2,
+        "Stop": 18,
+        "SessionEnd": 2
+      },
+      "tool_names": [],
+      "sources": [
+        "SessionStart:startup"
+      ],
+      "hook_sources": [
+        "project",
+        "user"
+      ],
+      "sentinel_files": [],
+      "deny_reason_quoted": false,
+      "context_nonce_in_result": false,
+      "system_nonce_in_result": false,
+      "context_nonce_in_transcript": false,
+      "system_nonce_in_transcript": false,
+      "result": [
+        ""
+      ],
+      "terminal_reason": [
+        "completed"
+      ],
+      "permission_denials": []
+    },
+    {
+      "row": "fail-exit-2",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "Stop",
+        "SessionEnd"
+      ],
+      "event_counts": {
+        "SessionStart": 2,
+        "UserPromptSubmit": 2,
+        "PreToolUse": 2,
+        "Stop": 2,
+        "SessionEnd": 2
+      },
+      "tool_names": [
+        "Read"
+      ],
+      "sources": [
+        "SessionStart:startup"
+      ],
+      "hook_sources": [
+        "project",
+        "user"
+      ],
+      "sentinel_files": [],
+      "deny_reason_quoted": false,
+      "context_nonce_in_result": false,
+      "system_nonce_in_result": false,
+      "context_nonce_in_transcript": false,
+      "system_nonce_in_transcript": false,
+      "result": [
+        "The Read tool call was blocked by a PreToolUse hook that exited with code 2. The hook appears to be part of a verification system (`NESSA_EXIT_2`) based on the environment variables you've set up. Thi"
+      ],
+      "terminal_reason": [
+        "completed"
+      ],
+      "permission_denials": [
+        {
+          "tool_name": "Read",
+          "tool_use_id": "toolu_01EK67gG79QHvqSJZgRn1QU3",
+          "tool_input": {
+            "file_path": "/tmp/nessa-claude-hooks.ac0Ykm/fail-exit-2/NOTES.txt"
+          }
+        }
+      ]
+    },
+    {
+      "row": "fail-exit-1",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        "Stop",
+        "SessionEnd"
+      ],
+      "event_counts": {
+        "SessionStart": 2,
+        "UserPromptSubmit": 2,
+        "PreToolUse": 2,
+        "PostToolUse": 2,
+        "Stop": 2,
+        "SessionEnd": 2
+      },
+      "tool_names": [
+        "Read"
+      ],
+      "sources": [
+        "SessionStart:startup"
+      ],
+      "hook_sources": [
+        "project",
+        "user"
+      ],
+      "sentinel_files": [],
+      "deny_reason_quoted": false,
+      "context_nonce_in_result": false,
+      "system_nonce_in_result": false,
+      "context_nonce_in_transcript": false,
+      "system_nonce_in_transcript": false,
+      "result": [
+        "The first line of NOTES.txt is: **NOTES_LINE_ALPHA**"
+      ],
+      "terminal_reason": [
+        "completed"
+      ],
+      "permission_denials": []
+    },
+    {
+      "row": "fail-malformed",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        "Stop",
+        "SessionEnd"
+      ],
+      "event_counts": {
+        "SessionStart": 2,
+        "UserPromptSubmit": 2,
+        "PreToolUse": 2,
+        "PostToolUse": 2,
+        "Stop": 2,
+        "SessionEnd": 2
+      },
+      "tool_names": [
+        "Read"
+      ],
+      "sources": [
+        "SessionStart:startup"
+      ],
+      "hook_sources": [
+        "project",
+        "user"
+      ],
+      "sentinel_files": [],
+      "deny_reason_quoted": false,
+      "context_nonce_in_result": false,
+      "system_nonce_in_result": false,
+      "context_nonce_in_transcript": false,
+      "system_nonce_in_transcript": false,
+      "result": [
+        "The first line of NOTES.txt is: **NOTES_LINE_ALPHA**"
+      ],
+      "terminal_reason": [
+        "completed"
+      ],
+      "permission_denials": []
+    },
+    {
+      "row": "fail-timeout",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        "Stop",
+        "SessionEnd"
+      ],
+      "event_counts": {
+        "SessionStart": 2,
+        "UserPromptSubmit": 2,
+        "PreToolUse": 2,
+        "PostToolUse": 2,
+        "Stop": 2,
+        "SessionEnd": 2
+      },
+      "tool_names": [
+        "Read"
+      ],
+      "sources": [
+        "SessionStart:startup"
+      ],
+      "hook_sources": [
+        "user",
+        "project"
+      ],
+      "sentinel_files": [],
+      "deny_reason_quoted": false,
+      "context_nonce_in_result": false,
+      "system_nonce_in_result": false,
+      "context_nonce_in_transcript": false,
+      "system_nonce_in_transcript": false,
+      "result": [
+        "The first line of NOTES.txt is: `NOTES_LINE_ALPHA`"
+      ],
+      "terminal_reason": [
+        "completed"
+      ],
+      "permission_denials": []
+    },
+    {
+      "row": "suppress-settings",
+      "suppression": "on",
+      "exit_code": 0,
+      "events": [],
+      "event_counts": {},
+      "tool_names": [],
+      "sources": [],
+      "hook_sources": [],
+      "sentinel_files": [],
+      "deny_reason_quoted": false,
+      "context_nonce_in_result": false,
+      "system_nonce_in_result": false,
+      "context_nonce_in_transcript": false,
+      "system_nonce_in_transcript": false,
+      "result": [
+        "OK"
+      ],
+      "terminal_reason": [
+        "completed"
+      ],
+      "permission_denials": []
+    },
+    {
+      "row": "control-user",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "Stop",
+        "SessionEnd"
+      ],
+      "event_counts": {
+        "SessionStart": 1,
+        "UserPromptSubmit": 1,
+        "Stop": 1,
+        "SessionEnd": 1
+      },
+      "tool_names": [],
+      "sources": [
+        "SessionStart:startup"
+      ],
+      "hook_sources": [
+        "user"
+      ],
+      "sentinel_files": [],
+      "deny_reason_quoted": false,
+      "context_nonce_in_result": false,
+      "system_nonce_in_result": false,
+      "context_nonce_in_transcript": false,
+      "system_nonce_in_transcript": false,
+      "result": [
+        "OK"
+      ],
+      "terminal_reason": [
+        "completed"
+      ],
+      "permission_denials": []
+    },
+    {
+      "row": "suppress-managed",
+      "suppression": "suppress-managed",
+      "exit_code": 0,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "Stop",
+        "SessionEnd"
+      ],
+      "event_counts": {
+        "SessionStart": 1,
+        "UserPromptSubmit": 1,
+        "Stop": 1,
+        "SessionEnd": 1
+      },
+      "tool_names": [],
+      "sources": [
+        "SessionStart:startup"
+      ],
+      "hook_sources": [
+        "managed"
+      ],
+      "sentinel_files": [],
+      "deny_reason_quoted": false,
+      "context_nonce_in_result": false,
+      "system_nonce_in_result": false,
+      "context_nonce_in_transcript": false,
+      "system_nonce_in_transcript": false,
+      "result": [
+        "OK"
+      ],
+      "terminal_reason": [
+        "completed"
+      ],
+      "permission_denials": []
+    },
+    {
+      "row": "suppress-managed-plus-flag",
+      "suppression": "suppress-managed-plus-flag",
+      "exit_code": 0,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "Stop",
+        "SessionEnd"
+      ],
+      "event_counts": {
+        "SessionStart": 1,
+        "UserPromptSubmit": 1,
+        "Stop": 1,
+        "SessionEnd": 1
+      },
+      "tool_names": [],
+      "sources": [
+        "SessionStart:startup"
+      ],
+      "hook_sources": [
+        "managed"
+      ],
+      "sentinel_files": [],
+      "deny_reason_quoted": false,
+      "context_nonce_in_result": false,
+      "system_nonce_in_result": false,
+      "context_nonce_in_transcript": false,
+      "system_nonce_in_transcript": false,
+      "result": [
+        "OK"
+      ],
+      "terminal_reason": [
+        "completed"
+      ],
+      "permission_denials": []
+    }
+  ],
+  "reference_checks": {
+    "events_present": true,
+    "events_missing": [],
+    "disable_all_hooks_empty": true,
+    "pretool_deny_stopped_read": true,
+    "pretool_allow_updated_rewritten_only": true,
+    "user_hook_wrote": true,
+    "deny_reason_quoted": false,
+    "ok": true
+  }
+}
