@@ -155,7 +155,8 @@ release_snapshot_lock() {
 # Publish rows.jsonl and summary.json as one snapshot. A failed copy leaves
 # dest unchanged. On Linux the swap is one rename, so the two files stay from
 # one run. Without that rename, the directory is moved aside and put back if
-# the replacement fails.
+# the replacement fails. mktemp creates the stage as 0700, and the exchange
+# would publish that mode, so the stage takes dest's mode before the copy.
 publish_snapshot() {
   local out="${1%/}" rows="$2" summary="$3"
   local parent base stage lock_fd name bn exchange_status=0
@@ -173,6 +174,11 @@ publish_snapshot() {
     release_snapshot_lock
     return 1
   }
+  if ! chmod --reference="$out" "$stage"; then
+    rm -rf "$stage"
+    release_snapshot_lock
+    return 1
+  fi
   while IFS= read -r -d '' name; do
     bn="$(basename "$name")"
     if [[ "$bn" == "rows.jsonl" || "$bn" == "summary.json" ]]; then
