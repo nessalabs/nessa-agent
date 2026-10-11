@@ -112,14 +112,27 @@ rejection; tools not routed through that gate do not gain a veto through a
 later tool notification. Which of the 33 events fire on a turn, which output
 combinations the CLI accepts, and whether a deny stops a tool were not run.
 `verification/hook-behavior/run-claude.sh` is the reproduction for the Claude
-2.1.257 Haiku observation already captured on the machine that holds the login:
-SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop, and SessionEnd
-fire; `disableAllHooks` via `--settings` produces no events; a PreToolUse deny
-stops the Read and the model quotes the reason. That log is not in this
-commit, so the Claude behaviour cells below stay pending. The ignored test
-`claude_project_and_user_hooks_stay_quiet_across_prompt_and_restore` plants a
-project hook and a user hook and asserts the log stays empty across the same
-open, prompt, restore, and prompt. It was not run.
+2.1.257 Haiku observation. Every `claude` process starts inside the row's
+project. Each hook command is tagged `--source project`, `user`, or `managed`.
+`CLAUDE_CONFIG_DIR` is the real login directory. Credential files are not
+copied, and the user hook is planted through `--settings` inside the project.
+`control-user` is that user hook through the raw CLI and must write the log.
+Context and system rows ask the model to repeat any additional context or
+system message verbatim. Nonce flags come from the CLI `result` and the session
+transcript, not from a scripted server. A PreToolUse deny passes when
+`permission_denials` has at least one entry and PostToolUse is absent. Whether
+the model quoted the reason is recorded separately and is not a pass or a fail.
+`--managed` is two rows: the managed hook alone, and that hook plus
+`--settings '{"disableAllHooks":true}'`. That log is not in this commit, so the
+Claude behaviour cells below stay pending. The ignored test
+`claude_project_and_user_hooks_stay_quiet_across_prompt_and_restore` points
+`CLAUDE_CONFIG_DIR` at the login directory and does not copy credentials. The
+ACP profile hardcodes `disableAllHooks: true` and empty `settingSources`, and
+the launch has no `--settings` argument, so the user hook cannot be planted on
+that path without writing the login directory. The same test runs the user hook
+through the raw `claude` CLI first and requires the log to contain `user`, then
+truncates the log and requires the ACP open, prompt, restore, and second prompt
+to leave it empty. It was not run.
 
 The packaged native implementation contains conditional park/resume handling for
 `defer`, so the earlier hypothesis in #134 that it simply means no opinion is not
@@ -168,7 +181,11 @@ times.
 `codex_startup_and_restoration_continue_when_native_hook_suppression_is_unsupported`
 is that contract. The fixture accepts the launch only after `features.hooks` is
 false and `notify` is empty. The test does not read that request back. It does
-not close [#147](https://github.com/nessalabs/nessa-agent/issues/147).
+not close [#147](https://github.com/nessalabs/nessa-agent/issues/147). The
+scripted CLI row is not that full `CODEX_CONFIG` document. `config.toml` leaves
+hooks enabled and does not set `notify`. Suppression on passes
+`-c features.hooks=false -c 'notify=[]'` on `codex exec` and on `resume`, which
+is the hooks portion of the thread/start override.
 
 The upstream pin is still Codex 0.154.0 at
 `6b9826e3aa83b1a5947db50f4332cb9c65f1b340`. Rechecked there, the request and the
@@ -247,8 +264,11 @@ that path is not `Plugin.trigger`.
 
 The ACP fixture does not emit plugin callbacks. Which of those call sites fire
 on a turn, and whether an in-place edit is what the process executes, are the
-scripted-model rows in the behaviour table. `permission.ask` remains without a
-trigger in this pin; the scripted run did not produce one.
+scripted-model rows in the behaviour table. The script plants a project plugin
+and a user plugin under the private `XDG_CONFIG_HOME`. `suppress-pure` sets
+only `OPENCODE_PURE=1`, with `OPENCODE_DISABLE_PROJECT_CONFIG` unset, so that
+flag is not the same cell as project-config disabling. `permission.ask` remains
+without a trigger in this pin; the scripted run did not produce one.
 
 Nessa's [binding](../../../crates/nessa-sdk/src/infrastructure/opencode_acp/sessions/binding.rs),
 after [#162](https://github.com/nessalabs/nessa-agent/pull/162), gives the
@@ -397,8 +417,8 @@ part of this refresh.
 
 | Harness | Events that fire | Output the harness accepts | Native-hook suppression |
 | --- | --- | --- | --- |
-| Claude ACP 0.76.0, SDK 0.3.257 | Not run. The adapter does not request SDK hook-event reporting, and the fixture does not emit hook events. `run-claude.sh` is able to reproduce the 2.1.257 Haiku observation (SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop, SessionEnd; `--settings '{"disableAllHooks":true}'` produces no events; a PreToolUse deny stops the Read and the model quotes the reason). That log is not committed here. | Not run. SDK 0.3.257 declares `allow \| deny \| ask \| defer`, `continue`, `stopReason`, `decision`, `systemMessage`, and `hookSpecificOutput`. The four-callback probe above is bridge serialization, not CLI acceptance. | `claude_startup_and_restoration_continue_when_native_hook_suppression_is_unknown`. The fixture requires `disableAllHooks: true` and empty `settingSources`. The negotiated fact stays `Unknown`. The open, the prompt, the restore, and the second prompt complete. `claude_project_and_user_hooks_stay_quiet_across_prompt_and_restore` is ignored and was not run. |
-| Codex 0.154.0 (`codex-cli 0.154.0`) | Real harness, scripted model. Log: [rows.jsonl](../../../verification/hook-behavior/evidence/codex/rows.jsonl). Hooks on: a plain turn fires SessionStart (`source` startup), UserPromptSubmit, Stop, and SessionEnd, twice, from `$CODEX_HOME/hooks.json` and the project `.codex/hooks.json`. A Bash turn also fires PreToolUse and PostToolUse and creates the original sentinel. `codex exec resume` adds SessionStart `source` resume. A follow-up whose whole text is `/compact` is that resume turn: PreCompact and PostCompact do not fire. The subagent row logs `unsupported call: close_agent` and does not fire SubagentStart or SubagentStop. Without the sandbox bypass the command hits a read-only filesystem, the hook log has one copy of each event where the other rows have two, and PermissionRequest does not fire. `features.hooks` false and `notify` empty: every row's hook log is empty, and a requested tool still runs. The ACP adapter still discards `hook/started` and `hook/completed`; this log is the CLI, not that stream. | Real harness, scripted model, same log. A bare `permissionDecision:allow` without `updatedInput` is rejected by the parser at `output_parser.rs` lines 441-457 (`6b9826e3`); this run did not send that output. Deny with a reason: no PostToolUse and no sentinel; the scripted model does not quote the reason. Allow with `updatedInput`: only the rewritten sentinel is created. `ask`, `defer`, and `continue: false` do not stop the tool. The additionalContext nonce appears in a later model request. The hook emits `systemMessage` and that nonce is absent from every model request. Stop `decision: block` loops (2348 Stop events) until the runner's 75s timeout, and SessionEnd does not fire. PreToolUse exit 2 stops the tool. Exit 1, malformed JSON, and a 1s timeout do not: PreToolUse is logged, then PostToolUse, and the original sentinel is created. With suppression on, the deny and exit-2 rows run the tool. | `codex_startup_and_restoration_continue_when_native_hook_suppression_is_unsupported`. The fixture requires `features.hooks: false` and `notify: []`. The negotiated fact stays `Unsupported`. The open, the prompt, the restore, and the second prompt complete. The scripted log is the same request against the real CLI. It does not close [#147](https://github.com/nessalabs/nessa-agent/issues/147). |
+| Claude ACP 0.76.0, SDK 0.3.257 | Not run. The adapter does not request SDK hook-event reporting, and the fixture does not emit hook events. `run-claude.sh` is able to reproduce the 2.1.257 Haiku observation (SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop, SessionEnd; `--settings` with `disableAllHooks` produces no events; a PreToolUse deny passes on `permission_denials` of at least one and no PostToolUse, and a quoted reason is a separate fact). `control-user` must show the user-tagged hook. That log is not committed here. | Not run. SDK 0.3.257 declares `allow \| deny \| ask \| defer`, `continue`, `stopReason`, `decision`, `systemMessage`, and `hookSpecificOutput`. The four-callback probe above is bridge serialization, not CLI acceptance. | `claude_startup_and_restoration_continue_when_native_hook_suppression_is_unknown`. The fixture requires `disableAllHooks: true` and empty `settingSources`. The negotiated fact stays `Unknown`. The open, the prompt, the restore, and the second prompt complete. `claude_project_and_user_hooks_stay_quiet_across_prompt_and_restore` is ignored and was not run. It does not copy credentials. The ACP path cannot pass `--settings`; the raw CLI control in that test is the user hook. |
+| Codex 0.154.0 (`codex-cli 0.154.0`) | Real harness, scripted model. Log: [rows.jsonl](../../../verification/hook-behavior/evidence/codex/rows.jsonl). Hooks on: a plain turn fires SessionStart (`source` startup), UserPromptSubmit, Stop, and SessionEnd, twice, from `$CODEX_HOME/hooks.json` and the project `.codex/hooks.json`. A Bash turn also fires PreToolUse and PostToolUse and creates the original sentinel. `codex exec resume` adds SessionStart `source` resume. A follow-up whose whole text is `/compact` is that resume turn: PreCompact and PostCompact do not fire. The subagent row logs `unsupported call: close_agent` and does not fire SubagentStart or SubagentStop. Without the sandbox bypass the command hits a read-only filesystem, the hook log has one copy of each event where the other rows have two, and PermissionRequest does not fire. `features.hooks` false and `notify` empty: every row's hook log is empty, and a requested tool still runs. The ACP adapter still discards `hook/started` and `hook/completed`; this log is the CLI, not that stream. | Real harness, scripted model, same log. A bare `permissionDecision:allow` without `updatedInput` is rejected by the parser at `output_parser.rs` lines 441-457 (`6b9826e3`); this run did not send that output. Deny with a reason: no PostToolUse and no sentinel; the scripted model does not quote the reason. Allow with `updatedInput`: only the rewritten sentinel is created. `ask`, `defer`, and `continue: false` do not stop the tool. The additionalContext nonce appears in a later model request. The hook emits `systemMessage` and that nonce is absent from every model request. Stop `decision: block` loops (2348 Stop events) until the runner's 75s timeout, and SessionEnd does not fire. PreToolUse exit 2 stops the tool. Exit 1, malformed JSON, and a 1s timeout do not: PreToolUse is logged, then PostToolUse, and the original sentinel is created. With suppression on, the deny and exit-2 rows run the tool. | `codex_startup_and_restoration_continue_when_native_hook_suppression_is_unsupported`. The fixture requires `features.hooks: false` and `notify: []`. The negotiated fact stays `Unsupported`. The open, the prompt, the restore, and the second prompt complete. Suppression on in the script is `-c features.hooks=false -c 'notify=[]'` on exec and on resume, while config.toml leaves hooks enabled. That is the hooks portion of the thread/start override, not the full `CODEX_CONFIG` document. It does not close [#147](https://github.com/nessalabs/nessa-agent/issues/147). |
 | OpenCode 1.18.31 | Real harness, scripted model. Log: [rows.jsonl](../../../verification/hook-behavior/evidence/opencode/rows.jsonl). Hooks on: a plain turn fires `chat.message`, `experimental.chat.system.transform`, and `event` callbacks (`session.created`, `session.updated`, `message.updated`, `message.part.updated`, `session.status`, `session.diff`, `plugin.added`, `catalog.updated`, `reference.updated`, `integration.updated`, `message.part.delta`, `session.idle`). A bash turn also fires `tool.execute.before` and `tool.execute.after` and creates the original sentinel. `--session` keeps one `session.created` and fires `chat.message` again. A follow-up message `/compact` does not fire `experimental.session.compacting` or `command.execute.before`. The subagent row calls `task`: `tool.execute.before` fires, the call errors, `tool.execute.after` does not, and the sentinel is not created. Without `--auto` the bash tool still runs. `permission.ask` has no trigger. Suppression (`OPENCODE_PURE=1`, project config disabled, the three config inputs unset): every row's plugin log is empty, and a requested bash tool still runs. | Real harness, scripted model, same log. OpenCode has no `permissionDecision` vocabulary. A thrown deny, and the exit-2 and exit-1 throws, stop the tool: before fires, after does not, and the deny reason is in stdout. An in-place rewrite of the arguments creates only the rewritten sentinel. `ask`, `defer`, and `continue: false` are not a plugin output; the tool runs. Replacing `output.args` is not read back; the original sentinel is created. A 30s wait inside `tool.execute.before` still reaches `tool.execute.after`. The additionalContext nonce and the system-transform nonce both appear in a model request. There is no Stop `decision: block` path; that row completes and the tool runs. | `opencode_startup_and_restoration_continue_when_native_hook_suppression_is_unknown`. The fixture requires `OPENCODE_PURE=1`, project config disabled, the three alternate config inputs absent, and a home other than the caller's. The negotiated fact stays `Unknown`. The open, the prompt, the restore, and the second prompt complete. The scripted log shows the planted project plugin stays silent under that request. Default plugins inside the binary are outside it. `pinned_binary_cannot_load_caller_config_tools_mcp_or_native_hooks` is ignored unless `NESSA_PINNED_OPENCODE_BINARY` is set. |
 
 Kiro has no repository pin and no adapter. Pinning it is not part of this
