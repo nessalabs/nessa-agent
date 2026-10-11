@@ -36,14 +36,17 @@ fn not_stopped() -> (
 const DESCENDANT_EXIT_POLLS: u64 = 200;
 const DESCENDANT_EXIT_POLL_MS: u64 = 10;
 const DESCENDANT_EXIT_POLL: Duration = Duration::from_millis(DESCENDANT_EXIT_POLL_MS);
-/// How long a killed descendant may still look alive before the test calls
-/// it a survivor. [`a_descendant_still_running_at_the_deadline_has_not_exited`]
-/// fails when a process is still executing at this deadline.
+/// How long a killed descendant may still look alive. The last sample is
+/// taken at or just after this instant, including when the poll wakes late.
+/// [`a_descendant_still_running_at_the_deadline_has_not_exited`] fails when
+/// that sample still shows the process executing.
 const DESCENDANT_EXIT_DEADLINE: Duration =
     Duration::from_millis(DESCENDANT_EXIT_POLLS * DESCENDANT_EXIT_POLL_MS);
 
-/// `true` once `pid` has exited, including a zombie `/proc` still lists.
-/// A process that is still executing at `limit` has not.
+/// `true` once a sample shows `pid` has exited, including a zombie `/proc`
+/// still lists. Sampling continues until then, or until a sample taken at or
+/// just after `limit` still shows it executing. A late wake takes that last
+/// sample, so an exit during the wake counts.
 async fn descendant_exits_within(pid: i32, limit: Duration) -> bool {
     let deadline = tokio::time::Instant::now() + limit;
     loop {
@@ -202,11 +205,12 @@ async fn a_stop_ends_a_running_command_and_its_descendants() {
         .parse()
         .unwrap();
     // The descendant may still look alive for a moment after the stop
-    // returns. A zombie `/proc` still lists has already exited; a process
-    // still executing at the deadline has not.
+    // returns. The last sample is at or just after the deadline. A zombie
+    // `/proc` still lists has already exited. A process still executing on
+    // that sample has not.
     assert!(
         descendant_exits_within(child, DESCENDANT_EXIT_DEADLINE).await,
-        "the command's descendant outlived its stop"
+        "the command's descendant was still executing at or just after the deadline"
     );
 
     // Asked to stop before it started: nothing runs.
@@ -254,7 +258,7 @@ async fn a_descendant_still_running_at_the_deadline_has_not_exited() {
     let exited = descendant_exits_within(pid, Duration::from_millis(30)).await;
     assert!(
         !exited,
-        "a process still executing at the deadline has not exited"
+        "a process still executing at or just after the deadline has not exited"
     );
 }
 
@@ -263,68 +267,126 @@ fn a_missing_pid_is_not_running() {
     assert!(!descendant_is_running(i32::MAX));
 }
 
-/// Parent of one zombie. It forks, lets the child exit, and does not reap it,
-/// so `/proc/<pid>` stays listed with state `Z`. A child of this test process
-/// is reaped by the runtime, which removes that entry. Dropping the holder
-/// reaps the zombie; [`a_zombie_listed_in_proc_has_exited`] reads `/proc` first.
+/// Parent of one zombie. It forks, lets the child exit, and waits on stdin
+/// before `waitpid`. Closing stdin is the shutdown; [`ZombieHolder`]'s drop
+/// does that and waits, including when the test panics.
+/// [`a_zombie_listed_in_proc_has_exited`] reads `/proc` while the zombie is
+/// listed. [`dropping_the_holder_on_panic_reaps_the_zombie`] drops it during
+/// unwind.
 #[cfg(target_os = "linux")]
-fn zombie_holder() -> StopChild {
-    // python3 is on the Linux CI image. The holder is not a second copy of
-    // this test binary: that starts another harness in the same crate.
-    StopChild(
-        std::process::Command::new("python3")
-            .args([
-                "-c",
-                concat!(
-                    "import os, sys, time\n",
-                    "pid = os.fork()\n",
-                    "if pid == 0:\n",
-                    "    os._exit(0)\n",
-                    "sys.stdout.write('%d\\n' % pid)\n",
-                    "sys.stdout.flush()\n",
-                    "time.sleep(60)\n",
-                ),
-            ])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .expect("python3 holds the zombie"),
-    )
+struct ZombieHolder {
+    child: Option<std::process::Child>,
+    exit: std::sync::Arc<std::sync::Mutex<Option<std::process::ExitStatus>>>,
 }
 
 #[cfg(target_os = "linux")]
-#[tokio::test]
-async fn a_zombie_listed_in_proc_has_exited() {
-    let mut holder = zombie_holder();
-    let stdout = holder.0.stdout.take().unwrap();
+impl ZombieHolder {
+    fn shutdown(&mut self) {
+        let Some(mut child) = self.child.take() else {
+            return;
+        };
+        // EOF makes the holder `waitpid` its child and exit. Kill is only for
+        // a holder that never reaches that.
+        drop(child.stdin.take());
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    *self
+                        .exit
+                        .lock()
+                        .unwrap_or_else(|poison| poison.into_inner()) = Some(status);
+                    return;
+                }
+                Ok(None) if std::time::Instant::now() >= deadline => break,
+                Ok(None) => std::thread::sleep(DESCENDANT_EXIT_POLL),
+                Err(_) => break,
+            }
+        }
+        let _ = child.kill();
+        if let Ok(status) = child.wait() {
+            *self
+                .exit
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner()) = Some(status);
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for ZombieHolder {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn zombie_holder() -> ZombieHolder {
+    // python3 is on the Linux CI image. The holder is not a second copy of
+    // this test binary: that starts another harness in the same crate.
+    let child = std::process::Command::new("python3")
+        .args([
+            "-c",
+            concat!(
+                "import os, sys\n",
+                "pid = os.fork()\n",
+                "if pid == 0:\n",
+                "    os._exit(0)\n",
+                "sys.stdout.write('%d\\n' % pid)\n",
+                "sys.stdout.flush()\n",
+                "sys.stdin.read()\n",
+                "os.waitpid(pid, 0)\n",
+            ),
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("python3 holds the zombie");
+    ZombieHolder {
+        child: Some(child),
+        exit: std::sync::Arc::new(std::sync::Mutex::new(None)),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn read_zombie_pid(holder: &mut ZombieHolder) -> i32 {
+    let stdout = holder.child.as_mut().unwrap().stdout.take().unwrap();
     let (sender, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let mut line = String::new();
         let _ = std::io::BufRead::read_line(&mut std::io::BufReader::new(stdout), &mut line);
         let _ = sender.send(line);
     });
-    // Killing the holder closes the pipe, so a holder that never prints does
-    // not leave this read running after the timeout.
+    // Dropping the holder closes stdin, so the holder exits and this read
+    // ends if the line never arrives.
     let line = receiver
         .recv_timeout(Duration::from_secs(5))
         .expect("the holder prints the zombie pid");
-    let pid: i32 = line
-        .trim()
+    line.trim()
         .parse()
-        .expect("the holder prints the zombie pid");
-    // Dropping the holder reaps the zombie. It has to stay alive until the
-    // assertions have read `/proc`.
-    let _holder = holder;
-    let mut zombie = false;
+        .expect("the holder prints the zombie pid")
+}
+
+#[cfg(target_os = "linux")]
+fn wait_until_zombie(pid: i32) {
     for _ in 0..DESCENDANT_EXIT_POLLS {
         if proc_pid_state(pid) == Some('Z') {
-            zombie = true;
-            break;
+            return;
         }
-        tokio::time::sleep(DESCENDANT_EXIT_POLL).await;
+        std::thread::sleep(DESCENDANT_EXIT_POLL);
     }
-    assert!(zombie, "the child never became a visible zombie");
+    panic!("the child never became a visible zombie");
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_zombie_listed_in_proc_has_exited() {
+    let mut holder = zombie_holder();
+    let exit = std::sync::Arc::clone(&holder.exit);
+    let pid = read_zombie_pid(&mut holder);
+    // The holder stays alive until the assertions have read `/proc`.
+    wait_until_zombie(pid);
     assert!(
         !descendant_is_running(pid),
         "a zombie still listed in /proc is not running"
@@ -340,6 +402,45 @@ async fn a_zombie_listed_in_proc_has_exited() {
         proc_pid_state(pid),
         Some('Z'),
         "the check must leave the zombie listed until it is reaped"
+    );
+    drop(holder);
+    let status = exit
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .expect("the holder exited");
+    assert!(
+        status.success(),
+        "the holder reaps the zombie before it exits"
+    );
+    assert!(
+        proc_pid_state(pid).is_none(),
+        "the holder reaped the zombie"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn dropping_the_holder_on_panic_reaps_the_zombie() {
+    let mut holder = zombie_holder();
+    let exit = std::sync::Arc::clone(&holder.exit);
+    let pid = read_zombie_pid(&mut holder);
+    wait_until_zombie(pid);
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _holder = holder;
+        panic!("assertion failed");
+    }));
+    assert!(caught.is_err());
+    let status = exit
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .expect("the holder exited");
+    assert!(
+        status.success(),
+        "a panic still lets the holder reap its zombie"
+    );
+    assert!(
+        proc_pid_state(pid).is_none(),
+        "a panic still reaps the zombie"
     );
 }
 
