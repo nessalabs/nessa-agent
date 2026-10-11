@@ -180,7 +180,9 @@ impl TryFrom<Settlement> for ExecutionReport {
                 attachment.try_into()?,
             ),
             Settlement::LocalCancellation(report) => Self::cancelled_locally(report.try_into()?),
-            Settlement::PolicyStop { attachment } => Self::stopped_by_policy(attachment.try_into()?),
+            Settlement::PolicyStop { attachment } => {
+                Self::stopped_by_policy(attachment.try_into()?)
+            }
             Settlement::ProviderFinalized {
                 result,
                 resources,

@@ -231,7 +231,8 @@ pub(super) fn test_acp_configuration(
         mcp_servers: crate::infrastructure::acp::sessions::McpServerList::none(),
         stand_ins: crate::infrastructure::acp::sessions::StandInSessions::none(),
         permissions: PermissionOfferPolicy::once_only(),
-        refusal: crate::application::agent_execution::permissions::ConfiguredRefusal::continue_turn(),
+        refusal: crate::application::agent_execution::permissions::ConfiguredRefusal::continue_turn(
+        ),
         launch_timeout: Duration::from_secs(10),
         startup_timeout: Duration::from_secs(10),
         // Unbounded unless a test bounds it, on a clock it moves: a real

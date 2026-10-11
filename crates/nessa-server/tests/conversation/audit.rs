@@ -14,7 +14,13 @@ use nessa_sdk::application::agent_execution::{
     tools::ToolReviewInput,
 };
 use nessa_sdk::domain::agent_execution::{
-    ExecutionError,
+    executions::{
+        ExecutionId, ExecutionOutcome, InvocationKind, QueueOrderChange, SchedulingCause,
+        SubmissionMode,
+    },
+    sessions::{AttachmentCause, ExecutionSession, ExecutionSessionId, SessionId},
+};
+use nessa_sdk::domain::agent_execution::{
     permissions::{
         CustomPermissionCancellationReason, PermissionCancellationReason, PermissionDecision,
         PermissionEffect, PermissionId, PermissionOfferPolicy, PermissionOption,
@@ -22,17 +28,11 @@ use nessa_sdk::domain::agent_execution::{
         ReviewDeclineId, ReviewDeclineReason,
     },
     questions::{
-        AgentQuestion, AnswerOption, AnswerShape, MAX_OPEN_ASK_COST, MAX_OPEN_QUESTIONS, Question,
-        QuestionCancellation, QuestionChoice, QuestionId, QuestionRefusalReason,
+        AgentQuestion, AnswerOption, AnswerShape, Question, QuestionCancellation, QuestionChoice,
+        QuestionId, QuestionRefusalReason, MAX_OPEN_ASK_COST, MAX_OPEN_QUESTIONS,
     },
     tools::{ToolCallId, ToolCallUpdate},
-};
-use nessa_sdk::domain::agent_execution::{
-    executions::{
-        ExecutionId, ExecutionOutcome, InvocationKind, QueueOrderChange, SchedulingCause,
-        SubmissionMode,
-    },
-    sessions::{AttachmentCause, ExecutionSession, ExecutionSessionId, SessionId},
+    ExecutionError,
 };
 use std::fs;
 struct TestClock;
@@ -470,12 +470,10 @@ fn audit_maps_a_declined_review_as_a_claim_about_a_tool_nobody_was_offered() {
         PermissionAnswerDelivery::Failed(AgentError::Transport("stdin write failed".into())),
     );
     assert_eq!(failed["delivery"]["stage"], "failed");
-    assert!(
-        failed["delivery"]["diagnostic"]
-            .as_str()
-            .unwrap()
-            .contains("stdin write failed")
-    );
+    assert!(failed["delivery"]["diagnostic"]
+        .as_str()
+        .unwrap()
+        .contains("stdin write failed"));
     assert_eq!(value["outcome"], "continue");
     assert!(value.get("stop").is_none());
 }

@@ -2036,9 +2036,7 @@ impl<P: AcpProfile> Worker<P> {
             .filter(|stopped| message.id == Some(RpcId::Number(stopped.prompt_id)))
             .cloned()
         {
-            return self
-                .record_late_provider_result(stopped, &message)
-                .await;
+            return self.record_late_provider_result(stopped, &message).await;
         }
         let active = self
             .active
@@ -2402,11 +2400,8 @@ impl<P: AcpProfile> Worker<P> {
                 )
                 .await;
         }
-        let decline = ReviewDecline::new(
-            declared_tool_name(params),
-            reason,
-            RefusalOutcome::Continue,
-        );
+        let decline =
+            ReviewDecline::new(declared_tool_name(params), reason, RefusalOutcome::Continue);
         let session_id = execution.id().clone();
         let Some(execution_id) = self
             .active
@@ -2631,10 +2626,7 @@ impl<P: AcpProfile> Worker<P> {
         };
         let delivery = self.send_before(response, response_deadline).await;
         let cancel = json_rpc::encode(
-            json_rpc::notification(
-                "session/cancel",
-                json!({"sessionId": session_id.as_str()}),
-            ),
+            json_rpc::notification("session/cancel", json!({"sessionId": session_id.as_str()})),
             self.config.max_frame_bytes,
         );
         let notified = match cancel {

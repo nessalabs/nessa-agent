@@ -2,14 +2,14 @@ use super::super::{
     executions::{
         event_queue::{EventQueueBudget, EventReceiver},
         prompt_content::{
-            IMAGE_READ_TIMEOUT, ImageBlocks, encoded_image_bytes, fits_one_frame, read_images,
+            encoded_image_bytes, fits_one_frame, read_images, ImageBlocks, IMAGE_READ_TIMEOUT,
         },
         steering::RESPONSE_TIMEOUT,
         worker,
     },
     profile::AcpProfile,
 };
-use super::{AcpConfig, StandInGrant, cleanup::ProcessCleanup};
+use super::{cleanup::ProcessCleanup, AcpConfig, StandInGrant};
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::{
     ExecutionAudit, ExecutionEvent, ExecutionRequest, PermissionAuthoritySource,
@@ -37,12 +37,12 @@ use crate::infrastructure::clock::ClockInstant;
 use crate::infrastructure::process::{ProcessScope, ProcessStartFailure};
 use std::{
     sync::{
-        Arc, Mutex as ControlMutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc, Mutex as ControlMutex,
     },
     time::Duration,
 };
-use tokio::sync::{Mutex, MutexGuard, OwnedSemaphorePermit, Semaphore, mpsc, oneshot, watch};
+use tokio::sync::{mpsc, oneshot, watch, Mutex, MutexGuard, OwnedSemaphorePermit, Semaphore};
 
 use tracing::Instrument;
 

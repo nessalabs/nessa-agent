@@ -33,13 +33,11 @@ fn continue_is_admitted_without_a_rule_on_every_binding() {
     assert_eq!(configured.outcome(), RefusalOutcome::Continue);
     assert!(configured.rule().is_none());
     assert!(admit_configured_outcome(&configured, OperationCapabilities::default()).is_ok());
-    assert!(
-        admit_configured_outcome(
-            &configured,
-            capabilities(TurnStopCleanup::Unknown, SessionCloseOwnership::Unknown),
-        )
-        .is_ok()
-    );
+    assert!(admit_configured_outcome(
+        &configured,
+        capabilities(TurnStopCleanup::Unknown, SessionCloseOwnership::Unknown),
+    )
+    .is_ok());
 }
 
 #[test]
@@ -56,16 +54,14 @@ fn a_stopping_outcome_names_its_rule_and_cannot_mean_continue() {
 #[test]
 fn ending_the_turn_is_admitted_only_when_cleanup_and_reuse_are_proven() {
     let configured = ConfiguredRefusal::stopping(RefusalOutcome::EndTurn, rule()).unwrap();
-    assert!(
-        admit_configured_outcome(
-            &configured,
-            capabilities(
-                TurnStopCleanup::ProvenWithSessionReuse,
-                SessionCloseOwnership::Unknown,
-            ),
-        )
-        .is_ok()
-    );
+    assert!(admit_configured_outcome(
+        &configured,
+        capabilities(
+            TurnStopCleanup::ProvenWithSessionReuse,
+            SessionCloseOwnership::Unknown,
+        ),
+    )
+    .is_ok());
     for (turn, session) in [
         (TurnStopCleanup::Unknown, SessionCloseOwnership::Proven),
         (TurnStopCleanup::Unsupported, SessionCloseOwnership::Proven),
@@ -102,21 +98,17 @@ fn closing_the_session_is_not_how_an_unproven_end_turn_is_honored() {
 #[test]
 fn closing_the_session_requires_proven_ownership() {
     let configured = ConfiguredRefusal::stopping(RefusalOutcome::CloseSession, rule()).unwrap();
-    assert!(
-        admit_configured_outcome(
-            &configured,
-            capabilities(
-                TurnStopCleanup::ProvenWithSessionReuse,
-                SessionCloseOwnership::Unknown
-            ),
-        )
-        .is_err()
-    );
-    assert!(
-        admit_configured_outcome(
-            &configured,
-            capabilities(TurnStopCleanup::Unknown, SessionCloseOwnership::Proven),
-        )
-        .is_ok()
-    );
+    assert!(admit_configured_outcome(
+        &configured,
+        capabilities(
+            TurnStopCleanup::ProvenWithSessionReuse,
+            SessionCloseOwnership::Unknown
+        ),
+    )
+    .is_err());
+    assert!(admit_configured_outcome(
+        &configured,
+        capabilities(TurnStopCleanup::Unknown, SessionCloseOwnership::Proven),
+    )
+    .is_ok());
 }

@@ -529,7 +529,8 @@ pub(crate) fn profile_setup() -> (tempfile::TempDir, AcpConfig, EffectiveCapabil
         mcp_servers: crate::infrastructure::acp::sessions::McpServerList::none(),
         stand_ins: crate::infrastructure::acp::sessions::StandInSessions::none(),
         permissions: PermissionOfferPolicy::once_only(),
-        refusal: crate::application::agent_execution::permissions::ConfiguredRefusal::continue_turn(),
+        refusal: crate::application::agent_execution::permissions::ConfiguredRefusal::continue_turn(
+        ),
         launch_timeout: Duration::from_secs(10),
         startup_timeout: Duration::from_secs(10),
         execution_timeout: Some(Duration::from_secs(2)),

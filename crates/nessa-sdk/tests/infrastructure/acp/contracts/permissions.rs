@@ -1742,7 +1742,9 @@ async fn a_refusal_can_end_the_turn_and_leave_the_session_usable() {
     assert!(
         declined.iter().any(|record| {
             record.decline().outcome() == RefusalOutcome::EndTurn
-                && record.rule().is_some_and(|rule| rule.rule_id() == "refuse-shell")
+                && record
+                    .rule()
+                    .is_some_and(|rule| rule.rule_id() == "refuse-shell")
         }),
         "{declined:?}"
     );
@@ -1822,7 +1824,9 @@ async fn ending_the_turn_does_not_wait_for_a_stalled_audit() {
     ));
     let result = timeout(Duration::from_secs(1), active).await;
     assert_eq!(
-        result.expect("the turn result waited on the audit").unwrap(),
+        result
+            .expect("the turn result waited on the audit")
+            .unwrap(),
         Ok(ExecutionOutcome::Cancelled)
     );
     let _ = opened
