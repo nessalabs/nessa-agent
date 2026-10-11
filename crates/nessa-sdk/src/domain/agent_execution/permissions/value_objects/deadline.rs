@@ -318,15 +318,15 @@ mod tests {
             ),
             Err(ExecutionError::PermissionDeadlineTooLong)
         );
-        assert!(matches!(
+        assert_eq!(
             PermissionReviewDeadline::new(
                 PermissionToolClass::Other,
                 Duration::from_secs(1),
                 PermissionEffect::Deny,
                 " ",
             ),
-            Err(ExecutionError::EmptyValue(_))
-        ));
+            Err(ExecutionError::EmptyValue("permission deadline reason"))
+        );
         assert_eq!(
             PermissionReviewDeadline::new(
                 PermissionToolClass::Other,
@@ -337,15 +337,18 @@ mod tests {
             Err(ExecutionError::ControlCharacterInPermissionReason)
         );
         let oversized = "x".repeat(MAX_DEADLINE_REASON_BYTES + 1);
-        assert!(matches!(
+        assert_eq!(
             PermissionReviewDeadline::new(
                 PermissionToolClass::Other,
                 Duration::from_secs(1),
                 PermissionEffect::Deny,
                 oversized,
             ),
-            Err(ExecutionError::ValueTooLong { .. })
-        ));
+            Err(ExecutionError::ValueTooLong {
+                field: "permission deadline reason",
+                max_bytes: MAX_DEADLINE_REASON_BYTES,
+            })
+        );
         let other = PermissionReviewDeadline::new(
             PermissionToolClass::Other,
             Duration::from_secs(1),
@@ -353,8 +356,19 @@ mod tests {
             reason,
         )
         .unwrap();
+        let read_only = PermissionReviewDeadline::new(
+            PermissionToolClass::ReadOnly,
+            Duration::from_secs(1),
+            PermissionEffect::Allow,
+            reason,
+        )
+        .unwrap();
         assert_eq!(
             PermissionDeadlinePolicy::new(other.clone(), other),
+            Err(ExecutionError::MismatchedPermissionDeadline)
+        );
+        assert_eq!(
+            PermissionDeadlinePolicy::new(read_only.clone(), read_only),
             Err(ExecutionError::MismatchedPermissionDeadline)
         );
         for error in [
