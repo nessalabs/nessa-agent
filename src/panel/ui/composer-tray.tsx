@@ -3,6 +3,7 @@ import * as React from "react"
 import { Check, ChevronLeft, ChevronRight, Plus } from "lucide-react"
 import { ChatComposerAction } from "@nessa-ui/react/chat-composer"
 import type { ApprovalMode, ApprovalModeChoice } from "../../conversation"
+import { environmentPlace, isPairedEnvironment } from "@nessa/client"
 
 /** The approval row's data: this conversation's mode and the ones its agent honours. */
 export interface TrayApproval {
@@ -16,7 +17,7 @@ export interface TrayApproval {
 
 /**
  * Where a new conversation's agent runs: this computer, or one of the SSH
- * hosts the gateway names. Offered only before the conversation exists, since
+ * hosts or connected paired machines the gateway names. Offered only before the conversation exists, since
  * it runs there for its whole life.
  */
 export interface TrayEnvironment {
@@ -31,7 +32,7 @@ type Page = "root" | "approval" | "confirm-full" | "agents" | "environment"
 
 /** The tray's name for where a conversation runs. */
 export function environmentLabel(host: string | undefined): string {
-  return host ?? "This computer"
+  return host === undefined ? "This computer" : environmentPlace(host)
 }
 
 /**
@@ -453,7 +454,9 @@ export function ComposerTray({
                       <span className="flex flex-1 flex-col">
                         <span className="break-all">{environmentLabel(host)}</span>
                         {host ? (
-                          <span className="nessa-text-2 text-muted-foreground">SSH</span>
+                          <span className="nessa-text-2 text-muted-foreground">
+                            {isPairedEnvironment(host) ? "Paired" : "SSH"}
+                          </span>
                         ) : null}
                       </span>
                       {chosen ? (

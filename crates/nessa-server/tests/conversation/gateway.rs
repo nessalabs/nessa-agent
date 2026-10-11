@@ -231,6 +231,35 @@ mod gateway {
             }
         }
     }
+    /// Review finding on #748: a paired environment is a place a new
+    /// conversation may run only while it is connected, so the catalog lists
+    /// it, after the SSH hosts, as connected when asked, never as composed.
+    #[tokio::test]
+    async fn the_agent_catalog_lists_the_paired_environments_connected_when_asked() {
+        let connected = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let listed = connected.clone();
+        let state = chat_state().with_connected_environments(Arc::new(move || {
+            listed.lock().unwrap().clone()
+        }));
+        let session = chat_session(&state, "owner-phone").await;
+        let places = |response: ResponseFrame| {
+            response.payload.unwrap()["environments"].clone()
+        };
+        let before = places(chat_request(&state, &session, "agents.list", json!({})).await);
+        let peer = format!("peer:{}", "ab".repeat(32));
+        connected.lock().unwrap().push(peer.clone());
+        let mut expected = before.as_array().unwrap().clone();
+        expected.push(json!(peer));
+        assert_eq!(
+            places(chat_request(&state, &session, "agents.list", json!({})).await),
+            json!(expected)
+        );
+        connected.lock().unwrap().clear();
+        assert_eq!(
+            places(chat_request(&state, &session, "agents.list", json!({})).await),
+            before
+        );
+    }
     pub(super) fn send_command(peer: &TestPeer, id: &str, method: &str, params: serde_json::Value) {
         peer.input
             .send(Ok(Message::Text(

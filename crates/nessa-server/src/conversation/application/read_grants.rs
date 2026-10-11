@@ -41,7 +41,7 @@ use super::{ConversationCaller, ConversationError, ConversationFuture, Conversat
 use crate::conversation::application::ReceiverAuthority;
 use crate::conversation::domain::ReceiverBinding;
 use nessa_auth::application::ports::{AccessError, AccessReader};
-use nessa_auth::domain::{AuthContext, CredentialId};
+use nessa_auth::domain::{AuthContext, CredentialId, Resource};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::conversation::read_scope::ReadRefusal;
 
@@ -184,12 +184,16 @@ pub struct ShareConversation<'a> {
     pub grants: &'a dyn ReadGrants,
     /// The credential registry, read for the principal a share target names.
     pub access: &'a dyn AccessReader,
+    /// This gateway, the resource a share target's read must be on.
+    pub gateway: &'a Resource,
 }
 
 impl ShareConversation<'_> {
     /// Grant `credential`'s receiver Read on `id`. The credential must be an
-    /// active paired device or peer gateway of the caller, or
-    /// `ShareTargetNotPaired`; the store refuses a conversation that is not
+    /// active paired device or peer gateway of the caller that holds
+    /// `conversation.read` on this gateway, or `ShareTargetNotPaired`: an environment's
+    /// credential serves and can never read, so a share to it would record a
+    /// reader that is not one; the store refuses a conversation that is not
     /// the caller's or is deleted, in the transaction that writes the grant
     /// (row G8). Either kind of party reads only what it is granted
     /// (`docs/design/auth/peer-gateways.md`, row H8).
@@ -222,12 +226,16 @@ impl ShareConversation<'_> {
         };
         // The answer must be about the credential asked for, in the
         // binding's organization, with a membership of the same principal:
-        // a grant is made on a registry answer about that exact credential.
+        // a grant is made on a registry answer about that exact credential,
+        // whose read is on this gateway, the one its reads will be asked of.
         let named = &target.credential;
         if named.id() != &credential
             || named.organization_id() != &binding.organization_id
             || named.principal_id() != target.membership.principal_id()
             || named.organization_id() != target.membership.organization_id()
+            || !named.grants().iter().any(|grant| {
+                grant.action().as_str() == "conversation.read" && grant.resource() == self.gateway
+            })
         {
             return Err(ConversationError::ShareTargetNotPaired);
         }

@@ -7,9 +7,13 @@ use super::{
     RevocationCause, Supersession, TransitionCause,
 };
 
-/// The read action: the one grant pairing issues, and the only one a peer
-/// gateway can hold.
+/// The read action: the grant a device's or a reading peer's pairing issues.
 pub(crate) const CONVERSATION_READ: &str = "conversation.read";
+
+/// The environment action: the grant an environment peer's pairing issues. Its
+/// holder may connect to this gateway as an environment and admit the leases
+/// this gateway issues it; it reads nothing.
+pub(crate) const ENVIRONMENT_SERVE: &str = "environment.serve";
 
 /// The conversation authority's actions: what only the gateway that owns a
 /// conversation may hold. `conversation.write` admits commands into a
@@ -19,10 +23,10 @@ pub(crate) const CONVERSATION_READ: &str = "conversation.read";
 /// of them: a peer gateway can never hold any, however its allowlist grows.
 pub const CONVERSATION_AUTHORITY_ACTIONS: &[&str] = &["conversation.write", "credential.manage"];
 
-/// What a peer gateway may hold. Slice I widens it to the environment-grant
-/// actions; the conversation authority's actions stay out of it whatever is
-/// added, because [`PrincipalKind::may_hold`] refuses them first.
-const PEER_GATEWAY_ACTIONS: &[&str] = &[CONVERSATION_READ];
+/// What a peer gateway may hold: reading what it is granted, and serving as an
+/// environment. The conversation authority's actions stay out of it whatever
+/// is added, because [`PrincipalKind::may_hold`] refuses them first.
+const PEER_GATEWAY_ACTIONS: &[&str] = &[CONVERSATION_READ, ENVIRONMENT_SERVE];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 /// Kind of actor. This classification conveys no permission or role, with one
@@ -41,21 +45,23 @@ pub enum PrincipalKind {
 impl PrincipalKind {
     /// Whether a credential of a principal of this kind may carry `action` at
     /// all. Policy and the credential's own grants still decide whether it is
-    /// allowed; this answers only what the kind can express.
+    /// allowed; this answers only what the kind can express. Only a peer
+    /// gateway may hold `environment.serve`.
     ///
-    /// A peer gateway holds surface grants only: it may read what it is
-    /// granted. It can never hold an action of the conversation authority
-    /// ([`CONVERSATION_AUTHORITY_ACTIONS`]: `conversation.write`, which admits
-    /// commands into a conversation and answers its approvals, and
-    /// `credential.manage`, which holds credentials, pairs and manages
-    /// grants). The gateway that owns a conversation keeps those, so whatever
+    /// A peer gateway may read what it is granted and may serve as an
+    /// environment for this gateway's leases. It can never hold an action of
+    /// the conversation authority ([`CONVERSATION_AUTHORITY_ACTIONS`]:
+    /// `conversation.write`, which admits commands into a conversation and
+    /// answers its approvals, and `credential.manage`, which holds
+    /// credentials, pairs and manages grants). The gateway that owns a conversation keeps those, so whatever
     /// a peer is later allowed to run for it, the peer cannot hold both
-    /// authorities over one conversation. Slice I widens the peer's allowlist
-    /// to the environment-grant actions; the authority's actions stay excluded
+    /// authorities over one conversation. The authority's actions are excluded
     /// here, before the allowlist is consulted, so a widening cannot admit one.
     pub fn may_hold(self, action: &Action) -> bool {
         match self {
-            Self::Human | Self::Agent | Self::Integration => true,
+            // Serving as an environment is a peer's alone: it is what
+            // pairing an environment issues, to the key it pinned.
+            Self::Human | Self::Agent | Self::Integration => action.as_str() != ENVIRONMENT_SERVE,
             Self::Gateway => {
                 !CONVERSATION_AUTHORITY_ACTIONS.contains(&action.as_str())
                     && PEER_GATEWAY_ACTIONS.contains(&action.as_str())

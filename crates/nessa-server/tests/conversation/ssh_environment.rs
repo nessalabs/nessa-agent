@@ -1311,6 +1311,7 @@ async fn an_idle_connection_sends_keepalives() {
             connect: Duration::from_secs(5),
             answer: Duration::from_secs(5),
             keepalive: Duration::from_millis(20),
+            ..SshTimings::default()
         },
     );
     // The grant is never answered: the connection is otherwise idle.
@@ -1339,6 +1340,34 @@ async fn an_idle_connection_sends_keepalives() {
     .await
     .expect("keepalives while idle");
     opening.abort();
+}
+
+/// A host that goes quiet without closing its stream, as one cut off by the
+/// network, is taken for gone past the silence bound: what waits on it is
+/// answered then, not at its own longer bound.
+#[tokio::test]
+async fn a_host_silent_past_its_bound_is_gone() {
+    let connector = Connector::new(Reach::Scripted(vec![hello_body(LEASE_PROTOCOL)]));
+    let environment = SshEnvironment::new(
+        devbox(),
+        connector,
+        Arc::new(Audit::default()),
+        no_install(),
+        SshTimings {
+            connect: Duration::from_secs(30),
+            answer: Duration::from_secs(30),
+            silence: Duration::from_millis(50),
+            ..SshTimings::default()
+        },
+    );
+    // The grant is never answered, and the stream stays open.
+    let refused = tokio::time::timeout(
+        Duration::from_secs(10),
+        environment.open(&lease(), &terms("claude"), binding_only()),
+    )
+    .await
+    .expect("answered at the silence bound, not the answer's");
+    assert_eq!(refused.err(), Some(LeaseRefusal::EnvironmentUnreachable));
 }
 
 /// An output overflow whose audit record cannot be written still stops the

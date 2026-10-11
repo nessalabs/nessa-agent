@@ -31,6 +31,78 @@ fn not_stopped() -> (
     watch::channel(None)
 }
 
+/// Pause between checks. The deadline below is 200 of these, the same
+/// two seconds the non-Linux check already waited.
+const DESCENDANT_EXIT_POLLS: u64 = 200;
+const DESCENDANT_EXIT_POLL_MS: u64 = 10;
+const DESCENDANT_EXIT_POLL: Duration = Duration::from_millis(DESCENDANT_EXIT_POLL_MS);
+/// How long a killed descendant may still look alive. The last sample is
+/// taken at or just after this instant, including when the poll wakes late.
+/// [`a_descendant_still_running_at_the_deadline_has_not_exited`] fails when
+/// that sample still shows the process executing.
+const DESCENDANT_EXIT_DEADLINE: Duration =
+    Duration::from_millis(DESCENDANT_EXIT_POLLS * DESCENDANT_EXIT_POLL_MS);
+
+/// `true` once a sample shows `pid` has exited, including a zombie or dead
+/// task `/proc` still lists (`Z`, `X`, or `x`). Sampling continues until
+/// then, or until a sample taken at or just after `limit` still shows it
+/// executing. A late wake takes that last sample, so an exit during the wake
+/// counts.
+async fn descendant_exits_within(pid: i32, limit: Duration) -> bool {
+    let deadline = tokio::time::Instant::now() + limit;
+    loop {
+        if !descendant_is_running(pid) {
+            return true;
+        }
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            return false;
+        }
+        tokio::time::sleep(DESCENDANT_EXIT_POLL.min(deadline.saturating_duration_since(now))).await;
+    }
+}
+
+/// Whether `pid` is still executing. A zombie (`Z`) or a dead task (`X`, and
+/// `x` on older kernels) is not: it has exited, which `proc_stat_is_running`
+/// reads from `/proc/<pid>/stat`. `a_zombie_listed_in_proc_has_exited` checks
+/// a real zombie on Linux.
+/// `proc_stat_reads_a_zombie_as_exited_and_any_other_state_as_running` checks
+/// `X` and `x`. A host with no `/proc` can only ask whether the pid exists.
+fn descendant_is_running(pid: i32) -> bool {
+    if std::path::Path::new("/proc/self/stat").exists() {
+        return linux_descendant_is_running(pid);
+    }
+    // SAFETY: signal 0 only asks whether the process exists.
+    let alive = unsafe { libc::kill(pid, 0) };
+    alive == 0
+}
+
+fn linux_descendant_is_running(pid: i32) -> bool {
+    match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Ok(stat) => proc_stat_is_running(&stat),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        // A stat line we could not read is not evidence the process exited.
+        Err(_) => true,
+    }
+}
+
+/// The state character of a `/proc/<pid>/stat` line. The command name sits
+/// in parentheses and may itself contain `)`, so the state is the character
+/// after the last `) `.
+fn proc_stat_state(stat: &str) -> Option<char> {
+    stat.rsplit_once(") ")
+        .and_then(|(_, rest)| rest.chars().next())
+}
+
+/// `Z` (zombie), `X` (dead), and `x` (dead on older kernels) have exited and
+/// may still be listed. Any other state is still executing.
+/// [`proc_stat_reads_a_zombie_as_exited_and_any_other_state_as_running`]
+/// checks that. A line that does not parse is treated as still running, so a
+/// survivor is not reported gone.
+fn proc_stat_is_running(stat: &str) -> bool {
+    !matches!(proc_stat_state(stat), Some('Z' | 'X' | 'x'))
+}
+
 #[tokio::test]
 async fn a_command_runs_in_the_workspace_with_its_arguments_as_given() {
     let workspace = tempfile::tempdir().unwrap();
@@ -137,30 +209,14 @@ async fn a_stop_ends_a_running_command_and_its_descendants() {
         .trim()
         .parse()
         .unwrap();
-    // Gone, or a zombie its new parent has yet to reap: never running.
-    let running = || {
-        std::fs::read_to_string(format!("/proc/{child}/stat"))
-            .ok()
-            .and_then(|stat| {
-                stat.rsplit_once(") ")
-                    .map(|(_, rest)| !rest.starts_with('Z'))
-            })
-            .unwrap_or(false)
-    };
-    if std::path::Path::new("/proc/self/stat").exists() {
-        assert!(!running(), "the command's descendant outlived its stop");
-    } else {
-        // SAFETY: signal 0 only asks whether the process exists.
-        let mut gone = false;
-        for _ in 0..200 {
-            if unsafe { libc::kill(child, 0) } != 0 {
-                gone = true;
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        assert!(gone, "the command's descendant outlived its stop");
-    }
+    // The descendant may still look alive for a moment after the stop
+    // returns. The last sample is at or just after the deadline. A zombie or
+    // dead task `/proc` still lists (`Z`, `X`, or `x`) has already exited. A
+    // process still executing on that sample has not.
+    assert!(
+        descendant_exits_within(child, DESCENDANT_EXIT_DEADLINE).await,
+        "the command's descendant was still executing at or just after the deadline"
+    );
 
     // Asked to stop before it started: nothing runs.
     let (stop, stopped) = not_stopped();
@@ -169,6 +225,239 @@ async fn a_stop_ends_a_running_command_and_its_descendants() {
         .run(command(&["sh", "-c", "exit 0"], None, 1_000), stopped)
         .await;
     assert_eq!(ran, CommandRan::not_started());
+}
+
+#[test]
+fn proc_stat_reads_a_zombie_as_exited_and_any_other_state_as_running() {
+    assert!(!proc_stat_is_running("1 (sleep) Z 1 1"));
+    assert!(!proc_stat_is_running("1 (sleep) X 1 1"));
+    assert!(!proc_stat_is_running("1 (sleep) x 1 1"));
+    assert!(proc_stat_is_running("1 (sleep) S 1 1"));
+    assert!(proc_stat_is_running("1 (sleep) R 1 1"));
+    // The command name may contain ") ". The state is the character after
+    // the last one, so a zombie or dead task is not hidden behind an earlier
+    // ") ".
+    assert!(!proc_stat_is_running("1 (a) b) Z 1 1"));
+    assert!(!proc_stat_is_running("1 (a) b) X 1 1"));
+    assert!(!proc_stat_is_running("1 (a) b) x 1 1"));
+    assert!(proc_stat_is_running("1 (a) b) S 1 1"));
+    // An unreadable line is not evidence the process exited.
+    assert!(proc_stat_is_running("not a stat line"));
+    assert_eq!(proc_stat_state("1 (sleep) Z 1 1"), Some('Z'));
+}
+
+/// Stops a process this test started, including when an assertion panics.
+struct StopChild(std::process::Child);
+
+impl Drop for StopChild {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+#[tokio::test]
+async fn a_descendant_still_running_at_the_deadline_has_not_exited() {
+    let live = StopChild(
+        std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .unwrap(),
+    );
+    let pid = i32::try_from(live.0.id()).unwrap();
+    let exited = descendant_exits_within(pid, Duration::from_millis(30)).await;
+    assert!(
+        !exited,
+        "a process still executing at or just after the deadline has not exited"
+    );
+}
+
+#[test]
+fn a_missing_pid_is_not_running() {
+    assert!(!descendant_is_running(i32::MAX));
+}
+
+/// Parent of one zombie. It forks, lets the child exit, and waits on stdin
+/// before `waitpid`. Closing stdin is the shutdown; [`ZombieHolder`]'s drop
+/// does that and waits, including when the test panics.
+/// [`a_zombie_listed_in_proc_has_exited`] reads `/proc` while the zombie is
+/// listed. [`dropping_the_holder_on_panic_reaps_the_zombie`] drops it during
+/// unwind.
+#[cfg(target_os = "linux")]
+struct ZombieHolder {
+    child: Option<std::process::Child>,
+    exit: std::sync::Arc<std::sync::Mutex<Option<std::process::ExitStatus>>>,
+}
+
+#[cfg(target_os = "linux")]
+impl ZombieHolder {
+    fn shutdown(&mut self) {
+        let Some(mut child) = self.child.take() else {
+            return;
+        };
+        // EOF makes the holder `waitpid` its child and exit. Kill is only for
+        // a holder that never reaches that.
+        drop(child.stdin.take());
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    *self
+                        .exit
+                        .lock()
+                        .unwrap_or_else(|poison| poison.into_inner()) = Some(status);
+                    return;
+                }
+                Ok(None) if std::time::Instant::now() >= deadline => break,
+                Ok(None) => std::thread::sleep(DESCENDANT_EXIT_POLL),
+                Err(_) => break,
+            }
+        }
+        let _ = child.kill();
+        if let Ok(status) = child.wait() {
+            *self
+                .exit
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner()) = Some(status);
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for ZombieHolder {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn zombie_holder() -> ZombieHolder {
+    // python3 is on the Linux CI image. The holder is not a second copy of
+    // this test binary: that starts another harness in the same crate.
+    let child = std::process::Command::new("python3")
+        .args([
+            "-c",
+            concat!(
+                "import os, sys\n",
+                "pid = os.fork()\n",
+                "if pid == 0:\n",
+                "    os._exit(0)\n",
+                "sys.stdout.write('%d\\n' % pid)\n",
+                "sys.stdout.flush()\n",
+                "sys.stdin.read()\n",
+                "os.waitpid(pid, 0)\n",
+            ),
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("python3 holds the zombie");
+    ZombieHolder {
+        child: Some(child),
+        exit: std::sync::Arc::new(std::sync::Mutex::new(None)),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn read_zombie_pid(holder: &mut ZombieHolder) -> i32 {
+    let stdout = holder.child.as_mut().unwrap().stdout.take().unwrap();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        let _ = std::io::BufRead::read_line(&mut std::io::BufReader::new(stdout), &mut line);
+        let _ = sender.send(line);
+    });
+    // Dropping the holder closes stdin, so the holder exits and this read
+    // ends if the line never arrives.
+    let line = receiver
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the holder prints the zombie pid");
+    line.trim()
+        .parse()
+        .expect("the holder prints the zombie pid")
+}
+
+#[cfg(target_os = "linux")]
+fn wait_until_zombie(pid: i32) {
+    for _ in 0..DESCENDANT_EXIT_POLLS {
+        if proc_pid_state(pid) == Some('Z') {
+            return;
+        }
+        std::thread::sleep(DESCENDANT_EXIT_POLL);
+    }
+    panic!("the child never became a visible zombie");
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_zombie_listed_in_proc_has_exited() {
+    let mut holder = zombie_holder();
+    let exit = std::sync::Arc::clone(&holder.exit);
+    let pid = read_zombie_pid(&mut holder);
+    // The holder stays alive until the assertions have read `/proc`.
+    wait_until_zombie(pid);
+    assert!(
+        !descendant_is_running(pid),
+        "a zombie still listed in /proc is not running"
+    );
+    // A short deadline must succeed while the zombie is still listed. Waiting
+    // for the entry to disappear would run out the deadline, because nothing
+    // has reaped it.
+    assert!(
+        descendant_exits_within(pid, Duration::from_millis(50)).await,
+        "a zombie still listed in /proc has exited"
+    );
+    assert_eq!(
+        proc_pid_state(pid),
+        Some('Z'),
+        "the check must leave the zombie listed until it is reaped"
+    );
+    drop(holder);
+    let status = exit
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .expect("the holder exited");
+    assert!(
+        status.success(),
+        "the holder reaps the zombie before it exits"
+    );
+    assert!(
+        proc_pid_state(pid).is_none(),
+        "the holder reaped the zombie"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn dropping_the_holder_on_panic_reaps_the_zombie() {
+    let mut holder = zombie_holder();
+    let exit = std::sync::Arc::clone(&holder.exit);
+    let pid = read_zombie_pid(&mut holder);
+    wait_until_zombie(pid);
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _holder = holder;
+        panic!("assertion failed");
+    }));
+    assert!(caught.is_err());
+    let status = exit
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .expect("the holder exited");
+    assert!(
+        status.success(),
+        "a panic still lets the holder reap its zombie"
+    );
+    assert!(
+        proc_pid_state(pid).is_none(),
+        "a panic still reaps the zombie"
+    );
+}
+
+#[cfg(target_os = "linux")]
+fn proc_pid_state(pid: i32) -> Option<char> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    proc_stat_state(&stat)
 }
 
 #[tokio::test]

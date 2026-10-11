@@ -168,20 +168,21 @@ function ConversationFacts({ conversation }: { conversation: Conversation }) {
 /** Where the agent runs and the sandbox around it, from its latest lease. */
 function LeaseFacts({ lease }: { lease: ConversationLease }) {
   // A refused lease names what was asked for, not where anything runs —
-  // except the SSH host it was asked of, which is what a person fixes.
+  // except the host it was asked of, which is what a person fixes.
   const granted = lease.state !== "refused"
   const place = conversationLeasePlace(lease) ?? "Not known"
+  const host =
+    lease.environment === "ssh"
+      ? "SSH host"
+      : lease.environment === "peer"
+        ? "Machine"
+        : undefined
   return (
     <FactGroup title="Where it runs">
-      {!granted && lease.environment === "ssh" ? (
-        <Fact label="SSH host" value={place} />
-      ) : null}
+      {!granted && host ? <Fact label={host} value={place} /> : null}
       {granted ? (
         <>
-          <Fact
-            label={lease.environment === "ssh" ? "SSH host" : "Computer"}
-            value={place}
-          />
+          <Fact label={host ?? "Computer"} value={place} />
           <Fact
             label="Sandbox"
             value={

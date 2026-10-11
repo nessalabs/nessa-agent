@@ -140,6 +140,10 @@ pub fn lease_view(current: &CurrentLease) -> ConversationLeaseView {
                 view.host = Some(host.as_str().to_owned());
                 ConversationLeaseEnvironment::Ssh
             }
+            EnvironmentRef::Peer(peer) => {
+                view.host = Some(peer.name());
+                ConversationLeaseEnvironment::Peer
+            }
         });
         view.sandbox = Some(match terms.sandbox {
             SandboxProfile::HarnessDefault => ConversationLeaseSandbox::HarnessDefault,

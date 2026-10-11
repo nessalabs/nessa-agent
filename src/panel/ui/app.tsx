@@ -805,7 +805,8 @@ export function App({
                   onSignOut={onSignOut}
                   agentInstallations={agentInstallations}
                   // Where a new conversation runs: offered only when the
-                  // gateway names an SSH host, and only before it exists.
+                  // gateway names an SSH host or a connected paired machine,
+                  // and only before it exists.
                   environment={
                     !chat.active.serverConversationId &&
                     selectedAgent &&

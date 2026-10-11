@@ -51,6 +51,7 @@ pub(super) async fn dispatch(
             let class = match params.enrollee {
                 None | Some(PairingEnrollee::Device) => ConsentClass::DeviceRead,
                 Some(PairingEnrollee::Gateway) => ConsentClass::PeerRead,
+                Some(PairingEnrollee::Environment) => ConsentClass::PeerEnvironment,
             };
             match pairing.create(session, class).await {
                 Ok(created) => {

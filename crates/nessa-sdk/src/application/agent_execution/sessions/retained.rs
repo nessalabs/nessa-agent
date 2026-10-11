@@ -10,7 +10,7 @@ use crate::{
     },
     domain::agent_execution::{
         executions::{ExecutionId, ExecutionOutcome, QueueMutation},
-        leases::{CommandTerms, EnvironmentRef, LeaseTerms, LeaseWork},
+        leases::{CommandTerms, EnvironmentRef, LeaseTerms, LeaseWork, PeerEnvironment},
         prompts::{AppModelContext, MessageSender},
     },
 };
@@ -153,6 +153,7 @@ fn command_terms(terms: &CommandTerms) -> usize {
     let environment = match &terms.environment {
         EnvironmentRef::Here => 0,
         EnvironmentRef::Ssh(host) => host.as_str().len(),
+        EnvironmentRef::Peer(_) => PeerEnvironment::PREFIX.len() + 2 * PeerEnvironment::KEY_BYTES,
     };
     terms
         .command

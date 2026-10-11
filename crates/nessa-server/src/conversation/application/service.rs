@@ -3828,8 +3828,10 @@ impl ConversationService {
     /// 4. Record [`ConversationDeletionAuditRecord`] from the tombstone, once
     ///    steps 2 and 3 have settled what it says.
     /// 5. Erase: uploads are let go whatever became of the record; the
-    ///    history (under the same lease) and the summary (under the summary
-    ///    lock) only once the record is acknowledged.
+    ///    history and the summary (under the summary lock) only once the
+    ///    record is acknowledged. A history this build cannot read is
+    ///    discarded then, without replaying it. A history that opened is
+    ///    erased under the same lease.
     /// 6. Mark the tombstone erased, so nothing of it is attempted again.
     ///
     /// Audit stores are not touched
@@ -3934,12 +3936,15 @@ impl ConversationService {
             }
         }
         let mut failures = DeletionFailures::default();
-        // `None` when it could not be taken; `Some(None)` when the history was
-        // never opened, so there is nothing of it to read or erase.
+        // `None` when it could not be taken. `Some(None)` when nothing is
+        // erased under a lease: the history was never opened, or this build
+        // cannot read it. That history is discarded only after the deletion
+        // record is acknowledged.
         let leased = tokio::select! {
             leased = self.erasure_lease(&id) => leased.map_err(ConversationError::Storage),
             () = self.retired() => Err(ConversationError::Unavailable),
         };
+        let mut lost_unreadable = false;
         let lease = match leased {
             Ok(lease) => Some(lease),
             // Still held after the wait for it: the one place a deletion
@@ -3950,13 +3955,36 @@ impl ConversationService {
                 failures.history_leased_elsewhere = true;
                 None
             }
+            // This conversation's saved bytes do not decode, or they name
+            // another `schemaVersion`. Settle the provider link as unknown so
+            // the delete can be recorded. The bytes stay until that record is
+            // acknowledged. A records-database failure is [`StorageError::Store`]
+            // and falls through: the tombstone stays unread and the delete retries.
+            Err(ConversationError::Storage(
+                StorageError::Corrupt(_) | StorageError::AnotherVersion { .. },
+            )) => {
+                lost_unreadable = true;
+                Some(None)
+            }
             Err(error) => {
                 failures.history = Some(error);
                 None
             }
         };
         let mut record = record;
-        if let (ProviderSessionLink::Unread, Some(lease)) = (deletion.provider_session(), &lease) {
+        if lost_unreadable && matches!(deletion.provider_session(), ProviderSessionLink::Unread) {
+            match self
+                .inner
+                .metadata
+                .record_deletion(record.id(), deletion.after_losing_history())
+                .await
+            {
+                Ok(kept) => record = kept,
+                Err(error) => failures.tombstone = Some(error),
+            }
+        } else if let (ProviderSessionLink::Unread, Some(lease)) =
+            (deletion.provider_session(), &lease)
+        {
             // What could not be read is the history's; what was read and
             // could not be kept is the tombstone's
             // (`a_history_read_that_cannot_be_kept_is_the_tombstone_s_failure`).
@@ -4007,6 +4035,22 @@ impl ConversationService {
             }
         }
         if recorded {
+            if lost_unreadable {
+                match self
+                    .inner
+                    .storage
+                    .discard_unreadable(conversation_session(&id))
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(StorageError::Busy) => {
+                        failures.history_leased_elsewhere = true;
+                    }
+                    Err(error) => {
+                        failures.history = Some(ConversationError::Storage(error));
+                    }
+                }
+            }
             if let Some(Some(lease)) = &lease {
                 if let Err(error) = lease.erase().await {
                     failures.history = Some(ConversationError::Storage(error));

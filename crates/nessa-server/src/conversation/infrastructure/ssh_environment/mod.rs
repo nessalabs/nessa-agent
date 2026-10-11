@@ -6,6 +6,8 @@
 //! gateway's own evidence about its hosts (kept by `durable_audit.rs`).
 //! A file the host publishes (issue #701) is read off it by `transfer.rs`,
 //! over `sftp.rs` on an artifact channel of that same connection.
+//! `peer.rs` is the paired environments (issue #706): the same adapter, over
+//! a connection the host dials into this gateway's native listener.
 //! Unix only, as its composition (`composition/local_auth.rs`) and the
 //! `nessa env serve` it speaks to are.
 //!
@@ -17,12 +19,14 @@ mod environment;
 mod install;
 mod link;
 mod open_ssh;
+mod peer;
 mod sftp;
 mod transfer;
 pub(crate) use durable_audit::DurableEnvironmentAudit;
 pub(crate) use environment::{SshEnvironment, SshTimings};
 pub(crate) use install::HostInstaller;
 pub(crate) use open_ssh::OpenSshConnector;
+pub(crate) use peer::{PeerEnvironments, ServingCredentials};
 
 #[cfg(test)]
 #[path = "../../../../tests/conversation/ssh_environment.rs"]

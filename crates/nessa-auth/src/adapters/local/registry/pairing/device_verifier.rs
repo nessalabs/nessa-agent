@@ -33,15 +33,30 @@ impl DeviceCredentialVerifier<'_> {
     /// nothing; a caller that admits on it still runs the full
     /// authentication with the credential the peer then names.
     pub fn holds_credential(&self, audience: &AudienceId) -> Result<bool, AccessError> {
+        Ok(!self.bound_credentials(audience)?.is_empty())
+    }
+    /// Every active (unrevoked) device credential for `audience` the key
+    /// this connection proved holds, by id: the binding rule `verify`
+    /// applies to one named credential, asked of every credential. As with
+    /// [`Self::holds_credential`], it authenticates nothing; what each may
+    /// do is the session's and the policy's answer.
+    pub fn bound_credentials(
+        &self,
+        audience: &AudienceId,
+    ) -> Result<Vec<CredentialId>, AccessError> {
         self.store.with_published_registry(|registry| {
+            let mut bound = Vec::new();
             for credential in &registry.credentials {
                 match bound_to_proof(registry, credential, audience, self.proof) {
-                    Ok(()) => return Ok(true),
+                    Ok(()) => bound.push(
+                        CredentialId::new(credential.metadata.id.as_str())
+                            .map_err(|_| AccessError::Unavailable)?,
+                    ),
                     Err(AccessError::InvalidCredential) => {}
                     Err(error) => return Err(error),
                 }
             }
-            Ok(false)
+            Ok(bound)
         })
     }
 }
