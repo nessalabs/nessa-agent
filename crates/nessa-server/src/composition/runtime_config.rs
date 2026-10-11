@@ -6,7 +6,7 @@ use crate::{
     product::{ConfiguredLimits, OperationalLimits, SessionSettings},
 };
 use nessa_auth::adapters::local::LocalStoreConfig;
-use nessa_sdk::domain::agent_execution::leases::SshDestination;
+use nessa_sdk::domain::agent_execution::leases::{PeerEnvironment, SshDestination};
 use serde::Deserialize;
 use std::{io::Read, net::SocketAddr, path::Path, time::Duration};
 
@@ -167,17 +167,20 @@ impl RuntimeConfig {
     }
 
     /// The agent's command policy; `None` when its environment tools are not
-    /// configured. A host not in `sshHosts`, or a program named by more than
-    /// its file name, refuses the configuration.
+    /// configured. A host is an SSH destination in `sshHosts` or a paired
+    /// environment's `peer:` name; any other host, or a program named by more
+    /// than its file name, refuses the configuration.
     pub fn command_policy(&self) -> Result<Option<CommandPolicy>, RunError> {
         let Some(tools) = &self.environment_tools else {
             return Ok(None);
         };
         let hosts = self.ssh_hosts()?;
         for host in &tools.command_hosts {
-            if !hosts.iter().any(|named| named.as_str() == host) {
+            if !hosts.iter().any(|named| named.as_str() == host)
+                && PeerEnvironment::parse(host).is_err()
+            {
                 return Err(refused(format!(
-                    "environmentTools.commandHosts: {host:?} is not in sshHosts"
+                    "environmentTools.commandHosts: {host:?} is neither in sshHosts nor a paired environment"
                 )));
             }
         }

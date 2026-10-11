@@ -41,6 +41,7 @@ pub(crate) use operational_limits::ConfiguredLimits;
 pub use operational_limits::{InvalidOperationalLimits, OperationalLimits};
 pub use socket::handle_socket;
 pub(crate) use socket::{RECORD_LANE, RECORD_SLOT, REFUSAL_LANE};
+pub(crate) use state::ConnectedEnvironments;
 pub use state::{InvalidSessionSettings, ProductDependencies, ProductRouteState, SessionSettings};
 
 mod conversation;

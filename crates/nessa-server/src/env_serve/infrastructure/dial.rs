@@ -5,8 +5,12 @@
 //! ```text
 //! TCP connect ──▶ TLS: this environment's key, the gateway's key pinned
 //!   ──▶ openEnvironment ──▶ serving ──▶ the stream lease frames ride
-//!                       ──▶ refused ──▶ PermissionDenied: this key may not serve
+//!                       ──▶ refused ──▶ PermissionDenied: not served now
 //! ```
+//!
+//! A refusal is redacted: the key holds no credential to serve, or the
+//! gateway had no room or could not read its registry just then. The dialer
+//! cannot tell them apart, so it tries a refusal again, with backoff.
 //!
 //! Arrows are steps, in order. The connect, the handshake and the answer are
 //! each bounded by the native phase deadlines, on a blocking worker as the
@@ -34,7 +38,8 @@ use std::{
 /// # Errors
 /// The gateway could not be reached or did not answer in time, the
 /// handshake failed, as it does when its key is not `pin`
-/// (`ConnectionAborted`), it refused this key (`PermissionDenied`), or it
+/// (`ConnectionAborted`), it refused to be served on this connection
+/// (`PermissionDenied`, which may pass: see the module's note), or it
 /// answered something else (`InvalidData`).
 #[cfg_attr(
     not(test),
@@ -65,7 +70,7 @@ fn open_environment(
         DeadlineStream::new(socket, clock, WakeEndpoint::new(address)).map_err(deadline_error)?;
     stream.blocking().map_err(deadline_error)?;
     // The handshake does not tell a cut connection from a key that is not
-    // `pin`; either is worth trying again, unlike a refusal of this key.
+    // `pin`; either is worth trying again.
     let transport = NativeTransport::connect(stream, identity, GatewayTrust::Pinned(pin))
         .map_err(|error| Error::new(ErrorKind::ConnectionAborted, format!("{error:?}")))?;
     begin_enrollment_phase(&deadline).map_err(deadline_error)?;
@@ -78,7 +83,7 @@ fn open_environment(
         Ok(NativePairingReply::Serving) => Ok(channel.into_transport()),
         Ok(NativePairingReply::Refused) => Err(Error::new(
             ErrorKind::PermissionDenied,
-            "the gateway refused to be served by this key",
+            "the gateway refused to be served on this connection",
         )),
         _ => Err(Error::new(
             ErrorKind::InvalidData,

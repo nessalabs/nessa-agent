@@ -170,12 +170,15 @@ fn nibble(digit: u8) -> Result<u8, ExecutionError> {
 /// `.`, `_`, `-` and `@`, starting with a letter or digit, at most
 /// [`Self::MAX_BYTES`]. A port, a jump host or an IPv6 literal is said in
 /// `~/.ssh/config` under an alias, as for any other OpenSSH option.
+/// [`EnvironmentRef::HERE`] is not a destination, since that name is this
+/// gateway's own machine.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SshDestination(Box<str>);
 impl SshDestination {
     /// Longest destination accepted: a DNS name's bound.
     pub const MAX_BYTES: usize = 253;
-    /// Accept `value` when it is in the alphabet above; otherwise
+    /// Accept `value` when it is in the alphabet above and is not
+    /// [`EnvironmentRef::HERE`]; otherwise
     /// [`ExecutionError::InvalidSshDestination`].
     pub fn new(value: impl Into<String>) -> Result<Self, ExecutionError> {
         let value = value.into();
@@ -184,6 +187,7 @@ impl SshDestination {
             .next()
             .is_some_and(|byte| byte.is_ascii_alphanumeric());
         if !starts_plainly
+            || value == EnvironmentRef::HERE
             || value.len() > Self::MAX_BYTES
             || !value.bytes().all(|byte| {
                 byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'@')

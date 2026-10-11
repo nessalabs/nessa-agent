@@ -352,10 +352,11 @@ pub(super) async fn product_state(
             }));
     }
     product.browser_http_allowed = config.browser_http_allowed();
+    let (listener_environments, connected_environments) = environment_peers.unzip();
     let native = match native {
         Some((prepared, commands, peers)) => {
             product = product.with_pairing(Arc::new(commands)).with_peers(peers);
-            Some(match environment_peers {
+            Some(match listener_environments {
                 Some(environments) => prepared.with_environments(environments),
                 None => prepared,
             })
@@ -390,6 +391,9 @@ pub(super) async fn product_state(
             .with_catalogue_source(catalogue)
             .with_attachments(attachments)
             .with_agents_catalog(agents_catalog);
+        if let Some(connected) = connected_environments {
+            product = product.with_connected_environments(connected);
+        }
         // The route redeems on the store the conversation service issues on.
         if let Some((tickets, audit)) = resource_route {
             product = product.with_resource_tickets(tickets, audit);
@@ -488,9 +492,17 @@ struct BuiltConversations {
     /// in: the store the conversation service issues on, and the audit it
     /// records an app's calls in. `None` without MCP servers.
     resource_route: Option<(Arc<ResourceTicketStore>, Arc<dyn McpAppAudit>)>,
-    /// The paired environments the native listener serves, when it does.
-    environment_peers: Option<Arc<dyn crate::device_pairing::infrastructure::EnvironmentPeers>>,
+    /// The paired environments the native listener serves, when it does,
+    /// and the names of those connected now, for the catalog.
+    environment_peers: Option<PairedParts>,
 }
+
+/// The paired environments as the native listener serves them, and the
+/// names of those connected now.
+type PairedParts = (
+    Arc<dyn crate::device_pairing::infrastructure::EnvironmentPeers>,
+    crate::product::ConnectedEnvironments,
+);
 
 /// What `config.json` says about conversations besides their agents.
 // Read only where conversations run: Unix process supervision.
@@ -1216,20 +1228,14 @@ fn setup_error(error: impl std::fmt::Display) -> RunError {
 /// the adapter, so no conversation reaches it; placements are kept either
 /// way, so a conversation placed on a host since removed from the
 /// configuration is refused rather than run here. The paired environments
-/// are handed back too, for the native listener.
+/// are handed back too, for the native listener and the catalog.
 fn environments(
     root: &Path,
     hosts: &[SshDestination],
     commands: Option<crate::conversation::domain::CommandPolicy>,
     clock: Arc<dyn Clock>,
     serving: Option<ServingAuth>,
-) -> Result<
-    (
-        Environments,
-        Option<Arc<dyn crate::device_pairing::infrastructure::EnvironmentPeers>>,
-    ),
-    RunError,
-> {
+) -> Result<(Environments, Option<PairedParts>), RunError> {
     use super::paired_environments::{ListenerEnvironments, RegistryServing};
     use crate::conversation::infrastructure::{
         ssh_environment::{
@@ -1291,11 +1297,22 @@ fn environments(
     if let Some(policy) = commands {
         environments = environments.with_commands(policy);
     }
-    let listener = peers.map(|peers| {
-        Arc::new(ListenerEnvironments(peers))
-            as Arc<dyn crate::device_pairing::infrastructure::EnvironmentPeers>
+    let paired = peers.map(|peers| {
+        let connected = peers.clone();
+        (
+            Arc::new(ListenerEnvironments(peers))
+                as Arc<dyn crate::device_pairing::infrastructure::EnvironmentPeers>,
+            Arc::new(move || {
+                use crate::conversation::application::PairedEnvironments;
+                connected
+                    .connected()
+                    .iter()
+                    .map(nessa_sdk::domain::agent_execution::leases::PeerEnvironment::name)
+                    .collect()
+            }) as crate::product::ConnectedEnvironments,
+        )
     });
-    Ok((environments, listener))
+    Ok((environments, paired))
 }
 
 #[cfg(unix)]

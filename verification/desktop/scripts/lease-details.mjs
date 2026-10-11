@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
  * Where an agent runs, as a person sees it: the details sheet's "Where it
- * runs" for each lease state the gateway publishes, on this computer or an
- * SSH host, and the composer tray's "Run on" choice of host for a new
- * conversation, both production components.
+ * runs" for each lease state the gateway publishes, on this computer, an SSH
+ * host or a paired machine, and the composer tray's "Run on" choice of place
+ * for a new conversation, both production components.
  */
 import { attempt, CannotRun } from "./lib/cli.mjs"
 import { openPage, withEngines } from "./lib/browser.mjs"
@@ -46,6 +46,38 @@ const expected = {
     ["SSH host", "devbox"],
     ["Status", "Couldn't start: host not reachable"],
   ],
+  // On a paired machine, by the start of its key, as the host is named.
+  "peer-live": [
+    ["Machine", "Paired machine abababab"],
+    ["Sandbox", "The agent's own"],
+    ["Status", "Allowed to run"],
+  ],
+  "peer-lost": [
+    ["Machine", "Paired machine 0f0f0f0f"],
+    ["Sandbox", "The agent's own"],
+    ["Status", "Ended when the connection to its host was lost"],
+  ],
+  "peer-refused": [
+    ["Machine", "Paired machine 0f0f0f0f"],
+    ["Status", "Couldn't start: host not reachable"],
+  ],
+}
+
+/** What each `run-on` case lists, and the place it then chooses. */
+const runOnCases = {
+  hosts: {
+    wanted: ["This computer", "devboxSSH", "me@build-01.internal.example.comSSH"],
+    choose: /^me@build-01/,
+    chosen: "me@build-01.internal.example.com",
+    row: "Run onme@build-01.internal.example.com",
+  },
+  // A connected paired machine, by the start of its key, after the SSH hosts.
+  paired: {
+    wanted: ["This computer", "devboxSSH", "Paired machine ababababPaired"],
+    choose: /^Paired machine/,
+    chosen: `peer:${"ab".repeat(32)}`,
+    row: "Run onPaired machine abababab",
+  },
 }
 
 /**
@@ -53,7 +85,7 @@ const expected = {
  * listing this computer and each host in full, and showing the one chosen.
  */
 async function runOn(browser, rep, url, engine, width) {
-  for (const name of ["none", "hosts"]) {
+  for (const name of ["none", ...Object.keys(runOnCases)]) {
     const pageUrl = new URL("/verification/conversation/run-on-fixture.html", url)
     pageUrl.searchParams.set("case", name)
     const opened = await openPage(browser, {
@@ -95,11 +127,12 @@ async function runOn(browser, rep, url, engine, width) {
           }),
         )
         const texts = radios.map((radio) => radio.text)
-        const wanted = [
-          "This computer",
-          "devboxSSH",
-          "me@build-01.internal.example.comSSH",
-        ]
+        const {
+          wanted,
+          choose,
+          chosen: expectedChoice,
+          row: expectedRow,
+        } = runOnCases[name]
         if (JSON.stringify(texts) !== JSON.stringify(wanted))
           failures.push(
             `choices ${JSON.stringify(texts)}, expected ${JSON.stringify(wanted)}`,
@@ -112,12 +145,11 @@ async function runOn(browser, rep, url, engine, width) {
           if (radio.right > viewport + 1)
             failures.push(`${radio.text} ends at ${radio.right}, past ${viewport}`)
         }
-        await group.getByRole("radio", { name: /^me@build-01/ }).click()
+        await group.getByRole("radio", { name: choose }).click()
         const chosen = await page.locator(css.runOnFixture).getAttribute("data-chosen")
-        if (chosen !== "me@build-01.internal.example.com")
-          failures.push(`chose ${JSON.stringify(chosen)}`)
+        if (chosen !== expectedChoice) failures.push(`chose ${JSON.stringify(chosen)}`)
         const after = (await row.textContent())?.trim()
-        if (after !== "Run onme@build-01.internal.example.com")
+        if (after !== expectedRow)
           failures.push(`the row reads ${JSON.stringify(after)} after a choice`)
         const overflow = await page.evaluate(
           () =>
@@ -136,7 +168,7 @@ await main(
   {
     name: "lease-details",
     summary:
-      "the details sheet's Where it runs section for every published lease state, here or on an SSH host, and the composer's Run on choice",
+      "the details sheet's Where it runs section for every published lease state, here, on an SSH host or on a paired machine, and the composer's Run on choice",
     defaults: { engine: "chromium,webkit" },
   },
   async ({ options, rep, url, mode }) => {

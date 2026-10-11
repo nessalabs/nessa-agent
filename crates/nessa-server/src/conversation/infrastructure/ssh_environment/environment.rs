@@ -322,6 +322,11 @@ impl Inner {
     /// asked again whether it still serves: one that no longer does is
     /// closed. Nothing is reached here: with no connection open, the host is
     /// unreachable until it dials in.
+    ///
+    /// The answer is about the key, and every connection in this slot proved
+    /// the same key, so the connection returned is the one held once the ask
+    /// returns: a reconnect while it was pending is served, not refused for
+    /// the connection it replaced.
     async fn dialed_in(
         &self,
         credentials: &dyn ServingCredentials,
@@ -331,13 +336,19 @@ impl Inner {
             .filter(|served| served.link.is_open())
             .ok_or(LeaseRefusal::EnvironmentUnreachable)?;
         match credentials.serves(&proof).await {
-            Ok(true) => Ok(link),
+            Ok(true) => served(serving)
+                .map(|current| current.link)
+                .filter(|current| current.is_open())
+                .ok_or(LeaseRefusal::EnvironmentUnreachable),
             Ok(false) => {
                 tracing::warn!(
                     host = self.name(),
                     "a paired environment no longer holds a credential to serve; its connection is closed"
                 );
                 link.close();
+                if let Some(current) = served(serving) {
+                    current.link.close();
+                }
                 Err(LeaseRefusal::EnvironmentUnreachable)
             }
             Err(error) => {

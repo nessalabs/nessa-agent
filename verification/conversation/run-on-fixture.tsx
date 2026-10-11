@@ -1,4 +1,4 @@
-/** The production composer tray's "Run on" over the hosts a gateway names. */
+/** The production composer tray's "Run on" over the places a gateway names. */
 import * as React from "react"
 import { createRoot } from "react-dom/client"
 import { ComposerTray } from "../../src/panel/ui/composer-tray"
@@ -8,6 +8,8 @@ import "../../src/styles.css"
 const hostCases: Record<string, readonly string[]> = {
   none: [],
   hosts: ["devbox", "me@build-01.internal.example.com"],
+  // A connected paired machine, after the SSH hosts, as the catalog lists it.
+  paired: ["devbox", `peer:${"ab".repeat(32)}`],
 }
 
 function Fixture() {

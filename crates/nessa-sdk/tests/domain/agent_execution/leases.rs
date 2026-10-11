@@ -428,6 +428,11 @@ fn an_environment_name_names_one_environment() {
         EnvironmentRef::named("-oProxyCommand=sh"),
         Err(ExecutionError::InvalidSshDestination)
     );
+    // `here` is this machine's name, so no SSH destination can take it.
+    assert_eq!(
+        SshDestination::new(EnvironmentRef::HERE),
+        Err(ExecutionError::InvalidSshDestination)
+    );
 }
 
 #[test]

@@ -315,7 +315,8 @@ and refuses a host whose build speaks another lease protocol:
 To let the agent run single commands on a host with its `run` tool (beside
 `environments_list`), name the host in `environmentTools.commandHosts` on the
 gateway, and on the host itself set `envServe.commands` in its `config.json`.
-Both are off until set. A command runs as the host's account, in its workspace,
+A host is an SSH destination from `sshHosts`, or a paired machine by its
+`peer:` name. Both are off until set. A command runs as the host's account, in its workspace,
 with nothing enclosing it, so the person's approval card is the check. The
 gateway's tool policy matches each program by its file name; `denyPrograms`
 wins over `allowPrograms`, and omitting `allowPrograms` allows every other

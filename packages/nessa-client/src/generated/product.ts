@@ -1612,7 +1612,7 @@ export interface AgentOption {
 export interface AgentsListResult {
   /** Configured agents. */
   agents: AgentOption[]
-  /** SSH destinations config.json names as places a new conversation may run, in the order it names them. Empty when it names none, and then nothing about SSH is reachable. */
+  /** Places a new conversation may run besides this gateway: the SSH destinations config.json names, in the order it names them, then each paired environment connected when the catalog is asked, as `peer:` and its key in lowercase hex. At most 16 of the first and 8 of the second. */
   environments: string[]
 }
 /** Change a conversation approval preset while no turn runs. */

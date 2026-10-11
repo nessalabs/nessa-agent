@@ -41,6 +41,9 @@ pub(crate) type PassiveReadAuthorities = (
     Arc<dyn ReadGrants>,
 );
 
+/// The names of the paired environments connected now.
+pub(crate) type ConnectedEnvironments = Arc<dyn Fn() -> Vec<String> + Send + Sync>;
+
 /// Dependencies and trusted gateway selectors for the product route.
 ///
 /// This state is constructed only in composition.
@@ -92,6 +95,9 @@ pub struct ProductRouteState {
     pub(crate) agent_installations: Option<Arc<dyn AgentInstallations>>,
     pub(crate) installs: Arc<Semaphore>,
     pub(crate) agents_catalog: Option<Arc<AgentsListResult>>,
+    /// The paired environments connected now, by name: added to the
+    /// catalog's places each time it is asked, since they come and go.
+    pub(crate) connected_environments: Option<ConnectedEnvironments>,
     pub(crate) attachments: Option<AttachmentService>,
     /// The MCP App resources held behind tickets: issued by the conversation
     /// service, redeemed at `GET /mcp-resources`, which records each
@@ -239,6 +245,7 @@ impl ProductRouteState {
             record_source: None,
             catalogue_source: None,
             agents_catalog: None,
+            connected_environments: None,
             agent_installations: None,
             installs: Arc::new(Semaphore::new(1)),
             attachments: None,
@@ -365,6 +372,14 @@ impl ProductRouteState {
     /// Publish the validated choices composed for this gateway.
     pub fn with_agents_catalog(mut self, catalog: AgentsListResult) -> Self {
         self.agents_catalog = Some(Arc::new(catalog));
+        self
+    }
+
+    /// Offer the paired environments connected when the catalog is asked as
+    /// places a new conversation may run, after its SSH hosts.
+    #[cfg_attr(not(any(unix, test)), allow(dead_code))]
+    pub(crate) fn with_connected_environments(mut self, connected: ConnectedEnvironments) -> Self {
+        self.connected_environments = Some(connected);
         self
     }
 

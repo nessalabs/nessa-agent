@@ -3912,8 +3912,8 @@
             "maxLength": 253,
             "x-utf8MaxBytes": 253
           },
-          "maxItems": 16,
-          "description": "SSH destinations config.json names as places a new conversation may run, in the order it names them. Empty when it names none, and then nothing about SSH is reachable."
+          "maxItems": 24,
+          "description": "Places a new conversation may run besides this gateway: the SSH destinations config.json names, in the order it names them, then each paired environment connected when the catalog is asked, as `peer:` and its key in lowercase hex. At most 16 of the first and 8 of the second."
         }
       },
       "required": ["agents", "environments"]

@@ -12,9 +12,9 @@ use super::paired_environments::{ListenerEnvironments, RegistryServing};
 use super::peer_reading_tests::{inputs, owned, uuid, NoAgents, WAIT};
 use super::runtime_config::NativeConfig;
 use crate::app::dependencies::RuntimeDependencies;
-use crate::conversation::application::{CommandResult, PairedEnvironments};
+use crate::conversation::application::{CommandResult, EnvironmentFuture, PairedEnvironments};
 use crate::conversation::infrastructure::ssh_environment::{
-    DurableEnvironmentAudit, PeerEnvironments, SshTimings,
+    DurableEnvironmentAudit, PeerEnvironments, ServingCredentials, SshTimings,
 };
 use crate::conversation::infrastructure::LocalReceiverAuthority;
 use crate::device_pairing::infrastructure::PairingOwnerCommands;
@@ -28,7 +28,8 @@ use nessa_auth::adapters::cedar::CedarPolicyEvaluator;
 use nessa_auth::adapters::local::LocalCredentialStore;
 use nessa_auth::adapters::pairing::{FilePairingState, ManualCode, NativeIdentity, OsEntropy};
 use nessa_auth::application::credential_admin::RevokeCredentialRequest;
-use nessa_auth::application::pairing::ClientPendingStore;
+use nessa_auth::application::pairing::{ClientPendingStore, DeviceConnectionProof};
+use nessa_auth::application::ports::AccessError;
 use nessa_auth::application::ports::Clock;
 use nessa_auth::application::session::AuthenticatedSession;
 use nessa_auth::domain::pairing::ConsentClass;
@@ -45,9 +46,10 @@ use std::io::ErrorKind;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::watch;
+use tokio::sync::{watch, Notify};
 use tokio::task::JoinHandle;
 
 /// Gateway A: native pairing with its paired environments composed.
@@ -57,8 +59,34 @@ struct Gateway {
     owner: String,
     commands: PairingOwnerCommands,
     peers: Arc<PeerEnvironments>,
+    /// Holds the next ask of whether a key serves, once armed.
+    gate: Arc<Gate>,
     native: SocketAddr,
     running: Option<RunningNative>,
+}
+
+/// The registry's answer, held once when armed: the next ask waits until
+/// released, so a test can act while a lease's ask is pending.
+struct Gate {
+    inner: RegistryServing,
+    armed: AtomicBool,
+    entered: Notify,
+    released: Notify,
+}
+
+impl ServingCredentials for Gate {
+    fn serves<'a>(
+        &'a self,
+        proof: &'a DeviceConnectionProof,
+    ) -> EnvironmentFuture<'a, Result<bool, AccessError>> {
+        Box::pin(async move {
+            if self.armed.swap(false, Ordering::SeqCst) {
+                self.entered.notify_one();
+                self.released.notified().await;
+            }
+            self.inner.serves(proof).await
+        })
+    }
 }
 
 impl Gateway {
@@ -85,14 +113,20 @@ impl Gateway {
             OrganizationId::new(organization.clone()).unwrap(),
             ResourceId::new(gateway.clone()).unwrap(),
         );
-        let peers = Arc::new(PeerEnvironments::new(
-            Arc::new(RegistryServing {
+        let gate = Arc::new(Gate {
+            inner: RegistryServing {
                 store: auth.clone(),
                 policy: Arc::new(CedarPolicyEvaluator::new().unwrap()),
                 clock: Arc::new(SystemClock),
                 gateway: resource,
                 audience: AudienceId::new(gateway.clone()).unwrap(),
-            }),
+            },
+            armed: AtomicBool::new(false),
+            entered: Notify::new(),
+            released: Notify::new(),
+        });
+        let peers = Arc::new(PeerEnvironments::new(
+            gate.clone(),
             DurableEnvironmentAudit::new(root.join("environments"), Arc::new(SystemClock)).unwrap(),
             SshTimings::default(),
         ));
@@ -121,6 +155,7 @@ impl Gateway {
             owner,
             commands,
             peers,
+            gate,
             native,
             running: Some(start(bound, failure)),
         }
@@ -363,4 +398,47 @@ async fn a_key_paired_to_read_is_refused_at_open_environment() {
         .expect("a reading peer is refused");
     assert_eq!(refused.kind(), ErrorKind::PermissionDenied);
     assert!(a.peers.connected().is_empty());
+}
+
+/// Review finding on #748: a lease asks whether the key still serves, and
+/// the environment dials again while that ask is pending. The answer is
+/// about the key, so the lease runs on the connection that replaced the one
+/// it saw, rather than being refused for the connection now closed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_lease_asked_across_a_reconnect_runs_on_the_new_connection() {
+    let directory = tempfile::tempdir().unwrap();
+    let a = Gateway::start(&directory.path().join("a")).await;
+    let e = a
+        .pair(
+            &directory.path().join("e-state"),
+            ConsentClass::PeerEnvironment,
+        )
+        .await;
+    let first = dial(a.native, e.identity.clone(), e.pin, clock())
+        .await
+        .unwrap();
+    let first = serving(&directory.path().join("e"), first);
+    a.until_connected(e.peer, true).await;
+
+    a.gate.armed.store(true, Ordering::SeqCst);
+    let a = Arc::new(a);
+    let racing = {
+        let a = a.clone();
+        tokio::spawn(async move { a.echo(e.peer, "racing").await })
+    };
+    tokio::time::timeout(WAIT, a.gate.entered.notified())
+        .await
+        .expect("the lease asks whether the key serves");
+    let second = dial(a.native, e.identity.clone(), e.pin, clock())
+        .await
+        .unwrap();
+    let _second = serving(&directory.path().join("e2"), second);
+    tokio::time::timeout(WAIT, first)
+        .await
+        .expect("the replaced connection's serving ends")
+        .unwrap();
+    a.until_connected(e.peer, true).await;
+    a.gate.released.notify_one();
+    let ran = racing.await.unwrap().unwrap();
+    assert_eq!(ran.stdout, b"racing");
 }
