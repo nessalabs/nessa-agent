@@ -88,7 +88,12 @@ impl ReadOnlyCache {
             proceed();
         }
         self.refresh(&saved.scope)?;
-        Ok(self.loaded.as_ref())
+        // Discarding a checkpoint leaves the loaded transcript with no
+        // progress. The retained reader treats that as not loaded.
+        Ok(self
+            .loaded
+            .as_ref()
+            .filter(|loaded| loaded.progress.is_some()))
     }
 
     pub(crate) fn retained_transcript_state(
