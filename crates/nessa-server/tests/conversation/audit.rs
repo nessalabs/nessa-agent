@@ -499,15 +499,13 @@ fn audit_maps_a_stopping_refusal_as_the_cause_of_the_stop() {
     assert_eq!(value["origin"]["kind"], "rule");
     assert_eq!(value["origin"]["ruleId"], "refuse-shell");
     assert_eq!(value["origin"]["revision"], "3");
-    assert_eq!(value["stop"]["before"], "running");
     assert_eq!(value["stop"]["after"], "ended");
-    assert_eq!(value["stop"]["target"]["executionId"], "run");
-    assert_eq!(value["stop"]["target"]["declaredTool"], "Bash");
     assert_eq!(value["stop"]["cause"]["kind"], "refusal");
     assert_eq!(value["stop"]["cause"]["reason"], "tool_not_reviewable");
     assert_eq!(value["stop"]["cause"]["declineId"], "9");
-    assert_eq!(value["stop"]["initiator"]["kind"], "rule");
-    assert_eq!(value["stop"]["initiator"]["ruleId"], "refuse-shell");
+    assert!(value.get("stop").unwrap().get("before").is_none());
+    assert!(value.get("stop").unwrap().get("target").is_none());
+    assert!(value.get("stop").unwrap().get("initiator").is_none());
     assert!(value.get("actor").is_none());
 
     let closed = record_value(&ExecutionAuditRecord::ReviewDeclined(
@@ -526,7 +524,6 @@ fn audit_maps_a_stopping_refusal_as_the_cause_of_the_stop() {
     ));
     assert_eq!(closed["outcome"], "close_session");
     assert_eq!(closed["stop"]["after"], "closed");
-    assert!(closed["stop"]["target"]["declaredTool"].is_null());
 
     let late = record_value(&ExecutionAuditRecord::LateProviderResult(
         LateProviderResultRecord::new(

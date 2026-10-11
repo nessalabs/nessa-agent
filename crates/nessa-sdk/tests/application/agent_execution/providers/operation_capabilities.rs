@@ -118,11 +118,11 @@ fn proven_turn_cleanup_is_the_only_fact_that_supports_ending_the_turn() {
     });
     assert_eq!(
         unsupported.policy_end_turn(),
-        PolicyEndTurnCapability::UnsupportedNotImplemented
+        PolicyEndTurnCapability::Unsupported
     );
     assert_eq!(
         unsupported.policy_close_session(),
-        PolicyCloseSessionCapability::UnsupportedNotImplemented
+        PolicyCloseSessionCapability::Unsupported
     );
     assert_eq!(
         OperationCapabilities::default().policy_end_turn(),

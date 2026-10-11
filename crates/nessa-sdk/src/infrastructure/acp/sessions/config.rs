@@ -454,6 +454,16 @@ pub struct AcpConfig {
     /// tests. Waiting for the process itself to exit is not measured on it:
     /// see [`crate::infrastructure::clock`].
     pub clock: Arc<dyn Clock>,
+    /// Turn-stop and session-close facts a test supplies so a stopping refusal
+    /// can be exercised before a profile has proven them.
+    ///
+    /// Production opens leave this unset. The profile's own facts are what is
+    /// published, and an unset value does not change them.
+    #[cfg(test)]
+    pub(crate) exercised_stop_facts: Option<(
+        crate::application::agent_execution::providers::TurnStopCleanup,
+        crate::application::agent_execution::providers::SessionCloseOwnership,
+    )>,
 }
 impl AcpConfig {
     /// This configuration for a harness a host starts, working in `workspace`

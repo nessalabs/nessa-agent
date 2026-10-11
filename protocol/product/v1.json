@@ -731,16 +731,12 @@
     "PolicyEndTurnSupport": {
       "type": "string",
       "description": "Whether a Nessa policy can end its correlated current invocation.",
-      "enum": [
-        "unknown",
-        "unsupported_not_implemented",
-        "supported_for_current_invocation"
-      ]
+      "enum": ["unknown", "unsupported", "supported_for_current_invocation"]
     },
     "PolicyCloseSessionSupport": {
       "type": "string",
       "description": "Whether a Nessa policy can close its correlated provider session.",
-      "enum": ["unknown", "unsupported_not_implemented", "supported_for_session"]
+      "enum": ["unknown", "unsupported", "supported_for_session"]
     },
     "IncomingElicitationSupport": {
       "type": "string",

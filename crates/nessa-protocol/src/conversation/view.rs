@@ -471,12 +471,12 @@ support_enum!(PreToolPolicySupport {
 });
 support_enum!(PolicyEndTurnSupport {
     Unknown,
-    UnsupportedNotImplemented,
+    Unsupported,
     SupportedForCurrentInvocation
 });
 support_enum!(PolicyCloseSessionSupport {
     Unknown,
-    UnsupportedNotImplemented,
+    Unsupported,
     SupportedForSession
 });
 support_enum!(IncomingElicitationSupport {
@@ -548,18 +548,14 @@ impl From<OperationCapabilities> for ConversationAgentFeatures {
             },
             policy_end_turn: match value.policy_end_turn() {
                 PolicyEndTurnCapability::Unknown => PolicyEndTurnSupport::Unknown,
-                PolicyEndTurnCapability::UnsupportedNotImplemented => {
-                    PolicyEndTurnSupport::UnsupportedNotImplemented
-                }
+                PolicyEndTurnCapability::Unsupported => PolicyEndTurnSupport::Unsupported,
                 PolicyEndTurnCapability::SupportedForCurrentInvocation => {
                     PolicyEndTurnSupport::SupportedForCurrentInvocation
                 }
             },
             policy_close_session: match value.policy_close_session() {
                 PolicyCloseSessionCapability::Unknown => PolicyCloseSessionSupport::Unknown,
-                PolicyCloseSessionCapability::UnsupportedNotImplemented => {
-                    PolicyCloseSessionSupport::UnsupportedNotImplemented
-                }
+                PolicyCloseSessionCapability::Unsupported => PolicyCloseSessionSupport::Unsupported,
                 PolicyCloseSessionCapability::SupportedForSession => {
                     PolicyCloseSessionSupport::SupportedForSession
                 }

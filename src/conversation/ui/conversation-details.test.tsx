@@ -53,8 +53,8 @@ function attached(
         permissionDeferral: "unsupported_not_implemented",
         elicitationForwarding: "unknown",
         preToolPolicy: "unsupported_not_implemented",
-        policyEndTurn: "unsupported_not_implemented",
-        policyCloseSession: "unsupported_not_implemented",
+        policyEndTurn: "unsupported",
+        policyCloseSession: "unsupported",
         incomingElicitation: "supported_with_correlated_round_trip",
       },
     },
@@ -99,7 +99,7 @@ it("says in a word whether approvals work here, without the capability jargon", 
   show(attached())
 
   expect(group("Approvals")).toBe(
-    "ApprovalsTool callsProvider asksDeny a requestSupportedAnswer laterNot yet in NessaEnd a turnNot yet in NessaClose the sessionNot yet in Nessa",
+    "ApprovalsTool callsProvider asksDeny a requestSupportedAnswer laterNot yet in Nessa",
   )
   expect(group("Model")).toBe("ModelImagesNot supported")
   expect(document.body.textContent).not.toContain("turn correlation")

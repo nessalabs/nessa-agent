@@ -46,7 +46,8 @@ pub fn lifetime_disposition(request: &SessionCloseRequest) -> LifetimeDispositio
         | SessionCloseRequest::ExecutionFailed
         | SessionCloseRequest::SessionFailed
         | SessionCloseRequest::DeadlineExceeded
-        | SessionCloseRequest::EventConsumerDropped => LifetimeDisposition::AttachmentOnly,
+        | SessionCloseRequest::EventConsumerDropped
+        | SessionCloseRequest::PolicyRefusal => LifetimeDisposition::AttachmentOnly,
     }
 }
 

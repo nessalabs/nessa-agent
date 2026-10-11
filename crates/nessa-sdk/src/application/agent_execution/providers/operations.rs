@@ -187,9 +187,7 @@ pub enum PolicyEndTurnCapability {
     /// Correlation and target fencing have not been established.
     Unknown,
     /// This binding cannot end the current invocation.
-    ///
-    /// The variant name is the published wire value from before this stop existed.
-    UnsupportedNotImplemented,
+    Unsupported,
     /// A policy can stop its correlated current invocation.
     SupportedForCurrentInvocation,
 }
@@ -200,9 +198,7 @@ pub enum PolicyCloseSessionCapability {
     /// Correlation and cleanup ownership have not been established.
     Unknown,
     /// This binding cannot close its session.
-    ///
-    /// The variant name is the published wire value from before this stop existed.
-    UnsupportedNotImplemented,
+    Unsupported,
     /// A policy can close its correlated session through the lifecycle owner.
     SupportedForSession,
 }
@@ -385,13 +381,10 @@ impl OperationCapabilities {
 }
 
 /// Map a binding's turn-cleanup fact onto the one capability the rest of Nessa reads.
-///
-/// `UnsupportedNotImplemented` is that published unsupported value. The
-/// integration exists; the variant now means this binding cannot honor the stop.
 fn end_turn_capability(fact: TurnStopCleanup) -> PolicyEndTurnCapability {
     match fact {
         TurnStopCleanup::Unknown => PolicyEndTurnCapability::Unknown,
-        TurnStopCleanup::Unsupported => PolicyEndTurnCapability::UnsupportedNotImplemented,
+        TurnStopCleanup::Unsupported => PolicyEndTurnCapability::Unsupported,
         TurnStopCleanup::ProvenWithSessionReuse => {
             PolicyEndTurnCapability::SupportedForCurrentInvocation
         }
@@ -401,9 +394,7 @@ fn end_turn_capability(fact: TurnStopCleanup) -> PolicyEndTurnCapability {
 fn close_session_capability(fact: SessionCloseOwnership) -> PolicyCloseSessionCapability {
     match fact {
         SessionCloseOwnership::Unknown => PolicyCloseSessionCapability::Unknown,
-        SessionCloseOwnership::Unsupported => {
-            PolicyCloseSessionCapability::UnsupportedNotImplemented
-        }
+        SessionCloseOwnership::Unsupported => PolicyCloseSessionCapability::Unsupported,
         SessionCloseOwnership::Proven => PolicyCloseSessionCapability::SupportedForSession,
     }
 }

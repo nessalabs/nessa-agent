@@ -14,25 +14,28 @@ use crate::application::agent_execution::providers::{
 };
 use crate::domain::agent_execution::permissions::RefusalOutcome;
 
-/// The refusal outcome configured for one binding, with the rule that required a stop.
+/// The refusal outcome configured for one binding.
 ///
-/// [`continue_turn`](Self::continue_turn) carries no rule: a built-in refusal
-/// still means the agent is told no and the execution continues.
-/// [`stopping`](Self::stopping) is an identified rule, and it cannot name
-/// [`RefusalOutcome::Continue`].
+/// [`Continue`](Self::Continue) carries no rule: a built-in refusal still means
+/// the agent is told no and the execution continues. [`Stop`](Self::Stop) is an
+/// identified rule, and its kind cannot be [`RefusalOutcome::Continue`].
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ConfiguredRefusal {
-    outcome: RefusalOutcome,
-    rule: Option<ApprovalRuleReference>,
+pub enum ConfiguredRefusal {
+    /// Tell the agent no and leave the execution running.
+    Continue,
+    /// Stop for `rule`. `kind` ends the turn or closes the session.
+    Stop {
+        /// Whether the stop ends the turn or closes the session.
+        kind: RefusalOutcome,
+        /// The rule that required the stop.
+        rule: ApprovalRuleReference,
+    },
 }
 
 impl ConfiguredRefusal {
     /// Tell the agent no and leave the execution running. No rule is involved.
     pub fn continue_turn() -> Self {
-        Self {
-            outcome: RefusalOutcome::Continue,
-            rule: None,
-        }
+        Self::Continue
     }
 
     /// Stop for `rule`. `outcome` must end the turn or close the session.
@@ -49,20 +52,26 @@ impl ConfiguredRefusal {
                 "a stopping refusal cannot continue the turn".into(),
             ));
         }
-        Ok(Self {
-            outcome,
-            rule: Some(rule),
+        Ok(Self::Stop {
+            kind: outcome,
+            rule,
         })
     }
 
     /// What this binding does when it refuses a tool review.
     pub fn outcome(&self) -> RefusalOutcome {
-        self.outcome
+        match self {
+            Self::Continue => RefusalOutcome::Continue,
+            Self::Stop { kind, .. } => *kind,
+        }
     }
 
     /// The rule that required a stop, when this outcome is not continue.
     pub fn rule(&self) -> Option<&ApprovalRuleReference> {
-        self.rule.as_ref()
+        match self {
+            Self::Continue => None,
+            Self::Stop { rule, .. } => Some(rule),
+        }
     }
 }
 
@@ -83,23 +92,35 @@ pub fn admit_configured_outcome(
     configured: &ConfiguredRefusal,
     capabilities: OperationCapabilities,
 ) -> Result<(), AgentError> {
-    match configured.outcome() {
-        RefusalOutcome::Continue => Ok(()),
-        RefusalOutcome::EndTurn => match capabilities.policy_end_turn() {
+    match configured {
+        ConfiguredRefusal::Continue => Ok(()),
+        ConfiguredRefusal::Stop {
+            kind: RefusalOutcome::Continue,
+            ..
+        } => Err(AgentError::Configuration(
+            "a stopping refusal cannot continue the turn".into(),
+        )),
+        ConfiguredRefusal::Stop {
+            kind: RefusalOutcome::EndTurn,
+            ..
+        } => match capabilities.policy_end_turn() {
             PolicyEndTurnCapability::SupportedForCurrentInvocation => Ok(()),
             PolicyEndTurnCapability::Unknown => Err(AgentError::Configuration(
                 "configured refusal ends the turn, and this binding has not proven it can stop the current invocation and run another".into(),
             )),
-            PolicyEndTurnCapability::UnsupportedNotImplemented => Err(AgentError::Configuration(
+            PolicyEndTurnCapability::Unsupported => Err(AgentError::Configuration(
                 "configured refusal ends the turn, and this binding cannot stop the current invocation and run another".into(),
             )),
         },
-        RefusalOutcome::CloseSession => match capabilities.policy_close_session() {
+        ConfiguredRefusal::Stop {
+            kind: RefusalOutcome::CloseSession,
+            ..
+        } => match capabilities.policy_close_session() {
             PolicyCloseSessionCapability::SupportedForSession => Ok(()),
             PolicyCloseSessionCapability::Unknown => Err(AgentError::Configuration(
                 "configured refusal closes the session, and this binding has not proven it owns that close".into(),
             )),
-            PolicyCloseSessionCapability::UnsupportedNotImplemented => Err(AgentError::Configuration(
+            PolicyCloseSessionCapability::Unsupported => Err(AgentError::Configuration(
                 "configured refusal closes the session, and this binding cannot close it".into(),
             )),
         },

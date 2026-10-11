@@ -28,6 +28,8 @@ pub(super) enum AuditEffectPhase {
     Cancellation,
     PermissionSelection,
     PermissionDelivery(EffectCorrelation),
+    /// A provider result that arrived after the local stop had already settled.
+    LateProviderResult,
 }
 
 enum SettlementFact {

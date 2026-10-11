@@ -28,8 +28,8 @@ const agentFeatures: AgentFeatures = {
   permissionDeferral: "unsupported_not_implemented",
   elicitationForwarding: "unknown",
   preToolPolicy: "unsupported_not_implemented",
-  policyEndTurn: "unsupported_not_implemented",
-  policyCloseSession: "unsupported_not_implemented",
+  policyEndTurn: "unsupported",
+  policyCloseSession: "unsupported",
   incomingElicitation: "unsupported",
 }
 

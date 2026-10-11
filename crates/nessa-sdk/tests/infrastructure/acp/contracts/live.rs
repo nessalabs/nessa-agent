@@ -244,3 +244,109 @@ async fn selected_codex_preset_survives_a_real_agent_close_and_restore() {
     restored.close(close_action()).await.unwrap();
     drop(workspace);
 }
+
+/// Drive the pinned Claude adapter through a policy stop, its cancel, and the
+/// next prompt.
+///
+/// Claude's profile does not claim this yet. `exercised_stop_facts` lets the
+/// check run; it is not that claim. Promote Claude only after this passes on
+/// a machine that is already logged in. Codex and OpenCode stay unknown.
+#[tokio::test]
+#[ignore = "requires NESSA_LIVE_CLAUDE_ACP and existing local Claude authentication"]
+async fn claude_stop_cancel_and_the_next_prompt() {
+    let _process_slot = process_test_slot().await;
+    let (workspace, config, fixture_model) = test_acp_configuration("live", 32);
+    let mut config = live_config(
+        config,
+        "NESSA_LIVE_CLAUDE_ACP",
+        &[
+            "HOME",
+            "PATH",
+            "USER",
+            "LOGNAME",
+            "SHELL",
+            "TMPDIR",
+            "LANG",
+            "CLAUDE_CONFIG_DIR",
+        ],
+        &["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
+    );
+    config.refusal = ConfiguredRefusal::stopping(
+        RefusalOutcome::EndTurn,
+        ApprovalRuleReference::new(
+            "refuse-shell",
+            "1",
+            ActionContext::new("host", "policy", "grant").unwrap(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    config.exercised_stop_facts = Some((
+        TurnStopCleanup::ProvenWithSessionReuse,
+        SessionCloseOwnership::Proven,
+    ));
+    let mut metadata = ModelMetadataDto::from(&fixture_model);
+    metadata.model_id = "claude-sonnet-5".into();
+    let model = ModelMetadata::try_from(metadata).unwrap();
+    let provider = ClaudeAcpProvider::new(
+        config,
+        &model,
+        TokenLimits::new(900, 100).unwrap(),
+        Arc::new(RecordingAudit::default()),
+    )
+    .unwrap();
+    let mut opened = provider
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
+    let first = start(
+        &opened,
+        "Run the shell command echo nessa-stop and show the output.",
+    )
+    .await;
+    let mut declined = false;
+    for _ in 0..40 {
+        match timeout(Duration::from_secs(30), opened.events.next())
+            .await
+            .expect("claude produced no event")
+            .unwrap()
+            .unwrap()
+            .into_update()
+        {
+            ExecutionUpdate::ReviewDeclined(notice) => {
+                assert_eq!(notice.decline().outcome(), RefusalOutcome::EndTurn);
+                declined = true;
+            }
+            ExecutionUpdate::Finished(ExecutionOutcome::Cancelled) if declined => break,
+            ExecutionUpdate::Finished(_) => {
+                panic!("claude finished without the stopping refusal");
+            }
+            _ => {}
+        }
+    }
+    assert!(declined, "claude never requested a tool this policy stops");
+    assert_eq!(
+        timeout(Duration::from_secs(30), first)
+            .await
+            .expect("the stopped prompt was not answered")
+            .unwrap(),
+        Ok(ExecutionOutcome::Cancelled)
+    );
+    let second = start(
+        &opened,
+        "Reply with the single word ready. Do not use tools.",
+    )
+    .await;
+    assert_eq!(
+        timeout(Duration::from_secs(120), second)
+            .await
+            .expect("the next prompt did not finish")
+            .unwrap(),
+        Ok(ExecutionOutcome::Completed)
+    );
+    let _ = opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await;
+    drop(workspace);
+}

@@ -147,6 +147,7 @@ fn cancellation_reason_code(state: PermissionStateView<'_>) -> &str {
             PermissionCancellationReasonView::DeadlineExceeded => "deadline_exceeded",
             PermissionCancellationReasonView::EventConsumerDropped => "event_consumer_dropped",
             PermissionCancellationReasonView::SessionHandlesDropped => "session_handles_dropped",
+            PermissionCancellationReasonView::PolicyRefusal => "policy_refusal",
             PermissionCancellationReasonView::Custom(reason) => reason.code(),
         },
         _ => "invalid_cancellation",

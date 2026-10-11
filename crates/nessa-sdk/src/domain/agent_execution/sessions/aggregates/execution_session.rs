@@ -160,6 +160,7 @@ impl ExecutionSession {
             Err(
                 PermissionCancellationReasonView::SessionClosed
                 | PermissionCancellationReasonView::SessionFailed
+                | PermissionCancellationReasonView::PolicyRefusal
                 | PermissionCancellationReasonView::EventConsumerDropped
                 | PermissionCancellationReasonView::SessionHandlesDropped
                 | PermissionCancellationReasonView::DeadlineExceeded,

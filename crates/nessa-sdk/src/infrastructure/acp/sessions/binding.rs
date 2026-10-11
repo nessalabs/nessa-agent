@@ -857,9 +857,8 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
                     ProviderSessionState::CleanupRequired,
                 ))
             });
-            // The turn is already finished. Retire the attachment before this
-            // call returns, so the next prompt cannot restore a closed binding.
-            // The refusal record is the cause; this request only ends the process.
+            // The turn is already finished. Remember that a policy close must
+            // not be restored. The agent owns the close, and names the refusal.
             if matches!(
                 &result,
                 ProviderExecutionReply::Finished(report)
@@ -870,10 +869,6 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
                         )
             ) {
                 self.policy_closed.store(true, Ordering::Release);
-                let cleanup = self.close(SessionCloseRequest::SessionFailed).await;
-                if !cleanup.is_confirmed() {
-                    tracing::warn!("policy session close did not confirm cleanup");
-                }
             }
             if let Err(error) = result.clone().into_result() {
                 observations

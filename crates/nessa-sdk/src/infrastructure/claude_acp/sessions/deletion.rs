@@ -86,6 +86,7 @@ mod tests {
             max_incoming_frame_bytes: 1024,
             images: None,
             clock: Arc::new(crate::infrastructure::clock::RuntimeClock::new()),
+            exercised_stop_facts: None,
         };
         let cleanups = DeletionCleanups::default();
         let counted_at_launch = Arc::new(AtomicBool::new(false));

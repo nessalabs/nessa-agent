@@ -342,7 +342,6 @@ fn declined(record: &ReviewDeclineRecord) -> Value {
             "grantedBy":actor(rule.granted_by()),
         }),
     };
-    let initiator = origin.clone();
     let mut value = json!({
         "kind":"review_declined",
         "sessionId":record.session_id().as_str(),
@@ -365,19 +364,12 @@ fn declined(record: &ReviewDeclineRecord) -> Value {
             RefusalOutcome::Continue => "running",
         };
         value["stop"] = json!({
-            "target": {
-                "sessionId": record.session_id().as_str(),
-                "executionId": record.execution_id().as_str(),
-                "declaredTool": decline.declared(),
-            },
-            "before": "running",
             "after": after,
             "cause": {
                 "kind": "refusal",
                 "reason": value["reason"].clone(),
                 "declineId": record.id().as_str(),
             },
-            "initiator": initiator,
         });
     }
     value
@@ -412,6 +404,7 @@ fn reason(value: &PermissionCancellationReason) -> Value {
         PermissionCancellationReasonView::DeadlineExceeded => "deadline_exceeded",
         PermissionCancellationReasonView::EventConsumerDropped => "event_consumer_dropped",
         PermissionCancellationReasonView::SessionHandlesDropped => "session_handles_dropped",
+        PermissionCancellationReasonView::PolicyRefusal => "policy_refusal",
         PermissionCancellationReasonView::Custom(value) => {
             return json!({"code":value.code(),"explanation":value.explanation()})
         }

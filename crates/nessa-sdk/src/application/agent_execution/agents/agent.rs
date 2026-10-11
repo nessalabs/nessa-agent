@@ -1385,9 +1385,12 @@ impl Agent {
                         settlement.session_state(),
                         ProviderSessionState::CleanupRequired
                     ) {
-                        let cleanup = self
-                            .shutdown_after_failure(SessionCloseRequest::ExecutionFailed)
-                            .await;
+                        let request = if settlement.source() == ExecutionReportSource::PolicyStop {
+                            SessionCloseRequest::PolicyRefusal
+                        } else {
+                            SessionCloseRequest::ExecutionFailed
+                        };
+                        let cleanup = self.shutdown_after_failure(request).await;
                         stop_after_ready_settlement = !cleanup.is_confirmed();
                         cleanup_failure = cleanup.into_result().err();
                     }
