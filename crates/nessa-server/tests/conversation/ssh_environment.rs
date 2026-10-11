@@ -1367,7 +1367,7 @@ async fn a_host_silent_past_its_bound_is_gone() {
     )
     .await
     .expect("answered at the silence bound, not the answer's");
-    assert!(refused.is_err());
+    assert_eq!(refused.err(), Some(LeaseRefusal::EnvironmentUnreachable));
 }
 
 /// An output overflow whose audit record cannot be written still stops the
