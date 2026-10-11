@@ -70,7 +70,6 @@ fn cleanup_config() -> (tempfile::TempDir, AcpConfig) {
         max_incoming_frame_bytes: 1024,
         images: None,
         clock: Arc::new(crate::infrastructure::clock::RuntimeClock::new()),
-        exercised_stop_facts: None,
     };
     assert!(config.executable.executable().is_absolute());
     assert!(config.workspace.is_absolute());

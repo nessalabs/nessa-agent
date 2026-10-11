@@ -1418,9 +1418,25 @@ impl SessionLifecycle {
             }
             _ => RecoveryPolicy::Automatic,
         };
-        let first_request = existing
-            .as_ref()
-            .map_or_else(|| request.clone(), |ticket| ticket.request.clone());
+        // A provider-state fence blocks admission before its owner names the
+        // cause. Cleanup has not started, so the owner's request is the close.
+        // A configured refusal and a missed reply grace are that owner. A later
+        // join keeps the cause that already started cleanup.
+        let fence_only = matches!(
+            (&state.work_status, &request),
+            (
+                WorkStatus::Blocked(stop),
+                SessionCloseRequest::PolicyRefusal | SessionCloseRequest::DeadlineExceeded,
+            ) if matches!(stop.recovery, RecoveryPolicy::CleanupNotStarted)
+                && matches!(stop.ticket.request, SessionCloseRequest::ExecutionFailed)
+        );
+        let first_request = if fence_only {
+            request.clone()
+        } else {
+            existing
+                .as_ref()
+                .map_or_else(|| request.clone(), |ticket| ticket.request.clone())
+        };
         let stop_id = existing
             .as_ref()
             .map_or(state.work_generation.0 + 1, |ticket| ticket.id);

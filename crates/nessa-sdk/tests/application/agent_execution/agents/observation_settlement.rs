@@ -293,3 +293,193 @@ async fn reader_deadline_retains_audit_failure_and_delayed_provider_settlement()
         .await;
     }
 }
+
+struct PolicyStopAudit {
+    records: Mutex<Vec<ExecutionAuditRecord>>,
+}
+impl ExecutionAudit for PolicyStopAudit {
+    fn record(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+        Box::pin(async move {
+            self.records.lock().unwrap().push(record);
+            Ok(())
+        })
+    }
+}
+struct PolicyStopProvider(Arc<PolicyStopBackend>);
+struct PolicyStopBackend {
+    events: mpsc::UnboundedSender<Result<ExecutionEvent, ObservationFailure>>,
+    receiver: Mutex<Option<mpsc::UnboundedReceiver<Result<ExecutionEvent, ObservationFailure>>>>,
+    closes: Mutex<Vec<SessionCloseRequest>>,
+    report: ExecutionReport,
+    terminal: ExecutionOutcome,
+}
+struct PolicyStopEvents(mpsc::UnboundedReceiver<Result<ExecutionEvent, ObservationFailure>>);
+impl ExecutionEventStream for PolicyStopEvents {
+    fn next(&mut self) -> ProviderObservationFuture<'_> {
+        Box::pin(async {
+            match self.0.recv().await {
+                Some(Ok(event)) => Ok(Some(event)),
+                Some(Err(error)) => Err(error),
+                None => Ok(None),
+            }
+        })
+    }
+}
+impl AgentProvider for PolicyStopProvider {
+    fn identity(&self) -> ProviderIdentity {
+        ProviderIdentity::new("policy-stop", "fixture", "test").unwrap()
+    }
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        capabilities_ref()
+    }
+    fn open(&self, _request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
+        Box::pin(async {
+            Ok(OpenedProviderSession {
+                session: ProviderSession::new(
+                    ExecutionSessionId::new("policy-stop").unwrap(),
+                    self.0.clone(),
+                    capabilities(),
+                ),
+                events: Box::new(PolicyStopEvents(
+                    self.0.receiver.lock().unwrap().take().unwrap(),
+                )),
+            })
+        })
+    }
+}
+impl ProviderSessionBackend for PolicyStopBackend {
+    fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
+    }
+    fn execute(&self, input: ExecutionRequest) -> ProviderExecutionFuture<'_> {
+        Box::pin(async move {
+            self.events
+                .send(Ok(ExecutionEvent::new(
+                    input.execution_id,
+                    ExecutionUpdate::Finished(self.terminal),
+                )))
+                .unwrap();
+            ProviderExecutionReply::Finished(self.report.clone())
+        })
+    }
+    fn answer_question(&self, _: QuestionAnswer) -> ProviderOperationFuture<'_, ()> {
+        Box::pin(async {
+            Err(ProviderOperationFailure::new(
+                AgentError::Unsupported("this fixture asks nothing".into()),
+                ProviderSessionState::Usable,
+            ))
+        })
+    }
+    fn answer_permission(
+        &self,
+        _: PermissionAnswer,
+    ) -> ProviderOperationFuture<'_, PermissionResolution> {
+        Box::pin(async {
+            Err(ProviderOperationFailure::new(
+                AgentError::StalePermission,
+                ProviderSessionState::Usable,
+            ))
+        })
+    }
+    fn cancel_permission(
+        &self,
+        _: PermissionCancellationRequest,
+    ) -> ProviderOperationFuture<'_, PermissionCancellation> {
+        Box::pin(async {
+            Err(ProviderOperationFailure::new(
+                AgentError::StalePermission,
+                ProviderSessionState::Usable,
+            ))
+        })
+    }
+    fn close(&self, request: SessionCloseRequest) -> CleanupFuture<'_> {
+        Box::pin(async move {
+            self.closes.lock().unwrap().push(request);
+            CleanupReport::confirmed(CloseOutcome { forced: false })
+        })
+    }
+}
+
+async fn assert_cleanup_close(
+    name: &str,
+    report: ExecutionReport,
+    terminal: ExecutionOutcome,
+    expected_result: Result<ExecutionOutcome, AgentError>,
+    expected_close: SessionCloseRequest,
+) {
+    let storage = MemoryStorage::default();
+    let (events, receiver) = mpsc::unbounded_channel();
+    let backend = Arc::new(PolicyStopBackend {
+        events,
+        receiver: Mutex::new(Some(receiver)),
+        closes: Mutex::new(Vec::new()),
+        report: report.clone(),
+        terminal,
+    });
+    let audit = Arc::new(PolicyStopAudit {
+        records: Mutex::new(Vec::new()),
+    });
+    let agent = Agent::prepare(
+        Arc::new(PolicyStopProvider(backend.clone())),
+        storage.manager().await,
+        audit.clone(),
+    )
+    .await
+    .map_err(|error| error.cause().clone())
+    .unwrap();
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(close_action()))
+        .unwrap();
+    agent
+        .start_attachment(authorization)
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
+    let result = tokio::time::timeout(Duration::from_secs(2), agent.invoke(request(name), actor()))
+        .await
+        .unwrap_or_else(|_| panic!("{name} did not settle"));
+    assert_eq!(result, expected_result);
+    assert_eq!(backend.closes.lock().unwrap().as_slice(), [expected_close]);
+    let snapshot = storage.snapshot();
+    assert_eq!(snapshot.invocations[0].result, Some(expected_result));
+    assert_eq!(
+        snapshot.invocations[0].provider_report.as_ref(),
+        Some(&report)
+    );
+    let records = audit.records.lock().unwrap().clone();
+    let rendered = format!("{records:?}{snapshot:?}");
+    assert!(
+        !rendered.contains("execution_failed") && !rendered.contains("session_failed"),
+        "{rendered}"
+    );
+}
+
+#[tokio::test]
+async fn a_policy_stop_closes_once_as_a_policy_refusal() {
+    assert_cleanup_close(
+        "policy-stop",
+        ExecutionReport::stopped_by_policy(ProviderSessionState::CleanupRequired),
+        ExecutionOutcome::Cancelled,
+        Ok(ExecutionOutcome::Cancelled),
+        SessionCloseRequest::PolicyRefusal,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn a_missed_stop_grace_closes_once_as_a_deadline() {
+    let report = ExecutionReport::new(
+        None,
+        Some(AgentError::Deadline),
+        ProviderSessionState::CleanupRequired,
+    );
+    assert_cleanup_close(
+        "missed-grace",
+        report,
+        ExecutionOutcome::Cancelled,
+        Err(AgentError::Deadline),
+        SessionCloseRequest::DeadlineExceeded,
+    )
+    .await;
+}

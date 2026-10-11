@@ -35,4 +35,4 @@ pub use audit::{
     RefusedAsk, ReviewDeclineRecord,
 };
 pub use cancellation::{CancellationOrigin, PermissionCancellation, PermissionCancellationRequest};
-pub use outcome::{admit_configured_outcome, ConfiguredRefusal};
+pub use outcome::{admit_configured_outcome, ConfiguredRefusal, StopKind};

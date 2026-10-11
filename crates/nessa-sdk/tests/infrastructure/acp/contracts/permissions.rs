@@ -1700,33 +1700,36 @@ fn stopping_rule() -> ApprovalRuleReference {
 
 fn binding_that_stops(
     mode: &str,
-    outcome: RefusalOutcome,
+    kind: StopKind,
     audit: Arc<RecordingAudit>,
 ) -> (tempfile::TempDir, ClaudeAcpProvider) {
     let (root, mut config, model) = test_acp_configuration(mode, 16);
-    config.refusal = ConfiguredRefusal::stopping(outcome, stopping_rule()).unwrap();
-    // The profile has not proven a stop. The fixture exercises the worker's
-    // stop anyway; publishing that proof is a separate promotion.
-    config.exercised_stop_facts = Some((
-        TurnStopCleanup::ProvenWithSessionReuse,
-        SessionCloseOwnership::Proven,
-    ));
+    config.refusal = ConfiguredRefusal::stopping(kind, stopping_rule());
     (
         root,
         ClaudeAcpProvider::new(config, &model, TokenLimits::new(900, 100).unwrap(), audit).unwrap(),
     )
 }
 
+async fn open_that_stops(
+    binding: &ClaudeAcpProvider,
+    audit: Arc<RecordingAudit>,
+) -> OpenedProviderSession {
+    super::super::profile_substitution::open_proven_stop(
+        binding,
+        audit,
+        ProviderOpenRequest::without_startup_control(None),
+    )
+    .await
+    .unwrap_or_else(|error| panic!("proven-stop open failed: {error:?}"))
+}
+
 #[tokio::test]
 async fn a_refusal_can_end_the_turn_and_leave_the_session_usable() {
     let _process_slot = process_test_slot().await;
     let audit = Arc::new(RecordingAudit::default());
-    let (root, binding) =
-        binding_that_stops("refusal-end-turn", RefusalOutcome::EndTurn, audit.clone());
-    let mut opened = binding
-        .open(ProviderOpenRequest::without_startup_control(None))
-        .await
-        .unwrap();
+    let (root, binding) = binding_that_stops("refusal-end-turn", StopKind::EndTurn, audit.clone());
+    let mut opened = open_that_stops(&binding, audit.clone()).await;
     let active = start(&opened, "stop-this").await;
     assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
     let ExecutionUpdate::ReviewDeclined(selected) = next(&mut opened).await else {
@@ -1778,13 +1781,10 @@ async fn a_refusal_can_close_the_session() {
     let audit = Arc::new(RecordingAudit::default());
     let (_root, binding) = binding_that_stops(
         "refusal-close-session",
-        RefusalOutcome::CloseSession,
+        StopKind::CloseSession,
         audit.clone(),
     );
-    let mut opened = binding
-        .open(ProviderOpenRequest::without_startup_control(None))
-        .await
-        .unwrap();
+    let mut opened = open_that_stops(&binding, audit.clone()).await;
     let active = start(&opened, "close-this").await;
     assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
     let ExecutionUpdate::ReviewDeclined(selected) = next(&mut opened).await else {
@@ -1815,17 +1815,15 @@ async fn a_stalled_stop_audit_fails_after_the_local_stop() {
     });
     let (_root, mut config, model) = test_acp_configuration("refusal-end-turn", 16);
     config.shutdown_grace = Duration::from_millis(50);
-    config.refusal = ConfiguredRefusal::stopping(RefusalOutcome::EndTurn, stopping_rule()).unwrap();
-    config.exercised_stop_facts = Some((
-        TurnStopCleanup::ProvenWithSessionReuse,
-        SessionCloseOwnership::Proven,
-    ));
-    let binding =
-        ClaudeAcpProvider::new(config, &model, TokenLimits::new(900, 100).unwrap(), audit).unwrap();
-    let mut opened = binding
-        .open(ProviderOpenRequest::without_startup_control(None))
-        .await
-        .unwrap();
+    config.refusal = ConfiguredRefusal::stopping(StopKind::EndTurn, stopping_rule());
+    let binding = ClaudeAcpProvider::new(
+        config,
+        &model,
+        TokenLimits::new(900, 100).unwrap(),
+        audit.clone(),
+    )
+    .unwrap();
+    let mut opened = open_that_stops(&binding, audit).await;
     let active = start(&opened, "stop-without-audit").await;
     assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
     assert!(matches!(
@@ -1856,11 +1854,8 @@ async fn a_stopped_turn_holds_the_next_prompt_until_the_provider_answers() {
     let _process_slot = process_test_slot().await;
     let audit = Arc::new(RecordingAudit::default());
     let (root, binding) =
-        binding_that_stops("refusal-stale-next", RefusalOutcome::EndTurn, audit.clone());
-    let mut opened = binding
-        .open(ProviderOpenRequest::without_startup_control(None))
-        .await
-        .unwrap();
+        binding_that_stops("refusal-stale-next", StopKind::EndTurn, audit.clone());
+    let mut opened = open_that_stops(&binding, audit.clone()).await;
     let first = start(&opened, "stop-this").await;
     assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
     assert!(matches!(
@@ -1923,12 +1918,8 @@ async fn a_stopped_turn_holds_the_next_prompt_until_the_provider_answers() {
 async fn an_unanswered_stop_expires_into_cleanup_required() {
     let _process_slot = process_test_slot().await;
     let audit = Arc::new(RecordingAudit::default());
-    let (_root, binding) =
-        binding_that_stops("refusal-silent", RefusalOutcome::EndTurn, audit.clone());
-    let mut opened = binding
-        .open(ProviderOpenRequest::without_startup_control(None))
-        .await
-        .unwrap();
+    let (_root, binding) = binding_that_stops("refusal-silent", StopKind::EndTurn, audit.clone());
+    let mut opened = open_that_stops(&binding, audit.clone()).await;
     let session = opened.session.clone();
     let first = tokio::spawn(async move { session.execute(prompt("silent")).await });
     assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
@@ -1949,16 +1940,20 @@ async fn an_unanswered_stop_expires_into_cleanup_required() {
         report.session_state(),
         ProviderSessionState::CleanupRequired
     ));
-    assert_eq!(report.into_result(), Ok(ExecutionOutcome::Cancelled));
+    assert_eq!(report.source(), ExecutionReportSource::Provider);
+    assert_eq!(report.into_result(), Err(AgentError::Deadline));
     let second = timeout(Duration::from_secs(3), second)
         .await
         .unwrap()
         .unwrap();
     match second {
-        ProviderExecutionReply::Finished(report) => assert!(matches!(
-            report.session_state(),
-            ProviderSessionState::CleanupRequired
-        )),
+        ProviderExecutionReply::Finished(report) => {
+            assert!(matches!(
+                report.session_state(),
+                ProviderSessionState::CleanupRequired
+            ));
+            assert_eq!(report.failure(), Some(&AgentError::Deadline));
+        }
         ProviderExecutionReply::Rejected(AgentError::Closed) => {}
         other => panic!("{other:?}"),
     }
@@ -1973,11 +1968,8 @@ async fn stopping_cancels_the_turns_open_review_and_question() {
     let _process_slot = process_test_slot().await;
     let audit = Arc::new(RecordingAudit::default());
     let (_root, binding) =
-        binding_that_stops("refusal-open-work", RefusalOutcome::EndTurn, audit.clone());
-    let mut opened = binding
-        .open(ProviderOpenRequest::without_startup_control(None))
-        .await
-        .unwrap();
+        binding_that_stops("refusal-open-work", StopKind::EndTurn, audit.clone());
+    let mut opened = open_that_stops(&binding, audit.clone()).await;
     let active = start(&opened, "open-work").await;
     let mut saw_question = false;
     let mut saw_question_closed = false;

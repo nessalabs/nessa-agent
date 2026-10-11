@@ -12,9 +12,10 @@ use crate::application::agent_execution::permissions::{
     ActionContext, ApprovalAttribution, ApprovalBasis, CancellationOrigin, PermissionAnswer,
 };
 use crate::application::agent_execution::providers::{
-    ExecutableUse, ExecutableUseAdmissionFailure, ExecutableUseError, ExecutableUseGuard,
-    ExecutableUseSnapshot, ProviderOpenControl, ProviderOpenRequest, ProviderSessionState,
-    ResourceCleanup, SessionCloseRequest,
+    AgentProvider, ApprovalMode, ExecutableUse, ExecutableUseAdmissionFailure, ExecutableUseError,
+    ExecutableUseGuard, ExecutableUseSnapshot, OpenedProviderSession, ProviderOpenControl,
+    ProviderOpenError, ProviderOpenRequest, ProviderOperationCapabilities, ProviderSessionState,
+    ResourceCleanup, SessionCloseOwnership, SessionCloseRequest, TurnStopCleanup,
 };
 use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::application::dto::{ModalitiesDto, ModelMetadataDto};
@@ -29,7 +30,9 @@ use crate::domain::effective_capabilities::value_objects::{
     BindingRestrictions, EffectiveCapabilities,
 };
 use crate::domain::model_metadata::entities::ModelMetadata;
-use crate::domain::model_metadata::value_objects::{Modalities, ModelFeatures};
+use crate::domain::model_metadata::value_objects::{EffortLevel, Modalities, ModelFeatures};
+use crate::infrastructure::claude_acp::sessions::profile::ClaudeProfile;
+use crate::infrastructure::claude_acp::sessions::ClaudeAcpProvider;
 use crate::infrastructure::json_rpc::protocol;
 use crate::infrastructure::process::{DirectoryCleanupStep, ProcessScope};
 use serde_json::{json, Value};
@@ -229,6 +232,124 @@ impl AcpProfile for PinnedProfile {
     fn permission_input(&self, _: &Value) -> Result<ToolReviewInput, AgentError> {
         Err(protocol("no permissions in this fixture"))
     }
+}
+
+/// Claude's profile with turn-stop and session-close facts the contract exercises.
+///
+/// The production profile stays unknown. This wrapper is how a test publishes
+/// [`TurnStopCleanup::ProvenWithSessionReuse`] and [`SessionCloseOwnership::Proven`]
+/// without a switch on the worker.
+#[derive(Clone)]
+pub(crate) struct ProvenStopProfile {
+    inner: ClaudeProfile,
+}
+impl ProvenStopProfile {
+    pub(crate) fn new(inner: ClaudeProfile) -> Self {
+        Self { inner }
+    }
+}
+impl AcpProfile for ProvenStopProfile {
+    fn operation_capabilities(&self, initialize: &Value) -> ProviderOperationCapabilities {
+        ProviderOperationCapabilities {
+            turn_stop_cleanup: TurnStopCleanup::ProvenWithSessionReuse,
+            session_close_ownership: SessionCloseOwnership::Proven,
+            ..self.inner.operation_capabilities(initialize)
+        }
+    }
+    fn for_open(self, config: &AcpConfig) -> Self {
+        Self {
+            inner: self.inner.for_open(config),
+        }
+    }
+    fn supports_steering(&self, initialize: &Value) -> bool {
+        self.inner.supports_steering(initialize)
+    }
+    fn supports_questions(&self) -> bool {
+        self.inner.supports_questions()
+    }
+    fn validate_initialize(&self, result: &Value) -> Result<(), AgentError> {
+        self.inner.validate_initialize(result)
+    }
+    fn new_session_params(
+        &self,
+        config: &AcpConfig,
+        capabilities: &EffectiveCapabilities,
+    ) -> Value {
+        self.inner.new_session_params(config, capabilities)
+    }
+    fn session_configuration(&self, session_id: &str) -> Vec<Value> {
+        self.inner.session_configuration(session_id)
+    }
+    fn change_approval_mode(
+        &mut self,
+        session_id: &str,
+        mode: ApprovalMode,
+    ) -> Result<Value, AgentError> {
+        self.inner.change_approval_mode(session_id, mode)
+    }
+    fn effort_option(&self) -> Option<&'static str> {
+        self.inner.effort_option()
+    }
+    fn change_effort_level(
+        &mut self,
+        session_id: &str,
+        level: EffortLevel,
+    ) -> Result<Value, AgentError> {
+        self.inner.change_effort_level(session_id, level)
+    }
+    fn verify_session(
+        &self,
+        result: &Value,
+        capabilities: &EffectiveCapabilities,
+        configured: bool,
+    ) -> Result<(), AgentError> {
+        self.inner.verify_session(result, capabilities, configured)
+    }
+    fn verify_update(
+        &self,
+        kind: &str,
+        update: &Value,
+        capabilities: &EffectiveCapabilities,
+        configured: bool,
+    ) -> Result<(), AgentError> {
+        self.inner
+            .verify_update(kind, update, capabilities, configured)
+    }
+    fn validate_execution(
+        &self,
+        input: &ExecutionRequest,
+        capabilities: &EffectiveCapabilities,
+    ) -> Result<(), AgentError> {
+        self.inner.validate_execution(input, capabilities)
+    }
+    fn begin_execution(&mut self) {
+        self.inner.begin_execution();
+    }
+    fn tool_call(&mut self, value: &Value) -> Result<ToolCallUpdate, AgentError> {
+        self.inner.tool_call(value)
+    }
+    fn permission_input(&self, request: &Value) -> Result<ToolReviewInput, AgentError> {
+        self.inner.permission_input(request)
+    }
+    fn note_declined_permission(&mut self, request: &Value) {
+        self.inner.note_declined_permission(request);
+    }
+}
+
+pub(crate) async fn open_proven_stop(
+    provider: &ClaudeAcpProvider,
+    audit: Arc<dyn ExecutionAudit>,
+    request: ProviderOpenRequest,
+) -> Result<OpenedProviderSession, ProviderOpenError> {
+    binding::open(
+        provider.process_factory(),
+        provider.config().clone(),
+        provider.capabilities().clone(),
+        ProvenStopProfile::new(provider.profile()),
+        audit,
+        request,
+    )
+    .await
 }
 
 #[tokio::test]
@@ -541,7 +662,6 @@ pub(crate) fn profile_setup() -> (tempfile::TempDir, AcpConfig, EffectiveCapabil
         max_incoming_frame_bytes: 4096,
         images: None,
         clock: Arc::new(crate::infrastructure::clock::RuntimeClock::new()),
-        exercised_stop_facts: None,
     };
     config.validate().unwrap();
     (root, config, capabilities)

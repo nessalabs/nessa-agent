@@ -499,13 +499,9 @@ fn audit_maps_a_stopping_refusal_as_the_cause_of_the_stop() {
     assert_eq!(value["origin"]["kind"], "rule");
     assert_eq!(value["origin"]["ruleId"], "refuse-shell");
     assert_eq!(value["origin"]["revision"], "3");
-    assert_eq!(value["stop"]["after"], "ended");
-    assert_eq!(value["stop"]["cause"]["kind"], "refusal");
-    assert_eq!(value["stop"]["cause"]["reason"], "tool_not_reviewable");
-    assert_eq!(value["stop"]["cause"]["declineId"], "9");
-    assert!(value.get("stop").unwrap().get("before").is_none());
-    assert!(value.get("stop").unwrap().get("target").is_none());
-    assert!(value.get("stop").unwrap().get("initiator").is_none());
+    assert_eq!(value["reason"], "tool_not_reviewable");
+    assert_eq!(value["declineId"], "9");
+    assert!(value.get("stop").is_none());
     assert!(value.get("actor").is_none());
 
     let closed = record_value(&ExecutionAuditRecord::ReviewDeclined(
@@ -523,7 +519,7 @@ fn audit_maps_a_stopping_refusal_as_the_cause_of_the_stop() {
         ),
     ));
     assert_eq!(closed["outcome"], "close_session");
-    assert_eq!(closed["stop"]["after"], "closed");
+    assert!(closed.get("stop").is_none());
 
     let late = record_value(&ExecutionAuditRecord::LateProviderResult(
         LateProviderResultRecord::new(

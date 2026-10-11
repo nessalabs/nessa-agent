@@ -1385,7 +1385,10 @@ impl Agent {
                         settlement.session_state(),
                         ProviderSessionState::CleanupRequired
                     ) {
-                        let request = if settlement.source() == ExecutionReportSource::PolicyStop {
+                        let request = if matches!(settlement.failure(), Some(AgentError::Deadline))
+                        {
+                            SessionCloseRequest::DeadlineExceeded
+                        } else if settlement.source() == ExecutionReportSource::PolicyStop {
                             SessionCloseRequest::PolicyRefusal
                         } else {
                             SessionCloseRequest::ExecutionFailed

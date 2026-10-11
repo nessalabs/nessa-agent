@@ -120,7 +120,7 @@ async fn blocked_worker(
         expired_stops: Vec::new(),
         held_prompts: VecDeque::new(),
         stop_reply_deadline: None,
-        stop_needs_cleanup: false,
+        stop_cleanup: StopCleanup::None,
         shutdown_deadline: None,
         configured: true,
         closing: false,
@@ -712,14 +712,14 @@ async fn a_second_stop_keeps_the_first_prompt_reply() {
         execution_id: ExecutionId::new("first").unwrap(),
         session_id: session_id.clone(),
         reply: first_reply,
-        kind: RefusalOutcome::EndTurn,
+        kind: StopKind::EndTurn,
     });
     worker.stopped_prompts.push(StoppedPrompt {
         prompt_id: 2,
         execution_id: ExecutionId::new("second").unwrap(),
         session_id,
         reply: second_reply,
-        kind: RefusalOutcome::EndTurn,
+        kind: StopKind::EndTurn,
     });
     let first = serde_json::from_str::<Envelope>(
         r#"{"jsonrpc":"2.0","id":1,"result":{"stopReason":"cancelled"}}"#,
@@ -775,7 +775,7 @@ async fn a_late_reply_after_the_stop_grace_does_not_fail_the_worker() {
         execution_id: ExecutionId::new("expired").unwrap(),
         session_id,
         reply,
-        kind: RefusalOutcome::EndTurn,
+        kind: StopKind::EndTurn,
     });
     worker.expire_stopped_prompts();
     let ProviderExecutionReply::Finished(report) = reply_rx.try_recv().unwrap() else {
@@ -785,6 +785,7 @@ async fn a_late_reply_after_the_stop_grace_does_not_fail_the_worker() {
         report.session_state(),
         ProviderSessionState::CleanupRequired
     ));
+    assert_eq!(report.into_result(), Err(AgentError::Deadline));
     let late = serde_json::from_str::<Envelope>(
         r#"{"jsonrpc":"2.0","id":7,"result":{"stopReason":"cancelled"}}"#,
     )
@@ -797,6 +798,36 @@ async fn a_late_reply_after_the_stop_grace_does_not_fail_the_worker() {
                 "a reply after grace expiry failed the worker: {:?}",
                 failure.error()
             )
+        });
+}
+
+#[tokio::test]
+async fn an_update_after_the_stop_grace_does_not_fail_the_worker() {
+    let (mut worker, mut execution, _events, _recovery, _clock) = blocked_worker("", false).await;
+    let _ = worker.active.take();
+    let (reply, mut reply_rx) = oneshot::channel();
+    worker.stopped_prompts.push(StoppedPrompt {
+        prompt_id: 7,
+        execution_id: ExecutionId::new("expired").unwrap(),
+        session_id: execution.id().clone(),
+        reply,
+        kind: StopKind::EndTurn,
+    });
+    worker.expire_stopped_prompts();
+    assert!(reply_rx.try_recv().is_ok());
+    worker
+        .update(
+            &mut execution,
+            serde_json::json!({
+                "sessionId": "context",
+                "update": {
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {"type": "text", "text": "late"}
+                }
+            }),
+        )
+        .unwrap_or_else(|error| {
+            panic!("an update after grace expiry failed the worker: {error:?}")
         });
 }
 

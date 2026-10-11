@@ -13,5 +13,5 @@
 mod binding;
 mod configuration;
 mod deletion;
-mod profile;
+pub(crate) mod profile;
 pub use binding::ClaudeAcpProvider;

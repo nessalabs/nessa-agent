@@ -342,7 +342,7 @@ fn declined(record: &ReviewDeclineRecord) -> Value {
             "grantedBy":actor(rule.granted_by()),
         }),
     };
-    let mut value = json!({
+    let value = json!({
         "kind":"review_declined",
         "sessionId":record.session_id().as_str(),
         "executionId":record.execution_id().as_str(),
@@ -357,21 +357,6 @@ fn declined(record: &ReviewDeclineRecord) -> Value {
         "delivery":delivery(record.delivery()),
         "origin":origin,
     });
-    if decline.outcome() != RefusalOutcome::Continue {
-        let after = match decline.outcome() {
-            RefusalOutcome::EndTurn => "ended",
-            RefusalOutcome::CloseSession => "closed",
-            RefusalOutcome::Continue => "running",
-        };
-        value["stop"] = json!({
-            "after": after,
-            "cause": {
-                "kind": "refusal",
-                "reason": value["reason"].clone(),
-                "declineId": record.id().as_str(),
-            },
-        });
-    }
     value
 }
 /// One vocabulary for how a decision reached the provider, answered or refused.

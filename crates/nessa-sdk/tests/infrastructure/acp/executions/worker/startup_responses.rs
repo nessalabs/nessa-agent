@@ -178,7 +178,7 @@ async fn nested_startup_response_writes_observe_remaining_rpc_deadline() {
                     expired_stops: Vec::new(),
                     held_prompts: VecDeque::new(),
                     stop_reply_deadline: None,
-                    stop_needs_cleanup: false,
+                    stop_cleanup: StopCleanup::None,
                     shutdown_deadline: None,
                     configured: true,
                     closing: false,

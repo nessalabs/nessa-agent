@@ -1,7 +1,7 @@
 use super::*;
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::permissions::{
-    ActionContext, ApprovalRuleReference, ConfiguredRefusal,
+    ActionContext, ApprovalRuleReference, ConfiguredRefusal, StopKind,
 };
 use crate::application::agent_execution::providers::{
     OperationCapabilities, PolicyCloseSessionCapability, PolicyEndTurnCapability,
@@ -41,19 +41,17 @@ fn continue_is_admitted_without_a_rule_on_every_binding() {
 }
 
 #[test]
-fn a_stopping_outcome_names_its_rule_and_cannot_mean_continue() {
-    let ended = ConfiguredRefusal::stopping(RefusalOutcome::EndTurn, rule()).unwrap();
+fn a_stopping_outcome_names_its_rule() {
+    let ended = ConfiguredRefusal::stopping(StopKind::EndTurn, rule());
     assert_eq!(ended.outcome(), RefusalOutcome::EndTurn);
     assert_eq!(ended.rule().unwrap().rule_id(), "refuse-shell");
-    assert!(matches!(
-        ConfiguredRefusal::stopping(RefusalOutcome::Continue, rule()),
-        Err(AgentError::InvalidInput(_))
-    ));
+    let closed = ConfiguredRefusal::stopping(StopKind::CloseSession, rule());
+    assert_eq!(closed.outcome(), RefusalOutcome::CloseSession);
 }
 
 #[test]
 fn ending_the_turn_is_admitted_only_when_cleanup_and_reuse_are_proven() {
-    let configured = ConfiguredRefusal::stopping(RefusalOutcome::EndTurn, rule()).unwrap();
+    let configured = ConfiguredRefusal::stopping(StopKind::EndTurn, rule());
     assert!(admit_configured_outcome(
         &configured,
         capabilities(
@@ -87,8 +85,8 @@ fn ending_the_turn_is_admitted_only_when_cleanup_and_reuse_are_proven() {
 
 #[test]
 fn closing_the_session_is_not_how_an_unproven_end_turn_is_honored() {
-    let end_turn = ConfiguredRefusal::stopping(RefusalOutcome::EndTurn, rule()).unwrap();
-    let close = ConfiguredRefusal::stopping(RefusalOutcome::CloseSession, rule()).unwrap();
+    let end_turn = ConfiguredRefusal::stopping(StopKind::EndTurn, rule());
+    let close = ConfiguredRefusal::stopping(StopKind::CloseSession, rule());
     let can_close = capabilities(TurnStopCleanup::Unknown, SessionCloseOwnership::Proven);
     assert!(admit_configured_outcome(&end_turn, can_close).is_err());
     assert!(admit_configured_outcome(&close, can_close).is_ok());
@@ -97,7 +95,7 @@ fn closing_the_session_is_not_how_an_unproven_end_turn_is_honored() {
 
 #[test]
 fn closing_the_session_requires_proven_ownership() {
-    let configured = ConfiguredRefusal::stopping(RefusalOutcome::CloseSession, rule()).unwrap();
+    let configured = ConfiguredRefusal::stopping(StopKind::CloseSession, rule());
     assert!(admit_configured_outcome(
         &configured,
         capabilities(

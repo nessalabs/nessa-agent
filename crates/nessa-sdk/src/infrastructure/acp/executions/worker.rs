@@ -35,7 +35,7 @@ use crate::application::agent_execution::permissions::{
     admit_configured_outcome, ApprovalRuleReference, CancellationOrigin, ConfiguredRefusal,
     PermissionAnswer, PermissionAnswerDelivery, PermissionAnswerRecord, PermissionCancellation,
     PermissionCancellationRequest, PermissionResolution, PermissionSelectionState, QuestionAnswer,
-    QuestionAnswerRecord, QuestionRefusalRecord, RefusedAsk, ReviewDeclineRecord,
+    QuestionAnswerRecord, QuestionRefusalRecord, RefusedAsk, ReviewDeclineRecord, StopKind,
 };
 use crate::application::agent_execution::providers::{
     ApprovalMode, CleanupReport, ExecutionReport, ImageInputRefusal, ObservationFailureCause,
@@ -175,17 +175,28 @@ fn interruption(readiness: &Result<DispatchReadiness, WorkerFailure>) -> Option<
 /// The execution reply stays here until that reply arrives or the shutdown grace
 /// expires. A later provider result for `prompt_id` is evidence, not a second
 /// outcome for that execution.
-/// A configured stop: which outcome, and the rule that required it.
-struct StoppingRefusal {
-    kind: RefusalOutcome,
-    rule: ApprovalRuleReference,
-}
 struct StoppedPrompt {
     prompt_id: i64,
     execution_id: ExecutionId,
     session_id: ExecutionSessionId,
     reply: ExecutionReply,
-    kind: RefusalOutcome,
+    kind: StopKind,
+}
+/// Why later prompts on this generation cannot run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StopCleanup {
+    /// No stop has required cleanup.
+    None,
+    /// A configured refusal closed the session.
+    Policy,
+    /// An end-turn stop's provider missed the reply grace.
+    Deadline,
+}
+fn refusal_outcome(kind: StopKind) -> RefusalOutcome {
+    match kind {
+        StopKind::EndTurn => RefusalOutcome::EndTurn,
+        StopKind::CloseSession => RefusalOutcome::CloseSession,
+    }
 }
 /// A stopped prompt whose caller was already told the grace expired.
 ///
@@ -420,10 +431,17 @@ struct Worker<P> {
     expired_stops: Vec<ExpiredStop>,
     /// Prompts accepted while a stop is still waiting on its provider reply.
     held_prompts: VecDeque<(DispatchedPrompt, ExecutionReply)>,
-    /// When an unanswered stopped prompt must be reported as cleanup required.
+    /// When an unanswered stopped prompt must be settled.
+    ///
+    /// This is the same instant `finish_turn_wire` used for that stop. A later
+    /// stop does not move it, so the wait is never a second grace.
     stop_reply_deadline: Option<ClockInstant>,
-    /// A stop resolved as cleanup. Later prompts on this generation are refused.
-    stop_needs_cleanup: bool,
+    /// Why this generation cannot take another turn.
+    ///
+    /// [`StopCleanup::Policy`] is a configured session close.
+    /// [`StopCleanup::Deadline`] is an end-turn stop whose provider missed the
+    /// grace. Either refuses later prompts. A missed grace is not a policy refusal.
+    stop_cleanup: StopCleanup,
     shutdown_deadline: Option<ClockInstant>,
     /// True once every request from `session_configuration` has been applied.
     ///
@@ -495,7 +513,7 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
         expired_stops: Vec::new(),
         held_prompts: VecDeque::new(),
         stop_reply_deadline: None,
-        stop_needs_cleanup: false,
+        stop_cleanup: StopCleanup::None,
         shutdown_deadline: None,
         configured: false,
         closing: false,
@@ -542,6 +560,7 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
         .map_err(|failure| worker.ensure_failure_covered(OperationEffectPhase::Worker, failure));
     // Worker, controller and reply ownership stay outside every caught phase.
     let mut execution_reply = None;
+    let mut unanswered = Vec::new();
     let completed: Result<WorkerResult, AgentError> = catch_worker_panic(async {
         Ok::<WorkerResult, AgentError>(
             worker
@@ -566,9 +585,7 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
             if execution_reply.is_none() {
                 execution_reply = worker.active.take().map(|active| active.reply);
             }
-            if execution_reply.is_none() {
-                execution_reply = worker.take_unanswered_replies().pop();
-            }
+            unanswered = worker.take_unanswered_replies();
             let resources = match physical {
                 Ok(outcome) => recovery.confirm_physical(outcome).await.resources().clone(),
                 Err(error) => ResourceCleanup::Unconfirmed(error),
@@ -610,8 +627,8 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
         failure: published_failure,
         failure_cause: worker.failure_cause,
     }));
-    if let Some(reply) = execution_reply {
-        let _ = reply.send(ProviderExecutionReply::Finished(settlement));
+    for reply in execution_reply.into_iter().chain(unanswered) {
+        let _ = reply.send(ProviderExecutionReply::Finished(settlement.clone()));
     }
 }
 // Startup budgets are shared by every step, so only the step that was waiting
@@ -908,8 +925,12 @@ impl<P: AcpProfile> Worker<P> {
         cancelled.and(closed)
     }
     fn current_deadline(&self) -> Option<ClockInstant> {
+        // An absolute shutdown grace is the deadline. A sooner steering or
+        // prompt timer must not cut it short, and must not start another one.
+        if let Some(deadline) = self.shutdown_deadline {
+            return Some(deadline);
+        }
         [
-            self.shutdown_deadline,
             self.stop_reply_deadline,
             self.active.as_ref().and_then(|active| active.deadline),
             self.steering.as_ref().map(|pending| pending.deadline),
@@ -1164,15 +1185,7 @@ impl<P: AcpProfile> Worker<P> {
         // Unsupported does not fail this open or the same publish on
         // restoration. Codex holds that with
         // `codex_startup_and_restoration_continue_when_native_hook_suppression_is_unsupported`.
-        // Tests may exercise a stop the profile has not proven. Production has
-        // no such override: the profile's facts are what is published.
-        #[cfg_attr(not(test), allow(unused_mut))]
-        let mut profile_capabilities = self.profile.operation_capabilities(&init);
-        #[cfg(test)]
-        if let Some((turn, close)) = self.config.exercised_stop_facts {
-            profile_capabilities.turn_stop_cleanup = turn;
-            profile_capabilities.session_close_ownership = close;
-        }
+        let profile_capabilities = self.profile.operation_capabilities(&init);
         let published = ProviderOperationCapabilities {
             negotiated: true,
             native_steering: self.steering_supported,
@@ -1636,10 +1649,8 @@ impl<P: AcpProfile> Worker<P> {
         prompt: DispatchedPrompt,
         reply: ExecutionReply,
     ) -> Result<(), WorkerFailure> {
-        if self.stop_needs_cleanup {
-            let _ = reply.send(ProviderExecutionReply::Finished(
-                ExecutionReport::stopped_by_policy(ProviderSessionState::CleanupRequired),
-            ));
+        if self.stop_cleanup != StopCleanup::None {
+            let _ = reply.send(ProviderExecutionReply::Finished(self.cleanup_refusal()));
             return Ok(());
         }
         if !self.stopped_prompts.is_empty() {
@@ -2189,7 +2200,7 @@ impl<P: AcpProfile> Worker<P> {
                     let event = execution.finished_event(target, result)?;
                     let records = execution.finish_execution(target, Ok(result))?;
                     self.record_lifecycle(records).await?;
-                    self.finish_turn_wire().await?;
+                    let _grace = self.finish_turn_wire().await?;
                     self.emit(event)?;
                     self.discard_unclaimed_arguments();
                     let active = self.active.take().expect("validated active prompt");
@@ -2278,10 +2289,10 @@ impl<P: AcpProfile> Worker<P> {
                 );
             }
             "agent_message_chunk" | "agent_thought_chunk" | "tool_call" | "tool_call_update" => {
-                // A stopped turn's updates have no prompt id. While any stopped
-                // prompt is unresolved they are dropped, including when a later
-                // turn is already active, so they cannot be attributed to it.
-                if !self.stopped_prompts.is_empty() {
+                // A stopped turn's updates have no prompt id. While a stop is
+                // unresolved, or its grace has expired and the late reply has
+                // not arrived, they are dropped so they cannot fail the worker.
+                if !self.stopped_prompts.is_empty() || !self.expired_stops.is_empty() {
                     return Ok(());
                 }
                 if self.active.is_none() {
@@ -2485,18 +2496,16 @@ impl<P: AcpProfile> Worker<P> {
         response_deadline: Option<ClockInstant>,
     ) -> Result<(), WorkerFailure> {
         if let ConfiguredRefusal::Stop { kind, rule } = self.config.refusal.clone() {
-            if kind != RefusalOutcome::Continue {
-                return self
-                    .stop_declined_turn(
-                        execution,
-                        wire_id,
-                        params,
-                        reason,
-                        StoppingRefusal { kind, rule },
-                        response_deadline,
-                    )
-                    .await;
-            }
+            return self
+                .stop_declined_turn(
+                    execution,
+                    wire_id,
+                    params,
+                    reason,
+                    (kind, rule),
+                    response_deadline,
+                )
+                .await;
         }
         let decline =
             ReviewDecline::new(declared_tool_name(params), reason, RefusalOutcome::Continue);
@@ -2635,11 +2644,11 @@ impl<P: AcpProfile> Worker<P> {
         wire_id: RpcId,
         params: &Value,
         reason: ReviewDeclineReason,
-        stop: StoppingRefusal,
+        stop: (StopKind, ApprovalRuleReference),
         response_deadline: Option<ClockInstant>,
     ) -> Result<(), WorkerFailure> {
-        let StoppingRefusal { kind, rule } = stop;
-        let decline = ReviewDecline::new(declared_tool_name(params), reason, kind);
+        let (kind, rule) = stop;
+        let decline = ReviewDecline::new(declared_tool_name(params), reason, refusal_outcome(kind));
         let session_id = execution.id().clone();
         let Some(active) = self.active.as_ref() else {
             return self
@@ -2667,8 +2676,8 @@ impl<P: AcpProfile> Worker<P> {
             reply: active.reply,
             kind,
         });
-        if kind == RefusalOutcome::CloseSession {
-            self.stop_needs_cleanup = true;
+        if kind == StopKind::CloseSession {
+            self.stop_cleanup = StopCleanup::Policy;
         }
         self.declined = Some(wire_id.clone());
         self.discard_unclaimed_arguments();
@@ -2681,8 +2690,10 @@ impl<P: AcpProfile> Worker<P> {
             "tool review declined and the execution stopped"
         );
         let cleaned = self.finish_turn_wire().await;
-        if cleaned.is_ok() && self.stop_reply_deadline.is_none() {
-            self.stop_reply_deadline = Some(self.config.clock.now() + self.config.shutdown_grace);
+        if let Ok(deadline) = cleaned {
+            if self.stop_reply_deadline.is_none() {
+                self.stop_reply_deadline = Some(deadline);
+            }
         }
         let response = match rejection_option(params, &self.config.permissions) {
             Some(option) => permission_wire::selected(&wire_id, &option),
@@ -2727,7 +2738,7 @@ impl<P: AcpProfile> Worker<P> {
                 merge_failure(recorded, Err(notice))
             }
         };
-        merge_failure(cleaned, recorded)
+        merge_failure(cleaned.map(|_| ()), recorded)
     }
     fn allocate_decline_id(&mut self) -> Result<ReviewDeclineId, AgentError> {
         #[allow(deprecated, reason = "Rust 1.89 MSRV; try_update requires Rust 1.95")]
@@ -2780,10 +2791,13 @@ impl<P: AcpProfile> Worker<P> {
     }
     /// Cancel outstanding wire asks and close questions, under the shutdown grace.
     ///
-    /// The same cleanup a turn uses when the provider finishes it. The grace is
-    /// restored afterwards so the wait for a stopped prompt's reply is not
-    /// mistaken for the worker's own deadline.
-    async fn finish_turn_wire(&mut self) -> Result<(), WorkerFailure> {
+    /// The same cleanup a turn uses when the provider finishes it. On success
+    /// the returned instant is that grace, and the previous shutdown deadline
+    /// is restored.
+    ///
+    /// Keep one absolute grace through cancellation and fallback teardown.
+    /// Successful normal completion leaves the reusable session without it.
+    async fn finish_turn_wire(&mut self) -> Result<ClockInstant, WorkerFailure> {
         let previous_deadline = self.shutdown_deadline;
         let deadline = self.begin_shutdown_grace();
         let clock = self.config.clock.clone();
@@ -2791,9 +2805,14 @@ impl<P: AcpProfile> Worker<P> {
         let closed = self
             .close_ended_questions(QuestionCancellation::ExecutionFinished)
             .await;
-        self.shutdown_deadline = previous_deadline;
         match sent {
-            Some(result) => result.and(closed).map_err(WorkerFailure::from),
+            Some(result) => {
+                let result = result.and(closed).map_err(WorkerFailure::from);
+                if result.is_ok() {
+                    self.shutdown_deadline = previous_deadline;
+                }
+                result.map(|()| deadline)
+            }
             None => {
                 self.failure_cause = ObservationFailureCause::DeadlineExceeded;
                 self.cancellation_cause.get_or_insert((
@@ -2812,19 +2831,47 @@ impl<P: AcpProfile> Worker<P> {
     /// The provider did not answer a stopped prompt within the grace.
     ///
     /// Each parked execution is reported cleanup-required. No provider result
-    /// is invented for the reply that never arrived.
+    /// is invented for the reply that never arrived. An end-turn stop missed
+    /// its grace, so that report is a deadline. A configured session close
+    /// stays a policy refusal.
     fn expire_stopped_prompts(&mut self) {
-        self.stop_needs_cleanup = true;
         self.stop_reply_deadline = None;
         for stopped in std::mem::take(&mut self.stopped_prompts) {
+            let report = match stopped.kind {
+                StopKind::CloseSession => {
+                    self.stop_cleanup = StopCleanup::Policy;
+                    ExecutionReport::stopped_by_policy(ProviderSessionState::CleanupRequired)
+                }
+                StopKind::EndTurn => {
+                    if self.stop_cleanup != StopCleanup::Policy {
+                        self.stop_cleanup = StopCleanup::Deadline;
+                    }
+                    ExecutionReport::new(
+                        None,
+                        Some(AgentError::Deadline),
+                        ProviderSessionState::CleanupRequired,
+                    )
+                }
+            };
             self.expired_stops.push(ExpiredStop {
                 prompt_id: stopped.prompt_id,
                 execution_id: stopped.execution_id.clone(),
                 session_id: stopped.session_id.clone(),
             });
-            let _ = stopped.reply.send(ProviderExecutionReply::Finished(
-                ExecutionReport::stopped_by_policy(ProviderSessionState::CleanupRequired),
-            ));
+            let _ = stopped.reply.send(ProviderExecutionReply::Finished(report));
+        }
+    }
+    /// The report for a prompt refused because this generation cannot continue.
+    fn cleanup_refusal(&self) -> ExecutionReport {
+        match self.stop_cleanup {
+            StopCleanup::Deadline => ExecutionReport::new(
+                None,
+                Some(AgentError::Deadline),
+                ProviderSessionState::CleanupRequired,
+            ),
+            StopCleanup::Policy | StopCleanup::None => {
+                ExecutionReport::stopped_by_policy(ProviderSessionState::CleanupRequired)
+            }
         }
     }
     /// Release prompts that were accepted while a stop was unresolved.
@@ -2839,11 +2886,10 @@ impl<P: AcpProfile> Worker<P> {
         if !self.stopped_prompts.is_empty() {
             return Ok(());
         }
-        if self.stop_needs_cleanup {
+        if self.stop_cleanup != StopCleanup::None {
+            let report = self.cleanup_refusal();
             for (_, reply) in std::mem::take(&mut self.held_prompts) {
-                let _ = reply.send(ProviderExecutionReply::Finished(
-                    ExecutionReport::stopped_by_policy(ProviderSessionState::CleanupRequired),
-                ));
+                let _ = reply.send(ProviderExecutionReply::Finished(report.clone()));
             }
             return Ok(());
         }
@@ -2867,10 +2913,10 @@ impl<P: AcpProfile> Worker<P> {
         stopped: StoppedPrompt,
         message: &Envelope,
     ) -> Result<(), WorkerFailure> {
-        if stopped.kind == RefusalOutcome::CloseSession {
-            self.stop_needs_cleanup = true;
+        if stopped.kind == StopKind::CloseSession {
+            self.stop_cleanup = StopCleanup::Policy;
         }
-        let session_state = if self.stop_needs_cleanup {
+        let session_state = if self.stop_cleanup != StopCleanup::None {
             ProviderSessionState::CleanupRequired
         } else {
             ProviderSessionState::Usable
@@ -3097,7 +3143,7 @@ impl<P: AcpProfile> Worker<P> {
         // With no execution there is nothing to correlate a refusal with, so
         // the agent is told and nothing is recorded — as a refused review is.
         // A question that arrives while a stopped prompt is still unanswered
-        // is that stopped turn's, even if a later turn is already active.
+        // belongs to that stopped turn.
         if self.active.is_none() || !self.stopped_prompts.is_empty() {
             return self
                 .send_before(question_wire::cancelled(&wire_id), response_deadline)

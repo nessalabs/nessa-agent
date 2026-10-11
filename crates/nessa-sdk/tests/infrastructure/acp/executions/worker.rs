@@ -243,7 +243,7 @@ async fn worker_initial_and_fallback_cancellation_share_grace_with_a_full_pipe()
             expired_stops: Vec::new(),
             held_prompts: VecDeque::new(),
             stop_reply_deadline: None,
-            stop_needs_cleanup: false,
+            stop_cleanup: StopCleanup::None,
             shutdown_deadline: None,
             configured: true,
             closing: true,

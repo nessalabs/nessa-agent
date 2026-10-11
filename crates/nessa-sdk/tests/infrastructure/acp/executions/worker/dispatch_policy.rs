@@ -297,7 +297,7 @@ async fn worker_with_ready_frames_boundary(
             expired_stops: Vec::new(),
             held_prompts: VecDeque::new(),
             stop_reply_deadline: None,
-            stop_needs_cleanup: false,
+            stop_cleanup: StopCleanup::None,
             shutdown_deadline: None,
             configured: true,
             closing: false,

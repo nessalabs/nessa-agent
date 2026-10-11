@@ -14,11 +14,23 @@ use crate::application::agent_execution::providers::{
 };
 use crate::domain::agent_execution::permissions::RefusalOutcome;
 
+/// Whether a stopping refusal ends the turn or closes the session.
+///
+/// Continue is not a stop. A binding that tells the agent no and leaves the
+/// execution running uses [`ConfiguredRefusal::Continue`](ConfiguredRefusal::Continue).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StopKind {
+    /// End the current turn. The session stays usable when the provider answers.
+    EndTurn,
+    /// Close the session.
+    CloseSession,
+}
+
 /// The refusal outcome configured for one binding.
 ///
 /// [`Continue`](Self::Continue) carries no rule: a built-in refusal still means
 /// the agent is told no and the execution continues. [`Stop`](Self::Stop) is an
-/// identified rule, and its kind cannot be [`RefusalOutcome::Continue`].
+/// identified rule whose [`StopKind`] ends the turn or closes the session.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ConfiguredRefusal {
     /// Tell the agent no and leave the execution running.
@@ -26,7 +38,7 @@ pub enum ConfiguredRefusal {
     /// Stop for `rule`. `kind` ends the turn or closes the session.
     Stop {
         /// Whether the stop ends the turn or closes the session.
-        kind: RefusalOutcome,
+        kind: StopKind,
         /// The rule that required the stop.
         rule: ApprovalRuleReference,
     },
@@ -38,31 +50,23 @@ impl ConfiguredRefusal {
         Self::Continue
     }
 
-    /// Stop for `rule`. `outcome` must end the turn or close the session.
-    ///
-    /// Returns [`AgentError::InvalidInput`] when `outcome` is
-    /// [`RefusalOutcome::Continue`], because a stop without a stop is not a
-    /// configured outcome.
-    pub fn stopping(
-        outcome: RefusalOutcome,
-        rule: ApprovalRuleReference,
-    ) -> Result<Self, AgentError> {
-        if outcome == RefusalOutcome::Continue {
-            return Err(AgentError::InvalidInput(
-                "a stopping refusal cannot continue the turn".into(),
-            ));
-        }
-        Ok(Self::Stop {
-            kind: outcome,
-            rule,
-        })
+    /// Stop for `rule`, ending the turn or closing the session.
+    pub fn stopping(kind: StopKind, rule: ApprovalRuleReference) -> Self {
+        Self::Stop { kind, rule }
     }
 
     /// What this binding does when it refuses a tool review.
     pub fn outcome(&self) -> RefusalOutcome {
         match self {
             Self::Continue => RefusalOutcome::Continue,
-            Self::Stop { kind, .. } => *kind,
+            Self::Stop {
+                kind: StopKind::EndTurn,
+                ..
+            } => RefusalOutcome::EndTurn,
+            Self::Stop {
+                kind: StopKind::CloseSession,
+                ..
+            } => RefusalOutcome::CloseSession,
         }
     }
 
@@ -95,13 +99,7 @@ pub fn admit_configured_outcome(
     match configured {
         ConfiguredRefusal::Continue => Ok(()),
         ConfiguredRefusal::Stop {
-            kind: RefusalOutcome::Continue,
-            ..
-        } => Err(AgentError::Configuration(
-            "a stopping refusal cannot continue the turn".into(),
-        )),
-        ConfiguredRefusal::Stop {
-            kind: RefusalOutcome::EndTurn,
+            kind: StopKind::EndTurn,
             ..
         } => match capabilities.policy_end_turn() {
             PolicyEndTurnCapability::SupportedForCurrentInvocation => Ok(()),
@@ -113,7 +111,7 @@ pub fn admit_configured_outcome(
             )),
         },
         ConfiguredRefusal::Stop {
-            kind: RefusalOutcome::CloseSession,
+            kind: StopKind::CloseSession,
             ..
         } => match capabilities.policy_close_session() {
             PolicyCloseSessionCapability::SupportedForSession => Ok(()),

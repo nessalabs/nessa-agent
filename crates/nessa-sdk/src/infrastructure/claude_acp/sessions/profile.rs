@@ -57,7 +57,7 @@ const EFFORT: &str = "effort";
 
 /// The pinned Claude harness's configuration contract and built-in tool schemas.
 #[derive(Clone)]
-pub(super) struct ClaudeProfile {
+pub(crate) struct ClaudeProfile {
     approval_mode: ApprovalMode,
     /// `None` leaves the agent on its own default, and nothing is sent.
     effort_level: Option<EffortLevel>,
@@ -66,7 +66,7 @@ pub(super) struct ClaudeProfile {
     mcp_prefixes: Vec<String>,
 }
 impl ClaudeProfile {
-    pub(super) fn new(
+    pub(crate) fn new(
         system_prompt: Option<SystemPrompt>,
         approval_mode: ApprovalMode,
         effort_level: Option<EffortLevel>,

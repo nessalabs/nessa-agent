@@ -248,9 +248,17 @@ async fn selected_codex_preset_survives_a_real_agent_close_and_restore() {
 /// Drive the pinned Claude adapter through a policy stop, its cancel, and the
 /// next prompt.
 ///
-/// Claude's profile does not claim this yet. `exercised_stop_facts` lets the
-/// check run; it is not that claim. Promote Claude only after this passes on
-/// a machine that is already logged in. Codex and OpenCode stay unknown.
+/// A stopping refusal fires only from `decline_review`: a review this binding
+/// will not offer. Bash is one of those tools. A permission the host could
+/// answer does not stop the turn. Claude's profile stays unknown; this wrapper
+/// is the test's proof, not a claim about Claude. Promote Claude only after
+/// this passes on a machine that is already logged in.
+///
+/// Output of 100 tokens is exhausted by the tool-call payload before Bash is
+/// requested. A 1_000_000/8_192 model ceiling with 100_000/4_096 limits produced
+/// no event within 150s, so the ceilings stay inside the binding's 200_000/64_000
+/// and the limits stay near the working preset except for enough output for one
+/// tool call.
 #[tokio::test]
 #[ignore = "requires NESSA_LIVE_CLAUDE_ACP and existing local Claude authentication"]
 async fn claude_stop_cancel_and_the_next_prompt() {
@@ -272,63 +280,75 @@ async fn claude_stop_cancel_and_the_next_prompt() {
         &["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
     );
     config.refusal = ConfiguredRefusal::stopping(
-        RefusalOutcome::EndTurn,
+        StopKind::EndTurn,
         ApprovalRuleReference::new(
             "refuse-shell",
             "1",
             ActionContext::new("host", "policy", "grant").unwrap(),
         )
         .unwrap(),
-    )
-    .unwrap();
-    config.exercised_stop_facts = Some((
-        TurnStopCleanup::ProvenWithSessionReuse,
-        SessionCloseOwnership::Proven,
-    ));
+    );
     let mut metadata = ModelMetadataDto::from(&fixture_model);
     metadata.model_id = "claude-sonnet-5".into();
+    metadata.max_context_window_tokens = 200_000;
+    metadata.max_output_tokens = 8_192;
     let model = ModelMetadata::try_from(metadata).unwrap();
+    let audit = Arc::new(RecordingAudit::default());
     let provider = ClaudeAcpProvider::new(
         config,
         &model,
-        TokenLimits::new(900, 100).unwrap(),
-        Arc::new(RecordingAudit::default()),
+        TokenLimits::new(8_000, 2_048).unwrap(),
+        audit.clone(),
     )
     .unwrap();
-    let mut opened = provider
-        .open(ProviderOpenRequest::without_startup_control(None))
-        .await
-        .unwrap();
+    let mut opened = super::super::profile_substitution::open_proven_stop(
+        &provider,
+        audit,
+        ProviderOpenRequest::without_startup_control(None),
+    )
+    .await
+    .unwrap_or_else(|error| panic!("proven-stop open failed: {error:?}"));
     let first = start(
         &opened,
-        "Run the shell command echo nessa-stop and show the output.",
+        "Use the Bash tool to run echo nessa-stop. Do not use any other tool.",
     )
     .await;
+    let mut seen = Vec::new();
     let mut declined = false;
+    let mut finished = false;
     for _ in 0..40 {
-        match timeout(Duration::from_secs(30), opened.events.next())
-            .await
-            .expect("claude produced no event")
-            .unwrap()
-            .unwrap()
-            .into_update()
-        {
+        let update = match timeout(Duration::from_secs(30), opened.events.next()).await {
+            Ok(Ok(Some(event))) => event.into_update(),
+            other => panic!("claude produced no event ({other:?}); events so far:\n{seen:?}"),
+        };
+        seen.push(format!("{update:?}"));
+        match &update {
             ExecutionUpdate::ReviewDeclined(notice) => {
-                assert_eq!(notice.decline().outcome(), RefusalOutcome::EndTurn);
+                assert_eq!(
+                    notice.decline().outcome(),
+                    RefusalOutcome::EndTurn,
+                    "events so far:\n{seen:?}"
+                );
                 declined = true;
             }
-            ExecutionUpdate::Finished(ExecutionOutcome::Cancelled) if declined => break,
+            ExecutionUpdate::Finished(ExecutionOutcome::Cancelled) if declined => {
+                finished = true;
+                break;
+            }
             ExecutionUpdate::Finished(_) => {
-                panic!("claude finished without the stopping refusal");
+                panic!("claude finished without the stopping refusal; events:\n{seen:?}");
             }
             _ => {}
         }
     }
-    assert!(declined, "claude never requested a tool this policy stops");
+    assert!(
+        declined && finished,
+        "claude never declined Bash and finished the stopped turn; events:\n{seen:?}"
+    );
     assert_eq!(
         timeout(Duration::from_secs(30), first)
             .await
-            .expect("the stopped prompt was not answered")
+            .unwrap_or_else(|_| panic!("the stopped prompt was not answered; events:\n{seen:?}"))
             .unwrap(),
         Ok(ExecutionOutcome::Cancelled)
     );
@@ -340,7 +360,7 @@ async fn claude_stop_cancel_and_the_next_prompt() {
     assert_eq!(
         timeout(Duration::from_secs(120), second)
             .await
-            .expect("the next prompt did not finish")
+            .unwrap_or_else(|_| panic!("the next prompt did not finish; events:\n{seen:?}"))
             .unwrap(),
         Ok(ExecutionOutcome::Completed)
     );
