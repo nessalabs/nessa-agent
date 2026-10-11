@@ -112,7 +112,8 @@ sources are empty. The test does not read that request back, and the fixture
 does not emit hook events. Neither the setting nor the SDK event enum exposes
 33 enforceable Nessa hooks through ACP. Reviewed tools can receive a selected
 rejection; tools not routed through that gate do not gain a veto through a
-later tool notification. The full event and output matrix is not in this commit.
+later tool notification. The CLI matrix for the rows in `run-claude.sh` is the
+committed log below. It is not the ACP event stream.
 `verification/hook-behavior/run-claude.sh` is the reproduction for the Claude
 2.1.257 Haiku observation. Every `claude` process starts inside the row's
 project. Each hook command is tagged `--source project`, `user`, or `managed`.
@@ -139,8 +140,24 @@ tool run, then stops the turn. `pretool-allow-updated` asks for a Bash `touch`
 of `hook-sentinel-original` and passes only when the sentinel directory
 contains exactly `hook-sentinel-rewritten`. `--managed` is two rows: the
 managed hook alone, and that hook plus `--settings '{"disableAllHooks":true}'`.
-Both still record the managed hook. That log is not in this commit, so the
-Claude behaviour cells below stay pending. The ignored test
+Both still record the managed hook. The committed log is
+[rows.jsonl](../../../verification/hook-behavior/evidence/claude/rows.jsonl),
+labelled real harness, live model (Claude Code 2.1.257,
+claude-haiku-4-5-20251001, 2026-10-11 01:52 PT). SessionStart fires with
+`source` startup, and with `source` resume on `--resume` and on `/compact`.
+UserPromptSubmit, PreToolUse, PostToolUse, Stop, and SessionEnd fire.
+SubagentStart and SubagentStop fire. PreCompact fires with `source` manual.
+PostCompact was not triggered by this run. PermissionRequest did not fire.
+Bash without `--dangerously-skip-permissions` is refused into
+`permission_denials`. `--settings` with `disableAllHooks` silences the project
+hook and the user hook. The managed hook fires alone and fires identically
+with that flag. Deny blocks the tool. Ask becomes a denial in `-p` mode.
+Defer ends the turn as `tool_deferred`. `continue: false` lets the tool run,
+then stops the turn. Allow with `updatedInput` leaves only
+`hook-sentinel-rewritten`. `additionalContext` reaches the model.
+`systemMessage` does not; it is a user-facing transcript attachment. Stop
+`decision: block` is bounded at 18 Stop events, then the turn completes. Exit
+2 blocks. Exit 1, malformed JSON, and a 1s timeout fail open. The test
 `claude_project_and_user_hooks_stay_quiet_across_prompt_and_restore` points
 `CLAUDE_CONFIG_DIR` at the login directory and does not copy credentials. The
 ACP profile hardcodes `disableAllHooks: true` and empty `settingSources`, and
@@ -150,7 +167,10 @@ that path without writing the login directory. The same test runs the raw
 `project` and a line that is exactly `user`. Only the project hook is a
 negative over ACP, because the user hook loads through `--settings`. The test
 then truncates the log and requires the ACP open, prompt, restore, and second
-prompt to leave it empty. It was not run.
+prompt to leave it empty.
+[live-acp-test.log](../../../verification/hook-behavior/evidence/claude/live-acp-test.log)
+records that run: the project hook stayed quiet, and the positive control
+passed.
 
 The packaged native implementation contains conditional park/resume handling for
 `defer`, so the earlier hypothesis in #134 that it simply means no opinion is not
@@ -429,13 +449,13 @@ emit hook events.
 
 Codex and OpenCode behaviour below is the committed log from the real pinned
 binary against `verification/hook-behavior/scripted_openai.py`. The label is
-real harness, scripted model. Claude's cells stay pending until that machine's
-log is committed. Kiro has no repository pin and no adapter. Pinning it is not
+real harness, scripted model. Claude's cells are the committed live log.
+Kiro has no repository pin and no adapter. Pinning it is not
 part of this refresh.
 
 | Harness | Events that fire | Output the harness accepts | Native-hook suppression |
 | --- | --- | --- | --- |
-| Claude ACP 0.76.0, SDK 0.3.257 | Not run. The adapter does not request SDK hook-event reporting, and the fixture does not emit hook events. `run-claude.sh` is able to reproduce the 2.1.257 Haiku observation (SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop, SessionEnd; project and user hooks produce no events under `--settings` with `disableAllHooks`; a PreToolUse deny passes on `permission_denials` of at least one and no PostToolUse, and a quoted reason is a separate fact). Managed hooks still fire with `disableAllHooks`, and `suppress-managed` matches `suppress-managed-plus-flag`. `control-user` must show the user-tagged hook. That log is not committed here. | Not run. SDK 0.3.257 declares `allow \| deny \| ask \| defer`, `continue`, `stopReason`, `decision`, `systemMessage`, and `hookSpecificOutput`. The four-callback probe above is bridge serialization, not CLI acceptance. `continue: false` lets the tool run, then stops the turn. `pretool-allow-updated` asks for a Bash `touch` of `hook-sentinel-original` and passes only when the sentinel directory contains exactly `hook-sentinel-rewritten`. | `claude_startup_and_restoration_continue_when_native_hook_suppression_is_unknown`. The fixture requires `disableAllHooks: true` and empty `settingSources`. That suppresses project and user hooks. Managed hooks still fire with `disableAllHooks`, and the two managed rows are identical, so managed hooks cannot be suppressed. The negotiated fact stays `Unknown`. The open, the prompt, the restore, and the second prompt complete. `claude_project_and_user_hooks_stay_quiet_across_prompt_and_restore` is ignored and was not run. It does not copy credentials. The raw CLI control must contain a line that is exactly `project` and a line that is exactly `user`. Only the project hook is a negative over ACP: the user hook loads through `--settings`, and the ACP launch has no such argument. |
+| Claude ACP 0.76.0, SDK 0.3.257 | Real harness, live model (Claude Code 2.1.257, claude-haiku-4-5-20251001, 2026-10-11 01:52 PT). Log: [rows.jsonl](../../../verification/hook-behavior/evidence/claude/rows.jsonl). A plain turn fires SessionStart (`source` startup), UserPromptSubmit, Stop, and SessionEnd, from the project hook and the `--settings` user hook. A Read turn also fires PreToolUse and PostToolUse. The subagent row fires SubagentStart and SubagentStop. `--resume` adds SessionStart `source` resume. A follow-up whose whole text is `/compact` fires PreCompact `source` manual and SessionStart `source` resume. PostCompact was not triggered by this run. PermissionRequest did not fire. Bash without `--dangerously-skip-permissions` is refused into `permission_denials`: one denial, and PostToolUse is absent. `--settings` with `disableAllHooks` silences the project hook and the user hook. `control-user` records only `hook_source` user. A managed hook fires alone, and `suppress-managed-plus-flag` fires the same events with the same counts. | Real harness, live model (Claude Code 2.1.257, claude-haiku-4-5-20251001, 2026-10-11 01:52 PT). Same log. Deny blocks the tool: `permission_denials` has one entry and PostToolUse is absent. `deny_reason_quoted` is false. Ask becomes a denial in `-p` mode: one `permission_denials` entry and no PostToolUse. Defer ends the turn as `tool_deferred`: no PostToolUse and no Stop. `continue: false` lets the tool run, then stops the turn: PostToolUse fires, `terminal_reason` is `hook_stopped`, and Stop does not fire. Allow with `updatedInput` is honoured: the sentinel directory contains only `hook-sentinel-rewritten`. `additionalContext` reaches the model (`context_nonce_in_result` is true). `systemMessage` does not (`system_nonce_in_result` is false); it is a user-facing transcript attachment (`system_nonce_in_transcript` is true). Stop `decision: block` is bounded: 18 Stop events, then the turn completes (`terminal_reason` completed, exit 0) and SessionEnd fires. Exit 2 blocks the tool: one denial and no PostToolUse. Exit 1, malformed JSON, and a 1s timeout fail open: PostToolUse fires and the Read result is returned. | `claude_startup_and_restoration_continue_when_native_hook_suppression_is_unknown`. The fixture requires `disableAllHooks: true` and empty `settingSources`. The negotiated fact stays `Unknown`. Project and `--settings` hooks fire, and `--settings` `disableAllHooks` silences both. A managed hook fires alone, and fires identically with `disableAllHooks`, so managed hooks cannot be suppressed. [live-acp-test.log](../../../verification/hook-behavior/evidence/claude/live-acp-test.log): `claude_project_and_user_hooks_stay_quiet_across_prompt_and_restore` passed. The project hook stays quiet across open, prompt, restore, and the second prompt. The positive control (a line exactly `project` and a line exactly `user`) passed. Only the project hook is a negative over ACP: the user hook loads through `--settings`, and the ACP launch has no such argument. |
 | Codex 0.154.0 (`codex-cli 0.154.0`) | Real harness, scripted model. Log: [rows.jsonl](../../../verification/hook-behavior/evidence/codex/rows.jsonl). Hooks on: `$CODEX_HOME/hooks.json` records `hook_source` user and the project `.codex/hooks.json` records `hook_source` project. A plain turn fires SessionStart (`source` startup), UserPromptSubmit, Stop, and SessionEnd, once from each hook. A Bash turn also fires PreToolUse and PostToolUse and creates the original sentinel. `codex exec resume` adds SessionStart `source` resume. A follow-up whose whole text is `/compact` is that resume turn: PreCompact and PostCompact were not triggered by this run. The subagent row logs `unsupported call: close_agent`. SubagentStart and SubagentStop were not triggered by this run. Without the sandbox bypass the sentinel touch fails with `Read-only file system`, the hook log has one copy of each event and only `hook_source` user, and PermissionRequest does not fire. Suppression on is `-c features.hooks=false -c 'notify=[]'` on exec and on resume. `config.toml` leaves hooks enabled and does not set `notify`. Every row's hook log is empty. A Bash turn still creates the original sentinel. The permission row's touch still fails read-only. The ACP adapter still discards `hook/started` and `hook/completed`; this log is the CLI, not that stream. | Real harness, scripted model, same log. A bare `permissionDecision:allow` without `updatedInput` is rejected by the parser at `output_parser.rs` lines 441-457 (`6b9826e3`); this run did not send that output. Deny with a reason: no PostToolUse and no sentinel; the scripted model does not quote the reason. Allow with `updatedInput`: only the rewritten sentinel is created. `ask`, `defer`, and `continue: false` do not stop the tool. The additionalContext nonce appears in a later model request. The hook emits `systemMessage` and that nonce is absent from every model request. Stop `decision: block` loops (2256 Stop events) until the runner's 75s timeout, exit 124, and SessionEnd does not fire. PreToolUse exit 2 stops the tool. Exit 1, malformed JSON, and a 1s timeout do not: PreToolUse is logged, then PostToolUse, and the original sentinel is created. With suppression on, the deny and exit-2 rows create the original sentinel. | `codex_startup_and_restoration_continue_when_native_hook_suppression_is_unsupported`. The fixture requires `features.hooks: false` and `notify: []`. The negotiated fact stays `Unsupported`. The open, the prompt, the restore, and the second prompt complete. Suppression on in the script is `-c features.hooks=false -c 'notify=[]'` on exec and on resume, while config.toml leaves hooks enabled. That is the hooks portion of the thread/start override, not the full `CODEX_CONFIG` document. It does not close [#147](https://github.com/nessalabs/nessa-agent/issues/147). |
 | OpenCode 1.18.31 | Real harness, scripted model. Log: [rows.jsonl](../../../verification/hook-behavior/evidence/opencode/rows.jsonl). Hooks on: the project plugin and the user plugin under the private `XDG_CONFIG_HOME` both record callbacks (`hook_source` project and user). A plain turn fires `chat.message`, `experimental.chat.system.transform`, and `event` callbacks (`session.created`, `session.updated`, `message.updated`, `message.part.updated`, `session.status`, `session.diff`, `plugin.added`, `catalog.updated`, `reference.updated`, `integration.updated`, `message.part.delta`, `session.idle`), once from each plugin. A bash turn also fires `tool.execute.before` and `tool.execute.after` and creates the original sentinel. `--session` does not add another `session.created`; `chat.message` fires again. A follow-up message `/compact` does not fire `experimental.session.compacting` or `command.execute.before`. The subagent row calls `task`: `tool.execute.before` fires from both plugins, `tool.execute.after` does not, and the sentinel is not created. Without `--auto` the bash tool still runs and both plugins record it. `permission.ask` has no trigger. Suppression (`OPENCODE_PURE=1` and `OPENCODE_DISABLE_PROJECT_CONFIG=1`, the three config inputs unset): every row's plugin log is empty, and a requested bash tool still runs. `suppress-pure` sets only `OPENCODE_PURE=1`. Its plugin log is empty and the original sentinel is created. | Real harness, scripted model, same log. OpenCode has no `permissionDecision` vocabulary. A thrown deny stops the tool: `tool.execute.before` fires once, `tool.execute.after` does not, the sentinel is not created, and the deny reason is in stdout. The exit-2 and exit-1 throws also stop the tool: before fires once, after does not, and the sentinel is not created. An in-place rewrite of the arguments creates only the rewritten sentinel. `ask`, `defer`, and `continue: false` are not a plugin output; the tool runs. Replacing `output.args` is not read back; the original sentinel is created. A 30s wait inside `tool.execute.before` still reaches `tool.execute.after`. The additionalContext nonce and the system-transform nonce both appear in a model request. There is no Stop `decision: block` path; that row completes and the tool runs. | `opencode_startup_and_restoration_continue_when_native_hook_suppression_is_unknown`. The fixture requires `OPENCODE_PURE=1`, project config disabled, the three alternate config inputs absent, and a home other than the caller's. The negotiated fact stays `Unknown`. The open, the prompt, the restore, and the second prompt complete. The scripted log shows both planted plugins stay silent under that request, and `suppress-pure` shows `OPENCODE_PURE=1` alone does the same. Default plugins inside the binary are outside it. `pinned_binary_cannot_load_caller_config_tools_mcp_or_native_hooks` is ignored unless `NESSA_PINNED_OPENCODE_BINARY` is set. |
 
@@ -444,8 +464,8 @@ refresh. Its local strings and help remain observations, not a behavior test.
 
 A callback result or parser acceptance alone cannot prove that a tool did not
 run or that the model received injected text. The Codex and OpenCode cells
-above are that check against a scripted model. The Claude cells are still that
-gap.
+above are that check against a scripted model. The Claude cells are that check
+against the live model.
 
 ## Output support and explicit degradation
 
