@@ -3,7 +3,7 @@ use nessa_auth::domain::pairing::ConsentClass;
 use nessa_auth::{
     adapters::pairing::{
         ClientAttempt, FilePairingState, GatewayTrust, ManualCode, NativeIdentity, NativeTransport,
-        OsEntropy, PairingCryptoError,
+        OsEntropy, PairingCryptoError, ServerInvitation,
     },
     application::{
         pairing::{
@@ -15,8 +15,9 @@ use nessa_auth::{
     },
     domain::{
         pairing::{
-            AttemptFailure, AttemptId, AttemptOutcome, DeviceKey, PairingError, PairingInitiator,
-            PairingPhase, PairingPolicy, PairingRecord, PublicIntent, TerminalCause,
+            AttemptFailure, AttemptId, AttemptOutcome, DeviceKey, InvitationId, PairingError,
+            PairingInitiator, PairingPhase, PairingPolicy, PairingRecord, PublicIntent,
+            TerminalCause,
         },
         CredentialId, ResourceId,
     },
@@ -2276,6 +2277,27 @@ async fn native_ended_invitation_setup_is_discarded() {
 /// a second one would never finish. The device runs on its own OS thread.
 #[test]
 fn native_gateway_runs_on_a_one_thread_blocking_pool() {
+    // Create and the device each run one Argon2id stretch (64 MiB, t=3, p=4).
+    // The sample is one stretch on this thread, before the pool exists, so a
+    // loaded runner's allowance grows with the stretch. Twenty times that
+    // sample covers both stretches, TLS, and the owner commands, with margin
+    // if the machine slows after the sample. The five-second floor covers a
+    // fast machine whose stretch is a small part of the exchange. The timeout
+    // is what fails a job that waits on a second blocking thread.
+    let sample = std::time::Instant::now();
+    let mut entropy = OsEntropy;
+    let code = ManualCode::generate(&mut entropy);
+    ServerInvitation::register(
+        &mut entropy,
+        &code,
+        InvitationId::new([7; InvitationId::LENGTH]),
+        [9; 44],
+    )
+    .expect("one Argon2id stretch");
+    let budget = sample
+        .elapsed()
+        .saturating_mul(20)
+        .max(std::time::Duration::from_secs(5));
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .max_blocking_threads(1)
@@ -2283,7 +2305,7 @@ fn native_gateway_runs_on_a_one_thread_blocking_pool() {
         .build()
         .unwrap();
     let outcome = runtime.block_on(async {
-        tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        tokio::time::timeout(budget, async {
             let fixture = Fixture::new().await;
             let created = fixture
                 .gateway
@@ -2353,7 +2375,9 @@ fn native_gateway_runs_on_a_one_thread_blocking_pool() {
         .await
     });
     runtime.shutdown_timeout(std::time::Duration::from_secs(1));
-    outcome.expect("gateway work finished on a one-thread blocking pool");
+    outcome.unwrap_or_else(|_| {
+        panic!("gateway work finished on a one-thread blocking pool within {budget:?}")
+    });
 }
 
 /// Slice 2b row A16: a device whose handshake dropped, after another device
