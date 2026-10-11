@@ -20,6 +20,46 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+ROWS_AND_MODES=(
+  "events-plain log"
+  "events-tool log"
+  "events-subagent log"
+  "events-compact log"
+  "events-resume log"
+  "events-permission log"
+  "pretool-deny deny"
+  "pretool-allow-updated allow-updated"
+  "pretool-ask ask"
+  "pretool-defer defer"
+  "pretool-continue-false continue-false"
+  "prompt-additional-context context"
+  "prompt-system-message system"
+  "stop-decision-block stop-block"
+  "fail-exit-2 exit2"
+  "fail-exit-1 exit1"
+  "fail-malformed malformed"
+  "fail-timeout timeout"
+)
+
+# A partial run must not replace the committed evidence directory.
+if [[ -n "$ONLY" && -z "$OUT" ]]; then
+  echo "--only needs --out" >&2
+  exit 2
+fi
+if [[ -n "$ONLY" ]]; then
+  known=0
+  for entry in "${ROWS_AND_MODES[@]}"; do
+    if [[ "$ONLY" == "${entry%% *}" ]]; then
+      known=1
+      break
+    fi
+  done
+  if [[ "$known" -eq 0 ]]; then
+    echo "unknown row: $ONLY" >&2
+    exit 2
+  fi
+fi
+
 HARNESS="codex"
 LABEL="real harness, scripted model"
 mkdir -p "${HOME}/.cache/nessa-hook-behavior"
@@ -55,27 +95,6 @@ for raw in paths:
         path.write_bytes(updated)
 PY
 }
-
-ROWS_AND_MODES=(
-  "events-plain log"
-  "events-tool log"
-  "events-subagent log"
-  "events-compact log"
-  "events-resume log"
-  "events-permission log"
-  "pretool-deny deny"
-  "pretool-allow-updated allow-updated"
-  "pretool-ask ask"
-  "pretool-defer defer"
-  "pretool-continue-false continue-false"
-  "prompt-additional-context context"
-  "prompt-system-message system"
-  "stop-decision-block stop-block"
-  "fail-exit-2 exit2"
-  "fail-exit-1 exit1"
-  "fail-malformed malformed"
-  "fail-timeout timeout"
-)
 
 write_config() {
   local home="$1"

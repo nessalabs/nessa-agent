@@ -14,7 +14,11 @@ verification/hook-behavior/run-opencode.sh
 
 `--out` sets the directory for `rows.jsonl` and `summary.json`. The default is
 `verification/hook-behavior/evidence/<harness>`. stdout is the summary JSON.
-Diagnostics, including the package install, go to stderr.
+Diagnostics, including the package install, go to stderr. `run-codex.sh` and
+`run-opencode.sh` accept `--only <row>`. `--only` without `--out` prints
+`--only needs --out` and exits 2, so a partial run cannot replace the committed
+evidence. An `--only` value that is not one of that runner's rows prints
+`unknown row: <name>` and exits 2. A full run, with no `--only`, is unchanged.
 
 `run-claude.sh` uses `env -u ANTHROPIC_API_KEY` and
 `--model claude-haiku-4-5-20251001`. Every `claude` process, including resume

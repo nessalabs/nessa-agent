@@ -192,7 +192,7 @@ for entry in "${ROWS_AND_MODES[@]}"; do
       ;;
   esac
   code="$(invoke_claude "$project" "$prompt" "$stdout" "$stderr" write "${extra[@]}")"
-  notes="CLAUDE_CONFIG_DIR is the login directory <login-dir>. Credentials are not copied and that directory is not written. The user hook is --settings inside this project. Each command is tagged --source. claude is started in the project directory. --dangerously-skip-permissions is omitted for events-permission."
+  notes="CLAUDE_CONFIG_DIR is the login directory <login-dir>. Credentials are not copied. The script does not write that directory, but the Claude CLI writes session transcripts under its projects/ folder. The user hook is --settings inside this project. Each command is tagged --source. claude is started in the project directory. --dangerously-skip-permissions is omitted for events-permission."
   if [[ "$row" == "control-user" ]]; then
     notes="Positive control: user hook only, through --settings, no project settings file. ${notes}"
   fi
