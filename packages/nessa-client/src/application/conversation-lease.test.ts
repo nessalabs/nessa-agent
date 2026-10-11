@@ -20,6 +20,10 @@ describe("a lease's status in words", () => {
         { state: "ended", cause: "lost", environment: "ssh" },
         "Ended when the connection to its host was lost",
       ],
+      [
+        { state: "ended", cause: "lost", environment: "peer" },
+        "Ended when the connection to its host was lost",
+      ],
       [{ state: "interrupted", cause: "stopped" }, "Cleanup not confirmed"],
       [
         { state: "refused", refusal: "sandbox_unavailable" },
@@ -63,6 +67,13 @@ describe("the machine a lease names", () => {
     expect(conversationLeasePlace({ environment: "ssh", host: "me@devbox" })).toBe(
       "me@devbox",
     )
+    expect(
+      conversationLeasePlace({
+        environment: "peer",
+        host: `peer:0123abcd${"ef".repeat(28)}`,
+      }),
+    ).toBe("Paired machine 0123abcd")
+    expect(conversationLeasePlace({ environment: "peer" })).toBeUndefined()
     expect(conversationLeasePlace({})).toBeUndefined()
   })
 })

@@ -1311,6 +1311,7 @@ async fn an_idle_connection_sends_keepalives() {
             connect: Duration::from_secs(5),
             answer: Duration::from_secs(5),
             keepalive: Duration::from_millis(20),
+            ..SshTimings::default()
         },
     );
     // The grant is never answered: the connection is otherwise idle.

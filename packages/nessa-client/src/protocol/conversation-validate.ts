@@ -667,7 +667,7 @@ const leaseValues = {
     refused: true,
     unreadable: true,
   } satisfies Record<ConversationLease["state"], true>,
-  environment: { here: true, ssh: true } satisfies Record<
+  environment: { here: true, ssh: true, peer: true } satisfies Record<
     NonNullable<ConversationLease["environment"]>,
     true
   >,
@@ -813,8 +813,10 @@ function lease(value: unknown) {
   }
   if (!shape.dropped && item.droppedEvents !== 0)
     throw new Error("Invalid conversation lease droppedEvents")
-  // The SSH destination, exactly when the lease names an SSH environment.
-  if (item.environment === "ssh") text(item, "host", 253, false)
+  // The machine's name, exactly when the lease names a machine of its own:
+  // an SSH destination, or a paired environment's `peer:<key>`.
+  if (item.environment === "ssh" || item.environment === "peer")
+    text(item, "host", 253, false)
   else if (item.host !== undefined) throw new Error("Invalid conversation lease host")
 }
 

@@ -27,10 +27,10 @@ export function conversationLeaseStatus(
           return "Access withdrawn"
         case "expired":
           return "Timed out"
-        // The environment no longer held it: an SSH host's connection went
-        // away, or this gateway started again.
+        // The environment no longer held it: a host's connection went away,
+        // or this gateway started again.
         case "lost":
-          return lease.environment === "ssh"
+          return lease.environment === "ssh" || lease.environment === "peer"
             ? "Ended when the connection to its host was lost"
             : "Ended when Nessa restarted"
         case "stopped":
@@ -78,8 +78,9 @@ export function conversationLeaseStatus(
 }
 
 /**
- * Which machine a lease names, in a person's words: this one, or the SSH
- * destination it runs on; nothing when the lease does not say.
+ * Which machine a lease names, in a person's words: this one, the SSH
+ * destination it runs on, or a paired machine by the start of its key;
+ * nothing when the lease does not say.
  */
 export function conversationLeasePlace(
   lease: Pick<ConversationLease, "environment" | "host">,
@@ -89,6 +90,10 @@ export function conversationLeasePlace(
       return "This computer"
     case "ssh":
       return lease.host
+    case "peer":
+      return lease.host === undefined
+        ? undefined
+        : `Paired machine ${lease.host.slice("peer:".length, "peer:".length + 8)}`
     case undefined:
       return undefined
     default: {

@@ -958,9 +958,9 @@ export interface ConversationLease {
   state: "live" | "ending" | "ended" | "interrupted" | "refused" | "unreadable"
   /** Which issuance of this conversation's leases this is, counting refused ones; absent when not known. */
   revision?: number
-  /** Where the agent runs. here: the gateway's own machine. ssh: a machine the gateway reaches over SSH, named by host, whose `nessa env serve` runs the agent's harness next to its files. */
-  environment?: "here" | "ssh"
-  /** The OpenSSH destination the agent runs on, as config.json names it; present exactly when environment is ssh. */
+  /** Where the agent runs. here: the gateway's own machine. ssh: a machine the gateway reaches over SSH, named by host, whose `nessa env serve` runs the agent's harness next to its files. peer: a paired environment, named by host, whose `nessa env serve` dials this gateway and runs the agent's harness next to its files. */
+  environment?: "here" | "ssh" | "peer"
+  /** The machine the agent runs on: for ssh, the OpenSSH destination as config.json names it; for peer, `peer:` and the paired environment's device key in lowercase hex. Present exactly when environment is ssh or peer. */
   host?: string
   /** The sandbox granted, or for a refused lease the one asked for. harness_default: whatever the agent's harness encloses by default, configured by nothing Nessa sets, and nothing more. none: nothing encloses what runs beyond the account the environment runs as. */
   sandbox?: "harness_default" | "none"

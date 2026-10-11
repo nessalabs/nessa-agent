@@ -36,7 +36,10 @@ use super::{
     audit::EnvironmentAudit,
     connector::LeaseConnector,
     install::HostInstaller,
-    link::{AdmissionRefused, CommandAnswer, Granted, HostLink, Opening, Published, StartError},
+    link::{
+        AdmissionRefused, CommandAnswer, Granted, HostLink, Liveness, Opening, Published,
+        StartError,
+    },
     transfer::SftpBytes,
 };
 use crate::conversation::application::{
@@ -44,7 +47,7 @@ use crate::conversation::application::{
     EnvironmentDeclaration, EnvironmentFuture, EnvironmentLease, LeaseHold, LeaseRelease,
 };
 use nessa_protocol::lease::{
-    Cleanup, CommandEnd, GrantRefusal, COMMAND_STOP_WAIT, KEEPALIVE_INTERVAL,
+    Cleanup, CommandEnd, GrantRefusal, COMMAND_STOP_WAIT, KEEPALIVE_INTERVAL, SILENCE_LIMIT,
 };
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
@@ -71,6 +74,9 @@ pub(crate) struct SshTimings {
     /// Most the connection is left without a frame to the host: past it a
     /// keepalive is sent, which is how the host tells this gateway is there.
     pub(crate) keepalive: Duration,
+    /// Most the connection is believed without a frame from the host, whose
+    /// own keepalives say it is there: past it, the connection is lost.
+    pub(crate) silence: Duration,
 }
 
 impl Default for SshTimings {
@@ -79,6 +85,7 @@ impl Default for SshTimings {
             connect: Duration::from_secs(30),
             answer: Duration::from_secs(15),
             keepalive: KEEPALIVE_INTERVAL,
+            silence: SILENCE_LIMIT,
         }
     }
 }
@@ -168,7 +175,10 @@ impl Inner {
             self.connector.as_ref(),
             self.audit.clone(),
             self.timings.connect,
-            self.timings.keepalive,
+            Liveness {
+                keepalive: self.timings.keepalive,
+                silence: self.timings.silence,
+            },
         )
         .await
     }

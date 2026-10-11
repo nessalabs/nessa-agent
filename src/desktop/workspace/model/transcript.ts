@@ -136,9 +136,11 @@ export function optionOf(
  */
 export interface TranscriptLease {
   readonly state: "live" | "ending" | "ended" | "interrupted" | "refused" | "unreadable"
-  /** `here` is the gateway's own machine; `ssh` a host reached over SSH. */
-  readonly environment?: "here" | "ssh"
-  /** The SSH destination, exactly when `environment` is `ssh`. */
+  /** `here` is the gateway's own machine; `ssh` a host reached over SSH;
+   * `peer` a paired machine that dials the gateway. */
+  readonly environment?: "here" | "ssh" | "peer"
+  /** The SSH destination, or the paired machine's `peer:<key>`, exactly when
+   * `environment` is `ssh` or `peer`. */
   readonly host?: string
   readonly cause?: "stopped" | "closed" | "revoked" | "expired" | "lost"
   readonly refusal?:

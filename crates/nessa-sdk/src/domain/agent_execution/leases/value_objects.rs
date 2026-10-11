@@ -56,14 +56,108 @@ impl LeaseRevision {
 }
 
 /// Where a lease's agent runs: the process that keeps the conversation,
-/// running the agent as a child process, or a machine reached over SSH whose
-/// `nessa env serve` runs the agent's harness next to its files.
+/// running the agent as a child process, or a machine whose `nessa env
+/// serve` runs the agent's harness next to its files, reached over SSH or
+/// dialing in as a paired environment.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum EnvironmentRef {
     /// This gateway's own process and machine.
     Here,
     /// The machine this OpenSSH destination reaches.
     Ssh(SshDestination),
+    /// The paired environment that proves this key when it dials in.
+    Peer(PeerEnvironment),
+}
+impl EnvironmentRef {
+    /// The name of this gateway's own machine.
+    pub const HERE: &'static str = "here";
+
+    /// The environment `name` names: [`Self::HERE`], a paired environment's
+    /// `peer:<key>`, or else an SSH destination. Each name reads one way
+    /// only, since an SSH destination holds no `:`.
+    ///
+    /// # Errors
+    /// [`ExecutionError::InvalidPeerEnvironment`] for a `peer:` name that
+    /// holds no key, [`ExecutionError::InvalidSshDestination`] for any other
+    /// name outside a destination's alphabet.
+    pub fn named(name: &str) -> Result<Self, ExecutionError> {
+        if name == Self::HERE {
+            Ok(Self::Here)
+        } else if name.starts_with(PeerEnvironment::PREFIX) {
+            PeerEnvironment::parse(name).map(Self::Peer)
+        } else {
+            SshDestination::new(name).map(Self::Ssh)
+        }
+    }
+
+    /// Its name, as [`Self::named`] reads it.
+    pub fn name(&self) -> String {
+        match self {
+            Self::Here => Self::HERE.to_owned(),
+            Self::Ssh(host) => host.as_str().to_owned(),
+            Self::Peer(peer) => peer.name(),
+        }
+    }
+}
+
+/// A paired environment: a machine that holds a credential to serve this
+/// gateway's leases, named by the device key it proved when it paired and
+/// proves on every connection, as `peer:` and the key in lowercase hex.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct PeerEnvironment([u8; Self::KEY_BYTES]);
+impl PeerEnvironment {
+    /// What every paired environment's name begins with.
+    pub const PREFIX: &'static str = "peer:";
+    /// The length of its key.
+    pub const KEY_BYTES: usize = 32;
+
+    /// The paired environment that proves `key`.
+    pub fn new(key: [u8; Self::KEY_BYTES]) -> Self {
+        Self(key)
+    }
+
+    /// Read back a name [`Self::name`] wrote: the prefix and exactly
+    /// [`Self::KEY_BYTES`] bytes in lowercase hex.
+    ///
+    /// # Errors
+    /// [`ExecutionError::InvalidPeerEnvironment`] for anything else.
+    pub fn parse(name: &str) -> Result<Self, ExecutionError> {
+        let hex = name
+            .strip_prefix(Self::PREFIX)
+            .filter(|hex| hex.len() == 2 * Self::KEY_BYTES)
+            .ok_or(ExecutionError::InvalidPeerEnvironment)?;
+        let mut key = [0; Self::KEY_BYTES];
+        for (byte, pair) in key.iter_mut().zip(hex.as_bytes().chunks_exact(2)) {
+            *byte = (nibble(pair[0])? << 4) | nibble(pair[1])?;
+        }
+        Ok(Self(key))
+    }
+
+    /// The key it proves.
+    pub fn key(&self) -> &[u8; Self::KEY_BYTES] {
+        &self.0
+    }
+
+    /// Its name: the prefix and its key in lowercase hex.
+    pub fn name(&self) -> String {
+        const DIGITS: &[u8; 16] = b"0123456789abcdef";
+        let mut name = String::with_capacity(Self::PREFIX.len() + 2 * Self::KEY_BYTES);
+        name.push_str(Self::PREFIX);
+        for byte in self.0 {
+            name.push(char::from(DIGITS[usize::from(byte >> 4)]));
+            name.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
+        }
+        name
+    }
+}
+
+/// One lowercase hex digit's value.
+fn nibble(digit: u8) -> Result<u8, ExecutionError> {
+    match digit {
+        b'0'..=b'9' => Ok(digit - b'0'),
+        b'a'..=b'f' => Ok(digit - b'a' + 10),
+        _ => Err(ExecutionError::InvalidPeerEnvironment),
+    }
 }
 
 /// An OpenSSH destination a person named for an environment, exactly as it is

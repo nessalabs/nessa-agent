@@ -11,8 +11,8 @@ use nessa_sdk::domain::agent_execution::{
     leases::{
         AgentWork, CleanupDecision, CommandOutput, CommandWork, EndDecision, EnvironmentRef, Lease,
         LeaseCleanup, LeaseDeadline, LeaseEndCause, LeaseError, LeaseGrants, LeaseId, LeasePhase,
-        LeaseRefusal, LeaseRevision, LeaseTerms, LeaseWork, SandboxProfile, SandboxProfiles,
-        SshDestination,
+        LeaseRefusal, LeaseRevision, LeaseTerms, LeaseWork, PeerEnvironment, SandboxProfile,
+        SandboxProfiles, SshDestination,
     },
     ExecutionError,
 };
@@ -372,6 +372,61 @@ fn an_ssh_destination_can_never_be_read_as_an_option_or_a_second_word() {
     }
     assert!(SshDestination::new("a".repeat(SshDestination::MAX_BYTES)).is_ok());
     assert!(SshDestination::new("a".repeat(SshDestination::MAX_BYTES + 1)).is_err());
+}
+
+/// A paired environment's name reads back as the key it was written from,
+/// and only a `peer:` name with exactly its key in lowercase hex is one.
+#[test]
+fn a_peer_environment_name_reads_back_as_its_key() {
+    let key: [u8; PeerEnvironment::KEY_BYTES] =
+        std::array::from_fn(|index| (index as u8).wrapping_mul(9));
+    let peer = PeerEnvironment::new(key);
+    let name = peer.name();
+    assert_eq!(&name[..PeerEnvironment::PREFIX.len()], "peer:");
+    assert_eq!(&name[5..9], "0009");
+    assert_eq!(PeerEnvironment::parse(&name), Ok(peer));
+    assert_eq!(peer.key(), &key);
+    let hex = &name[PeerEnvironment::PREFIX.len()..];
+    for refused in [
+        format!("peer:{}", &hex[1..]),
+        format!("peer:{hex}0"),
+        format!("peer:{}", hex.to_uppercase()),
+        format!("peer:{}g", &hex[1..]),
+        format!("gateway:{hex}"),
+        "peer:".to_owned(),
+    ] {
+        assert_eq!(
+            PeerEnvironment::parse(&refused),
+            Err(ExecutionError::InvalidPeerEnvironment),
+            "{refused:?}"
+        );
+    }
+}
+
+/// Every environment name reads one way: here, a paired environment, or an
+/// SSH destination, which holds no `:`; and each writes back as read.
+#[test]
+fn an_environment_name_names_one_environment() {
+    let peer = PeerEnvironment::new([0xab; PeerEnvironment::KEY_BYTES]);
+    for (name, environment) in [
+        ("here".to_owned(), EnvironmentRef::Here),
+        (
+            "me@devbox".to_owned(),
+            EnvironmentRef::Ssh(SshDestination::new("me@devbox").unwrap()),
+        ),
+        (peer.name(), EnvironmentRef::Peer(peer)),
+    ] {
+        assert_eq!(EnvironmentRef::named(&name), Ok(environment.clone()));
+        assert_eq!(environment.name(), name);
+    }
+    assert_eq!(
+        EnvironmentRef::named("peer:ab"),
+        Err(ExecutionError::InvalidPeerEnvironment)
+    );
+    assert_eq!(
+        EnvironmentRef::named("-oProxyCommand=sh"),
+        Err(ExecutionError::InvalidSshDestination)
+    );
 }
 
 #[test]

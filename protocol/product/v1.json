@@ -2409,15 +2409,15 @@
         },
         "environment": {
           "type": "string",
-          "enum": ["here", "ssh"],
-          "description": "Where the agent runs. here: the gateway's own machine. ssh: a machine the gateway reaches over SSH, named by host, whose `nessa env serve` runs the agent's harness next to its files."
+          "enum": ["here", "ssh", "peer"],
+          "description": "Where the agent runs. here: the gateway's own machine. ssh: a machine the gateway reaches over SSH, named by host, whose `nessa env serve` runs the agent's harness next to its files. peer: a paired environment, named by host, whose `nessa env serve` dials this gateway and runs the agent's harness next to its files."
         },
         "host": {
           "type": "string",
           "minLength": 1,
           "maxLength": 253,
           "x-utf8MaxBytes": 253,
-          "description": "The OpenSSH destination the agent runs on, as config.json names it; present exactly when environment is ssh."
+          "description": "The machine the agent runs on: for ssh, the OpenSSH destination as config.json names it; for peer, `peer:` and the paired environment's device key in lowercase hex. Present exactly when environment is ssh or peer."
         },
         "sandbox": {
           "type": "string",

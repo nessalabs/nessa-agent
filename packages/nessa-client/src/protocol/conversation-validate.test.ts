@@ -975,8 +975,13 @@ describe("the view's lease", () => {
     }
     for (const [key, schema] of Object.entries(properties)) {
       for (const value of schema.enum ?? []) {
-        // An SSH environment names its host.
-        const host = key === "environment" && value === "ssh" ? { host: "devbox" } : {}
+        // An SSH or paired environment names its host.
+        const host =
+          key === "environment" && value === "ssh"
+            ? { host: "devbox" }
+            : key === "environment" && value === "peer"
+              ? { host: `peer:${"ab".repeat(32)}` }
+              : {}
         const sample =
           key === "state"
             ? states[value]
@@ -987,14 +992,17 @@ describe("the view's lease", () => {
     }
   })
 
-  it("holds a lease's host to its SSH environment", () => {
+  it("holds a lease's host to its SSH or paired environment", () => {
     const there = { ...live, environment: "ssh", host: "me@devbox" }
     expect(conversationView(withLease(there), "conversation").lease).toEqual(there)
+    const paired = { ...live, environment: "peer", host: `peer:${"ab".repeat(32)}` }
+    expect(conversationView(withLease(paired), "conversation").lease).toEqual(paired)
     for (const contradiction of [
       { ...live, environment: "ssh" },
       { ...live, environment: "ssh", host: "" },
       { ...live, environment: "ssh", host: "d".repeat(254) },
       { ...live, environment: "here", host: "devbox" },
+      { ...live, environment: "peer" },
     ])
       expect(() => conversationView(withLease(contradiction), "conversation")).toThrow()
   })
