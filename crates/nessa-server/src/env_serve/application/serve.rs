@@ -51,7 +51,8 @@ use super::artifacts::{ArtifactOutbox, LeaseArtifacts};
 use super::wire::{write_frame, FrameStream};
 use nessa_protocol::lease::{
     decode, Cleanup, Collection, CommandEnd, Data, FromEnvironment, GrantRefusal, Hello,
-    StartFailure, ToEnvironment, Unavailability, MAX_DATA_BYTES, MAX_STOP_WAIT, KEEPALIVE_INTERVAL, SILENCE_LIMIT,
+    StartFailure, ToEnvironment, Unavailability, KEEPALIVE_INTERVAL, MAX_DATA_BYTES, MAX_STOP_WAIT,
+    SILENCE_LIMIT,
 };
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,

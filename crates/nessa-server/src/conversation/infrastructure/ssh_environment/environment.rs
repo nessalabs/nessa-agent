@@ -34,18 +34,20 @@
 //! fenced by the lease as any provider's events are.
 use super::{
     audit::EnvironmentAudit,
-    connector::LeaseConnector,
+    connector::{LeaseConnection, LeaseConnector},
     install::HostInstaller,
     link::{
         AdmissionRefused, CommandAnswer, Granted, HostLink, Liveness, Opening, Published,
         StartError,
     },
+    peer::ServingCredentials,
     transfer::SftpBytes,
 };
 use crate::conversation::application::{
     ArtifactAnswer, ArtifactOffer, CommandEnvironment, CommandHold, CommandResult, Environment,
     EnvironmentDeclaration, EnvironmentFuture, EnvironmentLease, LeaseHold, LeaseRelease,
 };
+use nessa_auth::application::pairing::DeviceConnectionProof;
 use nessa_protocol::lease::{
     Cleanup, CommandEnd, GrantRefusal, COMMAND_STOP_WAIT, KEEPALIVE_INTERVAL, SILENCE_LIMIT,
 };
@@ -58,7 +60,7 @@ use nessa_sdk::application::agent_execution::{
 };
 use nessa_sdk::domain::agent_execution::leases::{
     CommandExit, CommandRefusal, CommandWork, EnvironmentRef, LeaseCleanup, LeaseEndCause, LeaseId,
-    LeaseRefusal, LeaseTerms, LeaseWork, SandboxProfiles, SshDestination,
+    LeaseRefusal, LeaseTerms, LeaseWork, PeerEnvironment, SandboxProfiles, SshDestination,
 };
 use std::{collections::BTreeMap, path::Path, sync::Arc, time::Duration};
 use tokio::sync::{mpsc, watch, Mutex};
@@ -90,21 +92,42 @@ impl Default for SshTimings {
     }
 }
 
-/// One SSH host, as an environment.
+/// One host, as an environment: reached over SSH, or a paired environment
+/// that dials in ([`super::peer`]). Only how its connection is had differs.
 pub(crate) struct SshEnvironment {
     inner: Arc<Inner>,
 }
 
 struct Inner {
-    host: SshDestination,
-    connector: Arc<dyn LeaseConnector>,
+    reach: Reach,
     audit: Arc<dyn EnvironmentAudit>,
-    /// Puts this build on the host when none is there.
-    installer: Arc<HostInstaller>,
     timings: SshTimings,
-    /// The one connection to the host, opened when first needed and opened
-    /// again once lost. Held while connecting, so one is opened at a time.
+    /// The one connection to the host: over SSH, opened when first needed
+    /// and opened again once lost, held while connecting, so one is opened
+    /// at a time; for a paired environment, the one its latest connection
+    /// opened.
     link: Mutex<Option<Arc<HostLink>>>,
+}
+
+/// How a host's connection is had.
+enum Reach {
+    /// This gateway runs `ssh` to it.
+    Ssh {
+        host: SshDestination,
+        connector: Arc<dyn LeaseConnector>,
+        /// Puts this build on the host when none is there.
+        installer: Arc<HostInstaller>,
+    },
+    /// It dials this gateway. Its connection is used only while the key
+    /// that connection proved still holds a credential to serve, asked
+    /// again before each lease.
+    Peer {
+        peer: PeerEnvironment,
+        credentials: Arc<dyn ServingCredentials>,
+        /// What its current connection proved; written with
+        /// [`Inner::link`], under its lock.
+        proof: std::sync::Mutex<Option<Arc<DeviceConnectionProof>>>,
+    },
 }
 
 impl SshEnvironment {
@@ -115,16 +138,81 @@ impl SshEnvironment {
         installer: Arc<HostInstaller>,
         timings: SshTimings,
     ) -> Self {
-        Self {
-            inner: Arc::new(Inner {
+        Self::reached(
+            Reach::Ssh {
                 host,
                 connector,
-                audit,
                 installer,
+            },
+            audit,
+            timings,
+        )
+    }
+
+    /// The paired environment `peer`, with no connection until it dials in.
+    pub(super) fn peer(
+        peer: PeerEnvironment,
+        credentials: Arc<dyn ServingCredentials>,
+        audit: Arc<dyn EnvironmentAudit>,
+        timings: SshTimings,
+    ) -> Self {
+        Self::reached(
+            Reach::Peer {
+                peer,
+                credentials,
+                proof: std::sync::Mutex::new(None),
+            },
+            audit,
+            timings,
+        )
+    }
+
+    fn reached(reach: Reach, audit: Arc<dyn EnvironmentAudit>, timings: SshTimings) -> Self {
+        Self {
+            inner: Arc::new(Inner {
+                reach,
+                audit,
                 timings,
                 link: Mutex::new(None),
             }),
         }
+    }
+
+    /// Serve this paired environment's leases over `connection`, which
+    /// proved `proof`, in place of any connection it had: that one is
+    /// closed, and its leases are lost. Answers once the new connection
+    /// ends, or at once when its hello is refused.
+    pub(super) async fn serve(&self, proof: DeviceConnectionProof, connection: LeaseConnection) {
+        let Reach::Peer { proof: proved, .. } = &self.inner.reach else {
+            return;
+        };
+        let opened = HostLink::over(
+            &self.inner.name(),
+            connection,
+            self.inner.audit.clone(),
+            self.inner.timings.connect,
+            self.inner.liveness(),
+        )
+        .await;
+        let Ok(link) = opened else {
+            return;
+        };
+        let replaced = {
+            let mut held = self.inner.link.lock().await;
+            *proved
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::new(proof));
+            held.replace(link.clone())
+        };
+        if let Some(replaced) = replaced {
+            replaced.close();
+        }
+        link.ended().await;
+    }
+
+    /// Whether a connection to it is open now.
+    pub(super) fn is_connected(&self) -> bool {
+        self.reachable() == Some(true)
     }
 }
 
@@ -140,21 +228,48 @@ enum Install<'a> {
 }
 
 impl Inner {
+    /// Its name in the log and the audit.
+    fn name(&self) -> String {
+        self.environment().name()
+    }
+
+    fn environment(&self) -> EnvironmentRef {
+        match &self.reach {
+            Reach::Ssh { host, .. } => EnvironmentRef::Ssh(host.clone()),
+            Reach::Peer { peer, .. } => EnvironmentRef::Peer(*peer),
+        }
+    }
+
+    fn liveness(&self) -> Liveness {
+        Liveness {
+            keepalive: self.timings.keepalive,
+            silence: self.timings.silence,
+        }
+    }
+
     async fn link(&self, install: Install<'_>) -> Result<Arc<HostLink>, LeaseRefusal> {
+        let (host, connector, installer) = match &self.reach {
+            Reach::Ssh {
+                host,
+                connector,
+                installer,
+            } => (host, connector, installer),
+            Reach::Peer {
+                credentials, proof, ..
+            } => return self.dialed_in(credentials.as_ref(), proof).await,
+        };
         let mut held = self.link.lock().await;
         if let Some(link) = held.as_ref().filter(|link| link.is_open()) {
             return Ok(link.clone());
         }
         *held = None;
-        let link = match self.open().await {
+        let link = match self.open(host, connector.as_ref(), installer).await {
             Err(Opening::NotServed) => match install {
                 // Present already: another gateway of this build may have
                 // just put it there, so it is asked once more either way.
                 Install::IfAbsent(lease) => {
-                    self.installer
-                        .ensure(&self.host, lease, self.audit.as_ref())
-                        .await?;
-                    self.open().await
+                    installer.ensure(host, lease, self.audit.as_ref()).await?;
+                    self.open(host, connector.as_ref(), installer).await
                 }
                 Install::Never => Err(Opening::NotServed),
             },
@@ -168,19 +283,61 @@ impl Inner {
         Ok(link)
     }
 
-    async fn open(&self) -> Result<Arc<HostLink>, Opening> {
+    async fn open(
+        &self,
+        host: &SshDestination,
+        connector: &dyn LeaseConnector,
+        installer: &HostInstaller,
+    ) -> Result<Arc<HostLink>, Opening> {
         HostLink::open(
-            &self.host,
-            self.installer.serve_command().await?,
-            self.connector.as_ref(),
+            host,
+            installer.serve_command().await?,
+            connector,
             self.audit.clone(),
             self.timings.connect,
-            Liveness {
-                keepalive: self.timings.keepalive,
-                silence: self.timings.silence,
-            },
+            self.liveness(),
         )
         .await
+    }
+
+    /// A paired environment's current connection, once the key it proved is
+    /// asked again whether it still serves: one that no longer does is
+    /// closed. Nothing is reached here: with no connection open, the host is
+    /// unreachable until it dials in.
+    async fn dialed_in(
+        &self,
+        credentials: &dyn ServingCredentials,
+        proof: &std::sync::Mutex<Option<Arc<DeviceConnectionProof>>>,
+    ) -> Result<Arc<HostLink>, LeaseRefusal> {
+        let (link, proved) = {
+            let held = self.link.lock().await;
+            let link = held
+                .as_ref()
+                .filter(|link| link.is_open())
+                .cloned()
+                .ok_or(LeaseRefusal::EnvironmentUnreachable)?;
+            let proved = proof
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
+                .ok_or(LeaseRefusal::EnvironmentUnreachable)?;
+            (link, proved)
+        };
+        match credentials.serves(&proved).await {
+            Ok(true) => Ok(link),
+            Ok(false) => {
+                tracing::warn!(
+                    host = self.name(),
+                    "a paired environment no longer holds a credential to serve; its connection is closed"
+                );
+                link.close();
+                Err(LeaseRefusal::EnvironmentUnreachable)
+            }
+            Err(error) => {
+                tracing::warn!(host = self.name(), %error, "whether a paired environment still serves could not be read");
+                Err(LeaseRefusal::EnvironmentUnreachable)
+            }
+        }
     }
 
     /// What the host recorded of `lease`, asked on the connection there is
@@ -206,7 +363,7 @@ fn evidence(cleanup: Cleanup) -> Option<LeaseCleanup> {
 impl Environment for SshEnvironment {
     fn declaration(&self) -> EnvironmentDeclaration {
         EnvironmentDeclaration {
-            environment: EnvironmentRef::Ssh(self.inner.host.clone()),
+            environment: self.inner.environment(),
             sandbox: SandboxProfiles::HARNESS_DEFAULT,
         }
     }
@@ -286,7 +443,7 @@ impl CommandEnvironment for SshEnvironment {
                 self.inner.timings.answer,
             )
             .await
-            .map_err(|refused| command_refusal(&self.inner.host, refused))?;
+            .map_err(|refused| command_refusal(&self.inner.name(), refused))?;
             Ok(Box::new(SshCommand {
                 inner: self.inner.clone(),
                 link,
@@ -298,7 +455,7 @@ impl CommandEnvironment for SshEnvironment {
 }
 
 /// A host's refusal of a command lease, as the gateway's.
-fn command_refusal(host: &SshDestination, refused: AdmissionRefused) -> CommandRefusal {
+fn command_refusal(host: &str, refused: AdmissionRefused) -> CommandRefusal {
     match refused {
         AdmissionRefused::Host(GrantRefusal::CommandsUnavailable) => {
             CommandRefusal::CommandsUnavailable
@@ -306,10 +463,7 @@ fn command_refusal(host: &SshDestination, refused: AdmissionRefused) -> CommandR
         // The gateway checked it against the same bounds: a host that
         // disagrees has another reading of its workspace, so it is not run.
         AdmissionRefused::Host(GrantRefusal::InvalidCommand) => {
-            tracing::warn!(
-                host = host.as_str(),
-                "the host refused a command the gateway admitted"
-            );
+            tracing::warn!(host, "the host refused a command the gateway admitted");
             CommandRefusal::CommandDenied
         }
         AdmissionRefused::Host(

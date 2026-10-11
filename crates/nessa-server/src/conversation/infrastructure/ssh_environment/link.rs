@@ -209,6 +209,8 @@ pub(crate) struct HostLink {
     keep: Mutex<Box<dyn Send>>,
     /// Opens artifact channels on this same connection.
     artifacts: Arc<dyn ArtifactChannels>,
+    /// Closes once the demux ends: the connection is over.
+    ended: watch::Receiver<()>,
 }
 
 /// How long the writer may be idle before it says the gateway is there.
@@ -335,6 +337,7 @@ impl HostLink {
             liveness.keepalive,
         ));
         let routes = Arc::new(Mutex::new(Routes::default()));
+        let (ending, ended) = watch::channel(());
         let link = Arc::new(Self {
             host: host.into(),
             workspace,
@@ -343,12 +346,14 @@ impl HostLink {
             audit,
             keep: Mutex::new(connection.keep),
             artifacts: connection.artifacts,
+            ended,
         });
         tokio::spawn(demux(
             Arc::downgrade(&link),
             link.shared(),
             stream,
             liveness.silence,
+            ending,
         ));
         Ok(link)
     }
@@ -410,6 +415,20 @@ impl HostLink {
     /// Whether the connection still serves leases.
     pub(crate) fn is_open(&self) -> bool {
         !self.routes().closed && !self.frames.is_closed()
+    }
+
+    /// End the connection from this side: what keeps it open is let go, so
+    /// its stream ends and every lease on it is lost, as when the host goes.
+    pub(crate) fn close(&self) {
+        let mut keep = self.keep.lock().unwrap_or_else(PoisonError::into_inner);
+        drop(std::mem::replace(&mut *keep, Box::new(())));
+    }
+
+    /// Answers once the connection has ended and its leases are let go.
+    pub(crate) async fn ended(&self) {
+        let mut ended = self.ended.clone();
+        // Never sent to: only the demux's end, dropping the sender, answers.
+        while ended.changed().await.is_ok() {}
     }
 
     /// Ask the host to admit `lease` for `agent`, waiting at most `deadline`.
@@ -1226,6 +1245,7 @@ async fn demux<R: AsyncRead + Unpin>(
     shared: Shared,
     mut stream: FrameStream<R>,
     silence: Duration,
+    _ending: watch::Sender<()>,
 ) {
     loop {
         let body = match tokio::time::timeout(silence, stream.next()).await {
@@ -1278,8 +1298,7 @@ async fn demux<R: AsyncRead + Unpin>(
     }
     // Ends the ssh process too, if it is somehow still running.
     if let Some(link) = link.upgrade() {
-        let mut keep = link.keep.lock().unwrap_or_else(PoisonError::into_inner);
-        drop(std::mem::replace(&mut *keep, Box::new(())));
+        link.close();
     }
 }
 

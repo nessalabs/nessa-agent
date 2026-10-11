@@ -193,7 +193,7 @@ pub use passive_read::{AdmitPassiveRead, PassiveRead, PassiveReadGrants, Receive
 #[cfg(any(unix, test))]
 pub(crate) use placement::Environments;
 #[cfg(any(unix, test))]
-pub(crate) use placement::{ConversationPlacements, PlacementError};
+pub(crate) use placement::{ConversationPlacements, PairedEnvironments, PlacementError};
 pub use ports::{
     ArtifactKept, ArtifactRecordGate, AttachmentRelease, AttachmentReleaseCause,
     ConversationAttachments, ConversationCreation, ConversationCreationAudit,
