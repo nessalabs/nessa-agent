@@ -12,6 +12,32 @@ use nessa_sync::replication::{
 };
 
 impl ReadOnlyCache {
+    /// Remove one conversation the source no longer grants this receiver: its
+    /// catalogue entry and its transcript, in one transaction. Catalogue
+    /// progress stays, and no deletion fence is written, so a later grant
+    /// (a newer revision) brings the conversation back whole.
+    pub(crate) fn withdraw(&mut self, catalogue: &Scope, id: &Id) -> Result<(), CacheError> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(rows::database_error)?;
+        tx.execute(
+            "DELETE FROM catalogue_entries WHERE receiver=?1 AND origin=?2 AND stream=?3 AND entry_id=?4",
+            params![
+                catalogue.receiver().as_str(),
+                catalogue.origin().as_str(),
+                catalogue.stream().as_str(),
+                id.as_str()
+            ],
+        )
+        .map_err(rows::database_error)?;
+        raw_records::clear_transcript_target(&tx, catalogue.receiver(), catalogue.origin(), id)?;
+        let committed = tx.commit();
+        // Whatever the outcome, no loaded fold may outlive rows it came from.
+        self.invalidate_loaded();
+        committed.map_err(|_| CacheError::Uncertain)
+    }
+
     pub(crate) fn catalogue_entry(
         &mut self,
         scope: &Scope,

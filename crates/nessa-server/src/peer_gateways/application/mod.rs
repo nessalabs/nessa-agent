@@ -7,6 +7,15 @@
 //! correlated by one operation id. No intent, no effect: a command whose
 //! intent cannot be kept changes nothing. An outcome that cannot be kept
 //! turns the answer into a refusal, while the effect it describes stays.
+//!
+//! The poller changes what this gateway holds of a peer on its own, with no
+//! owner asking: it saves a credential, marks an ended enrollment, empties a
+//! cache, or drops the conversations a peer stopped granting. Each change is
+//! handed over as one record right after it is made, while the poller still
+//! holds the owner's commands' turn, naming the system as its initiator; the
+//! poller waits for it to be kept only after it gives the turn back. A
+//! record that cannot be kept is logged and the change stands: cleanup is
+//! never held back for its evidence.
 use nessa_auth::domain::{pairing::DeviceKey, PrincipalId};
 use std::{
     future::Future,
@@ -39,16 +48,68 @@ pub enum PeerState {
         /// The receiver the peer paired with it.
         receiver: String,
     },
+    /// The peer ended the enrollment; the record stays until forgotten.
+    Revoked {
+        /// Where the peer last answered.
+        address: SocketAddr,
+    },
     /// A record is there and this build cannot read it.
     Unreadable,
     /// Storage did not confirm whether the change landed.
     Unknown,
+    /// The record is as it was, and the removal of its cache, which comes
+    /// first, was not confirmed durable.
+    CacheUnconfirmed {
+        /// The record, untouched.
+        record: Box<PeerState>,
+    },
     /// The command ended before it read the record.
     NotRead,
 }
 
-/// One owner transition over this gateway's peers. Every record names the
-/// operation it belongs to and the principal who asked.
+/// Whether a peer's retained cache was there.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CacheState {
+    Present,
+    Absent,
+    /// Storage could not say.
+    Unknown,
+}
+
+/// A peer's record and its retained cache, as one poller change found or
+/// left them.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PeerHolding {
+    pub record: PeerState,
+    pub cache: CacheState,
+}
+
+/// Why the poller changed what this gateway holds of a peer.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PollerCause {
+    /// The peer's owner approved: an Active status, whose credential was saved.
+    Approved,
+    /// The peer ended the enrollment: a Terminal status (its owner revoked
+    /// the credential, or the invitation ended), or an Unclaimed one (this
+    /// attempt can never claim). `detail` names that status's cause or
+    /// outcome; `None` when the status failed after the change began.
+    Ended { detail: Option<String> },
+    /// The cache cannot continue against what the peer serves; it is emptied.
+    ResetRequired,
+    /// The cache is damaged or has an older shape; it is emptied.
+    CacheDamaged,
+    /// The peer no longer grants these conversations, which one read found;
+    /// each left the cache. At most [`WITHDRAWN_PER_RECORD`] in one record.
+    Withdrawn { conversations: Vec<String> },
+}
+
+/// The most conversations one withdrawal record names; a read that withdrew
+/// more keeps one record for each run of this many.
+pub const WITHDRAWN_PER_RECORD: usize = 64;
+
+/// One owner transition over this gateway's peers, or one change the poller
+/// made. Every record names the operation it belongs to and who asked: the
+/// owner's principal, or the system.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PeerAuditRecord {
     /// `peer.enroll` asked: nothing has been checked or dialed yet.
@@ -83,6 +144,16 @@ pub enum PeerAuditRecord {
         after: PeerState,
         outcome: Result<(), &'static str>,
     },
+    /// The poller changed what is held of `peer`, after the change was made.
+    /// `outcome` is a refusal when the change did not fully land.
+    PollerChanged {
+        operation: Uuid,
+        peer: DeviceKey,
+        cause: PollerCause,
+        before: PeerHolding,
+        after: PeerHolding,
+        outcome: Result<(), &'static str>,
+    },
 }
 
 /// The bounded future an audit port answers with.
@@ -90,6 +161,12 @@ pub type PeerAuditFuture<'a> =
     Pin<Box<dyn Future<Output = Result<(), PeerAuditUnavailable>> + Send + 'a>>;
 
 /// Keeps peer command evidence. `Ok` means the record is durable.
+///
+/// The record is handed over when `record` is called, not when the returned
+/// future is polled: records are kept in the order of those calls, and one
+/// whose future is dropped unpolled is still kept. The poller relies on that
+/// to place its records in the order it held the turn
+/// (`records_land_in_turn_order`, `an_unpolled_poller_record_is_still_written`).
 pub trait PeerAudit: Send + Sync {
     fn record(&self, record: PeerAuditRecord) -> PeerAuditFuture<'_>;
 }

@@ -120,4 +120,17 @@ CREATE TABLE cache_purges (
     catalogue_entries BLOB NOT NULL CHECK(length(catalogue_entries)=8),
     observed_at_ms BLOB NOT NULL CHECK(length(observed_at_ms)=8)
 ) STRICT, WITHOUT ROWID;
-PRAGMA user_version = 1;
+-- A retained reader walked every cached conversation of this catalogue, to
+-- the end, at catalogue head `head` and progress generation `generation`.
+-- Only a walk that finished writes it; a read finds the cache settled only
+-- when the progress is still at that head and generation.
+CREATE TABLE retained_walks (
+    receiver TEXT NOT NULL, origin TEXT NOT NULL, stream TEXT NOT NULL,
+    head BLOB NOT NULL CHECK(length(head)=8),
+    generation BLOB NOT NULL CHECK(length(generation)=8),
+    PRIMARY KEY(receiver,origin,stream),
+    FOREIGN KEY(receiver,origin,stream) REFERENCES catalogue_progress(receiver,origin,stream)
+) STRICT, WITHOUT ROWID;
+-- Version 2 added retained_walks. A file at another version is refused as
+-- outdated, never migrated: the cache is derived from its gateway.
+PRAGMA user_version = 2;

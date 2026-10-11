@@ -13,10 +13,23 @@
 //! enroll and forget runs through one audited wrapper: its intent before
 //! anything, its outcome on every way it ends, and success answered only when
 //! both are kept.
+//!
+//! One turn is held by an enroll, a forget, or one poller cycle. An owner
+//! command that finds a cycle holding it stops that cycle (its read's sockets
+//! shut, its waits woken) and takes the turn once given back; the cycle's
+//! read carries on at the next one. Only another owner command makes it
+//! `Busy`. A cycle holds the turn only for its own peer I/O and local
+//! writes: it hands each change's record to the audit under the turn, which
+//! queues it at once, and waits for it to be kept only after it gives the
+//! turn back, so the evidence is in turn order and a slow audit never holds
+//! the turn.
 use super::records::{
-    PeerEntry, PeerPhase, PeerRecords, PeerSlot, SlotFound, SlotRefusal, SlotSave,
+    ForgetFailure, PeerEntry, PeerPhase, PeerRecords, PeerSlot, SlotFound, SlotRefusal, SlotSave,
 };
-use crate::peer_gateways::application::{PeerAudit, PeerAuditRecord, PeerConnector, PeerState};
+use crate::peer_gateways::application::{
+    CacheState, PeerAudit, PeerAuditFuture, PeerAuditRecord, PeerConnector, PeerHolding, PeerState,
+    PollerCause,
+};
 use nessa_auth::{
     adapters::pairing::{rand, CryptoRng, ManualCode, PairingCryptoError, RngCore},
     application::pairing::PrivateStateError,
@@ -26,16 +39,20 @@ use nessa_auth::{
     },
 };
 use nessa_client_core::pairing::{NativeClientError, NativeEnrollmentClient};
+use nessa_client_core::retained::{ReadStop, HANDSHAKE};
 use nessa_protocol::clock::Clock as MonotonicClock;
 use nessa_protocol::pairing::socket::WAKE_TICK;
 use nessa_protocol::product::generated::PeerErrorCode;
+use std::collections::HashMap;
+use std::sync::{Mutex, PoisonError};
 use std::{
     future::Future,
+    io,
     net::{SocketAddr, TcpStream},
     sync::Arc,
     time::Duration,
 };
-use tokio::sync::Semaphore;
+use tokio::sync::{watch, OwnedSemaphorePermit, Semaphore, TryAcquireError};
 use uuid::Uuid;
 
 /// Entropy for one enrollment: its attempt id and its key exchange.
@@ -51,11 +68,21 @@ pub const CONNECT: Duration = Duration::from_secs(5);
 /// How long the audit may take to acknowledge one record, by the same clock.
 /// One not acknowledged by then is not kept, as far as the command knows.
 pub const AUDIT_DEADLINE: Duration = Duration::from_secs(5);
+/// How long an owner command waits, by the same clock, for a poller cycle it
+/// stopped to give back the turn. Stopping shuts the cycle's sockets and
+/// wakes its waits, so what is left is a read's operating-system connect,
+/// which cannot be stopped and lasts at most [`HANDSHAKE`], and local writes;
+/// the cycle only queues its audit records under the turn, and waits for them
+/// after it gives the turn back.
+pub const PREEMPT: Duration = Duration::from_secs(10);
+// The connect a stop cannot cut short, with as long again for local work.
+const _: () = assert!(PREEMPT.as_millis() >= 2 * HANDSHAKE.as_millis());
 
 /// Why a peer command did not do what was asked.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PeerError {
-    /// Another enrollment, or a forget, is running on this gateway.
+    /// Another enrollment, or a forget, is running on this gateway. A read
+    /// of a peer never is: it is stopped and carries on later.
     Busy,
     /// Nothing answered at the address, the connection failed, or what
     /// answered is not a gateway enrolling peers.
@@ -73,7 +100,8 @@ pub enum PeerError {
     Capacity,
     /// No record for that peer.
     NotFound,
-    /// Storage, the key, or a worker failed; retrying may help.
+    /// Storage, the key, or a worker failed, or the gateway is stopping;
+    /// retrying may help.
     Unavailable,
     /// The command's audit record could not be kept. Before the effect,
     /// nothing changed; after it, the effect stands and `peer.list` shows it.
@@ -100,16 +128,135 @@ impl PeerError {
     }
 }
 
+/// How reading a peer last went, as the poller saw it since this gateway
+/// started.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SyncState {
+    /// Not read since this gateway started.
+    Waiting,
+    /// The last read brought the cache up to what the peer grants.
+    Synced,
+    /// The last read stopped at a bound; the next one continues.
+    Syncing,
+    /// The peer could not be reached; reads back off.
+    Unreachable,
+    /// The peer answered, but the read failed; reads back off.
+    Failed,
+    /// This gateway's cache of the peer is full; reads back off until the
+    /// peer grants less.
+    Quota,
+}
+
+/// A peer's sync, for `peer.list`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PeerSync {
+    /// How the last read went.
+    pub state: SyncState,
+    /// Wall time the last read finished, if one has since this gateway
+    /// started.
+    pub last_synced_ms: Option<u64>,
+    /// Conversations the peer's retained cache holds, as last counted.
+    pub conversations: Option<u64>,
+}
+
 /// The owner's peer commands over one gateway's records.
 pub struct PeerCommands {
-    records: Arc<PeerRecords>,
-    clock: Arc<dyn MonotonicClock>,
+    pub(super) records: Arc<PeerRecords>,
+    pub(super) clock: Arc<dyn MonotonicClock>,
     audit: Arc<dyn PeerAudit>,
     connector: Arc<dyn PeerConnector>,
     entropy: EnrollmentEntropySource,
-    /// One enroll or forget at a time: an enrollment runs a key-stretching
-    /// function, and a forget must not remove the record one is saving.
-    enrolling: Semaphore,
+    /// One enroll, forget or poller cycle at a time: an enrollment runs a
+    /// key-stretching function, a forget must not remove the record one is
+    /// saving, and a cycle writes the record and its cache.
+    turn: Arc<Semaphore>,
+    /// The poller cycle holding the turn, if one is. Set and cleared under
+    /// this lock together with taking and giving back the turn, so an owner
+    /// command that cannot take the turn knows whether stopping a cycle frees
+    /// it.
+    cycle: Mutex<Option<Arc<CycleStop>>>,
+    /// What the poller last saw of each peer.
+    syncs: Mutex<HashMap<DeviceKey, PeerSync>>,
+    /// Owner commands between their intent and their outcome: shutdown waits
+    /// for them before it closes the audit.
+    running: watch::Sender<Admission>,
+}
+
+/// Ends one poller cycle: its read's sockets are shut, and its waits woken.
+pub(super) struct CycleStop {
+    read: Arc<ReadStop>,
+    woken: watch::Sender<bool>,
+}
+impl CycleStop {
+    pub(super) fn new() -> Arc<Self> {
+        Arc::new(Self {
+            read: ReadStop::new(),
+            woken: watch::channel(false).0,
+        })
+    }
+    /// Stop the cycle: now, and anything it starts later.
+    pub(super) fn stop(&self) {
+        self.woken.send_replace(true);
+        self.read.stop();
+    }
+    /// What a blocking read of this cycle stops by.
+    pub(super) fn read(&self) -> &Arc<ReadStop> {
+        &self.read
+    }
+    /// Resolves once the cycle is stopped.
+    pub(super) async fn stopped(&self) {
+        let mut woken = self.woken.subscribe();
+        let _ = woken.wait_for(|stopped| *stopped).await;
+    }
+}
+
+/// The turn as one poller cycle holds it. Dropping it clears the cycle and
+/// gives the turn back, both under the cycle's lock, so an owner command
+/// never finds the turn taken with no cycle to stop.
+pub(super) struct CycleTurn {
+    commands: Arc<PeerCommands>,
+    permit: Option<OwnedSemaphorePermit>,
+}
+impl Drop for CycleTurn {
+    fn drop(&mut self) {
+        let mut holder = self
+            .commands
+            .cycle
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        *holder = None;
+        drop(self.permit.take());
+    }
+}
+/// What an owner command found when it asked for the turn.
+pub(super) enum OwnerTurn {
+    /// It was free.
+    Taken(OwnedSemaphorePermit),
+    /// This poller cycle holds it: stop it and wait.
+    Cycle(Arc<CycleStop>),
+    /// Another owner command holds it.
+    Busy,
+    /// The commands are closed for shutdown.
+    Closed,
+}
+
+/// Whether owner commands are still admitted, and how many are between
+/// their intent and their outcome: one value, so a command is either
+/// counted before shutdown closes them or refused after, never neither.
+#[derive(Clone, Copy, Default)]
+struct Admission {
+    closed: bool,
+    running: usize,
+}
+
+/// One owner command counted as running until it is dropped.
+struct Running<'a>(&'a watch::Sender<Admission>);
+impl Drop for Running<'_> {
+    fn drop(&mut self) {
+        self.0.send_modify(|admission| {
+            admission.running = admission.running.saturating_sub(1);
+        });
+    }
 }
 impl PeerCommands {
     /// Commands over `records`, with `clock` for every deadline of an
@@ -129,8 +276,117 @@ impl PeerCommands {
             audit,
             connector,
             entropy,
-            enrolling: Semaphore::new(1),
+            turn: Arc::new(Semaphore::new(1)),
+            cycle: Mutex::new(None),
+            syncs: Mutex::new(HashMap::new()),
+            running: watch::channel(Admission::default()).0,
         }
+    }
+    /// The records these commands are over.
+    pub fn records(&self) -> &Arc<PeerRecords> {
+        &self.records
+    }
+    /// The turn for `cycle`, if no one holds it. The poller asks again later
+    /// rather than queue, so an owner command never waits behind a cycle.
+    pub(super) fn try_cycle_turn(self: &Arc<Self>, cycle: &Arc<CycleStop>) -> Option<CycleTurn> {
+        let mut holder = self.cycle.lock().unwrap_or_else(PoisonError::into_inner);
+        let permit = self.turn.clone().try_acquire_owned().ok()?;
+        *holder = Some(cycle.clone());
+        Some(CycleTurn {
+            commands: self.clone(),
+            permit: Some(permit),
+        })
+    }
+    /// Stop the cycle holding the turn, if one is.
+    pub(super) fn stop_cycle(&self) {
+        if let Some(cycle) = &*self.cycle.lock().unwrap_or_else(PoisonError::into_inner) {
+            cycle.stop();
+        }
+    }
+    /// The turn for an owner command: free, or given back by the poller
+    /// cycle that held it once stopped, within [`PREEMPT`]. `Busy` when
+    /// another owner command holds it, or the cycle did not give it back;
+    /// `Unavailable` once the commands are closed for shutdown. Either way
+    /// before the command has any effect.
+    async fn owner_turn(&self) -> Result<OwnedSemaphorePermit, PeerError> {
+        let cycle = match self.try_owner_turn() {
+            OwnerTurn::Taken(permit) => return Ok(permit),
+            OwnerTurn::Cycle(cycle) => cycle,
+            OwnerTurn::Busy => return Err(PeerError::Busy),
+            OwnerTurn::Closed => return Err(PeerError::Unavailable),
+        };
+        cycle.stop();
+        match self
+            .within(PREEMPT, || self.turn.clone().acquire_owned())
+            .await
+        {
+            Some(Ok(permit)) => Ok(permit),
+            Some(Err(_)) => Err(PeerError::Unavailable),
+            None => Err(PeerError::Busy),
+        }
+    }
+    /// The turn if free, else who holds it, read under the cycle's lock.
+    pub(super) fn try_owner_turn(&self) -> OwnerTurn {
+        let holder = self.cycle.lock().unwrap_or_else(PoisonError::into_inner);
+        match self.turn.clone().try_acquire_owned() {
+            Ok(permit) => OwnerTurn::Taken(permit),
+            Err(TryAcquireError::Closed) => OwnerTurn::Closed,
+            Err(TryAcquireError::NoPermits) => {
+                holder.clone().map_or(OwnerTurn::Busy, OwnerTurn::Cycle)
+            }
+        }
+    }
+    /// Close the commands for shutdown, once the poller is joined: a command
+    /// asked from now is refused `peer_unavailable` before its intent; one
+    /// already past its intent no longer takes the turn (it answers
+    /// `peer_unavailable`, its outcome kept, before any effect); and every
+    /// command already between
+    /// its intent and its outcome is waited for, until the injected clock
+    /// has moved `limit` past now, so its outcome reaches the audit before
+    /// the audit closes. `true` when none was left running.
+    pub async fn close(&self, limit: Duration) -> bool {
+        self.running
+            .send_modify(|admission| admission.closed = true);
+        self.turn.close();
+        let mut running = self.running.subscribe();
+        let finished = self
+            .within(limit, || async move {
+                let _ = running.wait_for(|admission| admission.running == 0).await;
+            })
+            .await
+            .is_some();
+        if !finished {
+            tracing::error!(
+                running = self.running.borrow().running,
+                "peer commands still running at shutdown; their outcomes may not be audited"
+            );
+        }
+        finished
+    }
+    pub(super) fn set_sync(&self, key: DeviceKey, sync: Option<PeerSync>) {
+        let mut syncs = self.syncs.lock().unwrap_or_else(PoisonError::into_inner);
+        match sync {
+            Some(sync) => {
+                syncs.insert(key, sync);
+            }
+            None => {
+                syncs.remove(&key);
+            }
+        }
+    }
+    /// Drop what the poller saw of peers no longer listed.
+    pub(super) fn keep_syncs(&self, live: &[DeviceKey]) {
+        self.syncs
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .retain(|key, _| live.contains(key));
+    }
+    pub(super) fn sync_of(&self, key: &DeviceKey) -> Option<PeerSync> {
+        self.syncs
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(key)
+            .copied()
     }
     /// Enroll this gateway, with its own key, into the peer invitation that
     /// `code` opens at `address`, for `initiator`. The record is saved,
@@ -157,8 +413,9 @@ impl PeerCommands {
         address: SocketAddr,
         code: ManualCode,
     ) -> (Result<PeerEntry, PeerError>, Evidence) {
-        let Ok(_permit) = self.enrolling.try_acquire() else {
-            return (Err(PeerError::Busy), Evidence::not_read(None));
+        let _permit = match self.owner_turn().await {
+            Ok(permit) => permit,
+            Err(refused) => return (Err(refused), Evidence::not_read(None)),
         };
         let slot = Arc::new(self.records.enrolling(address));
         let outcome = self.enroll_with(address, code, slot.clone()).await;
@@ -197,21 +454,23 @@ impl PeerCommands {
     }
     /// A connection to `address`, or `Unreachable` once the injected clock
     /// passes [`CONNECT`]; one that completes later is closed unused.
-    pub(super) async fn connect(&self, address: SocketAddr) -> Result<TcpStream, PeerError> {
-        match self
-            .within(CONNECT, || self.connector.connect(address))
+    async fn connect(&self, address: SocketAddr) -> Result<TcpStream, PeerError> {
+        self.dial(address).await.map_err(|_| PeerError::Unreachable)
+    }
+    /// The same connection, with why it failed: the connector's own error,
+    /// or `TimedOut` once the injected clock passes [`CONNECT`].
+    pub(super) async fn dial(&self, address: SocketAddr) -> io::Result<TcpStream> {
+        self.within(CONNECT, || self.connector.connect(address))
             .await
-        {
-            Some(Ok(stream)) => Ok(stream),
-            Some(Err(_)) | None => Err(PeerError::Unreachable),
-        }
+            .unwrap_or_else(|| Err(io::ErrorKind::TimedOut.into()))
     }
     /// What the work `start` begins answers, or `None` once the injected
-    /// clock has moved `limit` past the moment before it began: the one way this gateway's peer commands bound a
-    /// wait on something outside it. The clock is read every [`WAKE_TICK`],
-    /// so a substituted clock ends the wait within one tick of passing the
-    /// deadline, and read again when `work` answers, so an answer that comes
-    /// after the deadline, before a tick saw it, is too late all the same.
+    /// clock has moved `limit` past the moment before it began: the one way
+    /// this gateway's peer commands bound a wait on something outside it.
+    /// The clock is read every [`WAKE_TICK`], so a substituted clock ends the
+    /// wait within one tick of passing the deadline, and read again when
+    /// `work` answers, so an answer that comes after the deadline, before a
+    /// tick saw it, is too late all the same.
     /// `work` is dropped either way, which abandons it.
     async fn within<F: Future>(
         &self,
@@ -247,14 +506,31 @@ impl PeerCommands {
             Some(Ok(()))
         )
     }
-    /// Every kept peer.
-    pub async fn list(&self) -> Result<Vec<PeerEntry>, PeerError> {
-        self.blocking(|records| records.list()).await
+    /// Every kept peer, with what its reading last came to.
+    pub async fn list(&self) -> Result<Vec<(PeerEntry, Option<PeerSync>)>, PeerError> {
+        let entries = self.blocking(|records| records.list()).await?;
+        Ok(entries
+            .into_iter()
+            .map(|entry| {
+                let sync = match &entry {
+                    PeerEntry::Readable(record) if record.phase() != &PeerPhase::Revoked => {
+                        Some(self.sync_of(record.key()).unwrap_or(PeerSync {
+                            state: SyncState::Waiting,
+                            last_synced_ms: None,
+                            conversations: None,
+                        }))
+                    }
+                    _ => None,
+                };
+                (entry, sync)
+            })
+            .collect())
     }
-    /// Remove the record for `key` and return what it was, for `initiator`.
-    /// Local only: the peer's owner revokes the credential on the peer.
-    /// Refused `Busy` while an enrollment runs, which may be saving that very
-    /// record: removing it then would spend the peer's invitation for nothing.
+    /// Remove the record for `key`, and its cache, and return what it was,
+    /// for `initiator`. Local only: the peer's owner revokes the credential on
+    /// the peer. Refused `Busy` while an enrollment runs, which may be saving
+    /// that very record: removing it then would spend the peer's invitation
+    /// for nothing. A poller cycle reading it, or any peer, is stopped first.
     /// Audited like every peer command (see [`Self::audited`]).
     pub async fn forget(
         &self,
@@ -271,8 +547,9 @@ impl PeerCommands {
     /// The forget, and what it found and left of the record.
     async fn forget_turn(&self, key: DeviceKey) -> (Result<PeerEntry, PeerError>, Evidence) {
         let not_read = Evidence::not_read(Some(key));
-        let Ok(_permit) = self.enrolling.try_acquire() else {
-            return (Err(PeerError::Busy), not_read);
+        let _permit = match self.owner_turn().await {
+            Ok(permit) => permit,
+            Err(refused) => return (Err(refused), not_read),
         };
         // Nothing else writes peer records while the permit is held, so the
         // record read here is the one the removal finds.
@@ -290,13 +567,28 @@ impl PeerCommands {
         let records = self.records.clone();
         let removed = tokio::task::spawn_blocking(move || records.forget(&key))
             .await
-            .unwrap_or(Err(PrivateStateError::Unavailable));
+            .unwrap_or(Err(ForgetFailure::Record(PrivateStateError::Unavailable)));
         let (after, outcome) = match removed {
-            Ok(Some(entry)) => (PeerState::Absent, Ok(entry)),
+            Ok(Some(entry)) => {
+                self.set_sync(key, None);
+                (PeerState::Absent, Ok(entry))
+            }
             Ok(None) => (PeerState::Absent, Err(PeerError::NotFound)),
-            // Removed, then not confirmed durable.
-            Err(PrivateStateError::Uncertain) => (PeerState::Unknown, Err(PeerError::Unavailable)),
-            Err(_) => (before.clone(), Err(PeerError::Unavailable)),
+            // The cache, removed first, then not confirmed durable: the
+            // record is untouched, and forgetting again finishes it.
+            Err(ForgetFailure::Cache(PrivateStateError::Uncertain)) => (
+                PeerState::CacheUnconfirmed {
+                    record: Box::new(before.clone()),
+                },
+                Err(PeerError::Unavailable),
+            ),
+            // The record removed, then not confirmed durable.
+            Err(ForgetFailure::Record(PrivateStateError::Uncertain)) => {
+                (PeerState::Unknown, Err(PeerError::Unavailable))
+            }
+            Err(ForgetFailure::Cache(_) | ForgetFailure::Record(_)) => {
+                (before.clone(), Err(PeerError::Unavailable))
+            }
         };
         (
             outcome,
@@ -324,6 +616,24 @@ impl PeerCommands {
         initiator: &PrincipalId,
         turn: impl Future<Output = (Result<T, PeerError>, Evidence)>,
     ) -> Result<T, PeerError> {
+        // Counted from before the intent until the outcome is kept, so
+        // shutdown closes the audit only after both; once shutdown has
+        // closed the commands, refused before any intent, so no intent is
+        // left without its outcome when the audit closes. One update decides
+        // both, so no command is between.
+        let admitted = self.running.send_if_modified(|admission| {
+            if admission.closed {
+                return false;
+            }
+            admission.running += 1;
+            true
+        });
+        if !admitted {
+            tracing::warn!(command = command.name(), target = %command.target(),
+                initiator = initiator.as_str(), "peer command refused: shutting down");
+            return Err(PeerError::Unavailable);
+        }
+        let _running = Running(&self.running);
         let operation = Uuid::new_v4();
         let requested = match command {
             Command::Enroll { address } => PeerAuditRecord::EnrollRequested {
@@ -377,6 +687,85 @@ impl PeerCommands {
             outcome = ?answer, "peer command finished");
         outcome
     }
+    /// What is held of `key` now: its record and whether its cache is
+    /// there, each `Unknown` when storage cannot say.
+    pub(super) async fn holding(&self, key: DeviceKey) -> PeerHolding {
+        let records = self.records.clone();
+        tokio::task::spawn_blocking(move || PeerHolding {
+            record: match records.get(&key) {
+                Ok(Some(entry)) => state_of(&entry),
+                Ok(None) => PeerState::Absent,
+                Err(_) => PeerState::Unknown,
+            },
+            cache: match records.has_cache(&key) {
+                Ok(true) => CacheState::Present,
+                Ok(false) => CacheState::Absent,
+                Err(_) => CacheState::Unknown,
+            },
+        })
+        .await
+        .unwrap_or(PeerHolding {
+            record: PeerState::Unknown,
+            cache: CacheState::Unknown,
+        })
+    }
+    /// Hand the audit the evidence of one change the poller made to `peer`,
+    /// after it was made and while the cycle still holds the turn: the one
+    /// way a poller change is audited. The audit takes the record now, so its
+    /// place among the owner commands' records is the turn's; the answer is
+    /// awaited by [`Self::poller_kept`] once the turn is given back.
+    pub(super) fn poller_changed(
+        &self,
+        peer: DeviceKey,
+        cause: PollerCause,
+        before: PeerHolding,
+        after: PeerHolding,
+        outcome: Result<(), &'static str>,
+    ) -> PollerRecord<'_> {
+        let operation = Uuid::new_v4();
+        let name = format!("{cause:?}");
+        let kept = self.audit.record(PeerAuditRecord::PollerChanged {
+            operation,
+            peer,
+            cause,
+            before,
+            after: after.clone(),
+            outcome,
+        });
+        PollerRecord {
+            peer,
+            operation,
+            name,
+            after,
+            outcome,
+            kept,
+        }
+    }
+    /// Wait for one cycle's records, all within one [`AUDIT_DEADLINE`], and
+    /// log each: kept, or not kept and the change stands. The cleanup a
+    /// record describes is never undone or held back for it, and no owner
+    /// command waits on it: the cycle has already given back the turn.
+    pub(super) async fn poller_kept(&self, mut records: Vec<PollerRecord<'_>>) {
+        let mut kept = vec![false; records.len()];
+        let answers = (&mut records, &mut kept);
+        self.within(AUDIT_DEADLINE, move || async move {
+            for (record, kept) in answers.0.iter_mut().zip(answers.1.iter_mut()) {
+                *kept = (&mut record.kept).await.is_ok();
+            }
+        })
+        .await;
+        for (record, kept) in records.iter().zip(kept) {
+            let (peer, operation, cause) = (hex(&record.peer), record.operation, &record.name);
+            if kept {
+                tracing::info!(peer = %peer, operation = %operation, cause = %cause,
+                    after = ?record.after, outcome = ?record.outcome, "peer gateway poller change");
+            } else {
+                tracing::error!(peer = %peer, operation = %operation, cause = %cause,
+                    after = ?record.after, outcome = ?record.outcome,
+                    "peer gateway poller change not audited; the change stands");
+            }
+        }
+    }
     async fn blocking<T: Send + 'static>(
         &self,
         work: impl FnOnce(&PeerRecords) -> Result<T, PrivateStateError> + Send + 'static,
@@ -387,6 +776,16 @@ impl PeerCommands {
             .map_err(|_| PeerError::Unavailable)?
             .map_err(|_| PeerError::Unavailable)
     }
+}
+
+/// One poller change handed to the audit, and its answer still to come.
+pub(super) struct PollerRecord<'a> {
+    peer: DeviceKey,
+    operation: Uuid,
+    name: String,
+    after: PeerHolding,
+    outcome: Result<(), &'static str>,
+    kept: PeerAuditFuture<'a>,
 }
 
 /// One enrollment's entropy, handed to the client as a concrete generator.
@@ -493,6 +892,9 @@ fn state_of(entry: &PeerEntry) -> PeerState {
                 credential: credential.as_str().to_owned(),
                 receiver: receiver.as_str().to_owned(),
             },
+            PeerPhase::Revoked => PeerState::Revoked {
+                address: record.address(),
+            },
         },
     }
 }
@@ -537,3 +939,7 @@ fn hex(key: &DeviceKey) -> String {
         .map(|byte| format!("{byte:02x}"))
         .collect()
 }
+
+#[cfg(test)]
+#[path = "../../../tests/peer_gateways/commands.rs"]
+mod tests;
