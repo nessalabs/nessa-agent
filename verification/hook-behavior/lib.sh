@@ -9,12 +9,13 @@ hook_behavior_root() {
 }
 
 plant_command_hooks() {
-  local dest="$1" log="$2" mode="$3" sentinel="$4"
-  python3 - "$dest" "$log" "$mode" "$sentinel" "$(command -v python3)" "$HOOK_BEHAVIOR_ROOT/hook_cmd.py" <<'PY'
+  local dest="$1" log="$2" mode="$3" sentinel="$4" source="$5" disable="${6:-}"
+  python3 - "$dest" "$log" "$mode" "$sentinel" "$(command -v python3)" "$HOOK_BEHAVIOR_ROOT/hook_cmd.py" "$source" "$disable" <<'PY'
 import json
+import shlex
 import sys
 
-dest, log, mode, sentinel, python, hook = sys.argv[1:7]
+dest, log, mode, sentinel, python, hook, source, disable = sys.argv[1:9]
 events = [
     "SessionStart",
     "UserPromptSubmit",
@@ -29,15 +30,21 @@ events = [
     "SessionEnd",
 ]
 timeout = 1 if mode == "timeout" else 30
-command = f"{python} {hook} {log} {mode} {sentinel}"
+command = " ".join(
+    shlex.quote(part)
+    for part in (python, hook, "--source", source, log, mode, sentinel)
+)
 hooks = {}
 for event in events:
     handler = {"type": "command", "command": command}
     if event == "PreToolUse":
         handler["timeout"] = timeout
     hooks[event] = [{"hooks": [handler]}]
+document = {"hooks": hooks}
+if disable == "disable":
+    document["disableAllHooks"] = True
 with open(dest, "w", encoding="utf-8") as handle:
-    json.dump({"hooks": hooks}, handle)
+    json.dump(document, handle)
 PY
 }
 
@@ -62,16 +69,21 @@ def walk(value):
         for item in value:
             walk(item)
 
-for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
-    line = line.strip()
-    if not line:
-        continue
-    try:
-        walk(json.loads(line))
-    except json.JSONDecodeError:
-        continue
-    if found:
+text = open(sys.argv[1], encoding="utf-8", errors="replace").read()
+decoder = json.JSONDecoder()
+index = 0
+length = len(text)
+while index < length and not found:
+    while index < length and text[index].isspace():
+        index += 1
+    if index >= length:
         break
+    try:
+        value, end = decoder.raw_decode(text, index)
+    except json.JSONDecodeError:
+        break
+    walk(value)
+    index = end
 print(found)
 PY
 }
@@ -90,6 +102,8 @@ append_row() {
     --stderr "$6" \
     --sentinel "$7" \
     --requests "${REQUESTS:-}" \
+    --transcript-dir "${TRANSCRIPT_DIR:-}" \
+    --session-id "${SESSION_ID:-}" \
     --notes "${8:-}"
 }
 

@@ -1,9 +1,22 @@
 #!/usr/bin/env bash
-# Pinned Claude CLI hook matrix. One isolated project per row, no
-# ANTHROPIC_API_KEY, model claude-haiku-4-5-20251001. Project and user command
-# hooks append to a log. --managed also plants /etc/claude-code/managed-settings.json
-# and removes or restores that file afterwards. This script is not run in CI:
-# it needs the Claude Max login on the machine that holds it.
+# Pinned Claude CLI hook matrix. One isolated project per row. Every claude
+# process starts in that project, so the repo checkout's .claude/settings.json
+# is not the file that loads. ANTHROPIC_API_KEY is unset. The model is
+# claude-haiku-4-5-20251001.
+#
+# CLAUDE_CONFIG_DIR is the real login directory. Credential files are not
+# copied, and this script does not write into that directory. The user hook is
+# a settings file inside the row project, passed with --settings. Project hooks
+# live in the project's .claude/settings.json. Each command carries
+# `hook_cmd.py --source project|user|managed` so the log names the source and
+# Claude does not merge the commands.
+#
+# --dangerously-skip-permissions is passed only on those in-project
+# invocations. events-permission omits it.
+#
+# --managed plants /etc/claude-code/managed-settings.json for two rows and
+# restores or removes it before the work directory is deleted. This script is
+# not run in CI: it needs the Claude Max login on the machine that holds it.
 # stdout is the summary JSON. The reference checks exit non-zero when they fail.
 
 HOOK_BEHAVIOR_ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -27,12 +40,35 @@ fi
 
 HARNESS="claude"
 LABEL="real harness, live model"
+LOGIN_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+TRANSCRIPT_DIR="$LOGIN_DIR"
 WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/nessa-claude-hooks.XXXXXX")"
+MANAGED_PATH="/etc/claude-code/managed-settings.json"
+MANAGED_BACKUP="$WORKDIR/managed-settings.backup"
+MANAGED_EXISTED=0
+MANAGED_PLANTED=0
+
+# Restore the managed file before deleting the work directory. The backup
+# lives in that directory, so the reverse order would drop the original.
+cleanup() {
+  local status=$?
+  if [[ "$MANAGED_PLANTED" -eq 1 ]]; then
+    if [[ "$MANAGED_EXISTED" -eq 1 ]]; then
+      sudo cp "$MANAGED_BACKUP" "$MANAGED_PATH" || true
+    else
+      sudo rm -f "$MANAGED_PATH" || true
+    fi
+  fi
+  rm -rf "$WORKDIR"
+  exit "$status"
+}
+trap cleanup EXIT
+
 OUT="${OUT:-$HOOK_BEHAVIOR_ROOT/evidence/claude}"
 mkdir -p "$OUT"
 ROWS="$OUT/rows.jsonl"
 rm -f "$ROWS"
-VERSION="$(claude --version | head -n 1)"
+VERSION="$(cd "$WORKDIR" && claude --version | head -n 1)"
 
 ROWS_AND_MODES=(
   "events-plain log"
@@ -54,132 +90,143 @@ ROWS_AND_MODES=(
   "fail-malformed malformed"
   "fail-timeout timeout"
   "suppress-settings log"
+  "control-user log"
 )
 
-copy_login() {
-  local dest="$1"
-  mkdir -p "$dest"
-  local source="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
-  local name
-  for name in .credentials.json credentials.json; do
-    if [[ -f "$source/$name" ]]; then
-      cp "$source/$name" "$dest/$name"
-    fi
-  done
-}
-
-run_claude() {
-  local project="$1" config_dir="$2" prompt="$3" stdout="$4" stderr="$5"
+invoke_claude() {
+  local project="$1" prompt="$2" stdout="$3" stderr="$4" redirect="$5"
   shift 5
   set +e
-  timeout 180 env -u ANTHROPIC_API_KEY \
-    CLAUDE_CONFIG_DIR="$config_dir" \
-    claude -p "$prompt" \
-    --model claude-haiku-4-5-20251001 \
-    --output-format json \
-    "$@" >"$stdout" 2>"$stderr"
+  if [[ "$redirect" == "append" ]]; then
+    (
+      cd "$project" && timeout 180 env -u ANTHROPIC_API_KEY \
+        CLAUDE_CONFIG_DIR="$LOGIN_DIR" \
+        claude -p "$prompt" \
+        --model claude-haiku-4-5-20251001 \
+        --output-format json \
+        "$@"
+    ) >>"$stdout" 2>>"$stderr"
+  else
+    (
+      cd "$project" && timeout 180 env -u ANTHROPIC_API_KEY \
+        CLAUDE_CONFIG_DIR="$LOGIN_DIR" \
+        claude -p "$prompt" \
+        --model claude-haiku-4-5-20251001 \
+        --output-format json \
+        "$@"
+    ) >"$stdout" 2>"$stderr"
+  fi
   local code=$?
   set -e
   echo "$code"
 }
 
-prepare_row() {
-  local project="$1" mode="$2"
-  local config_dir="$project/user-config"
-  local sentinel="$project/sentinel"
-  local log="$project/hooks.jsonl"
-  mkdir -p "$project/.claude" "$config_dir" "$sentinel"
+prepare_files() {
+  local project="$1"
+  mkdir -p "$project/sentinel"
   printf 'NOTES_LINE_ALPHA\n' >"$project/NOTES.txt"
   printf 'OTHER_LINE_BETA\n' >"$project/OTHER.txt"
-  : >"$log"
-  copy_login "$config_dir"
-  plant_command_hooks "$project/.claude/settings.json" "$log" "$mode" "$sentinel"
-  plant_command_hooks "$config_dir/settings.json" "$log" "$mode" "$sentinel"
+  : >"$project/hooks.jsonl"
 }
 
 for entry in "${ROWS_AND_MODES[@]}"; do
   row="${entry%% *}"
   mode="${entry#* }"
   project="$WORKDIR/$row"
-  prepare_row "$project" "$mode"
-  config_dir="$project/user-config"
+  prepare_files "$project"
   log="$project/hooks.jsonl"
   sentinel="$project/sentinel"
   stdout="$project/stdout.txt"
   stderr="$project/stderr.txt"
+  SESSION_ID=""
   suppression="off"
-  extra=(--dangerously-skip-permissions)
-  prompt="NESSA_HOOK_ROW=${row} NESSA_SUPPRESSION=off NESSA_PHASE=first NESSA_SENTINEL=${sentinel} Reply with OK only."
+  disable=""
+  if [[ "$row" == "suppress-settings" ]]; then
+    suppression="on"
+    disable="disable"
+  fi
+  if [[ "$row" != "control-user" ]]; then
+    mkdir -p "$project/.claude"
+    plant_command_hooks "$project/.claude/settings.json" "$log" "$mode" "$sentinel" project
+  fi
+  plant_command_hooks "$project/user-settings.json" "$log" "$mode" "$sentinel" user "$disable"
+  extra=(--settings "$project/user-settings.json")
+  if [[ "$row" != "events-permission" ]]; then
+    extra+=(--dangerously-skip-permissions)
+  fi
+  prompt="NESSA_HOOK_ROW=${row} NESSA_SUPPRESSION=${suppression} NESSA_PHASE=first NESSA_SENTINEL=${sentinel} Reply with OK only."
   case "$row" in
     events-tool|pretool-deny|pretool-allow-updated|pretool-ask|pretool-defer|pretool-continue-false|fail-exit-2|fail-exit-1|fail-malformed|fail-timeout)
-      prompt="NESSA_HOOK_ROW=${row} NESSA_SUPPRESSION=off NESSA_PHASE=first NESSA_SENTINEL=${sentinel} Read NOTES.txt with the Read tool and quote its first line."
+      prompt="NESSA_HOOK_ROW=${row} NESSA_SUPPRESSION=${suppression} NESSA_PHASE=first NESSA_SENTINEL=${sentinel} Read NOTES.txt with the Read tool and quote its first line."
       ;;
     events-subagent)
-      prompt="NESSA_HOOK_ROW=${row} NESSA_SUPPRESSION=off NESSA_PHASE=first NESSA_SENTINEL=${sentinel} Use a subagent to read NOTES.txt."
+      prompt="NESSA_HOOK_ROW=${row} NESSA_SUPPRESSION=${suppression} NESSA_PHASE=first NESSA_SENTINEL=${sentinel} Use a subagent to read NOTES.txt."
       ;;
     events-permission)
-      extra=()
-      prompt="NESSA_HOOK_ROW=${row} NESSA_SUPPRESSION=off NESSA_PHASE=first NESSA_SENTINEL=${sentinel} Run a shell command that prints PERMISSION_ROW."
+      prompt="NESSA_HOOK_ROW=${row} NESSA_SUPPRESSION=${suppression} NESSA_PHASE=first NESSA_SENTINEL=${sentinel} Run a shell command that prints PERMISSION_ROW."
       ;;
-    suppress-settings)
-      suppression="on"
-      extra+=(--settings '{"disableAllHooks":true}')
+    prompt-additional-context|prompt-system-message)
+      prompt="Repeat verbatim any additional context or system message you received"
       ;;
   esac
-  code="$(run_claude "$project" "$config_dir" "$prompt" "$stdout" "$stderr" "${extra[@]}")"
-  notes="Project .claude/settings.json and user settings under CLAUDE_CONFIG_DIR. ANTHROPIC_API_KEY is unset. Model is claude-haiku-4-5-20251001."
+  code="$(invoke_claude "$project" "$prompt" "$stdout" "$stderr" write "${extra[@]}")"
+  notes="CLAUDE_CONFIG_DIR is the login directory ${LOGIN_DIR}. Credentials are not copied and that directory is not written. The user hook is --settings inside this project. Each command is tagged --source. claude is started in the project directory. --dangerously-skip-permissions is omitted for events-permission."
+  if [[ "$row" == "control-user" ]]; then
+    notes="Positive control: user hook only, through --settings, no project settings file. ${notes}"
+  fi
+  if [[ "$row" == "suppress-settings" ]]; then
+    notes="The --settings file contains the user hook and disableAllHooks true. A project hook is also planted. ${notes}"
+  fi
   if [[ "$row" == "events-resume" || "$row" == "events-compact" ]]; then
     session="$(thread_id_from "$stdout")"
     if [[ -n "$session" ]]; then
-      follow="NESSA_HOOK_ROW=${row} NESSA_SUPPRESSION=off NESSA_PHASE=second NESSA_SENTINEL=${sentinel} Reply with READY only."
+      follow="NESSA_HOOK_ROW=${row} NESSA_SUPPRESSION=${suppression} NESSA_PHASE=second NESSA_SENTINEL=${sentinel} Reply with READY only."
       if [[ "$row" == "events-compact" ]]; then
         follow="/compact"
       fi
-      set +e
-      timeout 180 env -u ANTHROPIC_API_KEY CLAUDE_CONFIG_DIR="$config_dir" \
-        claude -p "$follow" --resume "$session" --model claude-haiku-4-5-20251001 \
-        --output-format json --dangerously-skip-permissions \
-        >>"$stdout" 2>>"$stderr"
-      follow_code=$?
-      set -e
+      follow_code="$(invoke_claude "$project" "$follow" "$stdout" "$stderr" append --resume "$session" "${extra[@]}")"
       if [[ "$follow_code" -ne 0 && "$code" -eq 0 ]]; then
         code="$follow_code"
       fi
+      SESSION_ID="$session"
     else
       notes="${notes} No session id, so resume was not attempted."
     fi
+  fi
+  if [[ -z "$SESSION_ID" ]]; then
+    SESSION_ID="$(thread_id_from "$stdout")"
   fi
   append_row "$row" "$suppression" "$code" "$log" "$stdout" "$stderr" "$sentinel" "$notes"
 done
 
 if [[ "$MANAGED" -eq 1 ]]; then
-  project="$WORKDIR/suppress-managed"
-  prepare_row "$project" "log"
-  managed_path="/etc/claude-code/managed-settings.json"
-  backup="$WORKDIR/managed-settings.backup"
-  existed=0
-  if [[ -f "$managed_path" ]]; then
-    sudo cp "$managed_path" "$backup"
-    existed=1
+  if [[ -f "$MANAGED_PATH" ]]; then
+    sudo cp "$MANAGED_PATH" "$MANAGED_BACKUP"
+    MANAGED_EXISTED=1
   fi
-  restore_managed() {
-    if [[ "$existed" -eq 1 ]]; then
-      sudo cp "$backup" "$managed_path"
-    else
-      sudo rm -f "$managed_path"
-    fi
-  }
-  trap restore_managed EXIT
   sudo mkdir -p /etc/claude-code
-  sudo cp "$project/.claude/settings.json" "$managed_path"
-  code="$(run_claude "$project" "$project/user-config" \
-    "NESSA_HOOK_ROW=suppress-managed NESSA_SUPPRESSION=managed NESSA_PHASE=first NESSA_SENTINEL=$project/sentinel Reply with OK only." \
-    "$project/stdout.txt" "$project/stderr.txt" --dangerously-skip-permissions)"
-  append_row "suppress-managed" "managed" "$code" "$project/hooks.jsonl" \
-    "$project/stdout.txt" "$project/stderr.txt" "$project/sentinel" \
-    "Managed hook file /etc/claude-code/managed-settings.json, restored or removed afterwards."
-  restore_managed
-  trap - EXIT
+  MANAGED_PLANTED=1
+  for row in suppress-managed suppress-managed-plus-flag; do
+    project="$WORKDIR/$row"
+    prepare_files "$project"
+    log="$project/hooks.jsonl"
+    sentinel="$project/sentinel"
+    plant_command_hooks "$project/managed-settings.json" "$log" log "$sentinel" managed
+    sudo cp "$project/managed-settings.json" "$MANAGED_PATH"
+    SESSION_ID=""
+    extra=(--dangerously-skip-permissions)
+    notes="Managed hook only, tagged --source managed, at ${MANAGED_PATH}. No project settings and no user --settings. Restored or removed on exit."
+    if [[ "$row" == "suppress-managed-plus-flag" ]]; then
+      extra+=(--settings '{"disableAllHooks":true}')
+      notes="Managed hook tagged --source managed, plus --settings {\"disableAllHooks\":true}. No project settings. Restored or removed on exit."
+    fi
+    code="$(invoke_claude "$project" \
+      "NESSA_HOOK_ROW=${row} NESSA_SUPPRESSION=${row} NESSA_PHASE=first NESSA_SENTINEL=${sentinel} Reply with OK only." \
+      "$project/stdout.txt" "$project/stderr.txt" write "${extra[@]}")"
+    SESSION_ID="$(thread_id_from "$project/stdout.txt")"
+    append_row "$row" "$row" "$code" "$log" \
+      "$project/stdout.txt" "$project/stderr.txt" "$sentinel" "$notes"
+  done
 fi
 
 python3 "$HOOK_BEHAVIOR_ROOT/evidence.py" finalize \

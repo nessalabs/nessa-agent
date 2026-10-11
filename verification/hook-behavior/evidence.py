@@ -2,6 +2,12 @@
 """Turn one harness row's files into a JSONL record, then a summary.
 
 The summary JSON is the command's stdout. Progress stays off stdout.
+
+Claude rows store the parsed CLI `result`, `terminal_reason`, and
+`permission_denials`. They do not store a tail excerpt. Nonce flags for those
+rows come from the result strings and the session transcript under
+`CLAUDE_CONFIG_DIR/projects/**/*.jsonl`. Codex and OpenCode keep the scripted
+request body and the excerpts.
 """
 
 import argparse
@@ -62,6 +68,55 @@ def request_text(directory, row, suppression):
     return "\n".join(chunks)
 
 
+def json_values(path):
+    if not path or not Path(path).is_file():
+        return []
+    text = Path(path).read_text(encoding="utf-8", errors="replace")
+    decoder = json.JSONDecoder()
+    found = []
+    index = 0
+    length = len(text)
+    while index < length:
+        while index < length and text[index].isspace():
+            index += 1
+        if index >= length:
+            break
+        try:
+            value, end = decoder.raw_decode(text, index)
+        except json.JSONDecodeError:
+            break
+        index = end
+        found.append(value)
+    return found
+
+
+def claude_results(path):
+    found = []
+    for value in json_values(path):
+        if isinstance(value, dict) and (
+            value.get("type") == "result" or "permission_denials" in value
+        ):
+            found.append(value)
+    return found
+
+
+def transcript_text(directory, session_id):
+    if not directory or not Path(directory).is_dir():
+        return ""
+    paths = sorted(Path(directory).glob("projects/**/*.jsonl"))
+    if session_id:
+        matched = []
+        for path in paths:
+            text = path.read_text(encoding="utf-8", errors="replace")
+            if session_id in text or session_id in path.name:
+                matched.append(text)
+        return "\n".join(matched)
+    if not paths:
+        return ""
+    newest = max(paths, key=lambda path: path.stat().st_mtime)
+    return newest.read_text(encoding="utf-8", errors="replace")
+
+
 def sentinel_names(directory):
     if not directory or not Path(directory).is_dir():
         return []
@@ -84,7 +139,9 @@ def append(args):
         for item in logged
         if item.get("event") and item.get("source")
     ]
-    requests = request_text(args.requests, args.row, args.suppression)
+    hook_sources = [
+        str(item["hook_source"]) for item in logged if item.get("hook_source")
+    ]
     record = {
         "harness": args.harness,
         "version": args.version,
@@ -96,14 +153,45 @@ def append(args):
         "event_counts": dict(Counter(events)),
         "tool_names": list(dict.fromkeys(tool_names)),
         "sources": list(dict.fromkeys(sources)),
+        "hook_sources": list(dict.fromkeys(hook_sources)),
         "sentinel_files": sentinel_names(args.sentinel),
-        "context_nonce_in_model_request": CONTEXT_NONCE in requests,
-        "system_nonce_in_model_request": SYSTEM_NONCE in requests,
-        "deny_reason_in_stdout": DENY_REASON in excerpt(args.stdout, limit=20000),
-        "stdout_excerpt": excerpt(args.stdout),
-        "stderr_excerpt": excerpt(args.stderr),
         "notes": args.notes or "",
     }
+    if args.harness == "claude":
+        messages = claude_results(args.stdout)
+        results = [
+            message["result"]
+            for message in messages
+            if isinstance(message.get("result"), str)
+        ]
+        reasons = [
+            message["terminal_reason"]
+            for message in messages
+            if message.get("terminal_reason") is not None
+        ]
+        denials = []
+        for message in messages:
+            value = message.get("permission_denials")
+            if isinstance(value, list):
+                denials.extend(value)
+        seen = "\n".join(results) + "\n" + transcript_text(
+            args.transcript_dir, args.session_id
+        )
+        record["result"] = results
+        record["terminal_reason"] = reasons
+        record["permission_denials"] = denials
+        record["context_nonce_in_model_request"] = CONTEXT_NONCE in seen
+        record["system_nonce_in_model_request"] = SYSTEM_NONCE in seen
+        record["deny_reason_quoted"] = any(DENY_REASON in text for text in results)
+    else:
+        requests = request_text(args.requests, args.row, args.suppression)
+        stdout = excerpt(args.stdout, limit=20000)
+        record["context_nonce_in_model_request"] = CONTEXT_NONCE in requests
+        record["system_nonce_in_model_request"] = SYSTEM_NONCE in requests
+        record["deny_reason_in_stdout"] = DENY_REASON in stdout
+        record["deny_reason_quoted"] = DENY_REASON in stdout
+        record["stdout_excerpt"] = excerpt(args.stdout)
+        record["stderr_excerpt"] = excerpt(args.stderr)
     path = Path(args.rows)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
@@ -131,28 +219,64 @@ def claude_reference(rows):
         if row["row"] == "suppress-settings" and row["suppression"] == "on"
     ]
     suppressed_events = suppressed[0]["events"] if suppressed else ["row-missing"]
-    denied = [row for row in rows if row["row"] == "pretool-deny" and row["suppression"] == "off"]
-    deny_events = denied[0]["events"] if denied else []
-    deny_ok = (
-        bool(denied)
-        and "PreToolUse" in deny_events
-        and "PostToolUse" not in deny_events
-        and denied[0]["deny_reason_in_stdout"]
+    denied = next(
+        (
+            row
+            for row in rows
+            if row["row"] == "pretool-deny" and row["suppression"] == "off"
+        ),
+        None,
     )
+    denials = denied.get("permission_denials") if denied else None
+    deny_ok = (
+        denied is not None
+        and isinstance(denials, list)
+        and len(denials) >= 1
+        and "PostToolUse" not in denied.get("events", [])
+    )
+    control = next((row for row in rows if row["row"] == "control-user"), None)
+    user_hook_wrote = control is not None and "user" in control.get("hook_sources", [])
     checks = {
         "events_present": missing == [],
         "events_missing": missing,
         "disable_all_hooks_empty": suppressed_events == [],
-        "pretool_deny_stopped_read_and_reason_quoted": deny_ok,
+        "pretool_deny_stopped_read": deny_ok,
+        "user_hook_wrote": user_hook_wrote,
+        "deny_reason_quoted": bool(denied) and bool(denied.get("deny_reason_quoted")),
     }
     checks["ok"] = all(
         [
             checks["events_present"],
             checks["disable_all_hooks_empty"],
-            checks["pretool_deny_stopped_read_and_reason_quoted"],
+            checks["pretool_deny_stopped_read"],
+            checks["user_hook_wrote"],
         ]
     )
     return checks
+
+
+def summary_row(row):
+    item = {
+        "row": row["row"],
+        "suppression": row["suppression"],
+        "exit_code": row["exit_code"],
+        "events": row["events"],
+        "event_counts": row.get("event_counts", {}),
+        "tool_names": row.get("tool_names", []),
+        "sources": row.get("sources", []),
+        "hook_sources": row.get("hook_sources", []),
+        "sentinel_files": row["sentinel_files"],
+        "context_nonce_in_model_request": row["context_nonce_in_model_request"],
+        "system_nonce_in_model_request": row["system_nonce_in_model_request"],
+        "deny_reason_quoted": row.get("deny_reason_quoted", False),
+    }
+    if "result" in row:
+        item["result"] = row["result"]
+        item["terminal_reason"] = row["terminal_reason"]
+        item["permission_denials"] = row["permission_denials"]
+    else:
+        item["deny_reason_in_stdout"] = row.get("deny_reason_in_stdout", False)
+    return item
 
 
 def finalize(args):
@@ -162,22 +286,7 @@ def finalize(args):
         "version": args.version,
         "label": args.label,
         "row_count": len(rows),
-        "rows": [
-            {
-                "row": row["row"],
-                "suppression": row["suppression"],
-                "exit_code": row["exit_code"],
-                "events": row["events"],
-                "event_counts": row.get("event_counts", {}),
-                "tool_names": row.get("tool_names", []),
-                "sources": row.get("sources", []),
-                "sentinel_files": row["sentinel_files"],
-                "context_nonce_in_model_request": row["context_nonce_in_model_request"],
-                "system_nonce_in_model_request": row["system_nonce_in_model_request"],
-                "deny_reason_in_stdout": row["deny_reason_in_stdout"],
-            }
-            for row in rows
-        ],
+        "rows": [summary_row(row) for row in rows],
     }
     if args.claude_reference:
         summary["reference_checks"] = claude_reference(rows)
@@ -206,6 +315,8 @@ def main():
     add.add_argument("--stderr", required=True)
     add.add_argument("--sentinel", required=True)
     add.add_argument("--requests", default="")
+    add.add_argument("--transcript-dir", default="")
+    add.add_argument("--session-id", default="")
     add.add_argument("--notes", default="")
     done = sub.add_parser("finalize")
     done.add_argument("--rows", required=True)

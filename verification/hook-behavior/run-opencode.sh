@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Real OpenCode 1.18.31 against the scripted model. One variant loads the
-# project plugin. The other adds Nessa's suppression request: OPENCODE_PURE=1,
-# project config disabled, and the alternate config inputs removed.
-# stdout is the summary JSON.
+# Real OpenCode 1.18.31 against the scripted model. Every row plants a project
+# plugin and a user plugin under the private XDG_CONFIG_HOME. The off row sets
+# neither OPENCODE_PURE nor OPENCODE_DISABLE_PROJECT_CONFIG. The on row sets
+# both. suppress-pure sets only OPENCODE_PURE=1 so that flag is not the same
+# cell as project-config disabling. stdout is the summary JSON.
 
 HOOK_BEHAVIOR_ROOT="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=lib.sh
@@ -74,9 +75,41 @@ write_user_config() {
 EOF
 }
 
-opencode_environment() {
-  local project="$1" log="$2" mode="$3" suppression="$4"
-  OPENCODE_ENV=(
+plant_plugins() {
+  local project="$1"
+  local user_root="$project/home/.config/opencode"
+  mkdir -p "$project/.opencode/plugin" "$user_root/plugin"
+  printf '%s\n' '{"type":"module"}' >"$project/package.json"
+  printf '%s\n' '{"type":"module"}' >"$user_root/package.json"
+  sed 's/__NESSA_HOOK_SOURCE__/project/g' "$HOOK_BEHAVIOR_ROOT/opencode_plugin.mjs" \
+    >"$project/.opencode/plugin/hook.js"
+  sed 's/__NESSA_HOOK_SOURCE__/user/g' "$HOOK_BEHAVIOR_ROOT/opencode_plugin.mjs" \
+    >"$user_root/plugin/hook.js"
+}
+
+run_case() {
+  local row="$1" mode="$2" suppression="$3"
+  local project="$WORKDIR/$row-$suppression"
+  local sentinel="$project/sentinel"
+  local log="$project/hooks.jsonl"
+  mkdir -p "$sentinel" "$project/home/.config" "$project/home/.cache" "$project/home/.state" "$project/home/.local/share"
+  : >"$log"
+  plant_plugins "$project"
+  write_user_config "$project/home/.config"
+  local prompt="NESSA_HOOK_ROW=${row} NESSA_SUPPRESSION=${suppression} NESSA_PHASE=first NESSA_SENTINEL=${sentinel}"
+  local stdout="$project/stdout.txt"
+  local stderr="$project/stderr.txt"
+  local -a approve=()
+  if [[ "$row" != "events-permission" ]]; then
+    approve=(--auto)
+  fi
+  local -a flags=()
+  if [[ "$suppression" == "on" ]]; then
+    flags=("OPENCODE_PURE=1" "OPENCODE_DISABLE_PROJECT_CONFIG=1")
+  elif [[ "$suppression" == "pure" ]]; then
+    flags=("OPENCODE_PURE=1")
+  fi
+  local -a environment=(
     "HOME=$project/home"
     "XDG_CONFIG_HOME=$project/home/.config"
     "XDG_CACHE_HOME=$project/home/.cache"
@@ -87,27 +120,54 @@ opencode_environment() {
     "OPENAI_API_KEY=scripted"
     "NESSA_HOOK_LOG=$log"
     "NESSA_HOOK_MODE=$mode"
+    "${flags[@]}"
   )
-  if [[ "$suppression" == "on" ]]; then
-    OPENCODE_ENV+=("OPENCODE_PURE=1" "OPENCODE_DISABLE_PROJECT_CONFIG=1")
-  fi
-}
-
-run_opencode() {
-  local project="$1" prompt="$2" stdout="$3" stderr="$4" auto="$5"
-  shift 5
-  local -a approve=()
-  if [[ "$auto" == "yes" ]]; then
-    approve=(--auto)
-  fi
   set +e
-  timeout 120 env -u OPENCODE_CONFIG -u OPENCODE_CONFIG_CONTENT -u OPENCODE_CONFIG_DIR \
-    "$@" \
+  timeout 120 env \
+    -u OPENCODE_CONFIG -u OPENCODE_CONFIG_CONTENT -u OPENCODE_CONFIG_DIR \
+    -u OPENCODE_PURE -u OPENCODE_DISABLE_PROJECT_CONFIG \
+    "${environment[@]}" \
     "$OPENCODE" run --format json --model openai/gpt-4o-mini --dir "$project" \
     "${approve[@]}" "$prompt" </dev/null >"$stdout" 2>"$stderr"
   local code=$?
   set -e
-  echo "$code"
+  local notes="Project plugin and user plugin under the private XDG_CONFIG_HOME, each with its own hook_source. OPENCODE_CONFIG, OPENCODE_CONFIG_CONTENT, and OPENCODE_CONFIG_DIR are unset."
+  if [[ "$suppression" == "on" ]]; then
+    notes="${notes} OPENCODE_PURE=1 and OPENCODE_DISABLE_PROJECT_CONFIG=1."
+  elif [[ "$suppression" == "pure" ]]; then
+    notes="${notes} OPENCODE_PURE=1 only. OPENCODE_DISABLE_PROJECT_CONFIG is unset, so PURE is separate from project-config disabling."
+  else
+    notes="${notes} OPENCODE_PURE and OPENCODE_DISABLE_PROJECT_CONFIG are unset."
+  fi
+  if [[ "$row" == "events-resume" || "$row" == "events-compact" ]]; then
+    local session
+    session="$(thread_id_from "$stdout")"
+    if [[ -n "$session" ]]; then
+      local phase="second"
+      if [[ "$row" == "events-compact" ]]; then
+        phase="compact"
+      fi
+      local follow="NESSA_HOOK_ROW=${row} NESSA_SUPPRESSION=${suppression} NESSA_PHASE=${phase} NESSA_SENTINEL=${sentinel} Reply with READY only."
+      if [[ "$row" == "events-compact" ]]; then
+        follow="/compact"
+      fi
+      set +e
+      timeout 120 env \
+        -u OPENCODE_CONFIG -u OPENCODE_CONFIG_CONTENT -u OPENCODE_CONFIG_DIR \
+        -u OPENCODE_PURE -u OPENCODE_DISABLE_PROJECT_CONFIG \
+        "${environment[@]}" \
+        "$OPENCODE" run --format json --model openai/gpt-4o-mini --dir "$project" --auto \
+        --session "$session" "$follow" </dev/null >>"$stdout" 2>>"$stderr"
+      local follow_code=$?
+      set -e
+      if [[ "$follow_code" -ne 0 && "$code" -eq 0 ]]; then
+        code="$follow_code"
+      fi
+    else
+      notes="${notes} No session id in the first run, so resume was not attempted."
+    fi
+  fi
+  append_row "$row" "$suppression" "$code" "$log" "$stdout" "$stderr" "$sentinel" "$notes"
 }
 
 for entry in "${ROWS_AND_MODES[@]}"; do
@@ -117,52 +177,13 @@ for entry in "${ROWS_AND_MODES[@]}"; do
     continue
   fi
   for suppression in off on; do
-    project="$WORKDIR/$row-$suppression"
-    sentinel="$project/sentinel"
-    log="$project/hooks.jsonl"
-    mkdir -p "$project/.opencode/plugin" "$sentinel" "$project/home/.config" "$project/home/.cache" "$project/home/.state" "$project/home/.local/share"
-    printf '%s\n' '{"type":"module"}' >"$project/package.json"
-    : >"$log"
-    cp "$HOOK_BEHAVIOR_ROOT/opencode_plugin.mjs" "$project/.opencode/plugin/hook.js"
-    write_user_config "$project/home/.config"
-    prompt="NESSA_HOOK_ROW=${row} NESSA_SUPPRESSION=${suppression} NESSA_PHASE=first NESSA_SENTINEL=${sentinel}"
-    stdout="$project/stdout.txt"
-    stderr="$project/stderr.txt"
-    auto="yes"
-    if [[ "$row" == "events-permission" ]]; then
-      auto="no"
-    fi
-    opencode_environment "$project" "$log" "$mode" "$suppression"
-    code="$(run_opencode "$project" "$prompt" "$stdout" "$stderr" "$auto" "${OPENCODE_ENV[@]}")"
-    notes="Isolated home for both variants. Models fetch and autoupdate are off for both. The suppressed variant sets OPENCODE_PURE=1 and OPENCODE_DISABLE_PROJECT_CONFIG=1 and unsets OPENCODE_CONFIG, OPENCODE_CONFIG_CONTENT, and OPENCODE_CONFIG_DIR."
-    if [[ "$row" == "events-resume" || "$row" == "events-compact" ]]; then
-      session="$(thread_id_from "$stdout")"
-      if [[ -n "$session" ]]; then
-        phase="second"
-        if [[ "$row" == "events-compact" ]]; then
-          phase="compact"
-        fi
-        follow="NESSA_HOOK_ROW=${row} NESSA_SUPPRESSION=${suppression} NESSA_PHASE=${phase} NESSA_SENTINEL=${sentinel} Reply with READY only."
-        if [[ "$row" == "events-compact" ]]; then
-          follow="/compact"
-        fi
-        set +e
-        timeout 120 env -u OPENCODE_CONFIG -u OPENCODE_CONFIG_CONTENT -u OPENCODE_CONFIG_DIR \
-          "${OPENCODE_ENV[@]}" \
-          "$OPENCODE" run --format json --model openai/gpt-4o-mini --dir "$project" --auto \
-          --session "$session" "$follow" </dev/null >>"$stdout" 2>>"$stderr"
-        follow_code=$?
-        set -e
-        if [[ "$follow_code" -ne 0 && "$code" -eq 0 ]]; then
-          code="$follow_code"
-        fi
-      else
-        notes="${notes} No session id in the first run, so resume was not attempted."
-      fi
-    fi
-    append_row "$row" "$suppression" "$code" "$log" "$stdout" "$stderr" "$sentinel" "$notes"
+    run_case "$row" "$mode" "$suppression"
   done
 done
+
+if [[ -z "$ONLY" || "$ONLY" == "suppress-pure" ]]; then
+  run_case "suppress-pure" "log" "pure"
+fi
 
 python3 "$HOOK_BEHAVIOR_ROOT/evidence.py" finalize \
   --rows "$ROWS" \

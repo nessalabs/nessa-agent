@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Real Codex 0.154.0 against the scripted model, with the planted hooks.json
-# and again with Nessa's suppression request (features.hooks false, notify []).
-# stdout is the summary JSON. The pinned package is installed into a scratch
-# prefix for this run.
+# Real Codex 0.154.0 against the scripted model. config.toml leaves hooks
+# enabled and does not set notify. Suppression on adds
+# `codex exec -c features.hooks=false -c 'notify=[]'` on the first exec and on
+# resume. That is the hooks portion of Nessa's thread/start override, not the
+# full CODEX_CONFIG document. stdout is the summary JSON. The pinned package
+# is installed into a scratch prefix for this run.
 
 HOOK_BEHAVIOR_ROOT="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=lib.sh
@@ -57,20 +59,15 @@ ROWS_AND_MODES=(
 )
 
 write_config() {
-  local home="$1" suppression="$2"
+  local home="$1"
   mkdir -p "$home"
-  local hooks="true" notify=""
-  if [[ "$suppression" == "on" ]]; then
-    hooks="false"
-    notify=$'notify = []\n'
-  fi
   cat >"$home/config.toml" <<EOF
 model = "scripted"
 model_provider = "scripted"
 check_for_update_on_startup = false
-${notify}
+
 [features]
-hooks = ${hooks}
+hooks = true
 
 [model_providers.scripted]
 name = "Scripted"
@@ -79,30 +76,6 @@ env_key = "OPENAI_API_KEY"
 wire_api = "responses"
 requires_openai_auth = false
 EOF
-}
-
-run_exec() {
-  local home="$1" project="$2" prompt="$3" stdout="$4" stderr="$5" bypass_sandbox="$6"
-  local -a sandbox=()
-  if [[ "$bypass_sandbox" == "yes" ]]; then
-    sandbox=(--dangerously-bypass-approvals-and-sandbox)
-  fi
-  set +e
-  timeout 75 env \
-    CODEX_HOME="$home" \
-    OPENAI_API_KEY=scripted \
-    "$CODEX" exec \
-    --skip-git-repo-check \
-    --json \
-    --strict-config \
-    --dangerously-bypass-hook-trust \
-    "${sandbox[@]}" \
-    -C "$project" \
-    -m scripted \
-    "$prompt" < /dev/null >"$stdout" 2>"$stderr"
-  local code=$?
-  set -e
-  echo "$code"
 }
 
 for entry in "${ROWS_AND_MODES[@]}"; do
@@ -119,20 +92,39 @@ for entry in "${ROWS_AND_MODES[@]}"; do
     mkdir -p "$project/.codex" "$sentinel" "$home"
     git -C "$project" init -q
     : >"$log"
-    plant_command_hooks "$home/hooks.json" "$log" "$mode" "$sentinel"
-    plant_command_hooks "$project/.codex/hooks.json" "$log" "$mode" "$sentinel"
-    write_config "$home" "$suppression"
+    plant_command_hooks "$home/hooks.json" "$log" "$mode" "$sentinel" user
+    plant_command_hooks "$project/.codex/hooks.json" "$log" "$mode" "$sentinel" project
+    write_config "$home"
     prompt="NESSA_HOOK_ROW=${row} NESSA_SUPPRESSION=${suppression} NESSA_PHASE=first NESSA_SENTINEL=${sentinel}"
     stdout="$project/stdout.txt"
     stderr="$project/stderr.txt"
-    bypass="yes"
+    override=()
+    sandbox=(--dangerously-bypass-approvals-and-sandbox)
     if [[ "$row" == "events-permission" ]]; then
-      bypass="no"
+      sandbox=()
     fi
-    code="$(run_exec "$home" "$project" "$prompt" "$stdout" "$stderr" "$bypass")"
-    notes="features.hooks is ${suppression}; both variants bypass hook trust so the trust gate is not the difference. User hooks.json and project .codex/hooks.json are both planted."
     if [[ "$suppression" == "on" ]]; then
-      notes="Nessa's request: features.hooks false and notify []. ${notes}"
+      override=(-c features.hooks=false -c 'notify=[]')
+    fi
+    set +e
+    timeout 75 env \
+      CODEX_HOME="$home" \
+      OPENAI_API_KEY=scripted \
+      "$CODEX" exec \
+      "${override[@]}" \
+      --skip-git-repo-check \
+      --json \
+      --strict-config \
+      --dangerously-bypass-hook-trust \
+      "${sandbox[@]}" \
+      -C "$project" \
+      -m scripted \
+      "$prompt" < /dev/null >"$stdout" 2>"$stderr"
+    code=$?
+    set -e
+    notes="config.toml leaves hooks enabled and does not set notify. Both variants bypass hook trust. User hooks.json is tagged --source user and project .codex/hooks.json is tagged --source project."
+    if [[ "$suppression" == "on" ]]; then
+      notes="Suppression on passes -c features.hooks=false -c notify=[] on exec and on resume. That is the hooks portion of Nessa's thread/start override, not the full CODEX_CONFIG document. ${notes}"
     fi
     if [[ "$row" == "events-resume" || "$row" == "events-compact" ]]; then
       thread="$(thread_id_from "$stdout")"
@@ -148,6 +140,7 @@ for entry in "${ROWS_AND_MODES[@]}"; do
         set +e
         timeout 75 env CODEX_HOME="$home" OPENAI_API_KEY=scripted \
           "$CODEX" exec \
+          "${override[@]}" \
           --skip-git-repo-check \
           --json \
           --strict-config \

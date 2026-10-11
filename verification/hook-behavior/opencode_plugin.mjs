@@ -1,18 +1,24 @@
-// OpenCode plugin planted in a row's project. It records the callbacks the
-// process actually invokes and, for one mode, mutates the object that callback
-// received. OpenCode has no Claude permissionDecision vocabulary; those modes
-// record the callback and leave the tool arguments alone.
+// OpenCode plugin planted twice per row: the project copy and the user copy.
+// The runner replaces __NESSA_HOOK_SOURCE__ with project or user before the
+// process starts, because both copies share one environment. It records the
+// callbacks the process actually invokes and, for one mode, mutates the object
+// that callback received. OpenCode has no Claude permissionDecision vocabulary;
+// those modes record the callback and leave the tool arguments alone.
 import fs from "node:fs"
 
 const logPath = process.env.NESSA_HOOK_LOG
 const mode = process.env.NESSA_HOOK_MODE || "log"
+const hookSource = "__NESSA_HOOK_SOURCE__"
 const ORIGINAL = "hook-sentinel-original"
 const REWRITTEN = "hook-sentinel-rewritten"
 const CONTEXT_NONCE = "NONCE_CONTEXT_4c1e"
 const SYSTEM_NONCE = "SYSMSG_7ab2"
 
 function record(event, detail) {
-  fs.appendFileSync(logPath, JSON.stringify({ event, mode, detail }) + "\n")
+  fs.appendFileSync(
+    logPath,
+    JSON.stringify({ event, mode, hook_source: hookSource, detail }) + "\n",
+  )
 }
 
 function rewrite(value) {
