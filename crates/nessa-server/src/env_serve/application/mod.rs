@@ -5,11 +5,14 @@
 //! and for the gateway's SSH adapter alike; `artifacts.rs` is a lease's
 //! published files, staged through an [`ArtifactOutbox`] for the gateway to
 //! collect; `redial.rs` keeps a paired environment dialed in to its
-//! gateway, serving each connection it gets.
+//! gateway, serving each connection it gets, once `approval.rs` has seen
+//! its owner approve it through an [`EnvironmentPairing`].
+mod approval;
 mod artifacts;
 mod redial;
 mod serve;
 mod wire;
+pub(crate) use approval::{approval, Answer, EnvironmentPairing, NotApproved, Saved};
 pub(crate) use artifacts::{
     ArtifactOutbox, PublishAnswer, PublishCall, PublishPoint, PublishRefusal, PublishRequest,
     PUBLISH_POINT_VARIABLE,

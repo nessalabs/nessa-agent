@@ -474,8 +474,9 @@ async fn a_lease_asked_across_a_reconnect_runs_on_the_new_connection() {
 /// dialed again, and stop closes the one being served.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_enrolled_environment_waits_for_approval_then_stays_dialed_in() {
-    use super::env_dial_command::{serve_until_stopped, EnvironmentPairing};
-    use crate::env_serve::application::{redial, Backoff};
+    use super::env_dial_command::serve_until_stopped;
+    use crate::env_serve::application::{approval, redial, Backoff};
+    use crate::env_serve::infrastructure::FilePairingEnvironment;
     use std::sync::Mutex;
 
     let directory = tempfile::tempdir().unwrap();
@@ -487,22 +488,20 @@ async fn an_enrolled_environment_waits_for_approval_then_stays_dialed_in() {
         .unwrap();
     let environment = directory.path().join("e-environment");
     nessa_local_storage::create_directory(&environment).unwrap();
-    let pairing = EnvironmentPairing::open(&environment, clock()).unwrap();
-    let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
     let native = a.native;
-    let connect = move || async move { std::net::TcpStream::connect(native) };
-    tokio::time::timeout(
-        WAIT,
-        pairing.enroll(std::net::TcpStream::connect(native).unwrap(), code),
-    )
-    .await
-    .unwrap()
-    .unwrap();
+    let pairing = FilePairingEnvironment::open(&environment, &native.to_string(), clock()).unwrap();
+    let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
+    tokio::time::timeout(WAIT, pairing.enroll(code))
+        .await
+        .unwrap()
+        .unwrap();
 
     // Not approved yet: waiting is still waiting.
+    let (_running, running) = watch::channel(false);
+    let poll = Duration::from_millis(20);
     assert!(tokio::time::timeout(
         Duration::from_millis(300),
-        pairing.approved(connect, Duration::from_millis(20))
+        approval(&pairing, poll, running.clone())
     )
     .await
     .is_err());
@@ -510,11 +509,11 @@ async fn an_enrolled_environment_waits_for_approval_then_stays_dialed_in() {
     let claimed = a.commands.status(&a.session, id).await.unwrap();
     let (_, key) = claimed.claim_binding().unwrap();
     a.commands.approve(&a.session, id, key).await.unwrap();
-    let (identity, pin) =
-        tokio::time::timeout(WAIT, pairing.approved(connect, Duration::from_millis(20)))
-            .await
-            .unwrap()
-            .unwrap();
+    let (identity, pin) = tokio::time::timeout(WAIT, approval(&pairing, poll, running))
+        .await
+        .unwrap()
+        .unwrap()
+        .expect("not stopped");
     pairing.shutdown().await;
     let peer = PeerEnvironment::new(*key.bytes());
 
@@ -591,29 +590,29 @@ async fn an_enrolled_environment_waits_for_approval_then_stays_dialed_in() {
 /// gateway out of reach.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn waiting_for_approval_ends_when_denied_or_never_paired() {
-    use super::env_dial_command::EnvironmentPairing;
+    use crate::env_serve::application::{approval, NotApproved};
+    use crate::env_serve::infrastructure::FilePairingEnvironment;
     use nessa_auth::application::pairing::OwnerDecision;
 
     let directory = tempfile::tempdir().unwrap();
     let a = Gateway::start(&directory.path().join("a")).await;
-    let native = a.native;
-    let connect = move || async move { std::net::TcpStream::connect(native) };
+    let native = a.native.to_string();
+    let (_running, running) = watch::channel(false);
+    let poll = Duration::from_millis(20);
 
+    // Told at once, with no gateway to ask: nothing listens at this address.
+    let nowhere = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .to_string();
     let unpaired = directory.path().join("unpaired");
     nessa_local_storage::create_directory(&unpaired).unwrap();
-    let pairing = EnvironmentPairing::open(&unpaired, clock()).unwrap();
-    // Told at once, with no gateway to ask.
-    let unreachable = || async {
-        Err::<std::net::TcpStream, _>(std::io::Error::from(ErrorKind::ConnectionRefused))
-    };
-    let never = tokio::time::timeout(
-        WAIT,
-        pairing.approved(unreachable, Duration::from_millis(20)),
-    )
-    .await
-    .unwrap()
-    .expect_err("nothing was paired here");
-    assert!(never.to_string().contains("not paired"), "{never}");
+    let pairing = FilePairingEnvironment::open(&unpaired, &nowhere, clock()).unwrap();
+    let never = tokio::time::timeout(WAIT, approval(&pairing, poll, running.clone()))
+        .await
+        .unwrap();
+    assert_eq!(never.err(), Some(NotApproved::NotPaired));
     pairing.shutdown().await;
 
     let created = a
@@ -623,24 +622,20 @@ async fn waiting_for_approval_ends_when_denied_or_never_paired() {
         .unwrap();
     let denied = directory.path().join("denied");
     nessa_local_storage::create_directory(&denied).unwrap();
-    let pairing = EnvironmentPairing::open(&denied, clock()).unwrap();
+    let pairing = FilePairingEnvironment::open(&denied, &native, clock()).unwrap();
     let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
-    tokio::time::timeout(
-        WAIT,
-        pairing.enroll(std::net::TcpStream::connect(native).unwrap(), code),
-    )
-    .await
-    .unwrap()
-    .unwrap();
+    tokio::time::timeout(WAIT, pairing.enroll(code))
+        .await
+        .unwrap()
+        .unwrap();
     a.commands
         .decide(&a.session, created.record().id(), OwnerDecision::Deny)
         .await
         .unwrap();
-    let ended = tokio::time::timeout(WAIT, pairing.approved(connect, Duration::from_millis(20)))
+    let ended = tokio::time::timeout(WAIT, approval(&pairing, poll, running))
         .await
-        .unwrap()
-        .expect_err("a denied pairing is not approved");
-    assert!(ended.to_string().contains("without approving"), "{ended}");
+        .unwrap();
+    assert_eq!(ended.err(), Some(NotApproved::Ended));
     pairing.shutdown().await;
 }
 

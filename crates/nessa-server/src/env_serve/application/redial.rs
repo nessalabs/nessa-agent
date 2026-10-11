@@ -90,7 +90,7 @@ where
 }
 
 /// Resolves once stop is asked; never, once nothing can ask it any more.
-async fn stopped(stop: &mut watch::Receiver<bool>) {
+pub(super) async fn stopped(stop: &mut watch::Receiver<bool>) {
     if stop.wait_for(|stop| *stop).await.is_err() {
         std::future::pending::<()>().await;
     }

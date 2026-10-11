@@ -39,9 +39,9 @@ use std::{
 ///
 /// # Errors
 /// The gateway could not be reached or did not answer in time, the
-/// handshake failed, as it does when its key is not `pin`
-/// (`ConnectionAborted`), or cannot succeed by trying again (`InvalidInput`:
-/// `pin` is not a key, the gateway does not speak this protocol, or this
+/// handshake failed, as it does when its key is not `pin` or it offers no
+/// protocol in common, as across an upgrade (`ConnectionAborted`), or cannot
+/// succeed by trying again (`InvalidInput`: `pin` is not a key, or this
 /// build cannot make the TLS setup), it refused to be served on this connection
 /// (`PermissionDenied`, which may pass: see the module's note), or it
 /// answered something else (`InvalidData`).
@@ -70,9 +70,10 @@ fn open_environment(
         DeadlineStream::new(socket, clock, WakeEndpoint::new(address)).map_err(deadline_error)?;
     stream.blocking().map_err(deadline_error)?;
     // The handshake does not tell a cut connection from a key that is not
-    // `pin`; either is worth trying again. A pin that does not parse, a
-    // gateway speaking another protocol, or a TLS setup this build cannot
-    // make is not changed by dialing again.
+    // `pin`, or from a gateway with no protocol in common (rustls fails the
+    // handshake for it); each is worth trying again, the last once the
+    // gateway is upgraded. A pin that does not parse, or a TLS setup this
+    // build cannot make, is not changed by dialing again.
     let transport = NativeTransport::connect(stream, identity, GatewayTrust::Pinned(pin))
         .map_err(handshake_error)?;
     begin_enrollment_phase(&deadline).map_err(deadline_error)?;

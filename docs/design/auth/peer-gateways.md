@@ -314,10 +314,11 @@ sequenceDiagram
   same. So the dialer waits and dials again, doubling the wait up to 60 s;
   a connection served for 60 s or more starts the wait over, and one that
   ends sooner counts as a failure, so a gateway that drops each connection
-  is not dialed in a loop. Only a failure no dial can change stops it
-  (`InvalidInput`: a pin that is not a key, a gateway that does not speak
-  this protocol, a TLS setup this build cannot make). Each address the name
-  resolves to is tried in turn.
+  is not dialed in a loop. A gateway with no protocol in common, as across
+  an upgrade, fails the handshake and is dialed again too. Only a failure
+  no dial can change stops it (`InvalidInput`: a pin that is not a key, a
+  TLS setup this build cannot make). Each address the name resolves to is
+  tried in turn.
 - **Stopping.** SIGINT or SIGTERM closes the connection being served, so its
   leases end as they do when a gateway goes away, and then dialing stops. A
   second signal while that drains exits at once.
