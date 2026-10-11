@@ -1196,7 +1196,7 @@ Each row above has a test, named after it:
   main wrote with no `schemaVersion` as `AnotherVersion`), and P5's other
   conversation opening in the tests of
   `crates/nessa-sdk/src/infrastructure/session_storage/record.rs`
-  (it frames a save group by hand); P6 in
+  (it plants the record with `append_encoded_batch`); P6 in
   `snapshot/errors.rs`, P7 in `session_storage/transcript.rs`; B1–B5 in
   `crates/nessa-sdk/tests/infrastructure/acp/executions/prompt_content.rs`;
   B6 in `crates/nessa-sdk/tests/application/agent_execution/providers/session.rs`,

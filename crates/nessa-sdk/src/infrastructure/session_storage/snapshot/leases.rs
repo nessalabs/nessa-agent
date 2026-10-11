@@ -907,7 +907,10 @@ mod tests {
         }
     }
     fn batch(kind: &str, body: &str) -> String {
-        format!(r#"{{"changes":[{{"Lease":{{"kind":"{kind}","body":"{body}"}}}}]}}"#)
+        format!(
+            r#"{{"schemaVersion":{},"changes":[{{"Lease":{{"kind":"{kind}","body":"{body}"}}}}]}}"#,
+            StorageError::SCHEMA_VERSION,
+        )
     }
     fn corrupt_batch(bytes: &str) -> bool {
         matches!(
@@ -1182,13 +1185,23 @@ mod tests {
         ] {
             assert!(matches!(wire.decode(), Err(StorageError::Corrupt(_))));
         }
-        let extra = r#"{"changes":[{"Lease":{"kind":"issued","body":"{}","more":1}}]}"#;
-        assert!(corrupt_batch(extra));
+        let extra = format!(
+            r#"{{"schemaVersion":{},"changes":[{{"Lease":{{"kind":"issued","body":"{{}}","more":1}}}}]}}"#,
+            StorageError::SCHEMA_VERSION,
+        );
+        assert!(corrupt_batch(&extra));
     }
 
     fn checkpoint(snapshot: &SessionSnapshot) -> String {
         let text = serde_json::to_string(&SnapshotRef(snapshot)).unwrap();
-        preflight_checkpoint(format!(r#"{{"snapshot":{text}}}"#).as_bytes()).unwrap();
+        preflight_checkpoint(
+            format!(
+                r#"{{"schemaVersion":{},"snapshot":{text}}}"#,
+                StorageError::SCHEMA_VERSION,
+            )
+            .as_bytes(),
+        )
+        .unwrap();
         text
     }
     fn decode(text: &str) -> Result<SessionSnapshot, StorageError> {
