@@ -238,7 +238,8 @@ impl AcpProfile for PinnedProfile {
 ///
 /// The production profile stays unknown. This wrapper is how a test publishes
 /// [`TurnStopCleanup::ProvenWithSessionReuse`] and [`SessionCloseOwnership::Proven`]
-/// without a switch on the worker.
+/// without a switch on the worker. Delegate every new [`AcpProfile`] method to
+/// `inner`. Only `operation_capabilities` replaces the two stop facts.
 #[derive(Clone)]
 pub(crate) struct ProvenStopProfile {
     inner: ClaudeProfile,

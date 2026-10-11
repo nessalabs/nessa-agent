@@ -448,11 +448,43 @@ async fn assert_cleanup_close(
         Some(&report)
     );
     let records = audit.records.lock().unwrap().clone();
-    let rendered = format!("{records:?}{snapshot:?}");
-    assert!(
-        !rendered.contains("execution_failed") && !rendered.contains("session_failed"),
-        "{rendered}"
-    );
+    assert_no_failure_close(&records, &snapshot);
+}
+
+fn is_failure_close(reason: &PermissionCancellationReason) -> bool {
+    matches!(
+        reason.view(),
+        PermissionCancellationReasonView::ExecutionFailed
+            | PermissionCancellationReasonView::SessionFailed
+    )
+}
+
+fn assert_no_failure_close(records: &[ExecutionAuditRecord], snapshot: &SessionSnapshot) {
+    for record in records {
+        match record {
+            ExecutionAuditRecord::SessionClosed(closed) => {
+                assert!(!is_failure_close(closed.closure().reason()), "{closed:?}");
+            }
+            ExecutionAuditRecord::Cancelled(cancelled) => {
+                if let PermissionStateView::Cancelled { reason } = cancelled.request().state() {
+                    assert!(!is_failure_close(reason), "{cancelled:?}");
+                }
+            }
+            _ => {}
+        }
+    }
+    for invocation in &snapshot.invocations {
+        for event in &invocation.scheduling {
+            assert_ne!(event.cause, SchedulingCause::ExecutionFailed, "{event:?}");
+        }
+        for stop in invocation
+            .cancellation
+            .iter()
+            .chain(invocation.local_cancellation.iter())
+        {
+            assert_ne!(stop.cause, SchedulingCause::ExecutionFailed, "{stop:?}");
+        }
+    }
 }
 
 #[tokio::test]
