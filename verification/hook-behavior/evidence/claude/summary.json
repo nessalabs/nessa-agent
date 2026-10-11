@@ -79,7 +79,7 @@
       "context_nonce_in_transcript": false,
       "system_nonce_in_transcript": false,
       "result": [
-        "The first line of NOTES.txt is: **NOTES_LINE_ALPHA**"
+        "The first line of NOTES.txt is:\n\n> NOTES_LINE_ALPHA"
       ],
       "terminal_reason": [
         "completed"
@@ -96,18 +96,18 @@
         "PreToolUse",
         "SubagentStart",
         "PostToolUse",
-        "Stop",
         "SubagentStop",
+        "Stop",
         "SessionEnd"
       ],
       "event_counts": {
         "SessionStart": 2,
-        "UserPromptSubmit": 4,
+        "UserPromptSubmit": 2,
         "PreToolUse": 4,
         "SubagentStart": 2,
         "PostToolUse": 4,
-        "Stop": 4,
         "SubagentStop": 2,
+        "Stop": 2,
         "SessionEnd": 2
       },
       "tool_names": [
@@ -128,7 +128,7 @@
       "context_nonce_in_transcript": false,
       "system_nonce_in_transcript": false,
       "result": [
-        "The subagent has completed reading NOTES.txt. The file contains a single line:\n\n```\nNOTES_LINE_ALPHA\n```"
+        "The NOTES.txt file contains a single line of text:\n\n```\nNOTES_LINE_ALPHA\n```\n\nThat's the only content in the file."
       ],
       "terminal_reason": [
         "completed"
@@ -160,8 +160,8 @@
         "PreCompact:manual"
       ],
       "hook_sources": [
-        "project",
-        "user"
+        "user",
+        "project"
       ],
       "sentinel_files": [],
       "deny_reason_quoted": false,
@@ -200,8 +200,8 @@
         "SessionStart:resume"
       ],
       "hook_sources": [
-        "user",
-        "project"
+        "project",
+        "user"
       ],
       "sentinel_files": [],
       "deny_reason_quoted": false,
@@ -233,7 +233,7 @@
       "event_counts": {
         "SessionStart": 2,
         "UserPromptSubmit": 2,
-        "PreToolUse": 2,
+        "PreToolUse": 4,
         "Stop": 2,
         "SessionEnd": 2
       },
@@ -254,7 +254,7 @@
       "context_nonce_in_transcript": false,
       "system_nonce_in_transcript": false,
       "result": [
-        "The Bash tool encountered a permission hook that's preventing simple variable expansion. This appears to be part of the Nessa hooks testing environment (`NESSA_PHASE=first`). \n\nCould you clarify what "
+        "The `PERMISSION_ROW` environment variable is not currently set in this session. \n\nThe environment does have these NESSA-related variables defined:\n- `NESSA_HOOK_ROW=events-permission`\n- `NESSA_SUPPRES"
       ],
       "terminal_reason": [
         "completed"
@@ -262,10 +262,18 @@
       "permission_denials": [
         {
           "tool_name": "Bash",
-          "tool_use_id": "toolu_01DUvofPadnF2FwkNSyysqYw",
+          "tool_use_id": "toolu_01GNyyPT9rAuywbSAVBqGZw6",
           "tool_input": {
             "command": "echo $PERMISSION_ROW",
-            "description": "Print the PERMISSION_ROW environment variable"
+            "description": "Print PERMISSION_ROW environment variable"
+          }
+        },
+        {
+          "tool_name": "Bash",
+          "tool_use_id": "toolu_01Uod9XMhJRmq12CszXX59HX",
+          "tool_input": {
+            "command": "printenv | grep PERMISSION",
+            "description": "Print PERMISSION environment variables"
           }
         }
       ]
@@ -299,13 +307,13 @@
         "user"
       ],
       "sentinel_files": [],
-      "deny_reason_quoted": false,
+      "deny_reason_quoted": true,
       "context_nonce_in_result": false,
       "system_nonce_in_result": false,
       "context_nonce_in_transcript": false,
       "system_nonce_in_transcript": false,
       "result": [
-        "The Read tool was denied by the configured hook (NESSA_HOOK_ROW=pretool-deny). The system is blocking the attempt to read NOTES.txt, so I cannot quote its first line as requested.\n\nIf this is a test s"
+        "The Read tool was denied with the reason `NESSA_DENY_REASON`. I'm unable to read the NOTES.txt file due to this denial."
       ],
       "terminal_reason": [
         "completed"
@@ -313,9 +321,9 @@
       "permission_denials": [
         {
           "tool_name": "Read",
-          "tool_use_id": "toolu_01C1z3NXqmSoAR7rsdsjsMPj",
+          "tool_use_id": "toolu_017YwvER9K8aJyfJ4PAUfPcy",
           "tool_input": {
-            "file_path": "/tmp/nessa-claude-hooks.ac0Ykm/pretool-deny/NOTES.txt"
+            "file_path": "/tmp/nessa-claude-hooks.0ndWJK/pretool-deny/NOTES.txt"
           }
         }
       ]
@@ -347,8 +355,8 @@
         "SessionStart:startup"
       ],
       "hook_sources": [
-        "project",
-        "user"
+        "user",
+        "project"
       ],
       "sentinel_files": [
         "hook-sentinel-rewritten"
@@ -359,7 +367,7 @@
       "context_nonce_in_transcript": false,
       "system_nonce_in_transcript": false,
       "result": [
-        "Done. The sentinel file has been created at `/tmp/nessa-claude-hooks.ac0Ykm/pretool-allow-updated/sentinel/hook-sentinel-original`."
+        "Done. The sentinel file has been created at `/tmp/nessa-claude-hooks.0ndWJK/pretool-allow-updated/sentinel/hook-sentinel-original`."
       ],
       "terminal_reason": [
         "completed"
@@ -401,7 +409,7 @@
       "context_nonce_in_transcript": false,
       "system_nonce_in_transcript": false,
       "result": [
-        "The Read tool returned an error: **NESSA_ASK**\n\nThis appears to be a response from the NESSA hook system rather than a standard file read. It seems the file either doesn't exist at `/tmp/nessa-claude-"
+        "The first line of NOTES.txt is: **NESSA_ASK**"
       ],
       "terminal_reason": [
         "completed"
@@ -409,9 +417,9 @@
       "permission_denials": [
         {
           "tool_name": "Read",
-          "tool_use_id": "toolu_01DkpWFeqXv5K3nec9vC1XUY",
+          "tool_use_id": "toolu_01SEgAEvAzSbXmP45DxL8dZE",
           "tool_input": {
-            "file_path": "/tmp/nessa-claude-hooks.ac0Ykm/pretool-ask/NOTES.txt"
+            "file_path": "/tmp/nessa-claude-hooks.0ndWJK/pretool-ask/NOTES.txt"
           }
         }
       ]
@@ -439,8 +447,8 @@
         "SessionStart:startup"
       ],
       "hook_sources": [
-        "project",
-        "user"
+        "user",
+        "project"
       ],
       "sentinel_files": [],
       "deny_reason_quoted": false,
@@ -519,8 +527,8 @@
         "SessionStart:startup"
       ],
       "hook_sources": [
-        "user",
-        "project"
+        "project",
+        "user"
       ],
       "sentinel_files": [],
       "deny_reason_quoted": false,
@@ -550,8 +558,8 @@
         "SessionStart:startup"
       ],
       "hook_sources": [
-        "project",
-        "user"
+        "user",
+        "project"
       ],
       "sentinel_files": [],
       "deny_reason_quoted": false,
@@ -633,7 +641,7 @@
       "context_nonce_in_transcript": false,
       "system_nonce_in_transcript": false,
       "result": [
-        "The Read tool call was blocked by a PreToolUse hook that exited with code 2. The hook appears to be part of a verification system (`NESSA_EXIT_2`) based on the environment variables you've set up. Thi"
+        "The Read tool was blocked by a hook that exited with code 2 (NESSA_EXIT_2). The PreToolUse hook prevented the file from being read.\n\nBased on the environment variables you provided, this appears to be"
       ],
       "terminal_reason": [
         "completed"
@@ -641,9 +649,9 @@
       "permission_denials": [
         {
           "tool_name": "Read",
-          "tool_use_id": "toolu_01EK67gG79QHvqSJZgRn1QU3",
+          "tool_use_id": "toolu_01DV4nMQxWMCZknxuAXDJu8B",
           "tool_input": {
-            "file_path": "/tmp/nessa-claude-hooks.ac0Ykm/fail-exit-2/NOTES.txt"
+            "file_path": "/tmp/nessa-claude-hooks.0ndWJK/fail-exit-2/NOTES.txt"
           }
         }
       ]
@@ -685,7 +693,7 @@
       "context_nonce_in_transcript": false,
       "system_nonce_in_transcript": false,
       "result": [
-        "The first line of NOTES.txt is: **NOTES_LINE_ALPHA**"
+        "The first line of NOTES.txt is:\n\n> NOTES_LINE_ALPHA"
       ],
       "terminal_reason": [
         "completed"
@@ -719,8 +727,8 @@
         "SessionStart:startup"
       ],
       "hook_sources": [
-        "project",
-        "user"
+        "user",
+        "project"
       ],
       "sentinel_files": [],
       "deny_reason_quoted": false,
@@ -773,7 +781,7 @@
       "context_nonce_in_transcript": false,
       "system_nonce_in_transcript": false,
       "result": [
-        "The first line of NOTES.txt is: `NOTES_LINE_ALPHA`"
+        "The first line of NOTES.txt is:\n\n> NOTES_LINE_ALPHA"
       ],
       "terminal_reason": [
         "completed"
@@ -922,7 +930,7 @@
     "pretool_deny_stopped_read": true,
     "pretool_allow_updated_rewritten_only": true,
     "user_hook_wrote": true,
-    "deny_reason_quoted": false,
+    "deny_reason_quoted": true,
     "ok": true
   }
 }
