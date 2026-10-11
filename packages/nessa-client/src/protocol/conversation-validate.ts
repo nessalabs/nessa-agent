@@ -662,7 +662,7 @@ const leaseValues = {
     NonNullable<ConversationLease["environment"]>,
     true
   >,
-  sandbox: { harness_default: true } satisfies Record<
+  sandbox: { harness_default: true, none: true } satisfies Record<
     NonNullable<ConversationLease["sandbox"]>,
     true
   >,
@@ -690,7 +690,7 @@ const leaseValues = {
 
 type LeaseField = "required" | "optional" | "absent"
 type LeaseShape = Record<
-  "revision" | "environment" | "sandbox" | "cause" | "cleanup" | "refusal",
+  "revision" | "environment" | "sandbox" | "cause" | "cleanup" | "refusal" | "commands",
   LeaseField
 > & {
   /** Whether events can have been dropped: only once it stopped accepting them. */
@@ -702,17 +702,31 @@ const issued = {
   environment: "required",
   sandbox: "required",
   refusal: "absent",
+  commands: "absent",
 } as const
 
 /** Which fields each state carries: exactly what the gateway's `lease_view`
  * can produce. A lease is issued with its terms and revision; a cause once it
  * is ending, a cleanup once that is reported (late, for an interrupted one);
- * events are dropped only after it stopped accepting them. A refused lease
+ * events are dropped only after it stopped accepting them; commands are
+ * counted only while it can still have them running. A refused lease
  * has its terms and refusal and nothing after; an unreadable one claims
  * nothing at all. */
 const leaseShapes = {
-  live: { ...issued, cause: "absent", cleanup: "absent", dropped: false },
-  ending: { ...issued, cause: "required", cleanup: "absent", dropped: false },
+  live: {
+    ...issued,
+    cause: "absent",
+    cleanup: "absent",
+    commands: "optional",
+    dropped: false,
+  },
+  ending: {
+    ...issued,
+    cause: "required",
+    cleanup: "absent",
+    commands: "optional",
+    dropped: false,
+  },
   ended: { ...issued, cause: "required", cleanup: "required", dropped: true },
   interrupted: {
     ...issued,
@@ -734,6 +748,7 @@ const leaseShapes = {
     cause: "absent",
     cleanup: "absent",
     refusal: "absent",
+    commands: "absent",
     dropped: false,
   },
 } satisfies Record<ConversationLease["state"], LeaseShape>
@@ -752,6 +767,7 @@ function lease(value: unknown) {
     "cleanup",
     "refusal",
     "droppedEvents",
+    "commands",
   ])
   for (const [key, values] of Object.entries(leaseValues)) {
     const field = item[key]
@@ -766,6 +782,12 @@ function lease(value: unknown) {
   }
   if (item.revision !== undefined) count("revision", 1)
   count("droppedEvents", 0)
+  // At most the four commands a lease lets run at once.
+  if (item.commands !== undefined) {
+    count("commands", 1)
+    if ((item.commands as number) > 4)
+      throw new Error("Invalid conversation lease commands")
+  }
   const shape: LeaseShape = leaseShapes[item.state as ConversationLease["state"]]
   for (const key of [
     "revision",
@@ -774,6 +796,7 @@ function lease(value: unknown) {
     "cause",
     "cleanup",
     "refusal",
+    "commands",
   ] as const) {
     const present = item[key] !== undefined
     if ((shape[key] === "required" && !present) || (shape[key] === "absent" && present))

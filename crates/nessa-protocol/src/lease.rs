@@ -13,6 +13,11 @@
 //! gateway ── End{lease} ──▶ environment ── Ended{cleanup} ──▶ gateway
 //! gateway ── Account{lease} ──▶ environment ── Accounted{cleanup} ──▶ gateway
 //! gateway ── Keepalive ──▶ environment   (every KEEPALIVE_INTERVAL, always)
+//!
+//! a command lease (one bounded command, no harness):
+//! gateway ── GrantCommand{lease, argv, cwd, timeoutMs} ──▶ environment ── Granted | Refused ──▶ gateway
+//! gateway ── Run{lease} ──▶ the command ── Ran{end, stdout, stderr, cleanup} ──▶ gateway
+//!   gateway ── End{lease} ──▶ (stops it) ── Ran{stopped} ── Ended{cleanup} ──▶ gateway
 //! ```
 //!
 //! Arrows are frames, in the order the two ends exchange them. Every frame
@@ -29,6 +34,10 @@
 //! [`SILENCE_LIMIT`] takes the gateway as gone, as it does when the stream
 //! ends: a network that went away silently ends no stream until TCP gives
 //! up, hours later.
+//!
+//! A command lease runs one command, once, and its `Ran` ends it: the
+//! environment answers it with the command's captured output, at most
+//! [`MAX_DATA_BYTES`] of both streams together, so one frame carries it.
 //!
 //! On the wire each frame is [`crate::pairing::encode_frame`]'s four-byte
 //! big-endian length and a JSON body of at most [`MAX_FRAME_BYTES`]. A
@@ -60,6 +69,10 @@ pub const SILENCE_LIMIT: Duration = Duration::from_secs(45);
 /// Most an environment waits on a harness for one step of a
 /// [`ToEnvironment::Stop`]: a larger grace or kill is taken as this.
 pub const MAX_STOP_WAIT: Duration = Duration::from_secs(60);
+/// Most an environment takes, once a command lease's command is stopped or
+/// past its timeout, to answer its [`FromEnvironment::Ran`]: the command's
+/// grace, its forced kill, and the last of its output.
+pub const COMMAND_STOP_WAIT: Duration = Duration::from_secs(10);
 
 /// The longest an environment's stop of one harness can take before it
 /// answers, for a [`ToEnvironment::Stop`] asking `grace` and `kill`, each
@@ -135,6 +148,40 @@ pub enum GrantRefusal {
     /// The environment could not record the lease in its own audit, so it
     /// does not run it.
     AuditUnavailable,
+    /// The host is not configured to run commands.
+    CommandsUnavailable,
+    /// The command is not one a command lease can hold: no program, past its
+    /// bounds, or a working directory outside the workspace's.
+    InvalidCommand,
+}
+
+/// How a command lease's command ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "outcome",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum CommandEnd {
+    /// It exited by itself with `code`.
+    Exited {
+        /// Its exit status.
+        code: i32,
+    },
+    /// A signal the environment did not send ended it.
+    Signalled {
+        /// The signal's number.
+        signal: i32,
+    },
+    /// Its timeout passed and the environment stopped it.
+    TimedOut,
+    /// The gateway's `End`, or its connection's end, stopped it.
+    Stopped,
+    /// Its program could not be started; nothing ran.
+    NotStarted,
+    /// The environment could not observe how it ended.
+    Unknown,
 }
 
 /// Why a harness did not start.
@@ -231,6 +278,23 @@ pub enum ToEnvironment {
         /// The lease's id.
         lease: String,
     },
+    /// Admit a command lease to run `argv` once, in `cwd` beneath the
+    /// workspace (`None` for the workspace), for at most `timeout_ms`.
+    GrantCommand {
+        /// The command lease's id.
+        lease: String,
+        /// The program and its arguments, never a shell line.
+        argv: Vec<String>,
+        /// The directory beneath the workspace.
+        cwd: Option<String>,
+        /// How long it may run.
+        timeout_ms: u64,
+    },
+    /// Run the granted command lease's command; its `Ran` answers.
+    Run {
+        /// The command lease's id.
+        lease: String,
+    },
     /// The gateway is still there; nothing else.
     Keepalive,
 }
@@ -318,6 +382,21 @@ pub enum FromEnvironment {
         /// Its cleanup, as the environment recorded it.
         cleanup: Cleanup,
     },
+    /// A command lease's command ended, and the lease with it.
+    Ran {
+        /// The command lease's id.
+        lease: String,
+        /// How the command ended.
+        end: CommandEnd,
+        /// The newest of its standard output that was kept.
+        stdout: Data,
+        /// The newest of its standard error that was kept.
+        stderr: Data,
+        /// Bytes it printed that were not kept, the oldest first.
+        dropped_bytes: u64,
+        /// What releasing it took.
+        cleanup: Cleanup,
+    },
 }
 
 impl FromEnvironment {
@@ -332,7 +411,8 @@ impl FromEnvironment {
             | Self::OutputClosed { lease, .. }
             | Self::Stopped { lease, .. }
             | Self::Ended { lease, .. }
-            | Self::Accounted { lease, .. } => Some(lease),
+            | Self::Accounted { lease, .. }
+            | Self::Ran { lease, .. } => Some(lease),
         }
     }
 }
@@ -348,7 +428,9 @@ impl ToEnvironment {
             | Self::InputClosed { lease, .. }
             | Self::Stop { lease, .. }
             | Self::End { lease }
-            | Self::Account { lease } => Some(lease),
+            | Self::Account { lease }
+            | Self::GrantCommand { lease, .. }
+            | Self::Run { lease } => Some(lease),
         }
     }
 }

@@ -41,7 +41,8 @@ macro_rules! lease_protocol {
 
 // The frames, their framing, both ends that write, read and act on them, and
 // what the host's answers mean: how it launches a harness (with the variables
-// each agent's binding may set), records leases, and cleans a harness up.
+// each agent's binding may set), runs a command and which commands it takes,
+// records leases, and cleans a harness up.
 // Every source naming a lease frame, every source of `env serve`, and every
 // binding declaring launch variables is here
 // (`every_source_of_the_lease_contract_names_the_protocol`).
@@ -53,6 +54,7 @@ lease_protocol!(
     "../env_serve/application/serve.rs",
     "../env_serve/application/wire.rs",
     "../env_serve/infrastructure/mod.rs",
+    "../env_serve/infrastructure/commands.rs",
     "../env_serve/infrastructure/launcher.rs",
     "../env_serve/infrastructure/ledger.rs",
     "../env_serve/infrastructure/lock.rs",
@@ -63,6 +65,7 @@ lease_protocol!(
     "../../../nessa-sdk/src/infrastructure/codex_acp/sessions/binding.rs",
     "../../../nessa-sdk/src/infrastructure/harness_process.rs",
     "../../../nessa-sdk/src/infrastructure/process.rs",
+    "../../../nessa-sdk/src/domain/agent_execution/leases/value_objects.rs",
 );
 
 /// The lease protocol this build speaks: a fingerprint of its sources, taken

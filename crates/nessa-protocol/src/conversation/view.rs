@@ -692,6 +692,9 @@ pub struct ConversationLeaseView {
     pub refusal: Option<ConversationLeaseRefusal>,
     /// Events that arrived after it ended and were dropped.
     pub dropped_events: u64,
+    /// Command leases running under it now (row L14); absent when none is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commands: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -719,6 +722,8 @@ pub enum ConversationLeaseEnvironment {
 pub enum ConversationLeaseSandbox {
     /// Whatever the agent's harness encloses by default; nothing more.
     HarnessDefault,
+    /// Nothing encloses the work: it runs as the environment's account.
+    None,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]

@@ -11,6 +11,10 @@
 //!                                     ──▶ ledger: input_overflow ──▶ stop ──▶ Stopped (unasked)
 //!                          ──End────▶ stop every harness ──▶ ledger: ended ──▶ Ended
 //!                          ──Account▶ ledger ──▶ Accounted
+//!                          ──GrantCommand──▶ ledger: command_granted ──▶ Granted
+//!                          ──Run──▶ ledger: command_started ──▶ CommandRunner::run
+//!                                   ──▶ ledger: command_ran, ended ──▶ Ran
+//!                          ──End (a command running)──▶ stop it ──▶ Ran ──▶ Ended
 //!                          ──Keepalive▶ (nothing: the gateway is there)
 //! end of stream, or nothing read for `silence` ──▶ every lease ended as lost
 //!                                                ──▶ ledger: ended(lost)
@@ -33,23 +37,30 @@
 //! network that went away ends no stream, and this side would otherwise go
 //! on holding the serving lock and running harnesses nobody supervises.
 //!
+//! A command lease runs one command once, through [`CommandRunner`], only on
+//! a host configured to run commands; its `Ran` ends it. Its command is
+//! checked here again, as a [`CommandWork`]: the gateway's word for it is
+//! not taken.
+//!
 //! A lease's end is answered by that end alone: an `Account`, or another
 //! `End`, of a lease whose end is still under way waits for it, rather than
 //! reading a ledger that does not hold it yet.
 use super::wire::{write_frame, FrameStream};
 use nessa_protocol::lease::{
-    decode, Cleanup, Data, FromEnvironment, GrantRefusal, Hello, StartFailure, ToEnvironment,
-    Unavailability, MAX_DATA_BYTES, MAX_STOP_WAIT, SILENCE_LIMIT,
+    decode, Cleanup, CommandEnd, Data, FromEnvironment, GrantRefusal, Hello, StartFailure,
+    ToEnvironment, Unavailability, MAX_DATA_BYTES, MAX_STOP_WAIT, SILENCE_LIMIT,
 };
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
     providers::{HarnessControl, HarnessProcess},
 };
-use nessa_sdk::domain::agent_execution::leases::LeaseId;
+use nessa_sdk::domain::agent_execution::leases::{CommandWork, LeaseId};
 use serde::Serialize;
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
+    future::Future,
     io,
+    pin::Pin,
     sync::Arc,
     time::Duration,
 };
@@ -76,6 +87,54 @@ pub(crate) trait HarnessLauncher: Send + Sync {
         agent: &str,
         environment: &BTreeMap<String, String>,
     ) -> Result<HarnessProcess, AgentError>;
+}
+
+/// How the host runs a command lease's command: in its workspace, as the
+/// account it serves as, with nothing enclosing it.
+pub(crate) trait CommandRunner: Send + Sync {
+    /// Run `command` until it ends, its timeout passes, or `stop` is said,
+    /// and answer how it ended, what of its output was kept, and what
+    /// releasing it took. Answers within its timeout and the stop's bounds.
+    fn run(
+        &self,
+        command: CommandWork,
+        stop: watch::Receiver<Option<CommandStop>>,
+    ) -> Pin<Box<dyn Future<Output = CommandRan> + Send + 'static>>;
+}
+
+/// Why a running command is stopped.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CommandStop {
+    /// The gateway ended its lease.
+    Ended,
+    /// The gateway's connection ended.
+    Lost,
+}
+
+/// What running one command came to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CommandRan {
+    pub(crate) end: CommandEnd,
+    /// The newest of its standard output kept; with `stderr`, at most
+    /// [`MAX_DATA_BYTES`].
+    pub(crate) stdout: Vec<u8>,
+    pub(crate) stderr: Vec<u8>,
+    /// Bytes it printed past what was kept, the oldest.
+    pub(crate) dropped_bytes: u64,
+    pub(crate) cleanup: Cleanup,
+}
+
+impl CommandRan {
+    /// A command that never started: nothing ran, nothing is held.
+    pub(crate) fn not_started() -> Self {
+        Self {
+            end: CommandEnd::NotStarted,
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+            dropped_bytes: 0,
+            cleanup: Cleanup::NotHeld,
+        }
+    }
 }
 
 /// One entry of the environment's own audit of its leases.
@@ -110,6 +169,21 @@ pub(crate) enum LedgerEntry {
     /// A harness stopped reading its input until its queue was full, or for
     /// good: it is stopped rather than fed a stream with bytes missing.
     InputOverflow { lease: String, channel: u32 },
+    /// A command lease was admitted to run `argv` once.
+    CommandGranted {
+        lease: String,
+        argv: Vec<String>,
+        cwd: Option<String>,
+        timeout_ms: u64,
+    },
+    /// A command lease's command is about to start.
+    CommandStarted { lease: String },
+    /// A command lease's command ended; its output is the gateway's to keep.
+    CommandRan {
+        lease: String,
+        end: CommandEnd,
+        dropped_bytes: u64,
+    },
     /// A frame naming nothing this connection holds was dropped.
     Dropped {
         lease: Option<String>,
@@ -185,6 +259,15 @@ pub(crate) async fn refuse<W: AsyncWrite + Unpin>(
     output.shutdown().await
 }
 
+/// What this host runs for a gateway: its agents' harnesses, and commands
+/// when it serves them.
+#[derive(Clone)]
+pub(crate) struct Runners {
+    pub(crate) harnesses: Arc<dyn HarnessLauncher>,
+    /// `None` refuses every command lease `commands_unavailable`.
+    pub(crate) commands: Option<Arc<dyn CommandRunner>>,
+}
+
 /// Serve one gateway until its stream ends, then end every lease it held as
 /// lost and return once each is recorded.
 pub(crate) async fn serve<R, W>(
@@ -192,13 +275,17 @@ pub(crate) async fn serve<R, W>(
     output: W,
     build: &str,
     protocol: &str,
-    launcher: Arc<dyn HarnessLauncher>,
+    runners: Runners,
     ledger: Arc<dyn LeaseLedger>,
     timings: ServeTimings,
 ) where
     R: AsyncRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin + Send + 'static,
 {
+    let Runners {
+        harnesses: launcher,
+        commands,
+    } = runners;
     let (frames, mut writer) = start_writer(output);
     let _ = frames
         .send(FromEnvironment::Hello {
@@ -211,6 +298,8 @@ pub(crate) async fn serve<R, W>(
         leases: HashMap::new(),
         granted: HashSet::new(),
         ends: HashMap::new(),
+        commands: HashMap::new(),
+        runner: commands,
         frames,
         launcher,
         ledger,
@@ -333,6 +422,25 @@ struct Held {
     stops: Vec<Stopping>,
 }
 
+/// One command lease this connection holds.
+enum HeldCommand {
+    /// Granted, its command not yet run.
+    Granted(CommandWork),
+    /// Its command started: `stop` stops it, and `ran` is its cleanup once
+    /// its end is recorded.
+    Running {
+        stop: watch::Sender<Option<CommandStop>>,
+        ran: watch::Receiver<Option<Cleanup>>,
+    },
+}
+
+impl HeldCommand {
+    /// Whether its command is running still: started, its end not recorded.
+    fn runs(&self) -> bool {
+        matches!(self, Self::Running { ran, .. } if ran.borrow().is_none())
+    }
+}
+
 struct Served {
     leases: HashMap<String, Held>,
     /// Every lease id granted on this connection, ended ones included: an id
@@ -342,6 +450,11 @@ struct Served {
     /// once recorded. What answers an account or end of it meanwhile, and
     /// what serving waits for before it returns.
     ends: HashMap<String, watch::Receiver<Option<Cleanup>>>,
+    /// The command leases granted on this connection and not yet ended by
+    /// the gateway, by id.
+    commands: HashMap<String, HeldCommand>,
+    /// How this host runs commands; `None` when it is not configured to.
+    runner: Option<Arc<dyn CommandRunner>>,
     frames: mpsc::Sender<FromEnvironment>,
     launcher: Arc<dyn HarnessLauncher>,
     ledger: Arc<dyn LeaseLedger>,
@@ -429,6 +542,16 @@ impl Served {
                         .await;
                     }
                 }
+            }
+            ToEnvironment::GrantCommand {
+                lease,
+                argv,
+                cwd,
+                timeout_ms,
+            } => self.grant_command(lease, argv, cwd, timeout_ms).await,
+            ToEnvironment::Run { lease } => self.run(lease).await,
+            ToEnvironment::End { lease } if self.commands.contains_key(&lease) => {
+                self.end_command(lease).await;
             }
             ToEnvironment::End { lease } => match self.leases.remove(&lease) {
                 Some(held) => self.end(lease, held, false),
@@ -829,6 +952,204 @@ impl Served {
         });
     }
 
+    /// Admit a command lease, or refuse it, as [`Self::grant`] does a
+    /// harness's: only on a host that runs commands, and only for a command
+    /// a command lease can hold.
+    async fn grant_command(
+        &mut self,
+        lease: String,
+        argv: Vec<String>,
+        cwd: Option<String>,
+        timeout_ms: u64,
+    ) {
+        // Commands whose end is recorded are the audit's to answer for.
+        self.commands.retain(|_, held| match held {
+            HeldCommand::Granted(_) => true,
+            HeldCommand::Running { ran, .. } => ran.borrow().is_none(),
+        });
+        let work = CommandWork::new(argv.clone(), cwd.clone(), timeout_ms);
+        let refusal = if LeaseId::new(lease.clone()).is_err() || self.granted.contains(&lease) {
+            Err(GrantRefusal::Duplicate)
+        } else if self.runner.is_none() {
+            Err(GrantRefusal::CommandsUnavailable)
+        } else if let Some(refusal) = self.recorded_before(&lease) {
+            Err(refusal)
+        } else {
+            match work {
+                Err(_) => Err(GrantRefusal::InvalidCommand),
+                Ok(work) => match self.ledger.record(&LedgerEntry::CommandGranted {
+                    lease: lease.clone(),
+                    argv,
+                    cwd,
+                    timeout_ms,
+                }) {
+                    Ok(()) => Ok(work),
+                    Err(error) => {
+                        tracing::error!(lease, %error, "a command lease could not be recorded; it is refused");
+                        Err(GrantRefusal::AuditUnavailable)
+                    }
+                },
+            }
+        };
+        match refusal {
+            Ok(work) => {
+                self.granted.insert(lease.clone());
+                self.commands
+                    .insert(lease.clone(), HeldCommand::Granted(work));
+                self.send(FromEnvironment::Granted { lease }).await;
+            }
+            Err(reason) => {
+                if reason != GrantRefusal::AuditUnavailable {
+                    let entry = LedgerEntry::Refused {
+                        lease: lease.clone(),
+                        reason,
+                    };
+                    if let Err(error) = self.ledger.record(&entry) {
+                        tracing::error!(lease, %error, "a refused command lease could not be recorded");
+                    }
+                }
+                self.send(FromEnvironment::Refused { lease, reason }).await;
+            }
+        }
+    }
+
+    /// Run a granted command lease's command, once, on a task of its own,
+    /// which records how it ended and answers with its `Ran`. A lease not
+    /// granted here, or run already, is answered as never started.
+    async fn run(&mut self, lease: String) {
+        let work = match self.commands.remove(&lease) {
+            Some(HeldCommand::Granted(work)) => work,
+            // Still running: its own `Ran` will answer.
+            Some(running @ HeldCommand::Running { .. }) if running.runs() => {
+                self.commands.insert(lease.clone(), running);
+                return self.dropped(Some(&lease), None, "run");
+            }
+            held => {
+                if let Some(held) = held {
+                    self.commands.insert(lease.clone(), held);
+                }
+                // Never granted here, or run already: nothing runs, and that
+                // is said, so the gateway does not wait for an answer.
+                self.dropped(Some(&lease), None, "run");
+                return self.send(ran(lease, CommandRan::not_started())).await;
+            }
+        };
+        let Some(runner) = self.runner.clone() else {
+            unreachable!("a command lease is granted only on a host that runs commands");
+        };
+        let (stop, stopped) = watch::channel(None);
+        let (done, ran_receiver) = watch::channel(None);
+        let entry = LedgerEntry::CommandStarted {
+            lease: lease.clone(),
+        };
+        let started = match self.ledger.record(&entry) {
+            Ok(()) => Some(runner.run(work, stopped.clone())),
+            Err(error) => {
+                tracing::error!(lease, %error, "a command's start could not be recorded; it is not run");
+                None
+            }
+        };
+        self.commands.insert(
+            lease.clone(),
+            HeldCommand::Running {
+                stop,
+                ran: ran_receiver,
+            },
+        );
+        let ledger = self.ledger.clone();
+        let frames = self.frames.clone();
+        tokio::spawn(async move {
+            let mut outcome = match started {
+                Some(running) => running.await,
+                None => CommandRan::not_started(),
+            };
+            let lost = *stopped.borrow() == Some(CommandStop::Lost);
+            // Its end is written after its exit, and says uncertain once the
+            // exit could not be written, so the ledger never reads confirmed
+            // over a missing record.
+            let ran_entry = LedgerEntry::CommandRan {
+                lease: lease.clone(),
+                end: outcome.end,
+                dropped_bytes: outcome.dropped_bytes,
+            };
+            if let Err(error) = ledger.record(&ran_entry) {
+                tracing::error!(lease, %error, "a command's exit could not be recorded");
+                outcome.cleanup = Cleanup::Uncertain;
+            }
+            let ended_entry = LedgerEntry::Ended {
+                lease: lease.clone(),
+                cleanup: outcome.cleanup,
+                lost,
+            };
+            if let Err(error) = ledger.record(&ended_entry) {
+                tracing::error!(lease, %error, "a command's end could not be recorded");
+                outcome.cleanup = Cleanup::Uncertain;
+            }
+            let cleanup = outcome.cleanup;
+            // Its answer goes before anything that waits for its end, so a
+            // gateway's `End` of it is answered after its `Ran`.
+            if !lost {
+                // A gateway taken as gone while this waits for room to say
+                // it is not waited on: its end is recorded either way. Only
+                // that stop abandons the send: a stop channel whose sender
+                // went with an ended lease says nothing about the gateway.
+                let mut gone = stopped.clone();
+                let lost = async move {
+                    if gone
+                        .wait_for(|stop| *stop == Some(CommandStop::Lost))
+                        .await
+                        .is_err()
+                    {
+                        std::future::pending::<()>().await;
+                    }
+                };
+                tokio::select! {
+                    _ = frames.send(ran(lease, outcome)) => {}
+                    () = lost => {}
+                }
+            }
+            done.send_replace(Some(cleanup));
+        });
+    }
+
+    /// End a command lease: stop its command if it runs, and answer its end
+    /// once that is recorded; one never run ends holding nothing.
+    async fn end_command(&mut self, lease: String) {
+        match self.commands.remove(&lease) {
+            Some(HeldCommand::Running { stop, ran }) => {
+                ask_stop(&stop, CommandStop::Ended);
+                self.ends.retain(|_, ended| ended.borrow().is_none());
+                self.ends.insert(lease.clone(), ran);
+                self.answer_ended(lease, |lease, cleanup| FromEnvironment::Ended {
+                    lease,
+                    cleanup,
+                })
+                .await;
+            }
+            Some(HeldCommand::Granted(_)) => {
+                let cleanup = self.end_unrun(&lease, false);
+                self.send(FromEnvironment::Ended { lease, cleanup }).await;
+            }
+            None => unreachable!("only a held command lease is ended here"),
+        }
+    }
+
+    /// Record the end of a command lease whose command never ran.
+    fn end_unrun(&self, lease: &str, lost: bool) -> Cleanup {
+        let entry = LedgerEntry::Ended {
+            lease: lease.into(),
+            cleanup: Cleanup::NotHeld,
+            lost,
+        };
+        match self.ledger.record(&entry) {
+            Ok(()) => Cleanup::NotHeld,
+            Err(error) => {
+                tracing::error!(lease, %error, "a command lease's end could not be recorded");
+                Cleanup::Uncertain
+            }
+        }
+    }
+
     /// The gateway is gone: end every lease it held as lost, and wait for
     /// every end under way.
     async fn lose_all(&mut self) {
@@ -836,6 +1157,18 @@ impl Served {
         for (lease, held) in leases {
             tracing::warn!(lease, "the gateway's connection ended; its lease is lost");
             self.end(lease, held, true);
+        }
+        let commands: Vec<_> = self.commands.drain().collect();
+        for (lease, held) in commands {
+            match held {
+                HeldCommand::Running { stop, ran } => {
+                    ask_stop(&stop, CommandStop::Lost);
+                    self.ends.insert(lease, ran);
+                }
+                HeldCommand::Granted(_) => {
+                    self.end_unrun(&lease, true);
+                }
+            }
         }
         // Each end is waited for until it is recorded, not until its answer
         // is sent: a gateway that reads nothing more is never waited on.
@@ -851,6 +1184,29 @@ impl Served {
             leases = self.leases.len(),
             "nothing arrived from the gateway, not even a keepalive; it is taken as gone"
         );
+    }
+}
+
+/// Stop a running command for `why`, unless it was already asked to stop.
+fn ask_stop(stop: &watch::Sender<Option<CommandStop>>, why: CommandStop) {
+    stop.send_if_modified(|asked| match asked {
+        None => {
+            *asked = Some(why);
+            true
+        }
+        Some(_) => false,
+    });
+}
+
+/// A command lease's `Ran`.
+fn ran(lease: String, ran: CommandRan) -> FromEnvironment {
+    FromEnvironment::Ran {
+        lease,
+        end: ran.end,
+        stdout: Data(ran.stdout),
+        stderr: Data(ran.stderr),
+        dropped_bytes: ran.dropped_bytes,
+        cleanup: ran.cleanup,
     }
 }
 

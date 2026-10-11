@@ -39,5 +39,16 @@ Each row is a limit the gateway names when a refusal or a silent close hits it. 
 | peer.preempt | fixed | 10000 | PREEMPT in crates/nessa-server/src/peer_gateways/infrastructure/commands.rs | the longest peer.enroll or peer.forget waits for a peer read it stopped to give back its turn; at least twice the read's unstoppable connect (the 5 s handshake), and the read only queues its audit records before it gives the turn back, so past it the command answers peer_busy only if local storage stalls |
 | peer.audit_queue | fixed | 64 | AUDIT_QUEUE in crates/nessa-server/src/peer_gateways/infrastructure/audit.rs | the most peer audit records waiting to be written, one at a time in the order they were handed over; one poller cycle queues at most about half of it, so it fills only when the store falls behind; a record past it is refused at once, its sequence left as a gap, so peer.enroll or peer.forget answers peer_audit_unavailable before any effect and a peer read's change stands with its record logged as not kept; an owner command's record waits behind at most this many, well inside its 5 s audit deadline |
 | peer.withdrawn_per_read | fixed | 1024 | WITHDRAWN_PER_READ in crates/nessa-server/src/peer_gateways/infrastructure/poller.rs | the most conversations one read of a peer gateway withdraws, a quarter of peer.audit_queue's records of 64 each; a read that reaches it ends incomplete and the next cycle, soon, withdraws the rest |
+| command.default_timeout_ms | fixed | 120000 | CommandWork::DEFAULT_TIMEOUT_MS | a `run` naming no timeout is stopped after this, as timed out |
+| command.max_timeout_ms | fixed | 3600000 | CommandWork::MAX_TIMEOUT_MS | a `run` asking a longer timeout is refused before anything is recorded |
+| command.stop_wait_ms | fixed | 10000 | lease protocol COMMAND_STOP_WAIT | a host that has not answered a command this long past its timeout, or past its stop, leaves it unanswered |
+| command.capture_bytes | fixed | 65536 | lease protocol MAX_DATA_BYTES | a command's output past this, both streams together, is dropped from its start and counted |
+| command.retained_tail_bytes | fixed | 2048 | CommandOutput::MAX_TAIL_BYTES | of each stream, only the newest this many bytes are kept in the command's record |
+| command.live_per_lease | fixed | 4 | Lease::MAX_LIVE_COMMANDS | a `run` while this many run under the agent's lease is refused `budget_exceeded` |
+| command.max_args | fixed | 256 | CommandWork::MAX_ARGS | a `run` with more arguments is refused before anything is recorded |
+| command.max_argv_bytes | fixed | 4096 | CommandWork::MAX_ARGV_BYTES | a `run` whose arguments together are longer is refused before anything is recorded |
+| command.max_cwd_bytes | fixed | 1024 | CommandWork::MAX_CWD_BYTES | a `run` whose working directory is longer is refused before anything is recorded |
+| mcp.built_in_calls | fixed | 8 | built-in MCP server MAX_BUILT_IN_CALLS | a tool call past this many running on one stand-in's connection is answered with an error |
+| mcp.built_in_line_bytes | fixed | 65536 | built-in MCP server MAX_BUILT_IN_LINE_BYTES | a message longer than this ends the stand-in's connection |
 
 | client.preparing_attempts | client | the client's own | `PREPARING_ATTEMPTS` in `crates/nessa-client-core/src/read_only_sync/application/watch.rs` | how many times a preparing read is asked again |

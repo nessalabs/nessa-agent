@@ -956,6 +956,8 @@ pub struct ConversationLease {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refusal: Option<String>,
     pub dropped_events: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commands: Option<u64>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

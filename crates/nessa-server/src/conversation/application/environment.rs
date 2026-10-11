@@ -93,6 +93,12 @@ pub(crate) trait Environment: Send + Sync {
     /// could not be reached — and the lease is then recorded Interrupted, as
     /// row L11 says. An adapter answers within a bound of its own.
     fn account<'a>(&'a self, lease: &'a LeaseId) -> EnvironmentFuture<'a, Option<LeaseCleanup>>;
+    /// What runs commands here under command leases; `None` where nothing
+    /// does, as on this gateway's own machine, whose commands are the agent's
+    /// own shell tool's.
+    fn commands(&self) -> Option<&dyn super::CommandEnvironment> {
+        None
+    }
 }
 
 /// A lease an environment admitted: the provider that reaches the agent

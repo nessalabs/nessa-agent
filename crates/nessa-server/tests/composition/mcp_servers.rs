@@ -49,6 +49,47 @@ fn agents(servers: Vec<StdioMcpServer>) -> AgentsConfig {
 }
 
 #[test]
+fn the_built_in_server_is_handed_over_beside_the_configured_and_takes_its_name() {
+    let tools = super::super::environment_tools::EnvironmentTools::new(
+        &crate::conversation::domain::CommandPolicy::new(["devbox".to_owned()], None, Vec::new()),
+    );
+    let name = super::super::environment_tools::SERVER_NAME;
+    let configured = launches(&[server("mcptest", &["/s.mjs"]), server(name, &["/own.mjs"])]);
+    let key = ConfigurationKey::new([7; 32]);
+    let handed = stand_ins(
+        &live_of(&configured),
+        "/bundle/nessa",
+        "/s.sock",
+        &key,
+        Some(tools.as_ref()),
+    );
+    let names: Vec<&str> = handed
+        .iter()
+        .map(|stand_in| stand_in.name.as_str())
+        .collect();
+    assert_eq!(names, ["mcptest", name]);
+    assert_eq!(
+        handed[1].args,
+        [
+            "mcp-relay",
+            "/s.sock",
+            name,
+            crate::mcp_servers::infrastructure::built_in_digest(&key, tools.as_ref()).as_str(),
+        ]
+    );
+    // Without it, the configured server of that name is handed over again.
+    let handed = stand_ins(
+        &live_of(&configured),
+        "/bundle/nessa",
+        "/s.sock",
+        &key,
+        None,
+    );
+    assert_eq!(handed.len(), 2);
+    assert_eq!(handed[1].args[3], launch_digest(&key, &configured[1]));
+}
+
+#[test]
 fn each_server_is_handed_over_as_a_relay_under_its_own_name() {
     let configured = vec![
         server("mcptest", &["/s.mjs"]),
@@ -58,7 +99,7 @@ fn each_server_is_handed_over_as_a_relay_under_its_own_name() {
     let socket = "/tmp/nessa-mcp-501/0123456789abcdef.sock";
     let key = ConfigurationKey::new([7; 32]);
     let configured = launches(&configured);
-    let handed = stand_ins(&live_of(&configured), gateway, socket, &key);
+    let handed = stand_ins(&live_of(&configured), gateway, socket, &key, None);
     for (stand_in, launch) in handed.iter().zip(&configured) {
         assert_eq!(stand_in.name, launch.server.name);
         assert_eq!(stand_in.command, Path::new(gateway));
@@ -79,7 +120,7 @@ fn each_server_is_handed_over_as_a_relay_under_its_own_name() {
     // another stand-in: the restoration fingerprint does not read these
     // (ADR 344, #391).
     assert_eq!(
-        stand_ins(&live_of(&configured), gateway, socket, &key),
+        stand_ins(&live_of(&configured), gateway, socket, &key, None),
         handed
     );
     let mut changed = configured.clone();
@@ -89,7 +130,7 @@ fn each_server_is_handed_over_as_a_relay_under_its_own_name() {
         .environment
         .insert("API_TOKEN".into(), "rotated".into());
     for edited in [changed, environment_only] {
-        let again = stand_ins(&live_of(&edited), gateway, socket, &key);
+        let again = stand_ins(&live_of(&edited), gateway, socket, &key, None);
         assert_ne!(again[0].args, handed[0].args);
         assert_eq!(again[1].args, handed[1].args);
     }
@@ -98,6 +139,7 @@ fn each_server_is_handed_over_as_a_relay_under_its_own_name() {
         gateway,
         socket,
         &ConfigurationKey::new([8; 32]),
+        None,
     );
     assert_ne!(other_key[0].args, handed[0].args);
 }
@@ -211,6 +253,7 @@ async fn the_agents_get_stand_ins_and_the_relay_is_bound_privately() {
         Path::new("/nessa"),
         BTreeMap::new(),
         false,
+        None,
     )
     .await
     .unwrap()
@@ -243,6 +286,7 @@ async fn the_agents_get_stand_ins_and_the_relay_is_bound_privately() {
             Path::new("/nessa"),
             BTreeMap::new(),
             false,
+            None,
         )
         .await
         .unwrap();
@@ -305,6 +349,7 @@ async fn the_agents_grants_are_the_ones_the_composed_relay_lets_through() {
         Path::new("/nessa"),
         BTreeMap::new(),
         false,
+        None,
     )
     .await
     .unwrap()
@@ -368,6 +413,7 @@ async fn a_relay_that_cannot_be_bound_leaves_mcp_servers_off() {
         Path::new("/nessa"),
         BTreeMap::new(),
         false,
+        None,
     )
     .await
     .unwrap();
@@ -383,7 +429,8 @@ async fn a_relay_that_cannot_be_bound_leaves_mcp_servers_off() {
         &deep,
         Path::new("/nessa"),
         BTreeMap::new(),
-        false
+        false,
+        None
     )
     .await
     .unwrap()
@@ -417,6 +464,7 @@ async fn servers_that_cannot_be_launched_as_configured_are_an_agent_error_naming
             Path::new("/nessa"),
             BTreeMap::new(),
             false,
+            None,
         )
         .await;
         match refused {
@@ -473,6 +521,7 @@ async fn s18_with_no_server_configured_the_relay_exists_and_a_server_added_reach
         Path::new("/nessa"),
         BTreeMap::new(),
         false,
+        None,
     )
     .await
     .unwrap()
@@ -510,6 +559,7 @@ async fn s11_to_s13_a_replaced_set_reaches_the_next_open_and_old_stand_ins_are_r
         Path::new("/nessa"),
         BTreeMap::new(),
         false,
+        None,
     )
     .await
     .unwrap()
@@ -617,6 +667,7 @@ async fn stored_entries_parse_with_their_defaults_and_a_disabled_one_is_not_laun
         Path::new("/nessa"),
         BTreeMap::new(),
         false,
+        None,
     )
     .await
     .unwrap()
@@ -661,6 +712,7 @@ async fn composed_settings_publish_privately_under_the_lock_and_audit_without_va
         Path::new("/nessa"),
         BTreeMap::new(),
         true,
+        None,
     )
     .await
     .unwrap()
@@ -852,6 +904,7 @@ async fn composed_in(
         Path::new("/nessa"),
         BTreeMap::new(),
         false,
+        None,
     )
     .await
     .unwrap()
@@ -1604,6 +1657,7 @@ async fn a_composed_gateways_apps_drops_are_written_to_its_audit_before_it_exits
         Path::new("/nessa"),
         BTreeMap::new(),
         false,
+        None,
     )
     .await
     .unwrap()
@@ -1736,6 +1790,7 @@ async fn a_composed_gateways_dropped_context_is_written_by_its_recorder() {
         Path::new("/nessa"),
         BTreeMap::new(),
         false,
+        None,
     )
     .await
     .unwrap()
