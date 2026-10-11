@@ -11,9 +11,7 @@ export type AgentFeatures = {
     "unsupported_not_implemented" | "supported_with_invocation_correlation"
   modelSwitchReporting: "unsupported_not_implemented" | "supported_after_validated_switch"
   permissionDeferral:
-    | "unsupported_not_implemented"
-    | "unsupported"
-    | "supported_with_nonterminal_outcome"
+    "unsupported_not_implemented" | "unsupported" | "supported_with_nonterminal_outcome"
   elicitationForwarding:
     "unknown" | "unsupported" | "supported_with_correlated_round_trip"
   preToolPolicy:

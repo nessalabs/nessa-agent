@@ -444,12 +444,17 @@ describe("conversation view agreement", () => {
       })
       return value
     }
-    const reason = "No human answered in time. Continue without this tool or try another approach."
+    const reason =
+      "No human answered in time. Continue without this tool or try another approach."
     const read = conversationView(
       withDeadline({ waitMs: 30_000, effect: "deny", reason }),
       "conversation",
     )
-    expect(read.permissions[0]!.deadline).toEqual({ waitMs: 30_000, effect: "deny", reason })
+    expect(read.permissions[0]!.deadline).toEqual({
+      waitMs: 30_000,
+      effect: "deny",
+      reason,
+    })
     for (const deadline of [
       { waitMs: 0, effect: "deny", reason },
       { waitMs: 86_400_001, effect: "deny", reason },
