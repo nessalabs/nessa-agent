@@ -25,13 +25,13 @@
         "SessionStart:startup"
       ],
       "hook_sources": [
-        "project",
-        "user"
+        "user",
+        "project"
       ],
       "sentinel_files": [],
+      "deny_reason_quoted": false,
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
-      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -44,9 +44,9 @@
       "sources": [],
       "hook_sources": [],
       "sentinel_files": [],
+      "deny_reason_quoted": false,
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
-      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -76,15 +76,15 @@
         "SessionStart:startup"
       ],
       "hook_sources": [
-        "project",
-        "user"
+        "user",
+        "project"
       ],
       "sentinel_files": [
         "hook-sentinel-original"
       ],
+      "deny_reason_quoted": false,
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
-      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -99,9 +99,9 @@
       "sentinel_files": [
         "hook-sentinel-original"
       ],
+      "deny_reason_quoted": false,
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
-      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -129,9 +129,9 @@
         "user"
       ],
       "sentinel_files": [],
+      "deny_reason_quoted": false,
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
-      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -144,9 +144,9 @@
       "sources": [],
       "hook_sources": [],
       "sentinel_files": [],
+      "deny_reason_quoted": false,
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
-      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -171,13 +171,13 @@
         "SessionStart:resume"
       ],
       "hook_sources": [
-        "user",
-        "project"
+        "project",
+        "user"
       ],
       "sentinel_files": [],
+      "deny_reason_quoted": false,
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
-      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -190,9 +190,9 @@
       "sources": [],
       "hook_sources": [],
       "sentinel_files": [],
+      "deny_reason_quoted": false,
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
-      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -217,13 +217,13 @@
         "SessionStart:resume"
       ],
       "hook_sources": [
-        "user",
-        "project"
+        "project",
+        "user"
       ],
       "sentinel_files": [],
+      "deny_reason_quoted": false,
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
-      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -236,9 +236,9 @@
       "sources": [],
       "hook_sources": [],
       "sentinel_files": [],
+      "deny_reason_quoted": false,
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
-      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -271,9 +271,9 @@
         "user"
       ],
       "sentinel_files": [],
+      "deny_reason_quoted": false,
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
-      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -286,9 +286,9 @@
       "sources": [],
       "hook_sources": [],
       "sentinel_files": [],
+      "deny_reason_quoted": false,
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
-      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -320,9 +320,9 @@
         "project"
       ],
       "sentinel_files": [],
+      "deny_reason_quoted": false,
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
-      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -337,9 +337,9 @@
       "sentinel_files": [
         "hook-sentinel-original"
       ],
+      "deny_reason_quoted": false,
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
-      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -375,9 +375,9 @@
       "sentinel_files": [
         "hook-sentinel-rewritten"
       ],
+      "deny_reason_quoted": false,
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
-      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -392,9 +392,9 @@
       "sentinel_files": [
         "hook-sentinel-original"
       ],
+      "deny_reason_quoted": false,
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
-      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -430,9 +430,9 @@
       "sentinel_files": [
         "hook-sentinel-original"
       ],
+      "deny_reason_quoted": false,
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
-      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -447,9 +447,9 @@
       "sentinel_files": [
         "hook-sentinel-original"
       ],
+      "deny_reason_quoted": false,
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
-      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -485,9 +485,9 @@
       "sentinel_files": [
         "hook-sentinel-original"
       ],
+      "deny_reason_quoted": false,
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
-      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -502,9 +502,9 @@
       "sentinel_files": [
         "hook-sentinel-original"
       ],
+      "deny_reason_quoted": false,
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
-      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -534,15 +534,15 @@
         "SessionStart:startup"
       ],
       "hook_sources": [
-        "project",
-        "user"
+        "user",
+        "project"
       ],
       "sentinel_files": [
         "hook-sentinel-original"
       ],
+      "deny_reason_quoted": false,
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
-      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -557,9 +557,9 @@
       "sentinel_files": [
         "hook-sentinel-original"
       ],
+      "deny_reason_quoted": false,
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
-      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -589,15 +589,15 @@
         "SessionStart:startup"
       ],
       "hook_sources": [
-        "user",
-        "project"
+        "project",
+        "user"
       ],
       "sentinel_files": [
         "hook-sentinel-original"
       ],
+      "deny_reason_quoted": false,
       "context_nonce_in_model_request": true,
       "system_nonce_in_model_request": false,
-      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -612,9 +612,9 @@
       "sentinel_files": [
         "hook-sentinel-original"
       ],
+      "deny_reason_quoted": false,
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
-      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -650,9 +650,9 @@
       "sentinel_files": [
         "hook-sentinel-original"
       ],
+      "deny_reason_quoted": false,
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
-      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -667,9 +667,9 @@
       "sentinel_files": [
         "hook-sentinel-original"
       ],
+      "deny_reason_quoted": false,
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
-      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -688,7 +688,7 @@
         "UserPromptSubmit": 2,
         "PreToolUse": 2,
         "PostToolUse": 2,
-        "Stop": 2256
+        "Stop": 2360
       },
       "tool_names": [
         "Bash"
@@ -703,9 +703,9 @@
       "sentinel_files": [
         "hook-sentinel-original"
       ],
+      "deny_reason_quoted": false,
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
-      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -720,9 +720,9 @@
       "sentinel_files": [
         "hook-sentinel-original"
       ],
+      "deny_reason_quoted": false,
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
-      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -750,13 +750,13 @@
         "SessionStart:startup"
       ],
       "hook_sources": [
-        "user",
-        "project"
+        "project",
+        "user"
       ],
       "sentinel_files": [],
+      "deny_reason_quoted": false,
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
-      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -771,13 +771,68 @@
       "sentinel_files": [
         "hook-sentinel-original"
       ],
+      "deny_reason_quoted": false,
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
-      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
       "row": "fail-exit-1",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        "Stop",
+        "SessionEnd"
+      ],
+      "event_counts": {
+        "SessionStart": 2,
+        "UserPromptSubmit": 2,
+        "PreToolUse": 2,
+        "PostToolUse": 2,
+        "Stop": 2,
+        "SessionEnd": 2
+      },
+      "tool_names": [
+        "Bash"
+      ],
+      "sources": [
+        "SessionStart:startup"
+      ],
+      "hook_sources": [
+        "user",
+        "project"
+      ],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "deny_reason_quoted": false,
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "fail-exit-1",
+      "suppression": "on",
+      "exit_code": 0,
+      "events": [],
+      "event_counts": {},
+      "tool_names": [],
+      "sources": [],
+      "hook_sources": [],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "deny_reason_quoted": false,
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "fail-malformed",
       "suppression": "off",
       "exit_code": 0,
       "events": [
@@ -809,64 +864,9 @@
       "sentinel_files": [
         "hook-sentinel-original"
       ],
+      "deny_reason_quoted": false,
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
-      "deny_reason_quoted": false,
-      "deny_reason_in_stdout": false
-    },
-    {
-      "row": "fail-exit-1",
-      "suppression": "on",
-      "exit_code": 0,
-      "events": [],
-      "event_counts": {},
-      "tool_names": [],
-      "sources": [],
-      "hook_sources": [],
-      "sentinel_files": [
-        "hook-sentinel-original"
-      ],
-      "context_nonce_in_model_request": false,
-      "system_nonce_in_model_request": false,
-      "deny_reason_quoted": false,
-      "deny_reason_in_stdout": false
-    },
-    {
-      "row": "fail-malformed",
-      "suppression": "off",
-      "exit_code": 0,
-      "events": [
-        "SessionStart",
-        "UserPromptSubmit",
-        "PreToolUse",
-        "PostToolUse",
-        "Stop",
-        "SessionEnd"
-      ],
-      "event_counts": {
-        "SessionStart": 2,
-        "UserPromptSubmit": 2,
-        "PreToolUse": 2,
-        "PostToolUse": 2,
-        "Stop": 2,
-        "SessionEnd": 2
-      },
-      "tool_names": [
-        "Bash"
-      ],
-      "sources": [
-        "SessionStart:startup"
-      ],
-      "hook_sources": [
-        "user",
-        "project"
-      ],
-      "sentinel_files": [
-        "hook-sentinel-original"
-      ],
-      "context_nonce_in_model_request": false,
-      "system_nonce_in_model_request": false,
-      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -881,9 +881,9 @@
       "sentinel_files": [
         "hook-sentinel-original"
       ],
+      "deny_reason_quoted": false,
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
-      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -919,9 +919,9 @@
       "sentinel_files": [
         "hook-sentinel-original"
       ],
+      "deny_reason_quoted": false,
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
-      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     },
     {
@@ -936,9 +936,9 @@
       "sentinel_files": [
         "hook-sentinel-original"
       ],
+      "deny_reason_quoted": false,
       "context_nonce_in_model_request": false,
       "system_nonce_in_model_request": false,
-      "deny_reason_quoted": false,
       "deny_reason_in_stdout": false
     }
   ]
