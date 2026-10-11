@@ -125,7 +125,13 @@ mod tests {
         serde_json::to_string(&SnapshotRef(snapshot)).unwrap()
     }
     fn decode(text: &str) -> Result<SessionSnapshot, StorageError> {
-        preflight_checkpoint(format!(r#"{{"snapshot":{text}}}"#).as_bytes())?;
+        preflight_checkpoint(
+            format!(
+                r#"{{"schemaVersion":{},"snapshot":{text}}}"#,
+                StorageError::SCHEMA_VERSION,
+            )
+            .as_bytes(),
+        )?;
         serde_json::from_str::<Snapshot>(text)
             .map_err(corrupt)?
             .decode()
@@ -133,7 +139,11 @@ mod tests {
     fn field(record: &ArtifactRecord, key: &str, value: serde_json::Value) -> String {
         let mut wire = serde_json::to_value(WireArtifact::from(record)).unwrap();
         wire[key] = value;
-        serde_json::json!({ "changes": [{ "Artifact": wire }] }).to_string()
+        serde_json::json!({
+            "schemaVersion": StorageError::SCHEMA_VERSION,
+            "changes": [{ "Artifact": wire }]
+        })
+        .to_string()
     }
 
     #[test]

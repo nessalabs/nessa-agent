@@ -609,6 +609,7 @@ mod tests {
                     invocations: vec![],
                     queue_history: vec![],
                     lease: None,
+                    artifacts: vec![],
                 },
                 vec![SessionSaveUnit::new(vec![SessionChange::Opened {
                     id: session.clone(),
@@ -638,6 +639,7 @@ mod tests {
                     invocations: vec![],
                     queue_history: vec![],
                     lease: None,
+                    artifacts: vec![],
                 },
                 vec![SessionSaveUnit::new(vec![SessionChange::ProviderContext {
                     before: ProviderContext::Absent,
