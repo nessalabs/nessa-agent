@@ -335,7 +335,7 @@ all; what a machine lets a gateway run on it is the machine's own fact, so
 it lives on the machine, in `<data>/environment/grants.json`:
 
 ```text
-nessa env grant [--peer ssh|PIN] (--agent NAME... | --all-agents) [--commands --max-timeout 10m]
+nessa env grant [--peer ssh|PIN] [--agent NAME... | --all-agents] [--commands --max-timeout 10m]
 nessa env ungrant [--peer ssh|PIN] (--agent NAME | --commands | --all)
 nessa env grants
 ```

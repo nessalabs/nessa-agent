@@ -97,7 +97,8 @@ impl FilePairingEnvironment {
             return Ok(None);
         }
         // No address: only what is saved here is read.
-        let pairing = Self::open(environment, "", clock)?;
+        let pairing = Self::open(environment, "", clock)
+            .map_err(|error| format!("{error}: name the peer with --peer"))?;
         let saved = pairing.saved().await;
         pairing.shutdown().await;
         match saved? {

@@ -341,6 +341,8 @@ nessa env ungrant --commands
 nessa env grants                                        # every entry, as JSON
 ```
 
+A second `--max-timeout` replaces the first, shorter or longer.
+
 `--peer ssh` changes what a gateway reaching this machine over SSH gets
 instead. Without an entry, SSH keeps everything the machine's `config.json`
 runs, so to narrow it run `nessa env ungrant --peer ssh --all` and then grant

@@ -316,7 +316,7 @@ fn env_grant_names_agents_or_every_agent_and_commands_with_their_longest_run() {
         assert!(parse(&args(&refused)).is_err(), "{refused:?}");
     }
     assert!(crate::cli::entrypoint::HELP.contains(
-        "nessa env grant [--peer ssh|PIN] (--agent NAME... | --all-agents) [--commands --max-timeout 10m]"
+        "nessa env grant [--peer ssh|PIN] [--agent NAME... | --all-agents] [--commands --max-timeout 10m]"
     ));
 }
 

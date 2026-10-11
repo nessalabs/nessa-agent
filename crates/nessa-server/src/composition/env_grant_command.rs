@@ -32,7 +32,8 @@ use nessa_sdk::domain::agent_execution::leases::CommandWork;
 use std::{io::Write, path::Path};
 
 /// `nessa env grant`: grant `peer` the `agents`, and commands of at most
-/// `max_timeout_ms` each, beside what it has now.
+/// `max_timeout_ms` each, beside the agents it has now. `max_timeout_ms`
+/// replaces the peer's longest command run, shorter or longer.
 ///
 /// # Errors
 /// The peer or an agent is not one, the timeout is out of bounds, or the
