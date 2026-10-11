@@ -6,8 +6,9 @@
 //! env enroll ADDRESS CODE ──▶ <data>/environment/pairing (FilePairingState)
 //!   ──▶ NativeEnrollmentClient (PeerEnvironment) ──▶ the gateway's listener
 //!   ──▶ pending until the owner approves this machine's key there
-//! env dial ADDRESS ──▶ compose, as env serve does (lock, ledger, launcher)
-//!   ──▶ ask the pairing's status until approved (the credential is saved)
+//! env dial ADDRESS ──▶ ask the pairing's status until approved (the
+//!   credential is saved) ──▶ let go of the pairing
+//!   ──▶ compose, as env serve does (lock, ledger, launcher)
 //!   ──▶ redial(dial, Composed::serve) until SIGINT or SIGTERM ──▶ finish
 //! ```
 //!
@@ -26,7 +27,7 @@ use crate::{
 };
 use nessa_auth::{
     adapters::pairing::{FilePairingState, ManualCode, NativeIdentity, OsEntropy},
-    application::pairing::ClientPendingStore,
+    application::pairing::{ClientPendingStore, PrivateStateError},
     domain::pairing::ConsentClass,
 };
 use nessa_client_core::pairing::{NativeClientError, NativeEnrollmentClient};
@@ -34,12 +35,15 @@ use nessa_protocol::{clock::Clock, pairing::wire::NativePairingStatus};
 use std::{
     future::Future,
     io::{self, Write},
-    net::{SocketAddr, TcpStream, ToSocketAddrs},
+    net::TcpStream,
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
 };
-use tokio::sync::watch;
+use tokio::{
+    io::{ReadHalf, WriteHalf},
+    sync::watch,
+};
 
 /// The pairing's directory, beneath `<data>/environment`.
 const PAIRING: &str = "pairing";
@@ -62,10 +66,17 @@ impl EnvironmentPairing {
         let root = environment.canonicalize().map_err(storage)?;
         nessa_local_storage::create_directory_beneath(&root, Path::new(PAIRING))
             .map_err(storage)?;
-        let store = Arc::new(
-            FilePairingState::open(&root, Path::new(PAIRING))
-                .map_err(|error| RunError::Agent(format!("{error:?}")))?,
-        );
+        let store =
+            Arc::new(
+                FilePairingState::open(&root, Path::new(PAIRING)).map_err(|error| match error {
+                    PrivateStateError::Locked => RunError::Agent(
+                        "another nessa env enroll or nessa env dial is using this machine's \
+                     pairing"
+                            .into(),
+                    ),
+                    other => RunError::Agent(format!("{other:?}")),
+                })?,
+            );
         let client =
             NativeEnrollmentClient::enrolling(ConsentClass::PeerEnvironment, store.clone(), clock);
         Ok(Self {
@@ -104,13 +115,13 @@ impl EnvironmentPairing {
         Connected: Future<Output = io::Result<TcpStream>>,
     {
         let mut said = false;
-        let mut active = false;
         loop {
-            if let Some(saved) = self
-                .store
-                .load_credential()
-                .map_err(|error| RunError::Agent(format!("{error:?}")))?
-            {
+            let store = self.store.clone();
+            let saved = tokio::task::spawn_blocking(move || store.load_credential())
+                .await
+                .map_err(|error| RunError::Agent(error.to_string()))?
+                .map_err(|error| RunError::Agent(format!("{error:?}")))?;
+            if let Some(saved) = saved {
                 let (key, pin, _) = saved.into_enrollment().into_parts();
                 let identity = NativeIdentity::restore(key)
                     .map_err(|error| RunError::Agent(format!("{error:?}")))?;
@@ -118,20 +129,22 @@ impl EnvironmentPairing {
             }
             match connect().await {
                 Err(error) => tracing::warn!(%error, "the gateway could not be reached"),
-                // Active saves the credential, which the next turn reads.
                 Ok(stream) => match self.client.status(stream, None).await {
-                    Ok(NativePairingStatus::Unclaimed { .. }) => {
-                        return Err(RunError::Agent(format!(
-                            "the pairing ended without being approved; remove {} and \
-                             enroll again with a new code",
-                            self.directory.display()
-                        )))
+                    // Reading either status ends the enrollment here, so a
+                    // new code enrolls again at once.
+                    Ok(
+                        NativePairingStatus::Unclaimed { .. }
+                        | NativePairingStatus::Terminal { .. },
+                    ) => {
+                        return Err(RunError::Agent(
+                            "the gateway ended this pairing without approving it (denied, \
+                             cancelled or expired): run nessa env enroll with a new code"
+                                .into(),
+                        ))
                     }
-                    // Read at once, unless it was not saved the last time.
-                    Ok(NativePairingStatus::Active { .. }) if !active => {
-                        active = true;
-                        continue;
-                    }
+                    // Active is read only once the credential is saved:
+                    // the top of the loop returns it.
+                    Ok(NativePairingStatus::Active { .. }) => continue,
                     Ok(_) if !said => {
                         said = true;
                         tracing::info!("waiting for the owner to approve this machine");
@@ -156,7 +169,11 @@ impl EnvironmentPairing {
 
     fn enroll_error(&self, error: NativeClientError) -> RunError {
         RunError::Agent(match error {
-            NativeClientError::Enrolled => "this machine is already paired".into(),
+            NativeClientError::Enrolled => format!(
+                "this machine is already paired: run nessa env dial, or remove {} to pair \
+                 again",
+                self.directory.display()
+            ),
             NativeClientError::PendingExists => format!(
                 "this machine has a pairing waiting for approval: run nessa env dial, or \
                  remove {} to start over",
@@ -182,9 +199,9 @@ impl EnvironmentPairing {
 pub(super) async fn enroll(address: &str, code: &str) -> Result<(), RunError> {
     let code = ManualCode::parse(code.as_bytes())
         .map_err(|_| RunError::Agent("that is not a pairing code".into()))?;
-    let gateway = resolve(address)?;
+    check_address(address)?;
     let pairing = EnvironmentPairing::open(&environment_directory()?, clock())?;
-    let enrolled = match TcpStream::connect_timeout(&gateway, CONNECT) {
+    let enrolled = match connect(address).await {
         Ok(stream) => pairing.enroll(stream, code).await,
         Err(error) => Err(RunError::Agent(format!("{address}: {error}"))),
     };
@@ -197,50 +214,63 @@ pub(super) async fn enroll(address: &str, code: &str) -> Result<(), RunError> {
     Ok(())
 }
 
-/// `nessa env dial ADDRESS`: serve the gateway at `address` over
-/// connections this machine dials, until SIGINT or SIGTERM.
+/// `nessa env dial ADDRESS`: once the owner has approved this machine,
+/// serve the gateway at `address` over connections this machine dials,
+/// until SIGINT or SIGTERM.
+///
+/// The name is looked up on every connection, not here: started at boot,
+/// before names resolve, it keeps trying.
 ///
 /// # Errors
-/// This host cannot serve, is not paired, or its pairing cannot dial.
+/// The address is not `HOST:PORT`, this machine is not paired, this host
+/// cannot serve, or its pairing cannot dial.
 pub(super) async fn dial_in(address: &str) -> Result<(), RunError> {
-    resolve(address)?;
-    let composed = compose().await.map_err(|(_, failure)| failure)?;
+    check_address(address)?;
     let (stop, stopping) = watch::channel(false);
     let signals = tokio::spawn(stop_on_signal(stop));
-    let served = serve_dialing(&composed, address, stopping).await;
+    let served = approved_then_served(address, stopping).await;
     signals.abort();
+    served
+}
+
+/// Composed only once approved, so an unpaired machine says so at once and
+/// `env serve` is not locked out while the owner decides.
+async fn approved_then_served(
+    address: &str,
+    stopping: watch::Receiver<bool>,
+) -> Result<(), RunError> {
+    let Some((identity, pin)) = approval(address, &stopping).await? else {
+        return Ok(());
+    };
+    tracing::info!(%address, "approved; serving the gateway");
+    let composed = compose().await.map_err(|(_, failure)| failure)?;
+    let served = serve_dialing(&composed, address, identity, pin, stopping).await;
     composed.finish().await;
     served
+}
+
+/// This machine's key and the gateway's pin, or `None` when stop was asked
+/// first. The pairing, and its directory's lock, is let go either way.
+async fn approval(
+    address: &str,
+    stopping: &watch::Receiver<bool>,
+) -> Result<Option<(Arc<NativeIdentity>, [u8; 44])>, RunError> {
+    let pairing = EnvironmentPairing::open(&environment_directory()?, clock())?;
+    let approved = tokio::select! {
+        approved = pairing.approved(|| connect(address), APPROVAL_POLL) => Some(approved),
+        () = stopped(stopping.clone()) => None,
+    };
+    pairing.shutdown().await;
+    approved.transpose()
 }
 
 async fn serve_dialing(
     composed: &Composed,
     address: &str,
+    identity: Arc<NativeIdentity>,
+    pin: [u8; 44],
     stopping: watch::Receiver<bool>,
 ) -> Result<(), RunError> {
-    let pairing = EnvironmentPairing::open(&environment_directory()?, clock())?;
-    let connect = || {
-        let address = address.to_owned();
-        async move {
-            tokio::task::spawn_blocking(move || {
-                let gateway =
-                    resolve(&address).map_err(|error| io::Error::other(error.to_string()))?;
-                TcpStream::connect_timeout(&gateway, CONNECT)
-            })
-            .await
-            .map_err(io::Error::other)?
-        }
-    };
-    let approved = tokio::select! {
-        approved = pairing.approved(connect, APPROVAL_POLL) => approved,
-        _ = stopped(stopping.clone()) => {
-            pairing.shutdown().await;
-            return Ok(());
-        }
-    };
-    pairing.shutdown().await;
-    let (identity, pin) = approved?;
-    tracing::info!(%address, "approved; serving the gateway");
     redial(
         || {
             let identity = identity.clone();
@@ -253,7 +283,11 @@ async fn serve_dialing(
                 dial(gateway, identity, pin, clock()).await
             }
         },
-        |stream, stopping| serve_until_stopped(composed, stream, stopping),
+        |stream, stopping| {
+            serve_until_stopped(stream, stopping, |input, output| {
+                composed.serve(input, output)
+            })
+        },
         Backoff::default(),
         stopping,
     )
@@ -261,20 +295,23 @@ async fn serve_dialing(
     .map_err(|error| RunError::Agent(format!("{address}: {error}")))
 }
 
-/// Serve one dialed connection; closing it once stop is asked, so its
-/// leases end as they do when a gateway goes away.
-async fn serve_until_stopped(
-    composed: &Composed,
+/// Serve one dialed connection with `serve`, closing it once stop is asked
+/// so its leases end as they do when a gateway goes away.
+pub(super) async fn serve_until_stopped<Serve, Served>(
     stream: TlsStream,
     stopping: watch::Receiver<bool>,
-) {
+    serve: Serve,
+) where
+    Serve: FnOnce(ReadHalf<TlsStream>, WriteHalf<TlsStream>) -> Served,
+    Served: Future<Output = ()>,
+{
     let closer = stream.closer();
     let closing = tokio::spawn(async move {
         stopped(stopping).await;
         closer.close();
     });
     let (input, output) = tokio::io::split(stream);
-    composed.serve(input, output).await;
+    serve(input, output).await;
     closing.abort();
 }
 
@@ -284,6 +321,8 @@ async fn stopped(mut stopping: watch::Receiver<bool>) {
     }
 }
 
+/// The first SIGINT or SIGTERM asks stop; a second, while stopping drains,
+/// exits at once.
 async fn stop_on_signal(stop: watch::Sender<bool>) {
     use tokio::signal::unix::{signal, SignalKind};
     let (Ok(mut interrupt), Ok(mut terminate)) = (
@@ -298,14 +337,37 @@ async fn stop_on_signal(stop: watch::Sender<bool>) {
         _ = terminate.recv() => {}
     }
     let _ = stop.send(true);
+    tokio::select! {
+        _ = interrupt.recv() => {}
+        _ = terminate.recv() => {}
+    }
+    tracing::warn!("asked again while stopping: exiting now");
+    std::process::exit(130);
 }
 
-fn resolve(address: &str) -> Result<SocketAddr, RunError> {
-    address
-        .to_socket_addrs()
-        .map_err(|error| RunError::Agent(format!("{address}: {error}")))?
-        .next()
-        .ok_or_else(|| RunError::Agent(format!("{address}: no address")))
+/// `address` has the form `HOST:PORT`; the name is not looked up.
+fn check_address(address: &str) -> Result<(), RunError> {
+    let fits = address.rsplit_once(':').is_some_and(|(host, port)| {
+        !host.is_empty() && port.parse::<u16>().is_ok_and(|port| port != 0)
+    });
+    if fits {
+        Ok(())
+    } else {
+        Err(RunError::Agent(format!(
+            "{address}: give the gateway as HOST:PORT"
+        )))
+    }
+}
+
+/// A blocking stream to the gateway for the pairing client, connected
+/// without blocking the runtime.
+async fn connect(address: &str) -> io::Result<TcpStream> {
+    let stream = tokio::time::timeout(CONNECT, tokio::net::TcpStream::connect(address))
+        .await
+        .map_err(|_| io::Error::from(io::ErrorKind::TimedOut))??
+        .into_std()?;
+    stream.set_nonblocking(false)?;
+    Ok(stream)
 }
 
 fn clock() -> Arc<dyn Clock> {
