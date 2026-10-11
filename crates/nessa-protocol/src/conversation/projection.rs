@@ -85,7 +85,12 @@ pub fn lease_view(current: &CurrentLease) -> ConversationLeaseView {
                     ConversationLeaseRefusal::EnvironmentVersionMismatch
                 }
                 LeaseRefusal::EnvironmentBusy => ConversationLeaseRefusal::EnvironmentBusy,
-                LeaseRefusal::AgentUnavailable => ConversationLeaseRefusal::AgentUnavailable,
+                // Not granted there is, to a person, the environment not
+                // running this agent for this gateway: the product contract
+                // has no spelling of its own for it.
+                LeaseRefusal::AgentUnavailable | LeaseRefusal::EnvironmentNotGranted => {
+                    ConversationLeaseRefusal::AgentUnavailable
+                }
                 LeaseRefusal::EnvironmentPlatformUnsupported => {
                     ConversationLeaseRefusal::EnvironmentPlatformUnsupported
                 }

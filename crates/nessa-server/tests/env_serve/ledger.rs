@@ -1,10 +1,12 @@
 //! The host's lease audit on disk: what accounting answers from it.
 use super::*;
+use nessa_protocol::lease::Sandbox;
 
 fn granted(lease: &str) -> LedgerEntry {
     LedgerEntry::Granted {
         lease: lease.into(),
         agent: "claude".into(),
+        sandbox: Sandbox::HarnessDefault,
     }
 }
 

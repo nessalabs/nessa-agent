@@ -6,7 +6,10 @@
 //! run(conversation, call) ──▶ the running turn? ── no ──▶ NoTurn, nothing recorded
 //!   ──▶ the command's policy, sandbox and budget ── refused ──▶ CommandRefused
 //!   ──▶ CommandEnvironment::grant ── refused ──▶ CommandRefused
-//!   ──▶ CommandIssued (the turn's person, this call) ── unsaved ──▶ the hold dropped
+//!   ──▶ the terms granted within those asked? ── no ──▶ the hold dropped,
+//!       CommandRefused(environment not granted)
+//!   ──▶ CommandIssued with the terms granted (the turn's person, this call)
+//!       ── unsaved ──▶ the hold dropped
 //!   ──▶ CommandHold::run(stop) ──▶ CommandEnded{exit, output, cleanup}
 //! ```
 //!
@@ -16,8 +19,13 @@
 //! with the tool call as its request. A command is bounded by its tool call:
 //! the caller going away, or the agent's lease ending, stops it (row L15),
 //! and what it printed is kept as evidence under its record's bound.
+//!
+//! What is recorded issued is what the environment granted, never what was
+//! asked (row L1): its timeout may be shorter than asked, under the
+//! environment owner's own policy. An answer granting more — a longer
+//! timeout, another sandbox — is never run.
 use super::{ConversationError, ConversationService, LiveConversation};
-use crate::conversation::application::{CommandResult, Environment};
+use crate::conversation::application::{CommandResult, Environment, GrantedTerms};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::application::agent_execution::{
     permissions::ActionContext,
@@ -217,10 +225,23 @@ impl ConversationService {
                 .refuse(&live, &refused, CommandRefusal::CommandsUnavailable)
                 .await;
         };
-        let hold = match commands.grant(&lease, &work).await {
-            Ok(hold) => hold,
+        let granted = match commands.grant(&lease, &work).await {
+            Ok(granted) => granted,
             Err(refusal) => return self.refuse(&live, &refused, refusal).await,
         };
+        let Some(terms) = granted_terms(&terms, granted.granted) else {
+            tracing::warn!(
+                conversation_id = %id,
+                lease = lease.as_str(),
+                granted = ?granted.granted,
+                "the environment granted a command other terms than asked; it does not run"
+            );
+            drop(granted.hold);
+            return self
+                .refuse(&live, &refused, CommandRefusal::EnvironmentNotGranted)
+                .await;
+        };
+        let hold = granted.hold;
         // Recorded under the lock as granted, or refused if the lease filled
         // or ended meanwhile: either way the hold goes when not run.
         let issued = LeaseRecord::CommandIssued {
@@ -444,6 +465,28 @@ impl ConversationService {
         let slot = self.inner.conversations.lock().await.get(id).cloned()?;
         slot.value.get()?.as_ref().ok().cloned()
     }
+}
+
+/// The terms to record for a command asked as `asked` whose environment
+/// granted `granted`: the same command and sandbox, with the timeout it
+/// granted, no longer than asked. `None` for any other answer.
+fn granted_terms(asked: &CommandTerms, granted: GrantedTerms) -> Option<CommandTerms> {
+    let timeout_ms = granted
+        .timeout_ms
+        .filter(|granted| *granted <= asked.command.timeout_ms())?;
+    if granted.sandbox != asked.sandbox {
+        return None;
+    }
+    let command = CommandWork::new(
+        asked.command.argv().iter().map(|a| a.to_string()).collect(),
+        asked.command.cwd().map(Into::into),
+        timeout_ms,
+    )
+    .ok()?;
+    Some(CommandTerms {
+        command,
+        ..asked.clone()
+    })
 }
 
 /// What a refused command's record names.

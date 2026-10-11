@@ -164,8 +164,8 @@ pub use catalogue_read::{
     CatalogueReadSource, CatalogueReadValue, ReadCatalogue,
 };
 // The port itself, which placement and the service use on every host.
-pub(crate) use command_environment::CommandEnvironment;
 pub use command_environment::CommandResult;
+pub(crate) use command_environment::{CommandEnvironment, GrantedCommand};
 // Held by the SSH adapter, which is Unix only, and by tests.
 #[cfg_attr(not(any(unix, test)), allow(unused_imports))]
 pub(crate) use command_environment::CommandHold;
@@ -177,7 +177,9 @@ pub use artifacts::{
 };
 pub(crate) use artifacts::{ArtifactBudget, ArtifactCollector};
 #[cfg(any(unix, test))]
-pub(crate) use environment::{EnvironmentDeclaration, EnvironmentLease, LeaseHold, LeaseRelease};
+pub(crate) use environment::{
+    EnvironmentDeclaration, EnvironmentLease, GrantedTerms, LeaseHold, LeaseRelease,
+};
 pub use error::{ConversationError, DeletionFailures, StopFailure};
 pub use error_code::error_code;
 pub use live_changes::{LiveChangePublisher, LiveChanges};

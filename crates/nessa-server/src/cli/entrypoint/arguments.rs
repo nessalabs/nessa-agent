@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use crate::agent_install::domain::AgentName;
 
-pub const HELP: &str = "Nessa\n\n  nessa server [--provision-local]\n  nessa auth init --local [--owner-token-file PATH]\n  nessa auth token [--local] [--ttl 12h|7d|30m|60s | --no-expiry] [--credential-file PATH]\n  nessa doctor [--local] [--credential-file PATH]\n  nessa install-agent NAME\n  nessa limits [--json]\n  nessa env serve\n  nessa env enroll ADDRESS CODE\n  nessa env dial ADDRESS\n  nessa env protocol\n  nessa artifact publish PATH [--type MEDIA/TYPE]\n  nessa auth provision-surface --local --surface-id NAME [--grants ACTIONS]\n  nessa auth recover-owner --local --owner-token-file PATH\n\ninstall-agent downloads the release of an agent's own runtime that Nessa has\ntested, verifies it against a compiled-in digest, and reports what it installed\nas JSON on stdout. Installing one already present downloads nothing.\n\n`env serve` is the environment role a gateway starts over SSH, from the copy of\nits own build it installs under ~/.nessa/env on first use: it speaks lease frames on stdin and stdout and runs the agent\nharnesses this host's own config.json configures. Not for people.\n`env enroll` pairs this machine with the gateway at ADDRESS (host:port of its\nnative listener) as an environment, with the code of an environment invitation\nthe owner created there; the owner then approves it. `env dial` serves that\ngateway's leases over connections this machine dials, waiting for the\napproval first and dialing again whenever a connection ends, until stopped.\n`env protocol` prints the lease protocol this build speaks, which a gateway\nchecks a copy it installs on a host against before putting it in place.\n\n`artifact publish` attaches a file in the workspace to the conversation whose\nagent runs it, from a host serving `env serve`: the gateway receives it by\ndigest and verifies it. It prints the outcome as JSON on stdout.\n\n`limits` and `limits --json` print the effective operational limits as JSON\non stdout. A missing config file prints the defaults. An unusable config\nfile prints nothing and fails.\n\nLocal is the current backend. Cloud auth is not implemented.\n`server --provision-local` creates the owner and panel credentials of the selected\nnamespace when they are absent, then serves; it never replaces existing ones.\nWithout it, `nessa server` only serves what the offline auth commands provisioned.\nNESSA_HOST, NESSA_PORT, NESSA_STAGE, NESSA_DATA_DIR and NESSA_INSTANCE select the local gateway.\nToken defaults to no expiry (capped by issuer expiry) and prints only the secret to stdout; pipe it to pbcopy.\n";
+pub const HELP: &str = "Nessa\n\n  nessa server [--provision-local]\n  nessa auth init --local [--owner-token-file PATH]\n  nessa auth token [--local] [--ttl 12h|7d|30m|60s | --no-expiry] [--credential-file PATH]\n  nessa doctor [--local] [--credential-file PATH]\n  nessa install-agent NAME\n  nessa limits [--json]\n  nessa env serve\n  nessa env enroll ADDRESS CODE\n  nessa env dial ADDRESS\n  nessa env grant [--peer ssh|PIN] (--agent NAME... | --all-agents) [--commands --max-timeout 10m]\n  nessa env ungrant [--peer ssh|PIN] (--agent NAME | --commands | --all)\n  nessa env grants\n  nessa env protocol\n  nessa artifact publish PATH [--type MEDIA/TYPE]\n  nessa auth provision-surface --local --surface-id NAME [--grants ACTIONS]\n  nessa auth recover-owner --local --owner-token-file PATH\n\ninstall-agent downloads the release of an agent's own runtime that Nessa has\ntested, verifies it against a compiled-in digest, and reports what it installed\nas JSON on stdout. Installing one already present downloads nothing.\n\n`env serve` is the environment role a gateway starts over SSH, from the copy of\nits own build it installs under ~/.nessa/env on first use: it speaks lease frames on stdin and stdout and runs the agent\nharnesses this host's own config.json configures. Not for people.\n`env enroll` pairs this machine with the gateway at ADDRESS (host:port of its\nnative listener) as an environment, with the code of an environment invitation\nthe owner created there; the owner then approves it. `env dial` serves that\ngateway's leases over connections this machine dials, waiting for the\napproval first and dialing again whenever a connection ends, until stopped.\n`env grant` and `env ungrant` change what this machine's owner grants one\ngateway: `ssh` (whoever runs env serve over SSH) or a dialed gateway by its\npin, by default the gateway this machine is paired with, else `ssh`. Without\nan entry, `ssh` is granted everything this host runs and a dialed gateway\nnothing; a grant only narrows what config.json lets this host run. A change\napplies from the next lease; leases already running go on. `env grants`\nprints every entry as JSON on stdout.\n`env protocol` prints the lease protocol this build speaks, which a gateway\nchecks a copy it installs on a host against before putting it in place.\n\n`artifact publish` attaches a file in the workspace to the conversation whose\nagent runs it, from a host serving `env serve`: the gateway receives it by\ndigest and verifies it. It prints the outcome as JSON on stdout.\n\n`limits` and `limits --json` print the effective operational limits as JSON\non stdout. A missing config file prints the defaults. An unusable config\nfile prints nothing and fails.\n\nLocal is the current backend. Cloud auth is not implemented.\n`server --provision-local` creates the owner and panel credentials of the selected\nnamespace when they are absent, then serves; it never replaces existing ones.\nWithout it, `nessa server` only serves what the offline auth commands provisioned.\nNESSA_HOST, NESSA_PORT, NESSA_STAGE, NESSA_DATA_DIR and NESSA_INSTANCE select the local gateway.\nToken defaults to no expiry (capped by issuer expiry) and prints only the secret to stdout; pipe it to pbcopy.\n";
 
 /// Whether a serving process may create the local credentials it needs.
 ///
@@ -60,6 +60,23 @@ pub enum Command {
         /// The gateway's native listener, `host:port`.
         address: String,
     },
+    /// Grant a gateway leases on this machine, as its owner (#706).
+    EnvGrant {
+        /// `ssh` or a gateway's pin; `None` for the default.
+        peer: Option<String>,
+        /// The agents granted, if any are.
+        agents: Option<GrantedAgents>,
+        /// Commands granted, at most this long each, if they are.
+        max_timeout_ms: Option<u64>,
+    },
+    /// Take a grant back from a gateway, from its next lease (#706).
+    EnvUngrant {
+        /// `ssh` or a gateway's pin; `None` for the default.
+        peer: Option<String>,
+        what: Ungranted,
+    },
+    /// Print what this machine's owner grants each gateway, as JSON (#706).
+    EnvGrants,
     /// Print the lease protocol this build speaks: how a gateway checks a
     /// copy of itself it installs on a host before putting it in place (#703).
     EnvProtocol,
@@ -84,6 +101,26 @@ pub enum Command {
     },
 }
 
+/// The agents `env grant` grants.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GrantedAgents {
+    /// Every agent this host runs.
+    All,
+    /// These, by name, as given.
+    Named(Vec<String>),
+}
+
+/// What `env ungrant` takes back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Ungranted {
+    /// One agent, by name.
+    Agent(String),
+    /// Commands.
+    Commands,
+    /// Everything.
+    All,
+}
+
 pub fn parse(args: &[String]) -> Result<Command, String> {
     if args.is_empty() || args == ["--help"] || args == ["-h"] {
         return Ok(Command::Help);
@@ -96,6 +133,17 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
     }
     if args == ["env", "protocol"] {
         return Ok(Command::EnvProtocol);
+    }
+    if args == ["env", "grants"] {
+        return Ok(Command::EnvGrants);
+    }
+    if let [env, verb, rest @ ..] = args {
+        if env == "env" && verb == "grant" {
+            return grant(rest);
+        }
+        if env == "env" && verb == "ungrant" {
+            return ungrant(rest);
+        }
     }
     if let [env, verb, rest @ ..] = args {
         if env == "env" && verb == "enroll" {
@@ -264,4 +312,98 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
     } else {
         Command::Doctor { credential_file }
     })
+}
+
+/// `env grant`'s words after the verb.
+fn grant(words: &[String]) -> Result<Command, String> {
+    const USAGE: &str = "env grant takes --agent NAME (repeated) or --all-agents, and \
+                         --commands with --max-timeout DURATION, and an optional --peer";
+    let mut peer = None;
+    let mut named = Vec::new();
+    let mut all = false;
+    let mut commands = false;
+    let mut max_timeout_ms = None;
+    let mut words = words.iter();
+    while let Some(word) = words.next() {
+        match word.as_str() {
+            "--peer" if peer.is_none() => peer = Some(value(words.next(), USAGE)?),
+            "--agent" => named.push(value(words.next(), USAGE)?),
+            "--all-agents" if !all => all = true,
+            "--commands" if !commands => commands = true,
+            "--max-timeout" if max_timeout_ms.is_none() => {
+                max_timeout_ms = Some(duration_ms(&value(words.next(), USAGE)?)?);
+            }
+            _ => return Err(USAGE.into()),
+        }
+    }
+    let agents = match (all, named.is_empty()) {
+        (true, true) => Some(GrantedAgents::All),
+        (false, false) => Some(GrantedAgents::Named(named)),
+        (false, true) => None,
+        (true, false) => return Err("env grant takes --agent or --all-agents, not both".into()),
+    };
+    if commands != max_timeout_ms.is_some() || (agents.is_none() && !commands) {
+        return Err(USAGE.into());
+    }
+    Ok(Command::EnvGrant {
+        peer,
+        agents,
+        max_timeout_ms,
+    })
+}
+
+/// `env ungrant`'s words after the verb.
+fn ungrant(words: &[String]) -> Result<Command, String> {
+    const USAGE: &str =
+        "env ungrant takes one of --agent NAME, --commands or --all, and an optional --peer";
+    let mut peer = None;
+    let mut what = None;
+    let mut words = words.iter();
+    while let Some(word) = words.next() {
+        let taken = match word.as_str() {
+            "--peer" if peer.is_none() => {
+                peer = Some(value(words.next(), USAGE)?);
+                continue;
+            }
+            "--agent" => Ungranted::Agent(value(words.next(), USAGE)?),
+            "--commands" => Ungranted::Commands,
+            "--all" => Ungranted::All,
+            _ => return Err(USAGE.into()),
+        };
+        if what.replace(taken).is_some() {
+            return Err(USAGE.into());
+        }
+    }
+    let what = what.ok_or(USAGE)?;
+    Ok(Command::EnvUngrant { peer, what })
+}
+
+/// A flag's value: present, and not another flag.
+fn value(word: Option<&String>, usage: &str) -> Result<String, String> {
+    word.filter(|word| !word.starts_with('-'))
+        .cloned()
+        .ok_or_else(|| usage.to_owned())
+}
+
+/// A positive whole number of seconds, minutes or hours (`90s`, `10m`,
+/// `1h`), in milliseconds.
+fn duration_ms(text: &str) -> Result<u64, String> {
+    let invalid = || format!("{text}: give a duration such as 90s, 10m or 1h");
+    let split = text.len().checked_sub(1).ok_or_else(invalid)?;
+    let (number, unit) = text.split_at_checked(split).ok_or_else(invalid)?;
+    let factor = match unit {
+        "s" => 1_000,
+        "m" => 60_000,
+        "h" => 3_600_000,
+        _ => return Err(invalid()),
+    };
+    if number.is_empty() || !number.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(invalid());
+    }
+    number
+        .parse::<u64>()
+        .ok()
+        .and_then(|number| number.checked_mul(factor))
+        .filter(|ms| *ms > 0)
+        .ok_or_else(invalid)
 }

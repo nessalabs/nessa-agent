@@ -82,6 +82,35 @@ impl FilePairingEnvironment {
         })
     }
 
+    /// The pin of the gateway this machine is paired with, once its owner
+    /// approved it; `None` when nothing was ever paired here. Nothing is
+    /// asked of the gateway, and nothing is made when there is no pairing.
+    ///
+    /// # Errors
+    /// A pairing still waiting for approval, or one that cannot be read; the
+    /// message says which.
+    pub(crate) async fn approved_gateway(
+        environment: &Path,
+        clock: Arc<dyn Clock>,
+    ) -> Result<Option<[u8; 44]>, String> {
+        if !environment.join(PAIRING).exists() {
+            return Ok(None);
+        }
+        // No address: only what is saved here is read.
+        let pairing = Self::open(environment, "", clock)?;
+        let saved = pairing.saved().await;
+        pairing.shutdown().await;
+        match saved? {
+            Saved::Approved((_, pin)) => Ok(Some(pin)),
+            Saved::Nothing => Ok(None),
+            Saved::Pending => Err(
+                "this machine's pairing is waiting for its owner's approval: name the peer \
+                 with --peer"
+                    .into(),
+            ),
+        }
+    }
+
     /// Pair with the gateway using the owner's `code`.
     ///
     /// # Errors

@@ -329,6 +329,26 @@ as "Paired machine" plus the first eight characters of its key, and is named
 connection ends, waiting up to a minute between tries, and stops on Ctrl-C
 or SIGTERM. Revoking its credential stops the next lease it is given.
 
+A machine that dials in runs nothing for the gateway until you grant it, on
+that machine. Grants are kept in `environment/grants.json` beside its
+pairing and read again for every lease, so a change applies from the next
+one:
+
+```sh
+nessa env grant --agent claude                          # the gateway this machine paired with
+nessa env grant --commands --max-timeout 10m            # commands, each cut to at most 10 minutes
+nessa env ungrant --commands
+nessa env grants                                        # every entry, as JSON
+```
+
+`--peer ssh` changes what a gateway reaching this machine over SSH gets
+instead. Without an entry, SSH keeps everything the machine's `config.json`
+runs, so to narrow it run `nessa env ungrant --peer ssh --all` and then grant
+what it keeps. A grant only narrows: `config.json` still decides what the
+machine runs at all, and `envServe.commands` must be on for any command. A
+lease the machine did not grant is shown as the environment being
+unavailable, and the `run` tool answers `environment_not_granted`.
+
 To let the agent run single commands on a host with its `run` tool (beside
 `environments_list`), name the host in `environmentTools.commandHosts` on the
 gateway, and on the host itself set `envServe.commands` in its `config.json`.

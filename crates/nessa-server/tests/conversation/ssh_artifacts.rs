@@ -24,8 +24,10 @@ use crate::conversation::application::{
 };
 use crate::env::{LEASE_PROTOCOL, VERSION};
 use crate::env_serve::application::{
-    serve, HarnessLauncher, PublishAnswer, PublishRefusal, PublishRequest, Runners, ServeTimings,
+    serve, HarnessLauncher, PeerGrants, PublishAnswer, PublishRefusal, PublishRequest, Runners,
+    ServeTimings, Serving,
 };
+use crate::env_serve::domain::{Peer, PeerGrant};
 use crate::env_serve::infrastructure::{FileLedger, FileOutbox};
 use crate::env_serve::install::Platform;
 use nessa_protocol::lease::{Collection, CollectionRefusal};
@@ -40,7 +42,7 @@ use nessa_sdk::application::agent_execution::{
 use nessa_sdk::domain::{
     agent_execution::leases::{
         AgentWork, EnvironmentRef, LeaseDeadline, LeaseEndCause, LeaseGrants, LeaseId, LeaseTerms,
-        LeaseWork, SandboxProfile, SshDestination,
+        LeaseWork, SandboxProfile, SandboxProfiles, SshDestination,
     },
     effective_capabilities::value_objects::EffectiveCapabilities,
 };
@@ -85,6 +87,9 @@ impl HarnessLauncher for Publisher {
     }
     fn runs(&self, _agent: &str) -> bool {
         true
+    }
+    fn sandboxes(&self) -> SandboxProfiles {
+        SandboxProfiles::HARNESS_DEFAULT
     }
     fn launch(
         &self,
@@ -293,6 +298,14 @@ fn no_install() -> Arc<HostInstaller> {
     ))
 }
 
+/// SSH with no grants kept: everything the host runs.
+struct NoGrants;
+impl PeerGrants for NoGrants {
+    fn entry(&self, _peer: &Peer) -> Result<Option<PeerGrant>, String> {
+        Ok(None)
+    }
+}
+
 struct Connector(Arc<Host>);
 impl LeaseConnector for Connector {
     fn connect(&self, _host: &SshDestination, _command: String) -> io::Result<LeaseConnection> {
@@ -313,6 +326,10 @@ impl LeaseConnector for Connector {
             host_out,
             VERSION,
             LEASE_PROTOCOL,
+            Serving {
+                peer: Peer::Ssh,
+                grants: Arc::new(NoGrants),
+            },
             Runners {
                 harnesses: host.launcher.clone(),
                 commands: None,

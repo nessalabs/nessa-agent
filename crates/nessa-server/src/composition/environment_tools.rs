@@ -283,7 +283,10 @@ fn refusal_code(refusal: CommandRefusal) -> &'static str {
             "environment_install_failed"
         }
         CommandRefusal::Environment(LeaseRefusal::AgentUnavailable) => "agent_unavailable",
-        CommandRefusal::EnvironmentNotGranted => "environment_not_granted",
+        CommandRefusal::EnvironmentNotGranted
+        | CommandRefusal::Environment(LeaseRefusal::EnvironmentNotGranted) => {
+            "environment_not_granted"
+        }
         CommandRefusal::CommandDenied => "command_denied",
         CommandRefusal::BudgetExceeded => "budget_exceeded",
         CommandRefusal::CommandsUnavailable => "commands_unavailable",
@@ -311,8 +314,10 @@ fn refusal_message(refusal: CommandRefusal) -> &'static str {
             "the host had no copy of Nessa, and installing one failed"
         }
         CommandRefusal::Environment(LeaseRefusal::AgentUnavailable) => "the host cannot run this",
-        CommandRefusal::EnvironmentNotGranted => {
-            "commands are not granted on that environment; see environments_list"
+        CommandRefusal::EnvironmentNotGranted
+        | CommandRefusal::Environment(LeaseRefusal::EnvironmentNotGranted) => {
+            "commands are not granted on that environment, by this gateway or by its owner \
+             there; see environments_list"
         }
         CommandRefusal::CommandDenied => "this gateway's tool policy does not allow that program",
         CommandRefusal::BudgetExceeded => {

@@ -1,6 +1,7 @@
 //! The environment role's frame loop, driven in process over a pipe: what it
 //! answers, what it records, and what it does when the gateway goes away.
 use super::*;
+use crate::env_serve::domain::{AgentName, Agents, CommandGrant};
 use nessa_sdk::application::agent_execution::providers::{CloseOutcome, HarnessCleanupFuture};
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -55,7 +56,10 @@ impl HarnessLauncher for EchoLauncher {
         "/work"
     }
     fn runs(&self, agent: &str) -> bool {
-        agent == "claude"
+        agent == "claude" || agent == "codex"
+    }
+    fn sandboxes(&self) -> SandboxProfiles {
+        SandboxProfiles::HARNESS_DEFAULT
     }
     fn launch(
         &self,
@@ -222,6 +226,54 @@ impl LeaseLedger for MemoryLedger {
     }
 }
 
+/// Grants as a test sets them: every peer's entry, or a failure to read.
+struct MemoryGrants {
+    entries: Mutex<Result<HashMap<Peer, PeerGrant>, String>>,
+}
+
+impl MemoryGrants {
+    fn none() -> Arc<Self> {
+        Arc::new(Self {
+            entries: Mutex::new(Ok(HashMap::new())),
+        })
+    }
+    fn set(&self, peer: Peer, grant: Option<PeerGrant>) {
+        let mut entries = self.entries.lock().unwrap();
+        let entries = entries.as_mut().unwrap();
+        match grant {
+            Some(grant) => entries.insert(peer, grant),
+            None => entries.remove(&peer),
+        };
+    }
+}
+
+impl PeerGrants for MemoryGrants {
+    fn entry(&self, peer: &Peer) -> Result<Option<PeerGrant>, String> {
+        self.entries
+            .lock()
+            .unwrap()
+            .clone()
+            .map(|entries| entries.get(peer).cloned())
+    }
+}
+
+/// A dialed gateway's peer, as the tests name it.
+const DIALED: Peer = Peer::Gateway { pin: [5; 44] };
+
+fn harness_terms() -> GrantedTerms {
+    GrantedTerms {
+        sandbox: Sandbox::HarnessDefault,
+        timeout_ms: None,
+    }
+}
+
+fn command_terms(timeout_ms: u64) -> GrantedTerms {
+    GrantedTerms {
+        sandbox: Sandbox::None,
+        timeout_ms: Some(timeout_ms),
+    }
+}
+
 struct Gateway {
     frames: FrameStream<ReadHalf<DuplexStream>>,
     writer: WriteHalf<DuplexStream>,
@@ -230,6 +282,7 @@ struct Gateway {
     stopped: Arc<AtomicUsize>,
     launcher: Arc<EchoLauncher>,
     commands: Arc<FakeCommands>,
+    grants: Arc<MemoryGrants>,
 }
 
 impl Gateway {
@@ -243,6 +296,22 @@ impl Gateway {
         Self::over(ledger, Arc::new(NoOutbox), runs_commands)
     }
     fn over(
+        ledger: Arc<MemoryLedger>,
+        outbox: Arc<dyn ArtifactOutbox>,
+        runs_commands: bool,
+    ) -> Self {
+        Self::for_peer(
+            Peer::Ssh,
+            MemoryGrants::none(),
+            ledger,
+            outbox,
+            runs_commands,
+        )
+    }
+    /// Serving `peer`, granted as `grants` say.
+    fn for_peer(
+        peer: Peer,
+        grants: Arc<MemoryGrants>,
         ledger: Arc<MemoryLedger>,
         outbox: Arc<dyn ArtifactOutbox>,
         runs_commands: bool,
@@ -265,6 +334,10 @@ impl Gateway {
             environment_out,
             "1.2.3",
             "protocol",
+            Serving {
+                peer,
+                grants: grants.clone(),
+            },
             Runners {
                 harnesses: launcher.clone(),
                 commands: runner,
@@ -286,6 +359,7 @@ impl Gateway {
             stopped,
             launcher,
             commands,
+            grants,
         }
     }
     async fn send(&mut self, frame: ToEnvironment) {
@@ -313,12 +387,14 @@ impl Gateway {
         self.send(ToEnvironment::Grant {
             lease: lease.into(),
             agent: "claude".into(),
+            sandbox: Sandbox::HarnessDefault,
         })
         .await;
         assert_eq!(
             self.next().await,
             FromEnvironment::Granted {
-                lease: lease.into()
+                lease: lease.into(),
+                terms: harness_terms(),
             }
         );
     }
@@ -393,6 +469,7 @@ async fn a_lease_runs_a_harness_and_its_end_is_answered_with_recorded_cleanup() 
             LedgerEntry::Granted {
                 lease: LEASE.into(),
                 agent: "claude".into(),
+                sandbox: Sandbox::HarnessDefault,
             },
             LedgerEntry::Started {
                 lease: LEASE.into(),
@@ -551,6 +628,7 @@ async fn account_answers_only_what_was_recorded() {
         LedgerEntry::Granted {
             lease: "ended".into(),
             agent: "claude".into(),
+            sandbox: Sandbox::HarnessDefault,
         },
         LedgerEntry::Ended {
             lease: "ended".into(),
@@ -560,6 +638,7 @@ async fn account_answers_only_what_was_recorded() {
         LedgerEntry::Granted {
             lease: "unfinished".into(),
             agent: "claude".into(),
+            sandbox: Sandbox::HarnessDefault,
         },
     ] {
         ledger.record(&entry).unwrap();
@@ -596,6 +675,7 @@ async fn grants_are_refused_with_their_reason() {
         .send(ToEnvironment::Grant {
             lease: LEASE.into(),
             agent: "opencode".into(),
+            sandbox: Sandbox::HarnessDefault,
         })
         .await;
     assert_eq!(
@@ -610,6 +690,7 @@ async fn grants_are_refused_with_their_reason() {
         .send(ToEnvironment::Grant {
             lease: LEASE.into(),
             agent: "claude".into(),
+            sandbox: Sandbox::HarnessDefault,
         })
         .await;
     assert_eq!(
@@ -635,6 +716,7 @@ async fn grants_are_refused_with_their_reason() {
             .send(ToEnvironment::Grant {
                 lease: LEASE.into(),
                 agent: "claude".into(),
+                sandbox: Sandbox::HarnessDefault,
             })
             .await;
         assert_eq!(
@@ -653,6 +735,7 @@ async fn grants_are_refused_with_their_reason() {
         .send(ToEnvironment::Grant {
             lease: "second".into(),
             agent: "claude".into(),
+            sandbox: Sandbox::HarnessDefault,
         })
         .await;
     assert_eq!(
@@ -662,6 +745,344 @@ async fn grants_are_refused_with_their_reason() {
             reason: GrantRefusal::AuditUnavailable,
         }
     );
+}
+
+fn claude_only() -> PeerGrant {
+    PeerGrant::new(
+        Agents::Named([AgentName::new("claude").unwrap()].into()),
+        None,
+    )
+}
+
+/// Row I4: a dialed gateway the owner granted nothing is refused every
+/// lease `not_granted`, recorded, and nothing starts or runs for it.
+#[tokio::test]
+async fn i4_a_dialed_gateway_without_a_grant_is_refused_and_nothing_runs() {
+    let mut gateway = Gateway::for_peer(
+        DIALED,
+        MemoryGrants::none(),
+        Arc::new(MemoryLedger::default()),
+        Arc::new(NoOutbox),
+        true,
+    );
+    assert_eq!(gateway.next().await, hello());
+    gateway
+        .send(ToEnvironment::Grant {
+            lease: LEASE.into(),
+            agent: "claude".into(),
+            sandbox: Sandbox::HarnessDefault,
+        })
+        .await;
+    assert_eq!(
+        gateway.next().await,
+        FromEnvironment::Refused {
+            lease: LEASE.into(),
+            reason: GrantRefusal::NotGranted,
+        }
+    );
+    gateway
+        .send(grant_command(COMMAND, &["echo", "a"], None))
+        .await;
+    assert_eq!(
+        gateway.next().await,
+        FromEnvironment::Refused {
+            lease: COMMAND.into(),
+            reason: GrantRefusal::NotGranted,
+        }
+    );
+    gateway
+        .send(ToEnvironment::Start {
+            lease: LEASE.into(),
+            channel: 1,
+            environment: BTreeMap::new(),
+        })
+        .await;
+    assert_eq!(
+        gateway.next().await,
+        FromEnvironment::StartFailed {
+            lease: LEASE.into(),
+            channel: 1,
+            reason: StartFailure::NotGranted,
+        }
+    );
+    gateway
+        .send(ToEnvironment::Run {
+            lease: COMMAND.into(),
+        })
+        .await;
+    assert!(matches!(
+        gateway.next().await,
+        FromEnvironment::Ran {
+            end: CommandEnd::NotStarted,
+            ..
+        }
+    ));
+    assert!(gateway.launcher.launched.lock().unwrap().is_empty());
+    assert!(gateway.commands.ran.lock().unwrap().is_empty());
+    assert_eq!(
+        gateway.ledger.entries()[..2],
+        [
+            LedgerEntry::Refused {
+                lease: LEASE.into(),
+                reason: GrantRefusal::NotGranted,
+            },
+            LedgerEntry::Refused {
+                lease: COMMAND.into(),
+                reason: GrantRefusal::NotGranted,
+            },
+        ]
+    );
+}
+
+/// Row I6: a grant is read at every lease, so an ungrant refuses the next
+/// lease while the lease already running goes on; a grant names agents,
+/// and one it leaves out is refused.
+#[tokio::test]
+async fn i6_an_ungrant_applies_to_the_next_lease_and_running_leases_stay() {
+    let grants = MemoryGrants::none();
+    grants.set(DIALED, Some(claude_only()));
+    let mut gateway = Gateway::for_peer(
+        DIALED,
+        grants.clone(),
+        Arc::new(MemoryLedger::default()),
+        Arc::new(NoOutbox),
+        true,
+    );
+    assert_eq!(gateway.next().await, hello());
+    gateway.granted(LEASE).await;
+    gateway
+        .send(ToEnvironment::Grant {
+            lease: "codex-lease".into(),
+            agent: "codex".into(),
+            sandbox: Sandbox::HarnessDefault,
+        })
+        .await;
+    assert_eq!(
+        gateway.next().await,
+        FromEnvironment::Refused {
+            lease: "codex-lease".into(),
+            reason: GrantRefusal::NotGranted,
+        }
+    );
+    grants.set(DIALED, None);
+    gateway
+        .send(ToEnvironment::Grant {
+            lease: "next".into(),
+            agent: "claude".into(),
+            sandbox: Sandbox::HarnessDefault,
+        })
+        .await;
+    assert_eq!(
+        gateway.next().await,
+        FromEnvironment::Refused {
+            lease: "next".into(),
+            reason: GrantRefusal::NotGranted,
+        }
+    );
+    // The lease granted before the ungrant still runs its harness.
+    gateway
+        .send(ToEnvironment::Start {
+            lease: LEASE.into(),
+            channel: 1,
+            environment: BTreeMap::new(),
+        })
+        .await;
+    gateway
+        .send(ToEnvironment::Input {
+            lease: LEASE.into(),
+            channel: 1,
+            data: Data(b"still\n".to_vec()),
+        })
+        .await;
+    assert_eq!(
+        gateway.next().await,
+        FromEnvironment::Output {
+            lease: LEASE.into(),
+            channel: 1,
+            data: Data(b"still\n".to_vec()),
+        }
+    );
+    gateway
+        .send(ToEnvironment::End {
+            lease: LEASE.into(),
+        })
+        .await;
+    let ended = loop {
+        match gateway.next().await {
+            FromEnvironment::OutputClosed { .. } => continue,
+            other => break other,
+        }
+    };
+    assert!(matches!(ended, FromEnvironment::Ended { .. }));
+}
+
+/// Row I5 on the host: a command's timeout is narrowed to the peer's
+/// grant, recorded as granted beside what was asked, answered as granted,
+/// and the command runs with it.
+#[tokio::test]
+async fn i5_a_command_timeout_is_narrowed_recorded_and_run_with() {
+    let grants = MemoryGrants::none();
+    grants.set(
+        DIALED,
+        Some(PeerGrant::new(
+            Agents::Named(Default::default()),
+            Some(CommandGrant::new(400).unwrap()),
+        )),
+    );
+    let mut gateway = Gateway::for_peer(
+        DIALED,
+        grants,
+        Arc::new(MemoryLedger::default()),
+        Arc::new(NoOutbox),
+        true,
+    );
+    assert_eq!(gateway.next().await, hello());
+    gateway
+        .send(grant_command(COMMAND, &["echo", "a"], None))
+        .await;
+    assert_eq!(
+        gateway.next().await,
+        FromEnvironment::Granted {
+            lease: COMMAND.into(),
+            terms: command_terms(400),
+        }
+    );
+    gateway
+        .send(ToEnvironment::Run {
+            lease: COMMAND.into(),
+        })
+        .await;
+    assert!(matches!(
+        gateway.next().await,
+        FromEnvironment::Ran {
+            end: CommandEnd::Exited { code: 0 },
+            ..
+        }
+    ));
+    assert_eq!(gateway.commands.ran.lock().unwrap()[0].timeout_ms(), 400);
+    assert_eq!(
+        gateway.ledger.entries()[0],
+        LedgerEntry::CommandGranted {
+            lease: COMMAND.into(),
+            argv: vec!["echo".into(), "a".into()],
+            cwd: None,
+            timeout_ms: 400,
+            asked_timeout_ms: 1_000,
+            sandbox: Sandbox::None,
+        }
+    );
+}
+
+/// SSH with no grants at all keeps what it always had: every agent the
+/// host runs, and commands for as long as asked. An entry for it narrows
+/// it like any peer's.
+#[tokio::test]
+async fn ssh_without_grants_keeps_everything_the_host_runs() {
+    let mut gateway = Gateway::start();
+    assert_eq!(gateway.next().await, hello());
+    gateway.granted(LEASE).await;
+    gateway
+        .send(ToEnvironment::Grant {
+            lease: "codex-lease".into(),
+            agent: "codex".into(),
+            sandbox: Sandbox::HarnessDefault,
+        })
+        .await;
+    assert_eq!(
+        gateway.next().await,
+        FromEnvironment::Granted {
+            lease: "codex-lease".into(),
+            terms: harness_terms(),
+        }
+    );
+    gateway
+        .send(grant_command(COMMAND, &["echo", "a"], None))
+        .await;
+    assert_eq!(
+        gateway.next().await,
+        FromEnvironment::Granted {
+            lease: COMMAND.into(),
+            terms: command_terms(1_000),
+        }
+    );
+    gateway.grants.set(Peer::Ssh, Some(claude_only()));
+    gateway
+        .send(ToEnvironment::Grant {
+            lease: "narrowed".into(),
+            agent: "codex".into(),
+            sandbox: Sandbox::HarnessDefault,
+        })
+        .await;
+    assert_eq!(
+        gateway.next().await,
+        FromEnvironment::Refused {
+            lease: "narrowed".into(),
+            reason: GrantRefusal::NotGranted,
+        }
+    );
+}
+
+/// Grants that cannot be read grant nothing, to SSH too: a broken file is
+/// not taken as no file.
+#[tokio::test]
+async fn grants_that_cannot_be_read_refuse_every_lease() {
+    let mut gateway = Gateway::start();
+    assert_eq!(gateway.next().await, hello());
+    *gateway.grants.entries.lock().unwrap() = Err("grants.json is not this shape".into());
+    gateway
+        .send(ToEnvironment::Grant {
+            lease: LEASE.into(),
+            agent: "claude".into(),
+            sandbox: Sandbox::HarnessDefault,
+        })
+        .await;
+    assert_eq!(
+        gateway.next().await,
+        FromEnvironment::Refused {
+            lease: LEASE.into(),
+            reason: GrantRefusal::NotGranted,
+        }
+    );
+    gateway
+        .send(grant_command(COMMAND, &["echo", "a"], None))
+        .await;
+    assert_eq!(
+        gateway.next().await,
+        FromEnvironment::Refused {
+            lease: COMMAND.into(),
+            reason: GrantRefusal::NotGranted,
+        }
+    );
+}
+
+/// A sandbox the host cannot enforce is refused, and recorded so: the host
+/// never puts another in its place.
+#[tokio::test]
+async fn a_sandbox_the_host_cannot_enforce_is_refused() {
+    let mut gateway = Gateway::start();
+    assert_eq!(gateway.next().await, hello());
+    gateway
+        .send(ToEnvironment::Grant {
+            lease: LEASE.into(),
+            agent: "claude".into(),
+            sandbox: Sandbox::None,
+        })
+        .await;
+    assert_eq!(
+        gateway.next().await,
+        FromEnvironment::Refused {
+            lease: LEASE.into(),
+            reason: GrantRefusal::SandboxUnavailable,
+        }
+    );
+    assert_eq!(
+        gateway.ledger.entries(),
+        [LedgerEntry::Refused {
+            lease: LEASE.into(),
+            reason: GrantRefusal::SandboxUnavailable,
+        }]
+    );
+    assert!(gateway.launcher.launched.lock().unwrap().is_empty());
 }
 
 /// A harness's stop is answered with its cleanup; a stop for a harness not
@@ -1817,7 +2238,8 @@ async fn a_command_lease_runs_its_command_once_and_its_ran_ends_it() {
     assert_eq!(
         gateway.next().await,
         FromEnvironment::Granted {
-            lease: COMMAND.into()
+            lease: COMMAND.into(),
+            terms: command_terms(1_000),
         }
     );
     gateway
@@ -1878,6 +2300,8 @@ async fn a_command_lease_runs_its_command_once_and_its_ran_ends_it() {
                 argv: vec!["echo".into(), "a".into(), "b".into()],
                 cwd: Some("sub".into()),
                 timeout_ms: 1_000,
+                asked_timeout_ms: 1_000,
+                sandbox: Sandbox::None,
             },
             LedgerEntry::CommandStarted {
                 lease: COMMAND.into()
@@ -2077,7 +2501,8 @@ async fn a_command_whose_exit_cannot_be_recorded_ends_uncertain_in_the_ledger_to
     assert_eq!(
         gateway.next().await,
         FromEnvironment::Granted {
-            lease: COMMAND.into()
+            lease: COMMAND.into(),
+            terms: command_terms(1_000),
         }
     );
     gateway

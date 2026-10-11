@@ -6,9 +6,12 @@
 //! published files, staged through an [`ArtifactOutbox`] for the gateway to
 //! collect; `redial.rs` keeps a paired environment dialed in to its
 //! gateway, serving each connection it gets, once `approval.rs` has seen
-//! its owner approve it through an [`EnvironmentPairing`].
+//! its owner approve it through an [`EnvironmentPairing`]; `grants.rs` is
+//! where serving reads what this host's owner grants each gateway, through
+//! [`PeerGrants`].
 mod approval;
 mod artifacts;
+mod grants;
 mod redial;
 mod serve;
 mod wire;
@@ -17,9 +20,10 @@ pub(crate) use artifacts::{
     ArtifactOutbox, PublishAnswer, PublishCall, PublishPoint, PublishRefusal, PublishRequest,
     PUBLISH_POINT_VARIABLE,
 };
+pub(crate) use grants::PeerGrants;
 pub(crate) use redial::{redial, Backoff};
 pub(crate) use serve::{
     refuse, serve, CommandRan, CommandRunner, CommandStop, HarnessLauncher, LeaseLedger,
-    LedgerEntry, Runners, ServeTimings,
+    LedgerEntry, Runners, ServeTimings, Serving,
 };
 pub(crate) use wire::FrameStream;

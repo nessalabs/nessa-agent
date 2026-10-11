@@ -2,7 +2,10 @@
 //! (issue #699).
 //!
 //! ```text
-//! gateway ──frames──▶ serve ──Grant──▶ ledger: granted ──▶ Granted
+//! gateway ──frames──▶ serve ──Grant──▶ the host runs the agent, in the sandbox asked?
+//!                                     the peer's grant covers it? (PeerGrants, read now)
+//!                                     ──▶ ledger: granted{sandbox} ──▶ Granted{terms}
+//!                                     ──▶ otherwise ledger: refused ──▶ Refused
 //!                          ──Start──▶ ledger: started ──▶ HarnessLauncher::launch
 //!                                         input pump ──▶ harness stdin
 //!                                         harness stdout ──▶ output pump ──▶ Output
@@ -11,7 +14,9 @@
 //!                                     ──▶ ledger: input_overflow ──▶ stop ──▶ Stopped (unasked)
 //!                          ──End────▶ stop every harness ──▶ ledger: ended ──▶ Ended
 //!                          ──Account▶ ledger ──▶ Accounted
-//!                          ──GrantCommand──▶ ledger: command_granted ──▶ Granted
+//!                          ──GrantCommand──▶ the host runs commands? the peer's grant
+//!                                            covers them? timeout narrowed to its most
+//!                                            ──▶ ledger: command_granted ──▶ Granted{terms}
 //!                          ──Run──▶ ledger: command_started ──▶ CommandRunner::run
 //!                                   ──▶ ledger: command_ran, ended ──▶ Ran
 //!                          ──End (a command running)──▶ stop it ──▶ Ran ──▶ Ended
@@ -44,21 +49,32 @@
 //! checked here again, as a [`CommandWork`]: the gateway's word for it is
 //! not taken.
 //!
+//! Each lease is admitted under the grant this host's owner gave the peer
+//! serving is for ([`Peer`], given by composition, never by the gateway),
+//! read through [`PeerGrants`] at every grant: what the host can run is its
+//! configuration's, and the grant only narrows it, refusing `not_granted`.
+//! A command's timeout is granted as asked or shorter, and it runs with the
+//! timeout granted. A harness's sandbox is one the host can enforce, as
+//! asked, or the lease is refused `sandbox_unavailable`: none other is put
+//! in its place. What was granted is recorded, and is what `Granted` says.
+//!
 //! A lease's end is answered by that end alone: an `Account`, or another
 //! `End`, of a lease whose end is still under way waits for it, rather than
 //! reading a ledger that does not hold it yet.
 use super::artifacts::{ArtifactOutbox, LeaseArtifacts};
+use super::grants::{grant_for, PeerGrants};
 use super::wire::{write_frame, FrameStream};
+use crate::env_serve::domain::{admit_agent, admit_command, Peer, PeerGrant};
 use nessa_protocol::lease::{
-    decode, Cleanup, Collection, CommandEnd, Data, FromEnvironment, GrantRefusal, Hello,
-    StartFailure, ToEnvironment, Unavailability, KEEPALIVE_INTERVAL, MAX_DATA_BYTES, MAX_STOP_WAIT,
-    SILENCE_LIMIT,
+    decode, Cleanup, Collection, CommandEnd, Data, FromEnvironment, GrantRefusal, GrantedTerms,
+    Hello, Sandbox, StartFailure, ToEnvironment, Unavailability, KEEPALIVE_INTERVAL,
+    MAX_DATA_BYTES, MAX_STOP_WAIT, SILENCE_LIMIT,
 };
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
     providers::{HarnessControl, HarnessProcess},
 };
-use nessa_sdk::domain::agent_execution::leases::{CommandWork, LeaseId};
+use nessa_sdk::domain::agent_execution::leases::{CommandWork, LeaseId, SandboxProfiles};
 use serde::Serialize;
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
@@ -82,6 +98,8 @@ pub(crate) trait HarnessLauncher: Send + Sync {
     fn workspace(&self) -> &str;
     /// Whether the host is configured to run `agent`.
     fn runs(&self, agent: &str) -> bool;
+    /// The sandboxes the host can enforce around a harness it starts.
+    fn sandboxes(&self) -> SandboxProfiles;
     /// Start `agent`'s harness with `environment`, the binding's variables,
     /// added to the host's own, and `publish_point`, its lease's, when it
     /// has one, as this side's own variable.
@@ -152,8 +170,12 @@ impl CommandRan {
     rename_all_fields = "camelCase"
 )]
 pub(crate) enum LedgerEntry {
-    /// A lease was admitted.
-    Granted { lease: String, agent: String },
+    /// A lease was admitted, enclosed by `sandbox`.
+    Granted {
+        lease: String,
+        agent: String,
+        sandbox: Sandbox,
+    },
     /// A lease was refused; nothing ran.
     Refused { lease: String, reason: GrantRefusal },
     /// A harness is about to start under a lease.
@@ -193,12 +215,16 @@ pub(crate) enum LedgerEntry {
     /// The connection to the gateway was lost before it answered a
     /// published file: what the gateway made of it is not known here.
     Unanswered { lease: String, artifact: u32 },
-    /// A command lease was admitted to run `argv` once.
+    /// A command lease was admitted to run `argv` once, for at most
+    /// `timeout_ms`: the `asked_timeout_ms`, or shorter as the peer's grant
+    /// has it. Nothing encloses it (`sandbox`).
     CommandGranted {
         lease: String,
         argv: Vec<String>,
         cwd: Option<String>,
         timeout_ms: u64,
+        asked_timeout_ms: u64,
+        sandbox: Sandbox,
     },
     /// A command lease's command is about to start.
     CommandStarted { lease: String },
@@ -292,14 +318,23 @@ pub(crate) struct Runners {
     pub(crate) commands: Option<Arc<dyn CommandRunner>>,
 }
 
-/// Serve one gateway until its stream ends, then end every lease it held as
-/// lost and return once each is recorded.
+/// Who serving is for, and what they are granted: the peer as composition
+/// knows it, never as the gateway says, and where its grant is read.
+#[derive(Clone)]
+pub(crate) struct Serving {
+    pub(crate) peer: Peer,
+    pub(crate) grants: Arc<dyn PeerGrants>,
+}
+
+/// Serve one gateway, `serving`'s peer, until its stream ends, then end
+/// every lease it held as lost and return once each is recorded.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn serve<R, W>(
     input: R,
     output: W,
     build: &str,
     protocol: &str,
+    serving: Serving,
     runners: Runners,
     ledger: Arc<dyn LeaseLedger>,
     outbox: Arc<dyn ArtifactOutbox>,
@@ -326,6 +361,7 @@ pub(crate) async fn serve<R, W>(
         ends: HashMap::new(),
         commands: HashMap::new(),
         runner: commands,
+        serving,
         frames,
         launcher,
         ledger,
@@ -492,6 +528,7 @@ struct Served {
     commands: HashMap<String, HeldCommand>,
     /// How this host runs commands; `None` when it is not configured to.
     runner: Option<Arc<dyn CommandRunner>>,
+    serving: Serving,
     frames: mpsc::Sender<FromEnvironment>,
     launcher: Arc<dyn HarnessLauncher>,
     ledger: Arc<dyn LeaseLedger>,
@@ -503,7 +540,11 @@ struct Served {
 impl Served {
     async fn handle(&mut self, frame: ToEnvironment) {
         match frame {
-            ToEnvironment::Grant { lease, agent } => self.grant(lease, agent).await,
+            ToEnvironment::Grant {
+                lease,
+                agent,
+                sandbox,
+            } => self.grant(lease, agent, sandbox).await,
             ToEnvironment::Start {
                 lease,
                 channel,
@@ -689,17 +730,22 @@ impl Served {
         }
     }
 
-    async fn grant(&mut self, lease: String, agent: String) {
+    async fn grant(&mut self, lease: String, agent: String, sandbox: Sandbox) {
         let refusal = if LeaseId::new(lease.clone()).is_err() || self.granted.contains(&lease) {
             Some(GrantRefusal::Duplicate)
         } else if let Some(refusal) = self.recorded_before(&lease) {
             Some(refusal)
         } else if !self.launcher.runs(&agent) {
             Some(GrantRefusal::AgentUnavailable)
+        } else if !self.launcher.sandboxes().contains(sandbox.into()) {
+            Some(GrantRefusal::SandboxUnavailable)
+        } else if admit_agent(&self.grant_now(), &agent).is_err() {
+            Some(GrantRefusal::NotGranted)
         } else {
             match self.ledger.record(&LedgerEntry::Granted {
                 lease: lease.clone(),
                 agent: agent.clone(),
+                sandbox,
             }) {
                 Ok(()) => None,
                 Err(error) => {
@@ -727,7 +773,11 @@ impl Served {
                         artifacts,
                     },
                 );
-                self.send(FromEnvironment::Granted { lease }).await;
+                let terms = GrantedTerms {
+                    sandbox,
+                    timeout_ms: None,
+                };
+                self.send(FromEnvironment::Granted { lease, terms }).await;
             }
             Some(reason) => {
                 if reason != GrantRefusal::AuditUnavailable {
@@ -742,6 +792,12 @@ impl Served {
                 self.send(FromEnvironment::Refused { lease, reason }).await;
             }
         }
+    }
+
+    /// What the peer is granted now: read again for every lease, so a
+    /// change applies from the next one.
+    fn grant_now(&self) -> PeerGrant {
+        grant_for(self.serving.grants.as_ref(), &self.serving.peer)
     }
 
     /// Why a lease id this host's audit already records, from this
@@ -1026,8 +1082,9 @@ impl Served {
     }
 
     /// Admit a command lease, or refuse it, as [`Self::grant`] does a
-    /// harness's: only on a host that runs commands, and only for a command
-    /// a command lease can hold.
+    /// harness's: only on a host that runs commands, only for a command a
+    /// command lease can hold, and only as the peer's grant has it, its
+    /// timeout narrowed to the grant's longest.
     async fn grant_command(
         &mut self,
         lease: String,
@@ -1040,36 +1097,47 @@ impl Served {
             HeldCommand::Granted(_) => true,
             HeldCommand::Running { ran, .. } => ran.borrow().is_none(),
         });
-        let work = CommandWork::new(argv.clone(), cwd.clone(), timeout_ms);
         let refusal = if LeaseId::new(lease.clone()).is_err() || self.granted.contains(&lease) {
             Err(GrantRefusal::Duplicate)
         } else if self.runner.is_none() {
             Err(GrantRefusal::CommandsUnavailable)
         } else if let Some(refusal) = self.recorded_before(&lease) {
             Err(refusal)
+        } else if CommandWork::new(argv.clone(), cwd.clone(), timeout_ms).is_err() {
+            Err(GrantRefusal::InvalidCommand)
         } else {
-            match work {
-                Err(_) => Err(GrantRefusal::InvalidCommand),
-                Ok(work) => match self.ledger.record(&LedgerEntry::CommandGranted {
-                    lease: lease.clone(),
-                    argv,
-                    cwd,
-                    timeout_ms,
-                }) {
-                    Ok(()) => Ok(work),
-                    Err(error) => {
-                        tracing::error!(lease, %error, "a command lease could not be recorded; it is refused");
-                        Err(GrantRefusal::AuditUnavailable)
-                    }
+            match admit_command(&self.grant_now(), timeout_ms) {
+                Err(_) => Err(GrantRefusal::NotGranted),
+                // No longer than the timeout just checked, and never zero.
+                Ok(granted) => match CommandWork::new(argv.clone(), cwd.clone(), granted) {
+                    Err(_) => Err(GrantRefusal::InvalidCommand),
+                    Ok(work) => match self.ledger.record(&LedgerEntry::CommandGranted {
+                        lease: lease.clone(),
+                        argv,
+                        cwd,
+                        timeout_ms: granted,
+                        asked_timeout_ms: timeout_ms,
+                        sandbox: Sandbox::None,
+                    }) {
+                        Ok(()) => Ok(work),
+                        Err(error) => {
+                            tracing::error!(lease, %error, "a command lease could not be recorded; it is refused");
+                            Err(GrantRefusal::AuditUnavailable)
+                        }
+                    },
                 },
             }
         };
         match refusal {
             Ok(work) => {
+                let terms = GrantedTerms {
+                    sandbox: Sandbox::None,
+                    timeout_ms: Some(work.timeout_ms()),
+                };
                 self.granted.insert(lease.clone());
                 self.commands
                     .insert(lease.clone(), HeldCommand::Granted(work));
-                self.send(FromEnvironment::Granted { lease }).await;
+                self.send(FromEnvironment::Granted { lease, terms }).await;
             }
             Err(reason) => {
                 if reason != GrantRefusal::AuditUnavailable {

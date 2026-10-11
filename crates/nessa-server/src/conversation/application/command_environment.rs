@@ -3,8 +3,9 @@
 //! issue #700).
 //!
 //! ```text
-//! CommandEnvironment::grant(lease, command) ──▶ CommandHold | CommandRefusal
-//!   (the service records CommandIssued between the two)
+//! CommandEnvironment::grant(lease, command) ──▶ GrantedCommand | CommandRefusal
+//!   (the service checks the terms granted, then records CommandIssued with
+//!    them, before the hold runs)
 //! CommandHold::run(stop) ──▶ the command runs ──▶ CommandResult
 //!   stop said ──▶ the environment stops it ──▶ CommandResult{Stopped}
 //!   the hold dropped unrun ──▶ the environment ends the lease, unanswered
@@ -14,7 +15,7 @@
 //! session: it runs one argument vector once and its result ends it. Every
 //! wait is bounded by the adapter: a grant by its answer bound, a run by the
 //! command's own timeout and what stopping it takes.
-use super::EnvironmentFuture;
+use super::{EnvironmentFuture, GrantedTerms};
 use nessa_sdk::domain::agent_execution::leases::{
     CommandExit, CommandRefusal, CommandWork, LeaseCleanup, LeaseEndCause, LeaseId,
 };
@@ -27,12 +28,20 @@ pub(crate) trait CommandEnvironment: Send + Sync {
     /// connection open, `None` when not known without reaching it. No I/O.
     fn reachable(&self) -> Option<bool>;
     /// Admit `lease` to run `command` once. Answers within a bound of its
-    /// own; a refusal is the environment's, and nothing ran.
+    /// own, with the terms the environment granted, which may be narrower
+    /// than asked; a refusal is the environment's, and nothing ran.
     fn grant<'a>(
         &'a self,
         lease: &'a LeaseId,
         command: &'a CommandWork,
-    ) -> EnvironmentFuture<'a, Result<Box<dyn CommandHold>, CommandRefusal>>;
+    ) -> EnvironmentFuture<'a, Result<GrantedCommand, CommandRefusal>>;
+}
+
+/// A command lease an environment admitted: its hold, and the terms it
+/// granted, as it answered them. The hold runs the command under those.
+pub(crate) struct GrantedCommand {
+    pub(crate) hold: Box<dyn CommandHold>,
+    pub(crate) granted: GrantedTerms,
 }
 
 /// An environment's side of one admitted command lease. Dropped unrun, the

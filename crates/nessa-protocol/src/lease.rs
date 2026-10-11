@@ -5,7 +5,7 @@
 //!
 //! ```text
 //! environment ── Hello{build, protocol, workspace} ──▶ gateway   (first frame, always)
-//! gateway ── Grant{lease, agent} ──▶ environment ── Granted | Refused ──▶ gateway
+//! gateway ── Grant{lease, agent, sandbox} ──▶ environment ── Granted{terms} | Refused ──▶ gateway
 //! gateway ── Start{lease, channel, environment} ──▶ harness process on the host
 //!   gateway ── Input / InputClosed ──▶ harness stdin
 //!   gateway ◀── Output / OutputClosed ── harness stdout
@@ -19,7 +19,7 @@
 //! gateway ── Collected{lease, artifact, outcome} ──▶ environment
 //!
 //! a command lease (one bounded command, no harness):
-//! gateway ── GrantCommand{lease, argv, cwd, timeoutMs} ──▶ environment ── Granted | Refused ──▶ gateway
+//! gateway ── GrantCommand{lease, argv, cwd, timeoutMs} ──▶ environment ── Granted{terms} | Refused ──▶ gateway
 //! gateway ── Run{lease} ──▶ the command ── Ran{end, stdout, stderr, cleanup} ──▶ gateway
 //!   gateway ── End{lease} ──▶ (stops it) ── Ran{stopped} ── Ended{cleanup} ──▶ gateway
 //! ```
@@ -41,6 +41,12 @@
 //! to say ([`FromEnvironment::Keepalive`]), so a gateway that holds no
 //! process of its own on the connection, as with an environment that dialed
 //! it, can tell the same of the environment.
+//!
+//! An environment admits a lease under its own policy, and may narrow it:
+//! its `Granted` says the terms it granted ([`GrantedTerms`]), which are what
+//! the gateway records, never what it asked. The sandbox is granted exactly
+//! as asked or the lease is refused; a command's timeout may come back
+//! shorter, never longer.
 //!
 //! A command lease runs one command, once, and its `Ran` ends it: the
 //! environment answers it with the command's captured output, at most
@@ -65,6 +71,7 @@
 //! compiled, so it changes whenever they do, with nothing to remember to
 //! bump. The package version does not: it stays the same across revisions.
 use base64::{engine::general_purpose::STANDARD, Engine};
+use nessa_sdk::domain::agent_execution::leases::SandboxProfile;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{collections::BTreeMap, time::Duration};
 
@@ -185,6 +192,55 @@ pub enum GrantRefusal {
     /// The command is not one a command lease can hold: no program, past its
     /// bounds, or a working directory outside the workspace's.
     InvalidCommand,
+    /// The environment's owner has not granted this gateway the agent, or
+    /// commands: its own per-gateway policy, or that policy could not be
+    /// read.
+    NotGranted,
+    /// The environment cannot enforce the sandbox asked for, and never
+    /// substitutes another.
+    SandboxUnavailable,
+}
+
+/// A sandbox profile on the wire: what encloses a lease's work on the
+/// environment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Sandbox {
+    /// See [`SandboxProfile::HarnessDefault`].
+    HarnessDefault,
+    /// See [`SandboxProfile::None`].
+    None,
+}
+
+impl From<SandboxProfile> for Sandbox {
+    fn from(profile: SandboxProfile) -> Self {
+        match profile {
+            SandboxProfile::HarnessDefault => Self::HarnessDefault,
+            SandboxProfile::None => Self::None,
+        }
+    }
+}
+
+impl From<Sandbox> for SandboxProfile {
+    fn from(sandbox: Sandbox) -> Self {
+        match sandbox {
+            Sandbox::HarnessDefault => Self::HarnessDefault,
+            Sandbox::None => Self::None,
+        }
+    }
+}
+
+/// What an environment granted a lease: the terms the gateway records.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GrantedTerms {
+    /// The sandbox enclosing its work: the one asked for a harness's lease,
+    /// [`Sandbox::None`] for a command's, which nothing encloses.
+    pub sandbox: Sandbox,
+    /// How long its command may run, at most the timeout asked; only for a
+    /// command lease.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
 }
 
 /// How a command lease's command ended.
@@ -309,12 +365,14 @@ pub struct Hello {
     deny_unknown_fields
 )]
 pub enum ToEnvironment {
-    /// Admit a lease to run `agent`'s harness.
+    /// Admit a lease to run `agent`'s harness, enclosed by `sandbox`.
     Grant {
         /// The lease's id.
         lease: String,
         /// The agent, by its protocol name (`AgentId::name`).
         agent: String,
+        /// The sandbox asked for: granted as it is, or refused.
+        sandbox: Sandbox,
     },
     /// Start the lease's agent harness as `channel`. `environment` is what the
     /// binding sets for this launch; the host adds its own executable,
@@ -423,10 +481,12 @@ pub enum FromEnvironment {
         /// Why.
         reason: Unavailability,
     },
-    /// The lease is admitted.
+    /// The lease is admitted, on `terms`.
     Granted {
         /// The lease's id.
         lease: String,
+        /// What was granted, which may be narrower than what was asked.
+        terms: GrantedTerms,
     },
     /// The lease is refused; nothing ran.
     Refused {
@@ -515,7 +575,7 @@ impl FromEnvironment {
     pub fn lease(&self) -> Option<&str> {
         match self {
             Self::Hello { .. } | Self::Unavailable { .. } | Self::Keepalive => None,
-            Self::Granted { lease }
+            Self::Granted { lease, .. }
             | Self::Refused { lease, .. }
             | Self::StartFailed { lease, .. }
             | Self::Output { lease, .. }
