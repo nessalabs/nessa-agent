@@ -26,7 +26,7 @@ use crate::env::{LEASE_PROTOCOL, VERSION};
 use crate::env_serve::application::{
     serve, HarnessLauncher, PublishAnswer, PublishRefusal, PublishRequest, Runners, ServeTimings,
 };
-use crate::env_serve::infrastructure::{FileLedger, FileOutbox};
+use crate::env_serve::infrastructure::{FileLedger, FileOutbox, TokioTimer};
 use crate::env_serve::install::Platform;
 use nessa_protocol::lease::{Collection, CollectionRefusal};
 use nessa_sdk::application::agent_execution::{
@@ -324,6 +324,7 @@ impl LeaseConnector for Connector {
                 kill: Duration::from_millis(100),
                 ..ServeTimings::default()
             },
+            Arc::new(TokioTimer::new()),
         ));
         let (gateway_read, gateway_write) = split(gateway_end);
         let (host_read, host_write) = split(host_end);

@@ -22,7 +22,7 @@ use crate::{
     device_pairing::infrastructure::TlsStream,
     env_serve::{
         application::{self, redial, Backoff, NotApproved},
-        infrastructure::{dial, Approved, FilePairingEnvironment},
+        infrastructure::{dial, Approved, FilePairingEnvironment, TokioTimer},
     },
 };
 use nessa_auth::adapters::pairing::{ManualCode, NativeIdentity};
@@ -103,7 +103,13 @@ async fn approval(
     stopping: &watch::Receiver<bool>,
 ) -> Result<Option<Approved>, RunError> {
     let pairing = open(address)?;
-    let approved = application::approval(&pairing, APPROVAL_POLL, stopping.clone()).await;
+    let approved = application::approval(
+        &pairing,
+        APPROVAL_POLL,
+        &TokioTimer::new(),
+        stopping.clone(),
+    )
+    .await;
     pairing.shutdown().await;
     approved.map_err(|refused| {
         RunError::Agent(match refused {
@@ -156,6 +162,7 @@ async fn serve_dialing(
             })
         },
         Backoff::default(),
+        &TokioTimer::new(),
         stopping,
     )
     .await
