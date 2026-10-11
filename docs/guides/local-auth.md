@@ -312,6 +312,41 @@ and refuses a host whose build speaks another lease protocol:
 }
 ```
 
+To let the agent run single commands on a host with its `run` tool (beside
+`environments_list`), name the host in `environmentTools.commandHosts` on the
+gateway, and on the host itself set `envServe.commands` in its `config.json`.
+Both are off until set. A command runs as the host's account, in its workspace,
+with nothing enclosing it, so the person's approval card is the check. The
+gateway's tool policy matches each program by its file name; `denyPrograms`
+wins over `allowPrograms`, and omitting `allowPrograms` allows every other
+program. With `allowPrograms`, a program must be named bare (`cargo`), never
+by a path. The host looks a bare name up only in the absolute directories of
+its `PATH` that are outside its workspace, so a file the agent wrote in the
+workspace is never run under an allowed name. The allow-list is a tool
+policy, not a sandbox: an approved command that writes a program into another
+directory on the host's `PATH`, such as `~/.local/bin`, can plant one there, and
+any allowed program that runs code it is given (`cargo`, `make`) runs whatever
+that code says. Limits are in [docs/limits.md](../limits.md) (`command.*`).
+
+```json
+{
+  "sshHosts": ["devbox"],
+  "environmentTools": {
+    "commandHosts": ["devbox"],
+    "allowPrograms": ["cargo", "make", "ls"],
+    "denyPrograms": ["rm"]
+  }
+}
+```
+
+On the host:
+
+```json
+{
+  "envServe": { "commands": true }
+}
+```
+
 Omitted fields use defaults. Restart the gateway after editing; offline auth
 commands read the same settings on each invocation. Positive integers are required;
 unknown fields, malformed files, and unrepresentable sizes or deadlines fail startup.

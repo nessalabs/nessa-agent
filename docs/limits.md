@@ -33,5 +33,16 @@ Each row is a limit the gateway names when a refusal or a silent close hits it. 
 | conversation.read_grants | fixed | 64 | MAX_READ_GRANTS_PER_CONVERSATION in crates/nessa-server/src/conversation/application/read_grants.rs, the schema's ConversationSharesResult maxItems | the paired devices one conversation is shared with; one more conversation.share is refused invalid_request, so a conversation.shares answer always fits one frame |
 | record.read_work_budget | configured | 200 | config.json limits.readWorkBudgetMs | a cold read still preparing at this budget answers that it is preparing |
 | record.discovery_steps | fixed | 128 | record read DISCOVERY_STEPS_PER_READ | a cold read that uses every discovery step answers that the source is preparing |
+| command.default_timeout_ms | fixed | 120000 | CommandWork::DEFAULT_TIMEOUT_MS | a `run` naming no timeout is stopped after this, as timed out |
+| command.max_timeout_ms | fixed | 3600000 | CommandWork::MAX_TIMEOUT_MS | a `run` asking a longer timeout is refused before anything is recorded |
+| command.stop_wait_ms | fixed | 10000 | lease protocol COMMAND_STOP_WAIT | a host that has not answered a command this long past its timeout, or past its stop, leaves it unanswered |
+| command.capture_bytes | fixed | 65536 | lease protocol MAX_DATA_BYTES | a command's output past this, both streams together, is dropped from its start and counted |
+| command.retained_tail_bytes | fixed | 2048 | CommandOutput::MAX_TAIL_BYTES | of each stream, only the newest this many bytes are kept in the command's record |
+| command.live_per_lease | fixed | 4 | Lease::MAX_LIVE_COMMANDS | a `run` while this many run under the agent's lease is refused `budget_exceeded` |
+| command.max_args | fixed | 256 | CommandWork::MAX_ARGS | a `run` with more arguments is refused before anything is recorded |
+| command.max_argv_bytes | fixed | 4096 | CommandWork::MAX_ARGV_BYTES | a `run` whose arguments together are longer is refused before anything is recorded |
+| command.max_cwd_bytes | fixed | 1024 | CommandWork::MAX_CWD_BYTES | a `run` whose working directory is longer is refused before anything is recorded |
+| mcp.built_in_calls | fixed | 8 | built-in MCP server MAX_BUILT_IN_CALLS | a tool call past this many running on one stand-in's connection is answered with an error |
+| mcp.built_in_line_bytes | fixed | 65536 | built-in MCP server MAX_BUILT_IN_LINE_BYTES | a message longer than this ends the stand-in's connection |
 
 | client.preparing_attempts | client | the client's own | `PREPARING_ATTEMPTS` in `crates/nessa-client-core/src/read_only_sync/application/watch.rs` | how many times a preparing read is asked again |

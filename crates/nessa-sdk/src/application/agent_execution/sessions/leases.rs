@@ -18,8 +18,9 @@ use crate::application::agent_execution::permissions::ActionContext;
 use crate::domain::agent_execution::{
     executions::ExecutionId,
     leases::{
-        CleanupDecision, EndDecision, Lease, LeaseCleanup, LeaseEndCause, LeaseError, LeaseId,
-        LeaseRefusal, LeaseRevision, LeaseTerms,
+        CleanupDecision, CommandExit, CommandOutput, CommandRefusal, CommandTerms, EndDecision,
+        Lease, LeaseCleanup, LeaseEndCause, LeaseError, LeaseId, LeaseRefusal, LeaseRevision,
+        LeaseTerms,
     },
 };
 
@@ -94,6 +95,48 @@ pub enum LeaseRecord {
         turn: ExecutionId,
         /// Its place in what the environment reported.
         cursor: u64,
+    },
+    /// A command lease was admitted under `parent`, the conversation's Live
+    /// agent lease, with these terms, as granted (row L14). `actor` is who
+    /// the command runs for: the person whose turn asked for it.
+    CommandIssued {
+        /// The command lease.
+        lease: LeaseId,
+        /// The agent lease it runs under.
+        parent: LeaseId,
+        /// What was granted.
+        terms: CommandTerms,
+        /// Who it runs for.
+        actor: ActionContext,
+    },
+    /// A command lease was refused; nothing ran. `terms` are what was asked.
+    CommandRefused {
+        /// The refused command lease.
+        lease: LeaseId,
+        /// The agent lease it would have run under.
+        parent: LeaseId,
+        /// What was asked.
+        terms: CommandTerms,
+        /// Why.
+        refusal: CommandRefusal,
+        /// Who asked.
+        actor: ActionContext,
+    },
+    /// A command lease ended (rows L14, L15): how its command ended, what it
+    /// printed, as far as kept, and its environment's cleanup evidence, `None`
+    /// when there is none. Recorded after `parent` is final, it is late
+    /// evidence: the parent's end already ended the command.
+    CommandEnded {
+        /// The command lease.
+        lease: LeaseId,
+        /// The agent lease it ran under.
+        parent: LeaseId,
+        /// How its command ended.
+        exit: CommandExit,
+        /// What it printed, as kept.
+        output: CommandOutput,
+        /// What releasing it took, when its environment said.
+        cleanup: Option<LeaseCleanup>,
     },
     /// A record of a kind this build cannot read, kept as written: `kind`,
     /// and `body`, its encoded content. Never written by this build.
@@ -217,11 +260,33 @@ impl CurrentLease {
                     CurrentLeaseState::Refused { .. } => {
                         return Err(corrupt("a refused lease has no later transitions"));
                     }
-                    CurrentLeaseState::Held(lease) => Self::transition(lease, transition)?,
+                    CurrentLeaseState::Held(lease) => {
+                        Self::transition(lease, transition)?;
+                        next.keep_commands(record)?;
+                        return Ok(next);
+                    }
                 }
                 next.push(record)?;
                 Ok(next)
             }
+        }
+    }
+
+    /// Keep `record`, just folded onto a held lease, among the records saved
+    /// for it. A command lease's issuance is kept until its end arrives, so a
+    /// saved lease still says which commands run under it and, once the lease
+    /// is final, which ends are still owed as late evidence; its end and a
+    /// refusal change nothing else saved, and stay in the stream alone.
+    fn keep_commands(&mut self, record: &LeaseRecord) -> Result<(), StorageError> {
+        match record {
+            LeaseRecord::CommandRefused { .. } => Ok(()),
+            LeaseRecord::CommandEnded { lease: ended, .. } => {
+                self.records.retain(|kept| {
+                    !matches!(kept, LeaseRecord::CommandIssued { lease, .. } if lease == ended)
+                });
+                Ok(())
+            }
+            record => self.push(record),
         }
     }
 
@@ -318,7 +383,10 @@ impl CurrentLease {
             | LeaseRecord::Ended { lease, .. }
             | LeaseRecord::Interrupted { lease }
             | LeaseRecord::CleanupReported { lease, .. }
-            | LeaseRecord::EventDropped { lease, .. } => lease,
+            | LeaseRecord::EventDropped { lease, .. }
+            | LeaseRecord::CommandIssued { parent: lease, .. }
+            | LeaseRecord::CommandRefused { parent: lease, .. }
+            | LeaseRecord::CommandEnded { parent: lease, .. } => lease,
             LeaseRecord::Issued { .. }
             | LeaseRecord::Refused { .. }
             | LeaseRecord::Unreadable { .. } => {
@@ -347,6 +415,15 @@ impl CurrentLease {
                 Err(error) => Err(lease_error(error)),
             },
             LeaseRecord::EventDropped { .. } => lease.drop_event().map_err(lease_error),
+            LeaseRecord::CommandIssued { lease: command, .. } => {
+                lease.admit_command(command.clone()).map_err(lease_error)
+            }
+            // A refusal changes nothing: it is kept in the stream, as evidence
+            // of who asked, and only checked to name this lease.
+            LeaseRecord::CommandRefused { .. } => Ok(()),
+            LeaseRecord::CommandEnded { lease: command, .. } => {
+                lease.end_command(command).map_err(lease_error)
+            }
             LeaseRecord::Issued { .. }
             | LeaseRecord::Refused { .. }
             | LeaseRecord::Unreadable { .. } => {

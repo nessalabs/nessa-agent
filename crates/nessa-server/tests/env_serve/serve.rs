@@ -110,10 +110,49 @@ impl HarnessLauncher for EchoLauncher {
     }
 }
 
+/// Commands that answer at once (`echo`, with its arguments as output) or
+/// run until they are stopped (anything else), and remember what ran.
+#[derive(Default)]
+struct FakeCommands {
+    ran: Mutex<Vec<CommandWork>>,
+}
+
+impl CommandRunner for FakeCommands {
+    fn run(
+        &self,
+        command: CommandWork,
+        mut stop: watch::Receiver<Option<CommandStop>>,
+    ) -> Pin<Box<dyn Future<Output = CommandRan> + Send + 'static>> {
+        self.ran.lock().unwrap().push(command.clone());
+        Box::pin(async move {
+            if command.program() == "echo" {
+                let said: Vec<&str> = command.argv()[1..].iter().map(|a| &**a).collect();
+                return CommandRan {
+                    end: CommandEnd::Exited { code: 0 },
+                    stdout: said.join(" ").into_bytes(),
+                    stderr: b"e".to_vec(),
+                    dropped_bytes: 3,
+                    cleanup: Cleanup::Confirmed { forced: false },
+                };
+            }
+            let _ = stop.wait_for(Option::is_some).await;
+            CommandRan {
+                end: CommandEnd::Stopped,
+                stdout: b"partial".to_vec(),
+                stderr: Vec::new(),
+                dropped_bytes: 0,
+                cleanup: Cleanup::Confirmed { forced: true },
+            }
+        })
+    }
+}
+
 #[derive(Default)]
 struct MemoryLedger {
     entries: Mutex<Vec<LedgerEntry>>,
     failing: AtomicBool,
+    /// Refuses only a command's exit, as a disk that went away for one write.
+    failing_command_ran: AtomicBool,
 }
 
 impl MemoryLedger {
@@ -124,7 +163,10 @@ impl MemoryLedger {
 
 impl LeaseLedger for MemoryLedger {
     fn record(&self, entry: &LedgerEntry) -> io::Result<()> {
-        if self.failing.load(Ordering::SeqCst) {
+        if self.failing.load(Ordering::SeqCst)
+            || (matches!(entry, LedgerEntry::CommandRan { .. })
+                && self.failing_command_ran.load(Ordering::SeqCst))
+        {
             return Err(io::Error::other("disk gone"));
         }
         self.entries.lock().unwrap().push(entry.clone());
@@ -136,7 +178,10 @@ impl LeaseLedger for MemoryLedger {
         let mut ended = None;
         for entry in entries.iter() {
             match entry {
-                LedgerEntry::Granted { lease: id, .. } if id == lease => {
+                LedgerEntry::Granted { lease: id, .. }
+                | LedgerEntry::CommandGranted { lease: id, .. }
+                    if id == lease =>
+                {
                     granted = true;
                     ended = None;
                 }
@@ -161,6 +206,7 @@ struct Gateway {
     ledger: Arc<MemoryLedger>,
     stopped: Arc<AtomicUsize>,
     launcher: Arc<EchoLauncher>,
+    commands: Arc<FakeCommands>,
 }
 
 impl Gateway {
@@ -168,6 +214,9 @@ impl Gateway {
         Self::with(Arc::new(MemoryLedger::default()))
     }
     fn with(ledger: Arc<MemoryLedger>) -> Self {
+        Self::serving(ledger, true)
+    }
+    fn serving(ledger: Arc<MemoryLedger>, runs_commands: bool) -> Self {
         let (gateway, environment) = duplex(1 << 20);
         let (environment_in, environment_out) = split(environment);
         let stopped = Arc::new(AtomicUsize::new(0));
@@ -178,12 +227,17 @@ impl Gateway {
             deaf: AtomicBool::new(false),
             leisurely: AtomicBool::new(false),
         });
+        let commands = Arc::new(FakeCommands::default());
+        let runner = runs_commands.then(|| commands.clone() as Arc<dyn CommandRunner>);
         let served = tokio::spawn(serve(
             environment_in,
             environment_out,
             "1.2.3",
             "protocol",
-            launcher.clone(),
+            Runners {
+                harnesses: launcher.clone(),
+                commands: runner,
+            },
             ledger.clone(),
             ServeTimings {
                 grace: Duration::from_millis(10),
@@ -199,6 +253,7 @@ impl Gateway {
             ledger,
             stopped,
             launcher,
+            commands,
         }
     }
     async fn send(&mut self, frame: ToEnvironment) {
@@ -1079,5 +1134,317 @@ async fn a_stop_starts_its_grace_after_the_harness_has_its_input() {
             channel: 1,
             cleanup: Cleanup::Confirmed { forced: false },
         }
+    );
+}
+
+const COMMAND: &str = "0b7d3a1e-0000-4000-8000-0000000000c1";
+
+fn grant_command(lease: &str, argv: &[&str], cwd: Option<&str>) -> ToEnvironment {
+    ToEnvironment::GrantCommand {
+        lease: lease.into(),
+        argv: argv.iter().map(|a| (*a).to_owned()).collect(),
+        cwd: cwd.map(Into::into),
+        timeout_ms: 1_000,
+    }
+}
+
+/// Row L14 on the host: a command lease is granted, its command run once,
+/// and its `Ran` carries how it ended, what it printed and what releasing it
+/// took — each recorded before it is answered.
+#[tokio::test]
+async fn a_command_lease_runs_its_command_once_and_its_ran_ends_it() {
+    let mut gateway = Gateway::start();
+    assert_eq!(gateway.next().await, hello());
+    gateway
+        .send(grant_command(COMMAND, &["echo", "a", "b"], Some("sub")))
+        .await;
+    assert_eq!(
+        gateway.next().await,
+        FromEnvironment::Granted {
+            lease: COMMAND.into()
+        }
+    );
+    gateway
+        .send(ToEnvironment::Run {
+            lease: COMMAND.into(),
+        })
+        .await;
+    assert_eq!(
+        gateway.next().await,
+        FromEnvironment::Ran {
+            lease: COMMAND.into(),
+            end: CommandEnd::Exited { code: 0 },
+            stdout: Data(b"a b".to_vec()),
+            stderr: Data(b"e".to_vec()),
+            dropped_bytes: 3,
+            cleanup: Cleanup::Confirmed { forced: false },
+        }
+    );
+    let ran = gateway.commands.ran.lock().unwrap().clone();
+    assert_eq!(ran.len(), 1);
+    assert_eq!(ran[0].cwd(), Some("sub"));
+    // Run once: a second run is dropped and nothing more runs.
+    gateway
+        .send(ToEnvironment::Run {
+            lease: COMMAND.into(),
+        })
+        .await;
+    gateway
+        .send(ToEnvironment::Account {
+            lease: COMMAND.into(),
+        })
+        .await;
+    assert_eq!(
+        gateway.next().await,
+        FromEnvironment::Ran {
+            lease: COMMAND.into(),
+            end: CommandEnd::NotStarted,
+            stdout: Data(Vec::new()),
+            stderr: Data(Vec::new()),
+            dropped_bytes: 0,
+            cleanup: Cleanup::NotHeld,
+        }
+    );
+    assert_eq!(
+        gateway.next().await,
+        FromEnvironment::Accounted {
+            lease: COMMAND.into(),
+            cleanup: Cleanup::Confirmed { forced: false },
+        }
+    );
+    assert_eq!(gateway.commands.ran.lock().unwrap().len(), 1);
+    let entries = gateway.ledger.entries();
+    assert_eq!(
+        entries[..4],
+        [
+            LedgerEntry::CommandGranted {
+                lease: COMMAND.into(),
+                argv: vec!["echo".into(), "a".into(), "b".into()],
+                cwd: Some("sub".into()),
+                timeout_ms: 1_000,
+            },
+            LedgerEntry::CommandStarted {
+                lease: COMMAND.into()
+            },
+            LedgerEntry::CommandRan {
+                lease: COMMAND.into(),
+                end: CommandEnd::Exited { code: 0 },
+                dropped_bytes: 3,
+            },
+            LedgerEntry::Ended {
+                lease: COMMAND.into(),
+                cleanup: Cleanup::Confirmed { forced: false },
+                lost: false,
+            },
+        ]
+    );
+}
+
+/// Each command lease refusal is typed and recorded: a host not configured
+/// for commands, a command no lease can hold, an id already used, and an
+/// audit that cannot record it.
+#[tokio::test]
+async fn a_command_lease_is_refused_with_its_reason() {
+    let mut gateway = Gateway::serving(Arc::new(MemoryLedger::default()), false);
+    assert_eq!(gateway.next().await, hello());
+    gateway.send(grant_command(COMMAND, &["echo"], None)).await;
+    assert_eq!(
+        gateway.next().await,
+        FromEnvironment::Refused {
+            lease: COMMAND.into(),
+            reason: GrantRefusal::CommandsUnavailable,
+        }
+    );
+
+    let mut gateway = Gateway::start();
+    assert_eq!(gateway.next().await, hello());
+    for (argv, cwd) in [
+        (&["echo"][..], Some("../out")),
+        (&[""][..], None),
+        (&["echo", "\u{1b}"][..], None),
+    ] {
+        gateway.send(grant_command(COMMAND, argv, cwd)).await;
+        assert_eq!(
+            gateway.next().await,
+            FromEnvironment::Refused {
+                lease: COMMAND.into(),
+                reason: GrantRefusal::InvalidCommand,
+            }
+        );
+    }
+    gateway.granted(LEASE).await;
+    gateway.send(grant_command(LEASE, &["echo"], None)).await;
+    assert_eq!(
+        gateway.next().await,
+        FromEnvironment::Refused {
+            lease: LEASE.into(),
+            reason: GrantRefusal::Duplicate,
+        }
+    );
+    gateway.ledger.failing.store(true, Ordering::SeqCst);
+    gateway.send(grant_command(COMMAND, &["echo"], None)).await;
+    assert_eq!(
+        gateway.next().await,
+        FromEnvironment::Refused {
+            lease: COMMAND.into(),
+            reason: GrantRefusal::AuditUnavailable,
+        }
+    );
+    gateway.ledger.failing.store(false, Ordering::SeqCst);
+    assert!(gateway.commands.ran.lock().unwrap().is_empty());
+    assert!(gateway.ledger.entries().contains(&LedgerEntry::Refused {
+        lease: COMMAND.into(),
+        reason: GrantRefusal::InvalidCommand,
+    }));
+}
+
+/// Row L15 on the host: the gateway's End stops a running command, which
+/// answers its `Ran` as stopped with what it printed, and then the End.
+#[tokio::test]
+async fn an_end_stops_a_running_command_and_is_answered_after_its_ran() {
+    let mut gateway = Gateway::start();
+    assert_eq!(gateway.next().await, hello());
+    gateway.send(grant_command(COMMAND, &["wait"], None)).await;
+    gateway.next().await;
+    gateway
+        .send(ToEnvironment::Run {
+            lease: COMMAND.into(),
+        })
+        .await;
+    gateway
+        .send(ToEnvironment::End {
+            lease: COMMAND.into(),
+        })
+        .await;
+    assert_eq!(
+        gateway.next().await,
+        FromEnvironment::Ran {
+            lease: COMMAND.into(),
+            end: CommandEnd::Stopped,
+            stdout: Data(b"partial".to_vec()),
+            stderr: Data(Vec::new()),
+            dropped_bytes: 0,
+            cleanup: Cleanup::Confirmed { forced: true },
+        }
+    );
+    assert_eq!(
+        gateway.next().await,
+        FromEnvironment::Ended {
+            lease: COMMAND.into(),
+            cleanup: Cleanup::Confirmed { forced: true },
+        }
+    );
+
+    // Ended before it ran: nothing was held, and nothing runs after.
+    const OTHER: &str = "0b7d3a1e-0000-4000-8000-0000000000c2";
+    gateway.send(grant_command(OTHER, &["echo"], None)).await;
+    gateway.next().await;
+    gateway
+        .send(ToEnvironment::End {
+            lease: OTHER.into(),
+        })
+        .await;
+    assert_eq!(
+        gateway.next().await,
+        FromEnvironment::Ended {
+            lease: OTHER.into(),
+            cleanup: Cleanup::NotHeld,
+        }
+    );
+    gateway
+        .send(ToEnvironment::Run {
+            lease: OTHER.into(),
+        })
+        .await;
+    assert!(matches!(
+        gateway.next().await,
+        FromEnvironment::Ran {
+            end: CommandEnd::NotStarted,
+            ..
+        }
+    ));
+    assert_eq!(gateway.commands.ran.lock().unwrap().len(), 1);
+}
+
+/// The gateway gone: a running command is stopped as lost, its end recorded
+/// before serving returns, and a granted one never run ends holding nothing.
+#[tokio::test]
+async fn a_lost_connection_stops_running_commands_and_records_them_lost() {
+    let mut gateway = Gateway::start();
+    assert_eq!(gateway.next().await, hello());
+    const OTHER: &str = "0b7d3a1e-0000-4000-8000-0000000000c2";
+    gateway.send(grant_command(COMMAND, &["wait"], None)).await;
+    gateway.next().await;
+    gateway.send(grant_command(OTHER, &["wait"], None)).await;
+    gateway.next().await;
+    gateway
+        .send(ToEnvironment::Run {
+            lease: COMMAND.into(),
+        })
+        .await;
+    // The run is under way before the connection goes.
+    gateway.send(ToEnvironment::Keepalive).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let Gateway {
+        writer,
+        frames,
+        served,
+        ledger,
+        ..
+    } = gateway;
+    drop(writer);
+    drop(frames);
+    tokio::time::timeout(Duration::from_secs(5), served)
+        .await
+        .expect("serving ends")
+        .unwrap();
+    let entries = ledger.entries();
+    assert!(entries.contains(&LedgerEntry::Ended {
+        lease: COMMAND.into(),
+        cleanup: Cleanup::Confirmed { forced: true },
+        lost: true,
+    }));
+    assert!(entries.contains(&LedgerEntry::Ended {
+        lease: OTHER.into(),
+        cleanup: Cleanup::NotHeld,
+        lost: true,
+    }));
+}
+
+#[tokio::test]
+async fn a_command_whose_exit_cannot_be_recorded_ends_uncertain_in_the_ledger_too() {
+    let mut gateway = Gateway::start();
+    assert_eq!(gateway.next().await, hello());
+    gateway
+        .send(grant_command(COMMAND, &["echo", "a", "b"], None))
+        .await;
+    assert_eq!(
+        gateway.next().await,
+        FromEnvironment::Granted {
+            lease: COMMAND.into()
+        }
+    );
+    gateway
+        .ledger
+        .failing_command_ran
+        .store(true, Ordering::SeqCst);
+    gateway
+        .send(ToEnvironment::Run {
+            lease: COMMAND.into(),
+        })
+        .await;
+    let FromEnvironment::Ran { cleanup, .. } = gateway.next().await else {
+        panic!("its ran is answered");
+    };
+    assert_eq!(cleanup, Cleanup::Uncertain);
+    // The end written after the missing exit says so, and nothing reads
+    // confirmed later.
+    assert!(gateway.ledger.entries().iter().any(|entry| matches!(
+        entry,
+        LedgerEntry::Ended { lease, cleanup: Cleanup::Uncertain, .. } if lease == COMMAND
+    )));
+    assert_eq!(
+        gateway.ledger.accounted(COMMAND).unwrap(),
+        Cleanup::Uncertain
     );
 }
