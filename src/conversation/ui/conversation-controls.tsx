@@ -52,7 +52,11 @@ export function ConversationControls({
             </ToolApprovalIcon>
             <ToolApprovalHeading>
               <ToolApprovalTitle>{permission.title}</ToolApprovalTitle>
-              <ToolApprovalDescription>{permission.toolName}</ToolApprovalDescription>
+              <ToolApprovalDescription>
+                {permission.deadline
+                  ? `${permission.toolName}. ${permission.deadline.reason}`
+                  : permission.toolName}
+              </ToolApprovalDescription>
             </ToolApprovalHeading>
           </ToolApprovalHeader>
           <ToolApprovalCommand json={permission.argumentsJson} />

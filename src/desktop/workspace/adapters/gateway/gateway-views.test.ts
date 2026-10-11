@@ -304,6 +304,39 @@ describe("a conversation view as a transcript", () => {
       options: [{ id: "a", label: "Allow", choice: "once" }],
       ask: "tool",
     })
+    expect(transcript.approval?.deadline).toBeUndefined()
+    const waiting = transcriptFrom(
+      view("c", {
+        messages: [turn({ status: "running" })],
+        permissions: [
+          {
+            executionId: "e/1",
+            permissionId: "p%2",
+            toolId: "t1",
+            title: "Tool permission",
+            options: [{ id: "a", label: "Allow", effect: "allow" }],
+            toolName: "bash",
+            origin: { kind: "harness" },
+            ask: "tool",
+            argumentsJson: '{"command":"rm -rf build"}',
+            deadline: {
+              waitMs: 30_000,
+              effect: "deny",
+              reason:
+                "No human answered in time. Continue without this tool or try another approach.",
+            },
+          },
+        ],
+      }),
+      1,
+      at,
+    )
+    expect(waiting.approval?.deadline).toEqual({
+      waitMs: 30_000,
+      effect: "deny",
+      reason:
+        "No human answered in time. Continue without this tool or try another approach.",
+    })
     expect(reviewOf(transcript.approval!.id)).toEqual({
       executionId: "e/1",
       permissionId: "p%2",

@@ -284,6 +284,7 @@ mod tests {
             stand_ins: nessa_sdk::infrastructure::acp::sessions::StandInSessions::none(),
             permissions: PermissionOfferPolicy::once_only(),
             refusal: nessa_sdk::application::agent_execution::permissions::ConfiguredRefusal::continue_turn(),
+            permission_deadlines: nessa_sdk::domain::agent_execution::permissions::PermissionDeadlinePolicy::standard(),
             launch_timeout: Duration::from_secs(10),
             startup_timeout: Duration::from_secs(10),
             execution_timeout: None,

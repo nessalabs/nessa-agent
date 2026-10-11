@@ -5,6 +5,7 @@
 //! PermissionOfferPolicy --> PermissionOptions --> PermissionRequest --> PermissionStateView
 //!                                    |
 //!                                    +--> ReviewDeclineObservation
+//! PermissionDeadlinePolicy --> class deadline for an unanswered request
 //! ```
 //!
 //! Arrows mean filtering offered choices, constructing a request, and resolving
@@ -20,8 +21,10 @@ pub mod value_objects;
 pub use entities::{PermissionRequest, PermissionStateView};
 pub use value_objects::{
     CustomPermissionCancellationReason, PermissionApplicationId, PermissionCancellationReason,
-    PermissionCancellationReasonView, PermissionDecision, PermissionEffect, PermissionId,
-    PermissionOfferPolicy, PermissionOption, PermissionOptionId, PermissionOptions,
-    PermissionScope, PermissionScopeView, PermissionSessionId, RefusalOutcome, ReviewDecline,
+    PermissionCancellationReasonView, PermissionDeadlinePolicy, PermissionDeadlineSettlement,
+    PermissionDecision, PermissionEffect, PermissionId, PermissionOfferPolicy, PermissionOption,
+    PermissionOptionId, PermissionOptions, PermissionReviewDeadline, PermissionScope,
+    PermissionScopeView, PermissionSessionId, PermissionToolClass, RefusalOutcome, ReviewDecline,
     ReviewDeclineId, ReviewDeclineObservation, ReviewDeclineReason, ReviewDeclineStage,
+    MAX_DEADLINE_REASON_BYTES, MAX_PERMISSION_DEADLINE,
 };

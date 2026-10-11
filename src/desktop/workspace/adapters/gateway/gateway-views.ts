@@ -319,6 +319,11 @@ export function transcriptFrom(
         // The gateway's own word for what is asked, a closed set the client
         // holds the view to (`conversation-validate.ts`, D19 on #390).
         ask: asked.ask,
+        deadline: asked.deadline && {
+          waitMs: asked.deadline.waitMs,
+          effect: asked.deadline.effect,
+          reason: asked.deadline.reason,
+        },
       }
     : null
   return {

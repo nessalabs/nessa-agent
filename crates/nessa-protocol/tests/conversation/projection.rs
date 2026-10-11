@@ -250,6 +250,7 @@ fn review(arguments: String) -> ExecutionEvent {
             &PermissionOfferPolicy::once_only(),
         )
         .unwrap(),
+        deadline: None,
     })
 }
 fn review_snapshot(events: Vec<ExecutionEvent>) -> SessionSnapshot {
@@ -1271,6 +1272,7 @@ fn a_review_reaching_beyond_its_request_is_not_offered() {
         observation,
         input,
         options,
+        deadline: None,
     })]);
     let mut projection = projection();
     projection.replace_committed(
@@ -1321,6 +1323,7 @@ fn a_review_says_what_each_offered_option_decides() {
         observation,
         input,
         options,
+        deadline: None,
     })]);
     let mut projection = projection();
     projection.replace_committed(
@@ -1594,6 +1597,7 @@ fn active_interactions_survive_recent_message_window_without_copying_the_message
                 observation,
                 input,
                 options,
+                deadline: None,
             }));
     }
     let large = committed("incarnation", 27, 27, 27, Some(&costly));
@@ -1640,6 +1644,7 @@ fn active_interactions_survive_recent_message_window_without_copying_the_message
             ),
             input.clone(),
             options.clone(),
+            None,
         )
         .unwrap();
     let cancelled = owner
@@ -1739,6 +1744,7 @@ fn custom_backend_questions_over_display_budget_remain_semantic_and_atomic() {
                     ),
                     input,
                     options,
+                    None,
                 )
                 .unwrap(),
         );

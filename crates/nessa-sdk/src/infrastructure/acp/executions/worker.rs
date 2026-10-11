@@ -32,10 +32,11 @@ use crate::application::agent_execution::executions::{
 };
 
 use crate::application::agent_execution::permissions::{
-    admit_configured_outcome, ApprovalRuleReference, CancellationOrigin, ConfiguredRefusal,
-    PermissionAnswer, PermissionAnswerDelivery, PermissionAnswerRecord, PermissionCancellation,
-    PermissionCancellationRequest, PermissionResolution, PermissionSelectionState, QuestionAnswer,
-    QuestionAnswerRecord, QuestionRefusalRecord, RefusedAsk, ReviewDeclineRecord, StopKind,
+    admit_configured_outcome, ApprovalAttribution, ApprovalRuleReference, CancellationOrigin,
+    ConfiguredRefusal, PermissionAnswer, PermissionAnswerDelivery, PermissionAnswerRecord,
+    PermissionCancellation, PermissionCancellationRequest, PermissionResolution,
+    PermissionSelectionState, QuestionAnswer, QuestionAnswerRecord, QuestionRefusalRecord,
+    RefusedAsk, ReviewDeclineRecord, StopKind,
 };
 use crate::application::agent_execution::providers::{
     ApprovalMode, CleanupReport, ExecutionReport, ImageInputRefusal, ObservationFailureCause,
@@ -47,10 +48,10 @@ use crate::domain::agent_execution::executions::{
     ExecutionId, ExecutionOutcome, MessageChunk, MessageId,
 };
 use crate::domain::agent_execution::permissions::{
-    PermissionCancellationReason, PermissionCancellationReasonView, PermissionDecision,
-    PermissionEffect, PermissionId, PermissionOfferPolicy, PermissionOptionId, PermissionScope,
-    RefusalOutcome, ReviewDecline, ReviewDeclineId, ReviewDeclineObservation, ReviewDeclineReason,
-    ReviewDeclineStage,
+    PermissionCancellationReason, PermissionCancellationReasonView, PermissionDeadlineSettlement,
+    PermissionDecision, PermissionEffect, PermissionId, PermissionOfferPolicy, PermissionOptionId,
+    PermissionScope, PermissionToolClass, RefusalOutcome, ReviewDecline, ReviewDeclineId,
+    ReviewDeclineObservation, ReviewDeclineReason, ReviewDeclineStage,
 };
 use crate::domain::agent_execution::prompts::UserMessage;
 use crate::domain::agent_execution::questions::{
@@ -373,6 +374,12 @@ fn event_publication_result(
         Err(QueueError::Full) => Err(AgentError::Backpressure),
     }
 }
+/// One review the deadline will answer if nobody else does first.
+struct ArmedPermission {
+    at: ClockInstant,
+    settlement: PermissionDeadlineSettlement,
+}
+
 struct Worker<P> {
     profile: P,
     audit: Arc<dyn ExecutionAudit>,
@@ -397,6 +404,8 @@ struct Worker<P> {
     operation_capabilities: watch::Sender<ProviderOperationCapabilities>,
     permission_authority: PermissionAuthoritySource,
     permissions: HashMap<PermissionId, RpcId>,
+    /// Reviews waiting on a person, and the moment the deadline answers them.
+    armed_permissions: HashMap<PermissionId, ArmedPermission>,
     /// One session identity claimed by advisory updates racing session startup.
     /// Advisory payloads are not retained and conflicting identities fail startup.
     startup_advisory_session: Option<ExecutionSessionId>,
@@ -506,6 +515,7 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
         operation_capabilities,
         permission_authority,
         permissions: HashMap::new(),
+        armed_permissions: HashMap::new(),
         startup_advisory_session: None,
         questions: HashMap::new(),
         declined: None,
@@ -1265,10 +1275,12 @@ impl<P: AcpProfile> Worker<P> {
             Command(Option<Command>),
             Message(Result<Envelope, AgentError>),
             Deadline,
+            PermissionDeadline,
             ConsumerGone,
         }
         loop {
             let deadline = self.current_deadline();
+            let permission_deadline = self.next_permission_deadline();
             let input = if self.close_requested.borrow().is_some() && !self.closing {
                 Input::Close
             } else {
@@ -1277,11 +1289,13 @@ impl<P: AcpProfile> Worker<P> {
                     _ = self.events.closed() => Input::ConsumerGone,
                     _ = wait_for_deadline(&*self.config.clock, deadline), if deadline.is_some() => Input::Deadline,
                     command = self.commands.recv(), if !self.closing => Input::Command(command),
+                    _ = wait_for_deadline(&*self.config.clock, permission_deadline), if permission_deadline.is_some() => Input::PermissionDeadline,
                     message = self.reader.next() => Input::Message(message),
                 }
             };
             match input {
                 Input::Close | Input::Command(None) => {
+                    self.armed_permissions.clear();
                     self.closing = true;
                     self.begin_shutdown_grace();
                     let request = self
@@ -1349,6 +1363,9 @@ impl<P: AcpProfile> Worker<P> {
                     if self.deferred_outcome.is_some() {
                         return Ok(());
                     }
+                }
+                Input::PermissionDeadline => {
+                    self.settle_due_permissions(execution).await?;
                 }
                 Input::Message(message) => {
                     let message = message.map_err(|error| {
@@ -1922,6 +1939,7 @@ impl<P: AcpProfile> Worker<P> {
             .permissions
             .remove(record.request().id())
             .expect("pending wire permission");
+        self.armed_permissions.remove(record.request().id());
         if let Err(error) = self.record_cancellations(vec![record.clone()]).await {
             let _ = reply.send(Err(ProviderOperationFailure::permission_answer(
                 error.error().clone(),
@@ -1976,6 +1994,7 @@ impl<P: AcpProfile> Worker<P> {
                 return Ok(());
             }
         };
+        self.armed_permissions.remove(&permission_id);
         let correlation = self.next_correlation();
         if let Err(error) = self
             .record_answer(
@@ -2108,6 +2127,7 @@ impl<P: AcpProfile> Worker<P> {
                     .find_map(|(id, pending)| (pending == &wire_id).then(|| id.clone()))
                 {
                     self.permissions.remove(&id);
+                    self.armed_permissions.remove(&id);
                     let target = &self
                         .active
                         .as_ref()
@@ -2498,9 +2518,20 @@ impl<P: AcpProfile> Worker<P> {
             .as_ref()
             .expect("validated active prompt")
             .execution_id;
-        let event =
-            execution.request_permission(target, permission_id.clone(), tool, input, options)?;
-        self.permissions.insert(permission_id, wire_id);
+        let class = PermissionToolClass::of(*tool.kind());
+        let settlement = self.config.permission_deadlines.settlement(class, &options);
+        let event = execution.request_permission(
+            target,
+            permission_id.clone(),
+            tool,
+            input,
+            options,
+            Some(settlement.deadline().clone()),
+        )?;
+        let at = self.config.clock.now() + settlement.deadline().wait();
+        self.permissions.insert(permission_id.clone(), wire_id);
+        self.armed_permissions
+            .insert(permission_id, ArmedPermission { at, settlement });
         self.emit(event).map_err(Into::into)
     }
     /// Answer one review "no" without offering it, and leave the turn running.
@@ -3746,6 +3777,137 @@ fn rejection_option(params: &Value, policy: &PermissionOfferPolicy) -> Option<St
         .and_then(Value::as_str)
         .and_then(|id| PermissionOptionId::new(id).ok())
         .map(|id| id.as_str().to_owned())
+}
+
+impl<P: AcpProfile> Worker<P> {
+    fn next_permission_deadline(&self) -> Option<ClockInstant> {
+        self.armed_permissions.values().map(|armed| armed.at).min()
+    }
+
+    /// Answer every review whose deadline has passed and which nobody else has
+    /// answered. An audit failure is retained and does not stop the turn. A
+    /// failure to tell the provider, or to publish the notice, does.
+    async fn settle_due_permissions(
+        &mut self,
+        execution: &mut ExecutionController,
+    ) -> Result<(), WorkerFailure> {
+        let now = self.config.clock.now();
+        let due: Vec<PermissionId> = self
+            .armed_permissions
+            .iter()
+            .filter(|(_, armed)| now >= armed.at)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in due {
+            let Some(armed) = self.armed_permissions.remove(&id) else {
+                continue;
+            };
+            self.settle_permission(execution, id, armed).await?;
+        }
+        Ok(())
+    }
+
+    async fn settle_permission(
+        &mut self,
+        execution: &mut ExecutionController,
+        id: PermissionId,
+        armed: ArmedPermission,
+    ) -> Result<(), WorkerFailure> {
+        let Some(execution_id) = self
+            .active
+            .as_ref()
+            .map(|active| active.execution_id.clone())
+        else {
+            if let Some(wire_id) = self.permissions.remove(&id) {
+                let _ = self
+                    .send(permission_wire::permission_cancel(&wire_id))
+                    .await;
+            }
+            return Ok(());
+        };
+        let deadline = armed.settlement.deadline().clone();
+        let reason = deadline.reason().to_owned();
+        let effect = deadline.effect();
+        let mut delivery_correlation = None;
+        let sent = if let Some(option_id) = armed.settlement.option().cloned() {
+            let attribution = ApprovalAttribution::deadline(&id, deadline)
+                .map_err(|error| self.record_failure(OperationEffectPhase::Worker, error))?;
+            let resolution = match execution.answer_permission(PermissionAnswer {
+                attribution,
+                execution_id: execution_id.clone(),
+                id: id.clone(),
+                option_id: option_id.clone(),
+            }) {
+                Ok(resolution) => resolution,
+                Err(error) => {
+                    tracing::warn!(%error, permission_id = %id.as_str(), "permission deadline found the review already resolved");
+                    return Ok(());
+                }
+            };
+            let correlation = self.next_correlation();
+            delivery_correlation = Some(correlation);
+            if let Err(failure) = self
+                .record_answer(
+                    resolution.clone(),
+                    PermissionAnswerDelivery::Selected,
+                    correlation,
+                )
+                .await
+            {
+                let _ = failure;
+            }
+            let wire_id = self
+                .permissions
+                .remove(&id)
+                .expect("pending wire permission");
+            let sent = self
+                .send(permission_wire::selected_because(
+                    &wire_id,
+                    option_id.as_str(),
+                    &reason,
+                ))
+                .await;
+            let delivery = match &sent {
+                Ok(()) => PermissionAnswerDelivery::Written,
+                Err(error) => PermissionAnswerDelivery::Failed(error.clone()),
+            };
+            if let Err(failure) = self.record_answer(resolution, delivery, correlation).await {
+                let _ = failure;
+            }
+            sent
+        } else {
+            let wire_id = self
+                .permissions
+                .remove(&id)
+                .expect("pending wire permission");
+            if let Some(record) = execution
+                .cancel_permission(
+                    &execution_id,
+                    &id,
+                    PermissionCancellationReason::deadline_exceeded(),
+                    CancellationOrigin::Runtime,
+                )
+                .map_err(|error| self.record_failure(OperationEffectPhase::Worker, error))?
+            {
+                if let Err(failure) = self.record_cancellations(vec![record]).await {
+                    let _ = failure;
+                }
+            }
+            self.send(permission_wire::permission_cancel(&wire_id))
+                .await
+        };
+        if let Ok(event) = execution.deadline_answered(&execution_id, id, effect, reason) {
+            self.emit(event)
+                .map_err(|error| self.record_failure(OperationEffectPhase::EventDelivery, error))?;
+        }
+        if let Err(error) = sent {
+            let correlation = delivery_correlation.unwrap_or_else(|| self.next_correlation());
+            return Err(
+                self.record_failure(OperationEffectPhase::PermissionDelivery(correlation), error)
+            );
+        }
+        Ok(())
+    }
 }
 
 /// No artificial far-future timestamp: no configured limit means no timer.

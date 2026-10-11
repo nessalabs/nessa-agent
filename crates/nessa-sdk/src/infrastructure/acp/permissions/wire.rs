@@ -15,6 +15,20 @@ pub(crate) fn selected(id: &RpcId, option: &str) -> Value {
         json!({"outcome":{"outcome":"selected","optionId":option}}),
     )
 }
+/// A selected option plus the reason the deadline recorded.
+///
+/// The reason is `_meta`, which a harness may show its model and must not be
+/// required to. A person's answer does not use this: their selection carries
+/// no deadline reason.
+pub(crate) fn selected_because(id: &RpcId, option: &str, reason: &str) -> Value {
+    success(
+        id,
+        json!({
+            "outcome": {"outcome": "selected", "optionId": option},
+            "_meta": {"deadlineReason": reason}
+        }),
+    )
+}
 pub(crate) fn permission_options(
     params: &Value,
     config: &PermissionOfferPolicy,

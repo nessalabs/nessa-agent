@@ -56,6 +56,11 @@ export const ApprovalCard = memo(function ApprovalCard({
       <p className="workspace-approval-reason">
         <Saying said={approvalReason(approval)} />
       </p>
+      {approval.deadline ? (
+        <p className="workspace-approval-deadline" data-deadline={approval.deadline.effect}>
+          <Saying said={[approval.deadline.reason]} />
+        </p>
+      ) : null}
       {answer?.failure ? (
         <p className="workspace-approval-failure" role="status">
           {failureCopy(answer.failure)}

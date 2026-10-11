@@ -61,6 +61,8 @@ export type ConversationView = {
     toolId: string
     title: string
     options: { id: string; label: string }[]
+    /** Present when the review answers itself if nobody does. */
+    deadline?: { waitMs: number; effect: "allow" | "deny"; reason: string }
   }[]
   /** Questions the agent is waiting on. Nothing is authorised by answering. */
   questions: {

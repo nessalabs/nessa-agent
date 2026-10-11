@@ -165,6 +165,7 @@ async fn received_permission_receipt_finishes_validation_after_close() {
                                 observation: ToolObservation::default(),
                                 input: original,
                                 options,
+                                deadline: None,
                             },
                         ))
                         .await

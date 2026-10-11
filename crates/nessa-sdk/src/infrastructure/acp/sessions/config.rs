@@ -7,7 +7,9 @@ use crate::application::agent_execution::{
     permissions::ConfiguredRefusal,
     providers::{ExecutableUseSnapshot, UserImageSource},
 };
-use crate::domain::agent_execution::permissions::PermissionOfferPolicy;
+use crate::domain::agent_execution::permissions::{
+    PermissionDeadlinePolicy, PermissionOfferPolicy,
+};
 use crate::infrastructure::acp::executions::prompt_content;
 use crate::infrastructure::clock::Clock;
 use serde::Deserialize;
@@ -350,6 +352,11 @@ pub struct AcpConfig {
     /// What a refusal does. Continue leaves the turn running. A stopping
     /// outcome is refused at startup when this binding cannot honor it.
     pub refusal: ConfiguredRefusal,
+    /// How long an unanswered permission waits, and the outcome taken when
+    /// that wait ends. Host policy for this open, like [`Self::refusal`]: it
+    /// is not part of the restoration fingerprint. Composition installs
+    /// [`PermissionDeadlinePolicy::standard`].
+    pub permission_deadlines: PermissionDeadlinePolicy,
     /// Deadline for the whole `initialize` exchange, which is mostly the operating system's work
     /// rather than the provider's: `exec`, any first-execution scan of a newly written
     /// executable, the runtime's own boot, and only then a short protocol round trip. A freshly

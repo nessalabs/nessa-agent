@@ -290,6 +290,7 @@ async fn worker_with_ready_frames_boundary(
             permission_authority: PermissionAuthoritySource::default(),
             operation_capabilities,
             permissions: HashMap::new(),
+            armed_permissions: HashMap::new(),
             startup_advisory_session: None,
             questions: HashMap::new(),
             declined: None,

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::domain::agent_execution::{
-    permissions::{PermissionRequest, PermissionStateView},
+    permissions::{PermissionId, PermissionRequest, PermissionReviewDeadline, PermissionStateView},
     sessions::ExecutionSessionId,
 };
 
@@ -149,6 +149,11 @@ pub enum ApprovalBasis {
     Mode(ApprovalModeSnapshot),
     /// An identified rule revision selected the option.
     Rule(ApprovalRuleReference),
+    /// The review's deadline passed with no admitted answer.
+    ///
+    /// The actor is the deadline itself (`permission-deadline`), not a person
+    /// and not a rule. The value is the outcome that deadline published.
+    Deadline(PermissionReviewDeadline),
 }
 
 /// Who answered and why, required for allowances and denials alike.
@@ -167,9 +172,27 @@ impl ApprovalAttribution {
     pub fn actor(&self) -> &ActionContext {
         &self.actor
     }
-    /// Exact explicit, mode, or rule basis retained with the decision.
+    /// Exact explicit, mode, rule, or deadline basis retained with the decision.
     pub fn basis(&self) -> &ApprovalBasis {
         &self.basis
+    }
+
+    /// The deadline answering `permission` with the outcome it published.
+    ///
+    /// The principal is `permission-deadline` and the surface is the tool
+    /// class. Neither is a person. Construction does not answer the review.
+    pub fn deadline(
+        permission: &PermissionId,
+        deadline: PermissionReviewDeadline,
+    ) -> Result<Self, AgentError> {
+        Ok(Self::new(
+            ActionContext::new(
+                "permission-deadline",
+                deadline.class().as_str(),
+                permission.as_str(),
+            )?,
+            ApprovalBasis::Deadline(deadline),
+        ))
     }
 }
 

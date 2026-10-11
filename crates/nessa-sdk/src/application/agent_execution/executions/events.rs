@@ -12,7 +12,10 @@ use crate::application::agent_execution::{
 };
 use crate::domain::agent_execution::{
     executions::{ExecutionId, ExecutionOutcome, MessageChunk},
-    permissions::{PermissionId, PermissionOptions, PermissionRequest, ReviewDeclineObservation},
+    permissions::{
+        PermissionEffect, PermissionId, PermissionOptions, PermissionRequest,
+        PermissionReviewDeadline, ReviewDeclineObservation,
+    },
     questions::{AgentQuestion, QuestionId},
     tools::{ToolCall, ToolCallId, ToolCallUpdate, ToolObservation},
 };
@@ -51,6 +54,7 @@ impl ExecutionEvent {
                 observation,
                 input,
                 options,
+                deadline: _,
             } => {
                 ExecutionController::validate_review_payload(
                     &self.execution_id,
@@ -77,7 +81,7 @@ impl ExecutionEvent {
                 )?;
                 Ok(())
             }
-            ExecutionUpdate::ReviewDeclined(_) => Ok(()),
+            ExecutionUpdate::ReviewDeclined(_) | ExecutionUpdate::DeadlineAnswered { .. } => Ok(()),
             // An ask is bounded by its own construction — every text and both
             // collections — so what is left to check is the identity beside it.
             ExecutionUpdate::QuestionClosed { id } => validate_observation_id(id.as_str()),
@@ -111,6 +115,7 @@ impl ExecutionEvent {
                 observation,
                 input,
                 options,
+                deadline,
             } => id
                 .as_str()
                 .len()
@@ -118,7 +123,12 @@ impl ExecutionEvent {
                 .saturating_add(observation.payload_bytes())
                 .saturating_add(input.name.capacity())
                 .saturating_add(input.arguments_json.capacity())
-                .saturating_add(options.payload_bytes()),
+                .saturating_add(options.payload_bytes())
+                .saturating_add(
+                    deadline
+                        .as_ref()
+                        .map_or(0, |deadline| deadline.reason().len()),
+                ),
             ExecutionUpdate::PermissionCancelled(record) => {
                 let actor = match record.origin() {
                     CancellationOrigin::Client(actor) => actor
@@ -149,6 +159,9 @@ impl ExecutionEvent {
                 .len()
                 .saturating_add(question.allocation_bytes()),
             ExecutionUpdate::QuestionClosed { id } => id.as_str().len(),
+            ExecutionUpdate::DeadlineAnswered { id, reason, .. } => {
+                id.as_str().len().saturating_add(reason.len())
+            }
         };
         size_of::<Self>()
             .saturating_add(self.execution_id().as_str().len())
@@ -212,6 +225,21 @@ pub enum ExecutionUpdate {
         input: ToolReviewInput,
         /// Validated choices offered for this request; no authority is granted by display.
         options: PermissionOptions,
+        /// When this review answers itself if nobody does, and as what.
+        /// Absent means the review waits for a person.
+        deadline: Option<PermissionReviewDeadline>,
+    },
+    /// The review's deadline passed and selected `effect`. The turn continues.
+    ///
+    /// This is the lasting fact a surface reads after the pending review is
+    /// gone. It is not a second decision: the answer itself is the audit record.
+    DeadlineAnswered {
+        /// The review that the deadline answered.
+        id: PermissionId,
+        /// The outcome the deadline took.
+        effect: PermissionEffect,
+        /// The reason the deadline recorded, already bounded by construction.
+        reason: String,
     },
     /// A question the agent put to a person, waiting on an answer.
     ///

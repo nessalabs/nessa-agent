@@ -92,6 +92,8 @@ pub(super) enum Shape {
     Tool,
     McpTool,
     Review,
+    Deadline,
+    DeadlineNotice,
     Decline,
     Ask,
     AskedQuestions,
@@ -225,6 +227,7 @@ impl Shape {
             (Update, "Text" | "Thought") => Text(MAX_MESSAGE_CHUNK_BYTES),
             (Update, "Tool") | (Review, "tool") => Tool,
             (Update, "PermissionRequested" | "PermissionCancelled") => Review,
+            (Update, "DeadlineAnswered") => DeadlineNotice,
             (Update, "ReviewDeclined") => Decline,
             (Update, "QuestionAsked" | "QuestionClosed") => Ask,
             // Plural shapes are the arrays; `element` gives the singular for
@@ -245,6 +248,17 @@ impl Shape {
             (ContentItem, "Structured") => Text(MAX_STRUCTURED_RESULT_BYTES),
             (Tool, "id") | (Review, "id" | "execution_id" | "tool_id" | "session_id") => Text(256),
             (Review, "options") => Options,
+            (Review, "deadline") => Deadline,
+            (Deadline, "class" | "effect") => Text(32),
+            (Deadline, "reason") => {
+                Text(crate::domain::agent_execution::permissions::MAX_DEADLINE_REASON_BYTES)
+            }
+            (Deadline, "wait_ms") => Number,
+            (DeadlineNotice, "id") => Text(256),
+            (DeadlineNotice, "effect") => Text(16),
+            (DeadlineNotice, "reason") => {
+                Text(crate::domain::agent_execution::permissions::MAX_DEADLINE_REASON_BYTES)
+            }
             (Decline, "id") => Text(20),
             (Decline, "tool") => Text(128),
             (Decline, "reason" | "delivery" | "outcome") => Text(32),

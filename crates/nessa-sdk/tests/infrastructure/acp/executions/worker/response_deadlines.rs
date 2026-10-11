@@ -113,6 +113,7 @@ async fn blocked_worker(
         permission_authority: PermissionAuthoritySource::default(),
         operation_capabilities,
         permissions: HashMap::new(),
+        armed_permissions: HashMap::new(),
         startup_advisory_session: None,
         questions: HashMap::new(),
         declined: None,

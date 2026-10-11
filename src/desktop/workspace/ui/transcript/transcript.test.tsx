@@ -441,6 +441,31 @@ describe("a transcript", () => {
     expect(store.getState().workspace.outbox.b).toBeUndefined()
   })
 
+  it("shows the deadline that will answer a review nobody has answered", async () => {
+    const approval = conversation.approval
+    if (!approval) throw new Error("the sample asks for nothing")
+    await shown(fakeSource(), {
+      ...conversation,
+      approval: {
+        ...approval,
+        deadline: {
+          waitMs: 30_000,
+          effect: "deny",
+          reason:
+            "No human answered in time. Continue without this tool or try another approach.",
+        },
+      },
+    })
+    const deadline = host.querySelector<HTMLElement>("[data-deadline]")
+    expect(deadline?.dataset.deadline).toBe("deny")
+    expect(deadline?.textContent).toBe(
+      "No human answered in time. Continue without this tool or try another approach.",
+    )
+    expect(host.querySelector(".workspace-approval-reason")?.textContent).toBe(
+      "Runs the tests.",
+    )
+  })
+
   it("answers an approval once, resting its buttons while the answer is on its way", async () => {
     const source = fakeSource()
     source.hold("approve")

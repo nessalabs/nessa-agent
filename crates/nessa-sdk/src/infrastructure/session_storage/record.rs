@@ -2392,6 +2392,7 @@ mod tests {
                 observation: ToolObservation::default(),
                 input: input.clone(),
                 options: options.clone(),
+                deadline: None,
             },
         ));
         snapshot =

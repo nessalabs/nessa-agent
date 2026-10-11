@@ -7,10 +7,10 @@ use super::view::{
     ConversationLeaseState, ConversationLeaseView, ConversationLifecycle,
     ConversationLifecyclePhase, ConversationMcpTool, ConversationMessage, ConversationMessageApp,
     ConversationMessageStatus, ConversationPart, ConversationPending, ConversationPendingMode,
-    ConversationPermission, ConversationPermissionAsk, ConversationPermissionOption,
-    ConversationPermissionOptionEffect, ConversationPermissionOrigin, ConversationQuestion,
-    ConversationRuntime, ConversationSelectionView, ConversationTool, ConversationTranscriptState,
-    ConversationView, MAX_STRUCTURED_CONTENT_BYTES,
+    ConversationPermission, ConversationPermissionAsk, ConversationPermissionDeadline,
+    ConversationPermissionOption, ConversationPermissionOptionEffect, ConversationPermissionOrigin,
+    ConversationQuestion, ConversationRuntime, ConversationSelectionView, ConversationTool,
+    ConversationTranscriptState, ConversationView, MAX_STRUCTURED_CONTENT_BYTES,
 };
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
@@ -28,7 +28,8 @@ use nessa_sdk::domain::agent_execution::tools::McpTool;
 use nessa_sdk::domain::agent_execution::{
     executions::{ExecutionId, ExecutionOutcome, InvocationStage, MessageKind},
     permissions::{
-        PermissionScope, RefusalOutcome, ReviewDecline, ReviewDeclineReason, ReviewDeclineStage,
+        PermissionEffect, PermissionReviewDeadline, PermissionScope, RefusalOutcome, ReviewDecline,
+        ReviewDeclineReason, ReviewDeclineStage,
     },
     questions::{AnswerShape, MAX_OPEN_QUESTIONS},
     tools::{ToolContentView, ToolKind, ToolStatus},
@@ -265,6 +266,20 @@ fn outcome(value: ExecutionOutcome) -> ConversationMessageStatus {
         | ExecutionOutcome::RequestLimit
         | ExecutionOutcome::Refused => ConversationMessageStatus::Failed,
     }
+}
+fn permission_deadline(deadline: &PermissionReviewDeadline) -> ConversationPermissionDeadline {
+    ConversationPermissionDeadline {
+        wait_ms: u64::try_from(deadline.wait().as_millis()).unwrap_or(u64::MAX),
+        effect: ConversationPermissionOptionEffect::from(deadline.effect()),
+        reason: deadline.reason().to_owned(),
+    }
+}
+fn deadline_notice(effect: PermissionEffect, reason: &str) -> String {
+    let verb = match effect {
+        PermissionEffect::Allow => "Allowed automatically",
+        PermissionEffect::Deny => "Denied automatically",
+    };
+    format!("{verb}: {reason}")
 }
 fn decline_notice(decline: &ReviewDecline, delivery: ReviewDeclineStage) -> String {
     let target = decline
@@ -859,6 +874,7 @@ impl Projection {
             observation,
             input,
             options,
+            deadline,
         } = event.update()
         else {
             return;
@@ -919,6 +935,7 @@ impl Projection {
             arguments_json: input.arguments_json.clone(),
             origin: ConversationPermissionOrigin::Harness,
             ask: ConversationPermissionAsk::Tool,
+            deadline: deadline.as_ref().map(permission_deadline),
             options: options
                 .choices()
                 .iter()
@@ -966,6 +983,9 @@ impl Projection {
             ExecutionUpdate::QuestionAsked { .. } => self.observe_question(event),
             ExecutionUpdate::PermissionCancelled(cancellation) => {
                 self.resolved_permission(execution, cancellation.request().id().as_str());
+            }
+            ExecutionUpdate::DeadlineAnswered { id, .. } => {
+                self.resolved_permission(execution, id.as_str());
             }
             ExecutionUpdate::QuestionClosed { id } => {
                 self.answered_questions
@@ -1026,6 +1046,21 @@ impl Projection {
                     text: String::new(),
                     tool_id,
                     notice_id: String::new(),
+                })
+            }
+            ExecutionUpdate::DeadlineAnswered { id, effect, reason } => {
+                let text = deadline_notice(*effect, reason);
+                let bounded = clipped(&text, available);
+                if bounded.len() != text.len() {
+                    self.view.truncated = true;
+                }
+                Some(ConversationPart {
+                    message_id: None,
+                    offset,
+                    kind: "local_notice".into(),
+                    text: bounded,
+                    tool_id: String::new(),
+                    notice_id: id.as_str().into(),
                 })
             }
             ExecutionUpdate::ReviewDeclined(observation) => {
@@ -1092,6 +1127,9 @@ impl Projection {
                 self.view.messages[index].status = ConversationMessageStatus::Running;
             }
             ExecutionUpdate::PermissionCancelled(_) | ExecutionUpdate::QuestionClosed { .. } => {}
+            ExecutionUpdate::DeadlineAnswered { .. } => {
+                self.view.messages[index].status = ConversationMessageStatus::Running;
+            }
             ExecutionUpdate::ReviewDeclined(observation) => {
                 if observation.decline().outcome() == RefusalOutcome::Continue {
                     self.view.messages[index].status = ConversationMessageStatus::Running;

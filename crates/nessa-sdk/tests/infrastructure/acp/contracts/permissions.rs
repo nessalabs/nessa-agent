@@ -1,4 +1,5 @@
 mod answers;
+mod deadlines;
 use super::support::*;
 
 #[tokio::test]
@@ -33,6 +34,7 @@ async fn permission_is_typed_once_only_and_can_be_denied() {
             tool_id,
             observation,
             options,
+            ..
         } = next(&mut opened).await
         else {
             panic!("expected permission");

@@ -715,8 +715,8 @@
     },
     "PermissionDeferralSupport": {
       "type": "string",
-      "description": "Whether Nessa supports an explicit nonterminal defer outcome for a permission review.",
-      "enum": ["unsupported_not_implemented", "supported_with_nonterminal_outcome"]
+      "description": "Whether a review can be deferred for a later answer. unsupported means this provider cannot defer. unsupported_not_implemented means Nessa has not built deferral for a provider that might.",
+      "enum": ["unsupported_not_implemented", "unsupported", "supported_with_nonterminal_outcome"]
     },
     "ElicitationForwardingSupport": {
       "type": "string",
@@ -1166,6 +1166,31 @@
       "description": "Whether a permission option allows or denies the reviewed request. Only options that decide that one request are offered: the gateway offers no review with a choice that reaches further.",
       "enum": ["allow", "deny"]
     },
+    "ConversationPermissionDeadline": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "What happens if nobody answers this review, and when. Absent on a review that waits for a person.",
+      "properties": {
+        "waitMs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86400000,
+          "description": "How many milliseconds the review waits before this outcome is taken."
+        },
+        "effect": {
+          "$ref": "#/$defs/ConversationPermissionOptionEffect",
+          "description": "The outcome taken when the wait ends with no answer."
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "x-utf8MaxBytes": 512,
+          "description": "Why that outcome is taken. Shown while the review is pending and recorded if the deadline wins."
+        }
+      },
+      "required": ["waitMs", "effect", "reason"]
+    },
     "ConversationPermission": {
       "type": "object",
       "additionalProperties": false,
@@ -1225,6 +1250,10 @@
           "maxLength": 32768,
           "x-utf8MaxBytes": 32768,
           "description": "Exact original JSON input reviewed by the user; never truncated."
+        },
+        "deadline": {
+          "$ref": "#/$defs/ConversationPermissionDeadline",
+          "description": "Present when the review answers itself if nobody does. Absent for a review that waits for a person, including an app review."
         }
       },
       "required": [

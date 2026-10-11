@@ -132,6 +132,18 @@ pub enum ExecutionError {
     UnofferedAnswer,
     /// The selected option was not offered by this request.
     UnknownPermissionOption,
+    /// A permission deadline waits no time, so the request would be decided in
+    /// the instant it appeared.
+    ZeroPermissionDeadline,
+    /// A permission deadline waits longer than a day, so a misconfiguration
+    /// could push the moment past what the clock can reach and leave the
+    /// review waiting.
+    PermissionDeadlineTooLong,
+    /// A permission deadline reason holds a control character, so it cannot be
+    /// shown on one line.
+    ControlCharacterInPermissionReason,
+    /// A class deadline was installed in the other class's slot.
+    MismatchedPermissionDeadline,
 }
 impl fmt::Display for ExecutionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

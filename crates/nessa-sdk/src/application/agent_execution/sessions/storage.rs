@@ -801,7 +801,7 @@ impl StorageError {
     /// body the walk refuses is also [`Self::Corrupt`]: the broken body is
     /// reported, not another version. Old files are deleted by hand. Nothing
     /// is migrated.
-    pub const SCHEMA_VERSION: u64 = 2;
+    pub const SCHEMA_VERSION: u64 = 3;
     fn measure(
         mut pending: Vec<(&StorageError, usize)>,
         mut usage: StorageErrorUsage,

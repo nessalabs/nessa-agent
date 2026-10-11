@@ -158,6 +158,7 @@ fn review(
             observation: ToolObservation::default().with_update(observation),
             input,
             options: choices,
+            deadline: None,
         }
     }
 }

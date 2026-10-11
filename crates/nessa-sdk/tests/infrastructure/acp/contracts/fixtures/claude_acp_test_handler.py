@@ -423,6 +423,24 @@ while True:
             for review_id in (cancelled_permission_id, cancelled_permission_id, "unknown"):
                 send({"method": "$/cancel_request", "params": {"requestId": review_id}})
             text("provider cancellation processed")
+        elif mode == "permission-deadline-allow-only":
+            update({"sessionUpdate": "tool_call", **tool()})
+            send({"id": permission_id, "method": "session/request_permission", "params": {
+                "sessionId": session, "toolCall": {key: value for key, value in tool().items() if key != "title"}, "options": [
+                    {"optionId": "approve-one", "kind": "allow_once", "name": "Allow once"}]}})
+        elif mode in ("permission-deadline", "permission-read-deadline"):
+            call = tool("Read" if mode == "permission-read-deadline" else "Write")
+            if mode == "permission-read-deadline":
+                call["kind"] = "read"
+                call["title"] = "Read fixture.txt"
+            update({"sessionUpdate": "tool_call", **call})
+            send({"id": permission_id, "method": "session/request_permission", "params": {
+                "sessionId": session,
+                "toolCall": {key: value for key, value in call.items() if key != "title"},
+                "options": [
+                    {"optionId": "approve-one", "kind": "allow_once", "name": "Allow once"},
+                    {"optionId": "deny-one", "kind": "reject_once", "name": "Deny once"},
+                    {"optionId": "never-choose", "kind": "allow_always", "name": "Always"}]}})
         elif mode in ("permission", "permission-write-failure", "permission-stop", "permission-failure", "permission-finished", "permission-provider-error", "permission-byte-flood", "unknown-tool"):
             update({"sessionUpdate": "tool_call", **tool("Bash" if mode == "unknown-tool" else "Write")})
             if mode == "permission-write-failure":
@@ -809,6 +827,20 @@ while True:
         record("permission-outcomes", prior + json.dumps(msg["result"]["outcome"]) + "\n")
         record("permission-outcome", json.dumps(msg["result"]["outcome"]))
         text("declined and carried on")
+        result(pending, {"stopReason": "end_turn"})
+        pending = None
+    elif mode == "permission-deadline-allow-only" and msg.get("id") == permission_id:
+        record("permission-outcome", json.dumps(msg["result"]))
+        text(msg["result"]["outcome"]["outcome"])
+        result(pending, {"stopReason": "end_turn"})
+        pending = None
+    elif mode in ("permission-deadline", "permission-read-deadline") and msg.get("id") == permission_id:
+        # Echo the deadline's own reason. A selected option with no reason is
+        # not that answer, and the turn still ends so the wait can be told
+        # from a stall.
+        record("permission-outcome", json.dumps(msg["result"]))
+        meta = msg["result"].get("_meta") or {}
+        text(meta.get("deadlineReason") or "no deadline reason")
         result(pending, {"stopReason": "end_turn"})
         pending = None
     elif msg.get("id") == permission_id:

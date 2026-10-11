@@ -320,9 +320,10 @@ export const ModelSwitchReportingSupport = {
 } as const
 export type ModelSwitchReportingSupport =
   (typeof ModelSwitchReportingSupport)[keyof typeof ModelSwitchReportingSupport]
-/** Whether Nessa supports an explicit nonterminal defer outcome for a permission review. */
+/** Whether a review can be deferred for a later answer. unsupported means this provider cannot defer. unsupported_not_implemented means Nessa has not built deferral for a provider that might. */
 export const PermissionDeferralSupport = {
   UnsupportedNotImplemented: "unsupported_not_implemented",
+  Unsupported: "unsupported",
   SupportedWithNonterminalOutcome: "supported_with_nonterminal_outcome",
 } as const
 export type PermissionDeferralSupport =
@@ -516,6 +517,15 @@ export const ConversationPermissionOptionEffect = {
 } as const
 export type ConversationPermissionOptionEffect =
   (typeof ConversationPermissionOptionEffect)[keyof typeof ConversationPermissionOptionEffect]
+/** What happens if nobody answers this review, and when. Absent on a review that waits for a person. */
+export interface ConversationPermissionDeadline {
+  /** How many milliseconds the review waits before this outcome is taken. */
+  waitMs: number
+  /** The outcome taken when the wait ends with no answer. */
+  effect: ConversationPermissionOptionEffect
+  /** Why that outcome is taken. Shown while the review is pending and recorded if the deadline wins. */
+  reason: string
+}
 /** A pending review with its complete offered choices. */
 export interface ConversationPermission {
   /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
@@ -536,6 +546,8 @@ export interface ConversationPermission {
   ask: ConversationPermissionAsk
   /** Exact original JSON input reviewed by the user; never truncated. */
   argumentsJson: string
+  /** Present when the review answers itself if nobody does. Absent for a review that waits for a person, including an app review. */
+  deadline?: ConversationPermissionDeadline
 }
 /** Bounded presentation of an observed tool call. */
 export interface ConversationTool {

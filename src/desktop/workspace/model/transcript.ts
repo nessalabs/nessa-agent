@@ -93,6 +93,13 @@ export interface ApprovalOption {
  */
 export type ApprovalAsk = "tool" | "message"
 
+/** What happens if nobody answers, and the sentence that says so. */
+export interface ApprovalDeadline {
+  readonly waitMs: number
+  readonly effect: "allow" | "deny"
+  readonly reason: string
+}
+
 /**
  * What the agent, or an MCP App, asks to do, waiting on the person's answer:
  * run a command or a tool, or — an app — send a message as them, `command`
@@ -110,6 +117,8 @@ export interface Approval {
    * holds the view to (`conversation-validate.ts`, D19 on #390).
    */
   readonly ask: ApprovalAsk
+  /** Present when this review answers itself if nobody does. */
+  readonly deadline?: ApprovalDeadline
 }
 
 /** Whether `approval` offers `choice`. A button and an answer both ask this. */

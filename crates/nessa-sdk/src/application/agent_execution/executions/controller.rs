@@ -209,6 +209,7 @@ impl ExecutionController {
         tool: ToolCallUpdate,
         input: ToolReviewInput,
         options: PermissionOptions,
+        deadline: Option<crate::domain::agent_execution::permissions::PermissionReviewDeadline>,
     ) -> Result<ExecutionEvent, AgentError> {
         let (charged_bytes, review_bytes) =
             self.validate_review_retention(execution, &id, tool.id(), &input, &options)?;
@@ -243,9 +244,29 @@ impl ExecutionController {
                 observation,
                 input,
                 options,
+                deadline,
             },
         )
     }
+
+    /// The lasting observation that `id`'s deadline selected `effect`.
+    ///
+    /// Does not answer the review. The caller answers or cancels first, and
+    /// emits this so a surface that was not watching the audit still sees who
+    /// decided. A stale execution returns the same error as any other event.
+    pub fn deadline_answered(
+        &self,
+        execution: &ExecutionId,
+        id: PermissionId,
+        effect: PermissionEffect,
+        reason: String,
+    ) -> Result<ExecutionEvent, AgentError> {
+        self.event(
+            execution,
+            ExecutionUpdate::DeadlineAnswered { id, effect, reason },
+        )
+    }
+
     pub(crate) fn validate_review_retention(
         &self,
         execution: &ExecutionId,
@@ -843,6 +864,7 @@ mod tests {
             tool(Some(title.into())),
             input(),
             options("Allow".into()),
+            None,
         )
     }
     fn answer(id: &str) -> PermissionAnswer {
@@ -1049,7 +1071,8 @@ mod tests {
                     permission.clone(),
                     update(None),
                     review(1),
-                    choices.clone()
+                    choices.clone(),
+                    None,
                 )
                 .is_err());
             assert_eq!(controller.retained_review_bytes, 0);
@@ -1060,6 +1083,7 @@ mod tests {
                     update(None),
                     review(0),
                     choices,
+                    None,
                 )
                 .unwrap();
             assert_eq!(controller.retained_review_bytes, MAX_RETAINED_BYTES);
@@ -1172,7 +1196,8 @@ mod tests {
                 PermissionId::new("p").unwrap(),
                 tool(Some("unaccepted".into())),
                 input(),
-                options("x".repeat(MAX_RETAINED_BYTES))
+                options("x".repeat(MAX_RETAINED_BYTES)),
+                None,
             )
             .is_err());
         assert_eq!(controller.session.tool_count(), 0);

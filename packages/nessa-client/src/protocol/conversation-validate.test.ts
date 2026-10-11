@@ -423,6 +423,44 @@ describe("conversation view agreement", () => {
       expect(() => conversationView(withOrigin(origin), "conversation")).toThrow()
   })
 
+  it("reads a review's deadline and refuses one it cannot show", () => {
+    const withDeadline = (deadline: unknown) => {
+      const value = view()
+      Object.assign(value, {
+        permissions: [
+          {
+            executionId: "running",
+            permissionId: "permission",
+            toolId: "tool",
+            title: "Review",
+            toolName: "Write",
+            argumentsJson: "{}",
+            origin: { kind: "harness" },
+            ask: "tool",
+            options: [{ id: "deny", label: "Deny", effect: "deny" }],
+            deadline,
+          },
+        ],
+      })
+      return value
+    }
+    const reason = "No human answered in time. Continue without this tool or try another approach."
+    const read = conversationView(
+      withDeadline({ waitMs: 30_000, effect: "deny", reason }),
+      "conversation",
+    )
+    expect(read.permissions[0]!.deadline).toEqual({ waitMs: 30_000, effect: "deny", reason })
+    for (const deadline of [
+      { waitMs: 0, effect: "deny", reason },
+      { waitMs: 86_400_001, effect: "deny", reason },
+      { waitMs: 30_000, effect: "later", reason },
+      { waitMs: 30_000, effect: "deny", reason: " " },
+      { waitMs: 30_000, effect: "deny", reason: "line\nbreak" },
+      { waitMs: 30_000, effect: "deny" },
+    ])
+      expect(() => conversationView(withDeadline(deadline), "conversation")).toThrow()
+  })
+
   it("refuses an app's review that names a tool other than the one it reviews", () => {
     const withTools = (tool: string, toolName: string) => {
       const value = view()

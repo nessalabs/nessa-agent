@@ -76,6 +76,8 @@ mod tests {
             permissions: PermissionOfferPolicy::once_only(),
             refusal:
                 crate::application::agent_execution::permissions::ConfiguredRefusal::continue_turn(),
+            permission_deadlines:
+                crate::domain::agent_execution::permissions::PermissionDeadlinePolicy::standard(),
             launch_timeout: Duration::from_secs(1),
             startup_timeout: Duration::from_secs(1),
             execution_timeout: None,

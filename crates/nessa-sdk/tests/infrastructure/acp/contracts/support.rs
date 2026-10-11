@@ -233,6 +233,8 @@ pub(super) fn test_acp_configuration(
         permissions: PermissionOfferPolicy::once_only(),
         refusal: crate::application::agent_execution::permissions::ConfiguredRefusal::continue_turn(
         ),
+        permission_deadlines:
+            crate::domain::agent_execution::permissions::PermissionDeadlinePolicy::standard(),
         launch_timeout: Duration::from_secs(10),
         startup_timeout: Duration::from_secs(10),
         // Unbounded unless a test bounds it, on a clock it moves: a real

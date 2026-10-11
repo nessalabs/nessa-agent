@@ -10,7 +10,10 @@ export type AgentFeatures = {
   compactionReporting:
     "unsupported_not_implemented" | "supported_with_invocation_correlation"
   modelSwitchReporting: "unsupported_not_implemented" | "supported_after_validated_switch"
-  permissionDeferral: "unsupported_not_implemented" | "supported_with_nonterminal_outcome"
+  permissionDeferral:
+    | "unsupported_not_implemented"
+    | "unsupported"
+    | "supported_with_nonterminal_outcome"
   elicitationForwarding:
     "unknown" | "unsupported" | "supported_with_correlated_round_trip"
   preToolPolicy:
@@ -383,6 +386,8 @@ type ConversationState = {
       toolName: string
       argumentsJson: string
       options: { id: string; label: string }[]
+      /** Present when the review answers itself if nobody does. */
+      deadline?: { waitMs: number; effect: "allow" | "deny"; reason: string }
     }[]
     /** Questions the agent is waiting on. Nothing is authorised by answering. */
     questions: {

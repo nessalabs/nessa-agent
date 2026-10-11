@@ -329,6 +329,7 @@ fn audit_maps_permission_selection_delivery_and_custom_cancellation_exactly() {
             ),
             input.clone(),
             options(),
+            None,
         )
         .unwrap();
     let answer = controller
@@ -368,6 +369,7 @@ fn audit_maps_permission_selection_delivery_and_custom_cancellation_exactly() {
             ToolCallUpdate::new(tool, Some("Write file".into()), None, None, None, None),
             input,
             options(),
+            None,
         )
         .unwrap();
     let cancellation = controller

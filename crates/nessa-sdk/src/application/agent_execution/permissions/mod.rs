@@ -8,6 +8,7 @@
 //!                                   |
 //!                                   +--> ExecutionAudit
 //! configured refusal --> admit_configured_outcome --> OperationCapabilities
+//! permission deadline --> ApprovalBasis::Deadline (actor permission-deadline)
 //! ```
 //!
 //! Arrows show control flow. The adapter asks the controller to resolve a review

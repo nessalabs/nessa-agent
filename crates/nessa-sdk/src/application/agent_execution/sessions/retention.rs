@@ -66,6 +66,7 @@ impl Witness {
                 observation,
                 input,
                 options,
+                deadline: _,
             } => {
                 ExecutionController::validate_tool_payload(observation.payload_bytes())?;
                 let update = observation.as_update(tool_id.clone());
@@ -173,6 +174,7 @@ mod tests {
                     arguments_json: "x".repeat(bytes),
                 },
                 options,
+                deadline: None,
             },
         )
     }

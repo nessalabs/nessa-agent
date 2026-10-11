@@ -266,6 +266,17 @@ pub struct ConversationPermission {
     /// What the review asks the person to allow. The agent's reviews ask a
     /// tool; an app's say what the gateway's `ReviewAsk` opened them for.
     pub ask: ConversationPermissionAsk,
+    /// Present when this review answers itself if nobody does.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deadline: Option<ConversationPermissionDeadline>,
+}
+/// What happens if nobody answers a review, and when.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationPermissionDeadline {
+    pub wait_ms: u64,
+    pub effect: ConversationPermissionOptionEffect,
+    pub reason: String,
 }
 /// What a review asks the person to allow: running a tool, or an MCP App
 /// sending one message in the conversation as them.
@@ -457,6 +468,7 @@ support_enum!(ModelSwitchReportingSupport {
 });
 support_enum!(PermissionDeferralSupport {
     UnsupportedNotImplemented,
+    Unsupported,
     SupportedWithNonterminalOutcome
 });
 support_enum!(ElicitationForwardingSupport {
@@ -524,6 +536,7 @@ impl From<OperationCapabilities> for ConversationAgentFeatures {
                 PermissionDeferralCapability::UnsupportedNotImplemented => {
                     PermissionDeferralSupport::UnsupportedNotImplemented
                 }
+                PermissionDeferralCapability::Unsupported => PermissionDeferralSupport::Unsupported,
                 PermissionDeferralCapability::SupportedWithNonterminalOutcome => {
                     PermissionDeferralSupport::SupportedWithNonterminalOutcome
                 }

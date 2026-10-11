@@ -135,6 +135,16 @@ pub(super) fn record_value(record: &ExecutionAuditRecord) -> Value {
                 ApprovalBasis::Rule(rule) => {
                     json!({"kind":"rule","ruleId":rule.rule_id(),"revision":rule.revision(),"grantedBy":actor(rule.granted_by())})
                 }
+                ApprovalBasis::Deadline(deadline) => json!({
+                    "kind": "deadline",
+                    "class": deadline.class().as_str(),
+                    "waitMs": deadline.wait().as_millis(),
+                    "effect": match deadline.effect() {
+                        nessa_sdk::domain::agent_execution::permissions::PermissionEffect::Allow => "allow",
+                        nessa_sdk::domain::agent_execution::permissions::PermissionEffect::Deny => "deny",
+                    },
+                    "reason": deadline.reason(),
+                }),
             };
             let delivery = delivery(record.delivery());
             json!({"kind":"permission_answered","sessionId":record.session_id().as_str(),"request":permission(resolution.request()),"input":{"name":resolution.input().name,"argumentsJson":resolution.input().arguments_json},"actor":actor(resolution.attribution().actor()),"basis":basis,"delivery":delivery})

@@ -44,6 +44,22 @@ const utf8 = new TextEncoder()
 /** A canonical lowercase hyphenated UUID: the schema's pattern for a conversation identity. */
 export const conversationIdPattern = new RegExp(bounds.conversationIdPattern)
 
+/** A pending review's deadline: a positive wait within a day, an effect, and a reason. */
+function deadlineOf(value: unknown) {
+  const deadline = record(value)
+  exact(deadline, ["waitMs", "effect", "reason"])
+  const waitMs = deadline.waitMs
+  if (
+    typeof waitMs !== "number" ||
+    !Number.isInteger(waitMs) ||
+    waitMs < 1 ||
+    waitMs > 86_400_000
+  )
+    throw new Error("Invalid conversation waitMs")
+  oneOf(text(deadline, "effect", 16), Object.values(ConversationPermissionOptionEffect))
+  const reason = text(deadline, "reason", 512, false)
+  if (!reason.trim() || /\p{Cc}/u.test(reason)) throw new Error("Invalid conversation reason")
+}
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new Error("Invalid conversation response")
@@ -440,6 +456,7 @@ export function conversationView(value: unknown, expected: string): Conversation
       "argumentsJson",
       "origin",
       "ask",
+      "deadline",
     ])
     for (const key of ["executionId", "permissionId", "toolId"]) identity(permission, key)
     // What it asks the person to allow, a closed set: a surface words its
@@ -491,6 +508,7 @@ export function conversationView(value: unknown, expected: string): Conversation
       text(option, "label", 2048, false)
       oneOf(text(option, "effect"), Object.values(ConversationPermissionOptionEffect))
     }
+    if (permission.deadline !== undefined) deadlineOf(permission.deadline)
   }
   const toolIds = new Set<string>()
   for (const tool of items(item, "tools", 128)) {
