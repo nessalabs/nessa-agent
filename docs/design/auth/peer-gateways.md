@@ -238,7 +238,7 @@ sequenceDiagram
   allows `environment.serve` on this gateway, now? Nothing keeps a copy of the
   answer. It is asked when the connection is admitted and again before every
   lease, so a revoked credential or a disabled membership stops the next
-  lease and closes the connection.
+  lease asked for, and that ask closes the connection.
 - **One name per key.** A paired environment is `peer:` and its key in
   lowercase hex (`PeerEnvironment`), whichever connection it last made. A
   new connection from the same key takes the place of the old one: the old
@@ -257,9 +257,11 @@ sequenceDiagram
   refused before it takes one.
 - **Known limits.** A file the environment publishes is not fetched over a
   paired connection yet: there is no artifact channel, so its collection is
-  refused. The environment's own enroll and dial command, and revocation that
-  closes an idle connection without waiting for a lease, are the next parts
-  of #706.
+  refused. Revocation closes a connection only when a lease is next asked
+  of it: until then a revoked environment that stays idle keeps its
+  connection, and one of the environment permits, though it is given
+  nothing. The environment's own enroll and dial command, and revocation
+  that closes an idle connection, are the next parts of #706.
 
 ## State and order table
 

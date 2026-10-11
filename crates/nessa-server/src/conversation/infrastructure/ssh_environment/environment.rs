@@ -102,10 +102,9 @@ struct Inner {
     reach: Reach,
     audit: Arc<dyn EnvironmentAudit>,
     timings: SshTimings,
-    /// The one connection to the host: over SSH, opened when first needed
-    /// and opened again once lost, held while connecting, so one is opened
-    /// at a time; for a paired environment, the one its latest connection
-    /// opened.
+    /// The one SSH connection to the host, opened when first needed and
+    /// opened again once lost, held while connecting, so one is opened at a
+    /// time. A paired environment's is [`Reach::Peer`]'s `serving`.
     link: Mutex<Option<Arc<HostLink>>>,
 }
 
@@ -124,10 +123,27 @@ enum Reach {
     Peer {
         peer: PeerEnvironment,
         credentials: Arc<dyn ServingCredentials>,
-        /// What its current connection proved; written with
-        /// [`Inner::link`], under its lock.
-        proof: std::sync::Mutex<Option<Arc<DeviceConnectionProof>>>,
+        /// Its current connection and what that connection proved, kept
+        /// together. Never held across an await, so whether it is connected
+        /// is read without waiting.
+        serving: std::sync::Mutex<Option<Served>>,
     },
+}
+
+/// A paired environment's current connection, with the proof it was opened
+/// with.
+#[derive(Clone)]
+struct Served {
+    link: Arc<HostLink>,
+    proof: Arc<DeviceConnectionProof>,
+}
+
+/// The paired environment's current connection, if it holds one.
+fn served(serving: &std::sync::Mutex<Option<Served>>) -> Option<Served> {
+    serving
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
 }
 
 impl SshEnvironment {
@@ -160,7 +176,7 @@ impl SshEnvironment {
             Reach::Peer {
                 peer,
                 credentials,
-                proof: std::sync::Mutex::new(None),
+                serving: std::sync::Mutex::new(None),
             },
             audit,
             timings,
@@ -183,7 +199,7 @@ impl SshEnvironment {
     /// closed, and its leases are lost. Answers once the new connection
     /// ends, or at once when its hello is refused.
     pub(super) async fn serve(&self, proof: DeviceConnectionProof, connection: LeaseConnection) {
-        let Reach::Peer { proof: proved, .. } = &self.inner.reach else {
+        let Reach::Peer { serving, .. } = &self.inner.reach else {
             return;
         };
         let opened = HostLink::over(
@@ -197,15 +213,15 @@ impl SshEnvironment {
         let Ok(link) = opened else {
             return;
         };
-        let replaced = {
-            let mut held = self.inner.link.lock().await;
-            *proved
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::new(proof));
-            held.replace(link.clone())
-        };
+        let replaced = serving
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .replace(Served {
+                link: link.clone(),
+                proof: Arc::new(proof),
+            });
         if let Some(replaced) = replaced {
-            replaced.close();
+            replaced.link.close();
         }
         link.ended().await;
     }
@@ -255,8 +271,10 @@ impl Inner {
                 installer,
             } => (host, connector, installer),
             Reach::Peer {
-                credentials, proof, ..
-            } => return self.dialed_in(credentials.as_ref(), proof).await,
+                credentials,
+                serving,
+                ..
+            } => return self.dialed_in(credentials.as_ref(), serving).await,
         };
         let mut held = self.link.lock().await;
         if let Some(link) = held.as_ref().filter(|link| link.is_open()) {
@@ -307,23 +325,12 @@ impl Inner {
     async fn dialed_in(
         &self,
         credentials: &dyn ServingCredentials,
-        proof: &std::sync::Mutex<Option<Arc<DeviceConnectionProof>>>,
+        serving: &std::sync::Mutex<Option<Served>>,
     ) -> Result<Arc<HostLink>, LeaseRefusal> {
-        let (link, proved) = {
-            let held = self.link.lock().await;
-            let link = held
-                .as_ref()
-                .filter(|link| link.is_open())
-                .cloned()
-                .ok_or(LeaseRefusal::EnvironmentUnreachable)?;
-            let proved = proof
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .clone()
-                .ok_or(LeaseRefusal::EnvironmentUnreachable)?;
-            (link, proved)
-        };
-        match credentials.serves(&proved).await {
+        let Served { link, proof } = served(serving)
+            .filter(|served| served.link.is_open())
+            .ok_or(LeaseRefusal::EnvironmentUnreachable)?;
+        match credentials.serves(&proof).await {
             Ok(true) => Ok(link),
             Ok(false) => {
                 tracing::warn!(
@@ -414,6 +421,11 @@ impl Environment for SshEnvironment {
 
 impl CommandEnvironment for SshEnvironment {
     fn reachable(&self) -> Option<bool> {
+        if let Reach::Peer { serving, .. } = &self.inner.reach {
+            return served(serving)
+                .is_some_and(|served| served.link.is_open())
+                .then_some(true);
+        }
         let held = self.inner.link.try_lock().ok()?;
         held.as_ref()
             .is_some_and(|link| link.is_open())

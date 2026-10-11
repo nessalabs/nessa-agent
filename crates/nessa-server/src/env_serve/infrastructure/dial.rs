@@ -32,9 +32,10 @@ use std::{
 /// the paired environment `identity` is, and have it served.
 ///
 /// # Errors
-/// The gateway could not be reached or did not answer in time, its key is
-/// not `pin`, it refused this key (`PermissionDenied`), or it answered
-/// something else (`InvalidData`).
+/// The gateway could not be reached or did not answer in time, the
+/// handshake failed, as it does when its key is not `pin`
+/// (`ConnectionAborted`), it refused this key (`PermissionDenied`), or it
+/// answered something else (`InvalidData`).
 #[cfg_attr(
     not(test),
     allow(dead_code, reason = "the environment's command dials in part 1c")
@@ -63,8 +64,10 @@ fn open_environment(
     let (stream, deadline) =
         DeadlineStream::new(socket, clock, WakeEndpoint::new(address)).map_err(deadline_error)?;
     stream.blocking().map_err(deadline_error)?;
+    // The handshake does not tell a cut connection from a key that is not
+    // `pin`; either is worth trying again, unlike a refusal of this key.
     let transport = NativeTransport::connect(stream, identity, GatewayTrust::Pinned(pin))
-        .map_err(|error| Error::new(ErrorKind::PermissionDenied, format!("{error:?}")))?;
+        .map_err(|error| Error::new(ErrorKind::ConnectionAborted, format!("{error:?}")))?;
     begin_enrollment_phase(&deadline).map_err(deadline_error)?;
     let mut channel = EnrollmentChannel::new(transport);
     let request = encode_request(&NativePairingRequest::OpenEnvironment)

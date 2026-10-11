@@ -49,7 +49,8 @@ pub(crate) trait ServingCredentials: Send + Sync {
     ) -> EnvironmentFuture<'a, Result<bool, AccessError>>;
 }
 
-/// This gateway's paired environments, one per key, made when first named.
+/// This gateway's paired environments, one per key, made when it first
+/// dials in.
 pub(crate) struct PeerEnvironments {
     credentials: Arc<dyn ServingCredentials>,
     audit: Arc<dyn EnvironmentAudit>,
@@ -115,8 +116,25 @@ impl PeerEnvironments {
 }
 
 impl PairedEnvironments for PeerEnvironments {
+    /// The one that has dialed in under `peer`'s key; for a key that never
+    /// has, one with no connection, kept nowhere, so a name an agent makes
+    /// up adds nothing here.
     fn environment(&self, peer: &PeerEnvironment) -> Arc<dyn Environment> {
-        self.peer(*peer)
+        let known = self
+            .peers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(peer)
+            .cloned();
+        match known {
+            Some(environment) => environment,
+            None => Arc::new(SshEnvironment::peer(
+                *peer,
+                self.credentials.clone(),
+                self.audit.clone(),
+                self.timings,
+            )),
+        }
     }
 
     fn connected(&self) -> Vec<PeerEnvironment> {
