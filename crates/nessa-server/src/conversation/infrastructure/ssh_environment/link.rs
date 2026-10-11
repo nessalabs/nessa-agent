@@ -937,6 +937,9 @@ enum Routed {
 fn route_frame(routes: &mut Routes, frame: FromEnvironment) -> Routed {
     match frame {
         FromEnvironment::Hello { .. } | FromEnvironment::Unavailable { .. } => Routed::Dropped,
+        // Only proof the host is still there: its arrival already reset the
+        // demux's silence bound, and nothing waits on it.
+        FromEnvironment::Keepalive => Routed::Done,
         FromEnvironment::Accounted { lease, cleanup } => match routes.accounts.remove(&lease) {
             Some(waiters) => {
                 for waiter in waiters {
@@ -1162,6 +1165,7 @@ fn frame_name(frame: &FromEnvironment) -> &'static str {
     match frame {
         FromEnvironment::Hello { .. } => "hello",
         FromEnvironment::Unavailable { .. } => "unavailable",
+        FromEnvironment::Keepalive => "keepalive",
         FromEnvironment::Granted { .. } => "granted",
         FromEnvironment::Refused { .. } => "refused",
         FromEnvironment::StartFailed { .. } => "start_failed",

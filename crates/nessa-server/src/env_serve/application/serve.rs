@@ -51,7 +51,7 @@ use super::artifacts::{ArtifactOutbox, LeaseArtifacts};
 use super::wire::{write_frame, FrameStream};
 use nessa_protocol::lease::{
     decode, Cleanup, Collection, CommandEnd, Data, FromEnvironment, GrantRefusal, Hello,
-    StartFailure, ToEnvironment, Unavailability, MAX_DATA_BYTES, MAX_STOP_WAIT, SILENCE_LIMIT,
+    StartFailure, ToEnvironment, Unavailability, MAX_DATA_BYTES, MAX_STOP_WAIT, KEEPALIVE_INTERVAL, SILENCE_LIMIT,
 };
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
@@ -391,7 +391,14 @@ where
 {
     let (sender, mut receiver) = mpsc::channel::<FromEnvironment>(OUTPUT_QUEUE);
     let writer = tokio::spawn(async move {
-        while let Some(frame) = receiver.recv().await {
+        loop {
+            // Idle for a keepalive interval: the gateway is told this side is
+            // still there, which a network gone silent cannot tell it.
+            let frame = match tokio::time::timeout(KEEPALIVE_INTERVAL, receiver.recv()).await {
+                Ok(Some(frame)) => frame,
+                Ok(None) => break,
+                Err(_) => FromEnvironment::Keepalive,
+            };
             if let Err(error) = write_frame(&mut output, &frame).await {
                 tracing::warn!(%error, "a lease frame could not be written to the gateway");
                 break;

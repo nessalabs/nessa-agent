@@ -29,11 +29,13 @@ mod protected;
 mod receivers;
 mod registration;
 mod runtime;
+mod tls_stream;
 pub use connection::{NativeConnectionError, NativeConnectionFailure, NativeEnrollmentConnections};
 pub use identity::{restore_gateway_identity, GatewayIdentityError};
 pub use listener::{Accepted, EnrollmentAccept, NativeEnrollmentListener, TcpEnrollmentAccept};
 pub use owner_commands::{InvitationEntropy, InvitationEntropySource, PairingOwnerCommands};
 pub use protected::{ProtectedConnection, ProtectedSessions};
+pub use tls_stream::{TlsCloser, TlsStream};
 pub use receivers::ConversationReceivers;
 pub use registration::{RegisteredInvitation, RegistrationError, RegistrationWorker};
 pub use runtime::{
