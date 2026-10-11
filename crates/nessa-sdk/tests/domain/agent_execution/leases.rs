@@ -392,6 +392,7 @@ fn a_peer_environment_name_reads_back_as_its_key() {
         format!("peer:{hex}0"),
         format!("peer:{}", hex.to_uppercase()),
         format!("peer:{}g", &hex[1..]),
+        format!("peer:g{}", &hex[1..]),
         format!("gateway:{hex}"),
         "peer:".to_owned(),
     ] {

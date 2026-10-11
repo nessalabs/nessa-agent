@@ -127,8 +127,10 @@ impl PeerEnvironment {
             .filter(|hex| hex.len() == 2 * Self::KEY_BYTES)
             .ok_or(ExecutionError::InvalidPeerEnvironment)?;
         let mut key = [0; Self::KEY_BYTES];
-        for (byte, pair) in key.iter_mut().zip(hex.as_bytes().chunks_exact(2)) {
-            *byte = (nibble(pair[0])? << 4) | nibble(pair[1])?;
+        // The length is checked, so the pairs fill the key exactly.
+        let (pairs, _) = hex.as_bytes().as_chunks::<2>();
+        for (byte, [high, low]) in key.iter_mut().zip(pairs) {
+            *byte = (nibble(*high)? << 4) | nibble(*low)?;
         }
         Ok(Self(key))
     }
