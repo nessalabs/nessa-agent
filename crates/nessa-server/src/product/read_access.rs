@@ -102,6 +102,7 @@ pub(super) async fn dispatch_share(
         receivers: receivers.as_ref(),
         grants: grants.as_ref(),
         access: state.access.as_ref(),
+        gateway: &state.gateway,
     };
     // Sharing is the owner's: a paired device signs in as its owner's
     // principal, so it is refused here by what it is, not only by the

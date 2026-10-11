@@ -20,7 +20,7 @@ use nessa_auth::{
             PortFuture, VerifiedCredential,
         },
     },
-    domain::{AudienceId, Credential, CredentialId, OrganizationId, ResourceId},
+    domain::{AudienceId, Credential, CredentialId, Grant, OrganizationId, Resource, ResourceId},
 };
 use nessa_client_core::pairing::NativeEnrollmentClient;
 use nessa_protocol::agents::AgentId;
@@ -548,6 +548,50 @@ impl<A: AccessReader> AccessReader for ContradictoryAccess<A> {
     }
 }
 
+/// An access reader whose answer about the asked credential is coherent but
+/// puts every grant it holds on another resource of the same organization.
+struct ElsewhereAccess<A>(Arc<A>);
+impl<A: AccessReader> AccessReader for ElsewhereAccess<A> {
+    fn read<'a>(&'a self, credential: &'a CredentialId) -> PortFuture<'a, AccessSnapshot> {
+        Box::pin(async move {
+            let mut asked = self.0.read(credential).await?;
+            let named = &asked.credential;
+            let elsewhere = named
+                .grants()
+                .iter()
+                .map(|grant| {
+                    Grant::new(
+                        grant.action().clone(),
+                        Resource::new(
+                            grant.resource().organization_id().clone(),
+                            ResourceId::new("another-gateway").unwrap(),
+                        ),
+                    )
+                })
+                .collect();
+            asked.credential = Credential::new(
+                named.id().clone(),
+                named.principal_id().clone(),
+                named.organization_id().clone(),
+                named.audience_id().clone(),
+                named.issued_at(),
+                named.expires_at(),
+                elsewhere,
+            )
+            .unwrap();
+            Ok(asked)
+        })
+    }
+}
+
+/// This gateway, as the share route names it.
+fn gateway() -> Resource {
+    Resource::new(
+        OrganizationId::new("org").unwrap(),
+        ResourceId::new("gateway").unwrap(),
+    )
+}
+
 /// Row I1 (`docs/design/auth/peer-gateways.md`, "Environment peers"): a
 /// gateway paired as an environment enrolls over the native listener as the
 /// peer principal holding `environment.serve` alone. A share to it is refused
@@ -604,6 +648,7 @@ async fn an_environment_is_paired_but_never_shared_with() {
         receivers: fixture.receivers.as_ref(),
         grants: metadata.as_ref(),
         access: fixture.registry.as_ref(),
+        gateway: &gateway(),
     };
     let caller = ConversationCaller {
         organization_id: fixture.session.context().organization_id().clone(),
@@ -672,8 +717,9 @@ async fn a_peer_reads_only_what_it_was_granted() {
     };
     let peer_credential = CredentialId::new(peer.credential.clone()).unwrap();
     // An access reader that answers about another credential (here, always
-    // the device's), or one that names the device's actor on the peer's
-    // credential against the peer's own membership, grants nothing.
+    // the device's), one that names the device's actor on the peer's
+    // credential against the peer's own membership, or one whose read is on
+    // another gateway, grants nothing.
     let misread = MisreadAccess(
         fixture.registry.clone(),
         CredentialId::new(device.credential.clone()).unwrap(),
@@ -682,9 +728,11 @@ async fn a_peer_reads_only_what_it_was_granted() {
         fixture.registry.clone(),
         CredentialId::new(device.credential.clone()).unwrap(),
     );
-    let readers: [(&dyn AccessReader, &str); 2] = [
+    let elsewhere = ElsewhereAccess(fixture.registry.clone());
+    let readers: [(&dyn AccessReader, &str); 3] = [
         (&misread, "share-peer-misread"),
         (&contradictory, "share-peer-contradictory"),
+        (&elsewhere, "share-peer-elsewhere"),
     ];
     for (access, request) in readers {
         let shares = ShareConversation {
@@ -692,6 +740,7 @@ async fn a_peer_reads_only_what_it_was_granted() {
             receivers: fixture.receivers.as_ref(),
             grants: metadata.as_ref(),
             access,
+            gateway: &gateway(),
         };
         assert!(matches!(
             shares
@@ -706,6 +755,7 @@ async fn a_peer_reads_only_what_it_was_granted() {
         receivers: fixture.receivers.as_ref(),
         grants: metadata.as_ref(),
         access: fixture.registry.as_ref(),
+        gateway: &gateway(),
     };
     assert!(shares
         .share(
