@@ -28,7 +28,7 @@ mkdir -p "$OUT"
 ROWS="$OUT/rows.jsonl"
 rm -f "$ROWS"
 PREFIX="$WORKDIR/prefix"
-trap 'stop_scripted_server' EXIT
+trap 'stop_scripted_server; rm -rf "$WORKDIR"' EXIT
 
 echo "installing opencode-ai@1.18.31 into $PREFIX" >&2
 npm install --prefix "$PREFIX" opencode-ai@1.18.31 >&2

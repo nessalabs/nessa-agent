@@ -17,8 +17,9 @@
 # invocations. events-permission omits it.
 #
 # --managed plants /etc/claude-code/managed-settings.json for two rows and
-# restores or removes it before the work directory is deleted. This script is
-# not run in CI: it needs the Claude Max login on the machine that holds it.
+# restores or removes it before the work directory is deleted. If that restore
+# fails, the work directory is kept and the script exits non-zero. This script
+# is not run in CI: it needs the Claude Max login on the machine that holds it.
 # stdout is the summary JSON. The reference checks exit non-zero when they fail.
 
 HOOK_BEHAVIOR_ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -51,14 +52,19 @@ MANAGED_EXISTED=0
 MANAGED_PLANTED=0
 
 # Restore the managed file before deleting the work directory. The backup
-# lives in that directory, so the reverse order would drop the original.
+# lives in that directory. A failed restore leaves the directory in place.
 cleanup() {
   local status=$?
   if [[ "$MANAGED_PLANTED" -eq 1 ]]; then
+    local restore_status=0
     if [[ "$MANAGED_EXISTED" -eq 1 ]]; then
-      sudo cp "$MANAGED_BACKUP" "$MANAGED_PATH" || true
+      sudo cp "$MANAGED_BACKUP" "$MANAGED_PATH" || restore_status=$?
     else
-      sudo rm -f "$MANAGED_PATH" || true
+      sudo rm -f "$MANAGED_PATH" || restore_status=$?
+    fi
+    if [[ "$restore_status" -ne 0 ]]; then
+      echo "error: failed to restore $MANAGED_PATH from $MANAGED_BACKUP" >&2
+      exit "$restore_status"
     fi
   fi
   rm -rf "$WORKDIR"

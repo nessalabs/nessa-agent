@@ -21,7 +21,8 @@ Diagnostics, including the package install, go to stderr.
 and `/compact`, is started with `(cd "$project" && ...)`.
 `--dangerously-skip-permissions` is passed only on those invocations, and
 `events-permission` omits it. `CLAUDE_CONFIG_DIR` is the real login directory.
-Credential files are not copied, and the script does not write that directory.
+Credential files are not copied. The script itself does not write that
+directory, but the Claude CLI writes session transcripts there (see below).
 The user hook is `--settings` pointing at a file inside the project. Project
 hooks are `$project/.claude/settings.json`. Each command is
 `hook_cmd.py --source project|user|managed`, so the log names the source.
@@ -59,6 +60,8 @@ and `suppress-managed-plus-flag` (that file plus
 flag, and the two rows match. The reference check does not require those logs
 to be empty. The exit trap restores or removes
 `/etc/claude-code/managed-settings.json` and then deletes the work directory.
+If that restore or removal fails, it names both paths, leaves the work
+directory in place, and exits non-zero.
 
 Codex and OpenCode results are labeled `real harness, scripted model`. Codex
 `config.toml` leaves hooks enabled and does not set `notify`. Suppression on

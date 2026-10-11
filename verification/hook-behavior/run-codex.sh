@@ -29,7 +29,7 @@ mkdir -p "$OUT"
 ROWS="$OUT/rows.jsonl"
 rm -f "$ROWS"
 PREFIX="$WORKDIR/prefix"
-trap 'stop_scripted_server' EXIT
+trap 'stop_scripted_server; rm -rf "$WORKDIR"' EXIT
 
 echo "installing @openai/codex@0.154.0 into $PREFIX" >&2
 npm install --prefix "$PREFIX" @openai/codex@0.154.0 >&2

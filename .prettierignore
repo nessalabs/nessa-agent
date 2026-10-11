@@ -4,3 +4,4 @@ src-tauri
 .vendor
 pnpm-lock.yaml
 *.md
+verification/hook-behavior/evidence/
