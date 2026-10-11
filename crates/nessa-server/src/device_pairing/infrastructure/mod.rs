@@ -10,7 +10,8 @@
 //! ```text
 //! listener --> connection --> runtime --> application (owner, read_status) --> Auth
 //! connection --> nessa_protocol::pairing (enrollment_channel, wire, socket)
-//! connection --> protected (async framed TLS) --> ProtectedSessions (product)
+//! connection --> protected (framed tls_stream) --> ProtectedSessions (product)
+//! connection --> tls_stream --> EnvironmentPeers (paired environments)
 //! runtime  --> registration (one code registration at a time)
 //! owner_commands --> runtime (owner side only; the product socket's handle)
 //! receivers --> conversation receiver authority (application's PairingReceivers)
@@ -21,6 +22,7 @@
 //! Framing offsets are IO progress, not enrollment state. `shutdown` on each
 //! owner stops admission, wakes blocked sockets, and waits for its workers.
 mod connection;
+mod environment_peers;
 mod identity;
 mod listener;
 mod owner_admission;
@@ -31,6 +33,7 @@ mod registration;
 mod runtime;
 mod tls_stream;
 pub use connection::{NativeConnectionError, NativeConnectionFailure, NativeEnrollmentConnections};
+pub use environment_peers::EnvironmentPeers;
 pub use identity::{restore_gateway_identity, GatewayIdentityError};
 pub use listener::{Accepted, EnrollmentAccept, NativeEnrollmentListener, TcpEnrollmentAccept};
 pub use owner_commands::{InvitationEntropy, InvitationEntropySource, PairingOwnerCommands};

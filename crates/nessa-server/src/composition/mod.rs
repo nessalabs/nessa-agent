@@ -62,6 +62,8 @@ mod desktop;
 mod environment_tools;
 #[cfg(unix)]
 mod mcp_servers;
+#[cfg(unix)]
+mod paired_environments;
 
 mod provisioning;
 

@@ -3,7 +3,9 @@
 //! The socket each connection runs on, its phase deadlines and its wake, are
 //! `nessa_protocol::pairing::socket`, shared with the device's enrollment client.
 use super::{
+    environment_peers::EnvironmentPeers,
     protected::{ProtectedConnection, ProtectedSessions},
+    tls_stream::TlsStream,
     BeginPairing, GatewayPairing, PairingRuntimeError,
 };
 use nessa_auth::{
@@ -35,6 +37,9 @@ use tokio::{
 /// take the permits enrollment and pinned status need (design row PR10).
 /// Equal to the connection bound, which also sizes the wake report.
 const PRODUCT_SESSION_CAPACITY: usize = NATIVE_CONNECTION_CAPACITY;
+/// Bound on paired environments' connections, a pool of their own for the
+/// same reason; also the connection bound, which sizes the wake report.
+const ENVIRONMENT_CAPACITY: usize = NATIVE_CONNECTION_CAPACITY;
 
 /// Redacted primary physical/protocol refusal, without peer input diagnostics.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -65,6 +70,15 @@ pub enum NativeConnectionFailure {
     ProductUnregistered,
     /// Whether the key holds a device credential could not be read.
     ProductUnverifiable,
+    /// `openEnvironment` arrived but no paired environments are composed.
+    EnvironmentUnavailable,
+    /// `openEnvironment` arrived while every environment permit is held, or
+    /// after shutdown closed environment admission.
+    EnvironmentCapacity,
+    /// `openEnvironment` from a key that holds no credential to serve.
+    EnvironmentUnregistered,
+    /// Whether the key holds a credential to serve could not be read.
+    EnvironmentUnverifiable,
 }
 /// Primary failure and independent failure to settle the original charged attempt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -96,15 +110,54 @@ impl From<DeadlineError> for NativeConnectionError {
 /// A connection whose first envelope is `openProduct` moves to a pool of its
 /// own, also eight, and returns its connection permit, so product sessions
 /// never take the permits enrollment and pinned status need (design row PR10).
+/// One whose first envelope is `openEnvironment` moves to a third pool, also
+/// eight, the same way.
 pub struct NativeEnrollmentConnections {
     gateway: Arc<GatewayPairing>,
     clock: Arc<dyn Clock>,
     capacity: Arc<Semaphore>,
     drained: Arc<Notify>,
     wake: Arc<Mutex<WakeEndpoints>>,
-    product_capacity: Arc<Semaphore>,
-    product_wake: Arc<Mutex<WakeEndpoints>>,
+    product: Pool,
     sessions: Option<Arc<dyn ProtectedSessions>>,
+    environment: Pool,
+    peers: Option<Arc<dyn EnvironmentPeers>>,
+}
+
+/// A pool a connection moves to from the connection pool, selected by its
+/// first envelope: its permits and the wake sweep of the connections on it.
+#[derive(Clone)]
+struct Pool {
+    capacity: Arc<Semaphore>,
+    wake: Arc<Mutex<WakeEndpoints>>,
+    size: usize,
+}
+
+impl Pool {
+    fn new(size: usize) -> Self {
+        Self {
+            capacity: Arc::new(Semaphore::new(size)),
+            wake: Arc::new(Mutex::new(WakeEndpoints::new())),
+            size,
+        }
+    }
+
+    fn close(&self) {
+        let mut wake = self.wake.lock().unwrap_or_else(PoisonError::into_inner);
+        self.capacity.close();
+        wake.close();
+    }
+
+    fn report(&self) -> Option<NativeWakeReport> {
+        self.wake
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .report()
+    }
+
+    fn drained(&self) -> bool {
+        self.capacity.available_permits() == self.size
+    }
 }
 impl NativeEnrollmentConnections {
     /// Compose the actual canonical enrollment runtime before accepting sockets.
@@ -116,15 +169,23 @@ impl NativeEnrollmentConnections {
             capacity: Arc::new(Semaphore::new(NATIVE_CONNECTION_CAPACITY)),
             drained: Arc::new(Notify::new()),
             wake: Arc::new(Mutex::new(WakeEndpoints::new())),
-            product_capacity: Arc::new(Semaphore::new(PRODUCT_SESSION_CAPACITY)),
-            product_wake: Arc::new(Mutex::new(WakeEndpoints::new())),
+            product: Pool::new(PRODUCT_SESSION_CAPACITY),
             sessions: None,
+            environment: Pool::new(ENVIRONMENT_CAPACITY),
+            peers: None,
         }
     }
     /// Serve a connection whose first envelope is `openProduct` with
     /// `sessions`, on a product session permit (design rows PR1, PR10, PR13).
     pub fn with_protected_sessions(mut self, sessions: Arc<dyn ProtectedSessions>) -> Self {
         self.sessions = Some(sessions);
+        self
+    }
+    /// Serve a connection whose first envelope is `openEnvironment` with
+    /// `peers`, on an environment permit. Without it, `openEnvironment` is
+    /// refused.
+    pub fn with_environment_peers(mut self, peers: Arc<dyn EnvironmentPeers>) -> Self {
+        self.peers = Some(peers);
         self
     }
     /// Admit one accepted native TCP socket; the blocking worker owns all inputs.
@@ -165,25 +226,35 @@ impl NativeEnrollmentConnections {
         let permit = lease.clone();
         let gateway = self.gateway.clone();
         let handle = Handle::current();
-        let product = self.sessions.as_ref().map(|sessions| ProductAdmission {
-            sessions: sessions.clone(),
-            capacity: self.product_capacity.clone(),
-            wake: self.product_wake.clone(),
+        let admission = |pool: &Pool| Admission {
+            capacity: pool.capacity.clone(),
+            wake: pool.wake.clone(),
             connections: self.wake.clone(),
-            endpoint: endpoint_for_product(&lease),
+            endpoint: endpoint_of(&lease),
             drained: self.drained.clone(),
-        });
+        };
+        let admissions = Admissions {
+            product: self.sessions.as_ref().map(|sessions| ProductAdmission {
+                sessions: sessions.clone(),
+                pool: admission(&self.product),
+            }),
+            environment: self.peers.as_ref().map(|peers| EnvironmentAdmission {
+                peers: peers.clone(),
+                pool: admission(&self.environment),
+            }),
+        };
         let worker = tokio::task::spawn_blocking(move || {
             let _permit = permit;
             // Locals unwind physical IO and its runtime before the original permit.
             let runtime = gateway;
-            serve_exchange(&runtime, &handle, stream, deadline, entropy, product)
+            serve_exchange(&runtime, &handle, stream, deadline, entropy, admissions)
         });
         drop(wake);
         Ok(NativeConnectionTask {
             worker,
             lease,
             sessions: self.sessions.clone(),
+            peers: self.peers.clone(),
         })
     }
     pub(crate) fn close(&self) {
@@ -191,12 +262,8 @@ impl NativeEnrollmentConnections {
         self.capacity.close();
         wake.close();
         drop(wake);
-        let mut wake = self
-            .product_wake
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        self.product_capacity.close();
-        wake.close();
+        self.product.close();
+        self.environment.close();
     }
     /// The wake sweep from the first shutdown, if it has happened. A successful
     /// wake does not mean the worker has finished; `shutdown` reports that.
@@ -209,13 +276,15 @@ impl NativeEnrollmentConnections {
     /// The product sessions' wake sweep from the first shutdown, if it has
     /// happened; as with [`Self::wake_report`], not evidence of a drain.
     pub fn product_wake_report(&self) -> Option<NativeWakeReport> {
-        self.product_wake
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .report()
+        self.product.report()
+    }
+    /// The paired environments' wake sweep from the first shutdown, if it
+    /// has happened; likewise not evidence of a drain.
+    pub fn environment_wake_report(&self) -> Option<NativeWakeReport> {
+        self.environment.report()
     }
     /// Exclude new sockets and await actual blocked/unwinding closure drain,
-    /// of connections and product sessions alike.
+    /// of connections, product sessions and environments alike.
     pub async fn shutdown(&self) {
         self.close();
         loop {
@@ -223,7 +292,8 @@ impl NativeEnrollmentConnections {
             tokio::pin!(notified);
             notified.as_mut().enable();
             if self.capacity.available_permits() == NATIVE_CONNECTION_CAPACITY
-                && self.product_capacity.available_permits() == PRODUCT_SESSION_CAPACITY
+                && self.product.drained()
+                && self.environment.drained()
             {
                 return;
             }
@@ -235,11 +305,14 @@ pub(super) struct NativeConnectionTask {
     worker: JoinHandle<Result<Served, NativeConnectionError>>,
     lease: Arc<ConnectionPermit>,
     sessions: Option<Arc<dyn ProtectedSessions>>,
+    peers: Option<Arc<dyn EnvironmentPeers>>,
 }
 impl NativeConnectionTask {
     /// The blocking worker's outcome. A connection it handed to the product
     /// returns its connection permit and is served here on its product
-    /// session permit until the session ends (design rows PR1, PR10, PR11).
+    /// session permit until the session ends (design rows PR1, PR10, PR11);
+    /// one it handed to the paired environments, likewise on its environment
+    /// permit.
     pub(super) async fn complete(self) -> NativeConnectionCompletion {
         let mut lease = Some(self.lease);
         let outcome = self
@@ -251,24 +324,39 @@ impl NativeConnectionTask {
                 )))
             })
             .and_then(|result| result);
-        let outcome = match (outcome, self.sessions) {
-            (Ok(Served::Enrollment), _) => Ok(()),
-            (Ok(Served::Product(channel, product)), Some(sessions)) => {
-                drop(lease.take());
-                let served = match ProtectedConnection::open(channel.into_transport()) {
-                    Ok(connection) => {
-                        sessions.serve(connection).await;
-                        Ok(())
-                    }
-                    Err(error) => Err(NativeConnectionFailure::Io(error.kind()).into()),
-                };
-                drop(product);
-                served
-            }
-            (Ok(Served::Product(..)), None) => {
-                Err(NativeConnectionFailure::ProductUnavailable.into())
-            }
-            (Err(error), _) => Err(error),
+        let outcome = match outcome {
+            Ok(Served::Enrollment) => Ok(()),
+            Ok(Served::Product(channel, product)) => match self.sessions {
+                Some(sessions) => {
+                    drop(lease.take());
+                    let served = match ProtectedConnection::open(channel.into_transport()) {
+                        Ok(connection) => {
+                            sessions.serve(connection).await;
+                            Ok(())
+                        }
+                        Err(error) => Err(NativeConnectionFailure::Io(error.kind()).into()),
+                    };
+                    drop(product);
+                    served
+                }
+                None => Err(NativeConnectionFailure::ProductUnavailable.into()),
+            },
+            Ok(Served::Environment(channel, environment)) => match self.peers {
+                Some(peers) => {
+                    drop(lease.take());
+                    let served = match TlsStream::open(channel.into_transport()) {
+                        Ok(stream) => {
+                            peers.serve(stream).await;
+                            Ok(())
+                        }
+                        Err(error) => Err(NativeConnectionFailure::Io(error.kind()).into()),
+                    };
+                    drop(environment);
+                    served
+                }
+                None => Err(NativeConnectionFailure::EnvironmentUnavailable.into()),
+            },
+            Err(error) => Err(error),
         };
         NativeConnectionCompletion { outcome, lease }
     }
@@ -298,52 +386,69 @@ impl Drop for ConnectionPermit {
         self.drained.notify_waiters();
     }
 }
-fn endpoint_for_product(lease: &ConnectionPermit) -> Arc<WakeEndpoint> {
+fn endpoint_of(lease: &ConnectionPermit) -> Arc<WakeEndpoint> {
     lease
         .endpoint
         .clone()
         .expect("a live connection permit holds its endpoint")
 }
+/// What the blocking worker may move a connection to, by its first envelope.
+struct Admissions {
+    product: Option<ProductAdmission>,
+    environment: Option<EnvironmentAdmission>,
+}
 /// Admission to the product session pool, taken by the blocking worker when
 /// the first envelope is `openProduct`.
 struct ProductAdmission {
     sessions: Arc<dyn ProtectedSessions>,
+    pool: Admission,
+}
+/// Admission to the environment pool, taken by the blocking worker when the
+/// first envelope is `openEnvironment`.
+struct EnvironmentAdmission {
+    peers: Arc<dyn EnvironmentPeers>,
+    pool: Admission,
+}
+/// One connection's way into a pool of its own.
+struct Admission {
     capacity: Arc<Semaphore>,
     wake: Arc<Mutex<WakeEndpoints>>,
     connections: Arc<Mutex<WakeEndpoints>>,
     endpoint: Arc<WakeEndpoint>,
     drained: Arc<Notify>,
 }
-impl ProductAdmission {
-    /// Take a product permit and move the connection's wake endpoint to the
-    /// product sweep. `close` closes the pool under the same lock, so a
-    /// session admitted here is swept, and a closed pool admits nothing.
-    fn admit(&self) -> Result<ProductPermit, NativeConnectionError> {
+impl Admission {
+    /// Take a permit and move the connection's wake endpoint to the pool's
+    /// sweep. `close` closes the pool under the same lock, so a connection
+    /// admitted here is swept, and a closed pool admits nothing; a full or
+    /// closed one is `full`.
+    fn admit(&self, full: NativeConnectionFailure) -> Result<PoolPermit, NativeConnectionError> {
         let mut wake = self.wake.lock().unwrap_or_else(PoisonError::into_inner);
-        let permit =
-            self.capacity.clone().try_acquire_owned().map_err(|_| {
-                NativeConnectionError::from(NativeConnectionFailure::ProductCapacity)
-            })?;
+        let permit = self
+            .capacity
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| NativeConnectionError::from(full))?;
         wake.register(&self.endpoint);
         drop(wake);
         self.connections
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .remove(&self.endpoint);
-        Ok(ProductPermit {
+        Ok(PoolPermit {
             endpoint: Some(self.endpoint.clone()),
             permit: Some(permit),
             drained: self.drained.clone(),
         })
     }
 }
-/// One product session's permit, held until the session ends.
-pub(super) struct ProductPermit {
+/// One product session's or environment's permit, held until it ends.
+pub(super) struct PoolPermit {
     endpoint: Option<Arc<WakeEndpoint>>,
     permit: Option<OwnedSemaphorePermit>,
     drained: Arc<Notify>,
 }
-impl Drop for ProductPermit {
+impl Drop for PoolPermit {
     fn drop(&mut self) {
         drop(self.endpoint.take());
         drop(self.permit.take());
@@ -357,7 +462,10 @@ pub(super) enum Served {
     Enrollment,
     /// The first envelope was `openProduct`: the TLS connection, for the
     /// product session, and its product session permit.
-    Product(Box<EnrollmentChannel<DeadlineStream>>, ProductPermit),
+    Product(Box<EnrollmentChannel<DeadlineStream>>, PoolPermit),
+    /// The first envelope was `openEnvironment`, answered `serving`: the TLS
+    /// connection, for the paired environment, and its environment permit.
+    Environment(Box<EnrollmentChannel<DeadlineStream>>, PoolPermit),
 }
 fn serve_exchange<R: RngCore + CryptoRng>(
     gateway: &GatewayPairing,
@@ -365,7 +473,7 @@ fn serve_exchange<R: RngCore + CryptoRng>(
     stream: DeadlineStream,
     deadline: Arc<NativeDeadline>,
     mut entropy: R,
-    product: Option<ProductAdmission>,
+    admissions: Admissions,
 ) -> Result<Served, NativeConnectionError> {
     stream.blocking()?;
     let channel = NativeTransport::accept(stream, gateway.identity())
@@ -377,10 +485,13 @@ fn serve_exchange<R: RngCore + CryptoRng>(
         &mut channel,
         &deadline,
         &mut entropy,
-        product.as_ref(),
+        &admissions,
     );
     match result {
         Ok(Exchanged::ProductSelected(permit)) => Ok(Served::Product(Box::new(channel), permit)),
+        Ok(Exchanged::EnvironmentSelected(permit)) => {
+            Ok(Served::Environment(Box::new(channel), permit))
+        }
         Ok(Exchanged::Finished) => Ok(Served::Enrollment),
         Err(error) => {
             if answers_with_refusal(error.failure) {
@@ -403,7 +514,11 @@ fn answers_with_refusal(failure: NativeConnectionFailure) -> bool {
         | NativeConnectionFailure::ProductUnavailable
         | NativeConnectionFailure::ProductCapacity
         | NativeConnectionFailure::ProductUnregistered
-        | NativeConnectionFailure::ProductUnverifiable => true,
+        | NativeConnectionFailure::ProductUnverifiable
+        | NativeConnectionFailure::EnvironmentUnavailable
+        | NativeConnectionFailure::EnvironmentCapacity
+        | NativeConnectionFailure::EnvironmentUnregistered
+        | NativeConnectionFailure::EnvironmentUnverifiable => true,
         NativeConnectionFailure::Capacity
         | NativeConnectionFailure::Crypto(_)
         | NativeConnectionFailure::Io(_)
@@ -416,32 +531,61 @@ enum Exchanged {
     /// Enrollment or status answered.
     Finished,
     /// The first envelope selected the product session, admitted to its pool.
-    ProductSelected(ProductPermit),
+    ProductSelected(PoolPermit),
+    /// The first envelope selected the environment phase, admitted to its
+    /// pool and answered `serving`.
+    EnvironmentSelected(PoolPermit),
 }
 /// One enrollment exchange. Only a first envelope can select the product
 /// session, only when `product` admission is composed, and only with a free
-/// product session permit (design rows PR1, PR2, PR10, PR13).
+/// product session permit (design rows PR1, PR2, PR10, PR13); the same holds
+/// for the environment phase and its admission.
 fn exchange<R: RngCore + CryptoRng>(
     gateway: &GatewayPairing,
     handle: &Handle,
     channel: &mut EnrollmentChannel<DeadlineStream>,
     deadline: &NativeDeadline,
     entropy: &mut R,
-    product: Option<&ProductAdmission>,
+    admissions: &Admissions,
 ) -> Result<Exchanged, NativeConnectionError> {
     begin_enrollment_phase(deadline)?;
     let first = read_request(channel)?;
     check_deadline(deadline)?;
     let public = match first {
         NativePairingRequest::OpenProduct => {
-            let product = product.ok_or(NativeConnectionFailure::ProductUnavailable)?;
+            let product = admissions
+                .product
+                .as_ref()
+                .ok_or(NativeConnectionFailure::ProductUnavailable)?;
             // Only a paired device's key may take a product permit (row PR15).
             match product.sessions.admits(channel.transport().device_proof()) {
                 Ok(true) => {}
                 Ok(false) => return Err(NativeConnectionFailure::ProductUnregistered.into()),
                 Err(_) => return Err(NativeConnectionFailure::ProductUnverifiable.into()),
             }
-            return product.admit().map(Exchanged::ProductSelected);
+            return product
+                .pool
+                .admit(NativeConnectionFailure::ProductCapacity)
+                .map(Exchanged::ProductSelected);
+        }
+        NativePairingRequest::OpenEnvironment => {
+            let environment = admissions
+                .environment
+                .as_ref()
+                .ok_or(NativeConnectionFailure::EnvironmentUnavailable)?;
+            // Only a key that may serve takes an environment permit.
+            let admitted =
+                handle.block_on(environment.peers.admits(channel.transport().device_proof()));
+            match admitted {
+                Ok(true) => {}
+                Ok(false) => return Err(NativeConnectionFailure::EnvironmentUnregistered.into()),
+                Err(_) => return Err(NativeConnectionFailure::EnvironmentUnverifiable.into()),
+            }
+            let permit = environment
+                .pool
+                .admit(NativeConnectionFailure::EnvironmentCapacity)?;
+            write_reply(channel, wire::encode_serving())?;
+            return Ok(Exchanged::EnvironmentSelected(permit));
         }
         NativePairingRequest::Status(public) => {
             return send_status(gateway, handle, channel, public).map(|()| Exchanged::Finished);
