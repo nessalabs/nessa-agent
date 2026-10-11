@@ -210,4 +210,3 @@ pub(crate) fn history_fixture(count: usize) -> SessionSnapshot {
         artifacts: Vec::new(),
     }
 }
-
