@@ -21,6 +21,16 @@ describe("the heading's word on the agent's lease", () => {
     ).toBe("Ended when the connection to its host was lost · devbox")
   })
 
+  it("names the paired machine a lease runs on by the start of its key", () => {
+    expect(
+      leaseNote({
+        state: "live",
+        environment: "peer",
+        host: `peer:0123abcd${"ef".repeat(28)}`,
+      }),
+    ).toBe("Allowed to run · Paired machine 0123abcd")
+  })
+
   it("says nothing of a lease the gateway cannot read", () => {
     expect(leaseNote({ state: "unreadable" })).toBeUndefined()
   })

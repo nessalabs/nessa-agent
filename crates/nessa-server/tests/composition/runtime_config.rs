@@ -64,6 +64,14 @@ fn environment_tools_grant_commands_on_named_hosts_under_their_programs() {
     assert_eq!(policy.admit("devbox", "cargo"), Ok(()));
     assert!(policy.admit("devbox", "ls").is_err());
     assert!(policy.admit("devbox", "sh").is_err());
+    // A paired environment is named as it dials in, never in sshHosts.
+    let peer = format!("peer:{}", "ab".repeat(32));
+    let paired = self::policy(
+        &serde_json::json!({"environmentTools": {"commandHosts": [peer]}}).to_string(),
+    )
+    .unwrap()
+    .unwrap();
+    assert!(paired.grants(&peer));
 }
 
 #[test]
@@ -71,6 +79,7 @@ fn environment_tools_naming_an_unknown_host_or_a_path_refuse_the_configuration()
     let many: Vec<String> = (0..=MAX_POLICY_PROGRAMS).map(|n| format!("p{n}")).collect();
     for json in [
         r#"{"environmentTools":{"commandHosts":["devbox"]}}"#.to_owned(),
+        r#"{"environmentTools":{"commandHosts":["peer:AB"]}}"#.to_owned(),
         r#"{"sshHosts":["devbox"],"environmentTools":{}}"#.to_owned(),
         r#"{"sshHosts":["devbox"],"environmentTools":{"commandHosts":["devbox"],"denyPrograms":["/bin/rm"]}}"#.to_owned(),
         r#"{"sshHosts":["devbox"],"environmentTools":{"commandHosts":["devbox"],"allowPrograms":[""]}}"#.to_owned(),

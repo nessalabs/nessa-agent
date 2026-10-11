@@ -1308,19 +1308,24 @@ says why where the conversations would be.
   every lease state the gateway publishes, read in full.**
   _Check:_ `lease-details.mjs` mounts the production details sheet over each
   published lease (none, live, ending, ended, interrupted, refused, unreadable,
-  and live, lost and refused on an SSH host), decoded by the actual client
-  validator, at 360, 600 and 1440 px. It asserts the "Where it runs" rows in
-  order (a refused lease shows only its status, and the SSH host it was asked
-  of; an unreadable one claims nothing known; an SSH host is named in full),
+  and live, lost and refused on an SSH host and on a paired machine), decoded
+  by the actual client validator, at 360, 600 and 1440 px. It asserts the
+  "Where it runs" rows in order (a refused lease shows only its status, and
+  the host it was asked of; an unreadable one claims nothing known; an SSH
+  host is named in full; a paired machine is "Paired machine" and the first
+  eight hex digits of its key),
   that no value is cut short, and that the section stays inside the viewport.
   Fixture map: [conversation verification](../conversation/README.md).
-- [ ] **A new conversation can be put on an SSH host the gateway names, and
-  only then.** _Check:_ `lease-details.mjs` (`run-on-none`, `run-on-hosts`)
+- [ ] **A new conversation can be put on an SSH host the gateway names, or a
+  paired machine connected when it asks, and only then.** _Check:_
+  `lease-details.mjs` (`run-on-none`, `run-on-hosts`, `run-on-paired`)
   mounts the production composer tray: with no host there is no "Run on" row;
   with hosts it lists this computer (checked and focused) and each host in
-  full, a choice is reported and shown on the row, and nothing scrolls
-  sideways. The tray is the only place a host is chosen; the gateway refuses a
-  host its `config.json` does not name.
+  full, marked SSH, then each paired machine as "Paired machine" and the start
+  of its key, marked Paired; a choice is reported by its full name and shown
+  on the row, and nothing scrolls sideways. The tray is the only place a host
+  is chosen; the gateway refuses a host its `config.json` does not name, and a
+  paired machine that is not connected.
 
 ## Committed transcript controls
 

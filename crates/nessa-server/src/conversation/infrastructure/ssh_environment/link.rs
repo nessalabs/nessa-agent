@@ -8,6 +8,7 @@
 //!          empty workspace ──▶ Unavailable{busy | notConfigured} ──▶ refused
 //!          yes ──▶ writer task (frames out), demux task (frames in)
 //! writer: frames out, in the order queued; a Keepalive when idle `keepalive`
+//! demux: nothing read for `silence`, keepalives included ──▶ end of stream
 //! demux: frame ──▶ lease route? ──▶ grant / channel output / stopped / ended
 //!                   published ──▶ the lease's offers ──▶ (taken) Collected
 //!                     no room, or nobody takes them ──▶ Collected refused
@@ -46,7 +47,7 @@
 //! lease's end has no evidence, so it is Interrupted. A dropped frame's
 //! record failing is logged only: it records no transition of any lease.
 use super::audit::{EnvironmentAudit, EnvironmentEvent};
-use super::connector::{ArtifactChannels, LeaseConnector};
+use super::connector::{ArtifactChannels, LeaseConnection, LeaseConnector};
 use crate::env::LEASE_PROTOCOL;
 use crate::env_serve::application::FrameStream;
 use futures_util::FutureExt;
@@ -198,7 +199,9 @@ pub(crate) struct Granted {
 
 /// One open connection to a host's environment.
 pub(crate) struct HostLink {
-    host: SshDestination,
+    /// Names the host in the log and the audit: its SSH destination, or a
+    /// paired environment's `peer:<key>`.
+    host: String,
     workspace: PathBuf,
     frames: mpsc::Sender<ToEnvironment>,
     routes: Arc<Mutex<Routes>>,
@@ -206,10 +209,22 @@ pub(crate) struct HostLink {
     keep: Mutex<Box<dyn Send>>,
     /// Opens artifact channels on this same connection.
     artifacts: Arc<dyn ArtifactChannels>,
+    /// Closes once the demux ends: the connection is over.
+    ended: watch::Receiver<()>,
 }
 
 /// How long the writer may be idle before it says the gateway is there.
 pub(crate) type Keepalive = Duration;
+
+/// How long a connection is kept, and believed, without a frame either way.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Liveness {
+    /// Past it with nothing to send, the writer sends a keepalive.
+    pub(crate) keepalive: Keepalive,
+    /// Past it with nothing read, keepalives included, the host is gone and
+    /// the connection ends, as if its stream had.
+    pub(crate) silence: Duration,
+}
 
 /// What a started harness's binding is handed.
 pub(crate) struct StartedChannel {
@@ -247,27 +262,39 @@ impl HostLink {
         connector: &dyn LeaseConnector,
         audit: Arc<dyn EnvironmentAudit>,
         deadline: Duration,
-        keepalive: Keepalive,
+        liveness: Liveness,
     ) -> Result<Arc<Self>, Opening> {
         let connection = connector.connect(host, command).map_err(|error| {
             tracing::warn!(host = host.as_str(), %error, "ssh could not be started");
             LeaseRefusal::EnvironmentUnreachable
         })?;
+        Self::over(host.as_str(), connection, audit, deadline, liveness).await
+    }
+
+    /// Serve leases over `connection`, already open to the host `host`
+    /// names, once its hello within `deadline` says it is this build's.
+    ///
+    /// # Errors
+    /// As [`Self::open`], but for starting the connection.
+    pub(crate) async fn over(
+        host: &str,
+        connection: LeaseConnection,
+        audit: Arc<dyn EnvironmentAudit>,
+        deadline: Duration,
+        liveness: Liveness,
+    ) -> Result<Arc<Self>, Opening> {
         let mut stream = FrameStream::new(connection.from_environment);
         let first = match tokio::time::timeout(deadline, stream.next()).await {
             Ok(Ok(Some(body))) => body,
             Ok(Ok(None)) => {
                 tracing::warn!(
-                    host = host.as_str(),
+                    host,
                     "the host's stream ended before its environment said anything"
                 );
                 return Err(Opening::NotServed);
             }
             Ok(Err(_)) | Err(_) => {
-                tracing::warn!(
-                    host = host.as_str(),
-                    "the host's environment did not answer"
-                );
+                tracing::warn!(host, "the host's environment did not answer");
                 return Err(LeaseRefusal::EnvironmentUnreachable.into());
             }
         };
@@ -276,17 +303,14 @@ impl HostLink {
             other => {
                 let (build, protocol) = other.map(|hello| (hello.build, hello.protocol)).unzip();
                 let event = EnvironmentEvent::VersionRefused {
-                    host: host.as_str().into(),
+                    host: host.into(),
                     build,
                     protocol,
                 };
                 if let Err(error) = audit.record(&event) {
                     tracing::error!(%error, "an environment's version refusal could not be recorded");
                 }
-                tracing::warn!(
-                    host = host.as_str(),
-                    "the host speaks another lease protocol"
-                );
+                tracing::warn!(host, "the host speaks another lease protocol");
                 return Err(LeaseRefusal::EnvironmentVersionMismatch.into());
             }
         };
@@ -299,7 +323,7 @@ impl HostLink {
             );
         }
         let connected = EnvironmentEvent::Connected {
-            host: host.as_str().into(),
+            host: host.into(),
             workspace: hello.workspace.clone(),
         };
         if let Err(error) = audit.record(&connected) {
@@ -307,24 +331,36 @@ impl HostLink {
             return Err(LeaseRefusal::EnvironmentUnreachable.into());
         }
         let (frames, outgoing) = mpsc::channel(TO_HOST_QUEUE);
-        tokio::spawn(write_frames(connection.to_environment, outgoing, keepalive));
+        tokio::spawn(write_frames(
+            connection.to_environment,
+            outgoing,
+            liveness.keepalive,
+        ));
         let routes = Arc::new(Mutex::new(Routes::default()));
+        let (ending, ended) = watch::channel(());
         let link = Arc::new(Self {
-            host: host.clone(),
+            host: host.into(),
             workspace,
             frames,
             routes,
             audit,
             keep: Mutex::new(connection.keep),
             artifacts: connection.artifacts,
+            ended,
         });
-        tokio::spawn(demux(Arc::downgrade(&link), link.shared(), stream));
+        tokio::spawn(demux(
+            Arc::downgrade(&link),
+            link.shared(),
+            stream,
+            liveness.silence,
+            ending,
+        ));
         Ok(link)
     }
 
     /// The refusal a hello without a workspace precedes.
     async fn unavailable<R: AsyncRead + Unpin>(
-        host: &SshDestination,
+        host: &str,
         stream: &mut FrameStream<R>,
         audit: &dyn EnvironmentAudit,
         deadline: Duration,
@@ -336,7 +372,7 @@ impl HostLink {
             },
             _ => None,
         };
-        let host_name = host.as_str().to_owned();
+        let host_name = host.to_owned();
         let (event, refusal) = match reason {
             Some(Unavailability::Busy) => (
                 EnvironmentEvent::Busy { host: host_name },
@@ -379,6 +415,20 @@ impl HostLink {
     /// Whether the connection still serves leases.
     pub(crate) fn is_open(&self) -> bool {
         !self.routes().closed && !self.frames.is_closed()
+    }
+
+    /// End the connection from this side: what keeps it open is let go, so
+    /// its stream ends and every lease on it is lost, as when the host goes.
+    pub(crate) fn close(&self) {
+        let mut keep = self.keep.lock().unwrap_or_else(PoisonError::into_inner);
+        drop(std::mem::replace(&mut *keep, Box::new(())));
+    }
+
+    /// Answers once the connection has ended and its leases are let go.
+    pub(crate) async fn ended(&self) {
+        let mut ended = self.ended.clone();
+        // Never sent to: only the demux's end, dropping the sender, answers.
+        while ended.changed().await.is_ok() {}
     }
 
     /// Ask the host to admit `lease` for `agent`, waiting at most `deadline`.
@@ -839,7 +889,7 @@ fn millis(duration: Duration) -> u64 {
 
 /// What the demux needs of the link without keeping it alive.
 struct Shared {
-    host: SshDestination,
+    host: String,
     routes: Arc<Mutex<Routes>>,
     audit: Arc<dyn EnvironmentAudit>,
     /// The host's frames, for an answer the demux gives itself; weak, so
@@ -937,6 +987,9 @@ enum Routed {
 fn route_frame(routes: &mut Routes, frame: FromEnvironment) -> Routed {
     match frame {
         FromEnvironment::Hello { .. } | FromEnvironment::Unavailable { .. } => Routed::Dropped,
+        // Only proof the host is still there: its arrival already reset the
+        // demux's silence bound, and nothing waits on it.
+        FromEnvironment::Keepalive => Routed::Done,
         FromEnvironment::Accounted { lease, cleanup } => match routes.accounts.remove(&lease) {
             Some(waiters) => {
                 for waiter in waiters {
@@ -1162,6 +1215,7 @@ fn frame_name(frame: &FromEnvironment) -> &'static str {
     match frame {
         FromEnvironment::Hello { .. } => "hello",
         FromEnvironment::Unavailable { .. } => "unavailable",
+        FromEnvironment::Keepalive => "keepalive",
         FromEnvironment::Granted { .. } => "granted",
         FromEnvironment::Refused { .. } => "refused",
         FromEnvironment::StartFailed { .. } => "start_failed",
@@ -1190,13 +1244,22 @@ async fn demux<R: AsyncRead + Unpin>(
     link: std::sync::Weak<HostLink>,
     shared: Shared,
     mut stream: FrameStream<R>,
+    silence: Duration,
+    _ending: watch::Sender<()>,
 ) {
     loop {
-        let body = match stream.next().await {
-            Ok(Some(body)) => body,
-            Ok(None) => break,
-            Err(error) => {
+        let body = match tokio::time::timeout(silence, stream.next()).await {
+            Ok(Ok(Some(body))) => body,
+            Ok(Ok(None)) => break,
+            Ok(Err(error)) => {
                 tracing::warn!(host = shared.host.as_str(), %error, "the host's lease stream could not be read");
+                break;
+            }
+            Err(_) => {
+                tracing::warn!(
+                    host = shared.host.as_str(),
+                    "nothing was heard from the host for its silence limit"
+                );
                 break;
             }
         };
@@ -1235,8 +1298,7 @@ async fn demux<R: AsyncRead + Unpin>(
     }
     // Ends the ssh process too, if it is somehow still running.
     if let Some(link) = link.upgrade() {
-        let mut keep = link.keep.lock().unwrap_or_else(PoisonError::into_inner);
-        drop(std::mem::replace(&mut *keep, Box::new(())));
+        link.close();
     }
 }
 

@@ -98,6 +98,7 @@ pub(super) enum WireRequest<'a> {
         public: WirePublic<'a>,
     },
     OpenProduct {},
+    OpenEnvironment {},
 }
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
@@ -113,6 +114,7 @@ pub(super) enum WireReply<'a> {
         status: WireStatus<'a>,
     },
     Refused {},
+    Serving {},
 }
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "stage", rename_all = "camelCase", deny_unknown_fields)]

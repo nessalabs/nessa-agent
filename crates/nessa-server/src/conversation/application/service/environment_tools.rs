@@ -26,18 +26,19 @@ use nessa_sdk::application::agent_execution::{
 use nessa_sdk::domain::agent_execution::executions::InvocationStage;
 use nessa_sdk::domain::agent_execution::leases::{
     CommandExit, CommandOutput, CommandRefusal, CommandTerms, CommandWork, EnvironmentRef, Lease,
-    LeaseEndCause, LeaseId, LeasePhase, SandboxProfile, SandboxProfiles, SshDestination,
+    LeaseEndCause, LeaseId, LeasePhase, SandboxProfile, SandboxProfiles,
 };
 use std::sync::Arc;
 use tokio::sync::watch;
 
 /// The environment named `here`: this gateway's own machine.
-pub const HERE: &str = "here";
+pub const HERE: &str = EnvironmentRef::HERE;
 
 /// One environment the agent could work in, as `environments_list` says.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EnvironmentListing {
-    /// `here`, or the SSH destination the configuration names.
+    /// `here`, the SSH destination the configuration names, or a connected
+    /// paired environment's `peer:<key>`.
     pub name: String,
     /// Whether it is this gateway's own machine.
     pub here: bool,
@@ -53,7 +54,7 @@ pub struct EnvironmentListing {
 /// One `run` call.
 #[derive(Clone, Debug)]
 pub struct CommandCall {
-    /// Where: an SSH destination `environments_list` named.
+    /// Where: an SSH host or paired environment `environments_list` named.
     pub environment: String,
     pub argv: Vec<String>,
     pub cwd: Option<String>,
@@ -101,9 +102,10 @@ impl ConversationService {
         self.inner.environment.command_policy().is_some()
     }
 
-    /// Where conversation `id`'s agent could work: here and every configured
-    /// host, what is known of reaching each without reaching it, and whether
-    /// commands are granted there.
+    /// Where conversation `id`'s agent could work: here, every configured
+    /// host and every connected paired environment, what is known of
+    /// reaching each without reaching it, and whether commands are granted
+    /// there.
     pub async fn list_environments(
         &self,
         id: &ConversationId,
@@ -118,14 +120,18 @@ impl ConversationService {
             commands: false,
             current: current.is_none(),
         }];
-        for (name, environment) in environments.hosts() {
+        let hosts = environments
+            .hosts()
+            .iter()
+            .map(|(name, environment)| (name.clone(), environment.clone()));
+        for (name, environment) in hosts.chain(environments.connected_peers()) {
             let commands = environment.commands();
             listed.push(EnvironmentListing {
-                name: name.clone(),
                 here: false,
                 reachable: commands.and_then(|commands| commands.reachable()),
-                commands: commands.is_some() && policy.is_some_and(|policy| policy.grants(name)),
+                commands: commands.is_some() && policy.is_some_and(|policy| policy.grants(&name)),
                 current: current.as_deref() == Some(name.as_str()),
+                name,
             });
         }
         Ok(listed)
@@ -158,21 +164,17 @@ impl ConversationService {
             running_turn(&snapshot, &call.call).ok_or(CommandCallError::NoTurn)?;
         let lease = LeaseId::new(uuid::Uuid::new_v4().to_string())
             .expect("a UUID is a portable lease identity");
-        // A name that is no host is not recorded as one: nothing names it.
-        let host = match call.environment.as_str() {
-            HERE => None,
-            named => Some(SshDestination::new(named).map_err(|_| {
-                CommandCallError::Invalid(format!("{named:?} names no environment"))
-            })?),
-        };
+        // A name that is no environment is not recorded as one: nothing
+        // names it.
+        let named = EnvironmentRef::named(&call.environment).map_err(|_| {
+            CommandCallError::Invalid(format!("{:?} names no environment", call.environment))
+        })?;
         // A caller already gone is asked nothing.
         if *stop.borrow() {
             return Err(CommandCallError::Cancelled);
         }
         let terms = CommandTerms {
-            environment: host
-                .clone()
-                .map_or(EnvironmentRef::Here, EnvironmentRef::Ssh),
+            environment: named.clone(),
             command: work.clone(),
             sandbox: call.sandbox,
         };
@@ -182,11 +184,13 @@ impl ConversationService {
             terms: &terms,
             actor: &actor,
         };
-        // Where: a host this gateway names, granted, whose environment runs
-        // commands. Here runs none: its commands are the agent's own shell's.
-        let environment: Option<Arc<dyn Environment>> = host
-            .as_ref()
-            .and_then(|host| self.inner.environment.hosts().get(host.as_str()).cloned());
+        // Where: a host or paired environment this gateway knows, granted,
+        // whose environment runs commands. Here runs none: its commands are
+        // the agent's own shell's.
+        let environment: Option<Arc<dyn Environment>> = match named {
+            EnvironmentRef::Here => None,
+            _ => self.inner.environment.named(&call.environment),
+        };
         let Some(environment) = environment else {
             let refusal = if call.environment == HERE {
                 CommandRefusal::CommandsUnavailable

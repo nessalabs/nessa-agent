@@ -13,6 +13,7 @@
 //! gateway ── End{lease} ──▶ environment ── Ended{cleanup} ──▶ gateway
 //! gateway ── Account{lease} ──▶ environment ── Accounted{cleanup} ──▶ gateway
 //! gateway ── Keepalive ──▶ environment   (every KEEPALIVE_INTERVAL, always)
+//! environment ── Keepalive ──▶ gateway   (when idle KEEPALIVE_INTERVAL)
 //! environment ── Published{lease, artifact, file} ──▶ gateway   (no bytes)
 //!   gateway ── sftp read of the file's outbox path ──▶ environment   (the artifact channel)
 //! gateway ── Collected{lease, artifact, outcome} ──▶ environment
@@ -36,7 +37,10 @@
 //! [`KEEPALIVE_INTERVAL`]. An environment that reads nothing at all for
 //! [`SILENCE_LIMIT`] takes the gateway as gone, as it does when the stream
 //! ends: a network that went away silently ends no stream until TCP gives
-//! up, hours later.
+//! up, hours later. The environment says the same when it has nothing else
+//! to say ([`FromEnvironment::Keepalive`]), so a gateway that holds no
+//! process of its own on the connection, as with an environment that dialed
+//! it, can tell the same of the environment.
 //!
 //! A command lease runs one command, once, and its `Ran` ends it: the
 //! environment answers it with the command's captured output, at most
@@ -411,6 +415,9 @@ pub enum FromEnvironment {
         /// See [`Hello::workspace`].
         workspace: String,
     },
+    /// Nothing else to say: the environment is still there. Sent when its
+    /// side was idle for [`KEEPALIVE_INTERVAL`].
+    Keepalive,
     /// Nothing is served on this connection.
     Unavailable {
         /// Why.
@@ -507,7 +514,7 @@ impl FromEnvironment {
     /// The lease the frame names, if it names one.
     pub fn lease(&self) -> Option<&str> {
         match self {
-            Self::Hello { .. } | Self::Unavailable { .. } => None,
+            Self::Hello { .. } | Self::Unavailable { .. } | Self::Keepalive => None,
             Self::Granted { lease }
             | Self::Refused { lease, .. }
             | Self::StartFailed { lease, .. }
