@@ -342,7 +342,7 @@ fn declined(record: &ReviewDeclineRecord) -> Value {
             "grantedBy":actor(rule.granted_by()),
         }),
     };
-    let value = json!({
+    json!({
         "kind":"review_declined",
         "sessionId":record.session_id().as_str(),
         "executionId":record.execution_id().as_str(),
@@ -356,8 +356,7 @@ fn declined(record: &ReviewDeclineRecord) -> Value {
         "outcome":outcome,
         "delivery":delivery(record.delivery()),
         "origin":origin,
-    });
-    value
+    })
 }
 /// One vocabulary for how a decision reached the provider, answered or refused.
 fn delivery(value: &PermissionAnswerDelivery) -> Value {

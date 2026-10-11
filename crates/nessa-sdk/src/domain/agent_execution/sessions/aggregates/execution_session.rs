@@ -192,8 +192,9 @@ impl ExecutionSession {
     /// reviews. Repeated valid calls return no new transition and cannot replace its cause.
     /// Execution-scoped callbacks must use `close_execution` with their captured ID.
     /// `ExecutionFailed` is rejected here; idle attachment failures use `SessionFailed`.
-    /// `reason` must describe session closure/failure, execution failure, deadline, or lost
-    /// consumer/handles. Permission-only causes return `InvalidSessionClosureReason`
+    /// `reason` must describe session closure/failure, a policy refusal, execution
+    /// failure, deadline, or lost consumer/handles. Permission-only causes return
+    /// `InvalidSessionClosureReason`
     /// before any mutation, including on an already-closed attachment.
     #[must_use = "retain cancellation evidence when closing the session"]
     pub fn close(

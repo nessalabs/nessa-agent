@@ -24,6 +24,7 @@ fn closure_constructor_retains_valid_session_and_execution_failure_evidence() {
             Some(ExecutionId::new("run").unwrap()),
             PermissionCancellationReason::execution_failed(),
         ),
+        (None, PermissionCancellationReason::policy_refusal()),
     ] {
         let closure =
             SessionClosure::new(session.clone(), execution.clone(), reason.clone()).unwrap();

@@ -784,6 +784,7 @@ fn execution_cleanup_causes_preserve_terminal_and_permission_correlation() {
         PermissionCancellationReason::deadline_exceeded(),
         PermissionCancellationReason::event_consumer_dropped(),
         PermissionCancellationReason::session_handles_dropped(),
+        PermissionCancellationReason::policy_refusal(),
     ] {
         let mut session = active_session();
         session.request_permission(request()).unwrap();
@@ -791,6 +792,7 @@ fn execution_cleanup_causes_preserve_terminal_and_permission_correlation() {
             reason.view(),
             PermissionCancellationReasonView::SessionClosed
                 | PermissionCancellationReasonView::SessionFailed
+                | PermissionCancellationReasonView::PolicyRefusal
                 | PermissionCancellationReasonView::DeadlineExceeded
                 | PermissionCancellationReasonView::EventConsumerDropped
                 | PermissionCancellationReasonView::SessionHandlesDropped
@@ -831,6 +833,38 @@ fn execution_cleanup_causes_preserve_terminal_and_permission_correlation() {
             }
         );
     }
+}
+
+#[test]
+fn a_policy_refusal_cannot_finish_an_open_execution_and_can_close_the_session() {
+    let mut session = active_session();
+    session.request_permission(request()).unwrap();
+    let reason = PermissionCancellationReason::policy_refusal();
+    assert!(matches!(
+        reason.view(),
+        PermissionCancellationReasonView::PolicyRefusal
+    ));
+    assert_eq!(
+        session.finish_execution(&execution("first"), Err(reason.clone())),
+        Err(ExecutionError::InvalidExecutionFailureReason)
+    );
+    assert!(!session.is_closed());
+    let (closure, cancelled) = session.close(reason.clone()).unwrap().into_parts();
+    assert_eq!(closure.unwrap().reason(), &reason);
+    assert_eq!(
+        cancelled[0].state(),
+        PermissionStateView::Cancelled { reason: &reason }
+    );
+    let (finished, remaining) = session
+        .finish_execution(&execution("first"), Err(reason.clone()))
+        .unwrap();
+    assert_eq!(finished.result(), &Err(reason));
+    assert!(remaining.is_empty());
+    assert!(session.is_closed());
+    assert_eq!(
+        session.begin_execution(execution("next")),
+        Err(ExecutionError::SessionClosed)
+    );
 }
 
 #[test]
