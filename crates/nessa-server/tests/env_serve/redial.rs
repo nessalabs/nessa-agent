@@ -200,10 +200,12 @@ async fn stop_asked_while_waiting_ends_the_wait() {
             .await
         })
     };
-    gateway.timer.nth(0).await;
+    let wait = gateway.timer.nth(0).await;
     stop.send(true).unwrap();
-    assert!(dialing.await.unwrap().is_ok());
-    // The wait ended without its time passing.
-    assert_eq!(gateway.timer.elapsed(), Duration::ZERO);
+    let dialed = tokio::time::timeout(Duration::from_secs(5), dialing)
+        .await
+        .expect("stop ends the wait before its deadline");
+    assert!(dialed.unwrap().is_ok());
+    assert!(gateway.timer.now() < wait.deadline);
     assert_eq!(gateway.dialed.lock().unwrap().len(), 1);
 }

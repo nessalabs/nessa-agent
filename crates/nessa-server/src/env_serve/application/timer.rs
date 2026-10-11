@@ -50,7 +50,7 @@ pub(crate) trait Timer: Send + Sync {
     /// The current moment. Never earlier than one this timer returned before.
     fn now(&self) -> Moment;
     /// Resolves once [`Self::now`] has reached `deadline`, at once if it
-    /// already has.
+    /// already has. It is not polled again after it resolves.
     fn sleep_until(&self, deadline: Moment) -> Sleep;
     /// Resolves once `period` has passed from now.
     fn sleep(&self, period: Duration) -> Sleep {
@@ -64,7 +64,9 @@ pub(crate) struct Elapsed;
 
 /// What `operation` returned, or [`Elapsed`] when `deadline` passes first.
 /// `operation` is polled first, so one finished at the moment the deadline
-/// passes is still its answer.
+/// passes is still its answer. As in Tokio's own `timeout`, the deadline is
+/// seen even when `operation` has spent the task's budget: an operation
+/// always ready to make progress still cannot outlast it.
 pub(crate) async fn within<T>(
     timer: &dyn Timer,
     deadline: Moment,
@@ -73,7 +75,7 @@ pub(crate) async fn within<T>(
     tokio::select! {
         biased;
         finished = operation => Ok(finished),
-        () = timer.sleep_until(deadline) => Err(Elapsed),
+        () = tokio::task::unconstrained(timer.sleep_until(deadline)) => Err(Elapsed),
     }
 }
 

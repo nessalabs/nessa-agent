@@ -3,10 +3,14 @@
 //! A wait started on it ends only when the test advances the timer to its
 //! deadline, so a test says exactly when time runs out, and nothing it
 //! checks can be cut short by a slow machine. What a test waits for in real
-//! time is still bounded by the test itself.
+//! time is still bounded: a wait that never starts fails the test after
+//! [`STARTING`], rather than hanging it.
 use super::{Moment, Sleep, Timer};
 use std::{sync::Mutex, time::Duration};
 use tokio::sync::watch;
+
+/// How long, in real time, a test waits for a wait to start.
+const STARTING: Duration = Duration::from_secs(5);
 
 /// One wait started on a [`ManualTimer`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -24,6 +28,8 @@ impl Wait {
     }
 }
 
+/// A timer at its origin until the test advances it, recording every wait
+/// started on it.
 pub(crate) struct ManualTimer {
     now: watch::Sender<Moment>,
     /// Every wait started, in order.
@@ -59,19 +65,29 @@ impl ManualTimer {
     pub(crate) fn waits(&self) -> Vec<Wait> {
         self.waits.lock().unwrap().clone()
     }
-    /// The first wait matching `wanted`, once it has started.
+    /// The first wait matching `wanted`, by its index from zero, once it
+    /// has started.
+    ///
+    /// # Panics
+    /// None has started within [`STARTING`] of real time.
     pub(crate) async fn started(&self, wanted: impl Fn(usize, &Wait) -> bool) -> Wait {
         let mut started = self.started.subscribe();
-        loop {
-            if let Some((_, wait)) = self
-                .waits()
-                .iter()
-                .enumerate()
-                .find(|(index, wait)| wanted(*index, wait))
-            {
-                return *wait;
+        let found = async {
+            loop {
+                if let Some((_, wait)) = self
+                    .waits()
+                    .iter()
+                    .enumerate()
+                    .find(|(index, wait)| wanted(*index, wait))
+                {
+                    return *wait;
+                }
+                started.changed().await.unwrap();
             }
-            started.changed().await.unwrap();
+        };
+        match tokio::time::timeout(STARTING, found).await {
+            Ok(wait) => wait,
+            Err(_) => panic!("no such wait started; waits: {:?}", self.waits()),
         }
     }
     /// The `index`th wait (from zero), once it has started.

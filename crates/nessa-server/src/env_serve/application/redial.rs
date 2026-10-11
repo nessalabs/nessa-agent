@@ -37,7 +37,9 @@ impl Default for Backoff {
 }
 
 /// Dial with `connect` and serve each connection with `serve` until `stop`
-/// says true, waiting on `timer`, or until `connect` fails with [`io::ErrorKind::InvalidInput`].
+/// says true, or until `connect` fails with [`io::ErrorKind::InvalidInput`].
+/// The waits between dials, and how long a connection was served, are
+/// measured on `timer`.
 ///
 /// `serve` is given `stop` too: it closes its connection once stop is asked
 /// and returns when serving it has ended. A connection served for less than

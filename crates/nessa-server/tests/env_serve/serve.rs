@@ -836,8 +836,9 @@ async fn a_silent_gateway_is_lost_and_serving_ends() {
     let timer = Arc::new(ManualTimer::default());
     let mut gateway = Gateway::timed(timer.clone());
     gateway.started(LEASE).await;
-    // Its stream stays open; nothing more arrives on it. Just short of the
-    // bound it is still served.
+    // Just short of the bound after the last frame it is still served, as
+    // the account answered here shows; that account is the last frame the
+    // gateway sends. Its stream stays open, and the bound runs from it.
     timer.advance(SILENCE_LIMIT - Duration::from_millis(1));
     gateway.settled().await;
     timer.advance(SILENCE_LIMIT);

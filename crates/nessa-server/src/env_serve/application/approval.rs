@@ -70,8 +70,8 @@ pub(crate) trait EnvironmentPairing: Send + Sync {
 }
 
 /// What `pairing` holds once the owner has approved it, asking every `poll`
-/// on `timer` until then; `None` when `stop` says true first, which wins over anything
-/// else ready at the same moment.
+/// on `timer` until then; `None` when `stop` says true first, which wins
+/// over anything else ready at the same moment.
 ///
 /// # Errors
 /// Why the pairing will not be approved.

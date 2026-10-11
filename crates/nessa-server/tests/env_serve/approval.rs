@@ -1,5 +1,5 @@
 use super::{approval, Answer, EnvironmentPairing, NotApproved, Saved};
-use crate::env_serve::application::timer::manual::ManualTimer;
+use crate::env_serve::application::{timer::manual::ManualTimer, Timer};
 use std::{sync::Mutex, time::Duration};
 use tokio::sync::watch;
 
@@ -178,8 +178,11 @@ async fn stop_asked_while_waiting_ends_the_wait() {
         timer.advance(Duration::from_secs(1));
         stop.send(true).unwrap();
     };
-    let (approved, ()) = tokio::join!(approval(&pairing, POLL, &timer, stopping), waiting);
+    let (approved, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(approval(&pairing, POLL, &timer, stopping), waiting)
+    })
+    .await
+    .expect("stop ends the poll's wait before its deadline");
     assert_eq!(approved, Ok(None));
-    // Stop ended the poll's wait a second in, not at its end.
-    assert_eq!(timer.elapsed(), Duration::from_secs(1));
+    assert!(timer.now() < timer.nth(0).await.deadline);
 }
