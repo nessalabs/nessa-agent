@@ -11,7 +11,9 @@ stores `result` capped at 200 characters, plus `terminal_reason` and
 leaves those booleans false. Transcript presence is not a model request.
 Codex and OpenCode keep `*_nonce_in_model_request` from the scripted
 request body, and they keep the excerpts. `finalize` refuses stored text that
-contains an email address or the home directory.
+contains an email address or the home directory. After it writes the summary,
+it exits 1 when a row's exit code is not the expected one: 0, except Codex
+`stop-decision-block` with suppression off, which is 124.
 """
 
 import argparse
@@ -221,12 +223,39 @@ def claude_reference(rows):
             fired.extend(row["events"])
     present = set(fired)
     missing = [name for name in REFERENCE_EVENTS if name not in present]
-    suppressed = [
-        row
-        for row in rows
-        if row["row"] == "suppress-settings" and row["suppression"] == "on"
-    ]
-    suppressed_events = suppressed[0]["events"] if suppressed else ["row-missing"]
+    plain = next(
+        (
+            row
+            for row in rows
+            if row["row"] == "events-plain" and row["suppression"] == "off"
+        ),
+        None,
+    )
+    plain_sources = plain.get("hook_sources") if plain else None
+    if not isinstance(plain_sources, list):
+        plain_sources = []
+    if "project" not in plain_sources:
+        missing.append("hook_source:project")
+    if "user" not in plain_sources:
+        missing.append("hook_source:user")
+    plain_exit_ok = plain is not None and plain.get("exit_code") == 0
+    suppressed = next(
+        (
+            row
+            for row in rows
+            if row["row"] == "suppress-settings" and row["suppression"] == "on"
+        ),
+        None,
+    )
+    reasons = suppressed.get("terminal_reason") if suppressed else None
+    if not isinstance(reasons, list):
+        reasons = []
+    hooks_empty = (
+        suppressed is not None
+        and suppressed.get("exit_code") == 0
+        and "completed" in reasons
+        and suppressed.get("events") == []
+    )
     denied = next(
         (
             row
@@ -243,7 +272,14 @@ def claude_reference(rows):
         and "PostToolUse" not in denied.get("events", [])
     )
     control = next((row for row in rows if row["row"] == "control-user"), None)
-    user_hook_wrote = control is not None and "user" in control.get("hook_sources", [])
+    control_sources = control.get("hook_sources") if control else None
+    if not isinstance(control_sources, list):
+        control_sources = []
+    user_hook_wrote = (
+        control is not None
+        and control.get("exit_code") == 0
+        and "user" in control_sources
+    )
     rewritten = next(
         (
             row
@@ -257,9 +293,9 @@ def claude_reference(rows):
         and rewritten.get("sentinel_files") == ["hook-sentinel-rewritten"]
     )
     checks = {
-        "events_present": missing == [],
+        "events_present": missing == [] and plain_exit_ok,
         "events_missing": missing,
-        "disable_all_hooks_empty": suppressed_events == [],
+        "disable_all_hooks_empty": hooks_empty,
         "pretool_deny_stopped_read": deny_ok,
         "pretool_allow_updated_rewritten_only": allow_ok,
         "user_hook_wrote": user_hook_wrote,
@@ -329,6 +365,29 @@ def summary_row(row):
     return item
 
 
+def expected_exit(harness, row):
+    if (
+        harness == "codex"
+        and row["row"] == "stop-decision-block"
+        and row["suppression"] == "off"
+    ):
+        return 124
+    return 0
+
+
+def unexpected_exit_lines(harness, rows):
+    lines = []
+    for row in rows:
+        expected = expected_exit(harness, row)
+        actual = row.get("exit_code")
+        if actual != expected:
+            lines.append(
+                f"unexpected exit: {row['row']} {row['suppression']} "
+                f"exit_code={actual} expected {expected}"
+            )
+    return lines
+
+
 def finalize(args):
     rows = load_rows(args.rows) if Path(args.rows).is_file() else []
     summary = {
@@ -350,9 +409,13 @@ def finalize(args):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     sys.stdout.write(json.dumps(summary) + "\n")
+    status = 0
     if args.claude_reference and not summary["reference_checks"]["ok"]:
-        return 1
-    return 0
+        status = 1
+    for line in unexpected_exit_lines(args.harness, rows):
+        print(line, file=sys.stderr)
+        status = 1
+    return status
 
 
 def main():

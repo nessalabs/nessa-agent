@@ -47,6 +47,13 @@ if [[ -n "$ONLY" && -z "$OUT" ]]; then
   exit 2
 fi
 if [[ -n "$ONLY" ]]; then
+  committed="$(realpath -m "$HOOK_BEHAVIOR_ROOT/evidence/opencode")"
+  if [[ "$(realpath -m "$OUT")" == "$committed" ]]; then
+    echo "--only cannot write to the committed evidence directory" >&2
+    exit 2
+  fi
+fi
+if [[ -n "$ONLY" ]]; then
   known=0
   for entry in "${ROWS_AND_MODES[@]}"; do
     if [[ "$ONLY" == "${entry%% *}" ]]; then

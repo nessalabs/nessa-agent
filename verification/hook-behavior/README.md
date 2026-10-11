@@ -16,8 +16,10 @@ verification/hook-behavior/run-opencode.sh
 `verification/hook-behavior/evidence/<harness>`. stdout is the summary JSON.
 Diagnostics, including the package install, go to stderr. `run-codex.sh` and
 `run-opencode.sh` accept `--only <row>`. `--only` without `--out` prints
-`--only needs --out` and exits 2, so a partial run cannot replace the committed
-evidence. An `--only` value that is not one of that runner's rows prints
+`--only needs --out` and exits 2. `--only` whose `--out` resolves to the
+committed evidence directory prints `--only cannot write to the committed
+evidence directory` and exits 2, before anything there is removed. An `--only`
+value that is not one of that runner's rows prints
 `unknown row: <name>` and exits 2. A full run, with no `--only`, is unchanged.
 
 `run-claude.sh` uses `env -u ANTHROPIC_API_KEY` and
@@ -46,17 +48,20 @@ Those two rows store only those booleans. Every other Claude row stores
 `result` capped at 200 characters, plus `terminal_reason` and
 `permission_denials`. Notes say `<login-dir>` and `<workdir>` instead of those
 paths. `finalize` exits non-zero when any stored text contains an email address
-or the home directory.
+or the home directory. After it writes the summary, it also exits non-zero
+when a row's exit code is not 0, and names that row on stderr. Codex
+`stop-decision-block` with suppression off is expected to exit 124.
 `pretool-allow-updated` asks for a Bash `touch` of
 `$SENTINEL/hook-sentinel-original` and passes only when the sentinel directory
 contains exactly `hook-sentinel-rewritten`.
 
-The reference checks require the six events on the plain and tool rows,
-an empty hook log for `suppress-settings`, a PreToolUse deny whose
-`permission_denials` has at least one entry and whose log has no PostToolUse,
-the rewritten sentinel alone, and a write from `control-user`. Whether the
-model quoted the deny reason is `deny_reason_quoted`. That fact is not part of
-the pass.
+The reference checks require the six events on the plain and tool rows, the
+unsuppressed `events-plain` row to exit 0 with both `project` and `user` hook
+sources, an empty `suppress-settings` log that exits 0 with `terminal_reason`
+`completed`, a PreToolUse deny whose `permission_denials` has at least one
+entry and whose log has no PostToolUse, the rewritten sentinel alone, and a
+write from `control-user` that exits 0. Whether the model quoted the deny
+reason is `deny_reason_quoted`. That fact is not part of the pass.
 
 `--managed` runs two extra rows, `suppress-managed` (the managed file only)
 and `suppress-managed-plus-flag` (that file plus
