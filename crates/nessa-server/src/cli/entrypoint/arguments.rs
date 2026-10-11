@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use crate::agent_install::domain::AgentName;
 
-pub const HELP: &str = "Nessa\n\n  nessa server [--provision-local]\n  nessa auth init --local [--owner-token-file PATH]\n  nessa auth token [--local] [--ttl 12h|7d|30m|60s | --no-expiry] [--credential-file PATH]\n  nessa doctor [--local] [--credential-file PATH]\n  nessa install-agent NAME\n  nessa limits [--json]\n  nessa env serve\n  nessa env protocol\n  nessa artifact publish PATH [--type MEDIA/TYPE]\n  nessa auth provision-surface --local --surface-id NAME [--grants ACTIONS]\n  nessa auth recover-owner --local --owner-token-file PATH\n\ninstall-agent downloads the release of an agent's own runtime that Nessa has\ntested, verifies it against a compiled-in digest, and reports what it installed\nas JSON on stdout. Installing one already present downloads nothing.\n\n`env serve` is the environment role a gateway starts over SSH, from the copy of\nits own build it installs under ~/.nessa/env on first use: it speaks lease frames on stdin and stdout and runs the agent\nharnesses this host's own config.json configures. Not for people.\n`env protocol` prints the lease protocol this build speaks, which a gateway\nchecks a copy it installs on a host against before putting it in place.\n\n`artifact publish` attaches a file in the workspace to the conversation whose\nagent runs it, from a host serving `env serve`: the gateway receives it by\ndigest and verifies it. It prints the outcome as JSON on stdout.\n\n`limits` and `limits --json` print the effective operational limits as JSON\non stdout. A missing config file prints the defaults. An unusable config\nfile prints nothing and fails.\n\nLocal is the current backend. Cloud auth is not implemented.\n`server --provision-local` creates the owner and panel credentials of the selected\nnamespace when they are absent, then serves; it never replaces existing ones.\nWithout it, `nessa server` only serves what the offline auth commands provisioned.\nNESSA_HOST, NESSA_PORT, NESSA_STAGE, NESSA_DATA_DIR and NESSA_INSTANCE select the local gateway.\nToken defaults to no expiry (capped by issuer expiry) and prints only the secret to stdout; pipe it to pbcopy.\n";
+pub const HELP: &str = "Nessa\n\n  nessa server [--provision-local]\n  nessa auth init --local [--owner-token-file PATH]\n  nessa auth token [--local] [--ttl 12h|7d|30m|60s | --no-expiry] [--credential-file PATH]\n  nessa doctor [--local] [--credential-file PATH]\n  nessa install-agent NAME\n  nessa limits [--json]\n  nessa env serve\n  nessa env enroll ADDRESS CODE\n  nessa env dial ADDRESS\n  nessa env protocol\n  nessa artifact publish PATH [--type MEDIA/TYPE]\n  nessa auth provision-surface --local --surface-id NAME [--grants ACTIONS]\n  nessa auth recover-owner --local --owner-token-file PATH\n\ninstall-agent downloads the release of an agent's own runtime that Nessa has\ntested, verifies it against a compiled-in digest, and reports what it installed\nas JSON on stdout. Installing one already present downloads nothing.\n\n`env serve` is the environment role a gateway starts over SSH, from the copy of\nits own build it installs under ~/.nessa/env on first use: it speaks lease frames on stdin and stdout and runs the agent\nharnesses this host's own config.json configures. Not for people.\n`env enroll` pairs this machine with the gateway at ADDRESS (host:port of its\nnative listener) as an environment, with the code of an environment invitation\nthe owner created there; the owner then approves it. `env dial` serves that\ngateway's leases over connections this machine dials, waiting for the\napproval first and dialing again whenever a connection ends, until stopped.\n`env protocol` prints the lease protocol this build speaks, which a gateway\nchecks a copy it installs on a host against before putting it in place.\n\n`artifact publish` attaches a file in the workspace to the conversation whose\nagent runs it, from a host serving `env serve`: the gateway receives it by\ndigest and verifies it. It prints the outcome as JSON on stdout.\n\n`limits` and `limits --json` print the effective operational limits as JSON\non stdout. A missing config file prints the defaults. An unusable config\nfile prints nothing and fails.\n\nLocal is the current backend. Cloud auth is not implemented.\n`server --provision-local` creates the owner and panel credentials of the selected\nnamespace when they are absent, then serves; it never replaces existing ones.\nWithout it, `nessa server` only serves what the offline auth commands provisioned.\nNESSA_HOST, NESSA_PORT, NESSA_STAGE, NESSA_DATA_DIR and NESSA_INSTANCE select the local gateway.\nToken defaults to no expiry (capped by issuer expiry) and prints only the secret to stdout; pipe it to pbcopy.\n";
 
 /// Whether a serving process may create the local credentials it needs.
 ///
@@ -46,6 +46,20 @@ pub enum Command {
     /// which a gateway starts over SSH from the copy of its build it installed
     /// there (#699, #703).
     EnvServe,
+    /// Pair this machine with a gateway as an environment it cannot reach,
+    /// with the code of an environment invitation (#706).
+    EnvEnroll {
+        /// The gateway's native listener, `host:port`.
+        address: String,
+        /// The invitation's code, as the owner gave it.
+        code: String,
+    },
+    /// Serve a paired gateway's leases over connections this machine dials,
+    /// until stopped (#706).
+    EnvDial {
+        /// The gateway's native listener, `host:port`.
+        address: String,
+    },
     /// Print the lease protocol this build speaks: how a gateway checks a
     /// copy of itself it installs on a host before putting it in place (#703).
     EnvProtocol,
@@ -82,6 +96,27 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
     }
     if args == ["env", "protocol"] {
         return Ok(Command::EnvProtocol);
+    }
+    if let [env, verb, rest @ ..] = args {
+        if env == "env" && verb == "enroll" {
+            return match rest {
+                [address, code] if !address.starts_with('-') && !code.starts_with('-') => {
+                    Ok(Command::EnvEnroll {
+                        address: address.clone(),
+                        code: code.clone(),
+                    })
+                }
+                _ => Err("env enroll takes the gateway's ADDRESS and the invitation's CODE".into()),
+            };
+        }
+        if env == "env" && verb == "dial" {
+            return match rest {
+                [address] if !address.starts_with('-') => Ok(Command::EnvDial {
+                    address: address.clone(),
+                }),
+                _ => Err("env dial takes the gateway's ADDRESS".into()),
+            };
+        }
     }
     if let [artifact, publish, rest @ ..] = args {
         if artifact == "artifact" && publish == "publish" {

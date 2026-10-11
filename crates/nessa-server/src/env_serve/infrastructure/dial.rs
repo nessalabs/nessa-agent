@@ -17,7 +17,9 @@
 //! device's enrollment client runs them; the stream is then the async
 //! [`TlsStream`], which frames nothing, so lease frames keep their own bound.
 use crate::device_pairing::infrastructure::TlsStream;
-use nessa_auth::adapters::pairing::{GatewayTrust, NativeIdentity, NativeTransport};
+use nessa_auth::adapters::pairing::{
+    GatewayTrust, NativeIdentity, NativeTransport, PairingCryptoError,
+};
 use nessa_protocol::clock::Clock;
 use nessa_protocol::pairing::socket::{
     begin_enrollment_phase, DeadlineError, DeadlineStream, WakeEndpoint, TLS_DEADLINE,
@@ -38,13 +40,11 @@ use std::{
 /// # Errors
 /// The gateway could not be reached or did not answer in time, the
 /// handshake failed, as it does when its key is not `pin`
-/// (`ConnectionAborted`), it refused to be served on this connection
+/// (`ConnectionAborted`), or cannot succeed by trying again (`InvalidInput`:
+/// `pin` is not a key, the gateway does not speak this protocol, or this
+/// build cannot make the TLS setup), it refused to be served on this connection
 /// (`PermissionDenied`, which may pass: see the module's note), or it
 /// answered something else (`InvalidData`).
-#[cfg_attr(
-    not(test),
-    allow(dead_code, reason = "the environment's command dials in part 1c")
-)]
 pub(crate) async fn dial(
     address: SocketAddr,
     identity: Arc<NativeIdentity>,
@@ -70,9 +70,11 @@ fn open_environment(
         DeadlineStream::new(socket, clock, WakeEndpoint::new(address)).map_err(deadline_error)?;
     stream.blocking().map_err(deadline_error)?;
     // The handshake does not tell a cut connection from a key that is not
-    // `pin`; either is worth trying again.
+    // `pin`; either is worth trying again. A pin that does not parse, a
+    // gateway speaking another protocol, or a TLS setup this build cannot
+    // make is not changed by dialing again.
     let transport = NativeTransport::connect(stream, identity, GatewayTrust::Pinned(pin))
-        .map_err(|error| Error::new(ErrorKind::ConnectionAborted, format!("{error:?}")))?;
+        .map_err(handshake_error)?;
     begin_enrollment_phase(&deadline).map_err(deadline_error)?;
     let mut channel = EnrollmentChannel::new(transport);
     let request = encode_request(&NativePairingRequest::OpenEnvironment)
@@ -90,6 +92,16 @@ fn open_environment(
             "the gateway answered openEnvironment with something else",
         )),
     }
+}
+
+fn handshake_error(error: PairingCryptoError) -> Error {
+    let kind = match error {
+        PairingCryptoError::InvalidContext | PairingCryptoError::Unavailable => {
+            ErrorKind::InvalidInput
+        }
+        _ => ErrorKind::ConnectionAborted,
+    };
+    Error::new(kind, format!("{error:?}"))
 }
 
 fn deadline_error(error: DeadlineError) -> Error {

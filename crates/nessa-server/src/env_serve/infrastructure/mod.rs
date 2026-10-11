@@ -12,10 +12,6 @@ mod ledger;
 mod lock;
 mod outbox;
 pub(crate) use commands::{ShepherdCommands, COMMAND_VARIABLES};
-#[cfg_attr(
-    not(test),
-    allow(unused_imports, reason = "the environment's command dials in part 1c")
-)]
 pub(crate) use dial::dial;
 pub(crate) use launcher::{ConfiguredLauncher, LaunchSpec};
 pub(crate) use ledger::FileLedger;

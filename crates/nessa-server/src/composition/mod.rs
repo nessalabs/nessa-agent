@@ -34,6 +34,8 @@ mod credential_registry;
 #[cfg(unix)]
 mod current_agent;
 #[cfg(unix)]
+mod env_dial_command;
+#[cfg(unix)]
 mod env_serve_command;
 mod install_command;
 #[cfg(unix)]

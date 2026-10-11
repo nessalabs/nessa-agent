@@ -57,6 +57,7 @@ lease_protocol!(
     "../env_serve/application/serve.rs",
     "../env_serve/application/artifacts.rs",
     "../env_serve/application/wire.rs",
+    "../env_serve/application/redial.rs",
     "../env_serve/infrastructure/mod.rs",
     "../env_serve/infrastructure/commands.rs",
     "../env_serve/infrastructure/launcher.rs",

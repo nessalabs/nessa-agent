@@ -115,6 +115,16 @@ impl CompositionRoot {
                 "nessa env serve requires Unix process supervision".into(),
             )),
             #[cfg(unix)]
+            Command::EnvEnroll { address, code } => {
+                super::env_dial_command::enroll(&address, &code).await
+            }
+            #[cfg(unix)]
+            Command::EnvDial { address } => super::env_dial_command::dial_in(&address).await,
+            #[cfg(not(unix))]
+            Command::EnvEnroll { .. } | Command::EnvDial { .. } => Err(RunError::Agent(
+                "a paired environment requires Unix process supervision".into(),
+            )),
+            #[cfg(unix)]
             Command::ArtifactPublish { path, media_type } => {
                 let published = super::artifact_command::execute(&path, media_type).await?;
                 if !published {

@@ -442,3 +442,96 @@ async fn a_lease_asked_across_a_reconnect_runs_on_the_new_connection() {
     let ran = racing.await.unwrap().unwrap();
     assert_eq!(ran.stdout, b"racing");
 }
+
+/// Part 1c: E pairs with `env enroll`'s pairing, waits for the owner's
+/// approval as `env dial` does, then stays dialed in: a connection that
+/// ends is dialed again and served, and stop closes the one being served.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_enrolled_environment_waits_for_approval_then_stays_dialed_in() {
+    use super::env_dial_command::EnvironmentPairing;
+    use crate::env_serve::application::{redial, Backoff};
+    use std::sync::atomic::AtomicUsize;
+
+    let directory = tempfile::tempdir().unwrap();
+    let a = Gateway::start(&directory.path().join("a")).await;
+    let created = a
+        .commands
+        .create(&a.session, ConsentClass::PeerEnvironment)
+        .await
+        .unwrap();
+    let environment = directory.path().join("e-environment");
+    nessa_local_storage::create_directory(&environment).unwrap();
+    let pairing = EnvironmentPairing::open(&environment, clock()).unwrap();
+    let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
+    let native = a.native;
+    let connect = move || async move { std::net::TcpStream::connect(native) };
+    tokio::time::timeout(
+        WAIT,
+        pairing.enroll(std::net::TcpStream::connect(native).unwrap(), code),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+
+    // Not approved yet: waiting is still waiting.
+    assert!(tokio::time::timeout(
+        Duration::from_millis(300),
+        pairing.approved(connect, Duration::from_millis(20))
+    )
+    .await
+    .is_err());
+    let id = created.record().id();
+    let claimed = a.commands.status(&a.session, id).await.unwrap();
+    let (_, key) = claimed.claim_binding().unwrap();
+    a.commands.approve(&a.session, id, key).await.unwrap();
+    let (identity, pin) =
+        tokio::time::timeout(WAIT, pairing.approved(connect, Duration::from_millis(20)))
+            .await
+            .unwrap()
+            .unwrap();
+    pairing.shutdown().await;
+    let peer = PeerEnvironment::new(*key.bytes());
+
+    let (stop, stopping) = watch::channel(false);
+    let connections = Arc::new(AtomicUsize::new(0));
+    let root = directory.path().to_path_buf();
+    let dialing = {
+        let connections = connections.clone();
+        tokio::spawn(redial(
+            move || dial(native, identity.clone(), pin, clock()),
+            move |stream, mut stopping: watch::Receiver<bool>| {
+                let n = connections.fetch_add(1, Ordering::SeqCst);
+                let root = root.clone();
+                async move {
+                    if n == 0 {
+                        // The first connection is cut at once.
+                        drop(stream);
+                        return;
+                    }
+                    let closer = stream.closer();
+                    let served = serving(&root.join(format!("e{n}")), stream);
+                    let _ = stopping.wait_for(|stop| *stop).await;
+                    closer.close();
+                    served.await.unwrap();
+                }
+            },
+            Backoff {
+                first: Duration::from_millis(10),
+                most: Duration::from_millis(100),
+            },
+            stopping,
+        ))
+    };
+    a.until_connected(peer, true).await;
+    let ran = a.echo(peer, "dialed in").await.unwrap();
+    assert_eq!(ran.stdout, b"dialed in");
+    assert_eq!(connections.load(Ordering::SeqCst), 2);
+
+    stop.send(true).unwrap();
+    tokio::time::timeout(WAIT, dialing)
+        .await
+        .expect("stop ends dialing")
+        .unwrap()
+        .unwrap();
+    a.until_connected(peer, false).await;
+}

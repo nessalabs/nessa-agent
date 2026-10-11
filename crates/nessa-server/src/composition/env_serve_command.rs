@@ -31,6 +31,7 @@ use nessa_protocol::{
 };
 use shepherd::{ProcessSupervisor, SupervisorBuilder};
 use std::{collections::HashMap, path::Path, sync::Arc, time::Duration};
+use tokio::io::{AsyncRead, AsyncWrite};
 
 /// How long a new serving process waits for the previous one to finish
 /// ending its leases.
@@ -54,46 +55,17 @@ pub(super) async fn execute() -> Result<(), RunError> {
             return Ok(());
         }
     };
-    let Composed {
-        launcher,
-        commands,
-        ledger,
-        outbox,
-        sockets,
-        lock,
-    } = composed;
-    let runner = commands
-        .as_ref()
-        .map(|(runner, _)| runner.clone() as Arc<dyn CommandRunner>);
-    serve(
-        tokio::io::stdin(),
-        tokio::io::stdout(),
-        VERSION,
-        LEASE_PROTOCOL,
-        Runners {
-            harnesses: launcher,
-            commands: runner,
-        },
-        ledger,
-        outbox,
-        ServeTimings::default(),
-    )
-    .await;
-    // Every command's end is recorded before serving returns; the sweep is
-    // what is left of any of them, and only said.
-    if let Some((_, supervisor)) = commands {
-        match supervisor.shutdown().await {
-            Ok(report) if report.scopes.iter().all(|scope| scope.all_verified()) => {}
-            Ok(_) => tracing::error!("a command's processes could not be confirmed stopped"),
-            Err(error) => tracing::error!(%error, "the command supervisor did not shut down"),
-        }
-    }
-    let _ = std::fs::remove_dir_all(&sockets);
-    drop(lock);
+    composed
+        .serve(tokio::io::stdin(), tokio::io::stdout())
+        .await;
+    composed.finish().await;
     Ok(())
 }
 
-struct Composed {
+/// What serving needs on this host, held for as long as it serves: one
+/// connection's leases at a time, over standard input and output or over
+/// each connection a paired environment dials.
+pub(super) struct Composed {
     launcher: Arc<ConfiguredLauncher>,
     /// How commands run here, and what supervises them; `None` when this
     /// host does not run them.
@@ -105,14 +77,55 @@ struct Composed {
     lock: ServeLock,
 }
 
-async fn compose() -> Result<Composed, (Unavailability, RunError)> {
+impl Composed {
+    /// Serve one gateway's leases on `input` and `output` until that stream
+    /// ends.
+    pub(super) async fn serve<R, W>(&self, input: R, output: W)
+    where
+        R: AsyncRead + Unpin + Send + 'static,
+        W: AsyncWrite + Unpin + Send + 'static,
+    {
+        let runner = self
+            .commands
+            .as_ref()
+            .map(|(runner, _)| runner.clone() as Arc<dyn CommandRunner>);
+        serve(
+            input,
+            output,
+            VERSION,
+            LEASE_PROTOCOL,
+            Runners {
+                harnesses: self.launcher.clone(),
+                commands: runner,
+            },
+            self.ledger.clone(),
+            self.outbox.clone(),
+            ServeTimings::default(),
+        )
+        .await;
+    }
+
+    /// Stop serving on this host: what is left of commands is swept, the
+    /// publish points removed, and the lock given back.
+    pub(super) async fn finish(self) {
+        // Every command's end is recorded before serving returns; the sweep
+        // is what is left of any of them, and only said.
+        if let Some((_, supervisor)) = self.commands {
+            match supervisor.shutdown().await {
+                Ok(report) if report.scopes.iter().all(|scope| scope.all_verified()) => {}
+                Ok(_) => tracing::error!("a command's processes could not be confirmed stopped"),
+                Err(error) => tracing::error!(%error, "the command supervisor did not shut down"),
+            }
+        }
+        let _ = std::fs::remove_dir_all(&self.sockets);
+        drop(self.lock);
+    }
+}
+
+pub(super) async fn compose() -> Result<Composed, (Unavailability, RunError)> {
     let not_configured = |failure: RunError| (Unavailability::NotConfigured, failure);
     let auth = Environment::auth_directory_from_system()
         .map_err(|error| not_configured(RunError::Agent(error.to_string())))?;
-    let namespace = auth
-        .parent()
-        .ok_or_else(|| not_configured(RunError::Agent("invalid data directory".into())))?
-        .to_path_buf();
     let config = RuntimeConfig::load(&auth).map_err(not_configured)?;
     let launcher = launcher(&config).map_err(not_configured)?;
     let commands = config.env_serve.commands.then(|| {
@@ -125,9 +138,7 @@ async fn compose() -> Result<Composed, (Unavailability, RunError)> {
             ShepherdCommands::new(supervisor.clone(), launcher.workspace().into(), environment);
         (Arc::new(runner), supervisor)
     });
-    let directory = namespace.join("environment");
-    nessa_local_storage::create_directory(&directory)
-        .map_err(|error| not_configured(RunError::Agent(error.to_string())))?;
+    let directory = environment_directory().map_err(not_configured)?;
     let lock = match ServeLock::acquire(&directory.join("serve.lock"), LOCK_WAIT).await {
         Ok(lock) => lock,
         Err(ServeLockError::Busy) => {
@@ -163,6 +174,20 @@ async fn compose() -> Result<Composed, (Unavailability, RunError)> {
         sockets,
         lock,
     })
+}
+
+/// `<data>/environment`, created when absent: where this host keeps what
+/// serving leases needs, and a paired environment its pairing.
+pub(super) fn environment_directory() -> Result<std::path::PathBuf, RunError> {
+    let auth = Environment::auth_directory_from_system()
+        .map_err(|error| RunError::Agent(error.to_string()))?;
+    let directory = auth
+        .parent()
+        .ok_or_else(|| RunError::Agent("invalid data directory".into()))?
+        .join("environment");
+    nessa_local_storage::create_directory(&directory)
+        .map_err(|error| RunError::Agent(error.to_string()))?;
+    Ok(directory)
 }
 
 /// The launcher this host's `agents` block describes: its workspace, and

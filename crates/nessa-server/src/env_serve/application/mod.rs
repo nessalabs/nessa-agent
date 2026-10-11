@@ -4,14 +4,17 @@
 //! `wire.rs` reads and writes lease frames on a byte stream, for this side
 //! and for the gateway's SSH adapter alike; `artifacts.rs` is a lease's
 //! published files, staged through an [`ArtifactOutbox`] for the gateway to
-//! collect.
+//! collect; `redial.rs` keeps a paired environment dialed in to its
+//! gateway, serving each connection it gets.
 mod artifacts;
+mod redial;
 mod serve;
 mod wire;
 pub(crate) use artifacts::{
     ArtifactOutbox, PublishAnswer, PublishCall, PublishPoint, PublishRefusal, PublishRequest,
     PUBLISH_POINT_VARIABLE,
 };
+pub(crate) use redial::{redial, Backoff};
 pub(crate) use serve::{
     refuse, serve, CommandRan, CommandRunner, CommandStop, HarnessLauncher, LeaseLedger,
     LedgerEntry, Runners, ServeTimings,
