@@ -285,10 +285,10 @@ and the desktop's
   when none), both required. Each part is rebuilt through the domain on
   read, so a value the domain refuses is `Corrupt`, not a message the agent
   is handed.
-- **Records saved before this (#437).** Under One current contract no older
-  reader is kept: a message saved without the two fields is a record of
-  another shape, refused as `Corrupt` when the conversation it belongs to is
-  restored. The version marker and a typed "another version" refusal for
+- **Records saved before this (#437).** A record with `schemaVersion` but
+  missing either app field is `Corrupt` when its conversation is restored,
+  and a record with no `schemaVersion`, including one saved before #390, is
+  `AnotherVersion`. The version marker and a typed "another version" refusal for
   session record streams (ADR 202 rule 1) are #437's, not this slice's.
 - **When a context is done with.** The SDK gives its caller one fact:
   admission returns only once the turn's `InputAccepted` is saved. The rule

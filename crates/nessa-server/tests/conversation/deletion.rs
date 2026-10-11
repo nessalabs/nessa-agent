@@ -3170,6 +3170,90 @@ async fn an_unmarked_chat_cannot_be_read_and_can_be_deleted() {
     service.shutdown().await.unwrap();
 }
 
+/// The deletion record is acknowledged before an unreadable history is
+/// discarded. An audit that refuses leaves the unmarked batch in place, and
+/// a retry that records the deletion then discards it.
+#[tokio::test]
+async fn an_unreadable_chat_stays_until_its_deletion_is_recorded() {
+    use nessa_sdk::application::agent_execution::sessions::StorageError;
+    use nessa_sdk::infrastructure::session_storage::UNMARKED_SESSION_BATCH;
+    use std::sync::atomic::Ordering;
+
+    let root = tempfile::tempdir().unwrap();
+    let root = root.path();
+    nessa_local_storage::create_directory(&root.join("conversations")).unwrap();
+    let metadata = Arc::new(
+        LocalConversationStore::open(&root.join("conversations").join("metadata.sqlite3")).unwrap(),
+    );
+    let storage = Arc::new(RecordStorage::new(root.join("sessions")).unwrap());
+    storage.initialize().await.unwrap();
+    let audit = Arc::new(RecordingDeletionAudit::default());
+    let service = ConversationService::new(
+        ConversationDependencies {
+            agents: only(Arc::new(Provider::new(
+                Arc::new(ProviderFactory::default()),
+            ))),
+            storage: storage.clone(),
+            metadata: metadata.clone(),
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            deletion_audit: audit.clone(),
+            attachments: None,
+            summaries: metadata.clone(),
+            listing: metadata.clone(),
+            provider_sessions: claude_erasers(),
+            deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
+            clock: Arc::new(TestClock),
+            environment: crate::conversation::infrastructure::in_process_environment().into(),
+        },
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    let id = new_id();
+    service
+        .create(
+            id.clone(),
+            caller("create"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    service.stop_active_agents().await.unwrap();
+    storage.discard_unreadable(session(&id)).await.unwrap();
+    storage
+        .append_encoded_batch(session(&id), UNMARKED_SESSION_BATCH)
+        .await
+        .unwrap();
+
+    audit.refuses.store(true, Ordering::SeqCst);
+    let failures = incomplete(service.delete(id.clone(), caller("delete")).await);
+    assert!(matches!(failures.audit, Some(ConversationError::Audit)));
+    assert!(failures.history.is_none() && !failures.history_leased_elsewhere);
+    assert!(matches!(
+        storage.read_committed(session(&id)).await,
+        Err(StorageError::AnotherVersion { found: None })
+    ));
+
+    audit.refuses.store(false, Ordering::SeqCst);
+    assert!(service
+        .delete(id.clone(), caller("delete-again"))
+        .await
+        .is_ok());
+    assert!(matches!(
+        service.read(id.clone(), caller("read-deleted")).await,
+        Err(ConversationError::Deleted)
+    ));
+    let lease = storage.open_existing(session(&id)).await.unwrap().unwrap();
+    assert!(lease.load().await.unwrap().snapshot().is_none());
+    drop(lease);
+    service.shutdown().await.unwrap();
+}
+
 #[tokio::test]
 async fn a_reply_waiting_to_be_summarized_does_not_keep_a_deleted_history_leased() {
     let fixture = deleting();

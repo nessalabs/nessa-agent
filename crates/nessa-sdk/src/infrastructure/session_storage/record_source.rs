@@ -1093,14 +1093,17 @@ fn committed_source_error(error: SourceError) -> StorageError {
 
 fn committed_fold_error(error: super::transcript::TranscriptError) -> StorageError {
     // A decision keeps its cause: another version, and a body that does not
-    // decode, stay those errors. A race or other fold failure used to be
-    // flattened into `Corrupt`, which this build now treats as unreadable.
-    // Those stay retryable I/O.
+    // decode, stay those errors. A malformed frame is stored data, so it stays
+    // corrupt and the chat can be deleted. A race (`Position`, `Scope`,
+    // `Checkpoint`, `CheckpointTooLarge`) used to be flattened into `Corrupt`,
+    // which this build treats as unreadable. Those stay retryable I/O.
     match error {
         super::transcript::TranscriptError::Decision(cause) => cause,
+        super::transcript::TranscriptError::Frame => {
+            StorageError::Corrupt("committed transcript: Frame".into())
+        }
         super::transcript::TranscriptError::Position
         | super::transcript::TranscriptError::Scope
-        | super::transcript::TranscriptError::Frame
         | super::transcript::TranscriptError::Checkpoint
         | super::transcript::TranscriptError::CheckpointTooLarge => {
             StorageError::Io(format!("committed transcript: {error:?}"))
@@ -1135,8 +1138,8 @@ mod tests {
         sessions::ExecutionSessionId,
     };
     use event_stream::{
-        EventReader, EventRuntime, EventSink, IncarnationId, LifecycleAction, LifecycleOperationId,
-        LifecycleRequest, NewEvent, SchemaId, SchemaRef,
+        EventId, EventReader, EventRuntime, EventSink, IncarnationId, LifecycleAction,
+        LifecycleOperationId, LifecycleRequest, NewEvent, SchemaId, SchemaRef,
     };
     use nessa_sync::replication::{
         application::{
@@ -1409,10 +1412,13 @@ mod tests {
             ))),
             StorageError::Corrupt("schemaVersion is not an unsigned integer".into())
         );
+        assert_eq!(
+            committed_fold_error(TranscriptError::Frame),
+            StorageError::Corrupt("committed transcript: Frame".into())
+        );
         for error in [
             TranscriptError::Position,
             TranscriptError::Scope,
-            TranscriptError::Frame,
             TranscriptError::Checkpoint,
             TranscriptError::CheckpointTooLarge,
         ] {
@@ -1422,6 +1428,44 @@ mod tests {
                 "{label}"
             );
         }
+    }
+
+    /// A stored start frame the validator rejects is corrupt from a committed
+    /// read. The schema tag is the known start frame and the version byte is
+    /// not this build's, which is how saved bytes become `TranscriptError::Frame`.
+    /// An unknown tag is that same error. The bytes will not become readable,
+    /// so the read does not report a retryable outage.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_unknown_frame_tag_is_corrupt_from_read_committed() {
+        use event_stream::Payload;
+        let directory = tempfile::tempdir().unwrap();
+        let storage = RecordStorage::new(directory.path().join("sessions")).unwrap();
+        let runtime = storage.runtime().await.unwrap().clone();
+        let session = SessionId::new("conversation").unwrap();
+        let stream = runtime
+            .create_stream(&StreamId::new(session.as_str()).unwrap())
+            .await
+            .unwrap();
+        runtime
+            .append(
+                &stream,
+                NewEvent {
+                    id: EventId::new("unknown-frame-tag").unwrap(),
+                    schema: SchemaRef {
+                        id: SchemaId::new("nessa.fact-start").unwrap(),
+                        version: 1,
+                    },
+                    payload: Payload::copy_from_slice(&[99]),
+                },
+            )
+            .await
+            .unwrap();
+        let error = storage.read_committed(session).await.unwrap_err();
+        assert_eq!(
+            error,
+            StorageError::Corrupt("committed transcript: Frame".into())
+        );
+        storage.shutdown().await.unwrap();
     }
 
     #[test]

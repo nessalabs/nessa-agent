@@ -298,7 +298,7 @@ impl ReadOnlyCache {
             Some(progress) => match rows::checkpoint(&transaction, scope, self.policy)? {
                 rows::CheckpointBody::Unreadable(error) if disposable_checkpoint(&error) => {
                     drop(transaction);
-                    return self.drop_cached_transcript(scope);
+                    return self.drop_cached_transcript(scope, progress);
                 }
                 rows::CheckpointBody::Unreadable(error) => return Err(transcript_error(error)),
                 rows::CheckpointBody::Read(checkpoint) => {
@@ -308,7 +308,7 @@ impl ReadOnlyCache {
                             Ok(fold) => fold,
                             Err(error) if disposable_checkpoint(&error) => {
                                 drop(transaction);
-                                return self.drop_cached_transcript(scope);
+                                return self.drop_cached_transcript(scope, progress);
                             }
                             Err(error) => return Err(transcript_error(error)),
                         };
@@ -431,11 +431,14 @@ impl ReadOnlyCache {
     /// Delete one conversation's cached transcript and continue with an empty
     /// fold. A checkpoint this build cannot read is not the truth store. A
     /// later head observation writes a new checkpoint.
-    fn drop_cached_transcript(&mut self, scope: &Scope) -> Result<(), CacheError> {
-        tracing::warn!(
-            session = scope.stream().as_str(),
-            "dropped a cached checkpoint this build cannot read"
-        );
+    ///
+    /// `rejected` is the progress that failed to restore. A commit that landed
+    /// after that read wins: this clears nothing and returns [`CacheError::Stale`].
+    fn drop_cached_transcript(
+        &mut self,
+        scope: &Scope,
+        rejected: &CachedProgress,
+    ) -> Result<(), CacheError> {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -443,6 +446,14 @@ impl ReadOnlyCache {
         if rows::fenced(&transaction, scope)? {
             return Err(CacheError::Fenced);
         }
+        if rows::progress(&transaction, scope)?.as_ref() != Some(rejected) {
+            self.loaded = None;
+            return Err(CacheError::Stale);
+        }
+        tracing::warn!(
+            session = scope.stream().as_str(),
+            "dropped a cached checkpoint this build cannot read"
+        );
         raw_records::clear_transcript(&transaction, scope)?;
         transaction.commit().map_err(|_| CacheError::Uncertain)?;
         self.loaded = Some(LoadedTranscript {
@@ -519,5 +530,220 @@ fn open_error(error: OpenError) -> CacheError {
         OpenError::Database(error) => rows::database_error(error),
         OpenError::UnversionedSchema => CacheError::InvalidPolicy,
         OpenError::Directory(_) | OpenError::File(_) => CacheError::Unavailable,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nessa_auth::application::ports::Clock;
+    use nessa_sdk::application::agent_execution::{
+        providers::ProviderIdentity,
+        sessions::{SessionChange, SessionSaveUnit, SessionSnapshot, SessionStorage},
+    };
+    use nessa_sdk::domain::agent_execution::sessions::{
+        ExecutionSessionId, ProviderContext, SessionId,
+    };
+    use nessa_sdk::infrastructure::session_storage::{
+        RecordReadStatus, RecordStorage, MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+    };
+    use nessa_sync::replication::{
+        application::ReplicaStore,
+        domain::{validate_page, Checkpoint, Id, Limits, Page, PageRequest, Record},
+        infrastructure::MAX_PAGE_PAYLOAD,
+    };
+    use std::path::Path;
+
+    struct FixedClock;
+    impl Clock for FixedClock {
+        fn unix_milliseconds(&self) -> u64 {
+            123_000
+        }
+    }
+
+    fn identifier(text: &str) -> Id {
+        Id::new(text).unwrap()
+    }
+
+    fn policy() -> CachePolicy {
+        CachePolicy::new(
+            32 * 1024 * 1024,
+            8 * 1024 * 1024,
+            Limits::new(16, MAX_PAGE_PAYLOAD, MAX_PHYSICAL_RECORD_PAYLOAD_BYTES).unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn count(cache: &ReadOnlyCache, table: &str) -> i64 {
+        cache
+            .connection
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .unwrap()
+    }
+
+    fn checkpoint_payload(cache: &ReadOnlyCache) -> Vec<u8> {
+        cache
+            .connection
+            .query_row("SELECT payload FROM transcript_checkpoints", [], |row| {
+                row.get(0)
+            })
+            .unwrap()
+    }
+
+    /// One saved open, then one later context, as two committed pages.
+    async fn two_pages(root: &Path) -> (Scope, Vec<Record>, Vec<Record>) {
+        let storage = RecordStorage::new(root.join("source")).unwrap();
+        storage.initialize().await.unwrap();
+        let session = SessionId::new("00000000-0000-0000-0000-000000000001").unwrap();
+        let lease = storage.open(session.clone()).await.unwrap();
+        let provider = ProviderIdentity::new("provider", "model", "workspace").unwrap();
+        lease
+            .save_changes(
+                lease.load().await.unwrap().binding().clone(),
+                SessionSnapshot {
+                    id: session.clone(),
+                    provider: provider.clone(),
+                    provider_context: ProviderContext::Absent,
+                    invocations: vec![],
+                    queue_history: vec![],
+                    lease: None,
+                },
+                vec![SessionSaveUnit::new(vec![SessionChange::Opened {
+                    id: session.clone(),
+                    provider: provider.clone(),
+                    context: ProviderContext::Absent,
+                }])
+                .unwrap()],
+            )
+            .await
+            .unwrap();
+        let mut source = storage
+            .record_source(&session, identifier("origin"))
+            .await
+            .unwrap()
+            .unwrap();
+        let scope = source.scope(identifier("receiver"), identifier("epoch"));
+        let first = page_through(&mut source, &scope, 0);
+        drop(source);
+        let next = ProviderContext::Recorded(ExecutionSessionId::new("provider-session").unwrap());
+        lease
+            .save_changes(
+                lease.load().await.unwrap().binding().clone(),
+                SessionSnapshot {
+                    id: session.clone(),
+                    provider,
+                    provider_context: next.clone(),
+                    invocations: vec![],
+                    queue_history: vec![],
+                    lease: None,
+                },
+                vec![SessionSaveUnit::new(vec![SessionChange::ProviderContext {
+                    before: ProviderContext::Absent,
+                    after: next,
+                }])
+                .unwrap()],
+            )
+            .await
+            .unwrap();
+        drop(lease);
+        let mut source = storage
+            .record_source(&session, identifier("origin"))
+            .await
+            .unwrap()
+            .unwrap();
+        let scope = source.scope(identifier("receiver"), identifier("epoch"));
+        let second = page_through(&mut source, &scope, first.last().unwrap().position);
+        drop(source);
+        storage.shutdown().await.unwrap();
+        (scope, first, second)
+    }
+
+    fn page_through(
+        source: &mut nessa_sdk::infrastructure::session_storage::NessaRecordSource,
+        scope: &Scope,
+        after: u64,
+    ) -> Vec<Record> {
+        let target = loop {
+            if let RecordReadStatus::Ready(head) = source.bounded_head(scope).unwrap() {
+                break head;
+            }
+        };
+        let mut records = Vec::new();
+        let mut cursor = after;
+        while cursor < target {
+            let limits = policy().suffix_page();
+            let request = PageRequest {
+                scope: scope.clone(),
+                after: cursor,
+                target,
+                max_records: limits.max_records(),
+                max_payload_bytes: limits.max_payload_bytes(),
+                max_record_bytes: limits.max_record_bytes(),
+            };
+            let RecordReadStatus::Ready(page) = source.bounded_page(&request).unwrap() else {
+                panic!("head validated the captured prefix");
+            };
+            cursor = page.records.last().unwrap().position;
+            records.extend(page.records);
+        }
+        records
+    }
+
+    fn plan(scope: &Scope, after: u64, records: Vec<Record>) -> CommitPlan {
+        let target = records.last().unwrap().position;
+        let limits = policy().suffix_page();
+        let request = PageRequest {
+            scope: scope.clone(),
+            after,
+            target,
+            max_records: limits.max_records(),
+            max_payload_bytes: limits.max_payload_bytes(),
+            max_record_bytes: limits.max_record_bytes(),
+        };
+        validate_page(
+            &Checkpoint::new(scope.clone(), after),
+            &request,
+            Page {
+                request: request.clone(),
+                records,
+            },
+            limits,
+        )
+        .unwrap()
+    }
+
+    /// A drop that still names the progress it refused must not erase a commit
+    /// that landed after that read.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_newer_commit_survives_a_drop_of_the_progress_it_replaced() {
+        let root = tempfile::tempdir().unwrap();
+        let private = root.path().join("cache");
+        nessa_local_storage::create_directory(&private).unwrap();
+        let path = private.join("cache.sqlite3");
+        let (scope, first_page, second_page) = two_pages(root.path()).await;
+        assert!(!first_page.is_empty() && !second_page.is_empty());
+        let mut older = ReadOnlyCache::open(&path, policy(), Arc::new(FixedClock)).unwrap();
+        ReplicaStore::apply(&mut older, plan(&scope, 0, first_page)).unwrap();
+        let rejected = rows::progress(&older.connection, &scope).unwrap().unwrap();
+        let mut winner = ReadOnlyCache::open(&path, policy(), Arc::new(FixedClock)).unwrap();
+        ReplicaStore::apply(&mut winner, plan(&scope, rejected.downloaded, second_page)).unwrap();
+        let kept = rows::progress(&winner.connection, &scope).unwrap().unwrap();
+        let records = count(&winner, "transcript_records");
+        let checkpoint = checkpoint_payload(&winner);
+        assert_ne!(kept, rejected);
+        assert!(records > 0);
+        assert_eq!(
+            older.drop_cached_transcript(&scope, &rejected),
+            Err(CacheError::Stale)
+        );
+        assert!(older.loaded.is_none());
+        assert_eq!(
+            rows::progress(&older.connection, &scope).unwrap().unwrap(),
+            kept
+        );
+        assert_eq!(count(&older, "transcript_records"), records);
+        assert_eq!(checkpoint_payload(&older), checkpoint);
     }
 }

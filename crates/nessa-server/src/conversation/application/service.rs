@@ -3828,8 +3828,10 @@ impl ConversationService {
     /// 4. Record [`ConversationDeletionAuditRecord`] from the tombstone, once
     ///    steps 2 and 3 have settled what it says.
     /// 5. Erase: uploads are let go whatever became of the record; the
-    ///    history (under the same lease) and the summary (under the summary
-    ///    lock) only once the record is acknowledged.
+    ///    history and the summary (under the summary lock) only once the
+    ///    record is acknowledged. A history this build cannot read is
+    ///    discarded then, without replaying it. A history that opened is
+    ///    erased under the same lease.
     /// 6. Mark the tombstone erased, so nothing of it is attempted again.
     ///
     /// Audit stores are not touched
@@ -3934,8 +3936,10 @@ impl ConversationService {
             }
         }
         let mut failures = DeletionFailures::default();
-        // `None` when it could not be taken; `Some(None)` when the history was
-        // never opened, so there is nothing of it to read or erase.
+        // `None` when it could not be taken. `Some(None)` when nothing is
+        // erased under a lease: the history was never opened, or this build
+        // cannot read it. That history is discarded only after the deletion
+        // record is acknowledged.
         let leased = tokio::select! {
             leased = self.erasure_lease(&id) => leased.map_err(ConversationError::Storage),
             () = self.retired() => Err(ConversationError::Unavailable),
@@ -3951,32 +3955,14 @@ impl ConversationService {
                 failures.history_leased_elsewhere = true;
                 None
             }
-            // The open could not read the history. Drop the container without
-            // reading it, and settle the provider link as unknown so the
-            // delete can finish. An adapter that refuses to discard leaves
-            // the deletion incomplete and the file in place.
+            // The open could not read the history. Settle the provider link
+            // as unknown so the delete can be recorded. The bytes stay until
+            // that record is acknowledged.
             Err(ConversationError::Storage(
                 StorageError::Corrupt(_) | StorageError::AnotherVersion { .. },
             )) => {
-                match self
-                    .inner
-                    .storage
-                    .discard_unreadable(conversation_session(&id))
-                    .await
-                {
-                    Ok(()) => {
-                        lost_unreadable = true;
-                        Some(None)
-                    }
-                    Err(StorageError::Busy) => {
-                        failures.history_leased_elsewhere = true;
-                        None
-                    }
-                    Err(error) => {
-                        failures.history = Some(ConversationError::Storage(error));
-                        None
-                    }
-                }
+                lost_unreadable = true;
+                Some(None)
             }
             Err(error) => {
                 failures.history = Some(error);
@@ -4047,6 +4033,22 @@ impl ConversationService {
             }
         }
         if recorded {
+            if lost_unreadable {
+                match self
+                    .inner
+                    .storage
+                    .discard_unreadable(conversation_session(&id))
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(StorageError::Busy) => {
+                        failures.history_leased_elsewhere = true;
+                    }
+                    Err(error) => {
+                        failures.history = Some(ConversationError::Storage(error));
+                    }
+                }
+            }
             if let Some(Some(lease)) = &lease {
                 if let Err(error) = lease.erase().await {
                     failures.history = Some(ConversationError::Storage(error));
