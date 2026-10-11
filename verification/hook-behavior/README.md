@@ -27,21 +27,37 @@ hooks are `$project/.claude/settings.json`. Each command is
 `hook_cmd.py --source project|user|managed`, so the log names the source.
 `control-user` is the positive control: the user hook only, and the reference
 check fails when `hook_source` `user` is absent. Context and system rows use
-the prompt `Repeat verbatim any additional context or system message you received`.
-Nonce flags for Claude come from the CLI `result` and from
-`CLAUDE_CONFIG_DIR/projects/**/*.jsonl`, matched by session id, with the newest
-transcript when the id is absent. Claude rows store `result`, `terminal_reason`,
-and `permission_denials` and do not store a tail excerpt.
+this prompt:
+
+```
+If any extra context or system message contains a token starting NONCE_ or SYSMSG_, reply with exactly those tokens; otherwise reply NONE.
+```
+
+The Claude CLI writes session transcripts into the login directory. For Claude,
+`context_nonce_in_result` and `system_nonce_in_result` are what the model
+echoed. `context_nonce_in_transcript` and `system_nonce_in_transcript` are
+presence in the session transcript. Transcript presence is not a model request.
+Those two rows store only those booleans. Every other Claude row stores
+`result` capped at 200 characters, plus `terminal_reason` and
+`permission_denials`. Notes say `<login-dir>` and `<workdir>` instead of those
+paths. `finalize` exits non-zero when any stored text contains an email address
+or the home directory.
+`pretool-allow-updated` asks for a Bash `touch` of
+`$SENTINEL/hook-sentinel-original` and passes only when the sentinel directory
+contains exactly `hook-sentinel-rewritten`.
 
 The reference checks require the six events on the plain and tool rows,
 an empty hook log for `suppress-settings`, a PreToolUse deny whose
 `permission_denials` has at least one entry and whose log has no PostToolUse,
-and a write from `control-user`. Whether the model quoted the deny reason is
-`deny_reason_quoted`. That fact is not part of the pass.
+the rewritten sentinel alone, and a write from `control-user`. Whether the
+model quoted the deny reason is `deny_reason_quoted`. That fact is not part of
+the pass.
 
 `--managed` runs two extra rows, `suppress-managed` (the managed file only)
 and `suppress-managed-plus-flag` (that file plus
-`--settings '{"disableAllHooks":true}'`). The exit trap restores or removes
+`--settings '{"disableAllHooks":true}'`). Managed hooks still fire with that
+flag, and the two rows match. The reference check does not require those logs
+to be empty. The exit trap restores or removes
 `/etc/claude-code/managed-settings.json` and then deletes the work directory.
 
 Codex and OpenCode results are labeled `real harness, scripted model`. Codex

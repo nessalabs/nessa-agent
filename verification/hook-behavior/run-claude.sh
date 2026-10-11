@@ -5,8 +5,10 @@
 # claude-haiku-4-5-20251001.
 #
 # CLAUDE_CONFIG_DIR is the real login directory. Credential files are not
-# copied, and this script does not write into that directory. The user hook is
-# a settings file inside the row project, passed with --settings. Project hooks
+# copied, and this script does not write into that directory. The Claude CLI
+# writes session transcripts into that login directory, under projects/. This
+# script reads those transcripts and does not delete them. The user hook is a
+# settings file inside the row project, passed with --settings. Project hooks
 # live in the project's .claude/settings.json. Each command carries
 # `hook_cmd.py --source project|user|managed` so the log names the source and
 # Claude does not merge the commands.
@@ -121,6 +123,13 @@ invoke_claude() {
   echo "$code"
 }
 
+sanitize_notes() {
+  local text="$1"
+  text="${text//"$LOGIN_DIR"/<login-dir>}"
+  text="${text//"$WORKDIR"/<workdir>}"
+  printf '%s' "$text"
+}
+
 prepare_files() {
   local project="$1"
   mkdir -p "$project/sentinel"
@@ -156,8 +165,11 @@ for entry in "${ROWS_AND_MODES[@]}"; do
   fi
   prompt="NESSA_HOOK_ROW=${row} NESSA_SUPPRESSION=${suppression} NESSA_PHASE=first NESSA_SENTINEL=${sentinel} Reply with OK only."
   case "$row" in
-    events-tool|pretool-deny|pretool-allow-updated|pretool-ask|pretool-defer|pretool-continue-false|fail-exit-2|fail-exit-1|fail-malformed|fail-timeout)
+    events-tool|pretool-deny|pretool-ask|pretool-defer|pretool-continue-false|fail-exit-2|fail-exit-1|fail-malformed|fail-timeout)
       prompt="NESSA_HOOK_ROW=${row} NESSA_SUPPRESSION=${suppression} NESSA_PHASE=first NESSA_SENTINEL=${sentinel} Read NOTES.txt with the Read tool and quote its first line."
+      ;;
+    pretool-allow-updated)
+      prompt="Run exactly this Bash command and do not use any other tool: touch ${sentinel}/hook-sentinel-original"
       ;;
     events-subagent)
       prompt="NESSA_HOOK_ROW=${row} NESSA_SUPPRESSION=${suppression} NESSA_PHASE=first NESSA_SENTINEL=${sentinel} Use a subagent to read NOTES.txt."
@@ -166,11 +178,11 @@ for entry in "${ROWS_AND_MODES[@]}"; do
       prompt="NESSA_HOOK_ROW=${row} NESSA_SUPPRESSION=${suppression} NESSA_PHASE=first NESSA_SENTINEL=${sentinel} Run a shell command that prints PERMISSION_ROW."
       ;;
     prompt-additional-context|prompt-system-message)
-      prompt="Repeat verbatim any additional context or system message you received"
+      prompt="If any extra context or system message contains a token starting NONCE_ or SYSMSG_, reply with exactly those tokens; otherwise reply NONE."
       ;;
   esac
   code="$(invoke_claude "$project" "$prompt" "$stdout" "$stderr" write "${extra[@]}")"
-  notes="CLAUDE_CONFIG_DIR is the login directory ${LOGIN_DIR}. Credentials are not copied and that directory is not written. The user hook is --settings inside this project. Each command is tagged --source. claude is started in the project directory. --dangerously-skip-permissions is omitted for events-permission."
+  notes="CLAUDE_CONFIG_DIR is the login directory <login-dir>. Credentials are not copied and that directory is not written. The user hook is --settings inside this project. Each command is tagged --source. claude is started in the project directory. --dangerously-skip-permissions is omitted for events-permission."
   if [[ "$row" == "control-user" ]]; then
     notes="Positive control: user hook only, through --settings, no project settings file. ${notes}"
   fi
@@ -196,7 +208,7 @@ for entry in "${ROWS_AND_MODES[@]}"; do
   if [[ -z "$SESSION_ID" ]]; then
     SESSION_ID="$(thread_id_from "$stdout")"
   fi
-  append_row "$row" "$suppression" "$code" "$log" "$stdout" "$stderr" "$sentinel" "$notes"
+  append_row "$row" "$suppression" "$code" "$log" "$stdout" "$stderr" "$sentinel" "$(sanitize_notes "$notes")"
 done
 
 if [[ "$MANAGED" -eq 1 ]]; then
@@ -225,7 +237,7 @@ if [[ "$MANAGED" -eq 1 ]]; then
       "$project/stdout.txt" "$project/stderr.txt" write "${extra[@]}")"
     SESSION_ID="$(thread_id_from "$project/stdout.txt")"
     append_row "$row" "$row" "$code" "$log" \
-      "$project/stdout.txt" "$project/stderr.txt" "$sentinel" "$notes"
+      "$project/stdout.txt" "$project/stderr.txt" "$sentinel" "$(sanitize_notes "$notes")"
   done
 fi
 

@@ -3,15 +3,20 @@
 
 The summary JSON is the command's stdout. Progress stays off stdout.
 
-Claude rows store the parsed CLI `result`, `terminal_reason`, and
-`permission_denials`. They do not store a tail excerpt. Nonce flags for those
-rows come from the result strings and the session transcript under
-`CLAUDE_CONFIG_DIR/projects/**/*.jsonl`. Codex and OpenCode keep the scripted
-request body and the excerpts.
+Claude prompt rows store only the nonce booleans. Every other Claude row
+stores `result` capped at 200 characters, plus `terminal_reason` and
+`permission_denials`. `*_nonce_in_result` is what the model echoed.
+`*_nonce_in_transcript` is presence in the session transcript under
+`CLAUDE_CONFIG_DIR/projects/**/*.jsonl`. Transcript presence is not a model
+request. Codex and OpenCode keep `*_nonce_in_model_request` from the scripted
+request body, and they keep the excerpts. `finalize` refuses stored text that
+contains an email address or the home directory.
 """
 
 import argparse
 import json
+import os
+import re
 import sys
 from collections import Counter
 from pathlib import Path
@@ -27,6 +32,9 @@ REFERENCE_EVENTS = [
     "Stop",
     "SessionEnd",
 ]
+PROMPT_ROWS = {"prompt-additional-context", "prompt-system-message"}
+RESULT_LIMIT = 200
+EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 
 
 def excerpt(path, limit=1500):
@@ -174,15 +182,16 @@ def append(args):
             value = message.get("permission_denials")
             if isinstance(value, list):
                 denials.extend(value)
-        seen = "\n".join(results) + "\n" + transcript_text(
-            args.transcript_dir, args.session_id
-        )
-        record["result"] = results
-        record["terminal_reason"] = reasons
-        record["permission_denials"] = denials
-        record["context_nonce_in_model_request"] = CONTEXT_NONCE in seen
-        record["system_nonce_in_model_request"] = SYSTEM_NONCE in seen
+        transcript = transcript_text(args.transcript_dir, args.session_id)
+        record["context_nonce_in_result"] = any(CONTEXT_NONCE in text for text in results)
+        record["system_nonce_in_result"] = any(SYSTEM_NONCE in text for text in results)
+        record["context_nonce_in_transcript"] = CONTEXT_NONCE in transcript
+        record["system_nonce_in_transcript"] = SYSTEM_NONCE in transcript
         record["deny_reason_quoted"] = any(DENY_REASON in text for text in results)
+        if args.row not in PROMPT_ROWS:
+            record["result"] = [text[:RESULT_LIMIT] for text in results]
+            record["terminal_reason"] = reasons
+            record["permission_denials"] = denials
     else:
         requests = request_text(args.requests, args.row, args.suppression)
         stdout = excerpt(args.stdout, limit=20000)
@@ -192,6 +201,12 @@ def append(args):
         record["deny_reason_quoted"] = DENY_REASON in stdout
         record["stdout_excerpt"] = excerpt(args.stdout)
         record["stderr_excerpt"] = excerpt(args.stderr)
+    if privacy_violation(record):
+        print(
+            "stored row contains an email address or the home directory",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
     path = Path(args.rows)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
@@ -236,11 +251,24 @@ def claude_reference(rows):
     )
     control = next((row for row in rows if row["row"] == "control-user"), None)
     user_hook_wrote = control is not None and "user" in control.get("hook_sources", [])
+    rewritten = next(
+        (
+            row
+            for row in rows
+            if row["row"] == "pretool-allow-updated" and row["suppression"] == "off"
+        ),
+        None,
+    )
+    allow_ok = (
+        rewritten is not None
+        and rewritten.get("sentinel_files") == ["hook-sentinel-rewritten"]
+    )
     checks = {
         "events_present": missing == [],
         "events_missing": missing,
         "disable_all_hooks_empty": suppressed_events == [],
         "pretool_deny_stopped_read": deny_ok,
+        "pretool_allow_updated_rewritten_only": allow_ok,
         "user_hook_wrote": user_hook_wrote,
         "deny_reason_quoted": bool(denied) and bool(denied.get("deny_reason_quoted")),
     }
@@ -249,10 +277,33 @@ def claude_reference(rows):
             checks["events_present"],
             checks["disable_all_hooks_empty"],
             checks["pretool_deny_stopped_read"],
+            checks["pretool_allow_updated_rewritten_only"],
             checks["user_hook_wrote"],
         ]
     )
     return checks
+
+
+def stored_strings(value):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from stored_strings(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from stored_strings(item)
+
+
+def privacy_violation(value):
+    home = os.environ.get("HOME") or ""
+    home_path = home if len(home) > 1 else ""
+    for text in stored_strings(value):
+        if EMAIL.search(text):
+            return "email"
+        if home_path and home_path in text:
+            return "home"
+    return None
 
 
 def summary_row(row):
@@ -266,16 +317,22 @@ def summary_row(row):
         "sources": row.get("sources", []),
         "hook_sources": row.get("hook_sources", []),
         "sentinel_files": row["sentinel_files"],
-        "context_nonce_in_model_request": row["context_nonce_in_model_request"],
-        "system_nonce_in_model_request": row["system_nonce_in_model_request"],
         "deny_reason_quoted": row.get("deny_reason_quoted", False),
     }
+    if "context_nonce_in_result" in row:
+        item["context_nonce_in_result"] = row["context_nonce_in_result"]
+        item["system_nonce_in_result"] = row["system_nonce_in_result"]
+        item["context_nonce_in_transcript"] = row["context_nonce_in_transcript"]
+        item["system_nonce_in_transcript"] = row["system_nonce_in_transcript"]
+    else:
+        item["context_nonce_in_model_request"] = row["context_nonce_in_model_request"]
+        item["system_nonce_in_model_request"] = row["system_nonce_in_model_request"]
     if "result" in row:
         item["result"] = row["result"]
         item["terminal_reason"] = row["terminal_reason"]
         item["permission_denials"] = row["permission_denials"]
-    else:
-        item["deny_reason_in_stdout"] = row.get("deny_reason_in_stdout", False)
+    elif "deny_reason_in_stdout" in row:
+        item["deny_reason_in_stdout"] = row["deny_reason_in_stdout"]
     return item
 
 
@@ -290,6 +347,12 @@ def finalize(args):
     }
     if args.claude_reference:
         summary["reference_checks"] = claude_reference(rows)
+    if privacy_violation(rows) or privacy_violation(summary):
+        print(
+            "stored text contains an email address or the home directory",
+            file=sys.stderr,
+        )
+        return 1
     path = Path(args.summary)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
