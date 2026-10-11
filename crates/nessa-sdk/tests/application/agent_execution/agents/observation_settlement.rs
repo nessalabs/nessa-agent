@@ -500,6 +500,23 @@ async fn a_policy_stop_closes_once_as_a_policy_refusal() {
 }
 
 #[tokio::test]
+async fn a_malformed_end_turn_reply_closes_as_an_execution_failure() {
+    let report = ExecutionReport::new(
+        None,
+        Some(AgentError::Protocol("missing prompt result".into())),
+        ProviderSessionState::CleanupRequired,
+    );
+    assert_cleanup_close(
+        "malformed-end-turn",
+        report,
+        ExecutionOutcome::Cancelled,
+        Err(AgentError::Protocol("missing prompt result".into())),
+        SessionCloseRequest::ExecutionFailed,
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn a_missed_stop_grace_closes_once_as_a_deadline() {
     let report = ExecutionReport::new(
         None,

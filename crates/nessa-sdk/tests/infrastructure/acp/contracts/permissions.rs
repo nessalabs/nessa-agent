@@ -1976,7 +1976,12 @@ async fn a_malformed_stopped_reply_fails_the_worker_and_refuses_the_held_prompt(
     let ProviderExecutionReply::Finished(report) = first else {
         panic!("{first:?}");
     };
-    assert_eq!(report.source(), ExecutionReportSource::PolicyStop);
+    assert_ne!(report.source(), ExecutionReportSource::PolicyStop);
+    assert_eq!(report.source(), ExecutionReportSource::Provider);
+    assert_eq!(
+        report.failure(),
+        Some(&AgentError::Protocol("missing prompt result".into()))
+    );
     assert!(matches!(
         report.session_state(),
         ProviderSessionState::CleanupRequired
@@ -1988,7 +1993,12 @@ async fn a_malformed_stopped_reply_fails_the_worker_and_refuses_the_held_prompt(
     let ProviderExecutionReply::Finished(report) = second else {
         panic!("{second:?}");
     };
-    assert_eq!(report.source(), ExecutionReportSource::PolicyStop);
+    assert_ne!(report.source(), ExecutionReportSource::PolicyStop);
+    assert_eq!(report.source(), ExecutionReportSource::Provider);
+    assert_eq!(
+        report.failure(),
+        Some(&AgentError::Protocol("missing prompt result".into()))
+    );
     assert!(matches!(
         report.session_state(),
         ProviderSessionState::CleanupRequired

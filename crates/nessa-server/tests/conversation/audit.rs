@@ -430,7 +430,8 @@ fn audit_maps_a_declined_review_as_a_claim_about_a_tool_nobody_was_offered() {
                 ),
                 delivery,
                 None,
-            ),
+            )
+            .unwrap(),
         ))
     };
     let value = declined(
@@ -493,7 +494,8 @@ fn audit_maps_a_stopping_refusal_as_the_cause_of_the_stop() {
             ),
             PermissionAnswerDelivery::Selected,
             Some(rule),
-        ),
+        )
+        .unwrap(),
     ));
     assert_eq!(value["outcome"], "end_turn");
     assert_eq!(value["origin"]["kind"], "rule");
@@ -516,7 +518,8 @@ fn audit_maps_a_stopping_refusal_as_the_cause_of_the_stop() {
             ),
             PermissionAnswerDelivery::Written,
             Some(ApprovalRuleReference::new("refuse-shell", "3", actor()).unwrap()),
-        ),
+        )
+        .unwrap(),
     ));
     assert_eq!(closed["outcome"], "close_session");
     assert!(closed.get("stop").is_none());

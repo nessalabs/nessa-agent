@@ -85,6 +85,9 @@ pub enum ExecutionError {
     InvalidReviewDeclineToolName,
     /// Declined-review evidence did not advance once from selection to a final write fact.
     InvalidReviewDeclineTransition,
+    /// A declined-review record pairs its outcome with a rule incorrectly: a
+    /// stopping outcome has no rule, or a continue outcome has one.
+    InvalidReviewDecline,
     /// An update targets a different tool entity.
     DifferentTool,
     /// An action targets a different or inactive execution.

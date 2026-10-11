@@ -5,7 +5,7 @@ use super::{ActionContext, ApprovalRuleReference, PermissionResolution};
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::AdmittedQuestion;
 use crate::domain::agent_execution::executions::ExecutionId;
-use crate::domain::agent_execution::permissions::{ReviewDecline, ReviewDeclineId};
+use crate::domain::agent_execution::permissions::{RefusalOutcome, ReviewDecline, ReviewDeclineId};
 use crate::domain::agent_execution::questions::{
     AcceptedAnswer, AgentQuestion, OpenQuestionAccounting, QuestionCancellation, QuestionChoice,
     QuestionId, QuestionRefusalReason, QuestionResponse,
@@ -83,8 +83,10 @@ impl ReviewDeclineRecord {
     ///
     /// The constructor consumes the provider `session_id`, owning `execution_id`,
     /// execution-scoped decline `id`, immutable `decline`, and observed
-    /// `delivery` stage. It performs no I/O and cannot fail because each domain
-    /// value was validated before reaching this application boundary.
+    /// `delivery` stage. It performs no I/O. A stopping outcome
+    /// ([`RefusalOutcome::EndTurn`] or [`RefusalOutcome::CloseSession`]) requires
+    /// a `rule`, and [`RefusalOutcome::Continue`] requires none. Either mismatch
+    /// returns [`ExecutionError::InvalidReviewDecline`].
     ///
     /// `delivery` describes this binding's own progress — [`Selected`] before a
     /// response is written, then [`Written`] or [`Failed`] once the write has
@@ -106,15 +108,19 @@ impl ReviewDeclineRecord {
         decline: ReviewDecline,
         delivery: PermissionAnswerDelivery,
         rule: Option<ApprovalRuleReference>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, ExecutionError> {
+        let stops = decline.outcome() != RefusalOutcome::Continue;
+        if rule.is_some() != stops {
+            return Err(ExecutionError::InvalidReviewDecline);
+        }
+        Ok(Self {
             session_id,
             execution_id,
             id,
             decline,
             delivery,
             rule,
-        }
+        })
     }
     /// Provider session whose agent was refused.
     pub fn session_id(&self) -> &ExecutionSessionId {

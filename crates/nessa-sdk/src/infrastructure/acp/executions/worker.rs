@@ -2566,14 +2566,16 @@ impl<P: AcpProfile> Worker<P> {
             "tool review declined; the agent is told no and the execution continues"
         );
         let record = |delivery| {
-            ExecutionAuditRecord::ReviewDeclined(ReviewDeclineRecord::new(
+            ReviewDeclineRecord::new(
                 session_id.clone(),
                 execution_id.clone(),
                 decline_id.clone(),
                 decline.clone(),
                 delivery,
                 None,
-            ))
+            )
+            .map(ExecutionAuditRecord::ReviewDeclined)
+            .map_err(|error| AgentError::InvalidInput(error.to_string()))
         };
         let correlation = self.next_correlation();
         // The decision is evidence before the wire sees it. An unrecordable
@@ -2581,7 +2583,7 @@ impl<P: AcpProfile> Worker<P> {
         // way and the audit failure is reported after it.
         let decided = self
             .record_audit(
-                record(PermissionAnswerDelivery::Selected),
+                record(PermissionAnswerDelivery::Selected)?,
                 AuditEffectPhase::PermissionSelection,
             )
             .await;
@@ -2620,7 +2622,7 @@ impl<P: AcpProfile> Worker<P> {
         // unconfirmed through the publication guard's drop fallback.
         let written = self
             .record_audit(
-                record(observed),
+                record(observed)?,
                 AuditEffectPhase::PermissionDelivery(correlation),
             )
             .await;
@@ -2749,14 +2751,16 @@ impl<P: AcpProfile> Worker<P> {
             Err(error) => PermissionAnswerDelivery::Failed(error.clone()),
         };
         let record = |delivery| {
-            ExecutionAuditRecord::ReviewDeclined(ReviewDeclineRecord::new(
+            ReviewDeclineRecord::new(
                 session_id.clone(),
                 execution_id.clone(),
                 decline_id.clone(),
                 decline.clone(),
                 delivery,
                 Some(rule.clone()),
-            ))
+            )
+            .map(ExecutionAuditRecord::ReviewDeclined)
+            .map_err(|error| AgentError::InvalidInput(error.to_string()))
         };
         let audited = self.record_decline_audits(&record, observed).await;
         let lifecycle = self.record_lifecycle(records).await;
@@ -2801,19 +2805,19 @@ impl<P: AcpProfile> Worker<P> {
     /// Selection and delivery audits for one decline, both attempted.
     async fn record_decline_audits(
         &mut self,
-        record: &impl Fn(PermissionAnswerDelivery) -> ExecutionAuditRecord,
+        record: &impl Fn(PermissionAnswerDelivery) -> Result<ExecutionAuditRecord, AgentError>,
         observed: PermissionAnswerDelivery,
     ) -> Result<(), WorkerFailure> {
         let decided = self
             .record_audit(
-                record(PermissionAnswerDelivery::Selected),
+                record(PermissionAnswerDelivery::Selected)?,
                 AuditEffectPhase::PermissionSelection,
             )
             .await;
         let correlation = self.next_correlation();
         let written = self
             .record_audit(
-                record(observed),
+                record(observed)?,
                 AuditEffectPhase::PermissionDelivery(correlation),
             )
             .await;
@@ -2938,9 +2942,10 @@ impl<P: AcpProfile> Worker<P> {
     /// The reply is read before any session report. A result or a provider
     /// error keeps the local stop's report, sent before the late-result audit
     /// so a stalled audit cannot relabel the session. Anything else is a
-    /// protocol failure: the stopped execution and anything held behind it
-    /// are refused, and the error fails the worker the way a live prompt's
-    /// malformed reply does.
+    /// protocol failure. An end-turn stop answers the stopped execution and
+    /// anything held behind it with that failure, so the session closes as an
+    /// execution failure. A close-session stop stays a policy refusal. The
+    /// error fails the worker the way a live prompt's malformed reply does.
     async fn complete_stopped_prompt(
         &mut self,
         stopped: StoppedPrompt,
@@ -2949,7 +2954,7 @@ impl<P: AcpProfile> Worker<P> {
         let reply = match prompt_reply(message) {
             Ok(reply) => reply,
             Err(error) => {
-                self.fail_stopped_reply(stopped);
+                self.fail_stopped_reply(stopped, error.clone());
                 return Err(error.into());
             }
         };
@@ -2972,21 +2977,36 @@ impl<P: AcpProfile> Worker<P> {
     }
     /// Refuse a stopped prompt whose reply is not a terminal provider result.
     ///
-    /// Cleanup sticks for this generation. Held prompts are answered only once
-    /// nothing stopped is still waiting; until then the cleanup flag is what
-    /// refuses them.
-    fn fail_stopped_reply(&mut self, stopped: StoppedPrompt) {
-        if self.stop_cleanup == StopCleanup::None {
-            self.stop_cleanup = StopCleanup::Policy;
-        }
-        let _ = stopped.reply.send(ProviderExecutionReply::Finished(
-            ExecutionReport::stopped_by_policy(ProviderSessionState::CleanupRequired),
-        ));
-        if self.stopped_prompts.is_empty() {
-            self.stop_reply_deadline = None;
-            let report = self.cleanup_refusal();
+    /// An end-turn stop answers this prompt, and every prompt held behind it,
+    /// with the protocol error and cleanup required. That report is a provider
+    /// failure, so the agent closes the session as an execution failure. A
+    /// close-session stop stays a policy refusal. Prompts held behind that
+    /// stop are answered only once nothing stopped is still waiting.
+    fn fail_stopped_reply(&mut self, stopped: StoppedPrompt, error: AgentError) {
+        let closes_session = stopped.kind == StopKind::CloseSession;
+        let report = if closes_session {
+            if self.stop_cleanup == StopCleanup::None {
+                self.stop_cleanup = StopCleanup::Policy;
+            }
+            ExecutionReport::stopped_by_policy(ProviderSessionState::CleanupRequired)
+        } else {
+            ExecutionReport::new(None, Some(error), ProviderSessionState::CleanupRequired)
+        };
+        let _ = stopped
+            .reply
+            .send(ProviderExecutionReply::Finished(report.clone()));
+        if !closes_session {
             for (_, reply) in std::mem::take(&mut self.held_prompts) {
                 let _ = reply.send(ProviderExecutionReply::Finished(report.clone()));
+            }
+        }
+        if self.stopped_prompts.is_empty() {
+            self.stop_reply_deadline = None;
+            if closes_session {
+                let report = self.cleanup_refusal();
+                for (_, reply) in std::mem::take(&mut self.held_prompts) {
+                    let _ = reply.send(ProviderExecutionReply::Finished(report.clone()));
+                }
             }
         }
     }
