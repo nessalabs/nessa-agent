@@ -29,7 +29,8 @@ impl PairingAdmission {
         self.deadline_seconds
     }
 }
-/// Evaluate enrollment management and the proposed read grant with one snapshot.
+/// Evaluate enrollment management, and the proposed grant where the owner
+/// hands on their own, with one snapshot.
 pub struct AuthorizePairing<'a> {
     /// Current credential and membership authority.
     pub access: &'a dyn AccessReader,
@@ -69,10 +70,11 @@ impl AuthorizePairing<'_> {
             return Err(AccessError::IdentityMismatch);
         }
         let manage = Action::new("credential.manage").map_err(|_| AccessError::Unavailable)?;
-        for (action, resource) in [
-            (&manage, gateway),
-            (intent.grant().action(), intent.resource()),
-        ] {
+        let mut asked = vec![(&manage, gateway)];
+        if intent.class().delegates_owner_grant() {
+            asked.push((intent.grant().action(), intent.resource()));
+        }
+        for (action, resource) in asked {
             if self.policy.evaluate(context, action, resource, &snapshot)? != Decision::Allow {
                 return Err(AccessError::Denied);
             }

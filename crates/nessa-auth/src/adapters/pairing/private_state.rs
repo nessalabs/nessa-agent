@@ -39,28 +39,30 @@ const CREDENTIAL_MAGIC: &[u8; 4] = b"NSCA";
 /// a device's existing record reads as before and a record cannot change class.
 const PEER_PENDING_MAGIC: &[u8; 4] = b"NSPP";
 const PEER_CREDENTIAL_MAGIC: &[u8; 4] = b"NSPA";
+/// An environment peer's enrollment, told apart the same way.
+const ENVIRONMENT_PENDING_MAGIC: &[u8; 4] = b"NSEP";
+const ENVIRONMENT_CREDENTIAL_MAGIC: &[u8; 4] = b"NSEA";
 
 /// The pending and credential magics of one enrollment class.
 fn magics(class: ConsentClass) -> (&'static [u8; 4], &'static [u8; 4]) {
     match class {
         ConsentClass::DeviceRead => (PENDING_MAGIC, CREDENTIAL_MAGIC),
         ConsentClass::PeerRead => (PEER_PENDING_MAGIC, PEER_CREDENTIAL_MAGIC),
+        ConsentClass::PeerEnvironment => (ENVIRONMENT_PENDING_MAGIC, ENVIRONMENT_CREDENTIAL_MAGIC),
     }
 }
 /// The class and record kind a magic names; `None` for any other bytes.
 fn class_of(magic: &[u8]) -> Option<(ConsentClass, bool)> {
-    [ConsentClass::DeviceRead, ConsentClass::PeerRead]
-        .into_iter()
-        .find_map(|class| {
-            let (pending, credential) = magics(class);
-            if magic == pending {
-                Some((class, false))
-            } else if magic == credential {
-                Some((class, true))
-            } else {
-                None
-            }
-        })
+    ConsentClass::ALL.into_iter().find_map(|class| {
+        let (pending, credential) = magics(class);
+        if magic == pending {
+            Some((class, false))
+        } else if magic == credential {
+            Some((class, true))
+        } else {
+            None
+        }
+    })
 }
 /// A credential record: the pending layout, then two u16-prefixed identifiers,
 /// each bounded by the identifier owner's own limit.

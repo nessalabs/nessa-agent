@@ -2014,9 +2014,16 @@ async fn share_refuses_what_the_owner_cannot_grant() {
     ]));
     *fixture.authority.snapshot.lock().unwrap() =
         snapshot(MembershipRole::Admin, MembershipStatus::Active);
+    // The fake answers every share target with this snapshot, and a target
+    // must hold the read it is being shared (row I1).
     grants(
         &fixture.authority,
-        &["conversation.write", "server.read", "credential.manage"],
+        &[
+            "conversation.write",
+            "conversation.read",
+            "server.read",
+            "credential.manage",
+        ],
     );
     let share = |id: String, credential: &str| {
         json!({"conversationId": id, "requestId": format!("share-{credential}"), "credentialId": credential})

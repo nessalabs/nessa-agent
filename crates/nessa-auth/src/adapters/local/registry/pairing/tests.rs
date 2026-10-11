@@ -90,6 +90,10 @@ fn claim_fixture(
 fn peer_claim() -> Fixture {
     claim_fixture_as(ConsentClass::PeerRead, |public| public, None)
 }
+/// An environment peer's invitation, claimed by the fixture's key.
+fn environment_claim() -> Fixture {
+    claim_fixture_as(ConsentClass::PeerEnvironment, |public| public, None)
+}
 fn claim_fixture_as(
     class: ConsentClass,
     public_for: impl FnOnce(PublicIntent) -> PublicIntent,
@@ -3695,6 +3699,93 @@ fn a_gateway_principal_holds_only_what_pairing_issued_it() {
     assert!(open_store(&path).is_ok());
 }
 
+/// Row I1 (`docs/design/auth/peer-gateways.md`, "Environment peers"): an
+/// environment invitation is the same one-use pairing, and what it issues
+/// names the same gateway principal a reading enrollment of that key would,
+/// a member, holding `environment.serve` alone: it reads nothing. The owner
+/// needs `credential.manage` to create it and never holds the grant it hands
+/// out. A registry in which that credential also reads, or in which a
+/// person's credential serves, is refused on open; `credential.issue` refuses
+/// `environment.serve` to anyone, since only pairing makes a peer.
+#[test]
+fn an_environment_enrollment_issues_the_peer_principal_holding_only_serve() {
+    let fixture = environment_claim();
+    let active = publish(&fixture);
+    let principal = peer_principal(&fixture.channel.device_proof().key()).unwrap();
+    assert_eq!(active.credential_principal(), Some(principal.clone()));
+    let path = fixture.directory.path().join("native/credentials.v1.json");
+    let original_bytes = std::fs::read(&path).unwrap();
+    let original: Registry = serde_json::from_slice(&original_bytes).unwrap();
+    assert_eq!(
+        original
+            .principals
+            .iter()
+            .find(|entry| entry.id == principal.as_str())
+            .unwrap()
+            .kind,
+        PrincipalKindDto::Gateway
+    );
+    assert_eq!(
+        peer_credential(&original)
+            .metadata
+            .grants
+            .iter()
+            .map(|grant| grant.action.as_str())
+            .collect::<Vec<_>>(),
+        ["environment.serve"]
+    );
+    let pairing: serde_json::Value = serde_json::from_slice(&original_bytes).unwrap();
+    assert_eq!(pairing["pairings"][0]["class"], "environment");
+    // No person may hold it, through issuance or in a stored registry.
+    let mut request = ordinary_issue("person-serving");
+    request.grants = vec![grant("org-1", "environment.serve")];
+    request.grants[0].resource.id = "gateway-1".into();
+    let before = std::fs::read(&path).unwrap();
+    let issued = fixture.store.issue_sync(request);
+    assert!(
+        matches!(issued, Err(LocalStoreError::Conflict)),
+        "{:?}",
+        issued.err()
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    drop(fixture.store);
+    // The environment credential reading too, or reading instead.
+    for grants in [
+        vec!["environment.serve", "conversation.read"],
+        vec!["conversation.read"],
+    ] {
+        let mut changed = original.clone();
+        let credential = changed
+            .credentials
+            .iter_mut()
+            .find(|entry| entry.metadata.id == "native-device")
+            .unwrap();
+        let template = credential.metadata.grants[0].clone();
+        credential.metadata.grants = grants
+            .iter()
+            .map(|action| {
+                let mut grant = template.clone();
+                grant.action = (*action).into();
+                grant
+            })
+            .collect();
+        assert_public_registry_refusal(&path, &changed);
+    }
+    // A person's credential that serves.
+    let mut changed = original.clone();
+    let owner = changed
+        .credentials
+        .iter_mut()
+        .find(|entry| matches!(entry.verifier, StoredProof::Bearer(_)))
+        .unwrap();
+    let mut serve = owner.metadata.grants[0].clone();
+    serve.action = "environment.serve".into();
+    owner.metadata.grants.push(serve);
+    assert_public_registry_refusal(&path, &changed);
+    std::fs::write(&path, &original_bytes).unwrap();
+    assert!(open_store(&path).is_ok());
+}
+
 fn peer_credential(registry: &Registry) -> &super::super::StoredCredential {
     registry
         .credentials
@@ -3710,9 +3801,10 @@ fn the_kind_alone_refuses_a_gateway_any_conversation_authority() {
     let path = fixture.directory.path().join("native/credentials.v1.json");
     let original: Registry = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert!(super::super::validate_principal_kind(&original, peer_credential(&original)).is_ok());
+    drop(fixture.store);
     // Only the grants change, so the credential's verifier, membership and
-    // binding to its pairing stay valid: the kind's allowance is the one
-    // check left to refuse it.
+    // binding to its pairing stay valid: the kind's allowance, asked by
+    // `validate_grants`, is the one check left to refuse it.
     for action in CONVERSATION_AUTHORITY_ACTIONS {
         let mut changed = original.clone();
         changed
@@ -3723,12 +3815,17 @@ fn the_kind_alone_refuses_a_gateway_any_conversation_authority() {
             .metadata
             .grants[0]
             .action = (*action).into();
+        assert!(super::super::validate_principal_kind(&changed, peer_credential(&changed)).is_ok());
         assert!(matches!(
-            super::super::validate_principal_kind(&changed, peer_credential(&changed)),
-            Err(CredentialRegistryFault::InvalidState(
-                RegistryInvariant::CredentialMetadata
-            ))
+            super::super::validate_grants(
+                &peer_credential(&changed).metadata,
+                crate::domain::PrincipalKind::Gateway,
+                &changed.gateway_id,
+                true,
+            ),
+            Err(LocalStoreError::Conflict)
         ));
+        assert_public_registry_refusal(&path, &changed);
     }
 }
 

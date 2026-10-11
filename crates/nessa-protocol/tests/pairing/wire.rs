@@ -863,7 +863,22 @@ fn the_enrollment_class_is_carried_and_never_changes_in_transit() {
     );
     let device: Value = serde_json::from_slice(&encode_hello(public()).unwrap()).unwrap();
     assert_eq!(device["public"]["class"], "gateway-conversation-read");
-    for class in [ConsentClass::DeviceRead, ConsentClass::PeerRead] {
+    for class in ConsentClass::ALL {
         assert_eq!(ConsentClass::parse(class.as_str()), Some(class));
     }
+    let environment = PublicIntent::new(
+        public().invitation(),
+        public().attempt(),
+        public().consent(),
+        public().generation(),
+        public().expiry_ms(),
+        ConsentClass::PeerEnvironment,
+    )
+    .unwrap();
+    let bytes = encode_hello(environment).unwrap();
+    let value: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(value["public"]["class"], "peer-gateway-environment-serve");
+    assert!(
+        matches!(decode_reply(&bytes).unwrap(), NativePairingReply::Hello(decoded) if decoded == environment && decoded != peer)
+    );
 }

@@ -1448,6 +1448,7 @@ async fn metadata_query_target_fences_passive_admission_and_shares() {
         receivers: &bindings,
         grants: &fixture.store,
         access: &access,
+        gateway: &gateway,
     };
     let caller = ConversationCaller {
         organization_id: OrganizationId::new("org").unwrap(),
