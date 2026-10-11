@@ -213,3 +213,60 @@ async fn a_fatal_alert_is_sent_before_the_close() {
     // An encrypted TLS 1.3 alert travels as an application-data record.
     assert_eq!(&sent[..3], &[0x17, 0x03, 0x03]);
 }
+
+/// Codex review on #748: a peer that stops reading leaves the writer parked
+/// on a full socket. Closing the stream from outside, as replacing or
+/// revoking a paired environment's connection does, must wake that writer
+/// and refuse it, so neither the write half nor its task outlives the
+/// connection.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn closing_wakes_a_writer_parked_on_a_full_socket() {
+    let gateway = NativeIdentity::generate(&mut OsEntropy).unwrap();
+    let pin = gateway.public_spki();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let peer = std::thread::spawn(move || {
+        let socket = std::net::TcpStream::connect(address).unwrap();
+        let device = NativeIdentity::generate(&mut OsEntropy).unwrap();
+        NativeTransport::connect(socket, &device, GatewayTrust::Pinned(pin)).map(drop)
+    });
+    let (accepted, peer_address) = listener.accept().unwrap();
+    let mut transport = tokio::task::spawn_blocking(move || {
+        let (stream, _) = DeadlineStream::new(
+            accepted,
+            RuntimeDependencies::default().clock,
+            WakeEndpoint::new(peer_address),
+        )
+        .unwrap();
+        stream.blocking().unwrap();
+        NativeTransport::accept(stream, &gateway).unwrap()
+    })
+    .await
+    .unwrap();
+    peer.join().unwrap().unwrap();
+    let _socket = transport.stream_mut().take_socket().unwrap();
+    // A 1 KiB pipe nobody reads stands in for a socket the peer stopped
+    // draining.
+    let (socket, _unread) = tokio::io::duplex(1024);
+    let stream = TlsStream::over(transport, socket);
+    let closer = stream.closer();
+    let (_reader, mut writer) = tokio::io::split(stream);
+    let writing = tokio::spawn(async move {
+        writer.write_all(&[b'x'; RESPONSE]).await?;
+        writer.flush().await
+    });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        !writing.is_finished(),
+        "the writer is parked on the full pipe"
+    );
+    closer.close();
+    let written = tokio::time::timeout(Duration::from_secs(5), writing)
+        .await
+        .expect("closing wakes the parked writer")
+        .unwrap();
+    assert_eq!(
+        written.unwrap_err().kind(),
+        std::io::ErrorKind::ConnectionAborted
+    );
+}

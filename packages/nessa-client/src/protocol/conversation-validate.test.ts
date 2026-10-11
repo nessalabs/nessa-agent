@@ -1003,6 +1003,12 @@ describe("the view's lease", () => {
       { ...live, environment: "ssh", host: "d".repeat(254) },
       { ...live, environment: "here", host: "devbox" },
       { ...live, environment: "peer" },
+      { ...live, environment: "peer", host: "devbox" },
+      { ...live, environment: "peer", host: "peer:XYZ" },
+      { ...live, environment: "peer", host: `peer:${"AB".repeat(32)}` },
+      { ...live, environment: "peer", host: `peer:${"ab".repeat(31)}` },
+      { ...live, environment: "peer", host: `peer:${"ab".repeat(33)}` },
+      { ...live, environment: "peer", host: `${"ab".repeat(32)}` },
     ])
       expect(() => conversationView(withLease(contradiction), "conversation")).toThrow()
   })

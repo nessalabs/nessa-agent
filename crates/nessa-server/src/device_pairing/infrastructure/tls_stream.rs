@@ -22,8 +22,11 @@
 //! reading is sent rather than replaced by a bare close
 //! (`a_fatal_alert_is_sent_before_the_close`). Once its connection owner
 //! wakes it for shutdown, or [`TlsCloser::close`] ends it from outside, a
-//! waiting reader is woken at once and every later read is refused, and a
-//! closed stream refuses every write too.
+//! waiting reader is woken at once and every later read is refused. A close
+//! from outside also wakes a writer parked on a full socket, and a closed
+//! stream refuses every write and flush, so neither half outlives the
+//! connection waiting on a peer that stopped reading
+//! (`closing_wakes_a_writer_parked_on_a_full_socket`).
 use nessa_auth::{adapters::pairing::NativeTransport, application::pairing::DeviceConnectionProof};
 use nessa_protocol::pairing::socket::DeadlineStream;
 use std::{
@@ -51,31 +54,39 @@ const SOCKET_READ_BYTES: usize = 16 * 1024;
 pub struct TlsCloser {
     closed: AtomicBool,
     reader: Mutex<Option<Waker>>,
+    writer: Mutex<Option<Waker>>,
 }
 
 impl TlsCloser {
-    /// Refuse every later read and write, and wake a waiting reader.
+    /// Refuse every later read and write, and wake a waiting reader and
+    /// writer.
     pub fn close(&self) {
         self.closed.store(true, Ordering::SeqCst);
-        if let Some(reader) = self
-            .reader
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take()
-        {
-            reader.wake();
+        for slot in [&self.reader, &self.writer] {
+            if let Some(waiting) = slot.lock().unwrap_or_else(PoisonError::into_inner).take() {
+                waiting.wake();
+            }
         }
     }
 
     /// Have `reader` woken by [`Self::close`]; `true` if already closed.
-    fn register(&self, reader: &Waker) -> bool {
-        let mut held = self.reader.lock().unwrap_or_else(PoisonError::into_inner);
-        if self.closed.load(Ordering::SeqCst) {
+    fn register_reader(&self, reader: &Waker) -> bool {
+        Self::register(&self.reader, &self.closed, reader)
+    }
+
+    /// Have `writer` woken by [`Self::close`]; `true` if already closed.
+    fn register_writer(&self, writer: &Waker) -> bool {
+        Self::register(&self.writer, &self.closed, writer)
+    }
+
+    fn register(slot: &Mutex<Option<Waker>>, closed: &AtomicBool, waker: &Waker) -> bool {
+        let mut held = slot.lock().unwrap_or_else(PoisonError::into_inner);
+        if closed.load(Ordering::SeqCst) {
             return true;
         }
         match held.as_ref() {
-            Some(waker) if waker.will_wake(reader) => {}
-            _ => *held = Some(reader.clone()),
+            Some(waiting) if waiting.will_wake(waker) => {}
+            _ => *held = Some(waker.clone()),
         }
         false
     }
@@ -166,7 +177,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AsyncRead for TlsStream<S> {
     ) -> Poll<IoResult<()>> {
         let this = self.get_mut();
         // Closed from outside, or woken by the listener's shutdown: refused.
-        if this.closer.register(context.waker())
+        if this.closer.register_reader(context.waker())
             || this.transport.stream_mut().wake_reader(context.waker())
         {
             return Poll::Ready(Err(Error::from(ErrorKind::ConnectionAborted)));
@@ -216,7 +227,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AsyncWrite for TlsStream<S> {
         bytes: &[u8],
     ) -> Poll<IoResult<usize>> {
         let this = self.get_mut();
-        if this.closer.is_closed() {
+        if this.closer.register_writer(context.waker()) {
             return Poll::Ready(Err(Error::from(ErrorKind::ConnectionAborted)));
         }
         match this.poll_send(context) {
@@ -235,6 +246,9 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AsyncWrite for TlsStream<S> {
 
     fn poll_flush(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<IoResult<()>> {
         let this = self.get_mut();
+        if this.closer.register_writer(context.waker()) {
+            return Poll::Ready(Err(Error::from(ErrorKind::ConnectionAborted)));
+        }
         match this.poll_send(context) {
             Poll::Ready(Ok(())) => Pin::new(&mut this.socket).poll_flush(context),
             other => other,
