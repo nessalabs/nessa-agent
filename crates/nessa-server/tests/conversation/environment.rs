@@ -363,3 +363,31 @@ async fn a_read_waiting_when_its_lease_ends_is_cut_off_at_once() {
         .unwrap();
     assert_eq!(read, Err(super::super::ArtifactReadFailure::LeaseEnded));
 }
+
+/// Bytes whose read fails as their lease's end is asked, as a channel the
+/// host closes when it ends the lease.
+struct FailsAsItEnds(Arc<LeaseFence>);
+impl super::super::ArtifactBytes for FailsAsItEnds {
+    fn next(&mut self) -> super::super::ArtifactChunk<'_> {
+        self.0.ending();
+        Box::pin(async { Err(super::super::ArtifactReadFailure::Unavailable) })
+    }
+}
+
+/// A read that fails as its lease ends is answered as the lease ended, not
+/// as the failure its channel saw.
+#[tokio::test]
+async fn a_read_that_fails_as_its_lease_ends_is_answered_as_ended() {
+    let opening = open_lease(
+        in_process_environment().as_ref(),
+        request(SandboxProfiles::HARNESS_DEFAULT),
+        binding(),
+    )
+    .await;
+    let live = LiveLease::new(&opening);
+    let mut bytes = live.while_live(Box::new(FailsAsItEnds(opening.fence.clone())));
+    assert_eq!(
+        bytes.next().await,
+        Err(super::super::ArtifactReadFailure::LeaseEnded)
+    );
+}

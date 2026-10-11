@@ -689,14 +689,17 @@ impl super::ArtifactBytes for WhileLive {
             }
             // A read the host never answers still ends with its lease: the
             // offer holds the lease's End back until it is answered.
-            let chunk = tokio::select! {
-                chunk = self.bytes.next() => chunk?,
+            let read = tokio::select! {
+                read = self.bytes.next() => read,
                 () = self.fence.left_live() => {
                     return Err(super::ArtifactReadFailure::LeaseEnded);
                 }
             };
+            // The lease's end wins over what the read saw, a failure
+            // included: a channel the host closes as it ends the lease is
+            // the lease ending.
             match self.fence.is_live() {
-                true => Ok(chunk),
+                true => read,
                 false => Err(super::ArtifactReadFailure::LeaseEnded),
             }
         })
