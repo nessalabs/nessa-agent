@@ -452,7 +452,19 @@ impl CompositionRoot {
                         None => Ok(()),
                     }
                 },
-                conversations.map(|service| async move { service.shutdown().await }),
+                conversations.map(|service| {
+                    let held_reads = shutdown_product.held_reads.clone();
+                    async move {
+                        let drained = service.shutdown().await;
+                        // A held file's ranges are read for surfaces, not for
+                        // conversations, but end with them: fenced, and the
+                        // read under way finished, before the store goes.
+                        if let Some(reads) = held_reads {
+                            reads.shutdown().await;
+                        }
+                        drained
+                    }
+                }),
                 async {
                     // After agents, whose stand-ins end with their servers.
                     #[cfg(unix)]

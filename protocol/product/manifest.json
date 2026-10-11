@@ -102,6 +102,10 @@
       "params": "ConversationReorderParams",
       "grant": "conversation.write"
     },
+    "artifact.read": {
+      "params": "ArtifactReadParams",
+      "grant": "conversation.read"
+    },
     "attachment.begin": {
       "params": "AttachmentBeginParams",
       "grant": "conversation.write"

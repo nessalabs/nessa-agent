@@ -39,6 +39,9 @@ Each row is a limit the gateway names when a refusal or a silent close hits it. 
 | artifact.environment_bytes | fixed | 1073741824 | conversation ArtifactBudget::LEASE.bytes | a file that would take one lease's total kept bytes past this is refused unread |
 | artifact.conversation_records | fixed | 1024 | nessa-sdk ArtifactRecord::MAX_PER_CONVERSATION | a file published once a conversation records this many is refused unread |
 | artifact.read_resumes | fixed | 3 | conversation ARTIFACT_READ_RESUMES | a read whose channel fails more often than this is refused channelUnavailable |
+| artifact.read_range_bytes | fixed | 32768 | attachments HeldReads::MAX_RANGE_BYTES, the schema's ArtifactReadParams maxBytes | the most bytes one artifact.read answers with; its base64 fits the socket's ordinary frame |
+| artifact.read_busy_wait | fixed | 2000 | attachments HeldReads::BUSY_WAIT | how long one artifact.read waits, queued in arrival order, for the store's one read slot before it answers temporarily_unavailable |
+| server.artifact_reads | fixed | 4 | attachments HeldReads::CONCURRENT_READS | artifact.read requests the gateway reads or waits on at once, apart from server.requests; past this one is refused temporarily_unavailable at once |
 | artifact.publish_deadline | fixed | 900000 | attachments AttachmentLimits::publish_deadline | a published file not read and checked by then is refused, and nothing held |
 | record.discovery_steps | fixed | 128 | record read DISCOVERY_STEPS_PER_READ | a cold read that uses every discovery step answers that the source is preparing |
 | peer.poll_interval | fixed | 30000 | POLL_INTERVAL in crates/nessa-server/src/peer_gateways/infrastructure/poller.rs | how often each up-to-date peer gateway is read, jittered 80 to 120 percent; what a peer shares or unshares reaches this gateway's cache within about one interval |

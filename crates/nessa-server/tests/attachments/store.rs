@@ -987,3 +987,6 @@ mod artifact_tests;
 
 #[path = "artifact_ranges.rs"]
 mod artifact_range_tests;
+
+#[path = "held_reads.rs"]
+mod held_read_tests;

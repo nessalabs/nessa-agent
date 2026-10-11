@@ -34,7 +34,7 @@ use crate::{
         application::{AgentCredentialSource, AgentProbe},
         infrastructure::{LocalAgentCredentials, LocalAgentProbe},
     },
-    attachments::application::AttachmentService,
+    attachments::application::{AttachmentService, HeldReads},
     browser_session::adapters::PersistentSessions,
     conversation::{
         application::{
@@ -389,7 +389,7 @@ pub(super) async fn product_state(
             .with_change_watches(record_watches, catalogue_watches)
             .with_record_source(reader)
             .with_catalogue_source(catalogue)
-            .with_attachments(attachments)
+            .with_attachments(attachments.0, attachments.1)
             .with_agents_catalog(agents_catalog);
         if let Some(connected) = connected_environments {
             product = product.with_connected_environments(connected);
@@ -471,7 +471,7 @@ struct BuiltConversations {
     receivers: Arc<dyn ReceiverAuthority>,
     metadata: Arc<dyn ConversationRepository>,
     read_grants: Arc<dyn ReadGrants>,
-    attachments: AttachmentService,
+    attachments: (AttachmentService, HeldReads),
     agents_catalog: AgentsListResult,
     /// Which configured agents this run cannot start even though they are
     /// installed. Known only once every provider has been built, and needed
@@ -1201,7 +1201,7 @@ async fn conversations(
         receivers,
         read_grants: metadata.clone(),
         metadata,
-        attachments: attachments.service,
+        attachments: (attachments.service, attachments.reads),
         agents_catalog,
         record_reader,
         catalogue_reader,
