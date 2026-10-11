@@ -494,7 +494,9 @@ sequenceDiagram
   `terminal: credential_revoked`, `unclaimed: …`) rather than an ended
   change with no cause
   (`a_stop_after_an_ended_transition_commits_keeps_the_status_cause`).
-  The cycle does not continue into a read.
+  Recording that cause happens before the stop returns, so the cycle does
+  not continue into a read
+  (`a_stopped_status_records_its_cause_and_does_not_read`).
   The conversations one read withdrew are one record, or one per 64
   (`WITHDRAWN_PER_RECORD`); they are kept outside the
   read's worker, so a worker that panics still reports what it withdrew.
@@ -577,7 +579,7 @@ sequenceDiagram
 | R23 | Native pairing stops with records queued and the store stalled; or its writer panics | The audit is closed and drained within one `AUDIT_DEADLINE` on the injected clock: records before the stall are written, the rest are logged and not, and the writer ends once the stalled write returns; a writer that panicked ends the drain at once, reported as not drained, its unwritten records logged | `close_drains_within_one_deadline`, `a_writer_that_panics_does_not_hold_the_drain` |
 | R24 | Native pairing stops while an enroll and a forget have handed over their intents; while a command holds the turn; or a command is asked after | The peer commands are closed before the audit. The first two are waited for, find the turn closed, and answer `peer_unavailable` with their outcomes kept, having read, dialed and removed nothing. A command holding the turn is waited for, within `PREEMPT`, and its outcome kept before the audit closes (past `PREEMPT`, see Known limits). One asked after is refused `peer_unavailable` before its intent, leaving no record | `a_command_admitted_before_shutdown_ends_with_its_outcome_and_no_effect`, `close_waits_for_a_command_holding_the_turn_and_keeps_its_outcome`, `a_command_asked_after_close_is_refused_before_its_intent` |
 | R25 | One read finds more conversations withdrawn than `WITHDRAWN_PER_READ` | It withdraws that many and ends incomplete; the next cycle withdraws the rest; one cycle's records stay within about half the audit's queue | `a_read_withdraws_at_most_its_cap_and_ends_incomplete`; the bound on a cycle's records is a compile-time assertion beside `WITHDRAWN_PER_READ` |
-| R26 | A stop wins the status wait after the worker has committed an ending, before the poller has taken the status answer. The poller's own stop, or the cycle an owner command stops | The answer is kept, so the audit names the cause it carried. The cycle does not continue into a read | `a_stop_after_an_ended_transition_commits_keeps_the_status_cause` |
+| R26 | A stop wins the status wait after the worker has committed an ending, before the poller has taken the status answer. The poller's own stop, or the cycle an owner command stops | The answer is kept, so the audit names the cause it carried. The cycle does not continue into a read | `a_stop_after_an_ended_transition_commits_keeps_the_status_cause`, `a_stopped_status_records_its_cause_and_does_not_read` |
 | R17 | The wait after each cycle | The interval when settled or pending; an eighth of it when incomplete or stopped; doubling from the interval on each failure in a row; spread 80 to 120 percent; never past the cap; a failing entropy source draws the middle | `failures_double_the_wait_up_to_the_cap`, `jitter_spreads_a_wait_over_80_to_120_percent_and_the_cap_still_holds` and the other tests in `tests/peer_gateways/poller.rs` |
 
 ## What this part does not do

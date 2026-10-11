@@ -48,7 +48,7 @@ use super::commands::{
     CycleStop, CycleTurn, EnrollmentEntropySource, PeerCommands, PeerSync, PollerRecord, SyncState,
 };
 use super::records::{PeerEntry, PeerPhase, PeerRecord, SlotOutcome, SlotTransition};
-use crate::peer_gateways::application::{PollerCause, WITHDRAWN_PER_RECORD};
+use crate::peer_gateways::application::{PeerHolding, PollerCause, WITHDRAWN_PER_RECORD};
 use nessa_auth::{
     adapters::pairing::NativeIdentity,
     application::{pairing::ClientPendingStore, ports::Clock as WallClock},
@@ -397,24 +397,17 @@ impl Poller {
         let before = self.commands.holding(key).await;
         let asked = self.ask_status(record, cycle).await;
         let after = self.commands.holding(key).await;
-        let outcome = status_outcome(asked.landed);
-        match status_cause(asked.transition, asked.status.as_ref()) {
-            // A transition that changed nothing and failed nowhere is no change.
-            Some(cause) if after != before || outcome.is_err() => changes.push(
+        let recorded = status_record(asked, &before, &after);
+        if let Some(cause) = recorded.cause {
+            changes.push(
                 self.commands
-                    .poller_changed(key, cause, before, after, outcome),
-            ),
-            Some(_) => {}
-            None if after != before => {
-                tracing::warn!(peer = %hex(&key), before = ?before, after = ?after,
-                    "peer gateway holding read differently around a status that began no change");
-            }
-            None => {}
+                    .poller_changed(key, cause, before, after, recorded.outcome),
+            );
+        } else if after != before {
+            tracing::warn!(peer = %hex(&key), before = ?before, after = ?after,
+                "peer gateway holding read differently around a status that began no change");
         }
-        if asked.stopped {
-            return None;
-        }
-        Some(asked.status?.map(|(status, _)| status))
+        recorded.answer
     }
 
     /// The status, the transition its store began, if any, and whether that
@@ -436,47 +429,18 @@ impl Poller {
         let slot = Arc::new(self.commands.records().slot(*record.key()));
         let client = NativeEnrollmentClient::new(slot.clone(), self.commands.clock.clone());
         // `shutdown` wakes a worker still blocked in the read and waits until
-        // it has finished. It is polled only when a stop wins, and again
-        // below, so a status that answers first is drained the same way.
-        let (status, stopped_early) = take_status(
+        // it has finished. `asked_status` polls it when a stop wins; this
+        // second call drains a status that answered first.
+        let asked = asked_status(
             client.status(stream, None),
             cycle.stopped(),
             &mut stopped,
             client.shutdown(),
+            || (slot.transition(), slot.outcome()),
         )
         .await;
         client.shutdown().await;
-        let status = status.map(|status| match status {
-            NativePairingStatus::Active {
-                receiver,
-                access_epoch,
-                ..
-            } => (
-                Status::Active {
-                    receiver: receiver.as_str().to_owned(),
-                    access_epoch,
-                },
-                String::new(),
-            ),
-            NativePairingStatus::Terminal { cause, .. } => (
-                Status::Ended,
-                format!("terminal: {}", snake(&format!("{cause:?}"))),
-            ),
-            NativePairingStatus::Unclaimed { outcome, .. } => (
-                Status::Ended,
-                format!("unclaimed: {}", snake(&format!("{outcome:?}"))),
-            ),
-            NativePairingStatus::Pending(_)
-            | NativePairingStatus::Claimed(_)
-            | NativePairingStatus::Approved(_)
-            | NativePairingStatus::Staging(_) => (Status::Waiting, String::new()),
-        });
-        AskedStatus {
-            status: Some(status),
-            transition: slot.transition(),
-            landed: slot.outcome(),
-            stopped: stopped_early,
-        }
+        asked
     }
 
     /// Empty the peer's cache for `cause`, as one audited step. The cache is
@@ -662,12 +626,66 @@ impl AskedStatus {
     }
 }
 
+/// The status call's answer as the poller keeps it: the cause text, the
+/// transition `noted` reads once the worker has returned, and whether a
+/// stop won the wait. A stop does not drop the answer.
+/// `a_stop_after_an_ended_transition_commits_keeps_the_status_cause` passes
+/// a stand-in call and checks the cause on `AskedStatus`.
+async fn asked_status<S, C, P>(
+    status: S,
+    cycle_stopped: C,
+    poller_stopped: &mut watch::Receiver<bool>,
+    settle: P,
+    noted: impl FnOnce() -> (Option<SlotTransition>, Option<SlotOutcome>),
+) -> AskedStatus
+where
+    S: Future<Output = Result<NativePairingStatus, NativeClientError>>,
+    C: Future<Output = ()>,
+    P: Future<Output = ()>,
+{
+    let (status, stopped_early) = take_status(status, cycle_stopped, poller_stopped, settle).await;
+    let (transition, landed) = noted();
+    AskedStatus {
+        status: Some(status.map(status_text)),
+        transition,
+        landed,
+        stopped: stopped_early,
+    }
+}
+
+/// `(Status, cause text)` for one native status. The text is what an ending's
+/// audit detail keeps; a status that has not ended carries an empty string.
+fn status_text(status: NativePairingStatus) -> (Status, String) {
+    match status {
+        NativePairingStatus::Active {
+            receiver,
+            access_epoch,
+            ..
+        } => (
+            Status::Active {
+                receiver: receiver.as_str().to_owned(),
+                access_epoch,
+            },
+            String::new(),
+        ),
+        NativePairingStatus::Terminal { cause, .. } => (
+            Status::Ended,
+            format!("terminal: {}", snake(&format!("{cause:?}"))),
+        ),
+        NativePairingStatus::Unclaimed { outcome, .. } => (
+            Status::Ended,
+            format!("unclaimed: {}", snake(&format!("{outcome:?}"))),
+        ),
+        NativePairingStatus::Pending(_)
+        | NativePairingStatus::Claimed(_)
+        | NativePairingStatus::Approved(_)
+        | NativePairingStatus::Staging(_) => (Status::Waiting, String::new()),
+    }
+}
+
 /// The status worker's answer, and whether a stop won the wait before it.
 /// A stop does not drop the answer: `settle` wakes the worker (the client's
-/// shutdown) and this then takes whatever the worker returns, so an ending
-/// it has already committed keeps the cause that answer names.
-/// `a_stop_after_an_ended_transition_commits_keeps_the_status_cause` wins
-/// the stop on purpose and checks the cause.
+/// shutdown) and this then takes whatever the worker returns.
 async fn take_status<S, C, P>(
     status: S,
     cycle_stopped: C,
@@ -693,11 +711,43 @@ where
     };
     let answered = match answered {
         Some(answered) => answered,
-        // The worker has finished (shutdown saw its permit drop) or is
-        // finishing; the answer is still in this future.
+        // Runs only when no worker started: shutdown found the permit free,
+        // and this call is taken now against a client already closed.
         None => status.await,
     };
     (answered, true)
+}
+
+/// What a status step records, and the status the cycle may continue with.
+/// The cause is taken before a stop returns `None`, so an ending a stop
+/// won after is still recorded and the cycle does not go on to read.
+/// `a_stopped_status_records_its_cause_and_does_not_read` is that stop.
+struct StatusRecord {
+    /// The change to hand the audit, when the step began one worth keeping.
+    cause: Option<PollerCause>,
+    /// The store's answer for that change.
+    outcome: Result<(), &'static str>,
+    /// `None` when the cycle must not go on to a read.
+    answer: Option<Result<Status, NativeClientError>>,
+}
+
+fn status_record(asked: AskedStatus, before: &PeerHolding, after: &PeerHolding) -> StatusRecord {
+    let outcome = status_outcome(asked.landed);
+    // A transition that changed nothing and failed nowhere is no change.
+    let cause = match status_cause(asked.transition, asked.status.as_ref()) {
+        Some(cause) if after != before || outcome.is_err() => Some(cause),
+        _ => None,
+    };
+    let answer = if asked.stopped {
+        None
+    } else {
+        asked.status.map(|status| status.map(|(status, _)| status))
+    };
+    StatusRecord {
+        cause,
+        outcome,
+        answer,
+    }
 }
 
 /// Why a status step changed what is held: from the transition its store
