@@ -135,6 +135,7 @@ pub use catalogue_watch::{
 };
 mod artifacts;
 mod catalogue_read;
+mod command_environment;
 mod environment;
 mod error;
 mod error_code;
@@ -160,6 +161,11 @@ pub use catalogue_read::{
     CatalogueReadSource, CatalogueReadValue, ReadCatalogue,
 };
 // The port itself, which placement and the service use on every host.
+pub(crate) use command_environment::CommandEnvironment;
+pub use command_environment::CommandResult;
+// Held by the SSH adapter, which is Unix only, and by tests.
+#[cfg_attr(not(any(unix, test)), allow(unused_imports))]
+pub(crate) use command_environment::CommandHold;
 pub(crate) use environment::{Environment, EnvironmentFuture};
 // For the adapters, which only the Unix gateway composes (`infrastructure`).
 pub use artifacts::{
@@ -209,6 +215,7 @@ pub use record_read::{
     ReadRecords, RecordHead, RecordReadError, RecordReadFuture, RecordReadLease,
     RecordReadOperation, RecordReadResponse, RecordReadSource, RecordReadValue,
 };
+pub use service::{CommandAnswer, CommandCall, CommandCallError, EnvironmentListing, HERE};
 pub use service::{
     ConversationAgent, ConversationAgentFuture, ConversationAgentSource, ConversationAgents,
     ConversationCaller, ConversationDeletionBudgets, ConversationDependencies, ConversationLimits,

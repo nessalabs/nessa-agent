@@ -14,6 +14,9 @@
 //!                   none ──▶ FrameDropped, never applied elsewhere (row L9)
 //! end of stream ──▶ every route dropped: waiters unanswered, outputs ended,
 //!                   each lease's `gone` closed ──▶ ConnectionLost
+//! a command lease: grant_command ──▶ GrantCommand ──▶ Granted | Refused
+//!                  run ──▶ Run ──▶ Ran (routed to its waiter; the lease is done
+//!                  there unless its End is asked, whose Ended follows)
 //! a harness: binding's input ──▶ its pump ──▶ Input… InputClosed ──▶ Stop
 //!            (cleanup, let go, or output overflow ask its pump for the Stop;
 //!             a Stopped the host sent unasked, for its input overflow, ends
@@ -48,8 +51,8 @@ use crate::env::LEASE_PROTOCOL;
 use crate::env_serve::application::FrameStream;
 use futures_util::FutureExt;
 use nessa_protocol::lease::{
-    decode, encode, read_hello, stop_steps, Cleanup, Collection, CollectionRefusal, Data,
-    FromEnvironment, GrantRefusal, StagedArtifact, ToEnvironment, Unavailability,
+    decode, encode, read_hello, stop_steps, Cleanup, Collection, CollectionRefusal, CommandEnd,
+    Data, FromEnvironment, GrantRefusal, StagedArtifact, ToEnvironment, Unavailability,
     MAX_ARTIFACTS_IN_FLIGHT, MAX_DATA_BYTES,
 };
 use nessa_sdk::domain::agent_execution::leases::{LeaseRefusal, SshDestination};
@@ -121,9 +124,30 @@ struct ChannelRoute {
     start_failed: bool,
 }
 
+/// What a command lease's `Ran` said.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CommandAnswer {
+    pub(crate) end: CommandEnd,
+    pub(crate) stdout: Vec<u8>,
+    pub(crate) stderr: Vec<u8>,
+    pub(crate) dropped_bytes: u64,
+    pub(crate) cleanup: Cleanup,
+}
+
+/// Why a host did not admit a lease: its typed refusal, or no answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AdmissionRefused {
+    /// The host refused it.
+    Host(GrantRefusal),
+    /// The connection is lost, or the host did not answer in time.
+    Unreachable,
+}
+
 /// One lease held on this connection.
 struct LeaseRoute {
     grant: Option<oneshot::Sender<Result<(), GrantRefusal>>>,
+    /// A command lease's run, waiting for its `Ran`.
+    ran: Option<oneshot::Sender<CommandAnswer>>,
     ended: Option<oneshot::Sender<Cleanup>>,
     /// Its End was asked: no harness starts under it and none is asked to
     /// stop, as its `Ended` answers their stops.
@@ -136,7 +160,7 @@ struct LeaseRoute {
     channels: HashMap<u32, ChannelRoute>,
     next_channel: u32,
     /// Where the files the host publishes under it are offered: `None`
-    /// once whoever takes them let go.
+    /// once whoever takes them let go, and for a command lease.
     published: Option<mpsc::Sender<Published>>,
     /// Dropped with the route: the lease is no longer routed here.
     _gone: watch::Sender<()>,
@@ -371,43 +395,110 @@ impl HostLink {
         agent: &str,
         deadline: Duration,
     ) -> Result<Granted, LeaseRefusal> {
-        let (answer, answered) = oneshot::channel();
         let (offers, published) = mpsc::channel(MAX_ARTIFACTS_IN_FLIGHT);
+        let frame = ToEnvironment::Grant {
+            lease: lease.into(),
+            agent: agent.into(),
+        };
+        let gone = self
+            .admit(lease, frame, Some(offers), deadline)
+            .await
+            .map_err(|refused| match refused {
+                AdmissionRefused::Host(GrantRefusal::AgentUnavailable) => {
+                    LeaseRefusal::AgentUnavailable
+                }
+                _ => LeaseRefusal::EnvironmentUnreachable,
+            })?;
+        Ok(Granted { gone, published })
+    }
+
+    /// Ask the host to admit command lease `lease` to run `argv` once, as
+    /// [`Self::grant`] asks for a harness's, waiting at most `deadline`.
+    ///
+    /// # Errors
+    /// The host's refusal, or no answer.
+    pub(crate) async fn grant_command(
+        &self,
+        lease: &str,
+        argv: Vec<String>,
+        cwd: Option<String>,
+        timeout_ms: u64,
+        deadline: Duration,
+    ) -> Result<watch::Receiver<()>, AdmissionRefused> {
+        let frame = ToEnvironment::GrantCommand {
+            lease: lease.into(),
+            argv,
+            cwd,
+            timeout_ms,
+        };
+        // A command publishes nothing: no file is offered under its lease.
+        self.admit(lease, frame, None, deadline).await
+    }
+
+    /// Run a granted command lease's command and wait for its `Ran`. The
+    /// caller bounds the wait; `None` when the lease is not held here, or
+    /// the connection was lost before it answered. Its `End`, asked while it
+    /// runs, stops it, and its `Ran` still answers.
+    pub(crate) async fn run(&self, lease: &str) -> Option<CommandAnswer> {
+        let (answer, answered) = oneshot::channel();
+        {
+            let mut routes = self.routes();
+            let route = routes
+                .leases
+                .get_mut(lease)
+                .filter(|route| !route.ending && route.ran.is_none())?;
+            route.ran = Some(answer);
+        }
+        self.frames
+            .send(ToEnvironment::Run {
+                lease: lease.into(),
+            })
+            .await
+            .ok()?;
+        answered.await.ok()
+    }
+
+    /// Route `lease`, offering what it publishes to `published`, and send
+    /// `frame`, the request to admit it, and wait at most `deadline` for the
+    /// host's answer.
+    async fn admit(
+        &self,
+        lease: &str,
+        frame: ToEnvironment,
+        published: Option<mpsc::Sender<Published>>,
+        deadline: Duration,
+    ) -> Result<watch::Receiver<()>, AdmissionRefused> {
+        let (answer, answered) = oneshot::channel();
         let gone = {
             let mut routes = self.routes();
             if routes.closed || routes.leases.contains_key(lease) {
-                return Err(LeaseRefusal::EnvironmentUnreachable);
+                return Err(AdmissionRefused::Unreachable);
             }
             let (gone_sender, gone) = watch::channel(());
             routes.leases.insert(
                 lease.into(),
                 LeaseRoute {
                     grant: Some(answer),
+                    ran: None,
                     ended: None,
                     ending: false,
                     end_sent: false,
                     pumps: Arc::new(RwLock::new(())),
                     channels: HashMap::new(),
                     next_channel: 1,
-                    published: Some(offers),
+                    published,
                     _gone: gone_sender,
                 },
             );
             gone
         };
-        let sent = self
-            .frames
-            .send(ToEnvironment::Grant {
-                lease: lease.into(),
-                agent: agent.into(),
-            })
-            .await;
+        let sent = self.frames.send(frame).await;
         if sent.is_err() {
             self.routes().leases.remove(lease);
-            return Err(LeaseRefusal::EnvironmentUnreachable);
+            return Err(AdmissionRefused::Unreachable);
         }
         match tokio::time::timeout(deadline, answered).await {
-            Ok(Ok(Ok(()))) => Ok(Granted { gone, published }),
+            Ok(Ok(Ok(()))) => Ok(gone),
             refused => {
                 self.routes().leases.remove(lease);
                 if refused.is_err() {
@@ -422,8 +513,8 @@ impl HostLink {
                     );
                 }
                 Err(match refused {
-                    Ok(Ok(Err(GrantRefusal::AgentUnavailable))) => LeaseRefusal::AgentUnavailable,
-                    _ => LeaseRefusal::EnvironmentUnreachable,
+                    Ok(Ok(Err(reason))) => AdmissionRefused::Host(reason),
+                    _ => AdmissionRefused::Unreachable,
                 })
             }
         }
@@ -940,6 +1031,34 @@ fn route_frame(routes: &mut Routes, frame: FromEnvironment) -> Routed {
             }
             None => Routed::Dropped,
         },
+        FromEnvironment::Ran {
+            lease,
+            end,
+            stdout: Data(stdout),
+            stderr: Data(stderr),
+            dropped_bytes,
+            cleanup,
+        } => {
+            let Some(route) = routes.leases.get_mut(&lease) else {
+                return Routed::Dropped;
+            };
+            let Some(waiter) = route.ran.take() else {
+                return Routed::Dropped;
+            };
+            let _ = waiter.send(CommandAnswer {
+                end,
+                stdout,
+                stderr,
+                dropped_bytes,
+                cleanup,
+            });
+            // Its `Ran` ended it there; an End already asked is answered by
+            // the `Ended` that follows, so its route waits for that.
+            if !route.end_sent && route.ended.is_none() {
+                routes.leases.remove(&lease);
+            }
+            Routed::Done
+        }
         FromEnvironment::StartFailed { lease, channel, .. } => {
             match channel_route(routes, &lease, channel) {
                 Some(route) => {
@@ -1042,6 +1161,7 @@ fn frame_name(frame: &FromEnvironment) -> &'static str {
         FromEnvironment::Ended { .. } => "ended",
         FromEnvironment::Accounted { .. } => "accounted",
         FromEnvironment::Published { .. } => "published",
+        FromEnvironment::Ran { .. } => "ran",
     }
 }
 

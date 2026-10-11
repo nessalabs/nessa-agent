@@ -7,10 +7,14 @@
 //!                 ◀═══ MCP frames, both ways ═══════════▶ StandIn::serve
 //! ```
 //!
-//! One line each way, then the stand-in's bytes. A hello that is not one
+//! One line each way, then the stand-in's bytes. A hello naming the server
+//! the gateway serves itself ([`BuiltInServer`]) is admitted against that
+//! server's digest ([`built_in_digest`]) and served here
+//! (`built_in::serve`), never relayed to a process. A hello that is not one
 //! JSON line of at most [`MAX_HELLO_BYTES`] within [`HELLO_TIMEOUT`] is closed
 //! without an answer.
 use super::grants::ConversationGrants;
+use crate::mcp_servers::application::BuiltInServer;
 use crate::mcp_servers::domain::{
     admit, configuration_digest, remote_configuration_digest, ConfigurationKey, StandInRefusal,
 };
@@ -19,7 +23,7 @@ use nessa_sdk::infrastructure::mcp::{
     INITIALIZE_TIMEOUT,
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, io, time::Duration};
+use std::{collections::BTreeMap, io, path::Path, sync::Arc, time::Duration};
 use tokio::io::{
     AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader,
 };
@@ -50,6 +54,19 @@ pub fn launch_digest(key: &ConfigurationKey, launch: &McpServerLaunch) -> String
         &launch.server.command,
         &launch.server.args,
         &launch.environment,
+    )
+}
+
+/// The digest a stand-in for the built-in `server` carries, keyed with this
+/// process's `key`: its name and everything it says changes what it does
+/// ([`BuiltInServer::configuration`]), so a stand-in handed out under
+/// another is refused `configuration-changed`.
+pub fn built_in_digest(key: &ConfigurationKey, server: &dyn BuiltInServer) -> String {
+    configuration_digest(
+        key,
+        Path::new(server.name()),
+        &server.configuration(),
+        &BTreeMap::new(),
     )
 }
 
@@ -167,6 +184,8 @@ pub struct Relay {
     grants: ConversationGrants,
     /// This process's key for each configuration's digest.
     key: ConfigurationKey,
+    /// The server the gateway serves itself, when it serves one.
+    built_in: Option<Arc<dyn BuiltInServer>>,
 }
 impl Relay {
     pub fn new(servers: McpServers, grants: ConversationGrants, key: ConfigurationKey) -> Self {
@@ -174,7 +193,15 @@ impl Relay {
             servers,
             grants,
             key,
+            built_in: None,
         }
+    }
+
+    /// This relay, serving `server` itself under its name, in place of any
+    /// configured server of the same name.
+    pub fn with_built_in(mut self, server: Arc<dyn BuiltInServer>) -> Self {
+        self.built_in = Some(server);
+        self
     }
 
     /// The server `hello` names as it is configured now, when the hello's
@@ -252,6 +279,35 @@ impl Relay {
             let _ = write_line(&mut output, &answer).await;
             return;
         };
+        if let Some(server) = self
+            .built_in
+            .as_ref()
+            .filter(|server| server.name() == hello.server)
+        {
+            let digests = BTreeMap::from([(
+                server.name().to_owned(),
+                built_in_digest(&self.key, server.as_ref()),
+            )]);
+            if let Err(reason) = admit(&hello.server, &hello.configuration, &digests) {
+                let answer = refused(reason, CHANGED.into());
+                let _ = write_line(&mut output, &answer).await;
+                return;
+            }
+            if write_line(&mut output, &Answer::Accepted).await.is_err() {
+                return;
+            }
+            let session = owner.session().clone();
+            super::built_in::serve(
+                server.clone(),
+                session,
+                hello.session,
+                self.grants.clone(),
+                input,
+                output,
+            )
+            .await;
+            return;
+        }
         let admitted = match self.admitted(&hello) {
             Ok(admitted) => admitted,
             Err(reason) => {

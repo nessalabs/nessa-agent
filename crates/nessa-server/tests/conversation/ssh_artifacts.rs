@@ -24,7 +24,7 @@ use crate::conversation::application::{
 };
 use crate::env::{LEASE_PROTOCOL, VERSION};
 use crate::env_serve::application::{
-    serve, HarnessLauncher, PublishAnswer, PublishRefusal, PublishRequest, ServeTimings,
+    serve, HarnessLauncher, PublishAnswer, PublishRefusal, PublishRequest, Runners, ServeTimings,
 };
 use crate::env_serve::infrastructure::{FileLedger, FileOutbox};
 use crate::env_serve::install::Platform;
@@ -313,7 +313,10 @@ impl LeaseConnector for Connector {
             host_out,
             VERSION,
             LEASE_PROTOCOL,
-            host.launcher.clone(),
+            Runners {
+                harnesses: host.launcher.clone(),
+                commands: None,
+            },
             Arc::new(ledger),
             Arc::new(outbox),
             ServeTimings {

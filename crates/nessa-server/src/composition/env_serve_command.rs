@@ -3,6 +3,7 @@
 //!
 //! ```text
 //! config.json "agents" ──▶ ConfiguredLauncher (workspace, each agent's command)
+//! config.json "envServe.commands" ──▶ ShepherdCommands (in that workspace), or none
 //! <data>/environment/serve.lock ──▶ ServeLock (one serving process)
 //! <data>/environment/leases.jsonl ──▶ FileLedger
 //! <data>/environment/outbox/, a private temporary directory ──▶ FileOutbox
@@ -17,9 +18,10 @@ use crate::{
     core::RunError,
     env::{Environment, LEASE_PROTOCOL, VERSION},
     env_serve::{
-        application::{refuse, serve, HarnessLauncher, ServeTimings},
+        application::{refuse, serve, CommandRunner, HarnessLauncher, Runners, ServeTimings},
         infrastructure::{
             ConfiguredLauncher, FileLedger, FileOutbox, LaunchSpec, ServeLock, ServeLockError,
+            ShepherdCommands, COMMAND_VARIABLES,
         },
     },
 };
@@ -27,6 +29,7 @@ use nessa_protocol::{
     agents::AgentId,
     lease::{Hello, Unavailability},
 };
+use shepherd::{ProcessSupervisor, SupervisorBuilder};
 use std::{collections::HashMap, path::Path, sync::Arc, time::Duration};
 
 /// How long a new serving process waits for the previous one to finish
@@ -53,22 +56,38 @@ pub(super) async fn execute() -> Result<(), RunError> {
     };
     let Composed {
         launcher,
+        commands,
         ledger,
         outbox,
         sockets,
         lock,
     } = composed;
+    let runner = commands
+        .as_ref()
+        .map(|(runner, _)| runner.clone() as Arc<dyn CommandRunner>);
     serve(
         tokio::io::stdin(),
         tokio::io::stdout(),
         VERSION,
         LEASE_PROTOCOL,
-        launcher,
+        Runners {
+            harnesses: launcher,
+            commands: runner,
+        },
         ledger,
         outbox,
         ServeTimings::default(),
     )
     .await;
+    // Every command's end is recorded before serving returns; the sweep is
+    // what is left of any of them, and only said.
+    if let Some((_, supervisor)) = commands {
+        match supervisor.shutdown().await {
+            Ok(report) if report.scopes.iter().all(|scope| scope.all_verified()) => {}
+            Ok(_) => tracing::error!("a command's processes could not be confirmed stopped"),
+            Err(error) => tracing::error!(%error, "the command supervisor did not shut down"),
+        }
+    }
     let _ = std::fs::remove_dir_all(&sockets);
     drop(lock);
     Ok(())
@@ -76,6 +95,9 @@ pub(super) async fn execute() -> Result<(), RunError> {
 
 struct Composed {
     launcher: Arc<ConfiguredLauncher>,
+    /// How commands run here, and what supervises them; `None` when this
+    /// host does not run them.
+    commands: Option<(Arc<ShepherdCommands>, ProcessSupervisor)>,
     ledger: Arc<FileLedger>,
     outbox: Arc<FileOutbox>,
     /// The publish points' directory, removed when serving ends.
@@ -93,6 +115,16 @@ async fn compose() -> Result<Composed, (Unavailability, RunError)> {
         .to_path_buf();
     let config = RuntimeConfig::load(&auth).map_err(not_configured)?;
     let launcher = launcher(&config).map_err(not_configured)?;
+    let commands = config.env_serve.commands.then(|| {
+        let supervisor = SupervisorBuilder::new().build();
+        let environment = COMMAND_VARIABLES
+            .into_iter()
+            .filter_map(|key| std::env::var_os(key).map(|value| (key.into(), value)))
+            .collect();
+        let runner =
+            ShepherdCommands::new(supervisor.clone(), launcher.workspace().into(), environment);
+        (Arc::new(runner), supervisor)
+    });
     let directory = namespace.join("environment");
     nessa_local_storage::create_directory(&directory)
         .map_err(|error| not_configured(RunError::Agent(error.to_string())))?;
@@ -125,6 +157,7 @@ async fn compose() -> Result<Composed, (Unavailability, RunError)> {
     .map_err(|error| not_configured(RunError::Agent(error.to_string())))?;
     Ok(Composed {
         launcher: Arc::new(launcher),
+        commands,
         ledger: Arc::new(ledger),
         outbox: Arc::new(outbox),
         sockets,

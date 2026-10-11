@@ -67,6 +67,7 @@ pub fn lease_view(current: &CurrentLease) -> ConversationLeaseView {
         cleanup: None,
         refusal: None,
         dropped_events: 0,
+        commands: None,
     };
     let terms = match current.state() {
         CurrentLeaseState::Unreadable { .. } => return view,
@@ -96,6 +97,9 @@ pub fn lease_view(current: &CurrentLease) -> ConversationLeaseView {
         }
         CurrentLeaseState::Held(lease) => {
             view.dropped_events = lease.dropped_events();
+            view.commands = u64::try_from(lease.commands().len())
+                .ok()
+                .filter(|live| *live > 0);
             let (state, cause, cleanup) = match lease.phase() {
                 LeasePhase::Live => (ConversationLeaseState::Live, None, None),
                 LeasePhase::Ending { cause } => (ConversationLeaseState::Ending, Some(cause), None),
@@ -138,6 +142,7 @@ pub fn lease_view(current: &CurrentLease) -> ConversationLeaseView {
         });
         view.sandbox = Some(match terms.sandbox {
             SandboxProfile::HarnessDefault => ConversationLeaseSandbox::HarnessDefault,
+            SandboxProfile::None => ConversationLeaseSandbox::None,
         });
     }
     view

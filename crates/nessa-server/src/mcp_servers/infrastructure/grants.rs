@@ -37,6 +37,9 @@ struct Grants {
     servers: McpServers,
     tokens: Arc<dyn TokenSource>,
     live: Mutex<HashMap<TokenDigest, McpOwner>>,
+    /// Counts revocations, so what the gateway serves itself under a grant
+    /// can look again whether its grant still lives.
+    revocations: tokio::sync::watch::Sender<u64>,
 }
 
 impl ConversationGrants {
@@ -48,6 +51,7 @@ impl ConversationGrants {
                 servers,
                 tokens,
                 live: Mutex::default(),
+                revocations: tokio::sync::watch::Sender::new(0),
             }),
         }
     }
@@ -57,6 +61,12 @@ impl ConversationGrants {
     pub fn owner(&self, token: &str) -> Option<McpOwner> {
         let live = self.inner.live.lock().expect("grants");
         live.get(&TokenDigest::of(token)).cloned()
+    }
+
+    /// A watch that changes on every revocation: whoever holds a token
+    /// looks again with [`Self::owner`] whether its grant lives.
+    pub fn revocations(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.inner.revocations.subscribe()
     }
 
     /// How many grants are live now.
@@ -111,5 +121,8 @@ impl Drop for Revoke {
             .expect("grants")
             .remove(&self.digest);
         self.grants.servers.revoke(&self.owner);
+        self.grants
+            .revocations
+            .send_modify(|count| *count = count.wrapping_add(1));
     }
 }

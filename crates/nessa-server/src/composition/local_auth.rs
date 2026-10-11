@@ -270,6 +270,7 @@ pub(super) async fn product_state(
                 ConversationSettings {
                     read_work_budget: limits.read_work_budget(),
                     ssh_hosts: settings.ssh_hosts()?,
+                    command_policy: settings.command_policy()?,
                 },
             )
             .await?;
@@ -484,6 +485,9 @@ struct ConversationSettings {
     read_work_budget: std::time::Duration,
     /// The SSH hosts a conversation may be created on.
     ssh_hosts: Vec<SshDestination>,
+    /// Where the agent may run commands; `None` grants it no environment
+    /// tools.
+    command_policy: Option<crate::conversation::domain::CommandPolicy>,
 }
 
 #[cfg(not(unix))]
@@ -802,6 +806,7 @@ async fn conversations(
     let ConversationSettings {
         read_work_budget,
         ssh_hosts,
+        command_policy,
     } = settings;
     let mut warm_ups = Vec::new();
     // The gateway holds the one connection to each MCP server (ADR 344), so
@@ -810,6 +815,11 @@ async fn conversations(
         .parent()
         .ok_or_else(|| RunError::Agent("invalid namespace directory".into()))?;
     let mut agents = agents.clone();
+    // The agent's environment tools, when commands are granted: a server the
+    // gateway serves itself, given the service once it is composed below.
+    let environment_tools = command_policy
+        .as_ref()
+        .map(super::environment_tools::EnvironmentTools::new);
     let mut mcp = match std::env::current_exe() {
         Ok(gateway) => {
             super::mcp_servers::compose(
@@ -820,6 +830,9 @@ async fn conversations(
                 &gateway,
                 super::mcp_servers::server_environment(|key| std::env::var_os(key)),
                 packaged_agents,
+                environment_tools
+                    .clone()
+                    .map(|tools| tools as Arc<dyn crate::mcp_servers::application::BuiltInServer>),
             )
             .await?
         }
@@ -1101,7 +1114,7 @@ async fn conversations(
             nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
         ),
         clock: clock.clone(),
-        environment: environments(&root, &ssh_hosts, clock.clone())?,
+        environment: environments(&root, &ssh_hosts, command_policy, clock.clone())?,
     };
     let workspace = Some(agents.workspace.to_string_lossy().into_owned());
     // With MCP servers, an app's calls go through the conversation's own
@@ -1133,6 +1146,9 @@ async fn conversations(
     };
     let service = service.map_err(|error| RunError::Agent(error.to_string()))?;
     service.bind_commands(storage.clone());
+    if let Some(tools) = &environment_tools {
+        tools.attach(service.clone());
+    }
     if warm_current_opencode {
         warm_ups.push(StartupWarmUp::Current(resolver.clone()));
     }
@@ -1169,6 +1185,7 @@ fn setup_error(error: impl std::fmt::Display) -> RunError {
 fn environments(
     root: &Path,
     hosts: &[SshDestination],
+    commands: Option<crate::conversation::domain::CommandPolicy>,
     clock: Arc<dyn Clock>,
 ) -> Result<Environments, RunError> {
     use crate::conversation::infrastructure::{
@@ -1199,11 +1216,15 @@ fn environments(
             );
         }
     }
-    Ok(Environments::new(
+    let environments = Environments::new(
         crate::conversation::infrastructure::in_process_environment(),
         environments,
         Arc::new(placements),
-    ))
+    );
+    Ok(match commands {
+        Some(policy) => environments.with_commands(policy),
+        None => environments,
+    })
 }
 
 #[cfg(unix)]
