@@ -1,0 +1,820 @@
+{
+  "harness": "codex",
+  "version": "codex-cli 0.154.0",
+  "label": "real harness, scripted model",
+  "row_count": 36,
+  "rows": [
+    {
+      "row": "events-plain",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "Stop",
+        "SessionEnd"
+      ],
+      "event_counts": {
+        "SessionStart": 2,
+        "UserPromptSubmit": 2,
+        "Stop": 2,
+        "SessionEnd": 2
+      },
+      "tool_names": [],
+      "sources": [
+        "SessionStart:startup"
+      ],
+      "sentinel_files": [],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "events-plain",
+      "suppression": "on",
+      "exit_code": 0,
+      "events": [],
+      "event_counts": {},
+      "tool_names": [],
+      "sources": [],
+      "sentinel_files": [],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "events-tool",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        "Stop",
+        "SessionEnd"
+      ],
+      "event_counts": {
+        "SessionStart": 2,
+        "UserPromptSubmit": 2,
+        "PreToolUse": 2,
+        "PostToolUse": 2,
+        "Stop": 2,
+        "SessionEnd": 2
+      },
+      "tool_names": [
+        "Bash"
+      ],
+      "sources": [
+        "SessionStart:startup"
+      ],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "events-tool",
+      "suppression": "on",
+      "exit_code": 0,
+      "events": [],
+      "event_counts": {},
+      "tool_names": [],
+      "sources": [],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "events-subagent",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "Stop",
+        "SessionEnd"
+      ],
+      "event_counts": {
+        "SessionStart": 2,
+        "UserPromptSubmit": 2,
+        "Stop": 2,
+        "SessionEnd": 2
+      },
+      "tool_names": [],
+      "sources": [
+        "SessionStart:startup"
+      ],
+      "sentinel_files": [],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "events-subagent",
+      "suppression": "on",
+      "exit_code": 0,
+      "events": [],
+      "event_counts": {},
+      "tool_names": [],
+      "sources": [],
+      "sentinel_files": [],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "events-compact",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "Stop",
+        "SessionEnd"
+      ],
+      "event_counts": {
+        "SessionStart": 4,
+        "UserPromptSubmit": 4,
+        "Stop": 4,
+        "SessionEnd": 4
+      },
+      "tool_names": [],
+      "sources": [
+        "SessionStart:startup",
+        "SessionStart:resume"
+      ],
+      "sentinel_files": [],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "events-compact",
+      "suppression": "on",
+      "exit_code": 0,
+      "events": [],
+      "event_counts": {},
+      "tool_names": [],
+      "sources": [],
+      "sentinel_files": [],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "events-resume",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "Stop",
+        "SessionEnd"
+      ],
+      "event_counts": {
+        "SessionStart": 4,
+        "UserPromptSubmit": 4,
+        "Stop": 4,
+        "SessionEnd": 4
+      },
+      "tool_names": [],
+      "sources": [
+        "SessionStart:startup",
+        "SessionStart:resume"
+      ],
+      "sentinel_files": [],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "events-resume",
+      "suppression": "on",
+      "exit_code": 0,
+      "events": [],
+      "event_counts": {},
+      "tool_names": [],
+      "sources": [],
+      "sentinel_files": [],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "events-permission",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        "Stop",
+        "SessionEnd"
+      ],
+      "event_counts": {
+        "SessionStart": 1,
+        "UserPromptSubmit": 1,
+        "PreToolUse": 1,
+        "PostToolUse": 1,
+        "Stop": 1,
+        "SessionEnd": 1
+      },
+      "tool_names": [
+        "Bash"
+      ],
+      "sources": [
+        "SessionStart:startup"
+      ],
+      "sentinel_files": [],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "events-permission",
+      "suppression": "on",
+      "exit_code": 0,
+      "events": [],
+      "event_counts": {},
+      "tool_names": [],
+      "sources": [],
+      "sentinel_files": [],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "pretool-deny",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "Stop",
+        "SessionEnd"
+      ],
+      "event_counts": {
+        "SessionStart": 2,
+        "UserPromptSubmit": 2,
+        "PreToolUse": 2,
+        "Stop": 2,
+        "SessionEnd": 2
+      },
+      "tool_names": [
+        "Bash"
+      ],
+      "sources": [
+        "SessionStart:startup"
+      ],
+      "sentinel_files": [],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "pretool-deny",
+      "suppression": "on",
+      "exit_code": 0,
+      "events": [],
+      "event_counts": {},
+      "tool_names": [],
+      "sources": [],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "pretool-allow-updated",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        "Stop",
+        "SessionEnd"
+      ],
+      "event_counts": {
+        "SessionStart": 2,
+        "UserPromptSubmit": 2,
+        "PreToolUse": 2,
+        "PostToolUse": 2,
+        "Stop": 2,
+        "SessionEnd": 2
+      },
+      "tool_names": [
+        "Bash"
+      ],
+      "sources": [
+        "SessionStart:startup"
+      ],
+      "sentinel_files": [
+        "hook-sentinel-rewritten"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "pretool-allow-updated",
+      "suppression": "on",
+      "exit_code": 0,
+      "events": [],
+      "event_counts": {},
+      "tool_names": [],
+      "sources": [],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "pretool-ask",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        "Stop",
+        "SessionEnd"
+      ],
+      "event_counts": {
+        "SessionStart": 2,
+        "UserPromptSubmit": 2,
+        "PreToolUse": 2,
+        "PostToolUse": 2,
+        "Stop": 2,
+        "SessionEnd": 2
+      },
+      "tool_names": [
+        "Bash"
+      ],
+      "sources": [
+        "SessionStart:startup"
+      ],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "pretool-ask",
+      "suppression": "on",
+      "exit_code": 0,
+      "events": [],
+      "event_counts": {},
+      "tool_names": [],
+      "sources": [],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "pretool-defer",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        "Stop",
+        "SessionEnd"
+      ],
+      "event_counts": {
+        "SessionStart": 2,
+        "UserPromptSubmit": 2,
+        "PreToolUse": 2,
+        "PostToolUse": 2,
+        "Stop": 2,
+        "SessionEnd": 2
+      },
+      "tool_names": [
+        "Bash"
+      ],
+      "sources": [
+        "SessionStart:startup"
+      ],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "pretool-defer",
+      "suppression": "on",
+      "exit_code": 0,
+      "events": [],
+      "event_counts": {},
+      "tool_names": [],
+      "sources": [],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "pretool-continue-false",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        "Stop",
+        "SessionEnd"
+      ],
+      "event_counts": {
+        "SessionStart": 2,
+        "UserPromptSubmit": 2,
+        "PreToolUse": 2,
+        "PostToolUse": 2,
+        "Stop": 2,
+        "SessionEnd": 2
+      },
+      "tool_names": [
+        "Bash"
+      ],
+      "sources": [
+        "SessionStart:startup"
+      ],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "pretool-continue-false",
+      "suppression": "on",
+      "exit_code": 0,
+      "events": [],
+      "event_counts": {},
+      "tool_names": [],
+      "sources": [],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "prompt-additional-context",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        "Stop",
+        "SessionEnd"
+      ],
+      "event_counts": {
+        "SessionStart": 2,
+        "UserPromptSubmit": 2,
+        "PreToolUse": 2,
+        "PostToolUse": 2,
+        "Stop": 2,
+        "SessionEnd": 2
+      },
+      "tool_names": [
+        "Bash"
+      ],
+      "sources": [
+        "SessionStart:startup"
+      ],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": true,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "prompt-additional-context",
+      "suppression": "on",
+      "exit_code": 0,
+      "events": [],
+      "event_counts": {},
+      "tool_names": [],
+      "sources": [],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "prompt-system-message",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        "Stop",
+        "SessionEnd"
+      ],
+      "event_counts": {
+        "SessionStart": 2,
+        "UserPromptSubmit": 2,
+        "PreToolUse": 2,
+        "PostToolUse": 2,
+        "Stop": 2,
+        "SessionEnd": 2
+      },
+      "tool_names": [
+        "Bash"
+      ],
+      "sources": [
+        "SessionStart:startup"
+      ],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "prompt-system-message",
+      "suppression": "on",
+      "exit_code": 0,
+      "events": [],
+      "event_counts": {},
+      "tool_names": [],
+      "sources": [],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "stop-decision-block",
+      "suppression": "off",
+      "exit_code": 124,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        "Stop"
+      ],
+      "event_counts": {
+        "SessionStart": 2,
+        "UserPromptSubmit": 2,
+        "PreToolUse": 2,
+        "PostToolUse": 2,
+        "Stop": 2348
+      },
+      "tool_names": [
+        "Bash"
+      ],
+      "sources": [
+        "SessionStart:startup"
+      ],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "stop-decision-block",
+      "suppression": "on",
+      "exit_code": 0,
+      "events": [],
+      "event_counts": {},
+      "tool_names": [],
+      "sources": [],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "fail-exit-2",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "Stop",
+        "SessionEnd"
+      ],
+      "event_counts": {
+        "SessionStart": 2,
+        "UserPromptSubmit": 2,
+        "PreToolUse": 2,
+        "Stop": 2,
+        "SessionEnd": 2
+      },
+      "tool_names": [
+        "Bash"
+      ],
+      "sources": [
+        "SessionStart:startup"
+      ],
+      "sentinel_files": [],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "fail-exit-2",
+      "suppression": "on",
+      "exit_code": 0,
+      "events": [],
+      "event_counts": {},
+      "tool_names": [],
+      "sources": [],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "fail-exit-1",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        "Stop",
+        "SessionEnd"
+      ],
+      "event_counts": {
+        "SessionStart": 2,
+        "UserPromptSubmit": 2,
+        "PreToolUse": 2,
+        "PostToolUse": 2,
+        "Stop": 2,
+        "SessionEnd": 2
+      },
+      "tool_names": [
+        "Bash"
+      ],
+      "sources": [
+        "SessionStart:startup"
+      ],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "fail-exit-1",
+      "suppression": "on",
+      "exit_code": 0,
+      "events": [],
+      "event_counts": {},
+      "tool_names": [],
+      "sources": [],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "fail-malformed",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        "Stop",
+        "SessionEnd"
+      ],
+      "event_counts": {
+        "SessionStart": 2,
+        "UserPromptSubmit": 2,
+        "PreToolUse": 2,
+        "PostToolUse": 2,
+        "Stop": 2,
+        "SessionEnd": 2
+      },
+      "tool_names": [
+        "Bash"
+      ],
+      "sources": [
+        "SessionStart:startup"
+      ],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "fail-malformed",
+      "suppression": "on",
+      "exit_code": 0,
+      "events": [],
+      "event_counts": {},
+      "tool_names": [],
+      "sources": [],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "fail-timeout",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        "Stop",
+        "SessionEnd"
+      ],
+      "event_counts": {
+        "SessionStart": 2,
+        "UserPromptSubmit": 2,
+        "PreToolUse": 2,
+        "PostToolUse": 2,
+        "Stop": 2,
+        "SessionEnd": 2
+      },
+      "tool_names": [
+        "Bash"
+      ],
+      "sources": [
+        "SessionStart:startup"
+      ],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "fail-timeout",
+      "suppression": "on",
+      "exit_code": 0,
+      "events": [],
+      "event_counts": {},
+      "tool_names": [],
+      "sources": [],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    }
+  ]
+}

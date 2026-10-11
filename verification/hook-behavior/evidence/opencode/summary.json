@@ -1,0 +1,1148 @@
+{
+  "harness": "opencode",
+  "version": "1.18.31",
+  "label": "real harness, scripted model",
+  "row_count": 36,
+  "rows": [
+    {
+      "row": "events-plain",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "event:session.created",
+        "event:session.updated",
+        "chat.message",
+        "event:message.updated",
+        "event:message.part.updated",
+        "event:session.status",
+        "event:session.diff",
+        "experimental.chat.system.transform",
+        "event:plugin.added",
+        "event:catalog.updated",
+        "event:reference.updated",
+        "event:integration.updated",
+        "event:message.part.delta",
+        "event:session.idle"
+      ],
+      "event_counts": {
+        "event:session.created": 1,
+        "event:session.updated": 4,
+        "chat.message": 1,
+        "event:message.updated": 5,
+        "event:message.part.updated": 5,
+        "event:session.status": 4,
+        "event:session.diff": 1,
+        "experimental.chat.system.transform": 2,
+        "event:plugin.added": 45,
+        "event:catalog.updated": 3,
+        "event:reference.updated": 2,
+        "event:integration.updated": 2,
+        "event:message.part.delta": 1,
+        "event:session.idle": 1
+      },
+      "tool_names": [],
+      "sources": [],
+      "sentinel_files": [],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "events-plain",
+      "suppression": "on",
+      "exit_code": 0,
+      "events": [],
+      "event_counts": {},
+      "tool_names": [],
+      "sources": [],
+      "sentinel_files": [],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "events-tool",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "event:session.created",
+        "event:session.updated",
+        "chat.message",
+        "event:message.updated",
+        "event:message.part.updated",
+        "event:session.status",
+        "event:session.diff",
+        "experimental.chat.system.transform",
+        "event:plugin.added",
+        "event:catalog.updated",
+        "event:reference.updated",
+        "event:integration.updated",
+        "tool.execute.before",
+        "tool.execute.after",
+        "event:message.part.delta",
+        "event:session.idle"
+      ],
+      "event_counts": {
+        "event:session.created": 1,
+        "event:session.updated": 5,
+        "chat.message": 1,
+        "event:message.updated": 9,
+        "event:message.part.updated": 11,
+        "event:session.status": 6,
+        "event:session.diff": 2,
+        "experimental.chat.system.transform": 3,
+        "event:plugin.added": 45,
+        "event:catalog.updated": 3,
+        "event:reference.updated": 2,
+        "event:integration.updated": 2,
+        "tool.execute.before": 1,
+        "tool.execute.after": 1,
+        "event:message.part.delta": 1,
+        "event:session.idle": 1
+      },
+      "tool_names": [
+        "bash"
+      ],
+      "sources": [],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "events-tool",
+      "suppression": "on",
+      "exit_code": 0,
+      "events": [],
+      "event_counts": {},
+      "tool_names": [],
+      "sources": [],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "events-subagent",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "event:session.created",
+        "event:session.updated",
+        "chat.message",
+        "event:message.updated",
+        "event:message.part.updated",
+        "event:session.status",
+        "event:session.diff",
+        "experimental.chat.system.transform",
+        "event:plugin.added",
+        "event:catalog.updated",
+        "event:reference.updated",
+        "event:integration.updated",
+        "tool.execute.before",
+        "event:message.part.delta",
+        "event:session.idle"
+      ],
+      "event_counts": {
+        "event:session.created": 1,
+        "event:session.updated": 5,
+        "chat.message": 1,
+        "event:message.updated": 9,
+        "event:message.part.updated": 10,
+        "event:session.status": 6,
+        "event:session.diff": 2,
+        "experimental.chat.system.transform": 3,
+        "event:plugin.added": 45,
+        "event:catalog.updated": 3,
+        "event:reference.updated": 2,
+        "event:integration.updated": 2,
+        "tool.execute.before": 1,
+        "event:message.part.delta": 1,
+        "event:session.idle": 1
+      },
+      "tool_names": [
+        "task"
+      ],
+      "sources": [],
+      "sentinel_files": [],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "events-subagent",
+      "suppression": "on",
+      "exit_code": 0,
+      "events": [],
+      "event_counts": {},
+      "tool_names": [],
+      "sources": [],
+      "sentinel_files": [],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "events-compact",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "event:session.created",
+        "event:session.updated",
+        "chat.message",
+        "event:message.updated",
+        "event:message.part.updated",
+        "event:session.status",
+        "event:session.diff",
+        "experimental.chat.system.transform",
+        "event:plugin.added",
+        "event:catalog.updated",
+        "event:reference.updated",
+        "event:integration.updated",
+        "event:message.part.delta",
+        "event:session.idle"
+      ],
+      "event_counts": {
+        "event:session.created": 1,
+        "event:session.updated": 6,
+        "chat.message": 2,
+        "event:message.updated": 10,
+        "event:message.part.updated": 10,
+        "event:session.status": 8,
+        "event:session.diff": 2,
+        "experimental.chat.system.transform": 3,
+        "event:plugin.added": 90,
+        "event:catalog.updated": 6,
+        "event:reference.updated": 4,
+        "event:integration.updated": 4,
+        "event:message.part.delta": 2,
+        "event:session.idle": 2
+      },
+      "tool_names": [],
+      "sources": [],
+      "sentinel_files": [],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "events-compact",
+      "suppression": "on",
+      "exit_code": 0,
+      "events": [],
+      "event_counts": {},
+      "tool_names": [],
+      "sources": [],
+      "sentinel_files": [],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "events-resume",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "event:session.created",
+        "event:session.updated",
+        "chat.message",
+        "event:message.updated",
+        "event:message.part.updated",
+        "event:session.status",
+        "event:session.diff",
+        "experimental.chat.system.transform",
+        "event:plugin.added",
+        "event:catalog.updated",
+        "event:reference.updated",
+        "event:integration.updated",
+        "event:message.part.delta",
+        "event:session.idle"
+      ],
+      "event_counts": {
+        "event:session.created": 1,
+        "event:session.updated": 6,
+        "chat.message": 2,
+        "event:message.updated": 10,
+        "event:message.part.updated": 10,
+        "event:session.status": 8,
+        "event:session.diff": 2,
+        "experimental.chat.system.transform": 3,
+        "event:plugin.added": 90,
+        "event:catalog.updated": 6,
+        "event:reference.updated": 4,
+        "event:integration.updated": 4,
+        "event:message.part.delta": 2,
+        "event:session.idle": 2
+      },
+      "tool_names": [],
+      "sources": [],
+      "sentinel_files": [],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "events-resume",
+      "suppression": "on",
+      "exit_code": 0,
+      "events": [],
+      "event_counts": {},
+      "tool_names": [],
+      "sources": [],
+      "sentinel_files": [],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "events-permission",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "event:session.created",
+        "event:session.updated",
+        "chat.message",
+        "event:message.updated",
+        "event:message.part.updated",
+        "event:session.status",
+        "event:session.diff",
+        "experimental.chat.system.transform",
+        "event:plugin.added",
+        "event:catalog.updated",
+        "event:reference.updated",
+        "event:integration.updated",
+        "tool.execute.before",
+        "tool.execute.after",
+        "event:message.part.delta",
+        "event:session.idle"
+      ],
+      "event_counts": {
+        "event:session.created": 1,
+        "event:session.updated": 5,
+        "chat.message": 1,
+        "event:message.updated": 9,
+        "event:message.part.updated": 11,
+        "event:session.status": 6,
+        "event:session.diff": 2,
+        "experimental.chat.system.transform": 3,
+        "event:plugin.added": 45,
+        "event:catalog.updated": 3,
+        "event:reference.updated": 2,
+        "event:integration.updated": 2,
+        "tool.execute.before": 1,
+        "tool.execute.after": 1,
+        "event:message.part.delta": 1,
+        "event:session.idle": 1
+      },
+      "tool_names": [
+        "bash"
+      ],
+      "sources": [],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "events-permission",
+      "suppression": "on",
+      "exit_code": 0,
+      "events": [],
+      "event_counts": {},
+      "tool_names": [],
+      "sources": [],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "pretool-deny",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "event:session.created",
+        "event:session.updated",
+        "chat.message",
+        "event:message.updated",
+        "event:message.part.updated",
+        "event:session.status",
+        "event:session.diff",
+        "experimental.chat.system.transform",
+        "event:plugin.added",
+        "event:catalog.updated",
+        "event:reference.updated",
+        "event:integration.updated",
+        "tool.execute.before",
+        "event:message.part.delta",
+        "event:session.idle"
+      ],
+      "event_counts": {
+        "event:session.created": 1,
+        "event:session.updated": 5,
+        "chat.message": 1,
+        "event:message.updated": 9,
+        "event:message.part.updated": 10,
+        "event:session.status": 6,
+        "event:session.diff": 2,
+        "experimental.chat.system.transform": 3,
+        "event:plugin.added": 45,
+        "event:catalog.updated": 3,
+        "event:reference.updated": 2,
+        "event:integration.updated": 2,
+        "tool.execute.before": 1,
+        "event:message.part.delta": 1,
+        "event:session.idle": 1
+      },
+      "tool_names": [
+        "bash"
+      ],
+      "sources": [],
+      "sentinel_files": [],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": true
+    },
+    {
+      "row": "pretool-deny",
+      "suppression": "on",
+      "exit_code": 0,
+      "events": [],
+      "event_counts": {},
+      "tool_names": [],
+      "sources": [],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "pretool-allow-updated",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "event:session.created",
+        "event:session.updated",
+        "chat.message",
+        "event:message.updated",
+        "event:message.part.updated",
+        "event:session.status",
+        "event:session.diff",
+        "experimental.chat.system.transform",
+        "event:plugin.added",
+        "event:catalog.updated",
+        "event:reference.updated",
+        "event:integration.updated",
+        "tool.execute.before",
+        "tool.execute.after",
+        "event:message.part.delta",
+        "event:session.idle"
+      ],
+      "event_counts": {
+        "event:session.created": 1,
+        "event:session.updated": 5,
+        "chat.message": 1,
+        "event:message.updated": 9,
+        "event:message.part.updated": 11,
+        "event:session.status": 6,
+        "event:session.diff": 2,
+        "experimental.chat.system.transform": 3,
+        "event:plugin.added": 45,
+        "event:catalog.updated": 3,
+        "event:reference.updated": 2,
+        "event:integration.updated": 2,
+        "tool.execute.before": 1,
+        "tool.execute.after": 1,
+        "event:message.part.delta": 1,
+        "event:session.idle": 1
+      },
+      "tool_names": [
+        "bash"
+      ],
+      "sources": [],
+      "sentinel_files": [
+        "hook-sentinel-rewritten"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "pretool-allow-updated",
+      "suppression": "on",
+      "exit_code": 0,
+      "events": [],
+      "event_counts": {},
+      "tool_names": [],
+      "sources": [],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "pretool-ask",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "event:session.created",
+        "event:session.updated",
+        "chat.message",
+        "event:message.updated",
+        "event:message.part.updated",
+        "event:session.status",
+        "event:session.diff",
+        "experimental.chat.system.transform",
+        "event:plugin.added",
+        "tool.execute.before",
+        "event:catalog.updated",
+        "event:reference.updated",
+        "tool.execute.after",
+        "event:integration.updated",
+        "event:message.part.delta",
+        "event:session.idle"
+      ],
+      "event_counts": {
+        "event:session.created": 1,
+        "event:session.updated": 5,
+        "chat.message": 1,
+        "event:message.updated": 9,
+        "event:message.part.updated": 11,
+        "event:session.status": 6,
+        "event:session.diff": 2,
+        "experimental.chat.system.transform": 3,
+        "event:plugin.added": 45,
+        "tool.execute.before": 1,
+        "event:catalog.updated": 3,
+        "event:reference.updated": 2,
+        "tool.execute.after": 1,
+        "event:integration.updated": 2,
+        "event:message.part.delta": 1,
+        "event:session.idle": 1
+      },
+      "tool_names": [
+        "bash"
+      ],
+      "sources": [],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "pretool-ask",
+      "suppression": "on",
+      "exit_code": 0,
+      "events": [],
+      "event_counts": {},
+      "tool_names": [],
+      "sources": [],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "pretool-defer",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "event:session.created",
+        "event:session.updated",
+        "chat.message",
+        "event:message.updated",
+        "event:message.part.updated",
+        "event:session.status",
+        "event:session.diff",
+        "experimental.chat.system.transform",
+        "event:plugin.added",
+        "event:catalog.updated",
+        "event:reference.updated",
+        "event:integration.updated",
+        "tool.execute.before",
+        "tool.execute.after",
+        "event:message.part.delta",
+        "event:session.idle"
+      ],
+      "event_counts": {
+        "event:session.created": 1,
+        "event:session.updated": 5,
+        "chat.message": 1,
+        "event:message.updated": 9,
+        "event:message.part.updated": 11,
+        "event:session.status": 6,
+        "event:session.diff": 2,
+        "experimental.chat.system.transform": 3,
+        "event:plugin.added": 45,
+        "event:catalog.updated": 3,
+        "event:reference.updated": 2,
+        "event:integration.updated": 2,
+        "tool.execute.before": 1,
+        "tool.execute.after": 1,
+        "event:message.part.delta": 1,
+        "event:session.idle": 1
+      },
+      "tool_names": [
+        "bash"
+      ],
+      "sources": [],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "pretool-defer",
+      "suppression": "on",
+      "exit_code": 0,
+      "events": [],
+      "event_counts": {},
+      "tool_names": [],
+      "sources": [],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "pretool-continue-false",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "event:session.created",
+        "event:session.updated",
+        "chat.message",
+        "event:message.updated",
+        "event:message.part.updated",
+        "event:session.status",
+        "event:session.diff",
+        "experimental.chat.system.transform",
+        "event:plugin.added",
+        "event:catalog.updated",
+        "event:reference.updated",
+        "event:integration.updated",
+        "tool.execute.before",
+        "tool.execute.after",
+        "event:message.part.delta",
+        "event:session.idle"
+      ],
+      "event_counts": {
+        "event:session.created": 1,
+        "event:session.updated": 5,
+        "chat.message": 1,
+        "event:message.updated": 9,
+        "event:message.part.updated": 11,
+        "event:session.status": 6,
+        "event:session.diff": 2,
+        "experimental.chat.system.transform": 3,
+        "event:plugin.added": 45,
+        "event:catalog.updated": 3,
+        "event:reference.updated": 2,
+        "event:integration.updated": 2,
+        "tool.execute.before": 1,
+        "tool.execute.after": 1,
+        "event:message.part.delta": 1,
+        "event:session.idle": 1
+      },
+      "tool_names": [
+        "bash"
+      ],
+      "sources": [],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "pretool-continue-false",
+      "suppression": "on",
+      "exit_code": 0,
+      "events": [],
+      "event_counts": {},
+      "tool_names": [],
+      "sources": [],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "prompt-additional-context",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "event:session.created",
+        "event:session.updated",
+        "chat.message",
+        "event:message.updated",
+        "event:message.part.updated",
+        "event:session.status",
+        "event:session.diff",
+        "experimental.chat.system.transform",
+        "event:plugin.added",
+        "event:catalog.updated",
+        "event:reference.updated",
+        "event:integration.updated",
+        "tool.execute.before",
+        "tool.execute.after",
+        "event:message.part.delta",
+        "event:session.idle"
+      ],
+      "event_counts": {
+        "event:session.created": 1,
+        "event:session.updated": 5,
+        "chat.message": 1,
+        "event:message.updated": 9,
+        "event:message.part.updated": 11,
+        "event:session.status": 6,
+        "event:session.diff": 2,
+        "experimental.chat.system.transform": 3,
+        "event:plugin.added": 45,
+        "event:catalog.updated": 3,
+        "event:reference.updated": 2,
+        "event:integration.updated": 2,
+        "tool.execute.before": 1,
+        "tool.execute.after": 1,
+        "event:message.part.delta": 1,
+        "event:session.idle": 1
+      },
+      "tool_names": [
+        "bash"
+      ],
+      "sources": [],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": true,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "prompt-additional-context",
+      "suppression": "on",
+      "exit_code": 0,
+      "events": [],
+      "event_counts": {},
+      "tool_names": [],
+      "sources": [],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "prompt-system-message",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "event:session.created",
+        "event:session.updated",
+        "chat.message",
+        "event:message.updated",
+        "event:message.part.updated",
+        "event:session.status",
+        "event:session.diff",
+        "experimental.chat.system.transform",
+        "event:plugin.added",
+        "event:catalog.updated",
+        "event:reference.updated",
+        "event:integration.updated",
+        "tool.execute.before",
+        "tool.execute.after",
+        "event:message.part.delta",
+        "event:session.idle"
+      ],
+      "event_counts": {
+        "event:session.created": 1,
+        "event:session.updated": 5,
+        "chat.message": 1,
+        "event:message.updated": 9,
+        "event:message.part.updated": 11,
+        "event:session.status": 6,
+        "event:session.diff": 2,
+        "experimental.chat.system.transform": 3,
+        "event:plugin.added": 45,
+        "event:catalog.updated": 3,
+        "event:reference.updated": 2,
+        "event:integration.updated": 2,
+        "tool.execute.before": 1,
+        "tool.execute.after": 1,
+        "event:message.part.delta": 1,
+        "event:session.idle": 1
+      },
+      "tool_names": [
+        "bash"
+      ],
+      "sources": [],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": true,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "prompt-system-message",
+      "suppression": "on",
+      "exit_code": 0,
+      "events": [],
+      "event_counts": {},
+      "tool_names": [],
+      "sources": [],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "stop-decision-block",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "event:session.created",
+        "event:session.updated",
+        "chat.message",
+        "event:message.updated",
+        "event:message.part.updated",
+        "event:session.status",
+        "event:session.diff",
+        "experimental.chat.system.transform",
+        "event:plugin.added",
+        "event:catalog.updated",
+        "event:reference.updated",
+        "event:integration.updated",
+        "tool.execute.before",
+        "tool.execute.after",
+        "event:message.part.delta",
+        "event:session.idle"
+      ],
+      "event_counts": {
+        "event:session.created": 1,
+        "event:session.updated": 5,
+        "chat.message": 1,
+        "event:message.updated": 9,
+        "event:message.part.updated": 11,
+        "event:session.status": 6,
+        "event:session.diff": 2,
+        "experimental.chat.system.transform": 3,
+        "event:plugin.added": 45,
+        "event:catalog.updated": 3,
+        "event:reference.updated": 2,
+        "event:integration.updated": 2,
+        "tool.execute.before": 1,
+        "tool.execute.after": 1,
+        "event:message.part.delta": 1,
+        "event:session.idle": 1
+      },
+      "tool_names": [
+        "bash"
+      ],
+      "sources": [],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "stop-decision-block",
+      "suppression": "on",
+      "exit_code": 0,
+      "events": [],
+      "event_counts": {},
+      "tool_names": [],
+      "sources": [],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "fail-exit-2",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "event:session.created",
+        "event:session.updated",
+        "chat.message",
+        "event:message.updated",
+        "event:message.part.updated",
+        "event:session.status",
+        "event:session.diff",
+        "experimental.chat.system.transform",
+        "event:plugin.added",
+        "event:catalog.updated",
+        "event:reference.updated",
+        "event:integration.updated",
+        "tool.execute.before",
+        "event:message.part.delta",
+        "event:session.idle"
+      ],
+      "event_counts": {
+        "event:session.created": 1,
+        "event:session.updated": 5,
+        "chat.message": 1,
+        "event:message.updated": 9,
+        "event:message.part.updated": 10,
+        "event:session.status": 6,
+        "event:session.diff": 2,
+        "experimental.chat.system.transform": 3,
+        "event:plugin.added": 45,
+        "event:catalog.updated": 3,
+        "event:reference.updated": 2,
+        "event:integration.updated": 2,
+        "tool.execute.before": 1,
+        "event:message.part.delta": 1,
+        "event:session.idle": 1
+      },
+      "tool_names": [
+        "bash"
+      ],
+      "sources": [],
+      "sentinel_files": [],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "fail-exit-2",
+      "suppression": "on",
+      "exit_code": 0,
+      "events": [],
+      "event_counts": {},
+      "tool_names": [],
+      "sources": [],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "fail-exit-1",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "event:session.created",
+        "event:session.updated",
+        "chat.message",
+        "event:message.updated",
+        "event:message.part.updated",
+        "event:session.status",
+        "event:plugin.added",
+        "event:session.diff",
+        "experimental.chat.system.transform",
+        "tool.execute.before",
+        "event:message.part.delta",
+        "event:session.idle",
+        "event:catalog.updated",
+        "event:integration.updated",
+        "event:reference.updated"
+      ],
+      "event_counts": {
+        "event:session.created": 1,
+        "event:session.updated": 5,
+        "chat.message": 1,
+        "event:message.updated": 9,
+        "event:message.part.updated": 10,
+        "event:session.status": 6,
+        "event:plugin.added": 37,
+        "event:session.diff": 2,
+        "experimental.chat.system.transform": 3,
+        "tool.execute.before": 1,
+        "event:message.part.delta": 1,
+        "event:session.idle": 1,
+        "event:catalog.updated": 1,
+        "event:integration.updated": 1,
+        "event:reference.updated": 1
+      },
+      "tool_names": [
+        "bash"
+      ],
+      "sources": [],
+      "sentinel_files": [],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "fail-exit-1",
+      "suppression": "on",
+      "exit_code": 0,
+      "events": [],
+      "event_counts": {},
+      "tool_names": [],
+      "sources": [],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "fail-malformed",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "event:session.created",
+        "event:session.updated",
+        "chat.message",
+        "event:message.updated",
+        "event:message.part.updated",
+        "event:session.status",
+        "event:session.diff",
+        "experimental.chat.system.transform",
+        "event:plugin.added",
+        "event:catalog.updated",
+        "event:reference.updated",
+        "event:integration.updated",
+        "tool.execute.before",
+        "tool.execute.after",
+        "event:message.part.delta",
+        "event:session.idle"
+      ],
+      "event_counts": {
+        "event:session.created": 1,
+        "event:session.updated": 5,
+        "chat.message": 1,
+        "event:message.updated": 9,
+        "event:message.part.updated": 11,
+        "event:session.status": 6,
+        "event:session.diff": 2,
+        "experimental.chat.system.transform": 3,
+        "event:plugin.added": 45,
+        "event:catalog.updated": 3,
+        "event:reference.updated": 2,
+        "event:integration.updated": 2,
+        "tool.execute.before": 1,
+        "tool.execute.after": 1,
+        "event:message.part.delta": 1,
+        "event:session.idle": 1
+      },
+      "tool_names": [
+        "bash"
+      ],
+      "sources": [],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "fail-malformed",
+      "suppression": "on",
+      "exit_code": 0,
+      "events": [],
+      "event_counts": {},
+      "tool_names": [],
+      "sources": [],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "fail-timeout",
+      "suppression": "off",
+      "exit_code": 0,
+      "events": [
+        "event:session.created",
+        "event:session.updated",
+        "chat.message",
+        "event:message.updated",
+        "event:message.part.updated",
+        "event:session.status",
+        "event:session.diff",
+        "experimental.chat.system.transform",
+        "event:plugin.added",
+        "event:catalog.updated",
+        "event:reference.updated",
+        "event:integration.updated",
+        "tool.execute.before",
+        "tool.execute.after",
+        "event:message.part.delta",
+        "event:session.idle"
+      ],
+      "event_counts": {
+        "event:session.created": 1,
+        "event:session.updated": 5,
+        "chat.message": 1,
+        "event:message.updated": 9,
+        "event:message.part.updated": 11,
+        "event:session.status": 6,
+        "event:session.diff": 2,
+        "experimental.chat.system.transform": 3,
+        "event:plugin.added": 45,
+        "event:catalog.updated": 3,
+        "event:reference.updated": 2,
+        "event:integration.updated": 2,
+        "tool.execute.before": 1,
+        "tool.execute.after": 1,
+        "event:message.part.delta": 1,
+        "event:session.idle": 1
+      },
+      "tool_names": [
+        "bash"
+      ],
+      "sources": [],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    },
+    {
+      "row": "fail-timeout",
+      "suppression": "on",
+      "exit_code": 0,
+      "events": [],
+      "event_counts": {},
+      "tool_names": [],
+      "sources": [],
+      "sentinel_files": [
+        "hook-sentinel-original"
+      ],
+      "context_nonce_in_model_request": false,
+      "system_nonce_in_model_request": false,
+      "deny_reason_in_stdout": false
+    }
+  ]
+}

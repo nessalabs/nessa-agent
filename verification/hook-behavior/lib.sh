@@ -1,0 +1,118 @@
+# Shared helpers for the hook-behavior runners.
+# A runner sources this file. Diagnostics go to stderr.
+
+set -euo pipefail
+
+hook_behavior_root() {
+  cd "$(dirname "${BASH_SOURCE[1]}")"
+  pwd
+}
+
+plant_command_hooks() {
+  local dest="$1" log="$2" mode="$3" sentinel="$4"
+  python3 - "$dest" "$log" "$mode" "$sentinel" "$(command -v python3)" "$HOOK_BEHAVIOR_ROOT/hook_cmd.py" <<'PY'
+import json
+import sys
+
+dest, log, mode, sentinel, python, hook = sys.argv[1:7]
+events = [
+    "SessionStart",
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PermissionRequest",
+    "PostToolUse",
+    "PreCompact",
+    "PostCompact",
+    "SubagentStart",
+    "SubagentStop",
+    "Stop",
+    "SessionEnd",
+]
+timeout = 1 if mode == "timeout" else 30
+command = f"{python} {hook} {log} {mode} {sentinel}"
+hooks = {}
+for event in events:
+    handler = {"type": "command", "command": command}
+    if event == "PreToolUse":
+        handler["timeout"] = timeout
+    hooks[event] = [{"hooks": [handler]}]
+with open(dest, "w", encoding="utf-8") as handle:
+    json.dump({"hooks": hooks}, handle)
+PY
+}
+
+thread_id_from() {
+  python3 - "$1" <<'PY'
+import json
+import sys
+
+found = ""
+
+def walk(value):
+    global found
+    if found:
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in ("thread_id", "threadId", "session_id", "sessionId", "sessionID") and isinstance(item, str) and len(item) > 8:
+                found = item
+                return
+            walk(item)
+    elif isinstance(value, list):
+        for item in value:
+            walk(item)
+
+for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        walk(json.loads(line))
+    except json.JSONDecodeError:
+        continue
+    if found:
+        break
+print(found)
+PY
+}
+
+append_row() {
+  python3 "$HOOK_BEHAVIOR_ROOT/evidence.py" append \
+    --rows "$ROWS" \
+    --harness "$HARNESS" \
+    --version "$VERSION" \
+    --row "$1" \
+    --suppression "$2" \
+    --label "$LABEL" \
+    --exit-code "$3" \
+    --log "$4" \
+    --stdout "$5" \
+    --stderr "$6" \
+    --sentinel "$7" \
+    --requests "${REQUESTS:-}" \
+    --notes "${8:-}"
+}
+
+start_scripted_server() {
+  REQUESTS="$WORKDIR/requests"
+  mkdir -p "$REQUESTS"
+  python3 "$HOOK_BEHAVIOR_ROOT/scripted_openai.py" "$REQUESTS" >"$WORKDIR/port" 2>"$WORKDIR/server.err" &
+  SERVER_PID=$!
+  local attempt
+  for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    if [[ -s "$WORKDIR/port" ]]; then
+      PORT="$(cat "$WORKDIR/port")"
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "scripted server did not print a port" >&2
+  return 1
+}
+
+stop_scripted_server() {
+  if [[ -n "${SERVER_PID:-}" ]]; then
+    kill "$SERVER_PID" 2>/dev/null || true
+    wait "$SERVER_PID" 2>/dev/null || true
+  fi
+}
