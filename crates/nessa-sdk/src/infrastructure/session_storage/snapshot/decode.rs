@@ -325,10 +325,14 @@ fn preflight_shape(reader: impl Read, shape: Shape) -> Result<(), StorageError> 
 
 /// Top-level `schemaVersion` seen while preflight walks a record.
 ///
-/// The last duplicate key wins. A value that is not an unsigned integer is
-/// [`RecordVersion::Invalid`]. [`RecordVersion::Absent`] means the root value
-/// was a JSON object and the field was not present. [`RecordVersion::Unseen`]
-/// means the walk never entered that object.
+/// An unsupported marker ends the walk at once. Otherwise the last duplicate
+/// key wins: `"schemaVersion":1` then `"schemaVersion":2` is
+/// [`RecordVersion::Other`] of 2, and `"schemaVersion":2` then
+/// `"schemaVersion":1` is that same other version because the walk stops at 2.
+/// A value that is not an unsigned integer is [`RecordVersion::Invalid`].
+/// [`RecordVersion::Absent`] means the root value was a JSON object and the
+/// field was not present. [`RecordVersion::Unseen`] means the walk never
+/// entered that object.
 #[derive(Clone, Copy)]
 enum RecordVersion {
     Unseen,
@@ -401,7 +405,7 @@ impl<'de> Visitor<'de> for VersionSeed {
     fn visit_u64<E: de::Error>(self, value: u64) -> Result<(), E> {
         self.discard.charge(0)?;
         self.version.set(record_version(value));
-        Ok(())
+        self.stop_when_unsupported()
     }
 
     fn visit_i64<E: de::Error>(self, value: i64) -> Result<(), E> {
@@ -410,7 +414,7 @@ impl<'de> Visitor<'de> for VersionSeed {
             Ok(value) => record_version(value),
             Err(_) => RecordVersion::Invalid,
         });
-        Ok(())
+        self.stop_when_unsupported()
     }
 
     fn visit_str<E: de::Error>(self, text: &str) -> Result<(), E> {
@@ -443,6 +447,13 @@ impl<'de> Visitor<'de> for VersionSeed {
 }
 
 impl VersionSeed {
+    fn stop_when_unsupported<E: de::Error>(&self) -> Result<(), E> {
+        if matches!(self.version.get(), RecordVersion::Other(_)) {
+            return Err(E::custom("schemaVersion this build does not read"));
+        }
+        Ok(())
+    }
+
     fn mark_invalid<E: de::Error>(self, bytes: usize) -> Result<(), E> {
         if bytes > SCHEMA_MARKER_BYTES {
             return Err(E::custom("schemaVersion is not an unsigned integer"));
@@ -581,5 +592,57 @@ mod storage_tree_tests {
         }
         assert!(preflight_shape(deep.as_bytes(), Shape::StorageError).is_err());
         assert!(decode(&deep).is_err());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{cell::Cell, io, rc::Rc};
+
+    struct CountingRead<R> {
+        inner: R,
+        read: Rc<Cell<usize>>,
+    }
+
+    impl<R: Read> Read for CountingRead<R> {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            let count = self.inner.read(buf)?;
+            self.read.set(self.read.get() + count);
+            Ok(count)
+        }
+    }
+
+    fn counted(bytes: &[u8]) -> (CountingRead<&[u8]>, Rc<Cell<usize>>) {
+        let read = Rc::new(Cell::new(0));
+        (
+            CountingRead {
+                inner: bytes,
+                read: Rc::clone(&read),
+            },
+            read,
+        )
+    }
+
+    /// An unsupported marker ends the walk. The rest of a large record is not
+    /// read.
+    #[test]
+    fn an_unsupported_marker_stops_the_preflight_walk() {
+        let filler = "x".repeat(1024 * 1024);
+        let batch = format!(r#"{{"schemaVersion":2,"changes":["{filler}"]}}"#);
+        let (reader, read) = counted(batch.as_bytes());
+        assert_eq!(
+            preflight_semantic_batch(reader),
+            Err(StorageError::AnotherVersion { found: Some(2) })
+        );
+        assert!(read.get() < 4 * 1024, "batch read {}", read.get());
+
+        let checkpoint = format!(r#"{{"schemaVersion":2,"snapshot":{{"pad":"{filler}"}}}}"#);
+        let (reader, read) = counted(checkpoint.as_bytes());
+        assert_eq!(
+            preflight_checkpoint(reader),
+            Err(StorageError::AnotherVersion { found: Some(2) })
+        );
+        assert!(read.get() < 4 * 1024, "checkpoint read {}", read.get());
     }
 }

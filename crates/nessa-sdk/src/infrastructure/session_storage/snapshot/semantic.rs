@@ -908,13 +908,24 @@ mod tests {
                 Err(StorageError::AnotherVersion { found: Some(found) })
             );
         }
-        let doubled = String::from_utf8(bytes).unwrap().replacen(
+        let doubled = String::from_utf8(bytes.clone()).unwrap().replacen(
             "\"schemaVersion\":1",
             "\"schemaVersion\":1,\"schemaVersion\":2",
             1,
         );
         assert_eq!(
             decode_batch(doubled.as_bytes(), &ProviderContext::Absent),
+            Err(StorageError::AnotherVersion { found: Some(2) })
+        );
+        // The unsupported marker ends the walk, so a later current marker is
+        // not read.
+        let stopped = String::from_utf8(bytes).unwrap().replacen(
+            "\"schemaVersion\":1",
+            "\"schemaVersion\":2,\"schemaVersion\":1",
+            1,
+        );
+        assert_eq!(
+            decode_batch(stopped.as_bytes(), &ProviderContext::Absent),
             Err(StorageError::AnotherVersion { found: Some(2) })
         );
     }
