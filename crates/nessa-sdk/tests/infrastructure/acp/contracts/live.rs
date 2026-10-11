@@ -246,11 +246,23 @@ async fn selected_codex_preset_survives_a_real_agent_close_and_restore() {
     drop(workspace);
 }
 
-/// Project and user command hooks are on disk. The pinned Claude profile asks
-/// the adapter to disable hooks and to load no setting sources. This test
-/// checks that those hooks do not append to the log across an open, a prompt,
-/// a restore, and a second prompt. It is ignored because it needs the real
-/// `claude-agent-acp` and a Claude login that is not on this machine.
+/// Project command hooks are on disk in the scratch workspace. The user command
+/// hook is a settings file in that same workspace, not a file in the login
+/// directory.
+///
+/// `ClaudeAcpProvider` cannot plant that user hook through `--settings`. The
+/// profile hardcodes `disableAllHooks: true` and `settingSources: []`, and the
+/// ACP launch has no CLI `--settings` argument. Writing the hook into the real
+/// login directory would mutate it, so this test does not. `CLAUDE_CONFIG_DIR`
+/// is that login directory (`CLAUDE_CONFIG_DIR`, or `$HOME/.claude`). Credential
+/// files are not copied.
+///
+/// The positive control runs the same user hook through the raw `claude` CLI,
+/// with `--settings`, from inside the scratch workspace. The log must contain
+/// `user`. It is then truncated. The ACP open, prompt, restore, and second
+/// prompt must leave it empty. The test is ignored because it needs the real
+/// `claude-agent-acp`, the `claude` CLI, and a Claude login that is not on
+/// this machine.
 #[tokio::test]
 #[ignore = "requires NESSA_LIVE_CLAUDE_ACP and existing local Claude authentication"]
 async fn claude_project_and_user_hooks_stay_quiet_across_prompt_and_restore() {
@@ -271,8 +283,6 @@ async fn claude_project_and_user_hooks_stay_quiet_across_prompt_and_restore() {
         ],
         &["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
     );
-    let user_config = workspace.path().join("user-claude");
-    std::fs::create_dir_all(&user_config).unwrap();
     let login_dir = std::env::var_os("CLAUDE_CONFIG_DIR").map_or_else(
         || {
             let mut home = PathBuf::from(std::env::var_os("HOME").expect("HOME"));
@@ -281,16 +291,9 @@ async fn claude_project_and_user_hooks_stay_quiet_across_prompt_and_restore() {
         },
         PathBuf::from,
     );
-    for name in [".credentials.json", "credentials.json"] {
-        let from = login_dir.join(name);
-        if from.is_file() {
-            std::fs::copy(&from, user_config.join(name)).unwrap();
-        }
-    }
-    config.environment.insert(
-        "CLAUDE_CONFIG_DIR".into(),
-        user_config.as_os_str().to_owned(),
-    );
+    config
+        .environment
+        .insert("CLAUDE_CONFIG_DIR".into(), login_dir.as_os_str().to_owned());
     let log = workspace.path().join("hook-log");
     std::fs::write(&log, "").unwrap();
     let project_hook = workspace.path().join("project-hook.sh");
@@ -303,7 +306,38 @@ async fn claude_project_and_user_hooks_stay_quiet_across_prompt_and_restore() {
         hook_settings(&project_hook),
     )
     .unwrap();
-    std::fs::write(user_config.join("settings.json"), hook_settings(&user_hook)).unwrap();
+    let user_settings = workspace.path().join("user-settings.json");
+    std::fs::write(&user_settings, hook_settings(&user_hook)).unwrap();
+    let control = std::process::Command::new("timeout")
+        .arg("180")
+        .arg("claude")
+        .current_dir(workspace.path())
+        .stdin(std::process::Stdio::null())
+        .env_remove("ANTHROPIC_API_KEY")
+        .env("CLAUDE_CONFIG_DIR", &login_dir)
+        .args([
+            "-p",
+            "Reply with OK only. Do not use tools.",
+            "--model",
+            "claude-haiku-4-5-20251001",
+            "--output-format",
+            "json",
+            "--dangerously-skip-permissions",
+            "--settings",
+        ])
+        .arg(&user_settings)
+        .status()
+        .expect("raw claude user-hook control");
+    assert!(
+        control.success(),
+        "raw claude user-hook control exited {control}"
+    );
+    let control_log = std::fs::read_to_string(&log).unwrap();
+    assert!(
+        control_log.contains("user"),
+        "planted user hook did not write to the log: {control_log}"
+    );
+    std::fs::write(&log, "").unwrap();
 
     let mut metadata = ModelMetadataDto::from(&fixture_model);
     metadata.model_id = "claude-sonnet-5".into();
