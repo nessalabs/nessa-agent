@@ -179,6 +179,8 @@ for line in sys.stdin:
             assert params["mcpServers"] == []
         if method == "session/resume":
             session = params["sessionId"]
+            # Named so a test can tell a resumed session from a second new one.
+            (root / "resumed").write_text(session)
         if mode == "startup-update-before-session-response":
             update({"sessionUpdate": "available_commands_update", "availableCommands": []})
         elif mode == "wrong-session-startup-update":

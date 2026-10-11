@@ -22,6 +22,7 @@ are opt-in too (`alpha-perf.mjs`). Neither is part of `pnpm verify:desktop`.
 ```
 verification/
   README.md                 this file
+  hook-behavior/            real harness hook events and outputs; see that README
   conversation/
     README.md               committed transcript fixture and publication ownership
     fixture.html            real ConversationControls and applyView browser fixture
@@ -106,6 +107,14 @@ The standalone MCP sandbox departure and chart checks use
 labelled verification page, separate from the product UI. Every check releases
 its message-listener owner and removes its frames before closing the page;
 cleanup assertions report any remaining frames or product markup.
+
+## Hook behavior
+
+`hook-behavior/` drives a real harness and records which hook events fire.
+Claude needs the login on the machine that holds it. Codex and OpenCode
+install their pinned packages and talk to a scripted model. How to run them,
+and where the JSONL and summary go, is [hook-behavior/README.md](hook-behavior/README.md).
+They are not a desktop check and not a CI gate.
 
 ## Prerequisites
 
