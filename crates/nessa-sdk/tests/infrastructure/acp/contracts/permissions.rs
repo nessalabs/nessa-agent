@@ -1703,8 +1703,21 @@ fn binding_that_stops(
     kind: StopKind,
     audit: Arc<RecordingAudit>,
 ) -> (tempfile::TempDir, ClaudeAcpProvider) {
+    binding_that_stops_within(mode, kind, audit, SHUTDOWN_GRACE)
+}
+
+/// `grace` is how long a stopped prompt may wait for its provider. The short
+/// default is what an expiry test runs out. A test that releases the reply
+/// itself needs longer: the wait includes the machine, not only the grace.
+fn binding_that_stops_within(
+    mode: &str,
+    kind: StopKind,
+    audit: Arc<RecordingAudit>,
+    grace: Duration,
+) -> (tempfile::TempDir, ClaudeAcpProvider) {
     let (root, mut config, model) = test_acp_configuration(mode, 16);
     config.refusal = ConfiguredRefusal::stopping(kind, stopping_rule());
+    config.shutdown_grace = grace;
     (
         root,
         ClaudeAcpProvider::new(config, &model, TokenLimits::new(900, 100).unwrap(), audit).unwrap(),
@@ -1853,8 +1866,12 @@ async fn a_stalled_stop_audit_fails_after_the_local_stop() {
 async fn a_stopped_turn_holds_the_next_prompt_until_the_provider_answers() {
     let _process_slot = process_test_slot().await;
     let audit = Arc::new(RecordingAudit::default());
-    let (root, binding) =
-        binding_that_stops("refusal-stale-next", StopKind::EndTurn, audit.clone());
+    let (root, binding) = binding_that_stops_within(
+        "refusal-stale-next",
+        StopKind::EndTurn,
+        audit.clone(),
+        Duration::from_secs(2),
+    );
     let mut opened = open_that_stops(&binding, audit.clone()).await;
     let first = start(&opened, "stop-this").await;
     assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
@@ -1930,10 +1947,11 @@ async fn a_stopped_turn_holds_the_next_prompt_until_the_provider_answers() {
 async fn a_malformed_stopped_reply_fails_the_worker_and_refuses_the_held_prompt() {
     let _process_slot = process_test_slot().await;
     let audit = Arc::new(RecordingAudit::default());
-    let (root, binding) = binding_that_stops(
+    let (root, binding) = binding_that_stops_within(
         "refusal-malformed-stopped",
         StopKind::EndTurn,
         audit.clone(),
+        Duration::from_secs(2),
     );
     let mut opened = open_that_stops(&binding, audit.clone()).await;
     let session = opened.session.clone();
