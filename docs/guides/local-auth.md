@@ -312,6 +312,23 @@ and refuses a host whose build speaks another lease protocol:
 }
 ```
 
+A machine the gateway cannot reach, such as one behind NAT, can dial in
+instead. Create an environment invitation on the gateway
+(`pairing.create` with `{"enrollee":"environment"}`), then on that machine,
+which needs this same build and its own `config.json` with an `agents`
+section:
+
+```sh
+nessa env enroll gateway.example:47650 CODE  # native.listenAddress on the gateway
+nessa env dial gateway.example:47650         # waits for your approval, then serves
+```
+
+Approve its key on the gateway. While `env dial` runs, the machine is offered
+as "Paired machine" plus the first eight characters of its key, and is named
+`peer:` followed by its key elsewhere. It dials again whenever its
+connection ends, waiting up to a minute between tries, and stops on Ctrl-C
+or SIGTERM. Revoking its credential stops the next lease it is given.
+
 To let the agent run single commands on a host with its `run` tool (beside
 `environments_list`), name the host in `environmentTools.commandHosts` on the
 gateway, and on the host itself set `envServe.commands` in its `config.json`.

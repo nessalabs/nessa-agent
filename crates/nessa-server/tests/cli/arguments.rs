@@ -198,3 +198,33 @@ fn artifact_publish_takes_no_flag_as_its_path() {
         assert!(parse(&args(&words)).is_err(), "{words:?}");
     }
 }
+
+#[test]
+fn env_enroll_names_a_gateway_and_a_code_and_env_dial_a_gateway() {
+    assert_eq!(
+        parse(&args(&["env", "enroll", "gw.example:7443", "ABCD-EFGH"])).unwrap(),
+        Command::EnvEnroll {
+            address: "gw.example:7443".into(),
+            code: "ABCD-EFGH".into(),
+        }
+    );
+    assert_eq!(
+        parse(&args(&["env", "dial", "10.0.0.2:7443"])).unwrap(),
+        Command::EnvDial {
+            address: "10.0.0.2:7443".into(),
+        }
+    );
+    for refused in [
+        vec!["env", "enroll"],
+        vec!["env", "enroll", "gw:1"],
+        vec!["env", "enroll", "gw:1", "CODE", "extra"],
+        vec!["env", "enroll", "--address", "gw:1"],
+        vec!["env", "dial"],
+        vec!["env", "dial", "gw:1", "extra"],
+        vec!["env", "dial", "--help"],
+    ] {
+        assert!(parse(&args(&refused)).is_err(), "{refused:?}");
+    }
+    assert!(crate::cli::entrypoint::HELP.contains("nessa env enroll ADDRESS CODE"));
+    assert!(crate::cli::entrypoint::HELP.contains("nessa env dial ADDRESS"));
+}
