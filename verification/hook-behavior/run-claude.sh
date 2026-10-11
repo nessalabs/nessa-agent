@@ -275,7 +275,10 @@ for entry in "${ROWS_AND_MODES[@]}"; do
       fi
       SESSION_ID="$session"
     else
-      notes="${notes} No session id, so resume was not attempted."
+      echo "no session id: ${row} ${suppression}" >&2
+      if [[ "$code" -eq 0 ]]; then
+        code=1
+      fi
     fi
   fi
   if [[ -z "$SESSION_ID" ]]; then

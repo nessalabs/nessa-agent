@@ -214,7 +214,10 @@ run_case() {
         code="$follow_code"
       fi
     else
-      notes="${notes} No session id in the first run, so resume was not attempted."
+      echo "no session id: ${row} ${suppression}" >&2
+      if [[ "$code" -eq 0 ]]; then
+        code=1
+      fi
     fi
   fi
   redact_paths "$stdout" "$stderr" ${REQUESTS:+"$REQUESTS"/*}

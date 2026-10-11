@@ -51,6 +51,8 @@ paths. `finalize` exits non-zero when any stored text contains an email address
 or the home directory. After it writes the summary, it also exits non-zero
 when a row's exit code is not 0, and names that row on stderr. Codex
 `stop-decision-block` with suppression off is expected to exit 124.
+`events-resume` and `events-compact` record a non-zero exit code when the
+first run has no session id, and that follow-up run is not attempted.
 `pretool-allow-updated` asks for a Bash `touch` of
 `$SENTINEL/hook-sentinel-original` and passes only when the sentinel directory
 contains exactly `hook-sentinel-rewritten`.

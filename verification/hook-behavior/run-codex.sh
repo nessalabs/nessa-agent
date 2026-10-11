@@ -201,7 +201,10 @@ for entry in "${ROWS_AND_MODES[@]}"; do
           code="$follow_code"
         fi
       else
-        notes="${notes} No thread id in the first exec, so resume was not attempted."
+        echo "no session id: ${row} ${suppression}" >&2
+        if [[ "$code" -eq 0 ]]; then
+          code=1
+        fi
       fi
     fi
     redact_paths "$stdout" "$stderr" ${REQUESTS:+"$REQUESTS"/*}
