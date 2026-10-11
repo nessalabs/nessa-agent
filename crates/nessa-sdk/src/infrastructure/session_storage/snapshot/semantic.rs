@@ -877,7 +877,7 @@ mod tests {
     }
 
     #[test]
-    fn a_saved_batch_writes_schema_version_one() {
+    fn a_saved_batch_writes_the_current_schema_version() {
         let change = opened_change();
         let bytes = encode_one(&change).unwrap();
         let saved: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
@@ -912,25 +912,27 @@ mod tests {
                 Err(StorageError::AnotherVersion { found: Some(found) })
             );
         }
+        let current = StorageError::SCHEMA_VERSION;
+        let later = current + 1;
         let doubled = String::from_utf8(bytes.clone()).unwrap().replacen(
-            "\"schemaVersion\":1",
-            "\"schemaVersion\":1,\"schemaVersion\":2",
+            &format!("\"schemaVersion\":{current}"),
+            &format!("\"schemaVersion\":{current},\"schemaVersion\":{later}"),
             1,
         );
         assert_eq!(
             decode_batch(doubled.as_bytes(), &ProviderContext::Absent),
-            Err(StorageError::AnotherVersion { found: Some(2) })
+            Err(StorageError::AnotherVersion { found: Some(later) })
         );
         // The unsupported marker ends the walk, so a later current marker is
         // not read.
         let stopped = String::from_utf8(bytes).unwrap().replacen(
-            "\"schemaVersion\":1",
-            "\"schemaVersion\":2,\"schemaVersion\":1",
+            &format!("\"schemaVersion\":{current}"),
+            &format!("\"schemaVersion\":{later},\"schemaVersion\":{current}"),
             1,
         );
         assert_eq!(
             decode_batch(stopped.as_bytes(), &ProviderContext::Absent),
-            Err(StorageError::AnotherVersion { found: Some(2) })
+            Err(StorageError::AnotherVersion { found: Some(later) })
         );
     }
 
