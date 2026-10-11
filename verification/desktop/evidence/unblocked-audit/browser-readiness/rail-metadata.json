@@ -1,0 +1,27 @@
+{
+  "head": "7ca52f39c6b779197fe933fb17f24fdc8b339962",
+  "dirtyFiles": [],
+  "sourceSha256": {
+    "verification/desktop/scripts/command-order.mjs": "a5d726d57e1006f76556f116780f24d23237c60c48d1eba75ef0bc27eb0c00a3",
+    "verification/desktop/scripts/drag.mjs": "72ac1ed0bc46eb30936c8f4c4dace56f15c7c0923c3b5110bac13d83a862abee",
+    "verification/desktop/scripts/columns.mjs": "b0b81e5a3dea9158e342f45a65542924923daaaf5ec5cc6ce75fc1bff632237b",
+    "docs/design/ui-workspace-load.md": "b477718a88420d3f606291968a5fccb6b9f6ac726a54619d648a4c911b8f249d"
+  },
+  "command": [
+    "node",
+    "verification/desktop/scripts/columns.mjs",
+    "--only",
+    "rail-fold-focus",
+    "--engine",
+    "chromium,webkit",
+    "--layout",
+    "columns,sidebar",
+    "--channel",
+    "bundled",
+    "--out",
+    "/tmp/nessa-unblocked-audit/browser-final/readiness-author/clean-rail/result.json"
+  ],
+  "stage": "clean-rail",
+  "exit": 0,
+  "seconds": 49.6
+}

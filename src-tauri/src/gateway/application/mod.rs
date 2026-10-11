@@ -1,4 +1,8 @@
 //! Retryable desktop gateway reconciliation; native effects enter through the owned port.
+//! ClaudePublication serializes live/durable directory changes through ClaudeDirectorySettings;
+//! its owned transaction waits for native settlement, then completes any rollback
+//! before another directory publication can begin. Tests mirror it in
+//! `tests/gateway/application/claude_publication.rs`.
 mod ports;
 mod service;
 pub use crate::gateway::domain::value_objects::ReconciliationHistoryFact;
@@ -6,10 +10,11 @@ pub use crate::gateway::domain::value_objects::ReconciliationHistoryFact;
 pub(crate) use ports::testing;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub use ports::GatewayLifecycleRecovery;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", all(test, target_os = "macos")))]
 pub use ports::GatewayStopProofToken;
 pub use ports::{
-    ClaudeDirectoryReplacement, GatewayError, GatewayHost, GatewayPhysicalResult,
+    ClaudeConfigurationChangeError, ClaudeDirectoryReplacement, ClaudeDirectorySettings,
+    ClaudeSettingsPublishError, GatewayError, GatewayHost, GatewayPhysicalResult,
     GatewayReconciliationAttempt, GatewayReconciliationAudit, GatewayReconciliationEffect,
     GatewayReconciliationEffectTiming, GatewayReconciliationIds, GatewayReconciliationIntent,
     GatewayReconciliationIntentDelivery, GatewayReconciliationJournalSession,

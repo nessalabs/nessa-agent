@@ -51,6 +51,7 @@ struct Fixture {
     service: ConversationService,
     provider: Arc<ProviderFactory>,
     audit: Arc<HeldFileLinkAudit>,
+    storage: Arc<InMemoryStorage>,
     id: ConversationId,
 }
 
@@ -60,6 +61,7 @@ impl Fixture {
         let repository = Arc::new(MemoryRepository::default());
         let summaries = Arc::new(MemorySummaries::default());
         let audit = Arc::new(HeldFileLinkAudit::default());
+        let storage = Arc::new(InMemoryStorage::new());
         let service = ConversationService::new(
             ConversationDependencies {
                 // Each approval mode resolves, so a conversation can be in
@@ -68,7 +70,7 @@ impl Fixture {
                     provider.clone(),
                     Arc::new(RecordingModeExecutionAudit::default()),
                 ),
-                storage: Arc::new(InMemoryStorage::new()),
+                storage: storage.clone(),
                 metadata: repository.clone(),
                 mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
                 creation_audit: Arc::new(AcceptingCreationAudit),
@@ -108,6 +110,7 @@ impl Fixture {
             service,
             provider,
             audit,
+            storage,
             id,
         }
     }
@@ -222,9 +225,40 @@ impl Fixture {
     /// So does `Busy`: opening waits out the stopped agent's history lease
     /// (`a_read_right_after_a_desktop_stop_is_not_busy`).
     async fn settled(&self) -> Vec<(String, ConversationMessageStatus)> {
+        self.wait_for_settled(|| self.service.read(self.id.clone(), caller("read")))
+            .await
+    }
+
+    /// Cleanup may still be held while the SDK commits a message's outcome.
+    /// This evidence does not publish the stopping owner's current controls.
+    async fn settled_committed(&self) -> Vec<(String, ConversationMessageStatus)> {
+        self.wait_for_settled(|| async {
+            // The session key owner supplies the same identity composition uses.
+            let committed = self
+                .storage
+                .read_committed(conversation_session(&self.id))
+                .await?
+                .ok_or(ConversationError::NotFound)?;
+            Ok(nessa_protocol::conversation::projection::retained_view(
+                &self.id,
+                committed.snapshot(),
+                committed.status(),
+                Uuid::new_v4(),
+            ))
+        })
+        .await
+    }
+
+    async fn wait_for_settled<F>(
+        &self,
+        read: impl Fn() -> F,
+    ) -> Vec<(String, ConversationMessageStatus)>
+    where
+        F: Future<Output = Result<ConversationView, ConversationError>>,
+    {
         tokio::time::timeout(BOUND, async {
             loop {
-                let view = match self.service.read(self.id.clone(), caller("read")).await {
+                let view = match read().await {
                     Ok(view) => view,
                     Err(error) => panic!("the conversation stays readable: {error:?}"),
                 };
@@ -282,7 +316,7 @@ fn caller(action: &str) -> ConversationCaller {
 
 /// Row 1: a send arrives while a stop is closing the agent. The stop marked
 /// the owner before it, so the send is refused as closed before anything is
-/// recorded, and a read still answers — nothing waits for the close. Once
+/// recorded, and a current read refuses Closed without waiting for cleanup. Once
 /// the slot is let go, the next send opens the conversation again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_send_during_a_desktop_stop_is_refused_and_the_next_opens_again() {
@@ -298,13 +332,15 @@ async fn a_send_during_a_desktop_stop_is_refused_and_the_next_opens_again() {
     })
     .await
     .expect("the stop reaches the agent's close");
-    tokio::time::timeout(
-        BOUND,
-        fixture.service.read(fixture.id.clone(), caller("read")),
-    )
-    .await
-    .expect("a read does not wait for the close")
-    .expect("a read answers while the agent closes");
+    assert!(matches!(
+        tokio::time::timeout(
+            BOUND,
+            fixture.service.read(fixture.id.clone(), caller("read")),
+        )
+        .await
+        .expect("a read does not wait for the close"),
+        Err(ConversationError::Agent(AgentError::Closed))
+    ));
     assert!(matches!(
         fixture
             .send("during-stop", "During the stop", true)
@@ -357,12 +393,14 @@ async fn an_owner_marked_as_stopping_is_handed_no_message() {
     ));
     assert_eq!(fixture.audit.recorded.load(Ordering::SeqCst), 0);
     assert!(fixture.provider.executions.lock().unwrap().is_empty());
-    let view = fixture
-        .service
-        .read(fixture.id.clone(), caller("read"))
-        .await
-        .unwrap();
-    assert!(view.messages.is_empty(), "{:?}", view.messages);
+    assert!(matches!(
+        fixture
+            .service
+            .read(fixture.id.clone(), caller("read"))
+            .await,
+        Err(ConversationError::Agent(AgentError::Closed))
+    ));
+    assert!(fixture.settled_committed().await.is_empty());
     fixture.service.shutdown().await.unwrap();
 }
 
@@ -540,7 +578,14 @@ async fn a_desktop_stop_that_cannot_take_the_lock_within_its_budget_carries_on()
     })
     .await
     .expect("the stop carries on once the submission is done");
-    let settled = fixture.settled().await;
+    assert!(matches!(
+        fixture
+            .service
+            .read(fixture.id.clone(), caller("read"))
+            .await,
+        Err(ConversationError::Agent(AgentError::Closed))
+    ));
+    let settled = fixture.settled_committed().await;
     assert!(
         matches!(
             settled.as_slice(),
@@ -715,7 +760,7 @@ async fn the_wait_for_the_lock_and_the_stop_share_one_budget() {
 
 /// Row 6: the agent's close runs past the budget. The stop answers over
 /// budget and carries on until the close is confirmed and the slot let go.
-/// Meanwhile a read answers and a send is refused as closed — never admitted
+/// Meanwhile current reads and sends are refused as closed — never admitted
 /// to the closed agent — and afterwards the conversation opens again. Paused
 /// time, so the budget is exact.
 #[tokio::test(start_paused = true)]
@@ -735,13 +780,15 @@ async fn a_stop_that_runs_past_its_budget_carries_on_and_lets_the_agent_go() {
         "{stopped:?}"
     );
     assert_eq!(fixture.provider.close_calls.load(Ordering::SeqCst), 1);
-    tokio::time::timeout(
-        BOUND,
-        fixture.service.read(fixture.id.clone(), caller("read")),
-    )
-    .await
-    .expect("a read does not wait for the stop carrying on")
-    .expect("a read answers while the agent closes");
+    assert!(matches!(
+        tokio::time::timeout(
+            BOUND,
+            fixture.service.read(fixture.id.clone(), caller("read")),
+        )
+        .await
+        .expect("a read does not wait for the stop carrying on"),
+        Err(ConversationError::Agent(AgentError::Closed))
+    ));
     assert!(matches!(
         fixture
             .send("after-budget", "After the budget", false)

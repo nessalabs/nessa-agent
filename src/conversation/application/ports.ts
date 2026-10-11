@@ -45,6 +45,12 @@ export interface ConversationFollower {
   failed(reason: ReadFailure, cause?: unknown): void
 }
 
+/** Explicit active or archived catalogue facts, without deriving status from omission. */
+export interface ConversationListFollower {
+  list(list: ConversationListing): void
+  failed(reason: ReadFailure, cause?: unknown): void
+}
+
 /** External effects consumed by conversation commands. */
 export interface ConversationEffects {
   /** Apply an offered preset on an idle conversation and return the committed choice. */
@@ -71,6 +77,12 @@ export interface ConversationEffects {
    * it rejects with {@link ConversationReadFailedError} for the same reasons.
    */
   list(archived: boolean): Promise<ConversationListing>
+  /**
+   * Follow one catalogue classification until stopped. The client owns pending
+   * subscription cleanup; the history slice owns the active/archived pair and
+   * publication generation (record-subscriptions table PL1–PL10).
+   */
+  followList(archived: boolean, follower: ConversationListFollower): () => void
   /**
    * Archive (`true`) or unarchive a conversation: whether the list shows it.
    * Resolves with whether anything changed — false when it already was, or

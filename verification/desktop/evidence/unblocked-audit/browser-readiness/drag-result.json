@@ -1,0 +1,124 @@
+{
+  "check": "drag",
+  "ok": true,
+  "started": "2026-10-10T17:27:05.775Z",
+  "finished": "2026-10-10T17:27:43.406Z",
+  "target": {
+    "url": "http://127.0.0.1:1438/desktop.html",
+    "mode": "dev"
+  },
+  "results": [
+    {
+      "ok": true,
+      "failures": [],
+      "name": "compact-drag-card",
+      "engine": "chromium",
+      "layout": "columns",
+      "width": "1440x900",
+      "card": {
+        "x": 167,
+        "y": 35,
+        "w": 280,
+        "h": 44
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "compact-drag-card",
+      "engine": "chromium",
+      "layout": "columns",
+      "width": "1000x700",
+      "card": {
+        "x": 167,
+        "y": 32,
+        "w": 280,
+        "h": 44
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "compact-drag-card",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "width": "1440x900",
+      "card": {
+        "x": 167,
+        "y": 35,
+        "w": 280,
+        "h": 44
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "compact-drag-card",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "width": "1000x700",
+      "card": {
+        "x": 167,
+        "y": 32,
+        "w": 280,
+        "h": 44
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "compact-drag-card",
+      "engine": "webkit",
+      "layout": "columns",
+      "width": "1440x900",
+      "card": {
+        "x": 152,
+        "y": 20,
+        "w": 280,
+        "h": 44
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "compact-drag-card",
+      "engine": "webkit",
+      "layout": "columns",
+      "width": "1000x700",
+      "card": {
+        "x": 167,
+        "y": 32,
+        "w": 280,
+        "h": 44
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "compact-drag-card",
+      "engine": "webkit",
+      "layout": "sidebar",
+      "width": "1440x900",
+      "card": {
+        "x": 167,
+        "y": 35,
+        "w": 280,
+        "h": 44
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "compact-drag-card",
+      "engine": "webkit",
+      "layout": "sidebar",
+      "width": "1000x700",
+      "card": {
+        "x": 167,
+        "y": 32,
+        "w": 280,
+        "h": 44
+      }
+    }
+  ]
+}

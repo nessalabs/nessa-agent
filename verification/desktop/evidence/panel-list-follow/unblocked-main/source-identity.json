@@ -1,0 +1,29 @@
+{
+  "base": "965797a9f2cb1a71923f32eee4197aa501669ebf",
+  "head": "9f63243e36181625786fa332398152825c220e3e",
+  "files": {
+    "crates/nessa-protocol/src/product/generated.rs": "c27518fdaaa9177f89bc6c854e7543987b055fd9ebdc1e19e91fe884efc4ce1e",
+    "crates/nessa-server/tests/product/socket/subscriptions.rs": "c37de4f9bef481dbf5c9985288ed534ee1b58fdee8cc25806d8bb4bac9c86f9b",
+    "docs/ARCHITECTURE.md": "2f16dd3d4283d3bcea05561df85430451f4aa8efe171cf47d870c0b538051abe",
+    "docs/codebase-structure.md": "7845720b84a55d8e4510b3623043194700dfa92d46c3647bfd6e47ca3b843a09",
+    "docs/design/record-subscriptions.md": "e69a106644029c223705037bfb54545ef3d1daf6968dea1492630608818d5542",
+    "docs/limits.md": "0589fd74f5281104cbad9a0d7e7ecc042ac49de7a8670e0fa561cf23d52a0f8a",
+    "packages/nessa-client/src/generated/product.ts": "3ce81d67cf8d2385d42ec7152ed14eb2b3d908eccfd8ef3b3fd71e1ca1e34a48",
+    "protocol/product/v1.json": "6e06cf05f116e6cd965ca21ec09a2e2c77bcb089ece4813f5c2cf345b2dc733f",
+    "src/conversation/adapters/gateway/effects.ts": "66d774424da410867793de031327377e0e6e26bf65e47ee3637523f93402fd84",
+    "src/conversation/adapters/gateway/list-follow.test.ts": "a7450e562c2bfe7399194f38f3b91fe72822cf235a3302cb92b672ae5170d4cd",
+    "src/conversation/adapters/scenario/effects.ts": "aa03a7215436c85fe225ee009b49195326fd03d889c264076658e6e5885dd942",
+    "src/conversation/adapters/store/history-follow.test.ts": "4a3395eecb35080ece1204a90e3f22602f006b836ae1c05cdcc9917c0d176ad8",
+    "src/conversation/adapters/store/history.ts": "df0446b61995f3c843e77e13edc1b135b8e25d485b601c2947cd7f5ab26a345a",
+    "src/conversation/application/ports.ts": "80e2a021150b366ed2f3f2107f1a97f011c824b4a8717a5e6c5023791c030669",
+    "src/conversation/index.ts": "6d5b48222394faec63b8772849384efa0ec1011b3a5dba42b04c36a06aa2ccdb",
+    "src/conversation/ui/conversation-list.test.ts": "0ad94c0f942c20c3e3d220164665437ffb55d30b1804ff4f6964551914e9f0f9",
+    "src/conversation/ui/conversation-list.tsx": "6cd468a8b13451184b31f298f8d1087a159d463620531342ba87d51de9b8937b",
+    "verification/desktop/CHECKLIST.md": "1c2bbe654a240ff7d2a5cbc8dba7d9e8e43190bafb8d83302ed48ebe2d5b3f9e",
+    "verification/desktop/fixtures/panel-list-follow/index.html": "841068f15ac8ef4d6f513c2cfaaa61990e0d2ca50741f9898cb33754b6498ca2",
+    "verification/desktop/fixtures/panel-list-follow/main.tsx": "d757527a456ecdbe587aa1d39a3e88db856ff5a42d63175d0d7d0940160a35ae",
+    "verification/desktop/scripts/lib/selectors.mjs": "a970d5466532e70b5da7d0ea64fe6215b7897694bb76c5764ec705a074b4b5fd",
+    "verification/desktop/scripts/panel-list-follow.mjs": "7ac8ca4af0a07750e1534104201a310df21a91e07b1d120b95a0e23323d71717",
+    "verification/desktop/scripts/run-all.mjs": "90992aa48d0f25bbfc44cdec887990fa5e674d183b60193a3b3a9119ae2617b4"
+  }
+}

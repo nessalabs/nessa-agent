@@ -36,6 +36,7 @@
 //! initiator's membership staying active, which no runtime operation changes
 //! today; see `AdmitPassiveRead::binding` for the change that must check it.
 
+use super::metadata_target::load_conversation;
 use super::{ConversationCaller, ConversationError, ConversationFuture, ConversationRepository};
 use crate::conversation::application::ReceiverAuthority;
 use crate::conversation::domain::ReceiverBinding;
@@ -282,9 +283,7 @@ impl ShareConversation<'_> {
         id: &ConversationId,
     ) -> Result<(), ConversationError> {
         caller.actor()?;
-        let conversation = self
-            .conversations
-            .load(id)
+        let conversation = load_conversation(self.conversations, id)
             .await?
             .ok_or(ConversationError::NotFound)?;
         if !conversation.allows(&caller.organization_id, &caller.principal_id) {

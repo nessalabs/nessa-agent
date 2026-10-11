@@ -1,12 +1,14 @@
 //! Projections are bounded display state, not permission or scheduling authority.
 //! The cases that drive `ConversationService` stay in the gateway's
 //! `tests/conversation/projection.rs`.
-use crate::conversation::domain::ConversationId;
+use crate::agents::AgentId;
+use crate::conversation::domain::{ConversationApprovalMode, ConversationId};
 use crate::conversation::projection::{
     bound_view, bound_view_within, clipped, Projection, MAX_TEXT, MAX_VIEW_BYTES,
 };
 use crate::conversation::view::{
-    ConversationPermissionAsk, ConversationPermissionOptionEffect, ConversationTranscriptState,
+    ConversationPermissionAsk, ConversationPermissionOptionEffect, ConversationRuntime,
+    ConversationSelectionView, ConversationTranscriptState,
 };
 use crate::conversation::{
     projection::retained_view,
@@ -2247,4 +2249,60 @@ fn startup_authentication_uses_primary_retained_cause_without_a_provider_report(
             None
         );
     }
+}
+
+#[test]
+fn selection_and_runtime_replacements_own_revision_without_transcript_output() {
+    let mut projection = projection();
+    let initial = projection.read();
+    let selection = ConversationSelectionView {
+        agent: AgentId::Claude,
+        model: "test".into(),
+        approval_mode: ConversationApprovalMode::Ask,
+    };
+    projection.selection(selection.clone());
+    let selected = projection.read();
+    assert_ne!(selected.revision, initial.revision);
+    projection.selection(selection);
+    assert_eq!(projection.read().revision, selected.revision);
+    projection.approval_mode(ConversationApprovalMode::Auto);
+    let changed = projection.read();
+    assert_ne!(changed.revision, selected.revision);
+    assert_eq!(
+        changed.selection.as_ref().unwrap().approval_mode,
+        ConversationApprovalMode::Auto
+    );
+    projection.approval_mode(ConversationApprovalMode::Auto);
+    assert_eq!(projection.read().revision, changed.revision);
+    let runtime = ConversationRuntime {
+        model: "test".into(),
+        provider: "provider".into(),
+        workspace: "/workspace".into(),
+    };
+    projection.runtime(runtime.clone());
+    let running = projection.read();
+    assert_ne!(running.revision, changed.revision);
+    projection.runtime(runtime);
+    assert_eq!(projection.read().revision, running.revision);
+    projection.runtime(ConversationRuntime {
+        workspace: "/other".into(),
+        ..running.runtime.unwrap()
+    });
+    assert_ne!(projection.read().revision, running.revision);
+    projection.selection(ConversationSelectionView {
+        agent: AgentId::Codex,
+        model: "other".into(),
+        approval_mode: ConversationApprovalMode::Auto,
+    });
+    assert_ne!(projection.read().revision, running.revision);
+    assert!(projection.read().messages.is_empty());
+}
+
+#[test]
+fn publishing_mode_without_a_selection_does_not_invent_one() {
+    let mut projection = projection();
+    let before = projection.read();
+    projection.approval_mode(ConversationApprovalMode::Auto);
+    assert!(projection.read().selection.is_none());
+    assert_eq!(projection.read().revision, before.revision);
 }

@@ -844,6 +844,7 @@ export function App({
                             mode: chat.active.remote.approvalMode,
                             modes: chat.active.remote.approvalModes,
                             disabled:
+                              chat.active.readError !== undefined ||
                               chat.active.phase !== "idle" ||
                               !!chat.active.controlPending ||
                               !!chat.active.remote.approvalModeChange ||

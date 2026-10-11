@@ -972,7 +972,7 @@ impl ConversationService {
     ) -> Option<(AppFacts, McpTool)> {
         let projection = live.projection.lock().await;
         let tool =
-            projection.view.tools.iter().find(|tool| {
+            projection.view().tools.iter().find(|tool| {
                 tool.execution_id == app.execution_id && tool.tool_id == app.tool_id
             })?;
         let mcp = tool.mcp.as_ref()?;

@@ -20,16 +20,27 @@ export function useAtLeastWide(
     const target = element.current
     if (!target || typeof ResizeObserver === "undefined") return
     let last: boolean | null = null
+    let latest = false
+    let frame: number | null = null
     const observer = new ResizeObserver(([entry]) => {
       const next =
         (entry.borderBoxSize?.[0]?.inlineSize ?? entry.contentRect.width) >= min
-      if (next === last) return
-      last = next
-      // Decided before the frame paints, so no frame shows the other arrangement.
-      flushSync(() => setWide(next))
+      latest = next
+      if (frame !== null || next === last) return
+      // Flushing React during observer delivery can also mount neighboring
+      // observers from pending updates and invalidate this broadcast (#693).
+      frame = requestAnimationFrame(() => {
+        frame = null
+        if (latest === last) return
+        last = latest
+        flushSync(() => setWide(latest))
+      })
     })
     observer.observe(target)
-    return () => observer.disconnect()
+    return () => {
+      observer.disconnect()
+      if (frame !== null) cancelAnimationFrame(frame)
+    }
   }, [element, min])
   return wide
 }

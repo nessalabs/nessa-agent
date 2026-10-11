@@ -35,7 +35,7 @@ import { attempt, CannotRun } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
 import { css, keys, selectorFor, storage } from "./lib/selectors.mjs"
-import { settled } from "./lib/workspace.mjs"
+import { frames, settled } from "./lib/workspace.mjs"
 
 const checks = [
   "no-overlap",
@@ -394,6 +394,7 @@ const body = {
     while ((await railAt()) === "open" && width > 400) {
       width -= 20
       await page.setViewportSize({ width, height: size.height })
+      await frames(page)
       await settled(page)
     }
     await rest(page, { ...size, width })

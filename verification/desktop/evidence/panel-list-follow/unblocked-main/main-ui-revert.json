@@ -1,0 +1,36 @@
+{
+  "check": "panel-list-follow",
+  "ok": false,
+  "started": "2026-10-10T08:36:54.534Z",
+  "finished": "2026-10-10T08:38:00.865Z",
+  "target": {
+    "url": "http://127.0.0.1:59631/desktop.html",
+    "mode": "dev"
+  },
+  "results": [
+    {
+      "ok": true,
+      "failures": [],
+      "name": "console",
+      "harmless": [
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:59631/favicon.ico)"
+      ]
+    },
+    {
+      "ok": false,
+      "failures": [],
+      "name": "external-catalogue-and-cleanup",
+      "engine": "chromium",
+      "cannotRun": false,
+      "error": "locator.waitFor: Timeout 30000ms exceeded."
+    },
+    {
+      "ok": false,
+      "failures": [],
+      "name": "external-catalogue-and-cleanup",
+      "engine": "webkit",
+      "cannotRun": false,
+      "error": "locator.waitFor: Timeout 30000ms exceeded."
+    }
+  ]
+}

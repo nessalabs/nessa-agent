@@ -1,0 +1,15 @@
+{
+  "head": "05bc3c6c3b1ab1a9148bfc45f7cb133cc6f855fe",
+  "clean": true,
+  "frontendGatewayClientFixtureHelperChangesFrom9c1": [],
+  "readinessScriptChangesFrom4a": [],
+  "nativeException": ["src-tauri/src/gateway/infrastructure/commands.rs"],
+  "currentMainReportedByCoordinator": "2d2a7a714e053d25b7371d86ff53b8b77952a363",
+  "baselineMeasuredAt": "88f34e4dabdeca46486dfbd5294e0a2a00a0a5fa",
+  "retainedAppProof": "newcut-9c1c672f/retained-app",
+  "scriptedProof": "newcut-9c1c672f/scripted",
+  "performanceProof": "newcut-9c1c672f/performance",
+  "performanceUnchangedNotRerun": true,
+  "nativeProductionPrefixIdentical": true,
+  "nativeProductionPrefixSha256": "b856c8f13cae9f7d3d4e402ceada4740c6135505de7ea7694201d337da58887c"
+}

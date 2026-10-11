@@ -3,9 +3,23 @@ import { expect, it, vi } from "vitest"
 import { makeStore } from "../../../store"
 import { createDependencies } from "../../../composition/dependencies"
 import type { ConversationView } from "../../application/view"
+import {
+  ConversationReadFailedError,
+  type ConversationFollower,
+} from "../../application/ports"
+import { textContent, type MessageContent } from "../../model"
 import { conversationNotice } from "../../ui/notification"
 import { gatewayEffects } from "../gateway/effects"
-import { bindConversation, controlConversation, followConversation } from "./slice"
+import { scenarioEffects } from "../scenario/effects"
+import {
+  attachFiles,
+  bindConversation,
+  controlConversation,
+  followConversation,
+  sendDraft,
+  setDraft,
+  unfollowConversation,
+} from "./slice"
 
 /**
  * What a failed read becomes on the tab, and what the panel then says.
@@ -88,6 +102,111 @@ async function refreshed(cause: unknown) {
   await store.dispatch(followConversation("c0"))
   return store.getState().conversation.conversations[0]!
 }
+
+it.each([false, true])(
+  "keeps a bound unavailable draft before any admission and resumes after a valid follow (steering=%s)",
+  async (steering) => {
+    const effects = scenarioEffects("echo")
+    await effects.create("server")
+    const create = vi.fn(effects.create)
+    const send = vi.fn(effects.send)
+    const steer = vi.fn(effects.steer)
+    const followers: ConversationFollower[] = []
+    let unavailable = false
+    const store = makeStore(
+      createDependencies({
+        canChoosePaths: true,
+        conversation: {
+          ...effects,
+          create,
+          send,
+          steer,
+          follow(id, follower) {
+            followers.push(follower)
+            return effects.follow(id, {
+              view(view) {
+                if (unavailable)
+                  follower.failed(
+                    "unavailable",
+                    new ConversationReadFailedError("unavailable"),
+                  )
+                else follower.view(view)
+              },
+              failed: follower.failed,
+            })
+          },
+        },
+      }),
+    )
+    store.dispatch(bindConversation({ id: "c0", serverId: "server" }))
+    await store.dispatch(followConversation("c0"))
+    const draft: MessageContent = [
+      ...textContent("Keep this draft"),
+      {
+        type: "file",
+        id: "notes",
+        name: "notes.txt",
+        mimeType: "text/plain",
+        size: 1,
+        previewUrl: "blob:notes",
+        path: "/tmp/notes.txt",
+        upload: { status: "not-started" },
+      },
+    ]
+    store.dispatch(
+      attachFiles({
+        conversationId: "c0",
+        files: draft.filter((part) => part.type === "file"),
+      }),
+    )
+    store.dispatch(setDraft({ id: "c0", draft }))
+    unavailable = true
+    followers
+      .at(-1)!
+      .failed("unavailable", new ConversationReadFailedError("unavailable"))
+    const before = store.getState().conversation.conversations[0]!
+    expect(before.readError).toBe("unavailable")
+    try {
+      const declined = await store.dispatch(
+        sendDraft({ id: "c0", content: draft, connected: true, steering }),
+      )
+      expect({
+        create: create.mock.calls.length,
+        send: send.mock.calls.length,
+        steer: steer.mock.calls.length,
+      }).toEqual({ create: 0, send: 0, steer: 0 })
+      expect(declined.meta.requestStatus).toBe("rejected")
+      expect(declined.payload).toEqual({ kind: "view-unavailable" })
+      const retained = store.getState().conversation.conversations[0]!
+      expect(retained.draft).toBe(before.draft)
+      expect(retained.remote).toBe(before.remote)
+      expect(retained.serverConversationId).toBe(before.serverConversationId)
+      expect(retained.selection).toBe(before.selection)
+      expect(retained.turns).toBe(before.turns)
+      expect(retained.phase).toBe(before.phase)
+      expect(followers).toHaveLength(2)
+
+      unavailable = false
+      await store.dispatch(followConversation("c0"))
+      expect(store.getState().conversation.conversations[0]!.readError).toBeUndefined()
+      const accepted = await store.dispatch(
+        sendDraft({ id: "c0", content: draft, connected: true, steering }),
+      )
+      expect(accepted.meta.requestStatus).toBe("fulfilled")
+      expect(create).toHaveBeenCalledTimes(1)
+      expect(steering ? steer : send).toHaveBeenCalledTimes(1)
+      expect(steering ? send : steer).not.toHaveBeenCalled()
+      expect((steering ? steer : send).mock.calls[0]![0]).toMatchObject({
+        conversationId: "server",
+        text: "Keep this draft",
+        files: [{ path: "/tmp/notes.txt" }],
+      })
+      expect(store.getState().conversation.conversations[0]!.draft).toEqual([])
+    } finally {
+      await store.dispatch(unfollowConversation("c0"))
+    }
+  },
+)
 
 it("still explains a configuration change when the gateway sends a sentence, not its code", async () => {
   // The failure this panel used to recognise only because the gateway happened

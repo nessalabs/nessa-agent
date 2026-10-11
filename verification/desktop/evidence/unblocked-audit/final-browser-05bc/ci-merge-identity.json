@@ -1,0 +1,18 @@
+{
+  "head": "05bc3c6c3b1ab1a9148bfc45f7cb133cc6f855fe",
+  "mainRef": "2d2a7a714e053d25b7371d86ff53b8b77952a363",
+  "mergeCommit": "6f41dc4b205413eb523e736a86812b540f1325ea",
+  "mergeParents": [
+    "2d2a7a714e053d25b7371d86ff53b8b77952a363",
+    "05bc3c6c3b1ab1a9148bfc45f7cb133cc6f855fe"
+  ],
+  "workflowRun": 38073073317,
+  "backendWorkflowJob": 114274314191,
+  "backendLogTruncated": false,
+  "backendCheckoutLines": [
+    "HEAD is now at 6f41dc4 Merge 05bc3c6c3b1ab1a9148bfc45f7cb133cc6f855fe into 2d2a7a714e053d25b7371d86ff53b8b77952a363",
+    "git log -1 --format=%H: 6f41dc4b205413eb523e736a86812b540f1325ea"
+  ],
+  "apiBaseRefOidCaveat": "PR API cached base88 despite actual merge parent2d2a; actual git/ref heads main and ls-remote both2d2a",
+  "supportPlatformOutcome": "running, not pass"
+}

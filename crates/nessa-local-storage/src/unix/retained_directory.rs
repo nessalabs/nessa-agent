@@ -8,6 +8,7 @@
 use super::{
     open_child_directory, open_child_locator_directory, open_root, relative_components,
     verify_directory_file, verify_identity_candidate, verify_locator_directory_file,
+    verify_shared_directory_file,
 };
 use crate::{
     retained_directory::{PrivateDirectoryEntry, PrivateFileIdentity, PrivateFileType},
@@ -29,7 +30,23 @@ struct DirectoryBinding {
     file: File,
     identity: PrivateFileIdentity,
     name_in_parent: Option<CString>,
-    private: bool,
+    permissions: DirectoryPermissions,
+}
+
+#[derive(Clone, Copy)]
+enum DirectoryPermissions {
+    Private,
+    Shared,
+    Locator,
+}
+impl DirectoryPermissions {
+    fn verify(self, directory: &File) -> io::Result<()> {
+        match self {
+            Self::Private => verify_directory_file(directory),
+            Self::Shared => verify_shared_directory_file(directory),
+            Self::Locator => verify_locator_directory_file(directory),
+        }
+    }
 }
 
 pub struct RetainedDirectory {
@@ -60,7 +77,7 @@ impl RetainedDirectory {
             identity: directory_identity(&root_file)?,
             file: root_file,
             name_in_parent: None,
-            private: true,
+            permissions: DirectoryPermissions::Private,
         }];
         for component in components {
             let child = open_child_directory(&chain.last().expect("root exists").file, &component)?;
@@ -68,7 +85,7 @@ impl RetainedDirectory {
                 identity: directory_identity(&child)?,
                 file: child,
                 name_in_parent: Some(component),
-                private: true,
+                permissions: DirectoryPermissions::Private,
             });
         }
         let retained = Self {
@@ -80,6 +97,18 @@ impl RetainedDirectory {
     }
 
     pub fn open_path(private_root: &Path, directory: &Path) -> io::Result<Self> {
+        Self::open_path_with(private_root, directory, DirectoryPermissions::Private)
+    }
+
+    pub fn open_shared_path(directory: &Path) -> io::Result<Self> {
+        Self::open_path_with(directory, directory, DirectoryPermissions::Shared)
+    }
+
+    fn open_path_with(
+        private_root: &Path,
+        directory: &Path,
+        leaf: DirectoryPermissions,
+    ) -> io::Result<Self> {
         if !private_root.is_absolute() || !directory.is_absolute() {
             return Err(unsafe_file());
         }
@@ -101,12 +130,16 @@ impl RetainedDirectory {
             identity: directory_identity(&root_file)?,
             file: root_file,
             name_in_parent: None,
-            private: false,
+            permissions: DirectoryPermissions::Locator,
         }];
         let private_depth = private_components.len();
         for (index, component) in components.into_iter().enumerate() {
-            let private = index + 1 >= private_depth;
-            let child = if private {
+            let permissions = if index + 1 >= private_depth {
+                leaf
+            } else {
+                DirectoryPermissions::Locator
+            };
+            let child = if matches!(permissions, DirectoryPermissions::Private) {
                 open_child_directory(&chain.last().expect("root exists").file, &component)?
             } else {
                 open_child_locator_directory(&chain.last().expect("root exists").file, &component)?
@@ -115,7 +148,7 @@ impl RetainedDirectory {
                 identity: directory_identity(&child)?,
                 file: child,
                 name_in_parent: Some(component),
-                private,
+                permissions,
             });
         }
         let retained = Self { root_path, chain };
@@ -201,7 +234,7 @@ impl RetainedDirectory {
     }
 
     pub fn verify_binding(&self) -> io::Result<()> {
-        let current_root = if self.chain[0].private {
+        let current_root = if matches!(self.chain[0].permissions, DirectoryPermissions::Private) {
             open_root(&self.root_path)?
         } else {
             let root = std::fs::OpenOptions::new()
@@ -217,16 +250,8 @@ impl RetainedDirectory {
         for index in 1..self.chain.len() {
             let parent = &self.chain[index - 1];
             let child = &self.chain[index];
-            if parent.private {
-                verify_directory_file(&parent.file)?;
-            } else {
-                verify_locator_directory_file(&parent.file)?;
-            }
-            if child.private {
-                verify_directory_file(&child.file)?;
-            } else {
-                verify_locator_directory_file(&child.file)?;
-            }
+            parent.permissions.verify(&parent.file)?;
+            child.permissions.verify(&child.file)?;
             let name = child.name_in_parent.as_ref().expect("child has a name");
             let mut status = std::mem::MaybeUninit::<libc::stat>::uninit();
             let result = unsafe {

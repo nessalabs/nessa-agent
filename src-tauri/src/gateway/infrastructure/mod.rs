@@ -33,7 +33,7 @@
 //! is ready (`GatewayReader`). Each native
 //! manager adapter owns its background process lifetime.
 mod commands;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", all(test, target_os = "macos")))]
 mod linux;
 mod login_shell;
 #[cfg(target_os = "macos")]

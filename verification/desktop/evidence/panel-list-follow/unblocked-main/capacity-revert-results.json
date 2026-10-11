@@ -1,0 +1,22 @@
+[
+  {
+    "check": "mutant-generate",
+    "exit": 0
+  },
+  {
+    "check": "mutant-socket",
+    "exit": 101
+  },
+  {
+    "check": "restored-generation-check",
+    "exit": 0
+  },
+  {
+    "check": "restored-socket",
+    "exit": 0
+  },
+  {
+    "check": "fixed-gateway-build",
+    "exit": 0
+  }
+]

@@ -1,0 +1,7 @@
+{
+  "base": "5c1c2257c630a3f5d5dc83ba422c882ecc598fbd",
+  "path": "src-tauri/src/gateway/infrastructure/commands.rs",
+  "currentSha256": "865a30b8890569d80d3127eadb918408e2bf99684bb87bec2f7cdfc8ade7b1da",
+  "productionPrefixIdentical": true,
+  "checksPendingQuietRelease": true
+}

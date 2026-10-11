@@ -144,6 +144,16 @@ export function useFocusFollowsPane(
     const scope = root.current
     if (!scope) return
     let stop = () => {}
+    let active = true
+    const frames = new Set<number>()
+    // Settlement belongs to this effect, including the second overview frame.
+    const afterPaint = (action: () => void) => {
+      const frame = requestAnimationFrame(() => {
+        frames.delete(frame)
+        if (active) action()
+      })
+      frames.add(frame)
+    }
     // Where focus last was in the panes or the window, to tell focus that fell away from focus taken elsewhere.
     let last: Element | null = null
 
@@ -182,7 +192,7 @@ export function useFocusFollowsPane(
       if (next.shown === "agents") return
       // A widget in the window, opened or replaced by another.
       if (next.shown !== "panes") {
-        if (next.shown !== was.shown) requestAnimationFrame(intoWindow)
+        if (next.shown !== was.shown) afterPaint(intoWindow)
         return
       }
       const back = was.shown !== "panes"
@@ -193,8 +203,8 @@ export function useFocusFollowsPane(
       // After the change reaches the page. Coming back from the overview,
       // one frame later still: the leave's own frame only lifts the cover
       // (`overview-layer.tsx`).
-      if (back) requestAnimationFrame(() => requestAnimationFrame(() => settle(moved)))
-      else requestAnimationFrame(() => settle(moved))
+      if (back) afterPaint(() => afterPaint(() => settle(moved)))
+      else afterPaint(() => settle(moved))
     })
 
     // Focus falls to the page when what held it is taken away, or hidden by
@@ -227,6 +237,9 @@ export function useFocusFollowsPane(
     }
     scope.addEventListener("focusin", onFocusIn)
     return () => {
+      active = false
+      for (const frame of frames) cancelAnimationFrame(frame)
+      frames.clear()
       stop()
       unsubscribe()
       watcher.disconnect()

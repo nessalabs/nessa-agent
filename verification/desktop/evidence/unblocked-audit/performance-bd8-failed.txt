@@ -1,0 +1,42 @@
+Exact head: bd8ef0763b92a6f5ca6a7178d736b21a7a5ffe17 (clean)
+Mode: prod; headed bundled Chromium; default layouts; three runs; throttle 4; budget 50 ms
+Whole run: exit 1; 32/35 results held; 410 seconds
+Calibration: ratio 3.2; known 120 ms frame measured 120.4 ms; Long Animation Frame attribution held
+
+layout | interaction | max ms | median ms | over 50 | run maxima ms | verdict
+columns | split-right | 42.80 | 24.50 | 0 | 42.80, 24.50, 23.30 | PASS
+columns | split-down | 33.50 | 32.50 | 0 | 32.50, 31.10, 33.50 | PASS
+columns | move | 25.10 | 21.60 | 0 | 19.30, 25.10, 21.60 | PASS
+columns | close | 33.20 | 26.40 | 0 | 23.90, 33.20, 26.40 | PASS
+columns | sidebar | 31.60 | 21.80 | 0 | 21.80, 18.80, 31.60 | PASS
+columns | session-list | 28.10 | 27.80 | 0 | 27.80, 19.10, 28.10 | PASS
+columns | send-home | 41.80 | 39.90 | 0 | 39.90, 34.40, 41.80 | PASS
+columns | typing | 21.00 | 20.70 | 0 | 20.20, 21.00, 20.70 | PASS
+columns | stream-1-of-4 | 26.20 | 24.90 | 0 | 26.20, 24.90, 21.60 | PASS
+columns | drag-drop | 73.60 | 41.90 | 1 | 73.60, 41.20, 41.90 | FAIL
+columns | drag-cancel | 43.50 | 42.10 | 0 | 42.10, 41.90, 43.50 | PASS
+columns | thinking-walk | 26.00 | 23.50 | 0 | 23.00, 26.00, 23.50 | PASS
+columns | thinking-drag | 19.20 | 19.10 | 0 | 19.10, 18.80, 19.20 | PASS
+columns | overview-open | 31.60 | 24.80 | 0 | 31.60, 24.70, 24.80 | PASS
+columns | overview-select | 41.70 | 39.10 | 0 | 41.70, 39.10, 38.70 | PASS
+columns | overview-answer | 78.60 | 74.90 | 3 | 78.60, 74.90, 74.80 | FAIL
+columns | overview-leave | 20.80 | 19.20 | 0 | 20.80, 19.00, 19.20 | PASS
+sidebar | split-right | 28.70 | 27.70 | 0 | 26.20, 27.70, 28.70 | PASS
+sidebar | split-down | 26.20 | 26.10 | 0 | 26.10, 26.20, 26.00 | PASS
+sidebar | move | 26.20 | 23.10 | 0 | 18.90, 23.10, 26.20 | PASS
+sidebar | close | 27.90 | 26.30 | 0 | 26.00, 26.30, 27.90 | PASS
+sidebar | sidebar | 40.90 | 34.50 | 0 | 33.40, 40.90, 34.50 | PASS
+sidebar | send-home | 34.10 | 33.30 | 0 | 34.10, 33.00, 33.30 | PASS
+sidebar | typing | 22.60 | 21.10 | 0 | 20.40, 22.60, 21.10 | PASS
+sidebar | stream-1-of-4 | 25.30 | 24.80 | 0 | 25.30, 20.80, 24.80 | PASS
+sidebar | drag-drop | 42.20 | 42.10 | 0 | 42.10, 42.20, 41.10 | PASS
+sidebar | drag-cancel | 41.30 | 40.40 | 0 | 40.20, 41.30, 40.40 | PASS
+sidebar | thinking-walk | 21.80 | 20.70 | 0 | 21.80, 20.70, 20.50 | PASS
+sidebar | thinking-drag | 19.50 | 18.90 | 0 | 18.70, 18.90, 19.50 | PASS
+sidebar | overview-open | 26.50 | 25.40 | 0 | 25.00, 25.40, 26.50 | PASS
+sidebar | overview-select | 42.10 | 41.20 | 0 | 42.10, 40.80, 41.20 | PASS
+sidebar | overview-answer | 76.70 | 76.60 | 3 | 76.60, 74.40, 76.70 | FAIL
+sidebar | overview-leave | 23.00 | 20.50 | 0 | 20.50, 23.00, 20.00 | PASS
+
+Attribution: columns drag-drop has one 74 ms LoAF, blocking 0 ms, style/layout 2 ms, no script entry and no Long Task. All six overview-answer slow frames report root keydown function B_ at index-BQ_9XmPH.js:185686, script duration 55–63 ms and forced layout 37–40 ms. No source-level cause or baseline attribution is claimed.
+No budgets, assertions, fixtures, selectors or source were edited for this run.
