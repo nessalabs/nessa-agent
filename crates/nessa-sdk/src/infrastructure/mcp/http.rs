@@ -32,10 +32,18 @@
 //! Dropping the session aborts its GET and POST streams and asks for the same single
 //! DELETE. The DELETE itself is best-effort and bounded by the exchange. A panic
 //! in that DELETE still releases the claimed id and signals [`HttpSession::finished`].
+//! A panic in a reply reader, the legacy stream, the server stream, or recovery
+//! settles that task and asks the connection end owner for [`McpError::ServerGone`].
+//! The fixed marker is logged only after that end, on a thread this runtime
+//! does not run, so a blocking subscriber cannot hold the upstream session
+//! claim. Cleanup yields while it reads a bearer and while DELETE is in
+//! flight (ADR 392 J28).
 #![deny(missing_docs)]
 
 use super::authorization::{Bearer, RemoteAuthorization};
-use super::connection::{Outgoing, OutgoingQueue};
+use super::connection::{
+    catch_task_panic, log_task_panic_off_runtime, HttpTask, Outgoing, OutgoingQueue, PanicEnd,
+};
 use super::framing::MAX_FRAME_BYTES;
 use super::http_exchange::{HttpExchange, HttpMethod, HttpRequest, HttpResponse};
 use super::remote::RemoteMcpUrl;
@@ -45,11 +53,12 @@ use super::McpError;
 use crate::infrastructure::clock::{within, Clock, ClockInstant};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use tokio::runtime::Handle;
 use tokio::sync::{mpsc, oneshot, watch, OwnedSemaphorePermit, Semaphore};
-use tokio::task::JoinHandle;
+use tokio::task::{AbortHandle, JoinHandle};
 use uuid::Uuid;
 
 /// What one dispatched frame did to the connection.
@@ -178,6 +187,10 @@ pub struct HttpSession {
     /// panics. `Some(false)` after it finishes or is cancelled. A dropped
     /// recovery completion waits for this instead of deciding an end cause.
     writer_settled: watch::Sender<Option<bool>>,
+    /// Set by the connection before any session task runs. A task panic asks
+    /// this owner to record [`McpError::ServerGone`]. Absent only when a
+    /// session is exercised without a connection.
+    panic_end: Mutex<Option<Arc<PanicEnd>>>,
 }
 
 #[derive(Clone)]
@@ -191,14 +204,14 @@ pub(crate) const MAX_POST_STREAMS: usize = 256;
 
 #[derive(Default)]
 struct ReaderTasks {
-    get: Vec<JoinHandle<()>>,
+    get: Vec<TrackedTask>,
     post: Vec<PostReader>,
 }
 
 impl ReaderTasks {
     fn stop_get(&mut self) {
         for task in &self.get {
-            task.abort();
+            task.abort_work();
         }
         self.get.retain(|task| !task.is_finished());
     }
@@ -206,9 +219,32 @@ impl ReaderTasks {
 
 struct PostReader {
     request_id: Option<u64>,
-    task: JoinHandle<()>,
+    task: TrackedTask,
     /// Held until this handle is reaped or joined, including after abort.
     _permit: OwnedSemaphorePermit,
+}
+
+/// The watch joins the work. Shutdown aborts the work, then joins the watch.
+/// A caught panic records [`McpError::ServerGone`] before it returns, so the
+/// watch observes a clean exit. The marker is logged from a task this join
+/// does not wait for.
+struct TrackedTask {
+    watch: JoinHandle<()>,
+    work: AbortHandle,
+}
+
+impl TrackedTask {
+    fn abort_work(&self) {
+        self.work.abort();
+    }
+
+    fn is_finished(&self) -> bool {
+        self.watch.is_finished()
+    }
+
+    async fn join(self) {
+        let _ = self.watch.await;
+    }
 }
 
 /// The next local id handed to a session.
@@ -256,6 +292,7 @@ impl HttpSession {
             post_capacity: Arc::new(Semaphore::new(MAX_POST_STREAMS)),
             finished: watch::channel(false).0,
             writer_settled: watch::channel(None).0,
+            panic_end: Mutex::new(None),
         });
         (session, incoming)
     }
@@ -266,18 +303,40 @@ impl HttpSession {
         self.server
     }
 
+    /// Install the connection's panic record. `Connection::open_http` calls
+    /// this before the writer starts, so every later session task can reach
+    /// the same end owner.
+    pub(crate) fn install_panic_end(&self, end: Arc<PanicEnd>) {
+        *self.panic_end.lock().expect("panic end") = Some(end);
+    }
+
+    /// Settle is the caller's step, already done. Fence and record
+    /// [`McpError::ServerGone`]. The marker is logged after that, on a thread
+    /// this runtime does not run. Cleanup yields while it reads a bearer and
+    /// while DELETE is in flight, so a log scheduled here can run before the
+    /// claim is released. A subscriber that blocks must not sit on this
+    /// worker: shutdown would then never release the upstream session claim.
+    /// A session exercised without a connection has no end owner; the marker
+    /// is still logged from that same thread.
+    fn record_task_panic(&self, task: HttpTask) {
+        let end = self.panic_end.lock().expect("panic end").clone();
+        if let Some(end) = end {
+            end.end(self);
+        }
+        log_task_panic_off_runtime(self.server(), task);
+    }
+
     /// Record the HTTP writer task's outcome once. Later calls keep the first.
     /// `panicked` is the writer's own result: a dropped recovery completion
     /// resolves [`McpError::ServerGone`] from it, and a clean finish or
     /// cancellation resolves [`McpError::Unconfirmed`].
     pub(crate) fn settle_writer(&self, panicked: bool) {
-        self.writer_settled.send_if_modified(|current| {
-            if current.is_some() {
-                return false;
-            }
-            *current = Some(panicked);
-            true
-        });
+        settle_task(&self.writer_settled, panicked);
+    }
+
+    /// Drop settles the writer as not panicked, unless a panic already settled.
+    pub(super) fn writer_settle_guard(&self) -> SettleOnDrop {
+        SettleOnDrop(self.writer_settled.clone())
     }
 
     /// The end cause for a recovery completion the writer dropped without
@@ -286,16 +345,7 @@ impl HttpSession {
     /// A clean finish, a cancellation, or a closed watch is
     /// [`McpError::Unconfirmed`].
     async fn dropped_writer_sender(&self) -> McpError {
-        let mut settled = self.writer_settled.subscribe();
-        let panicked = loop {
-            if let Some(panicked) = *settled.borrow_and_update() {
-                break panicked;
-            }
-            if settled.changed().await.is_err() {
-                break false;
-            }
-        };
-        if panicked {
+        if settled_as_panic(self.writer_settled.subscribe()).await {
             McpError::ServerGone
         } else {
             McpError::Unconfirmed
@@ -326,10 +376,10 @@ impl HttpSession {
             )
         };
         for task in &get_task {
-            task.abort();
+            task.abort_work();
         }
         for reader in &readers {
-            reader.task.abort();
+            reader.task.abort_work();
         }
         let phase = self.phase.lock().expect("http phase");
         let legacy = phase.legacy_post.is_some();
@@ -350,10 +400,10 @@ impl HttpSession {
         let server = self.server;
         self.runtime.spawn(async move {
             for reader in readers {
-                let _ = reader.task.await;
+                reader.task.join().await;
             }
             for task in get_task {
-                let _ = task.await;
+                task.join().await;
             }
             let Some(session_id) = session_id else {
                 finished.send_replace(true);
@@ -481,7 +531,7 @@ impl HttpSession {
     pub(crate) fn cancel_post(&self, id: u64) {
         for reader in self.readers.lock().expect("http readers").post.iter() {
             if reader.request_id == Some(id) {
-                reader.task.abort();
+                reader.task.abort_work();
             }
         }
     }
@@ -555,23 +605,28 @@ impl HttpSession {
             let inbound = self.inbound.clone();
             let weak = self.weak.clone();
             let initialize = method == Some("initialize");
-            let task = self.runtime.spawn(async move {
-                match consume_body(
-                    response,
-                    event_stream,
-                    BodyPurpose::public(request_id, initialize),
-                    &weak,
-                    &inbound,
-                    &origin,
-                )
-                .await
-                {
-                    Ok(_) => {}
-                    Err(error) => {
-                        let _ = inbound.send(Err(error)).await;
+            let (task, _) = spawn_tracked(
+                &self.runtime,
+                self.weak.clone(),
+                HttpTask::ReplyReader,
+                async move {
+                    match consume_body(
+                        response,
+                        event_stream,
+                        BodyPurpose::public(request_id, initialize),
+                        &weak,
+                        &inbound,
+                        &origin,
+                    )
+                    .await
+                    {
+                        Ok(_) => {}
+                        Err(error) => {
+                            let _ = inbound.send(Err(error)).await;
+                        }
                     }
-                }
-            });
+                },
+            );
             readers.post.push(PostReader {
                 request_id,
                 task,
@@ -724,23 +779,34 @@ impl HttpSession {
         }
         let (endpoint_tx, endpoint_rx) = tokio::sync::oneshot::channel();
         let inbound = self.inbound.clone();
+        let settled_rx;
         {
             let mut readers = self.readers.lock().expect("http readers");
             if self.closing.load(Ordering::SeqCst) {
                 return SendOutcome::End(McpError::Closed);
             }
-            let task = self.runtime.spawn(read_legacy_stream(
-                response,
-                inbound,
-                Some(endpoint_tx),
-                None,
-            ));
+            let task;
+            (task, settled_rx) = spawn_tracked(
+                &self.runtime,
+                self.weak.clone(),
+                HttpTask::LegacyStream,
+                read_legacy_stream(response, inbound, Some(endpoint_tx), None),
+            );
             readers.stop_get();
             readers.get.push(task);
         }
         let endpoint = match endpoint_rx.await {
             Ok(endpoint) => endpoint,
-            Err(_) => return SendOutcome::End(McpError::Handshake("no endpoint event".into())),
+            // The caught future drops the endpoint sender before the reader
+            // records. Wait for the settlement so a writer that observes that
+            // drop still ends ServerGone rather than Handshake.
+            Err(_) => {
+                return if settled_as_panic(settled_rx).await {
+                    SendOutcome::End(McpError::ServerGone)
+                } else {
+                    SendOutcome::End(McpError::Handshake("no endpoint event".into()))
+                };
+            }
         };
         let Some(post) = self.url.same_origin(&endpoint) else {
             return SendOutcome::End(McpError::Handshake(
@@ -939,32 +1005,37 @@ impl HttpSession {
         let inbound = self.inbound.clone();
         let authorization = self.authorization.clone();
         let server = self.server;
-        let task = self.runtime.spawn(async move {
-            let mut headers = vec![("Accept".into(), "text/event-stream".into())];
-            headers.push(("Mcp-Session-Id".into(), session_id));
-            if let Some(version) = version {
-                headers.push(("MCP-Protocol-Version".into(), version));
-            }
-            if let Ok(Some(bearer)) = authorization.bearer(server).await {
-                headers.push(("Authorization".into(), format!("Bearer {}", bearer.token())));
-            }
-            let response = match exchange
-                .exchange(HttpRequest {
-                    method: HttpMethod::Get,
-                    url,
-                    headers,
-                    body: Vec::new(),
-                })
-                .await
-            {
-                Ok(response) => response,
-                Err(_) => return,
-            };
-            if response.status == 405 || response.status != 200 {
-                return;
-            }
-            read_legacy_stream(response, inbound, None, Some((weak, origin))).await;
-        });
+        let (task, _) = spawn_tracked(
+            &self.runtime,
+            self.weak.clone(),
+            HttpTask::ServerStream,
+            async move {
+                let mut headers = vec![("Accept".into(), "text/event-stream".into())];
+                headers.push(("Mcp-Session-Id".into(), session_id));
+                if let Some(version) = version {
+                    headers.push(("MCP-Protocol-Version".into(), version));
+                }
+                if let Ok(Some(bearer)) = authorization.bearer(server).await {
+                    headers.push(("Authorization".into(), format!("Bearer {}", bearer.token())));
+                }
+                let response = match exchange
+                    .exchange(HttpRequest {
+                        method: HttpMethod::Get,
+                        url,
+                        headers,
+                        body: Vec::new(),
+                    })
+                    .await
+                {
+                    Ok(response) => response,
+                    Err(_) => return,
+                };
+                if response.status == 405 || response.status != 200 {
+                    return;
+                }
+                read_legacy_stream(response, inbound, None, Some((weak, origin))).await;
+            },
+        );
         readers.stop_get();
         readers.get.push(task);
     }
@@ -1013,116 +1084,121 @@ impl HttpSession {
         let inbound = self.inbound.clone();
         let deadline = clock.now() + super::servers::INITIALIZE_TIMEOUT;
         let (registered, registration) = oneshot::channel();
-        let task = self.runtime.spawn(async move {
-            if registration.await.is_err() {
-                return;
-            }
-            enum Startup {
-                Done(Result<(), McpError>),
-                WriterDropped,
-            }
-            let startup = async {
-                let ready = async {
-                    let body = serde_json::to_vec(&json!({
-                        "jsonrpc": "2.0", "id": 0, "method": "initialize",
-                        "params": wire::initialize_params(),
-                    }))
-                    .unwrap_or_default();
-                    let attempt = match authorized_modern_post(
-                        &weak,
-                        exchange,
-                        authorization,
-                        server,
-                        &body,
-                        PostPurpose::RecoveryInitialize,
-                    )
-                    .await?
-                    {
-                        Modern::Response(attempt) => attempt,
-                        Modern::Accepted => return Err(McpError::SessionExpired),
-                        Modern::Legacy => {
-                            return Err(McpError::Malformed(
-                                "recovery initialize selected legacy transport".into(),
-                            ))
+        let (task, _) = spawn_tracked(
+            &self.runtime,
+            self.weak.clone(),
+            HttpTask::Recovery,
+            async move {
+                if registration.await.is_err() {
+                    return;
+                }
+                enum Startup {
+                    Done(Result<(), McpError>),
+                    WriterDropped,
+                }
+                let startup = async {
+                    let ready = async {
+                        let body = serde_json::to_vec(&json!({
+                            "jsonrpc": "2.0", "id": 0, "method": "initialize",
+                            "params": wire::initialize_params(),
+                        }))
+                        .unwrap_or_default();
+                        let attempt = match authorized_modern_post(
+                            &weak,
+                            exchange,
+                            authorization,
+                            server,
+                            &body,
+                            PostPurpose::RecoveryInitialize,
+                        )
+                        .await?
+                        {
+                            Modern::Response(attempt) => attempt,
+                            Modern::Accepted => return Err(McpError::SessionExpired),
+                            Modern::Legacy => {
+                                return Err(McpError::Malformed(
+                                    "recovery initialize selected legacy transport".into(),
+                                ))
+                            }
+                        };
+                        if let Some(error) = attempt.failure {
+                            return Err(error);
                         }
-                    };
-                    if let Some(error) = attempt.failure {
-                        return Err(error);
-                    }
-                    let response = attempt.response;
-                    let origin = attempt.origin;
-                    let content_type = response.header("content-type");
-                    let event_stream = sse::is_event_stream(content_type);
-                    if !event_stream && content_type.is_some() && !sse::is_json(content_type) {
-                        return Err(McpError::SessionExpired);
-                    }
-                    if !consume_body(
-                        response,
-                        event_stream,
-                        BodyPurpose::RecoveryInitialize,
-                        &weak,
-                        &inbound,
-                        &origin,
-                    )
-                    .await
-                    .map_err(|error| match error {
-                        McpError::Unconfirmed => McpError::SessionExpired,
-                        other => other,
-                    })? {
-                        return Err(McpError::SessionExpired);
-                    }
-                    {
-                        let session = weak.upgrade().ok_or(McpError::Closed)?;
-                        let _readers = session.readers.lock().expect("http readers");
-                        if session.closing.load(Ordering::SeqCst) {
-                            return Err(McpError::Closed);
+                        let response = attempt.response;
+                        let origin = attempt.origin;
+                        let content_type = response.header("content-type");
+                        let event_stream = sse::is_event_stream(content_type);
+                        if !event_stream && content_type.is_some() && !sse::is_json(content_type) {
+                            return Err(McpError::SessionExpired);
                         }
-                        session.phase.lock().expect("http phase").recovery =
-                            Recovery::ReadyForWriter;
-                    }
-                    let (completed, completion) = oneshot::channel();
-                    writer
-                        .send(Outgoing::RecoveryReady {
-                            deadline,
-                            completed,
-                        })
+                        if !consume_body(
+                            response,
+                            event_stream,
+                            BodyPurpose::RecoveryInitialize,
+                            &weak,
+                            &inbound,
+                            &origin,
+                        )
                         .await
-                        .map_err(|_| McpError::Unconfirmed)?;
-                    Ok(completion)
+                        .map_err(|error| match error {
+                            McpError::Unconfirmed => McpError::SessionExpired,
+                            other => other,
+                        })? {
+                            return Err(McpError::SessionExpired);
+                        }
+                        {
+                            let session = weak.upgrade().ok_or(McpError::Closed)?;
+                            let _readers = session.readers.lock().expect("http readers");
+                            if session.closing.load(Ordering::SeqCst) {
+                                return Err(McpError::Closed);
+                            }
+                            session.phase.lock().expect("http phase").recovery =
+                                Recovery::ReadyForWriter;
+                        }
+                        let (completed, completion) = oneshot::channel();
+                        writer
+                            .send(Outgoing::RecoveryReady {
+                                deadline,
+                                completed,
+                            })
+                            .await
+                            .map_err(|_| McpError::Unconfirmed)?;
+                        Ok(completion)
+                    };
+                    match ready.await {
+                        Err(error) => Startup::Done(Err(error)),
+                        Ok(completion) => match completion.await {
+                            Ok(result) => Startup::Done(result),
+                            // The writer owned this sender. Settlement is read
+                            // after the deadline, below.
+                            Err(_) => Startup::WriterDropped,
+                        },
+                    }
                 };
-                match ready.await {
-                    Err(error) => Startup::Done(Err(error)),
-                    Ok(completion) => match completion.await {
-                        Ok(result) => Startup::Done(result),
-                        // The writer owned this sender. Settlement is read
-                        // after the deadline, below.
-                        Err(_) => Startup::WriterDropped,
-                    },
-                }
-            };
-            let result = match within(&*clock, deadline, startup).await {
-                None => Err(McpError::Timeout),
-                Some(Startup::Done(result)) => result,
-                Some(Startup::WriterDropped) => {
-                    // Outside the deadline. A deadline that is already due
-                    // would otherwise win while this wait is still pending.
-                    // The wait stays bounded: the writer settles right after
-                    // catching the panic, and shutdown aborts this recovery.
-                    match weak.upgrade() {
-                        Some(session) => Err(session.dropped_writer_sender().await),
-                        None => Err(McpError::Closed),
+                let result = match within(&*clock, deadline, startup).await {
+                    None => Err(McpError::Timeout),
+                    Some(Startup::Done(result)) => result,
+                    Some(Startup::WriterDropped) => {
+                        // Outside the deadline. A deadline that is already due
+                        // would otherwise win while this wait is still pending.
+                        // The wait stays bounded: the writer settles right after
+                        // catching the panic, and shutdown aborts this recovery.
+                        match weak.upgrade() {
+                            Some(session) => Err(session.dropped_writer_sender().await),
+                            None => Err(McpError::Closed),
+                        }
+                    }
+                };
+                if let Err(error) = result {
+                    let result = weak
+                        .upgrade()
+                        .map_or(Err(error.clone()), |session| session.fail_recovery(error));
+                    if let Err(error) = result {
+                        let _ = inbound.send(Err(error)).await;
                     }
                 }
-            };
-            if let Err(error) = result {
-                let result = weak
-                    .upgrade()
-                    .map_or(Err(error.clone()), |session| session.fail_recovery(error));
-                if let Err(error) = result {
-                    let _ = inbound.send(Err(error)).await;
-                }
-            }
-        });
+            },
+        );
         readers.post.push(PostReader {
             request_id: None,
             task,
@@ -1267,6 +1343,94 @@ impl Drop for ReleaseClaimOnDrop {
     fn drop(&mut self) {
         self.claims.release(&self.url, &self.session_id, self.local);
         self.finished.send_replace(true);
+    }
+}
+
+fn settle_task(settled: &watch::Sender<Option<bool>>, panicked: bool) {
+    settled.send_if_modified(|current| {
+        if current.is_some() {
+            return false;
+        }
+        *current = Some(panicked);
+        true
+    });
+}
+
+/// First settlement wins. A caught panic settles itself before this drop.
+/// Cancellation and a clean exit settle as not panicked.
+pub(super) struct SettleOnDrop(watch::Sender<Option<bool>>);
+
+impl Drop for SettleOnDrop {
+    fn drop(&mut self) {
+        settle_task(&self.0, std::thread::panicking());
+    }
+}
+
+/// `Some(true)` once `settled` says the task panicked. A closed watch is not
+/// a panic: the caller keeps its existing cause.
+async fn settled_as_panic(mut settled: watch::Receiver<Option<bool>>) -> bool {
+    loop {
+        if let Some(panicked) = *settled.borrow_and_update() {
+            return panicked;
+        }
+        if settled.changed().await.is_err() {
+            return false;
+        }
+    }
+}
+
+/// Run `work` on the session runtime. A caught panic settles and asks the
+/// connection end owner for [`McpError::ServerGone`] before this task returns.
+/// The marker is logged from a thread this runtime does not run. The watch asks
+/// for that end only when a panic still fails the task, and it does not log on
+/// the joined task either. The returned receiver is the task's settlement;
+/// only the legacy writer keeps it.
+///
+/// Callers hold the readers lock across this call and the push of the returned
+/// task. Shutdown takes that same lock, so the task is already visible to the
+/// cleanup a panic starts.
+fn spawn_tracked(
+    runtime: &Handle,
+    weak: Weak<HttpSession>,
+    kind: HttpTask,
+    work: impl Future<Output = ()> + Send + 'static,
+) -> (TrackedTask, watch::Receiver<Option<bool>>) {
+    let (settled, observed) = watch::channel(None);
+    let task_weak = weak.clone();
+    let task_settled = settled.clone();
+    let task = runtime.spawn(async move {
+        let settle = SettleOnDrop(task_settled);
+        let panicked = catch_task_panic(work).await.is_err();
+        if !panicked {
+            return;
+        }
+        settle_task(&settle.0, true);
+        if let Some(session) = task_weak.upgrade() {
+            session.record_task_panic(kind);
+        }
+    });
+    let work = task.abort_handle();
+    let watch = runtime.spawn(watch_http_task(task, weak, settled, kind));
+    (TrackedTask { watch, work }, observed)
+}
+
+/// Join `task`. A panic that still fails it is not a second end owner:
+/// settle, then the same `ServerGone` end the caught path uses. The marker
+/// is logged off this task. A cancellation records nothing.
+pub(super) async fn watch_http_task(
+    task: JoinHandle<()>,
+    weak: Weak<HttpSession>,
+    settled: watch::Sender<Option<bool>>,
+    kind: HttpTask,
+) {
+    let Err(error) = task.await else {
+        return;
+    };
+    if error.is_panic() {
+        settle_task(&settled, true);
+        if let Some(session) = weak.upgrade() {
+            session.record_task_panic(kind);
+        }
     }
 }
 
