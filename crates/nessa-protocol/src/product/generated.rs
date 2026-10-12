@@ -627,6 +627,7 @@ pub struct ConversationMcpTool {
 pub struct ConversationView {
     pub conversation_id: String,
     pub revision: String,
+    pub server_now_ms: u64,
     pub messages: Vec<ConversationMessage>,
     pub pending: Vec<ConversationPending>,
     pub permissions: Vec<ConversationPermission>,

@@ -25,7 +25,14 @@ import { messageText } from "../../model/transcript"
 import { testStore } from "../../testing"
 import { followWorkspace, loadWorkspace, sendMessage } from "../store/commands"
 import { approvalId } from "./gateway-views"
-import { deferred, fakeGateway, row, view, type FakeGateway } from "./fake-gateway"
+import {
+  deferred,
+  fakeGateway,
+  GATEWAY_NOW_MS,
+  row,
+  view,
+  type FakeGateway,
+} from "./fake-gateway"
 import { gatewaySource, refusalOf, type GatewayClock } from "./gateway-source"
 
 const timing = { callMs: 5_000, retryMs: 1_000 }
@@ -492,6 +499,41 @@ describe("conversations", () => {
     await flush()
     expect(transcriptsOf(updates, "a").map((said) => said.revision)).toEqual([1, 2])
     expect((await source.transcript("a")).revision).toBe(2)
+  })
+
+  it("D2: a frame that differs only in the gateway's time it was stamped with is the same transcript", async () => {
+    const { gateway, source, updates, follow } = started()
+    follow()
+    gateway.views.set("a", view("a"))
+    await source.transcript("a")
+    gateway.views.set("a", view("a", { serverNowMs: GATEWAY_NOW_MS + 5_000 }))
+    gateway.publish("a")
+    await flush()
+    expect(transcriptsOf(updates, "a")).toHaveLength(1)
+  })
+
+  it("a review's deadline is put on the window's clock as its frame arrives, whatever the gateway's clock reads", async () => {
+    // The window's clock is the manual one, far behind the gateway's.
+    const { gateway, source } = started()
+    gateway.views.set(
+      "a",
+      view("a", {
+        messages: [running()],
+        permissions: [
+          permission({
+            deadline: {
+              waitMs: 30_000,
+              dueAtMs: GATEWAY_NOW_MS + 30_000,
+              effect: "deny",
+              reason: "No human answered in time.",
+              stopsTurn: false,
+            },
+          }),
+        ],
+      }),
+    )
+    const transcript = await source.transcript("a")
+    expect(transcript.approval?.deadline?.dueAtMs).toBe(1_000_000 + 30_000)
   })
 
   it("a summary says a session waits on the person when its conversation asks", async () => {

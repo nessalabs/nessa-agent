@@ -164,7 +164,14 @@ not show that reason. It says what will happen, from the effect and the time
 left until `dueAtMs`: "If nobody answers within 30 seconds, this is denied
 automatically." When the only refusal stops the turn, that line says the
 agent stops. A reloaded client counts down from `dueAtMs` rather than
-starting `waitMs` again. The desktop approval card and the floating
+starting `waitMs` again. `dueAtMs` is on the gateway's clock, and the client
+is often another machine whose clock is ahead or behind. So every view also
+carries `serverNowMs`, the gateway's wall time read from its injected clock
+as the view is made, and each client puts `dueAtMs` on its own clock as the view
+arrives: as long after its own time then as `dueAtMs` is after `serverNowMs`
+(`clientDueAtMs`). The card counts down from the gateway's time left, and a
+difference between the two machines' clocks does not move it; only the time
+the view took to arrive is left over. The desktop approval card and the floating
 conversation card both read that time again each second, so the count goes
 down while the review is pending. When the deadline answers, the transcript
 gains a local notice in the past tense: "Allowed automatically" or "Denied

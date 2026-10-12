@@ -1246,7 +1246,7 @@
         "dueAtMs": {
           "type": "integer",
           "minimum": 1,
-          "description": "Unix milliseconds when the deadline decides. A reloaded client counts down from this rather than starting waitMs again."
+          "description": "Unix milliseconds on the gateway's clock when the deadline decides. A reloaded client counts down from this rather than starting waitMs again, measured from the view's serverNowMs rather than its own clock."
         },
         "effect": {
           "$ref": "#/$defs/ConversationPermissionOptionEffect",
@@ -1472,6 +1472,12 @@
           "x-utf8MaxBytes": 256,
           "description": "Opaque revision; compare for equality, never numeric ordering."
         },
+        "serverNowMs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991,
+          "description": "The gateway's Unix milliseconds when it made this view. A client measures each deadline's dueAtMs against this, not against its own clock, so a clock on another machine that is ahead or behind does not move the countdown."
+        },
         "messages": {
           "type": "array",
           "items": { "$ref": "#/$defs/ConversationMessage" },
@@ -1576,6 +1582,7 @@
       "required": [
         "conversationId",
         "revision",
+        "serverNowMs",
         "messages",
         "pending",
         "permissions",

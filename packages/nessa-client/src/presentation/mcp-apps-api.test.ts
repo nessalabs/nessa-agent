@@ -247,6 +247,7 @@ function viewWithAppReview(argumentsJson: string) {
     conversationId,
     title: null,
     revision: "1",
+    serverNowMs: 1_700_000_000_000,
     approvalMode: "ask",
     approvalModes: [{ id: "ask", name: "Ask", description: "Asks." }],
     truncated: false,

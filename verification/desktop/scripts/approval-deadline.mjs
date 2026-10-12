@@ -116,6 +116,12 @@ await main(meta, async ({ options, rep, url, mode }) => {
           failures.push(
             `countdown started at ${firstSeconds}s, too late to watch it fall`,
           )
+        // The fixture's gateway clock is a minute ahead of the page's: a card
+        // that measured against its own clock would start near 70 seconds.
+        else if (firstSeconds > approvalDeadline.waitSeconds)
+          failures.push(
+            `countdown started at ${firstSeconds}s, above the ${approvalDeadline.waitSeconds}s wait: the gateway's clock moved it`,
+          )
         if (!decreased)
           failures.push(`countdown did not fall from ${JSON.stringify(firstText)}`)
         else if (later && Number(later[1]) >= firstSeconds)

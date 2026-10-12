@@ -1,6 +1,7 @@
 {
   "conversationId": "00000000-0000-4000-8000-000000000010",
   "revision": "00000000-0000-4000-8000-000000000000:1",
+  "serverNowMs": 100000,
   "messages": [],
   "pending": [],
   "permissions": [],

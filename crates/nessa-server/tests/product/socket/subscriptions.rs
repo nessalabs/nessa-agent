@@ -682,6 +682,41 @@ async fn subscribe_replies_after_the_first_read_then_sends_the_view() {
     client.close().await;
 }
 
+/// A view says what time it is on the gateway, read from the injected clock
+/// as the view is made, on a one-shot read and on each subscription frame: a
+/// client measures a deadline's `dueAtMs` against it, not against its own
+/// clock (ADR 141).
+#[tokio::test]
+async fn a_view_carries_the_gateways_time_from_its_clock() {
+    let fixture = SubscriptionFixture::new().await;
+    fixture.authority.now.store(123, Ordering::SeqCst);
+    let read = fixture
+        .call(
+            "conversation.read",
+            json!({"conversationId": fixture.id.to_string()}),
+        )
+        .await;
+    assert_eq!(read["payload"]["serverNowMs"], 123_000, "{read}");
+    let mut client = fixture.connect();
+    let id = client.subscribe("subscribe", &fixture.id).await;
+    let first = client.next().await;
+    assert_eq!(view(&first)["serverNowMs"], 123_000);
+    // A later frame is stamped when it is read, not when the follow began.
+    fixture.authority.now.store(150, Ordering::SeqCst);
+    let changed = fixture
+        .call(
+            "conversation.setApprovalMode",
+            json!({"conversationId": fixture.id.to_string(), "requestId": "mode", "mode": "auto"}),
+        )
+        .await;
+    assert_eq!(changed["ok"], true, "{changed}");
+    let frames = client
+        .until(&id, |frame| view(frame)["approvalMode"] == "auto")
+        .await;
+    assert_eq!(view(frames.last().unwrap())["serverNowMs"], 150_000);
+    client.close().await;
+}
+
 /// Row S2: a refused first read refuses the subscription and frees its place.
 #[tokio::test]
 async fn a_refused_first_read_refuses_the_subscription() {

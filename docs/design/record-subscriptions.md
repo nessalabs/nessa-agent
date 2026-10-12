@@ -90,9 +90,9 @@ the committed records folded with no agent (`read_unopened`), read-only, its
 lifecycle `absent`, nothing awaiting an answer. Otherwise a close or a desktop
 stop, which publishes the slot let go, would wake every follower into a read
 that starts the agent again at once (row S26). A send opens the agent, and its
-publish wakes the view. A fresh fold numbers its revision anew, so the
-comparison that keeps an unchanged view from being sent leaves the revision
-out (row S9). Nor does a follower recover an unfinished approval-mode change,
+publish wakes the view. A fresh fold numbers its revision anew, and every
+read is stamped with the gateway's time (`serverNowMs`), so the comparison that
+keeps an unchanged view from being sent leaves both out (row S9). Nor does a follower recover an unfinished approval-mode change,
 which stops and starts the agent: it shows the change pending and leaves
 recovery to `conversation.read` or a send (row S27).
 
@@ -215,7 +215,7 @@ otherwise.
 | S6 | A commit after the first frame | One new frame | `a_commit_after_subscribe_is_delivered` |
 | S7 | Commits racing the subscription's reads | The last frame shows the last commit; cursors only move forward | `replay_then_live_misses_no_commit_under_concurrent_writes` |
 | S8 | Many commits while a frame waits for the writer | One next frame, with the latest state | `commits_while_a_frame_waits_collapse_into_one_frame` |
-| S9 | A wake that changes nothing the client sees (the revision alone may differ) | No frame | `a_wake_that_changes_nothing_sends_nothing`; `views_that_differ_only_in_revision_have_one_key` (unit) |
+| S9 | A wake that changes nothing the client sees (the revision and `serverNowMs` alone may differ) | No frame | `a_wake_that_changes_nothing_sends_nothing`; `views_that_differ_only_in_revision_have_one_key` (unit) |
 | S10 | A frame not taken by the writer within `deliveryTimeoutMs` | Ended `lagging` with `lastDelivered`; the socket stays | `a_frame_not_taken_in_time_ends_the_subscription_as_lagging` |
 | S11 | Resubscribe after `lagging` from `lastDelivered` | Frames continue; the last equals a cold read | `a_lagging_subscriber_resumes_from_its_cursor` |
 | S12 | One socket's writer stalled | Commits finish and another socket's frames arrive | `one_stalled_socket_delays_no_commit_and_no_other_subscriber` |
@@ -252,7 +252,7 @@ asks of the client does not offer them.
 | Row | State and input | Result |
 |---|---|---|
 | D1 | First listener | One list subscription; nothing asked on a timer |
-| D2 | A followed conversation's frames | A frame a person would see differently is the next transcript, whatever its revision (a title, a permission ask, an app's review change without it); one that differs only in its revision is the same transcript |
+| D2 | A followed conversation's frames | A frame a person would see differently is the next transcript, whatever its revision (a title, a permission ask, an app's review change without it); one that differs only in its revision or `serverNowMs` is the same transcript |
 | D3 | Ended `lagging` (view or list) | Opened again at once, a view from the last cursor applied; no gap |
 | D4 | Ended `refused` as not found or deleted | The session is taken out; a deletion is also forgotten by the window's MCP Apps |
 | D5 | The connection is lost, then back | Every subscription ends `disconnected` and nothing more; back, one resync and each opened again from its cursor |

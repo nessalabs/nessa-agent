@@ -267,7 +267,7 @@ export {
   MAX_UPLOAD_BYTES,
   type StoredAttachment,
 } from "./protocol/attachment-validate.js"
-export { deadlinePendingLine } from "./protocol/deadline-pending.js"
+export { clientDueAtMs, deadlinePendingLine } from "./protocol/deadline-pending.js"
 export type {
   ConversationView,
   ApprovalMode,

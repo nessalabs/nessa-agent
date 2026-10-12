@@ -81,6 +81,7 @@
   "ConversationView": {
     "conversationId": "00000000-0000-4000-8000-000000000001",
     "revision": "1",
+    "serverNowMs": 1700000000000,
     "messages": [
       {
         "executionId": "execution-1",

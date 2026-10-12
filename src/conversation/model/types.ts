@@ -390,7 +390,8 @@ type ConversationState = {
       /**
        * Present when the review answers itself if nobody does.
        * `reason` is the past-tense record. The pending line is built from
-       * `dueAtMs`, `effect`, and `stopsTurn`.
+       * `dueAtMs`, `effect`, and `stopsTurn`. `dueAtMs` is on this panel's
+       * clock, put there as the view arrived (`gatewayEffects`).
        */
       deadline?: {
         waitMs: number

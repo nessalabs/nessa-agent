@@ -543,7 +543,7 @@ export type ConversationPermissionOptionEffect =
 export interface ConversationPermissionDeadline {
   /** How many milliseconds the review waits before this outcome is taken, measured when the review was armed. */
   waitMs: number
-  /** Unix milliseconds when the deadline decides. A reloaded client counts down from this rather than starting waitMs again. */
+  /** Unix milliseconds on the gateway's clock when the deadline decides. A reloaded client counts down from this rather than starting waitMs again, measured from the view's serverNowMs rather than its own clock. */
   dueAtMs: number
   /** The outcome taken when the wait ends with no answer. */
   effect: ConversationPermissionOptionEffect
@@ -624,6 +624,8 @@ export interface ConversationView {
   conversationId: string
   /** Opaque revision; compare for equality, never numeric ordering. */
   revision: string
+  /** The gateway's Unix milliseconds when it made this view. A client measures each deadline's dueAtMs against this, not against its own clock, so a clock on another machine that is ahead or behind does not move the countdown. */
+  serverNowMs: number
   /** Recent turns with current streamed output. */
   messages: ConversationMessage[]
   /** Current removable queue entries. */

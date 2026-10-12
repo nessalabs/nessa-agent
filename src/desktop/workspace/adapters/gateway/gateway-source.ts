@@ -232,14 +232,15 @@ interface Read {
 }
 
 /**
- * What a person could see of a view: all of it but its revision. The
- * gateway's revision numbers the fold's committed content; a title, a
- * permission ask, an app's review or the agent's lifecycle change without
- * it, and a fresh fold numbers the same content anew. The gateway sends a
- * frame when this changes (`view_key`, row S9), so it is what decides here.
+ * What a person could see of a view: all of it but its revision and the
+ * gateway's time it was stamped with. The gateway's revision numbers the
+ * fold's committed content; a title, a permission ask, an app's review or the
+ * agent's lifecycle change without it, and a fresh fold numbers the same
+ * content anew. `serverNowMs` moves on every read. The gateway sends a frame
+ * when this changes (`view_key`, row S9), so it is what decides here.
  */
 function viewKey(view: ConversationView): string {
-  return JSON.stringify({ ...view, revision: undefined })
+  return JSON.stringify({ ...view, revision: undefined, serverNowMs: undefined })
 }
 
 /** A caller waiting for a subscription's first frame. */
@@ -853,6 +854,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     sessionId: string,
     view: ConversationView,
     cursor: ConversationViewCursor,
+    receivedAtMs: number,
   ): Transcript => {
     const held = reads.get(sessionId)
     const key = viewKey(view)
@@ -862,7 +864,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     }
     const revision = (transcriptCounts.get(sessionId) ?? 0) + 1
     transcriptCounts.set(sessionId, revision)
-    const transcript = transcriptFrom(view, revision, seenIn(sessionId))
+    const transcript = transcriptFrom(view, revision, seenIn(sessionId), receivedAtMs)
     reads.set(sessionId, { view, key, transcript, cursor })
     tellApps(() => options.apps?.observe(view))
     emit({ kind: "transcript", transcript })
@@ -877,9 +879,11 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     follow: Followed<Transcript>,
     frame: ViewFrame,
   ) => {
+    // Read as the frame arrives: the moment its `serverNowMs` is paired with.
+    const receivedAtMs = clock.now()
     const held = reads.get(sessionId)
     if (held && behind(frame.cursor, held.cursor)) return
-    const transcript = applyRead(sessionId, frame.view, frame.cursor)
+    const transcript = applyRead(sessionId, frame.view, frame.cursor, receivedAtMs)
     follow.applied = true
     settle(follow, { value: transcript })
   }

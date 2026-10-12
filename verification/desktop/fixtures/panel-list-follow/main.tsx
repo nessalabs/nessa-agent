@@ -26,6 +26,7 @@ const client = await NessaClient.connect({
 const effects = gatewayEffects(
   () => client,
   (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  () => Date.now(),
 )
 let oneShotReads = 0
 let opens = 0

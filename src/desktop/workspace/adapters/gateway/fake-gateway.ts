@@ -73,6 +73,9 @@ export function row(
   }
 }
 
+/** The gateway's time each fake view is stamped with, unless changed. */
+export const GATEWAY_NOW_MS = 1_700_000_000_000
+
 /** A conversation view: what a view frame says, empty unless changed. */
 export function view(
   conversationId: string,
@@ -81,6 +84,7 @@ export function view(
   return {
     conversationId,
     revision: "r1",
+    serverNowMs: GATEWAY_NOW_MS,
     messages: [],
     pending: [],
     permissions: [],
@@ -176,7 +180,16 @@ type Live =
       readonly handlers: ListSubscriptionHandlers
     }
 
-export function fakeGateway(): FakeGateway {
+export function fakeGateway(
+  options: {
+    /**
+     * The gateway's own clock. When given, each view frame is stamped with it
+     * as it is sent, as the gateway stamps each read; otherwise a view is sent
+     * with the `serverNowMs` it was stored with.
+     */
+    readonly now?: () => number
+  } = {},
+): FakeGateway {
   const calls: FakeGateway["calls"] = []
   const rows = new Map<string, ConversationSummary>()
   const views = new Map<string, ConversationView>()
@@ -274,7 +287,11 @@ export function fakeGateway(): FakeGateway {
     deliver(id, (live) => {
       if (live.kind !== "view") return
       const held = views.get(live.target)
-      if (held) live.handlers.view({ cursor: cursor(live.target), view: held })
+      if (held)
+        live.handlers.view({
+          cursor: cursor(live.target),
+          view: options.now ? { ...held, serverNowMs: options.now() } : held,
+        })
     })
   const sendList = (id: string) =>
     deliver(id, (live) => {

@@ -702,6 +702,8 @@ export const approvalDeadline = {
   reason:
     "No human answered in time. Continue without this tool or try another approach.",
   notice: (reason) => `Denied automatically: ${reason}`,
+  /** The fixture's wait (`waitMs` in its `main.tsx`): the most the countdown may start at. */
+  waitSeconds: 10,
 }
 
 export const appReview = {

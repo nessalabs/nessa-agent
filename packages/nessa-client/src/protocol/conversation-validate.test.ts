@@ -20,6 +20,7 @@ function view() {
     conversationId: "conversation",
     title: null,
     revision: "1",
+    serverNowMs: 1_700_000_000_000,
     approvalMode: "ask",
     approvalModes: [
       {
@@ -508,6 +509,18 @@ describe("conversation view agreement", () => {
       { ...deadline, later: true },
     ])
       expect(() => conversationView(withDeadline(broken), "conversation")).toThrow()
+  })
+
+  it("reads the gateway's time the view was sent at, and refuses a view without a usable one", () => {
+    expect(conversationView(view(), "conversation").serverNowMs).toBe(1_700_000_000_000)
+    for (const broken of [undefined, 0, -1, 1.5, "1700000000000", 2 ** 53]) {
+      const value: Record<string, unknown> = view()
+      if (broken === undefined) delete value.serverNowMs
+      else value.serverNowMs = broken
+      expect(() => conversationView(value, "conversation"), String(broken)).toThrow(
+        "Invalid conversation serverNowMs",
+      )
+    }
   })
 
   it("refuses an app's review that names a tool other than the one it reviews", () => {

@@ -15,7 +15,7 @@ import {
   resendMessage,
 } from "../../adapters/store/commands"
 import { transcriptFrom } from "../../adapters/gateway/gateway-views"
-import { view } from "../../adapters/gateway/fake-gateway"
+import { GATEWAY_NOW_MS, view } from "../../adapters/gateway/fake-gateway"
 import { workspaceActions } from "../../adapters/store/slice"
 import { ClockProvider } from "../../adapters/dom/clock"
 import {
@@ -740,6 +740,7 @@ describe("provider recovery ownership", () => {
                 accepted,
                 phase === "queued" ? 2 : phase === "running" ? 3 : 4,
                 () => 1000,
+                GATEWAY_NOW_MS,
               ),
             },
           }),
@@ -816,6 +817,7 @@ it("keeps an older failed outbox message from hiding a later observed refusal", 
       }),
       revision,
       () => 1,
+      GATEWAY_NOW_MS,
     )
   for (const revision of [2, 3]) {
     await act(async () => {

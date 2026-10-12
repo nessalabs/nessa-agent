@@ -19,6 +19,7 @@ const view: ConversationView = {
   approvalModes: [{ id: "ask", name: "Provider asks", description: "Asks." }],
   title: null,
   revision: "opaque-1",
+  serverNowMs: 1_700_000_000_000,
   messages: [],
   pending: [],
   permissions: [],

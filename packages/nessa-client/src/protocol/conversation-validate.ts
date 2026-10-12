@@ -208,6 +208,7 @@ export function conversationView(value: unknown, expected: string): Conversation
   exact(item, [
     "conversationId",
     "revision",
+    "serverNowMs",
     "messages",
     "pending",
     "permissions",
@@ -230,6 +231,15 @@ export function conversationView(value: unknown, expected: string): Conversation
   if (identity(item, "conversationId") !== expected)
     throw new Error("Conversation response belongs to another conversation")
   identity(item, "revision")
+  // The gateway's time the view was sent at: what each deadline's `dueAtMs`
+  // is measured against (`clientDueAtMs`).
+  const serverNowMs = item.serverNowMs
+  if (
+    typeof serverNowMs !== "number" ||
+    !Number.isSafeInteger(serverNowMs) ||
+    serverNowMs < 1
+  )
+    throw new Error("Invalid conversation serverNowMs")
   optionalText(item, "title", bounds.maxConversationTitleBytes)
   flag(item, "truncated")
   flag(item, "queueComplete")

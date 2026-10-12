@@ -13,6 +13,7 @@ import {
   NessaConversationMutationError,
   NessaRpcError,
   createSubscriptionGate,
+  deadlinePendingLine,
   type NessaClient,
   type ConversationView,
   type ConversationViewCursor,
@@ -36,6 +37,7 @@ import {
   STORED_IMAGE_TYPES,
 } from "../../model"
 import { deletedAnyway } from "../../application/usecases"
+import type { ConversationView as ConversationViewOf } from "../../application/view"
 import { BUSY_RETRY_DELAYS_MS, FOLLOW_RETRY_MS, gatewayEffects } from "./effects"
 
 function gatewayView(): ConversationView {
@@ -45,6 +47,7 @@ function gatewayView(): ConversationView {
     conversationId: "server",
     title: null,
     revision: "capabilities",
+    serverNowMs: SERVER_NOW_MS,
     approvalMode: "ask",
     approvalModes: [
       {
@@ -85,8 +88,12 @@ function gatewayView(): ConversationView {
 
 /** A backoff nothing in the test should reach: waiting here is the failure. */
 const unexpectedWait = () => Promise.reject(new Error("no wait expected"))
+/** The gateway's time each view here is stamped with. */
+const SERVER_NOW_MS = 1_700_000_000_000
+/** The panel's clock, standing still at the gateway's time. */
+const panelNow = () => SERVER_NOW_MS
 const effectsOf = (client: () => NessaClient | null) =>
-  gatewayEffects(client, unexpectedWait)
+  gatewayEffects(client, unexpectedWait, panelNow)
 function deferred<T>() {
   let resolve!: (value: T) => void
   const promise = new Promise<T>((done) => {
@@ -136,6 +143,7 @@ it("creates a draft with its exact selected agent, model and approval mode", asy
   const effects = gatewayEffects(
     () => ({ conversation: { create } }) as unknown as NessaClient,
     unexpectedWait,
+    panelNow,
     chosenAgent,
   )
   await effects.create("server", { agent: "codex", model: "astra", approvalMode: "auto" })
@@ -155,6 +163,7 @@ it("creates a draft on the SSH host it was to run on", async () => {
   const effects = gatewayEffects(
     () => ({ conversation: { create } }) as unknown as NessaClient,
     unexpectedWait,
+    panelNow,
     vi.fn(async () => "claude"),
   )
   await effects.create("server", {
@@ -270,6 +279,61 @@ it("P1: tells the follower each frame, and after lagging follows on at once from
   expect(said).toHaveLength(1)
 })
 
+it("puts a review's deadline on the panel's clock as the view arrives, so skew between the machines does not move the countdown", async () => {
+  for (const skewMs of [0, 60_000, -60_000]) {
+    const gateway = subscribing()
+    // The panel's clock, `skewMs` ahead of the gateway's.
+    let panelMs = SERVER_NOW_MS + skewMs
+    const effects = gatewayEffects(
+      () => gateway.client,
+      unexpectedWait,
+      () => panelMs,
+    )
+    const { said, follower } = told()
+    const stop = effects.follow("server", follower)
+    await settle()
+    gateway.opens[0]!.handlers.view({
+      cursor: cursor("1"),
+      view: {
+        ...gatewayView(),
+        permissions: [
+          {
+            executionId: "e1",
+            permissionId: "p1",
+            toolId: "t1",
+            title: "Tool permission",
+            options: [{ id: "d", label: "Deny", effect: "deny" }],
+            toolName: "bash",
+            origin: { kind: "harness" },
+            ask: "tool",
+            argumentsJson: "{}",
+            // Due 30 s after the gateway sent the view, on its clock.
+            deadline: {
+              waitMs: 30_000,
+              dueAtMs: SERVER_NOW_MS + 30_000,
+              effect: "deny",
+              reason: "No human answered in time.",
+              stopsTurn: false,
+            },
+          },
+        ],
+      },
+    })
+    // Read once, as the frame arrives: a later reading changes nothing told.
+    const receivedAtMs = panelMs
+    panelMs += 5_000
+    const heard = said[0] as { view: ConversationViewOf }
+    const deadline = heard.view.permissions[0]!.deadline!
+    expect(deadline.dueAtMs - receivedAtMs, `skew ${skewMs}`).toBe(30_000)
+    expect(deadlinePendingLine(deadline, receivedAtMs)).toBe(
+      "If nobody answers within 30 seconds, this is denied automatically.",
+    )
+    // What the panel's model holds is its own: the gateway's time is not carried on.
+    expect(heard.view).not.toHaveProperty("serverNowMs")
+    stop()
+  }
+})
+
 it("P2: follows from the start when the gateway holds no history that far", async () => {
   const gateway = subscribing()
   const effects = effectsOf(() => gateway.client)
@@ -296,7 +360,7 @@ it("P3: says why it could not follow, and tries again after a wait", async () =>
   const gateway = subscribing([
     new NessaRpcError("conversation_configuration_changed", "setup changed"),
   ])
-  const effects = gatewayEffects(() => gateway.client, wait)
+  const effects = gatewayEffects(() => gateway.client, wait, panelNow)
   const { said, follower } = told()
   const stop = effects.follow("server", follower)
   await settle()
@@ -323,7 +387,7 @@ it("P3: says why it could not follow, and tries again after a wait", async () =>
 it("P3: stops trying for a conversation somebody deleted", async () => {
   const wait = vi.fn(() => Promise.resolve())
   const gateway = subscribing([new NessaRpcError("conversation_deleted", "deleted")])
-  const effects = gatewayEffects(() => gateway.client, wait)
+  const effects = gatewayEffects(() => gateway.client, wait, panelNow)
   const { said, follower } = told()
   effects.follow("server", follower)
   await settle()
@@ -411,6 +475,7 @@ it("asks the host again after a failed answer instead of keeping the failure", a
   const effects = gatewayEffects(
     () => ({ conversation: { create } }) as unknown as NessaClient,
     unexpectedWait,
+    panelNow,
     chosenAgent,
   )
   await expect(effects.create("server")).rejects.toThrow("the host module would not load")
@@ -431,6 +496,7 @@ it("sends the creation over the session of the moment, not the one checked first
   const effects = gatewayEffects(
     () => ({ conversation: { create: current } }) as unknown as NessaClient,
     unexpectedWait,
+    panelNow,
     async () => {
       current = live
       return undefined
@@ -557,6 +623,7 @@ function staging(
     () =>
       ({ attachments: { upload: vi.fn(), ...attachments } }) as unknown as NessaClient,
     wait,
+    panelNow,
   )
 }
 
@@ -1148,6 +1215,7 @@ it("stops offering the ticket when the session went away during the wait", async
         attachments: { begin: async () => owed, upload },
       }) as unknown as NessaClient,
     clock.wait,
+    panelNow,
   )
   const staged = effects
     .stageAttachment("server", file, bytes, live())

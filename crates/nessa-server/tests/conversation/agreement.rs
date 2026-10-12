@@ -38,6 +38,11 @@ fn the_list_schema_states_the_bounds_the_summary_rules_keep() {
             "{field}"
         );
     }
+    // The gateway's time a view is stamped with is held to the same range.
+    assert_eq!(
+        schema["$defs"]["ConversationView"]["properties"]["serverNowMs"]["maximum"].as_u64(),
+        Some(LATEST_TIME_MS)
+    );
     assert_eq!(
         schema["$defs"]["ConversationListResult"]["properties"]["conversations"]["maxItems"]
             .as_u64(),

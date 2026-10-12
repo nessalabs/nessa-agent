@@ -20,6 +20,7 @@ function gatewayView(): ConversationView {
     conversationId: "server",
     title: null,
     revision: "capabilities",
+    serverNowMs: 1_700_000_000_000,
     approvalMode: "ask",
     approvalModes: [
       {
@@ -79,6 +80,7 @@ it("P8: a tab followed while its after-command single read is opening still sett
   const gateway = gatewayEffects(
     () => client,
     () => new Promise(() => {}),
+    () => 0,
   )
   const store = makeStore(
     createDependencies({

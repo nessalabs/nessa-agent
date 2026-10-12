@@ -116,7 +116,11 @@ export type ApprovalAsk = "tool" | "message"
  */
 export interface ApprovalDeadline {
   readonly waitMs: number
-  /** Unix milliseconds when the deadline decides. A reload counts down from this. */
+  /**
+   * Unix milliseconds when the deadline decides, on this window's clock: put
+   * there from the gateway's as the view arrived (`transcriptFrom`). A reload
+   * counts down from this.
+   */
   readonly dueAtMs: number
   readonly effect: "allow" | "deny"
   readonly reason: string

@@ -35,6 +35,7 @@ const attachments = createAttachmentResources()
 const effects = gatewayEffects(
   () => client,
   (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  () => Date.now(),
 )
 let viewUnavailable = false
 let dispatched = 0

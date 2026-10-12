@@ -6,6 +6,10 @@
  * from that instant. When the wait ends, the fixture publishes the notice the
  * deadline would leave and drops the review, which is what the gateway does
  * when the deadline wins. The desktop does not decide the review itself.
+ *
+ * The fake gateway's clock is a minute ahead of the page's, as a gateway on
+ * another machine can be: the card still counts down from the wait, because
+ * it measures `dueAtMs` against the gateway's own `serverNowMs` (ADR 141).
  */
 import type { ConversationPermission, ConversationView } from "@nessa/client"
 import * as React from "react"
@@ -40,7 +44,9 @@ const conversation = "1c2b3a4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
 const reason =
   "No human answered in time. Continue without this tool or try another approach."
 const waitMs = 10_000
-const dueAtMs = Date.now() + waitMs
+/** The gateway's clock, a minute ahead of the page's. */
+const gatewayNow = () => Date.now() + 60_000
+const dueAtMs = gatewayNow() + waitMs
 
 function armed(): ConversationPermission {
   return {
@@ -102,7 +108,7 @@ function shown(
   )
 }
 
-const gateway = fakeGateway()
+const gateway = fakeGateway({ now: gatewayNow })
 let revision = 1
 gateway.rows.set(
   conversation,
@@ -110,8 +116,10 @@ gateway.rows.set(
 )
 gateway.views.set(conversation, shown(revision, armed()))
 
+// The page's wall clock, the one the card's countdown is read against
+// (`createDesktopDependencies`' default `now`).
 const clock: GatewayClock = {
-  now: () => performance.now(),
+  now: () => Date.now(),
   after(ms, run) {
     const timer = window.setTimeout(run, ms)
     return () => window.clearTimeout(timer)
