@@ -1,5 +1,5 @@
 mod acquisition;
-mod read_grants;
+mod share_grants;
 
 use super::catalogue_changes::CatalogueChanges;
 
@@ -40,15 +40,6 @@ use std::sync::{MutexGuard, PoisonError};
 
 /// The tables and their version, defined once.
 const DEFINITION: &str = include_str!("schema.sql");
-
-/// The grant journal by receiver, which a paired reader's head reads through
-/// ([`granted_head`]). Defined here alone, not in `schema.sql`, and run on
-/// every open: an index changes nothing a version 4 reader understands, so it
-/// is no new version (docs/adr/todo/202-versioned-local-datasets.md), and a
-/// version 4 file made before it gets it here
-/// (`a_version_4_file_made_before_the_receiver_index_gets_it_on_open`).
-const RECEIVER_INDEX: &str = "CREATE INDEX IF NOT EXISTS read_grant_changes_by_receiver
-    ON read_grant_changes (receiver_id, revision)";
 
 /// One owner's conversations that a list shows, newest summary first, at most
 /// `?4` of them. The index on `(organization, owner)` finds the owner's rows,
@@ -99,7 +90,6 @@ impl LocalConversationStore {
     /// (docs/adr/todo/202-versioned-local-datasets.md).
     pub fn open(path: &Path) -> Result<Self, OpenError> {
         let connection = nessa_local_database::open(path, &Schema::new(DEFINITION)?)?;
-        connection.execute_batch(RECEIVER_INDEX)?;
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
             changes: CatalogueChanges::default(),
@@ -199,7 +189,9 @@ fn granted_to(reader: &Reader) -> Option<String> {
 }
 
 /// A paired reader's head: the latest revision among the owner's rows granted
-/// to `receiver`, and among `receiver`'s grant changes that changed something.
+/// to `receiver`, and among `receiver`'s grants and revokes. A change of role
+/// or policy is neither: it leaves what the receiver reads as it was, and
+/// takes no revision of its own (`docs/design/read-grants.md`, row J4).
 /// A revoke stamps the row it takes away with a new revision and journals
 /// that revision, so in steady state the head moves forward on a revoke and
 /// never back: the journal only grows and conversation rows are never
@@ -216,11 +208,12 @@ fn granted_head(
                 "SELECT MAX(
                      COALESCE((SELECT MAX(c.change_revision) FROM conversations AS c
                                WHERE c.organization = ?1 AND c.owner = ?2 AND {}), 0),
-                     COALESCE((SELECT MAX(j.revision) FROM read_grant_changes AS j
+                     COALESCE((SELECT MAX(j.revision) FROM share_grant_changes AS j
                                JOIN conversations AS c ON c.id = j.conversation_id
                                WHERE c.organization = ?1 AND c.owner = ?2
-                                 AND j.receiver_id = ?3 AND j.before <> j.after), 0))",
-                read_grants::granted("c.id", "?3")
+                                 AND j.receiver_id = ?3
+                                 AND (j.before = 'none') <> (j.after = 'none')), 0))",
+                share_grants::granted("c.id", "?3")
             ),
             params![organization.as_str(), owner.as_str(), receiver],
             |row| row.get(0),
@@ -1498,7 +1491,7 @@ impl ConversationCatalogue for LocalConversationStore {
                    AND (?8 IS NULL OR {})
                  ORDER BY creation_revision, id LIMIT ?7",
                 acquisition::conversation(""),
-                read_grants::granted("conversations.id", "?8"),
+                share_grants::granted("conversations.id", "?8"),
             )).map_err(failed)?;
             let mut rows = statement.query(params![
                 organization.as_str(), owner.as_str(), boundary, completed,
@@ -1542,7 +1535,7 @@ impl ConversationCatalogue for LocalConversationStore {
                         EXISTS (SELECT 1 FROM deletions WHERE conversation_id = ?1)
                  FROM conversations WHERE id = ?1 AND organization = ?2 AND owner = ?3
                    AND (?4 IS NULL OR {})",
-                        read_grants::granted("conversations.id", "?4")
+                        share_grants::granted("conversations.id", "?4")
                     ),
                     params![
                         id.to_string(),

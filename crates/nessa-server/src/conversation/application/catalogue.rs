@@ -53,7 +53,7 @@ pub struct CatalogueValue {
 /// database incarnation. The caller supplies its current authenticated owner;
 /// a sync adapter additionally checks its exact scope and access epoch.
 /// `reader` narrows a head, a page and a resolve to what that reader was
-/// granted (`read_grants`). The owner's head moves on every catalogue change.
+/// granted (`share_grants`). The owner's head moves on every catalogue change.
 /// A paired reader's head is the latest revision among its granted rows and
 /// its own grant changes, so a change to a row it may not read never moves
 /// it, while a grant, a revoke or a change to a granted row does. In steady

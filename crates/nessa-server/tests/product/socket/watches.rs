@@ -78,6 +78,11 @@ struct WatchFixture {
 
 impl WatchFixture {
     async fn new() -> Self {
+        Self::granted(crate::conversation::domain::ShareAccess::read()).await
+    }
+
+    /// A fixture whose watching device holds `access` on the conversation.
+    async fn granted(access: crate::conversation::domain::ShareAccess) -> Self {
         let directory = tempfile::tempdir().unwrap();
         let private = directory.path().join("conversations");
         nessa_local_storage::create_directory(&private).unwrap();
@@ -101,8 +106,9 @@ impl WatchFixture {
             )
             .await
             .unwrap();
-        // The watching device is granted the conversation (read grants).
-        crate::conversation_test_support::grant_read(metadata.as_ref(), &id, "receiver").await;
+        // The watching device is granted the conversation (share grants).
+        crate::conversation_test_support::grant_as(metadata.as_ref(), &id, "receiver", access)
+            .await;
         let storage = Arc::new(RecordStorage::new(directory.path().join("records")).unwrap());
         storage.initialize().await.unwrap();
         let records = Arc::new(CountingRecords {
@@ -297,6 +303,31 @@ async fn real_commit_waits_for_physical_ack_then_emits_only_opaque_watch_identit
     // Row E1: the challenge was this socket's event 1; watch events follow it.
     assert_eq!(notice["seq"], CHALLENGE_EVENT_SEQUENCE + 1);
     fixture.finish(peer, socket).await;
+}
+
+/// Row J1 (`docs/design/read-grants.md`): a records watch admits a Comment
+/// or a Drive grant exactly as it admits Read, and its notice follows a
+/// commit.
+#[tokio::test]
+async fn a_comment_or_drive_grant_watches_records_as_read_does() {
+    for access in crate::conversation_test_support::roles_beyond_read() {
+        let fixture = WatchFixture::granted(access.clone()).await;
+        let (socket, mut peer) = test_socket(None);
+        let socket = tokio::spawn(run_authenticated(
+            socket,
+            fixture.state.clone(),
+            fixture.session.clone(),
+        ));
+        fixture.watch(&peer, "install");
+        let acknowledgement = text(peer.message().await);
+        assert_eq!(acknowledgement["ok"], true, "{access:?}: {acknowledgement}");
+        let watch = acknowledgement["payload"]["watchId"].as_str().unwrap().to_owned();
+        fixture.commit().await;
+        let notice = text(peer.message().await);
+        assert_eq!(notice["event"], "conversation.changed", "{access:?}");
+        assert_eq!(notice["payload"], json!({"watchId": watch}));
+        fixture.finish(peer, socket).await;
+    }
 }
 
 #[tokio::test]
@@ -2318,8 +2349,8 @@ impl Drop for HostWatchFixture {
 async fn revoke_grant(fixture: &WatchFixture) {
     let grants = fixture.state.passive_read.as_ref().unwrap().2.clone();
     let revoked = grants
-        .change(crate::conversation::application::ReadGrantChange {
-            transition: crate::conversation::application::ReadGrantTransition::Revoke,
+        .change(crate::conversation::application::ShareGrantChange {
+            transition: crate::conversation::application::ShareGrantTransition::Revoke,
             conversation_id: fixture.id.clone(),
             receiver_id: None,
             credential_id: CredentialId::new("receiver-credential").unwrap(),

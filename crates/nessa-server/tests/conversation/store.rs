@@ -11,7 +11,10 @@ use crate::conversation::{
         ConversationModeRequest, ConversationModeRequestState, ConversationRepository,
         ConversationSummaries, Reader, WatchCatalogue,
     },
-    domain::{Conversation, ConversationDeletion, ProviderSessionErasure, ProviderSessionLink},
+    domain::{
+        Conversation, ConversationDeletion, ProviderSessionErasure, ProviderSessionLink,
+        ShareAccess, ShareRole, ToolPolicy, ToolPreset, ToolRules,
+    },
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId, MAX_IDENTIFIER_BYTES};
 use nessa_local_database::rusqlite::{params, Connection, StatementStatus};
@@ -223,7 +226,7 @@ fn an_alpha_v1_database_is_refused_without_migrating_its_rows() {
         LocalConversationStore::open(&path),
         Err(nessa_local_database::OpenError::Version {
             found: 1,
-            expected: 4
+            expected: 5
         })
     ));
     let old_row: String = raw(&path)
@@ -250,7 +253,7 @@ fn an_alpha_v2_database_is_refused_without_erasing_ownership() {
         LocalConversationStore::open(&path),
         Err(nessa_local_database::OpenError::Version {
             found: 2,
-            expected: 4
+            expected: 5
         })
     ));
     let retained: String = raw(&path)
@@ -2637,13 +2640,13 @@ async fn catalogue_watch_callback_panic_cannot_replace_a_durable_create_result()
 // docs/design/read-grants.md.
 
 fn grant_change(
-    transition: crate::conversation::application::ReadGrantTransition,
+    transition: crate::conversation::application::ShareGrantTransition,
     id: &ConversationId,
     receiver: Option<&str>,
     credential: &str,
     request: &str,
-) -> crate::conversation::application::ReadGrantChange {
-    crate::conversation::application::ReadGrantChange {
+) -> crate::conversation::application::ShareGrantChange {
+    crate::conversation::application::ShareGrantChange {
         transition,
         conversation_id: id.clone(),
         receiver_id: receiver.map(str::to_owned),
@@ -2658,10 +2661,10 @@ fn grant_change(
     }
 }
 async fn grant(store: &LocalConversationStore, id: &ConversationId, receiver: &str) -> bool {
-    use crate::conversation::application::{ReadGrantTransition, ReadGrants};
+    use crate::conversation::application::{ShareGrantTransition, ShareGrants};
     store
         .change(grant_change(
-            ReadGrantTransition::Grant,
+            ShareGrantTransition::Grant(ShareAccess::read()),
             id,
             Some(receiver),
             &format!("{receiver}-credential"),
@@ -2671,10 +2674,10 @@ async fn grant(store: &LocalConversationStore, id: &ConversationId, receiver: &s
         .unwrap()
 }
 async fn revoke(store: &LocalConversationStore, id: &ConversationId, receiver: &str) -> bool {
-    use crate::conversation::application::{ReadGrantTransition, ReadGrants};
+    use crate::conversation::application::{ShareGrantTransition, ShareGrants};
     store
         .change(grant_change(
-            ReadGrantTransition::Revoke,
+            ShareGrantTransition::Revoke,
             id,
             None,
             &format!("{receiver}-credential"),
@@ -2829,50 +2832,42 @@ async fn a_revoke_takes_the_row_out_of_the_devices_catalogue() {
         .await
         .unwrap()
         .is_none());
-    use crate::conversation::application::ReadGrants;
+    use crate::conversation::application::ShareGrants;
     assert!(!opened.store.is_granted(&id, "phone").await.unwrap());
 }
 
-/// The journal's index by receiver is made on open, not by a new version: a
-/// version 4 file made before it gets it, stays at version 4, and keeps its
-/// rows (docs/adr/todo/202-versioned-local-datasets.md).
-#[tokio::test]
-async fn a_version_4_file_made_before_the_receiver_index_gets_it_on_open() {
-    let Opened {
-        _directory,
-        path,
-        store,
-    } = opened();
-    let id = new_id();
-    store.create(owned(&id)).await.unwrap();
-    drop(store);
-    let index_columns = |connection: &Connection| -> Vec<String> {
-        connection
-            .prepare("SELECT name FROM pragma_index_info('read_grant_changes_by_receiver')")
-            .unwrap()
-            .query_map([], |row| row.get(0))
-            .unwrap()
-            .collect::<Result<_, _>>()
-            .unwrap()
-    };
-    let before = raw(&path);
-    before
-        .execute_batch("DROP INDEX read_grant_changes_by_receiver")
+/// A version 4 file, whose grants hold no role but Read and no policy, is
+/// refused rather than read into the version 5 shape, and keeps its rows
+/// (docs/adr/todo/202-versioned-local-datasets.md).
+#[test]
+fn a_version_4_database_is_refused_without_erasing_its_grants() {
+    let directory = tempfile::tempdir().unwrap();
+    let private = directory.path().join("conversations");
+    nessa_local_storage::create_directory(&private).unwrap();
+    let path = private.join("metadata.sqlite3");
+    let old = nessa_local_database::Schema::new(
+        "CREATE TABLE read_grants (receiver_id TEXT NOT NULL, role TEXT NOT NULL CHECK (role = 'read')) STRICT;\nPRAGMA user_version = 4;",
+    )
+    .unwrap();
+    let connection = nessa_local_database::open(&path, &old).unwrap();
+    connection
+        .execute(
+            "INSERT INTO read_grants (receiver_id, role) VALUES ('phone', 'read')",
+            [],
+        )
         .unwrap();
-    assert!(index_columns(&before).is_empty());
-    drop(before);
-
-    let store = LocalConversationStore::open(&path).unwrap();
-    let after = raw(&path);
-    assert_eq!(index_columns(&after), ["receiver_id", "revision"]);
-    let version: i64 = after
-        .pragma_query_value(None, "user_version", |row| row.get(0))
+    drop(connection);
+    assert!(matches!(
+        LocalConversationStore::open(&path),
+        Err(nessa_local_database::OpenError::Version {
+            found: 4,
+            expected: 5
+        })
+    ));
+    let kept: String = raw(&path)
+        .query_row("SELECT receiver_id FROM read_grants", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 4);
-    assert!(ConversationRepository::load(&store, &id)
-        .await
-        .unwrap()
-        .is_some());
+    assert_eq!(kept, "phone");
 }
 
 /// Row H9 (`docs/design/auth/peer-gateways.md`): a paired reader's head
@@ -2933,7 +2928,7 @@ async fn a_paired_readers_head_moves_only_with_what_it_was_granted() {
 /// Row G7.
 #[tokio::test]
 async fn a_grant_names_one_conversation_and_nothing_else() {
-    use crate::conversation::application::ReadGrants;
+    use crate::conversation::application::ShareGrants;
     let opened = opened();
     let (shared, existing) = (new_id(), new_id());
     opened.store.create(owned(&shared)).await.unwrap();
@@ -2985,7 +2980,7 @@ async fn a_repeated_share_or_unshare_changes_nothing() {
     );
     let unchanged: i64 = raw(&opened.path)
         .query_row(
-            "SELECT COUNT(*) FROM read_grant_changes WHERE before = after",
+            "SELECT COUNT(*) FROM share_grant_changes WHERE before = after",
             [],
             |row| row.get(0),
         )
@@ -2998,14 +2993,14 @@ async fn a_repeated_share_or_unshare_changes_nothing() {
 /// `applied: false` and does not grant again.
 #[tokio::test]
 async fn a_retried_share_that_changed_nothing_never_undoes_a_later_unshare() {
-    use crate::conversation::application::{ReadGrantTransition, ReadGrants};
+    use crate::conversation::application::{ShareGrantTransition, ShareGrants};
     let opened = opened();
     let id = new_id();
     opened.store.create(owned(&id)).await.unwrap();
     assert!(grant(&opened.store, &id, "phone").await);
     let share = || {
         grant_change(
-            ReadGrantTransition::Grant,
+            ShareGrantTransition::Grant(ShareAccess::read()),
             &id,
             Some("phone"),
             "phone-credential",
@@ -3046,13 +3041,13 @@ async fn a_retried_share_that_changed_nothing_never_undoes_a_later_unshare() {
 /// again; the same request naming another device or change is refused.
 #[tokio::test]
 async fn a_retried_share_replays_its_answer_and_never_undoes_a_later_unshare() {
-    use crate::conversation::application::{ConversationError, ReadGrantTransition, ReadGrants};
+    use crate::conversation::application::{ConversationError, ShareGrantTransition, ShareGrants};
     let opened = opened();
     let id = new_id();
     opened.store.create(owned(&id)).await.unwrap();
     let share = || {
         grant_change(
-            ReadGrantTransition::Grant,
+            ShareGrantTransition::Grant(ShareAccess::read()),
             &id,
             Some("phone"),
             "phone-credential",
@@ -3064,8 +3059,11 @@ async fn a_retried_share_replays_its_answer_and_never_undoes_a_later_unshare() {
     assert!(opened.store.change(share()).await.unwrap());
     assert!(!opened.store.is_granted(&id, "phone").await.unwrap());
     for (transition, credential) in [
-        (ReadGrantTransition::Revoke, "phone-credential"),
-        (ReadGrantTransition::Grant, "tablet-credential"),
+        (ShareGrantTransition::Revoke, "phone-credential"),
+        (
+            ShareGrantTransition::Grant(ShareAccess::read()),
+            "tablet-credential",
+        ),
     ] {
         let refused = opened
             .store
@@ -3084,7 +3082,7 @@ async fn a_retried_share_replays_its_answer_and_never_undoes_a_later_unshare() {
         );
     }
     let journaled: i64 = raw(&opened.path)
-        .query_row("SELECT COUNT(*) FROM read_grant_changes", [], |row| {
+        .query_row("SELECT COUNT(*) FROM share_grant_changes", [], |row| {
             row.get(0)
         })
         .unwrap();
@@ -3092,23 +3090,23 @@ async fn a_retried_share_replays_its_answer_and_never_undoes_a_later_unshare() {
 }
 
 /// Row G17: a conversation holds at most
-/// `MAX_READ_GRANTS_PER_CONVERSATION` grants, so its shares answer fits one
+/// `MAX_SHARE_GRANTS_PER_CONVERSATION` grants, so its shares answer fits one
 /// frame; one more is refused and writes nothing.
 #[tokio::test]
 async fn a_conversation_holds_a_bounded_number_of_grants() {
     use crate::conversation::application::{
-        ConversationError, ReadGrantTransition, ReadGrants, MAX_READ_GRANTS_PER_CONVERSATION,
+        ConversationError, ShareGrantTransition, ShareGrants, MAX_SHARE_GRANTS_PER_CONVERSATION,
     };
     let opened = opened();
     let id = new_id();
     opened.store.create(owned(&id)).await.unwrap();
-    for device in 0..MAX_READ_GRANTS_PER_CONVERSATION {
+    for device in 0..MAX_SHARE_GRANTS_PER_CONVERSATION {
         assert!(grant(&opened.store, &id, &format!("device-{device}")).await);
     }
     let refused = opened
         .store
         .change(grant_change(
-            ReadGrantTransition::Grant,
+            ShareGrantTransition::Grant(ShareAccess::read()),
             &id,
             Some("one-more"),
             "one-more-credential",
@@ -3119,7 +3117,7 @@ async fn a_conversation_holds_a_bounded_number_of_grants() {
     assert!(!opened.store.is_granted(&id, "one-more").await.unwrap());
     assert_eq!(
         opened.store.grants(&id).await.unwrap().len() as i64,
-        MAX_READ_GRANTS_PER_CONVERSATION
+        MAX_SHARE_GRANTS_PER_CONVERSATION
     );
 }
 
@@ -3128,7 +3126,7 @@ async fn a_conversation_holds_a_bounded_number_of_grants() {
 /// writes nothing.
 #[tokio::test]
 async fn a_grant_on_another_owners_conversation_writes_nothing() {
-    use crate::conversation::application::{ConversationError, ReadGrantTransition, ReadGrants};
+    use crate::conversation::application::{ConversationError, ShareGrantTransition, ShareGrants};
     let opened = opened();
     let id = new_id();
     opened
@@ -3136,7 +3134,10 @@ async fn a_grant_on_another_owners_conversation_writes_nothing() {
         .create(owned_by(&id, "org", "bob", 1))
         .await
         .unwrap();
-    for transition in [ReadGrantTransition::Grant, ReadGrantTransition::Revoke] {
+    for transition in [
+        ShareGrantTransition::Grant(ShareAccess::read()),
+        ShareGrantTransition::Revoke,
+    ] {
         let refused = opened
             .store
             .change(grant_change(
@@ -3155,7 +3156,7 @@ async fn a_grant_on_another_owners_conversation_writes_nothing() {
     }
     let written: i64 = raw(&opened.path)
         .query_row(
-            "SELECT (SELECT COUNT(*) FROM read_grants) + (SELECT COUNT(*) FROM read_grant_changes)",
+            "SELECT (SELECT COUNT(*) FROM share_grants) + (SELECT COUNT(*) FROM share_grant_changes)",
             [],
             |row| row.get(0),
         )
@@ -3163,7 +3164,7 @@ async fn a_grant_on_another_owners_conversation_writes_nothing() {
     assert_eq!(written, 0);
 }
 
-/// One `read_grant_changes` row, in column order.
+/// One `share_grant_changes` row, in column order.
 type JournalRow = (
     String,
     String,
@@ -3184,10 +3185,14 @@ async fn every_grant_change_is_journaled_with_its_initiator() {
     let id = new_id();
     opened.store.create(owned(&id)).await.unwrap();
     {
-        use crate::conversation::application::{ReadGrantTransition, ReadGrants};
+        use crate::conversation::application::{ShareGrantTransition, ShareGrants};
         for (transition, receiver, request) in [
-            (ReadGrantTransition::Grant, Some("phone"), "share"),
-            (ReadGrantTransition::Revoke, None, "unshare"),
+            (
+                ShareGrantTransition::Grant(ShareAccess::read()),
+                Some("phone"),
+                "share",
+            ),
+            (ShareGrantTransition::Revoke, None, "unshare"),
         ] {
             assert!(opened
                 .store
@@ -3217,7 +3222,7 @@ async fn every_grant_change_is_journaled_with_its_initiator() {
         .prepare(
             "SELECT conversation_id, receiver_id, credential_id, before, after, initiator,
                     surface, request, changed_at_ms, revision
-             FROM read_grant_changes ORDER BY sequence",
+             FROM share_grant_changes ORDER BY sequence",
         )
         .unwrap();
     let rows: Vec<JournalRow> = statement
@@ -3259,4 +3264,371 @@ async fn every_grant_change_is_journaled_with_its_initiator() {
             row("read", "none", "unshare", head),
         ]
     );
+}
+
+// Roles and tool policies (issue 707): rows J1, J4, J5, J6, J8 and J9 of
+// docs/design/read-grants.md.
+
+fn drive_with(policy: ToolPolicy) -> ShareAccess {
+    ShareAccess::new(ShareRole::Drive, Some(policy)).unwrap()
+}
+fn no_shell() -> ShareAccess {
+    drive_with(ToolPolicy::Preset(ToolPreset::NoShell))
+}
+fn rules() -> ShareAccess {
+    drive_with(ToolPolicy::Rules(
+        ToolRules::new(vec!["Read".into()], vec!["Bash(rm -rf:*)".into()]).unwrap(),
+    ))
+}
+/// Share `receiver` `access` on `id` under request `request`.
+async fn share_as(
+    store: &LocalConversationStore,
+    id: &ConversationId,
+    receiver: &str,
+    access: ShareAccess,
+    request: &str,
+) -> Result<bool, crate::conversation::application::ConversationError> {
+    use crate::conversation::application::{ShareGrantTransition, ShareGrants};
+    store
+        .change(grant_change(
+            ShareGrantTransition::Grant(access),
+            id,
+            Some(receiver),
+            &format!("{receiver}-credential"),
+            request,
+        ))
+        .await
+}
+/// The one grant on `id`.
+async fn only_grant(
+    store: &LocalConversationStore,
+    id: &ConversationId,
+) -> crate::conversation::application::ShareGrant {
+    use crate::conversation::application::ShareGrants;
+    let mut grants = store.grants(id).await.unwrap();
+    assert_eq!(grants.len(), 1);
+    grants.remove(0)
+}
+/// Each journal row: role and policy before and after, its revision and its
+/// sequence.
+type RoleRow = (String, String, Option<String>, Option<String>, i64, i64);
+fn role_journal(path: &Path) -> Vec<RoleRow> {
+    raw(path)
+        .prepare(
+            "SELECT before, after, policy_before, policy_after, revision, sequence
+             FROM share_grant_changes ORDER BY sequence",
+        )
+        .unwrap()
+        .query_map([], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+            ))
+        })
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+}
+async fn owner_head(store: &LocalConversationStore) -> u64 {
+    store
+        .head(&org(), &alice(), &Reader::Owner)
+        .await
+        .unwrap()
+        .revision
+}
+
+/// Row J1, in the catalogue: a Comment or a Drive grant pages, resolves and
+/// moves the device's head exactly as a Read grant does.
+#[tokio::test]
+async fn a_comment_or_drive_grant_pages_and_resolves_as_read_does() {
+    use crate::conversation::application::ShareGrants;
+    let seen = |access: ShareAccess| async move {
+        let opened = opened();
+        let (shared, private) = (new_id(), new_id());
+        opened.store.create(owned(&shared)).await.unwrap();
+        opened.store.create(owned(&private)).await.unwrap();
+        assert!(share_as(&opened.store, &shared, "phone", access, "share")
+            .await
+            .unwrap());
+        let pass = device_pass(&opened.store, device("phone"), 0).await;
+        let head = opened
+            .store
+            .head(&org(), &alice(), &device("phone"))
+            .await
+            .unwrap();
+        let mut resolved = Vec::new();
+        for id in [&shared, &private] {
+            resolved.push(
+                opened
+                    .store
+                    .resolve(&org(), &alice(), &device("phone"), &head.incarnation, id)
+                    .await
+                    .unwrap()
+                    .is_some(),
+            );
+        }
+        let granted = opened.store.is_granted(&shared, "phone").await.unwrap();
+        (
+            pass.into_iter()
+                .map(|(id, revision)| (id == shared, revision))
+                .collect::<Vec<_>>(),
+            head.revision,
+            resolved,
+            granted,
+        )
+    };
+    let read = seen(ShareAccess::read()).await;
+    assert_eq!(read, (vec![(true, 3)], 3, vec![true, false], true));
+    for access in crate::conversation_test_support::roles_beyond_read() {
+        assert_eq!(seen(access.clone()).await, read, "{access:?}");
+    }
+}
+
+/// Row J4: sharing again with another role or policy replaces them. It is
+/// applied and journaled with the role and policy before and after; the
+/// grant's policy revision moves to that journal row; the catalogue revision
+/// and the device's head stay where they were, because what it reads did
+/// not change.
+#[tokio::test]
+async fn a_change_of_role_or_policy_is_applied_journaled_and_moves_the_policy_revision() {
+    let opened = opened();
+    let store = &opened.store;
+    let id = new_id();
+    store.create(owned(&id)).await.unwrap();
+    assert!(share_as(store, &id, "phone", ShareAccess::read(), "share")
+        .await
+        .unwrap());
+    let read = only_grant(store, &id).await;
+    let head = owner_head(store).await;
+    let device_head = store
+        .head(&org(), &alice(), &device("phone"))
+        .await
+        .unwrap()
+        .revision;
+    assert!(share_as(store, &id, "phone", no_shell(), "to-drive")
+        .await
+        .unwrap());
+    let driving = only_grant(store, &id).await;
+    assert_eq!(driving.access, no_shell());
+    assert!(driving.policy_revision > read.policy_revision);
+    assert_eq!(driving.granted_at_ms, read.granted_at_ms);
+    assert!(share_as(store, &id, "phone", rules(), "to-rules")
+        .await
+        .unwrap());
+    let ruled = only_grant(store, &id).await;
+    assert_eq!(ruled.access, rules());
+    assert!(ruled.policy_revision > driving.policy_revision);
+    assert!(
+        share_as(store, &id, "phone", ShareAccess::read(), "to-read")
+            .await
+            .unwrap()
+    );
+    let back = only_grant(store, &id).await;
+    assert_eq!(back.access, ShareAccess::read());
+    assert!(back.policy_revision > ruled.policy_revision);
+    assert_eq!(owner_head(store).await, head, "no catalogue revision moved");
+    assert_eq!(
+        store
+            .head(&org(), &alice(), &device("phone"))
+            .await
+            .unwrap()
+            .revision,
+        device_head
+    );
+    let journal = role_journal(&opened.path);
+    let no_shell_text = Some(r#"{"preset":"no_shell"}"#.to_owned());
+    let rules_text = Some(r#"{"allow":["Read"],"deny":["Bash(rm -rf:*)"]}"#.to_owned());
+    let revision = i64::try_from(head).unwrap();
+    let row = |before: &str,
+               after: &str,
+               policy_before: &Option<String>,
+               policy_after: &Option<String>| {
+        (
+            before.to_owned(),
+            after.to_owned(),
+            policy_before.clone(),
+            policy_after.clone(),
+        )
+    };
+    assert_eq!(
+        journal
+            .iter()
+            .map(|(before, after, policy_before, policy_after, _, _)| row(
+                before,
+                after,
+                policy_before,
+                policy_after
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            row("none", "read", &None, &None),
+            row("read", "drive", &None, &no_shell_text),
+            row("drive", "drive", &no_shell_text, &rules_text),
+            row("drive", "read", &rules_text, &None),
+        ]
+    );
+    assert!(journal.iter().all(|entry| entry.4 == revision));
+    let sequences: Vec<u64> = journal
+        .iter()
+        .map(|entry| u64::try_from(entry.5).unwrap())
+        .collect();
+    assert_eq!(
+        sequences,
+        vec![
+            read.policy_revision,
+            driving.policy_revision,
+            ruled.policy_revision,
+            back.policy_revision
+        ]
+    );
+}
+
+/// Row J5: sharing the role and policy already held changes nothing: not
+/// applied, journaled with before equal to after, the policy revision kept.
+#[tokio::test]
+async fn an_identical_share_changes_nothing_and_keeps_the_policy_revision() {
+    let opened = opened();
+    let store = &opened.store;
+    let id = new_id();
+    store.create(owned(&id)).await.unwrap();
+    assert!(share_as(store, &id, "phone", rules(), "share")
+        .await
+        .unwrap());
+    let first = only_grant(store, &id).await;
+    let head = owner_head(store).await;
+    assert!(!share_as(store, &id, "phone", rules(), "again")
+        .await
+        .unwrap());
+    assert_eq!(only_grant(store, &id).await, first);
+    assert_eq!(owner_head(store).await, head);
+    let journal = role_journal(&opened.path);
+    assert_eq!(journal.len(), 2);
+    let (before, after, policy_before, policy_after, _, _) = &journal[1];
+    assert_eq!((before, policy_before), (after, policy_after));
+    assert_eq!(after, "drive");
+}
+
+/// Row J6: a share retried with its request id answers what it answered the
+/// first time and changes nothing, even after a later change of role; the
+/// same request naming another role or another policy is refused.
+#[tokio::test]
+async fn a_retried_share_replays_its_role_and_policy_or_is_refused() {
+    use crate::conversation::application::ConversationError;
+    let opened = opened();
+    let store = &opened.store;
+    let id = new_id();
+    store.create(owned(&id)).await.unwrap();
+    assert!(share_as(store, &id, "phone", no_shell(), "share-1")
+        .await
+        .unwrap());
+    assert!(
+        share_as(store, &id, "phone", ShareAccess::read(), "share-2")
+            .await
+            .unwrap()
+    );
+    assert!(share_as(store, &id, "phone", no_shell(), "share-1")
+        .await
+        .unwrap());
+    assert_eq!(only_grant(store, &id).await.access, ShareAccess::read());
+    let comment = ShareAccess::new(ShareRole::Comment, None).unwrap();
+    for other in [comment, rules(), ShareAccess::read()] {
+        let refused = share_as(store, &id, "phone", other.clone(), "share-1").await;
+        assert!(
+            matches!(refused, Err(ConversationError::InvalidInput)),
+            "{other:?}: {:?}",
+            refused.map_err(|error| error.to_string())
+        );
+    }
+    assert_eq!(role_journal(&opened.path).len(), 2);
+    assert_eq!(only_grant(store, &id).await.access, ShareAccess::read());
+}
+
+/// Row J8: a revoke ends a grant of any role, journaled with the role and
+/// policy it took away.
+#[tokio::test]
+async fn a_revoke_ends_a_grant_of_any_role() {
+    use crate::conversation::application::ShareGrants;
+    let comment = ShareAccess::new(ShareRole::Comment, None).unwrap();
+    for (access, role, policy) in [
+        (comment, "comment", None),
+        (
+            no_shell(),
+            "drive",
+            Some(r#"{"preset":"no_shell"}"#.to_owned()),
+        ),
+    ] {
+        let opened = opened();
+        let id = new_id();
+        opened.store.create(owned(&id)).await.unwrap();
+        assert!(share_as(&opened.store, &id, "phone", access, "share")
+            .await
+            .unwrap());
+        assert!(revoke(&opened.store, &id, "phone").await);
+        assert!(!opened.store.is_granted(&id, "phone").await.unwrap());
+        assert!(opened.store.grants(&id).await.unwrap().is_empty());
+        assert!(device_pass(&opened.store, device("phone"), 0)
+            .await
+            .is_empty());
+        let journal = role_journal(&opened.path);
+        let last = journal.last().unwrap();
+        assert_eq!(
+            (last.0.as_str(), last.1.as_str(), &last.2, &last.3),
+            (role, "none", &policy, &None)
+        );
+    }
+}
+
+/// Row J9: a conversation holds at most `MAX_DRIVE_GRANTS_PER_CONVERSATION`
+/// Drive grants; one more, new or a change from another role, is refused and
+/// writes nothing.
+#[tokio::test]
+async fn a_conversation_holds_a_bounded_number_of_drive_grants() {
+    use crate::conversation::application::{
+        ConversationError, ShareGrants, MAX_DRIVE_GRANTS_PER_CONVERSATION,
+    };
+    let opened = opened();
+    let store = &opened.store;
+    let id = new_id();
+    store.create(owned(&id)).await.unwrap();
+    for n in 0..MAX_DRIVE_GRANTS_PER_CONVERSATION {
+        assert!(share_as(
+            store,
+            &id,
+            &format!("driver-{n}"),
+            no_shell(),
+            &format!("drive-{n}")
+        )
+        .await
+        .unwrap());
+    }
+    let journaled = role_journal(&opened.path).len();
+    assert!(matches!(
+        share_as(store, &id, "one-more", no_shell(), "one-more").await,
+        Err(ConversationError::InvalidInput)
+    ));
+    assert!(!store.is_granted(&id, "one-more").await.unwrap());
+    assert!(
+        share_as(store, &id, "reader", ShareAccess::read(), "reader")
+            .await
+            .unwrap()
+    );
+    assert!(matches!(
+        share_as(store, &id, "reader", no_shell(), "reader-drives").await,
+        Err(ConversationError::InvalidInput)
+    ));
+    assert_eq!(role_journal(&opened.path).len(), journaled + 1);
+    let grants = store.grants(&id).await.unwrap();
+    let driving = grants
+        .iter()
+        .filter(|grant| grant.access.role() == ShareRole::Drive)
+        .count();
+    assert_eq!(driving as i64, MAX_DRIVE_GRANTS_PER_CONVERSATION);
+    // A driver's own policy can still change: it takes no new Drive grant.
+    assert!(share_as(store, &id, "driver-0", rules(), "driver-0-rules")
+        .await
+        .unwrap());
 }
