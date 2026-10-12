@@ -218,7 +218,9 @@ struct LeaseRoute {
     /// which answers each unanswered.
     publishes: HashMap<String, oneshot::Sender<Result<(), PublishFailure>>>,
     /// Each fetch this gateway asked under it, by request, waiting for the
-    /// host's answers. Dropped with the route, which ends each wait.
+    /// host's answers. Dropped with the route, which ends each wait. One
+    /// given up before the host's last word stays, answered to nobody, so
+    /// its request is never asked again under this lease.
     fetches: HashMap<String, mpsc::Sender<FetchAnswer>>,
     /// Each read of a published file this gateway asked under it, by
     /// artifact and offset, waiting for the host's bytes or why not.
@@ -1868,7 +1870,19 @@ impl Drop for Fetching {
         // queued, so the host settles the fetch as given up, never as the
         // lease's end. One already asked goes first, as it was asked first.
         let held = routes.leases.get_mut(&self.lease).map(|route| {
-            route.fetches.remove(&self.request);
+            match self.undelivered {
+                // The host may still answer the fetch given up, so its
+                // request stays taken for the lease's life: answered to
+                // nobody, and never asked again under the same id, whose
+                // late words would be taken as the new ask's.
+                true => {
+                    let (retired, _) = mpsc::channel(1);
+                    route.fetches.insert(self.request.clone(), retired);
+                }
+                false => {
+                    route.fetches.remove(&self.request);
+                }
+            }
             match route.ending {
                 true => None,
                 false => route.pumps.clone().try_read_owned().ok(),
