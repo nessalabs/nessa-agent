@@ -1551,6 +1551,99 @@ async fn a_fetch_given_up_keeps_its_request_from_being_asked_again() {
     assert_eq!(asked, 1, "the second ask is never sent");
 }
 
+/// The requests kept from being asked again are bounded per lease: past
+/// the bound the oldest given up may be asked again, the newer still not.
+#[tokio::test]
+async fn the_requests_kept_from_being_asked_again_are_bounded() {
+    use super::link::RETIRED_FETCHES;
+    use crate::conversation::application::{
+        EnvironmentFuture, FetchAsk, FetchFailure, HeldSource, HeldSourceFailure,
+    };
+    use nessa_protocol::lease::FetchRefusal;
+    use nessa_sdk::application::agent_execution::sessions::PublishedFile;
+    use nessa_sdk::domain::common::value_objects::{MediaType, Sha256Digest};
+    struct Unread;
+    impl HeldSource for Unread {
+        fn read(
+            &self,
+            _offset: u64,
+            _max: usize,
+        ) -> EnvironmentFuture<'_, Result<Vec<u8>, HeldSourceFailure>> {
+            Box::pin(async { Err(HeldSourceFailure::NotHeld) })
+        }
+    }
+    let ask = |request: String| FetchAsk {
+        request,
+        destination: "a.bin".into(),
+        file: PublishedFile::new(
+            Sha256Digest::parse(&format!("sha256:{}", "0".repeat(64))).unwrap(),
+            MediaType::parse("application/octet-stream").unwrap(),
+            1,
+        )
+        .unwrap(),
+        source: Arc::new(Unread),
+        delivered: Arc::default(),
+    };
+    let (_open, gate) = tokio::sync::watch::channel(true);
+    let connector = Connector::new(Reach::Stalling(gate));
+    let environment = environment(connector.clone(), Arc::new(Audit::default()));
+    let (binding, _host) = binding(true);
+    let opened = environment
+        .open(&lease(), &terms("claude"), binding)
+        .await
+        .unwrap_or_else(|_| panic!("granted"));
+    for n in 0..=RETIRED_FETCHES {
+        let mut fetch = opened
+            .hold
+            .fetch(ask(format!("r{n}")))
+            .expect("a host's lease fetches");
+        tokio::select! {
+            biased;
+            _ = &mut fetch => panic!("answered before the host could accept it"),
+            () = std::future::ready(()) => {}
+        }
+        drop(fetch);
+    }
+    // The newest kept is still refused before anything is sent.
+    let kept = opened
+        .hold
+        .fetch(ask("r1".into()))
+        .expect("a host's lease fetches");
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(10), kept)
+            .await
+            .expect("refused at once"),
+        Err(FetchFailure::Refused(FetchRefusal::Invalid))
+    ));
+    // The oldest, past the bound, is asked again.
+    let mut again = opened
+        .hold
+        .fetch(ask("r0".into()))
+        .expect("a host's lease fetches");
+    tokio::select! {
+        biased;
+        _ = &mut again => panic!("the oldest given up is asked again, not refused"),
+        () = std::future::ready(()) => {}
+    }
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while connector
+            .frames
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(
+                |frame| matches!(frame, ToEnvironment::Fetch { request, .. } if request == "r0"),
+            )
+            .count()
+            < 2
+        {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the oldest is asked again");
+}
+
 /// A harness's stop and a lease's end are delivered even when the host's
 /// queue is full when they are asked: a stop let go of, an end abandoned,
 /// and an end whose caller stopped waiting before it was queued all reach

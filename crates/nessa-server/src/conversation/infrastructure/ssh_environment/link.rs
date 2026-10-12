@@ -80,7 +80,7 @@ use nessa_protocol::lease::{
 };
 use nessa_sdk::domain::agent_execution::leases::{LeaseEndCause, LeaseRefusal, SshDestination};
 use std::{
-    collections::{hash_map::Entry, BTreeMap, HashMap, HashSet},
+    collections::{hash_map::Entry, BTreeMap, HashMap, HashSet, VecDeque},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, MutexGuard, PoisonError},
     time::Duration,
@@ -99,6 +99,9 @@ const OUTPUT_QUEUE: usize = 128;
 const PIPE_BYTES: usize = 64 * 1024;
 /// Most drops one connection records; more are counted in the log.
 const MAX_RECORDED_DROPS: u32 = 64;
+/// Most requests of fetches given up one lease keeps from being asked
+/// again; older ones may be asked again, their host long since done.
+pub(super) const RETIRED_FETCHES: usize = 64;
 /// How long a stop waits beyond every step the host takes
 /// ([`stop_steps`]) for its answer: the host recording it, and the frames'
 /// way there and back.
@@ -218,10 +221,11 @@ struct LeaseRoute {
     /// which answers each unanswered.
     publishes: HashMap<String, oneshot::Sender<Result<(), PublishFailure>>>,
     /// Each fetch this gateway asked under it, by request, waiting for the
-    /// host's answers. Dropped with the route, which ends each wait. One
-    /// given up before the host's last word stays, answered to nobody, so
-    /// its request is never asked again under this lease.
+    /// host's answers. Dropped with the route, which ends each wait.
     fetches: HashMap<String, mpsc::Sender<FetchAnswer>>,
+    /// The requests of the last fetches given up before the host's last
+    /// word, oldest first: not asked again under this lease while kept.
+    retired_fetches: VecDeque<String>,
     /// Each read of a published file this gateway asked under it, by
     /// artifact and offset, waiting for the host's bytes or why not.
     /// Dropped with the route, which ends each wait.
@@ -786,6 +790,7 @@ impl HostLink {
                     ending_cause: ending_sender,
                     publishes: HashMap::new(),
                     fetches: HashMap::new(),
+                    retired_fetches: VecDeque::new(),
                     reads: HashMap::new(),
                     gone: gone_sender,
                 },
@@ -1169,7 +1174,7 @@ impl HostLink {
                 return Err(FetchFailure::Refused(FetchRefusal::LeaseEnded));
             };
             // One ask per request: the caller holds each until answered.
-            if route.fetches.contains_key(&request) {
+            if route.fetches.contains_key(&request) || route.retired_fetches.contains(&request) {
                 return Err(FetchFailure::Refused(FetchRefusal::Invalid));
             }
             // The host says at most two things of one fetch.
@@ -1235,8 +1240,21 @@ impl HostLink {
         // Room for it first, then marked, then queued with nothing awaited
         // between: marked exactly when the host may place it, so a call
         // given up while the queue is full keeps no bytes counted.
-        let Ok(permit) = self.frames.reserve().await else {
-            return Err(FetchFailure::Unanswered);
+        // The host's last word while waiting for room is still its answer.
+        let permit = tokio::select! {
+            biased;
+            answer = answers.recv() => {
+                fetching.undelivered = false;
+                return match answer {
+                    Some(FetchAnswer::Fetched(outcome)) => fetched(outcome),
+                    Some(FetchAnswer::Refused(reason)) => Err(FetchFailure::Refused(reason)),
+                    _ => Err(FetchFailure::Refused(FetchRefusal::LeaseEnded)),
+                };
+            }
+            permit = self.frames.reserve() => match permit {
+                Ok(permit) => permit,
+                Err(_) => return Err(FetchFailure::Unanswered),
+            },
         };
         said_delivered.store(true, std::sync::atomic::Ordering::SeqCst);
         permit.send(delivered);
@@ -1870,18 +1888,16 @@ impl Drop for Fetching {
         // queued, so the host settles the fetch as given up, never as the
         // lease's end. One already asked goes first, as it was asked first.
         let held = routes.leases.get_mut(&self.lease).map(|route| {
-            match self.undelivered {
-                // The host may still answer the fetch given up, so its
-                // request stays taken for the lease's life: answered to
-                // nobody, and never asked again under the same id, whose
-                // late words would be taken as the new ask's.
-                true => {
-                    let (retired, _) = mpsc::channel(1);
-                    route.fetches.insert(self.request.clone(), retired);
+            route.fetches.remove(&self.request);
+            // The host may still answer the fetch given up, so its request
+            // is not asked again under the same id, whose late words would
+            // be taken as the new ask's: kept among the lease's last
+            // [`RETIRED_FETCHES`] given up, answered to nobody.
+            if self.undelivered {
+                if route.retired_fetches.len() == RETIRED_FETCHES {
+                    route.retired_fetches.pop_front();
                 }
-                false => {
-                    route.fetches.remove(&self.request);
-                }
+                route.retired_fetches.push_back(self.request.clone());
             }
             match route.ending {
                 true => None,
