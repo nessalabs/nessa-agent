@@ -450,7 +450,7 @@ impl ExecutionController {
     ///
     /// This is the caller's answer, so it cannot claim the deadline decided:
     /// that is InvalidInput, and the review stays pending. Only the worker that
-    /// armed the deadline settles it, through [`Self::settle_deadline`].
+    /// armed the deadline settles it, through `settle_deadline`.
     pub fn answer_permission(
         &mut self,
         answer: PermissionAnswer,

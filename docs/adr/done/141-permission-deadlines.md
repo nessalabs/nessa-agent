@@ -3,7 +3,7 @@
 ## Purpose
 
 An agent that is waiting on a person who is not there should keep working.
-This decision gives each tool review the live worker is holding a deadline and
+This decision gives each tool review held by the live worker a deadline and
 a default outcome, so the turn ends that wait on its own and the model is told
 what happened. An app review has no deadline, and a review restored after a
 restart is not re-armed.
