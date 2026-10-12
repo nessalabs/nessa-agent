@@ -28,6 +28,9 @@
 //! a lease lasts its granted leaseMs ──▶ ledger: expiring ──▶ stop every harness
 //!     ──▶ ledger: ended(expired) ──▶ Ending{expired}; the gateway's End is
 //!     answered with what that took
+//!                          ──Revoked──▶ for each lease held: ledger: revoking
+//!                                       ──▶ stop everything under it ──▶ ledger: ended(revoked);
+//!                                       nothing more admitted; each `End` answered with that
 //! end of stream, or nothing read for `silence` ──▶ every lease ended as lost
 //!                                                ──▶ ledger: ended(lost)
 //! ```
@@ -71,6 +74,12 @@
 //! the one authority on it, and says so with `Ending`. A deadline passing is
 //! not the gateway heard from. A command lease is bounded by its own
 //! timeout instead.
+//!
+//! A gateway that no longer lets this host serve it (its credential there
+//! was revoked) says `Revoked`: every lease held on the connection is ended
+//! with that cause, recorded first as the expiry's is, and nothing more is
+//! admitted on it. The gateway asks each lease's `End`, answered with what
+//! that end took, and closes the connection.
 //!
 //! A lease's end is answered by that end alone: an `Account`, or another
 //! `End`, of a lease whose end is still under way waits for it, rather than
@@ -149,6 +158,10 @@ pub(crate) enum CommandStop {
     Ended,
     /// The gateway's connection ended.
     Lost,
+    /// The gateway no longer lets this host serve it; `recorded` says
+    /// whether that was recorded for the lease, and unrecorded its end
+    /// settles nothing.
+    Revoked { recorded: bool },
 }
 
 /// What running one command came to.
@@ -233,6 +246,9 @@ pub(crate) enum LedgerEntry {
     },
     /// A lease lasted the `lease_ms` it was granted: this side is ending it.
     Expiring { lease: String, lease_ms: u64 },
+    /// `peer`, the gateway the lease was for, said it no longer lets this
+    /// host serve it (`Revoked`): this side is ending the lease.
+    Revoking { lease: String, peer: Peer },
     /// A lease ended, for `cause`, with what stopping everything under it
     /// took.
     Ended {
@@ -305,6 +321,8 @@ pub(crate) enum EndCause {
     Lost,
     /// It lasted as long as it was granted.
     Expired,
+    /// The gateway it was for no longer lets this host serve it.
+    Revoked,
 }
 
 /// The environment's own audit of its leases, and the evidence it answers
@@ -427,6 +445,7 @@ pub(crate) async fn serve<R, W>(
         granted: HashSet::new(),
         ends: HashMap::new(),
         commands: HashMap::new(),
+        revoked: false,
         runner: commands,
         serving,
         frames,
@@ -615,6 +634,8 @@ struct Served {
     /// The command leases granted on this connection and not yet ended by
     /// the gateway, by id.
     commands: HashMap<String, HeldCommand>,
+    /// The gateway said `Revoked`: nothing more is admitted here.
+    revoked: bool,
     /// How this host runs commands; `None` when it is not configured to.
     runner: Option<Arc<dyn CommandRunner>>,
     serving: Serving,
@@ -754,6 +775,7 @@ impl Served {
                 });
             }
             ToEnvironment::Keepalive => {}
+            ToEnvironment::Revoked => self.revoke(),
             ToEnvironment::Collected {
                 lease,
                 artifact,
@@ -936,6 +958,9 @@ impl Served {
             Some(GrantRefusal::Duplicate)
         } else if let Some(refusal) = self.recorded_before(&lease) {
             Some(refusal)
+        } else if self.revoked {
+            // The gateway said it no longer lets this host serve it.
+            Some(GrantRefusal::NotGranted)
         } else if admit_agent(&self.grant_now(), &agent)
             .map(|admitted| lease_ms = admitted)
             .is_err()
@@ -1281,16 +1306,17 @@ impl Served {
     /// End `lease` on a task of its own: stop every harness still running
     /// under it, wait for the stops already under way, record what all of it
     /// took and, when the gateway asked for it, answer it after every answer
-    /// those stops send. One lost with the connection, or expired, is not
-    /// answered unasked: its cleanup answers the gateway's `End` or
+    /// those stops send. One lost with the connection, expired or revoked
+    /// is not answered unasked: its cleanup answers the gateway's `End` or
     /// `Account`. Unless what made it end was `recorded`, its cleanup is
     /// uncertain.
     fn end(&mut self, lease: String, mut held: Held, cause: EndCause, recorded: bool) {
         // Nothing more is published under it, and nothing it staged is read
-        // again: the gateway ended it, is gone, or it expired. Only the
-        // gateway's own end says what it made of a file still in flight
-        // (it took none); once lost or expired, the gateway may have kept
-        // it, so it is recorded unanswered rather than refused.
+        // again: the gateway ended or revoked it, is gone, or it expired.
+        // Only the gateway's own end says what it made of a file still in
+        // flight (it took none); once lost, expired or revoked, the gateway
+        // may have kept it, so it is recorded unanswered rather than
+        // refused.
         if let Some(artifacts) = held.artifacts.take() {
             artifacts.end(cause != EndCause::Asked);
         }
@@ -1370,6 +1396,8 @@ impl Served {
             Err(GrantRefusal::Duplicate)
         } else if let Some(refusal) = self.recorded_before(&lease) {
             Err(refusal)
+        } else if self.revoked {
+            Err(GrantRefusal::NotGranted)
         } else {
             // The peer's grant first: a peer granted no commands learns
             // nothing of whether the host runs any.
@@ -1482,7 +1510,19 @@ impl Served {
                 Some(running) => running.await,
                 None => CommandRan::not_started(),
             };
-            let lost = *stopped.borrow() == Some(CommandStop::Lost);
+            let stop = *stopped.borrow();
+            let lost = stop == Some(CommandStop::Lost);
+            let cause = match stop {
+                Some(CommandStop::Lost) => EndCause::Lost,
+                Some(CommandStop::Revoked { recorded }) => {
+                    // What ended it went unrecorded: it settles nothing.
+                    if !recorded {
+                        outcome.cleanup = Cleanup::Uncertain;
+                    }
+                    EndCause::Revoked
+                }
+                Some(CommandStop::Ended) | None => EndCause::Asked,
+            };
             // Its end is written after its exit, and says uncertain once the
             // exit could not be written, so the ledger never reads confirmed
             // over a missing record.
@@ -1498,11 +1538,7 @@ impl Served {
             let ended_entry = LedgerEntry::Ended {
                 lease: lease.clone(),
                 cleanup: outcome.cleanup,
-                cause: if lost {
-                    EndCause::Lost
-                } else {
-                    EndCause::Asked
-                },
+                cause,
             };
             if let Err(error) = ledger.record(&ended_entry) {
                 tracing::error!(lease, %error, "a command's end could not be recorded");
@@ -1558,16 +1594,91 @@ impl Served {
 
     /// Record the end of a command lease whose command never ran.
     fn end_unrun(&self, lease: &str, cause: EndCause) -> Cleanup {
+        self.end_unrun_with(lease, cause, Cleanup::NotHeld)
+    }
+
+    /// Record the end of a command lease whose command never ran, with
+    /// `cleanup`: nothing held, or uncertain when what ended it went
+    /// unrecorded.
+    fn end_unrun_with(&self, lease: &str, cause: EndCause, cleanup: Cleanup) -> Cleanup {
         let entry = LedgerEntry::Ended {
             lease: lease.into(),
-            cleanup: Cleanup::NotHeld,
+            cleanup,
             cause,
         };
         match self.ledger.record(&entry) {
-            Ok(()) => Cleanup::NotHeld,
+            Ok(()) => cleanup,
             Err(error) => {
                 tracing::error!(lease, %error, "a command lease's end could not be recorded");
                 Cleanup::Uncertain
+            }
+        }
+    }
+
+    /// The gateway no longer lets this host serve it: end every lease held
+    /// on this connection as revoked, each recorded `revoking` first, as an
+    /// expiry is, and admit nothing more on it. Nothing here waits: each
+    /// harness lease ends as an end does, on tasks of its own, and its
+    /// `End` is answered with what that took; a running command is stopped
+    /// and answers with its `Ran`; one granted and never run ends holding
+    /// nothing. Said twice, it is acted on once.
+    fn revoke(&mut self) {
+        if std::mem::replace(&mut self.revoked, true) {
+            return;
+        }
+        tracing::warn!(
+            leases = self.leases.len(),
+            commands = self.commands.len(),
+            "the gateway no longer lets this host serve it; every lease it holds here ends"
+        );
+        let mut leases: Vec<_> = self.leases.drain().collect();
+        leases.sort_by(|(left, _), (right, _)| left.cmp(right));
+        for (lease, held) in leases {
+            let recorded = self.revoking(&lease);
+            self.end(lease, held, EndCause::Revoked, recorded);
+        }
+        let mut commands: Vec<_> = self.commands.keys().cloned().collect();
+        commands.sort();
+        for lease in commands {
+            match self.commands.get(&lease) {
+                // Its own `Ran` answers, and the gateway's `End` of it waits
+                // for that; one already asked to stop ends as it was asked,
+                // and one whose end is recorded has ended already.
+                Some(running @ HeldCommand::Running { stop, .. })
+                    if running.runs() && stop.borrow().is_none() =>
+                {
+                    let recorded = self.revoking(&lease);
+                    if let Some(HeldCommand::Running { stop, .. }) = self.commands.get(&lease) {
+                        ask_stop(stop, CommandStop::Revoked { recorded });
+                    }
+                }
+                Some(HeldCommand::Granted(_)) => {
+                    self.commands.remove(&lease);
+                    let recorded = self.revoking(&lease);
+                    let cleanup = if recorded {
+                        Cleanup::NotHeld
+                    } else {
+                        Cleanup::Uncertain
+                    };
+                    self.end_unrun_with(&lease, EndCause::Revoked, cleanup);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Record that `lease` is ending because the gateway revoked this host:
+    /// whether that was recorded.
+    fn revoking(&self, lease: &str) -> bool {
+        let entry = LedgerEntry::Revoking {
+            lease: lease.into(),
+            peer: self.serving.peer,
+        };
+        match self.ledger.record(&entry) {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::error!(lease, %error, "a lease's revocation could not be recorded; it is ended still");
+                false
             }
         }
     }

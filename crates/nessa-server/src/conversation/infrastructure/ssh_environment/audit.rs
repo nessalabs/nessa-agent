@@ -1,7 +1,8 @@
 //! The gateway's own evidence about its SSH environments: each connection,
-//! each refusal by version or business, each connection lost, each frame
-//! dropped because it named no lease or harness the gateway holds (row L9),
-//! and each install of this build on a host, begun, done or refused.
+//! each refusal by version or business, each connection lost, each paired
+//! host revoked while connected, each frame dropped because it named no
+//! lease or harness the gateway holds (row L9), and each install of this
+//! build on a host, begun, done or refused.
 //! One immutable JSON file per record, like the gateway's other audits, with
 //! when it was observed.
 use serde::Serialize;
@@ -30,6 +31,10 @@ pub(crate) enum EnvironmentEvent {
     NotConfigured { host: String },
     /// A connection ended, ending every lease it carried.
     ConnectionLost { host: String, leases: Vec<String> },
+    /// A paired host no longer holds a credential to serve this gateway:
+    /// every lease its connection carried, `leases`, ends as revoked, and
+    /// the connection is closed once they are let go.
+    Revoked { host: String, leases: Vec<String> },
     /// A frame named a lease or harness this connection does not hold, or
     /// was not one this build reads, and was dropped.
     FrameDropped {

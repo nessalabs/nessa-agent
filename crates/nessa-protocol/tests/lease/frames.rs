@@ -84,6 +84,13 @@ fn every_frame_round_trips_and_names_its_lease() {
         decode(&body(&encode(&ToEnvironment::Keepalive).unwrap())).unwrap();
     assert_eq!(keepalive, ToEnvironment::Keepalive);
     assert_eq!(keepalive.lease(), None);
+    let revoked: ToEnvironment = decode(&body(&encode(&ToEnvironment::Revoked).unwrap())).unwrap();
+    assert_eq!(revoked, ToEnvironment::Revoked);
+    assert_eq!(revoked.lease(), None);
+    assert_eq!(
+        serde_json::to_value(ToEnvironment::Revoked).unwrap(),
+        serde_json::json!({"type": "revoked"})
+    );
     let from = [
         FromEnvironment::Granted {
             lease: "l".into(),

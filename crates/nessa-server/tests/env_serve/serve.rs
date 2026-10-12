@@ -173,6 +173,8 @@ struct MemoryLedger {
     failing_command_ran: AtomicBool,
     /// Refuses only a lease's expiry, likewise.
     failing_expiring: AtomicBool,
+    /// Refuses only a lease's revocation, likewise.
+    failing_revoking: AtomicBool,
 }
 
 impl MemoryLedger {
@@ -188,6 +190,8 @@ impl LeaseLedger for MemoryLedger {
                 && self.failing_command_ran.load(Ordering::SeqCst))
             || (matches!(entry, LedgerEntry::Expiring { .. })
                 && self.failing_expiring.load(Ordering::SeqCst))
+            || (matches!(entry, LedgerEntry::Revoking { .. })
+                && self.failing_revoking.load(Ordering::SeqCst))
         {
             return Err(io::Error::other("disk gone"));
         }
@@ -3786,4 +3790,194 @@ async fn a_lease_due_as_the_gateway_falls_silent_is_expired_not_lost() {
         LedgerEntry::Ended { lease, cause: EndCause::Lost, .. } if lease == LEASE
     )));
     gateway.served.abort();
+}
+
+// Row I8 on the host: the gateway says it no longer lets this host serve it.
+
+/// A dialed gateway granted everything, served on the runtime's clock.
+fn revocable(ledger: Arc<MemoryLedger>) -> Gateway {
+    let grants = MemoryGrants::none();
+    grants.set(DIALED, Some(PeerGrant::everything()));
+    Gateway::for_peer(
+        DIALED,
+        grants,
+        ledger,
+        Arc::new(NoOutbox),
+        true,
+        real_time(),
+    )
+}
+
+const UNRUN: &str = "0b7d3a1e-0000-4000-8000-0000000000c3";
+
+#[tokio::test]
+async fn a_revoked_gateway_has_every_lease_ended_recorded_revoked_and_its_ends_answered() {
+    let mut gateway = revocable(Arc::new(MemoryLedger::default()));
+    gateway.started(LEASE).await;
+    gateway.send(grant_command(COMMAND, &["wait"], None)).await;
+    gateway.next().await;
+    gateway
+        .send(ToEnvironment::Run {
+            lease: COMMAND.into(),
+        })
+        .await;
+    gateway.send(grant_command(UNRUN, &["wait"], None)).await;
+    gateway.next().await;
+    gateway.settled().await;
+    // Said twice, acted on once.
+    gateway.send(ToEnvironment::Revoked).await;
+    gateway.send(ToEnvironment::Revoked).await;
+    // Nothing more is admitted.
+    gateway
+        .send(ToEnvironment::Grant {
+            lease: OTHER_LEASE.into(),
+            agent: "claude".into(),
+            sandbox: Sandbox::HarnessDefault,
+        })
+        .await;
+    let (mut refused, mut ran) = (None, None);
+    while refused.is_none() || ran.is_none() {
+        match gateway.said().await {
+            frame @ FromEnvironment::Refused { .. } => refused = Some(frame),
+            frame @ FromEnvironment::Ran { .. } => ran = Some(frame),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+    assert_eq!(
+        refused,
+        Some(FromEnvironment::Refused {
+            lease: OTHER_LEASE.into(),
+            reason: GrantRefusal::NotGranted,
+        })
+    );
+    // The running command is stopped and answers with its `Ran`.
+    assert!(matches!(
+        ran,
+        Some(FromEnvironment::Ran {
+            end: CommandEnd::Stopped,
+            cleanup: Cleanup::Confirmed { forced: true },
+            ..
+        })
+    ));
+    // Each End is answered with what that end took.
+    for (lease, cleanup) in [
+        (LEASE, Cleanup::Confirmed { forced: false }),
+        (COMMAND, Cleanup::Confirmed { forced: true }),
+        (UNRUN, Cleanup::NotHeld),
+    ] {
+        gateway
+            .send(ToEnvironment::End {
+                lease: lease.into(),
+            })
+            .await;
+        assert_eq!(
+            gateway.said().await,
+            FromEnvironment::Ended {
+                lease: lease.into(),
+                cleanup,
+            }
+        );
+    }
+    assert_eq!(gateway.stopped.load(Ordering::SeqCst), 1);
+    let entries = gateway.ledger.entries();
+    for (lease, cleanup) in [
+        (LEASE, Cleanup::Confirmed { forced: false }),
+        (COMMAND, Cleanup::Confirmed { forced: true }),
+        (UNRUN, Cleanup::NotHeld),
+    ] {
+        let revoking = LedgerEntry::Revoking {
+            lease: lease.into(),
+            peer: DIALED,
+        };
+        let ended = LedgerEntry::Ended {
+            lease: lease.into(),
+            cleanup,
+            cause: EndCause::Revoked,
+        };
+        assert_eq!(
+            entries.iter().filter(|entry| **entry == revoking).count(),
+            1,
+            "{entries:?}"
+        );
+        let at = |wanted: &LedgerEntry| entries.iter().position(|entry| entry == wanted);
+        assert!(at(&revoking) < at(&ended), "{entries:?}");
+        assert_eq!(ended_entries(&gateway.ledger, lease), 1, "{entries:?}");
+    }
+    assert!(entries.contains(&LedgerEntry::Refused {
+        lease: OTHER_LEASE.into(),
+        peer: DIALED,
+        reason: GrantRefusal::NotGranted,
+        asked: Asked::Agent {
+            agent: "claude".into(),
+            sandbox: Sandbox::HarnessDefault,
+        },
+    }));
+}
+
+#[tokio::test]
+async fn a_revocation_that_cannot_be_recorded_still_stops_and_answers_uncertain() {
+    let ledger = Arc::new(MemoryLedger::default());
+    ledger.failing_revoking.store(true, Ordering::SeqCst);
+    let mut gateway = revocable(ledger.clone());
+    gateway.started(LEASE).await;
+    gateway.send(ToEnvironment::Revoked).await;
+    gateway
+        .send(ToEnvironment::End {
+            lease: LEASE.into(),
+        })
+        .await;
+    assert_eq!(
+        gateway.said().await,
+        FromEnvironment::Ended {
+            lease: LEASE.into(),
+            cleanup: Cleanup::Uncertain,
+        }
+    );
+    assert_eq!(gateway.stopped.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        ledger.entries().last(),
+        Some(&LedgerEntry::Ended {
+            lease: LEASE.into(),
+            cleanup: Cleanup::Uncertain,
+            cause: EndCause::Revoked,
+        })
+    );
+}
+
+#[tokio::test]
+async fn a_revocation_after_an_expiry_ends_the_lease_once_as_expired() {
+    let timer = Arc::new(ManualTimer::default());
+    let mut gateway = expiring(timer.clone(), Arc::new(MemoryLedger::default()));
+    gateway.started_expiring(LEASE).await;
+    timer.advance(MAX_LEASE);
+    assert_eq!(
+        gateway.said().await,
+        FromEnvironment::Ending {
+            lease: LEASE.into(),
+            cause: EndingCause::Expired,
+        }
+    );
+    gateway.send(ToEnvironment::Revoked).await;
+    assert_eq!(
+        gateway.ended(LEASE).await,
+        FromEnvironment::Ended {
+            lease: LEASE.into(),
+            cleanup: Cleanup::Confirmed { forced: false },
+        }
+    );
+    assert_eq!(gateway.stopped.load(Ordering::SeqCst), 1);
+    assert_eq!(ended_entries(&gateway.ledger, LEASE), 1);
+    assert!(!gateway
+        .ledger
+        .entries()
+        .iter()
+        .any(|entry| matches!(entry, LedgerEntry::Revoking { .. })));
+    assert_eq!(
+        gateway.ledger.entries().last(),
+        Some(&LedgerEntry::Ended {
+            lease: LEASE.into(),
+            cleanup: Cleanup::Confirmed { forced: false },
+            cause: EndCause::Expired,
+        })
+    );
 }

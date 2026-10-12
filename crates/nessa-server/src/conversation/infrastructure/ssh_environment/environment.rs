@@ -53,8 +53,7 @@ use crate::conversation::application::{
 };
 use nessa_auth::application::pairing::DeviceConnectionProof;
 use nessa_protocol::lease::{
-    self, Cleanup, CommandEnd, EndingCause, GrantRefusal, COMMAND_STOP_WAIT, KEEPALIVE_INTERVAL,
-    SILENCE_LIMIT,
+    self, Cleanup, CommandEnd, GrantRefusal, COMMAND_STOP_WAIT, KEEPALIVE_INTERVAL, SILENCE_LIMIT,
 };
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
@@ -202,9 +201,16 @@ impl SshEnvironment {
     /// Serve this paired environment's leases over `connection`, which
     /// proved `proof`, in place of any connection it had: that one is
     /// closed, and its leases are lost. Answers once the new connection
-    /// ends, or at once when its hello is refused.
+    /// ends, or at once when its hello is refused. While it lasts, whether
+    /// the key still serves is asked again every keepalive interval, and a
+    /// key that no longer does has its connection revoked.
     pub(super) async fn serve(&self, proof: DeviceConnectionProof, connection: LeaseConnection) {
-        let Reach::Peer { serving, .. } = &self.inner.reach else {
+        let Reach::Peer {
+            serving,
+            credentials,
+            ..
+        } = &self.inner.reach
+        else {
             return;
         };
         let opened = HostLink::over(
@@ -218,20 +224,27 @@ impl SshEnvironment {
         let Ok(link) = opened else {
             return;
         };
+        let proof = Arc::new(proof);
         let replaced = serving
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .replace(Served {
                 link: link.clone(),
-                proof: Arc::new(proof),
+                proof: proof.clone(),
             });
         if let Some(replaced) = replaced {
             replaced.link.close();
         }
-        link.ended().await;
+        tokio::select! {
+            () = link.ended() => {}
+            () = self.inner.until_revoked(credentials.as_ref(), &proof) => {
+                self.inner.revoke(&link);
+                link.ended().await;
+            }
+        }
     }
 
-    /// Whether a connection to it is open now.
+    /// Whether a connection to it serves leases now.
     pub(super) fn is_connected(&self) -> bool {
         self.reachable() == Some(true)
     }
@@ -338,21 +351,17 @@ impl Inner {
         serving: &std::sync::Mutex<Option<Served>>,
     ) -> Result<Arc<HostLink>, LeaseRefusal> {
         let Served { link, proof } = served(serving)
-            .filter(|served| served.link.is_open())
+            .filter(|served| served.link.is_serving())
             .ok_or(LeaseRefusal::EnvironmentUnreachable)?;
         match credentials.serves(&proof).await {
             Ok(true) => served(serving)
                 .map(|current| current.link)
-                .filter(|current| current.is_open())
+                .filter(|current| current.is_serving())
                 .ok_or(LeaseRefusal::EnvironmentUnreachable),
             Ok(false) => {
-                tracing::warn!(
-                    host = self.name(),
-                    "a paired environment no longer holds a credential to serve; its connection is closed"
-                );
-                link.close();
+                self.revoke(&link);
                 if let Some(current) = served(serving) {
-                    current.link.close();
+                    self.revoke(&current.link);
                 }
                 Err(LeaseRefusal::EnvironmentUnreachable)
             }
@@ -361,6 +370,36 @@ impl Inner {
                 Err(LeaseRefusal::EnvironmentUnreachable)
             }
         }
+    }
+
+    /// Answers once the key `proof` carries no longer serves, asked again
+    /// every keepalive interval: the admission's answer held only for its
+    /// moment, and a credential revoked, expired or whose membership was
+    /// disabled since then says nothing to this connection by itself. An
+    /// answer that cannot be read is not a revocation: the next one is
+    /// asked, and the next lease asks for itself.
+    async fn until_revoked(
+        &self,
+        credentials: &dyn ServingCredentials,
+        proof: &DeviceConnectionProof,
+    ) {
+        loop {
+            tokio::time::sleep(self.timings.keepalive).await;
+            match credentials.serves(proof).await {
+                Ok(true) => {}
+                Ok(false) => return,
+                Err(error) => {
+                    tracing::warn!(host = self.name(), %error, "whether a paired environment still serves could not be read");
+                }
+            }
+        }
+    }
+
+    /// Revoke a paired environment's connection: its leases end as revoked
+    /// on both sides, and it closes once they are let go, or past the
+    /// silence bound, the longest a connection is believed without a frame.
+    fn revoke(&self, link: &Arc<HostLink>) {
+        link.revoke(self.timings.silence);
     }
 
     /// What the host recorded of `lease`, asked on the connection there is
@@ -451,7 +490,7 @@ impl CommandEnvironment for SshEnvironment {
     fn reachable(&self) -> Option<bool> {
         if let Reach::Peer { serving, .. } = &self.inner.reach {
             return served(serving)
-                .is_some_and(|served| served.link.is_open())
+                .is_some_and(|served| served.link.is_serving())
                 .then_some(true);
         }
         let held = self.inner.link.try_lock().ok()?;
@@ -590,6 +629,8 @@ impl CommandHold for SshCommand {
             .await
             .ok()
             .flatten();
+            // The host stops a command itself once told it is revoked.
+            let stopped = stopped.or(self.link.revoked().then_some(LeaseEndCause::Revoked));
             match answer {
                 Some(answer) => command_result(answer, stopped),
                 None => CommandResult {
@@ -638,8 +679,9 @@ struct SshHold {
     /// Closed once the lease is no longer routed on its connection: taken
     /// at its grant, so a loss before anyone asks is still seen.
     gone: watch::Receiver<()>,
-    /// Why the host is ending it unasked, once it says so.
-    ending: watch::Receiver<Option<EndingCause>>,
+    /// Why it is ending unasked, once known: the host said so, or this
+    /// gateway revoked the host.
+    ending: watch::Receiver<Option<LeaseEndCause>>,
     /// The files published under it, until [`LeaseHold::artifacts`] takes
     /// them.
     published: std::sync::Mutex<Option<mpsc::Receiver<Published>>>,
@@ -649,15 +691,13 @@ impl LeaseHold for SshHold {
     fn ends(&self) -> Option<EnvironmentFuture<'static, LeaseEndCause>> {
         let mut ending = self.ending.clone();
         Some(Box::pin(async move {
-            // The host saying it is ending the lease, or the route's end; a
-            // route already gone answers at once. An `Ending` read before
-            // the route went is still what ended it.
+            // The host saying it is ending the lease, this gateway revoking
+            // the host, or the route's end; a route already gone answers at
+            // once. A cause known before the route went is still what
+            // ended it.
             let _ = ending.wait_for(Option::is_some).await;
-            let said = *ending.borrow();
-            match said {
-                Some(EndingCause::Expired) => LeaseEndCause::Expired,
-                None => LeaseEndCause::Lost,
-            }
+            let known = *ending.borrow();
+            known.unwrap_or(LeaseEndCause::Lost)
         }))
     }
 

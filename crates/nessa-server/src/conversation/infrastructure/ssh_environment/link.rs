@@ -18,6 +18,9 @@
 //!                   none ──▶ FrameDropped, never applied elsewhere (row L9)
 //! end of stream ──▶ every route dropped: waiters unanswered, outputs ended,
 //!                   each lease's `gone` closed ──▶ ConnectionLost
+//! revoke(drain) ──▶ no lease admitted any more ──▶ Revoked{leases} recorded
+//!   ──▶ Revoked to the host ──▶ each harness lease's ending cause: revoked
+//!   ──▶ every lease let go (each End answered), or `drain` ──▶ close
 //! publish(lease, request) ──▶ waiter by request ──▶ Publish ──▶ Published | NotPublished
 //! a command lease: grant_command ──▶ GrantCommand ──▶ Granted{terms} | Refused
 //!                  run ──▶ Run ──▶ Ran (routed to its waiter; the lease is done
@@ -61,7 +64,7 @@ use nessa_protocol::lease::{
     Data, EndingCause, FromEnvironment, GrantRefusal, GrantedTerms, PublishRefusal, Sandbox,
     StagedArtifact, ToEnvironment, Unavailability, MAX_ARTIFACTS_IN_FLIGHT, MAX_DATA_BYTES,
 };
-use nessa_sdk::domain::agent_execution::leases::{LeaseRefusal, SshDestination};
+use nessa_sdk::domain::agent_execution::leases::{LeaseEndCause, LeaseRefusal, SshDestination};
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     path::{Path, PathBuf},
@@ -191,20 +194,26 @@ struct LeaseRoute {
     /// Where the files the host publishes under it are offered: `None`
     /// once whoever takes them let go, and for a command lease.
     published: Option<mpsc::Sender<Published>>,
-    /// Why the host said it is ending the lease unasked, once it said so.
-    environment_ending: watch::Sender<Option<EndingCause>>,
+    /// Why the lease is ending unasked, once known: the host said it is
+    /// (`Ending`), or this gateway revoked the host. The first cause known
+    /// is the one kept.
+    ending_cause: watch::Sender<Option<LeaseEndCause>>,
     /// Each publish this gateway asked under it, by request, waiting for
     /// the host to offer the file or say why not. Dropped with the route,
     /// which answers each unanswered.
     publishes: HashMap<String, oneshot::Sender<Result<(), PublishFailure>>>,
     /// Dropped with the route: the lease is no longer routed here.
-    _gone: watch::Sender<()>,
+    gone: watch::Sender<()>,
 }
 
 #[derive(Default)]
 struct Routes {
     /// The connection ended: nothing more is routed or asked.
     closed: bool,
+    /// The host no longer holds a credential to serve this gateway: no
+    /// lease is admitted any more, and the connection closes once the
+    /// leases on it are let go.
+    revoked: bool,
     leases: HashMap<String, LeaseRoute>,
     accounts: HashMap<String, Vec<oneshot::Sender<Cleanup>>>,
     drops: u32,
@@ -232,9 +241,9 @@ pub(crate) struct Granted {
     pub(crate) terms: GrantedTerms,
     /// Closes once the lease is no longer routed here.
     pub(crate) gone: watch::Receiver<()>,
-    /// Why the host is ending the lease unasked, once it says so
-    /// (`Ending`); closes with `gone`.
-    pub(crate) ending: watch::Receiver<Option<EndingCause>>,
+    /// Why the lease is ending unasked, once known: the host said so
+    /// (`Ending`), or this gateway revoked the host; closes with `gone`.
+    pub(crate) ending: watch::Receiver<Option<LeaseEndCause>>,
     /// Ends once the lease is no longer routed here.
     pub(crate) published: mpsc::Receiver<Published>,
 }
@@ -454,9 +463,115 @@ impl HostLink {
         self.artifacts.clone()
     }
 
-    /// Whether the connection still serves leases.
+    /// Whether the connection still carries leases: those on it may still
+    /// be asked to end, revoked or not.
     pub(crate) fn is_open(&self) -> bool {
         !self.routes().closed && !self.frames.is_closed()
+    }
+
+    /// Whether a new lease may be asked on it: open, and not revoked.
+    pub(crate) fn is_serving(&self) -> bool {
+        self.is_open() && !self.routes().revoked
+    }
+
+    /// Whether the host was revoked on this connection.
+    pub(crate) fn revoked(&self) -> bool {
+        self.routes().revoked
+    }
+
+    /// The host no longer holds a credential to serve this gateway. No lease
+    /// is admitted on this connection any more; the revocation is recorded
+    /// with every lease it carries; the host is told (`Revoked`), and ends
+    /// each lease itself with that cause; then each harness lease's ending
+    /// cause becomes revoked, unless the host already said why it is ending
+    /// it, so whoever watches it ends it as the system's stop; and the
+    /// connection is closed once every lease on it is let go — each End
+    /// answered with the host's cleanup — or once `drain` passes from now,
+    /// whichever comes first. A revocation that cannot be recorded still
+    /// ends and closes everything, but settles none of those leases as
+    /// confirmed. Asked again, or of a closed connection, nothing more
+    /// happens.
+    pub(crate) fn revoke(self: &Arc<Self>, drain: Duration) {
+        let leases = {
+            let mut routes = self.routes();
+            if routes.closed || routes.revoked {
+                return;
+            }
+            routes.revoked = true;
+            let mut leases: Vec<String> = routes.leases.keys().cloned().collect();
+            leases.sort();
+            leases
+        };
+        tracing::warn!(
+            host = self.host.as_str(),
+            leases = leases.len(),
+            "the host no longer holds a credential to serve this gateway; its leases end and its connection closes"
+        );
+        let recorded = match self.audit.record(&EnvironmentEvent::Revoked {
+            host: self.host.clone(),
+            leases: leases.clone(),
+        }) {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::error!(%error, "a host's revocation could not be recorded; its leases end unconfirmed");
+                false
+            }
+        };
+        if !recorded {
+            self.routes().unaudited.extend(leases);
+        }
+        let link = self.clone();
+        tokio::spawn(async move {
+            let deadline = tokio::time::Instant::now() + drain;
+            // The host is told before any lease is seen ending as revoked,
+            // so an End asked for one reaches it after `Revoked`, and it
+            // records the revocation as that end's cause. A host reading
+            // nothing is waited on no longer than the bound.
+            let told =
+                tokio::time::timeout_at(deadline, link.frames.send(ToEnvironment::Revoked)).await;
+            if !matches!(told, Ok(Ok(()))) {
+                tracing::warn!(
+                    host = link.host.as_str(),
+                    "a revoked host could not be told; its connection closes"
+                );
+            }
+            let let_go = async {
+                for mut lease in link.end_as_revoked() {
+                    while lease.changed().await.is_ok() {}
+                }
+            };
+            if tokio::time::timeout_at(deadline, let_go).await.is_err() {
+                tracing::warn!(
+                    host = link.host.as_str(),
+                    "a revoked host's leases were not all let go in time; its connection closes"
+                );
+            }
+            link.close();
+        });
+    }
+
+    /// Each harness lease on this revoked connection ends as revoked,
+    /// unless the host already said why it is ending it: whoever watches it
+    /// ends it as the system's stop. Answers each lease's watch, which
+    /// closes once it is let go. No lease is admitted once revoked, so these
+    /// are every lease it carries still.
+    fn end_as_revoked(&self) -> Vec<watch::Receiver<()>> {
+        self.routes()
+            .leases
+            .values()
+            .map(|route| {
+                if !route.command {
+                    route.ending_cause.send_if_modified(|cause| {
+                        let unknown = cause.is_none();
+                        if unknown {
+                            *cause = Some(LeaseEndCause::Revoked);
+                        }
+                        unknown
+                    });
+                }
+                route.gone.subscribe()
+            })
+            .collect()
     }
 
     /// End the connection from this side: what keeps it open is let go, so
@@ -572,7 +687,7 @@ impl HostLink {
         let (answer, answered) = oneshot::channel();
         let (gone, ending) = {
             let mut routes = self.routes();
-            if routes.closed || routes.leases.contains_key(lease) {
+            if routes.closed || routes.revoked || routes.leases.contains_key(lease) {
                 return Err(AdmissionRefused::Unreachable);
             }
             let (gone_sender, gone) = watch::channel(());
@@ -591,9 +706,9 @@ impl HostLink {
                     channels: HashMap::new(),
                     next_channel: 1,
                     published,
-                    environment_ending: ending_sender,
+                    ending_cause: ending_sender,
                     publishes: HashMap::new(),
-                    _gone: gone_sender,
+                    gone: gone_sender,
                 },
             );
             (gone, ending)
@@ -624,6 +739,9 @@ impl HostLink {
                     );
                 }
                 Err(match refused {
+                    // A host told it is revoked refuses what it is asked
+                    // after: that is the revocation, not its owner's grant.
+                    Ok(Ok(Err(_))) if self.revoked() => AdmissionRefused::Unreachable,
                     Ok(Ok(Err(reason))) => AdmissionRefused::Host(reason),
                     _ => AdmissionRefused::Unreachable,
                 })
@@ -1078,7 +1196,7 @@ impl Shared {
 /// A lease the host admitted: its watches, and the terms it granted.
 struct Admitted {
     gone: watch::Receiver<()>,
-    ending: watch::Receiver<Option<EndingCause>>,
+    ending: watch::Receiver<Option<LeaseEndCause>>,
     terms: GrantedTerms,
 }
 
@@ -1173,10 +1291,20 @@ fn route_frame(routes: &mut Routes, frame: FromEnvironment) -> Routed {
         }
         // The host is ending a lease unasked: said to whoever watches it,
         // who asks its End, which the host answers with what that took.
-        // A command's lease is bounded by its timeout, never ended so.
+        // A command's lease is bounded by its timeout, never ended so. A
+        // lease already ending as revoked keeps that cause.
         FromEnvironment::Ending { lease, cause } => match routes.leases.get(&lease) {
             Some(route) if !route.command => {
-                route.environment_ending.send_replace(Some(cause));
+                let cause = match cause {
+                    EndingCause::Expired => LeaseEndCause::Expired,
+                };
+                route.ending_cause.send_if_modified(|known| {
+                    let unknown = known.is_none();
+                    if unknown {
+                        *known = Some(cause);
+                    }
+                    unknown
+                });
                 Routed::Done
             }
             _ => Routed::Dropped,

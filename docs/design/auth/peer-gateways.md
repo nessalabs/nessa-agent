@@ -237,9 +237,10 @@ sequenceDiagram
   ask the same question, `ServingCredentials::serves`: is there a credential
   bound to the key this connection proved that authenticates and that Cedar
   allows `environment.serve` on this gateway, now? Nothing keeps a copy of the
-  answer. It is asked when the connection is admitted and again before every
-  lease, so a revoked credential or a disabled membership stops the next
-  lease asked for, and that ask closes the connection.
+  answer. It is asked when the connection is admitted, again before every
+  lease, and again every keepalive interval while the connection is open,
+  so a revoked credential or a disabled membership ends the connection and
+  the leases on it (row I8, below) whether or not a lease is asked.
 - **One name per key.** A paired environment is `peer:` and its key in
   lowercase hex (`PeerEnvironment`), whichever connection it last made. A
   new connection from the same key takes the place of the old one: the old
@@ -258,11 +259,82 @@ sequenceDiagram
   refused before it takes one.
 - **Known limits.** A file the environment publishes is not fetched over a
   paired connection yet: there is no artifact channel, so its collection is
-  refused. Revocation closes a connection only when a lease is next asked
-  of it: until then a revoked environment that stays idle keeps its
-  connection, and one of the environment permits, though it is given
-  nothing. Revocation that closes an idle connection is a later part of
-  #706.
+  refused.
+
+### Revocation ends a live connection (row I8)
+
+Part I-2a ends what a revoked environment is running, and its connection,
+without waiting for a lease to be asked of it.
+
+```mermaid
+sequenceDiagram
+    participant O as Owner
+    participant S as Registry and Cedar
+    participant P as PeerEnvironments (G)
+    participant L as HostLink (G)
+    participant C as Conversation service (G)
+    participant E as env serve (E)
+    participant J as E's ledger
+    O->>S: credential.revoke (or a membership disabled, or the credential expires)
+    loop every keepalive interval while connected, and before every lease
+        P->>S: does the key this connection proved still serve?
+    end
+    S-->>P: no
+    P->>L: revoke
+    L->>L: admit no lease, record Revoked with every lease it carries
+    L->>C: each harness lease's hold ends as Revoked (unless the host already said why)
+    L->>E: Revoked
+    E->>J: for each lease held - revoking, then stop everything, then ended (revoked)
+    C->>C: record ending (revoked), actor environment_revoked
+    C->>L: End(lease)
+    L->>E: End(lease)
+    E-->>L: Ended(cleanup), the revocation's own end
+    C->>C: record ended with that cleanup, or interrupted past the bound
+    L->>L: every lease let go, or the silence bound passed - close
+    L-->>E: the connection ends, and its permit is freed
+    E->>P: the next dial
+    Note over E: refused at openEnvironment, dialed again with backoff
+```
+
+- **How it is noticed.** Whether a key may serve depends on more than the
+  revoke call: a credential can also expire, and the owner's organization
+  can disable the membership, and neither tells the connection anything.
+  So the gateway does not hook the revoke call. It asks the one authority,
+  `ServingCredentials::serves`, again every keepalive interval (15 s) for
+  as long as the connection is open, and before every lease as before; a
+  "yes" holds only for the moment it was given. An answer that cannot be
+  read is not taken as a revocation: the next one is asked.
+- **One response, wherever it is noticed.** The periodic check and a
+  lease's own check both call `HostLink::revoke`. It refuses every new
+  lease on that connection at once (the environment leaves the connected
+  list), records `revoked` in the gateway's environment audit with every
+  lease the connection carries, sets each harness lease's ending cause to
+  revoked, and sends the environment `Revoked`. Asked twice, it acts once.
+- **Both sides record why.** The gateway's conversation sees its hold end
+  as revoked and stops it as the system (`environment_revoked`, never a
+  person): the lease is recorded ending (revoked) and then ended with the
+  environment's cleanup, or interrupted past the cleanup bound, as for an
+  expiry. The environment, told `Revoked`, ends every lease it holds on
+  that connection itself: it records `revoking` with the gateway it was
+  for, stops everything under the lease, and records `ended` with cause
+  `revoked`; a running command is stopped and answers its `Ran`, and one
+  granted but never run ends holding nothing. Each `End` the gateway then
+  asks is answered with what that end took. The environment admits nothing
+  more on the connection, so a grant that crossed the revocation is refused
+  and reported unreachable, not as the owner's refusal.
+- **The connection closes.** The gateway closes the connection once every
+  lease on it has been let go, or once the silence bound (45 s) has passed,
+  whichever is first, so a revoked environment never keeps its permit. Its
+  next dial is refused, as before.
+- **The first cause wins.** A lease the environment had already said was
+  ending as expired keeps that cause on both sides; an expiry said after
+  the gateway revoked it does not replace the revocation. If the
+  environment's deadline passes just as the gateway revokes, the gateway
+  may record the lease revoked while the environment's ledger says
+  expired; both keep their cleanup evidence. A revocation the gateway
+  cannot record still ends and closes everything, and settles none of
+  those leases as confirmed; one the environment cannot record still
+  stops everything and answers `uncertain`.
 
 ### Staying dialed in
 
@@ -544,6 +616,7 @@ Each row has at least one test.
 | I5 | A gateway asks a command longer than the grant's `maxTimeoutMs`; or an environment answers terms wider than, or other than, asked | The environment records the narrowed timeout and the timeout asked, answers the terms it granted, and runs the command with the narrowed timeout; the gateway records the granted terms and waits for the command that long; a wider or other answer is refused as the environment's `EnvironmentNotGranted` and its hold dropped, nothing run | `i5_a_command_timeout_is_narrowed_recorded_and_run_with`; `a_command_timeout_is_narrowed_and_never_widened`; `i5_a_narrowed_command_is_recorded_as_granted_and_a_wider_one_is_refused`; `l1_an_environment_granting_other_terms_than_asked_is_refused_and_nothing_runs`; `a_grant_names_its_sandbox_and_its_answer_the_granted_terms` |
 | I6 | The owner runs `env grant`, `env ungrant` and `env grants`; the file is another version, too large, not private or not this shape | Each change is written whole and private under a lock and read back as given, an entry equal to the defaults removed; an unreadable file is refused, never taken as no grants, and no change is made over it; a change past the size bound is refused, nothing written; a peer named twice is unreadable in either order; each grant and ungrant appends a private `intended` record of who, when, which peer, the operation and the grant before and after, and then `written` (durable or not) or `not_written`, both under the lock; one whose intent cannot be recorded leaves grants.json unchanged, a sync failure after the rename is `written`, not durable, and fails the command, and an outcome that cannot be recorded fails it as unconfirmed; an ungrant applies to the next lease while the leases running go on | `a_change_is_written_privately_and_read_back`; `every_agent_and_missing_fields_are_read_as_written`; `a_file_this_build_cannot_read_is_refused`; `a_change_past_the_bound_is_refused_and_writes_nothing`; `a_peer_is_spelled_one_way_and_read_back`; `an_absent_file_is_no_entries`; `granting_adds_and_ungranting_takes_away`; `i6_an_ungrant_applies_to_the_next_lease_and_running_leases_stay`; `env_grant_names_agents_or_every_agent_and_commands_with_their_longest_run`; `env_ungrant_takes_one_thing_back_and_env_grants_lists_them`; `a_peer_named_twice_is_refused_in_either_order`; `a_grant_writes_intended_then_written`; `a_rename_failure_writes_intended_then_not_written`; `a_sync_failure_after_the_rename_writes_written_and_is_not_durable`; `an_outcome_that_cannot_be_recorded_leaves_the_change_unconfirmed`; `a_change_that_cannot_be_audited_leaves_the_grants_unchanged` |
 | I7 | The environment's owner grants a peer `maxLeaseMs`; one of its agent leases outlives it, or is ended as the deadline passes, or its expiry cannot be recorded, or its connection is lost first; a command lease under the same grant; a host says it is ending a lease the gateway does not hold | E grants the lease with `leaseMs`, records it, and at the deadline (not a moment before, and however continuously the gateway sends) records `expiring`, stops the harness, records `ended` with cause `expired` and says `Ending`; the silence bound still runs from the gateway's last frame; a Start read after the deadline starts nothing; an answer held up on a full output queue does not hold the expiry back, nor does one lease's `Ending` waiting for room hold another lease's expiry back, due at once or later, nor a lease's own `Granted` waiting for room hold back its expiry; a lease due as the gateway is taken as gone is expired, not lost; a file still in flight is recorded unanswered, never refused as the lease ending; the gateway's End is answered with that cleanup; an End and the deadline at once end the lease once; without a limit nothing expires and the wait is only the silence bound; an expiry that cannot be recorded still stops and answers `uncertain`; after the connection is lost nothing more is recorded; a command is bounded by its own timeout, granted no `leaseMs`; G records the deadline as its clock read before the Grant plus `leaseMs` (the earliest E's can be), and on `Ending` records the lease ending as expired by the system and then ended with the cleanup, or interrupted with none; an `Ending` for a lease not held, or for a command's lease, is dropped and recorded; a command answer carrying `leaseMs` is refused as the environment's `EnvironmentNotGranted`; `--max-lease` writes grants.json as version 2, version 1 still reads, and the audit's operation, before and after carry it | `a_lease_past_its_granted_duration_is_stopped_recorded_expired_and_said`; `an_end_and_a_deadline_at_once_end_the_lease_once`; `a_lease_with_no_max_never_expires`; `an_expiry_that_cannot_be_recorded_still_stops_and_answers_uncertain`; `a_deadline_after_the_connection_is_lost_records_nothing_more`; `a_command_is_bounded_by_its_timeout_not_the_max_lease`; `max_lease_is_written_as_version_2_and_version_1_still_reads`; `a_granted_duration_is_recorded_as_the_deadline`; `an_environment_expiry_is_recorded_ending_then_ended_with_its_cleanup`; `an_expiry_whose_end_goes_unanswered_is_interrupted`; `an_ending_for_a_lease_not_held_is_dropped_with_evidence`; `an_ending_for_a_command_lease_is_dropped_with_evidence`; `a_gateway_sending_without_pause_cannot_put_off_an_expiry`; `a_reply_blocked_on_a_full_output_queue_does_not_hold_back_an_expiry`; `two_leases_due_at_once_both_expire_at_the_deadline`; `staggered_deadlines_each_expire_at_their_own`; `a_lease_granted_while_the_gateway_reads_nothing_expires_at_its_deadline`; `a_lease_due_as_the_gateway_falls_silent_is_expired_not_lost`; `a_granted_duration_is_recorded_on_the_issued_lease`; `a_file_in_flight_when_its_lease_expires_is_left_unanswered`; `i5_a_narrowed_command_is_recorded_as_granted_and_a_wider_one_is_refused`; `a_paired_environment_expires_a_lease_and_both_sides_record_it`; `a_grant_writes_intended_then_written`; `env_grant_names_agents_or_every_agent_and_commands_with_their_longest_run`; `a_grant_names_its_sandbox_and_its_answer_the_granted_terms` |
+| I8 | The owner revokes a paired environment's credential while it is connected, idle or running a lease; the revocation races an expiry; either side cannot record it | Without a lease being asked, the gateway sees it at its next check (each keepalive interval), refuses new leases there and drops the environment from the connected list, records `revoked` with the connection's leases, ends each harness lease as revoked by the system (`environment_revoked`), and says `Revoked`; the environment records `revoking` naming the gateway, stops everything, records `ended` with cause `revoked`, stops a running command (its `Ran` answers) and ends an unrun one holding nothing, refuses anything more, and answers each `End` with that cleanup; the gateway records the lease ending (revoked) then ended with that cleanup, or interrupted with none; the connection closes once every lease is let go, or at the silence bound when one is never ended; the first cause known is kept on each side, and the environment ends an expired lease once; said or asked twice, it acts once; an unrecordable revocation still ends everything, unconfirmed on the gateway and `uncertain` on the environment; the next dial is refused | `a_paired_environment_revoked_mid_lease_ends_it_on_both_sides_and_closes`; `an_idle_paired_environment_is_closed_once_revoked`; `a_paired_environment_dials_in_serves_and_stops_at_revocation`; `a_revoked_link_ends_each_lease_as_revoked_and_closes_once_they_are_ended`; `a_revoked_link_closes_at_its_bound_when_a_lease_is_never_ended`; `a_revocation_whose_audit_fails_leaves_its_leases_unconfirmed`; `a_lease_ending_for_one_cause_keeps_it_when_the_other_comes`; `a_revoked_gateway_has_every_lease_ended_recorded_revoked_and_its_ends_answered`; `a_revocation_that_cannot_be_recorded_still_stops_and_answers_uncertain`; `a_revocation_after_an_expiry_ends_the_lease_once_as_expired`; `an_environment_revocation_is_recorded_ending_then_ended_with_its_cleanup`; `a_revocation_whose_end_goes_unanswered_is_interrupted`; `every_frame_round_trips_and_names_its_lease` |
 | H10 | A registry whose owner membership is disabled or not an admin | Refused on open (`owner_membership`). The pairing initiator's membership is what keeps a grantor live; the owner's is the one the registry pins | `a_registry_whose_owner_is_not_an_active_admin_does_not_open` |
 
 ## The dialing side
