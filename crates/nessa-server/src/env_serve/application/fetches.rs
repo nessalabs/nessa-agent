@@ -16,8 +16,10 @@
 //!   ──▶ ledger: fetched(outcome) ──▶ Fetched{outcome}
 //!       not recorded ──▶ placed by this fetch? ArtifactInbox::take_back
 //!         ──▶ Fetched{refused: auditUnavailable}
+//!         could not be taken back ──▶ Fetched{placed}, unrecorded here
 //! Undelivered{request} ──▶ the part let go ──▶ ledger: fetch_unanswered
-//!   (still being accepted: remembered, and its part let go once made)
+//!   (still being accepted: remembered, and recorded unanswered whatever
+//!   the acceptance finds, its part let go once made)
 //! a request still held asked again ──▶ logged and dropped, nothing recorded
 //! the lease ends ──▶ every fetch under way finishes first; each one not
 //!   answered: ended by the gateway ──▶ ledger: fetched(leaseEnded) ──▶ Fetched
@@ -136,8 +138,9 @@ pub(crate) trait ArtifactInbox: Send + Sync {
     fn place(&self, lease: &str, fetch: u32, destination: &str, file: &FetchedFile) -> Placement;
     /// Take back a file this fetch placed, whose placing could not be
     /// recorded: removed only while its name is still that very file, so
-    /// anything put there since is left.
-    fn take_back(&self, placed: &PlacedFile);
+    /// anything put there since is left. `false` when that file is still
+    /// there: it could not be reached or removed.
+    fn take_back(&self, placed: &PlacedFile) -> bool;
     /// Let go of fetch `fetch`'s part.
     fn discard(&self, lease: &str, fetch: u32);
     /// Let go of every part `lease` has.
@@ -169,7 +172,9 @@ impl ArtifactInbox for NoInbox {
     ) -> Placement {
         Placement::Refused(FetchRefusal::Unavailable)
     }
-    fn take_back(&self, _placed: &PlacedFile) {}
+    fn take_back(&self, _placed: &PlacedFile) -> bool {
+        true
+    }
     fn discard(&self, _lease: &str, _fetch: u32) {}
     fn close(&self, _lease: &str) {}
 }
@@ -557,22 +562,27 @@ impl Handle {
                 None => Next::Nothing,
                 // Nothing of it is kept; the end answers it.
                 Some((fetch, Stage::Accepting, _)) if ended => Next::Discard(fetch),
-                Some((fetch, _, asked)) => match answer {
-                    Answer::Accepted(_)
-                        if state
-                            .taken
-                            .get(&request)
-                            .is_some_and(|taken| taken.undelivered) =>
-                    {
-                        state.taken.remove(&request);
-                        let entry = LedgerEntry::FetchUnanswered {
-                            lease: self.lease.clone(),
-                            request,
-                            asked,
-                        };
-                        self.record(&entry, "undelivered");
-                        Next::Discard(fetch)
+                // Given up while its destination was checked: unanswered,
+                // whatever the check found, and nothing said.
+                Some((fetch, _, asked))
+                    if state
+                        .taken
+                        .get(&request)
+                        .is_some_and(|taken| taken.undelivered) =>
+                {
+                    state.taken.remove(&request);
+                    let entry = LedgerEntry::FetchUnanswered {
+                        lease: self.lease.clone(),
+                        request,
+                        asked,
+                    };
+                    self.record(&entry, "undelivered");
+                    match answer {
+                        Answer::Accepted(_) => Next::Discard(fetch),
+                        _ => Next::Nothing,
                     }
+                }
+                Some((fetch, _, asked)) => match answer {
                     Answer::Accepted(path) => {
                         let entry = LedgerEntry::FetchAccepted {
                             lease: self.lease.clone(),
@@ -654,15 +664,26 @@ impl Handle {
             (Answer::Fetched(placement), false) => {
                 // Ours only when this fetch linked it: a file already there
                 // is left as it was.
-                if let Placement::Placed(placed) = placement {
-                    let inbox = self.inbox.clone();
-                    let _ = tokio::task::spawn_blocking(move || inbox.take_back(&placed)).await;
-                }
+                let kept = match placement {
+                    Placement::Placed(placed) => {
+                        let inbox = self.inbox.clone();
+                        !tokio::task::spawn_blocking(move || inbox.take_back(&placed))
+                            .await
+                            .unwrap_or(false)
+                    }
+                    _ => false,
+                };
+                // One that could not be taken back is still placed: said
+                // so, unrecorded here (the lease's end is then uncertain),
+                // never as a refusal that placed nothing.
                 FromEnvironment::Fetched {
                     lease: self.lease.clone(),
                     request,
-                    outcome: FetchOutcome::Refused {
-                        reason: FetchRefusal::AuditUnavailable,
+                    outcome: match kept {
+                        true => outcome,
+                        false => FetchOutcome::Refused {
+                            reason: FetchRefusal::AuditUnavailable,
+                        },
                     },
                 }
             }

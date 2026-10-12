@@ -3400,6 +3400,10 @@ struct RecordingInbox {
     closed: Mutex<Vec<String>>,
     /// When set, making the next part waits for this.
     hold_part: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+    /// When set, making a part is refused so.
+    refuse_part: Mutex<Option<FetchRefusal>>,
+    /// When set, a placed file cannot be taken back.
+    keeps: AtomicBool,
 }
 
 impl ArtifactInbox for RecordingInbox {
@@ -3422,6 +3426,9 @@ impl ArtifactInbox for RecordingInbox {
         if let Some(go) = held {
             let _ = go.recv();
         }
+        if let Some(reason) = *self.refuse_part.lock().unwrap() {
+            return Err(reason);
+        }
         self.parts.lock().unwrap().push((lease.into(), fetch));
         Ok(format!("/inbox/{fetch}.part"))
     }
@@ -3441,8 +3448,9 @@ impl ArtifactInbox for RecordingInbox {
             })
         })
     }
-    fn take_back(&self, placed: &PlacedFile) {
+    fn take_back(&self, placed: &PlacedFile) -> bool {
         self.taken_back.lock().unwrap().push(placed.clone());
+        !self.keeps.load(Ordering::SeqCst)
     }
     fn discard(&self, lease: &str, fetch: u32) {
         self.discarded.lock().unwrap().push((lease.into(), fetch));
@@ -4065,6 +4073,80 @@ async fn a_fetch_given_up_while_being_accepted_lets_its_part_go_once_made() {
             FromEnvironment::FetchAccepted { request, .. } if request == format!("held-{n}")
         ));
     }
+}
+
+/// A fetch the gateway gave up on while it was being accepted is recorded
+/// unanswered whatever the acceptance then finds, a refusal included, and
+/// nothing more is said of it.
+#[tokio::test]
+async fn a_fetch_given_up_while_being_accepted_is_unanswered_even_when_refused() {
+    let (mut gateway, inbox) = Gateway::fetching().await;
+    let (go, held) = std::sync::mpsc::channel();
+    *inbox.hold_part.lock().unwrap() = Some(held);
+    *inbox.refuse_part.lock().unwrap() = Some(FetchRefusal::PlacingFailed);
+    gateway.send(fetch_frame(LEASE, "call-1", "a.png")).await;
+    gateway
+        .send(ToEnvironment::Undelivered {
+            lease: LEASE.into(),
+            request: "call-1".into(),
+        })
+        .await;
+    gateway.settled().await;
+    go.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while gateway.fetch_entries().is_empty() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("it is recorded");
+    assert_eq!(
+        gateway.fetch_entries(),
+        [LedgerEntry::FetchUnanswered {
+            lease: LEASE.into(),
+            request: "call-1".into(),
+            asked: asked("a.png"),
+        }]
+    );
+    // Nothing was said of it: the next frame is the next fetch's.
+    *inbox.refuse_part.lock().unwrap() = None;
+    gateway.send(fetch_frame(LEASE, "call-2", "b.png")).await;
+    assert!(matches!(
+        gateway.next().await,
+        FromEnvironment::FetchAccepted { request, .. } if request == "call-2"
+    ));
+}
+
+/// A placed file whose placing cannot be recorded, and which cannot be
+/// taken back, is still said placed, never refused: the gateway keeps
+/// counting it, and the lease's end is uncertain.
+#[tokio::test]
+async fn a_placed_file_that_cannot_be_taken_back_is_still_said_placed() {
+    let (mut gateway, inbox) = Gateway::fetching().await;
+    gateway.ledger.failing_fetched.store(true, Ordering::SeqCst);
+    inbox.keeps.store(true, Ordering::SeqCst);
+    gateway.send(fetch_frame(LEASE, "call-1", "a.png")).await;
+    assert!(matches!(
+        gateway.next().await,
+        FromEnvironment::FetchAccepted { .. }
+    ));
+    gateway
+        .send(ToEnvironment::Delivered {
+            lease: LEASE.into(),
+            request: "call-1".into(),
+        })
+        .await;
+    assert_eq!(
+        gateway.next().await,
+        FromEnvironment::Fetched {
+            lease: LEASE.into(),
+            request: "call-1".into(),
+            outcome: FetchOutcome::Placed {
+                path: "/work/a.png".into(),
+            },
+        }
+    );
+    assert_eq!(inbox.taken_back.lock().unwrap().len(), 1);
 }
 
 /// A fetch the gateway gave up on while its part was being made, whose

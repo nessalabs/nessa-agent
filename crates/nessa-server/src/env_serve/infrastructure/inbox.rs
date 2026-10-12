@@ -329,10 +329,10 @@ impl ArtifactInbox for FileInbox {
         placed.unwrap_or_else(Placement::Refused)
     }
 
-    fn take_back(&self, placed: &PlacedFile) {
+    fn take_back(&self, placed: &PlacedFile) -> bool {
         let path = Path::new(&placed.path);
         let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
-            return;
+            return false;
         };
         let directory = OpenOptions::new()
             .read(true)
@@ -340,7 +340,7 @@ impl ArtifactInbox for FileInbox {
             .open(parent);
         let (Ok(directory), Ok(name)) = (directory, c_name(name)) else {
             tracing::warn!("a fetched file whose placing went unrecorded could not be reached");
-            return;
+            return false;
         };
         // A window remains open here, and cannot be closed: the identity
         // check and the unlink are two calls, and POSIX has no call that
@@ -349,15 +349,20 @@ impl ArtifactInbox for FileInbox {
         // removed. A file put there after this one was deleted outright may
         // also be given its inode again, and pass the check.
         match identity_at(&directory, &name) {
-            Ok(there) if there == placed.identity => {
-                if let Err(error) = unlink_at(&directory, &name) {
+            Ok(there) if there == placed.identity => match unlink_at(&directory, &name) {
+                Ok(()) => true,
+                Err(error) => {
                     tracing::warn!(%error, "a fetched file whose placing went unrecorded could not be taken back");
+                    false
                 }
-            }
+            },
             // Gone, or another file put there since: not this fetch's.
-            _ => tracing::warn!(
-                "a fetched file whose placing went unrecorded was no longer there to take back"
-            ),
+            _ => {
+                tracing::warn!(
+                    "a fetched file whose placing went unrecorded was no longer there to take back"
+                );
+                true
+            }
         }
     }
 

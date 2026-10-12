@@ -319,7 +319,7 @@ fn a_placed_file_is_taken_back_only_while_its_name_is_still_that_file() {
     let Placement::Placed(placed) = fixture.inbox.place("l", 1, "kept.txt", &file) else {
         panic!("placed");
     };
-    fixture.inbox.take_back(&placed);
+    assert!(fixture.inbox.take_back(&placed));
     assert!(!fixture.workspace.join("kept.txt").exists());
     // Placed again, then replaced by someone else: theirs stays.
     delivered(&fixture.inbox, "l", 2, bytes);
@@ -333,14 +333,17 @@ fn a_placed_file_is_taken_back_only_while_its_name_is_still_that_file() {
     )
     .unwrap();
     fs::write(fixture.workspace.join("kept.txt"), b"someone else's").unwrap();
-    fixture.inbox.take_back(&placed);
+    assert!(
+        fixture.inbox.take_back(&placed),
+        "not this fetch's any more"
+    );
     assert_eq!(
         fs::read(fixture.workspace.join("kept.txt")).unwrap(),
         b"someone else's"
     );
     // Gone already: nothing to do.
     fs::remove_file(fixture.workspace.join("kept.txt")).unwrap();
-    fixture.inbox.take_back(&placed);
+    assert!(fixture.inbox.take_back(&placed));
 }
 
 /// A placed file gets the mode this user's other new files get, never the
