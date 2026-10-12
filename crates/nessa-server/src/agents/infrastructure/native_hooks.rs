@@ -76,11 +76,15 @@ impl NativeHooksPreferences {
             directory.join("audit").join("native-hooks"),
             clock,
         )?);
-        Self::open_with(directory, audit)
+        Self::open_syncing(directory, audit, sync_directory)
     }
 
-    /// [`open`](Self::open) with an audit port the caller supplies.
-    pub fn open_with(
+    /// [`open`](Self::open) with an audit port a test supplies.
+    ///
+    /// Retries and crash recovery read the records under `audit/native-hooks`
+    /// themselves, so the store owns its audit: only a test swaps the writer.
+    #[cfg(test)]
+    fn open_with(
         directory: PathBuf,
         audit: Arc<dyn NativeHooksAudit>,
     ) -> Result<Arc<Self>, NativeHooksError> {
