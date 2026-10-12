@@ -307,10 +307,16 @@ async fn independent_instances_progress() {
     let worker = first.clone();
     let held = tokio::spawn(async move { worker.store_secret(Uuid::new_v4(), &secret()).await });
     super::super::physical_tests::reached(&probe.started, 1).await;
-    assert_eq!(
-        second.store_secret(Uuid::new_v4(), &secret()).await,
-        Ok(Publication::Acknowledged)
-    );
+    // Thirty seconds is the hang detector if this write waits on the first
+    // instance's slot. It is not the observation window. The capture stays
+    // held until `release` below.
+    let progressed = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        second.store_secret(Uuid::new_v4(), &secret()),
+    )
+    .await
+    .expect("the second instance progresses while the first is held");
+    assert_eq!(progressed, Ok(Publication::Acknowledged));
     assert_eq!(probe.cleaned.load(std::sync::atomic::Ordering::SeqCst), 0);
     // The neighbor write can outlast a fixed sleep. Release only after the
     // capture is still shown held, then let it finish.
