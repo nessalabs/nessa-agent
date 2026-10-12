@@ -55,8 +55,9 @@ different command. The rows are the orders the store implements.
 `a_choice_renamed_into_place_is_in_effect_when_its_directory_sync_fails`,
 `a_readable_outcome_record_keeps_the_change_it_records`, and
 `a_process_start_reads_the_earlier_choice_until_the_outcome_is_recorded`,
-`a_harness_named_twice_is_off_whichever_value_comes_last`, and
-`a_choice_file_larger_than_any_choice_loads_as_off` are those rows.
+`a_harness_named_twice_is_off_whichever_value_comes_last`,
+`a_choice_file_larger_than_any_choice_loads_as_off`, and
+`a_retry_is_not_acknowledged_until_the_outcome_records_directory_syncs` are those rows.
 The launch row is `claude_native_hook_runs_when_the_launch_omits_suppression`
 and `codex_native_hook_runs_when_the_launch_omits_suppression`. The next start
 of a conversation already open is
@@ -72,7 +73,7 @@ and
 | Requested record written, file on, flag still off | The outcome record fails and the revert write succeeds | The file returns to the choice this call started from, and the flag never moved. The command fails |
 | File published | The revert write fails | The flag stays with that file. The command fails. The outcome record is absent |
 | Requested record written | The file is renamed into place and its directory sync fails | The outcome is recorded and the flag follows the file. The command reports the storage failure. A retry succeeds once the directory syncs, and reports the storage failure until then |
-| File and flag on | The outcome record is readable but reports a failure | Nothing is reverted, because the record says the change took effect. The command fails. A retry succeeds |
+| File and flag on | The outcome record is readable but reports a failure | Nothing is reverted, because the record says the change took effect. The command fails. A retry succeeds once the record's directory syncs, and reports the audit failure until then |
 | File written, outcome absent | The process starts | The start loads the file |
 | The file is not one JSON object, names a harness twice, or is larger than any choice | The gateway starts | That file loads as off and the gateway keeps starting |
 | Both records written for this choice | The same caller, harness, and request id | The command succeeds. The records stay as first written, including the observation time |

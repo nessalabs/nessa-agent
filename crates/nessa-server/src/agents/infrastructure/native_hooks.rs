@@ -150,10 +150,12 @@ fn set_blocking(
 ) -> Result<NativeHooksSelection, NativeHooksError> {
     // A retry of a command that already recorded its outcome keeps that
     // record. The before value in it is the one from the first attempt.
-    // It succeeds only once the choice's directory is synced: the first
-    // attempt may have recorded its outcome after that sync failed.
+    // It succeeds only once the outcome record's directory and the choice's
+    // directory are synced: the first attempt may have found either sync
+    // failing after the record or the file was already readable.
     if already_recorded(&directory, &change)? {
         sync(&directory).map_err(|_| NativeHooksError::Storage)?;
+        sync(&audit_directory(&directory)).map_err(|_| NativeHooksError::Audit)?;
         return Ok(selection_of(&claude, &codex));
     }
     let current = flag(&claude, &codex, change.agent);
@@ -285,11 +287,13 @@ fn record_name(
     format!("native-hooks-{digest:x}")
 }
 
+/// Where the durable audit adapter keeps this store's records.
+fn audit_directory(directory: &Path) -> PathBuf {
+    directory.join("audit").join("native-hooks")
+}
+
 fn audit_record(directory: &Path, name: &str) -> PathBuf {
-    directory
-        .join("audit")
-        .join("native-hooks")
-        .join(format!("{name}.json"))
+    audit_directory(directory).join(format!("{name}.json"))
 }
 
 fn read_record(path: &Path) -> Result<Option<Value>, NativeHooksError> {
@@ -754,6 +758,50 @@ mod tests {
             .await
             .unwrap();
         assert!(selection.codex());
+    }
+
+    fn audit_unsynced(path: &Path) -> std::io::Result<()> {
+        if path.ends_with("audit/native-hooks") {
+            return Err(std::io::Error::other("audit directory sync failed"));
+        }
+        sync_directory(path)
+    }
+
+    #[tokio::test]
+    async fn a_retry_is_not_acknowledged_until_the_outcome_records_directory_syncs() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("data");
+        let first = NativeHooksPreferences::open_with(
+            directory.clone(),
+            Arc::new(OutcomeUnconfirmed {
+                inner: DurableNativeHooksAudit::new(
+                    directory.join("audit").join("native-hooks"),
+                    Arc::new(FixedClock),
+                )
+                .unwrap(),
+            }),
+        )
+        .unwrap();
+        let retry = change(NativeHooksAgent::Codex, true, "request-audit-unsynced");
+        assert_eq!(
+            first.set(retry.clone()).await.unwrap_err(),
+            NativeHooksError::Audit
+        );
+        let audit = Arc::new(
+            DurableNativeHooksAudit::new(
+                directory.join("audit").join("native-hooks"),
+                Arc::new(FixedClock),
+            )
+            .unwrap(),
+        );
+        let unsynced =
+            NativeHooksPreferences::open_syncing(directory.clone(), audit, audit_unsynced).unwrap();
+        assert_eq!(
+            unsynced.set(retry.clone()).await.unwrap_err(),
+            NativeHooksError::Audit
+        );
+        let synced = NativeHooksPreferences::open(directory, Arc::new(FixedClock)).unwrap();
+        assert!(synced.set(retry).await.unwrap().codex());
     }
 
     /// Notes what a process start would read while the outcome is recorded.
