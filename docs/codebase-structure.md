@@ -1718,7 +1718,9 @@ Scope discovery and each page have separate snapshots; pages carry their actual
 scope/progress/generation for consumers to compare. `retained/device.rs` composes
 the existing enrollment worker and purge policy, collecting status/purge effects
 inside physical admission and exposing original durable purge receipts separately.
-Native phone binding and linked runtime integration remain later ADR 782 slices.
+The native adapter below provides generated Swift binding and linked library
+execution. Phone repository/enrollment/authority wiring, artifact exports and
+durable deletion remain later ADR 782 slices.
 
 ### Retained read-only example
 
