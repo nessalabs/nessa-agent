@@ -1594,6 +1594,12 @@ pub struct AgentsListResult {
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentsListed {
+    pub subscription_id: ConversationSubscriptionId,
+    pub catalog: AgentsListResult,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationSetApprovalModeParams {
     pub conversation_id: String,
     pub request_id: String,
@@ -2284,6 +2290,8 @@ pub mod product_method {
     pub const ARTIFACT_READ: &str = "artifact.read";
     pub const ATTACHMENT_BEGIN: &str = "attachment.begin";
     pub const AGENTS_LIST: &str = "agents.list";
+    pub const AGENTS_SUBSCRIBE: &str = "agents.subscribe";
+    pub const AGENTS_UNSUBSCRIBE: &str = "agents.unsubscribe";
     pub const CONVERSATION_SET_APPROVAL_MODE: &str = "conversation.setApprovalMode";
     pub const AGENTS_INSTALL_OPTIONS: &str = "agents.installOptions";
     pub const AGENTS_INSTALL: &str = "agents.install";
@@ -2326,6 +2334,7 @@ pub mod product_event {
     pub const CONVERSATION_WATCH_ENDED: &str = "conversation.watchEnded";
     pub const CONVERSATION_VIEW: &str = "conversation.view";
     pub const CONVERSATION_LISTED: &str = "conversation.listed";
+    pub const AGENTS_LISTED: &str = "agents.listed";
     pub const CONVERSATION_SUBSCRIPTION_ENDED: &str = "conversation.subscriptionEnded";
 }
 pub fn wire_shape_session_challenge(value: &Value) -> bool {
@@ -2507,7 +2516,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 62
+                items.len() <= 64
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -2559,6 +2568,8 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "artifact.read",
     "attachment.begin",
     "agents.list",
+    "agents.subscribe",
+    "agents.unsubscribe",
     "conversation.setApprovalMode",
     "agents.installOptions",
     "agents.install",
@@ -2607,7 +2618,11 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
 /// a watch.
 pub fn action_for_method(method: &str) -> Option<&'static str> {
     match method {
-        "server.health" | "agents.list" | "agents.installOptions" => Some("server.read"),
+        "server.health"
+        | "agents.list"
+        | "agents.subscribe"
+        | "agents.unsubscribe"
+        | "agents.installOptions" => Some("server.read"),
         "credential.issue"
         | "credential.list"
         | "credential.revoke"

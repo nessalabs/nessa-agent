@@ -41,6 +41,7 @@ export {
   type SubscriptionGate,
 } from "./subscription-gate.js"
 export type {
+  AgentsSubscriptionHandlers,
   ListSubscriptionHandlers,
   Subscription,
   SubscriptionApi,

@@ -1634,8 +1634,14 @@ export interface AgentOption {
 export interface AgentsListResult {
   /** Configured agents. */
   agents: AgentOption[]
-  /** Places a new conversation may run besides this gateway: the SSH destinations config.json names, in the order it names them, then each paired environment connected when the catalog is asked, as `peer:` and its key in lowercase hex. At most 16 of the first and 8 of the second. */
+  /** Places a new conversation may run besides this gateway: the SSH destinations config.json names, in the order it names them, then each paired environment connected when the catalog is read, as `peer:` and its key in lowercase hex. At most 16 of the first and 8 of the second. agents.list reads it once; agents.subscribe reads it again each time a paired environment connects, disconnects or is revoked. */
   environments: string[]
+}
+/** The agent catalog as it is now, read after a paired environment connected, disconnected or was revoked, and sent only when it differs from the last one sent. Replace what was held with it. The subscription ends with conversation.subscriptionEnded, as a conversation subscription does. */
+export interface AgentsListed {
+  subscriptionId: ConversationSubscriptionId
+  /** The same catalog agents.list returns, read again now. */
+  catalog: AgentsListResult
 }
 /** Change a conversation approval preset while no turn runs. */
 export interface ConversationSetApprovalModeParams {
@@ -2208,7 +2214,7 @@ export interface ConversationSubscribeListParams {
 export interface ConversationSubscribeResult {
   subscriptionId: ConversationSubscriptionId
 }
-/** Stop one subscription of this connection. A frame already being written may arrive before the reply; none arrives after it. */
+/** Stop one subscription of this connection: conversation.unsubscribe stops one made by conversation.subscribe or conversation.subscribeList, agents.unsubscribe one made by agents.subscribe, and either answers unknown_subscription for the other's. A frame already being written may arrive before the reply; none arrives after it. */
 export interface ConversationUnsubscribeParams {
   subscriptionId: ConversationSubscriptionId
 }
@@ -2243,7 +2249,7 @@ export interface ConversationSubscriptionEnded {
   /** Where a view subscription resumes from: the cursor of the last view frame written or, when none was, the after it was opened with. Absent for a list, and for a view subscription opened without after that wrote no frame. */
   lastDelivered?: ConversationViewCursor
 }
-/** Refusals of subscribe and unsubscribe beside the conversation error codes a refused first read carries. subscription_capacity: the connection's published limit, or the gateway's watch capacity, is full. subscription_duplicate: this connection already follows that target. unknown_subscription: no such live subscription on this connection. cursor_ahead: after names a position past the stored history. */
+/** Refusals of subscribe and unsubscribe beside the conversation error codes a refused first read carries. subscription_capacity: the connection's published limit, or the gateway's watch capacity, is full. subscription_duplicate: this connection already follows that target; the agent catalog is one target, so a connection follows it at most once. unknown_subscription: no such live subscription on this connection, or one the other unsubscribe stops. cursor_ahead: after names a position past the stored history. */
 export const ConversationSubscriptionErrorCode = {
   SubscriptionCapacity: "subscription_capacity",
   SubscriptionDuplicate: "subscription_duplicate",
@@ -2304,7 +2310,7 @@ export const mcpServerRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 62,
+  maxReadyMethods: 64,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -2390,6 +2396,8 @@ export const ProductMethod = {
   ArtifactRead: "artifact.read",
   AttachmentBegin: "attachment.begin",
   AgentsList: "agents.list",
+  AgentsSubscribe: "agents.subscribe",
+  AgentsUnsubscribe: "agents.unsubscribe",
   ConversationSetApprovalMode: "conversation.setApprovalMode",
   AgentsInstallOptions: "agents.installOptions",
   AgentsInstall: "agents.install",
@@ -2432,6 +2440,7 @@ export const ProductEvent = {
   ConversationWatchEnded: "conversation.watchEnded",
   ConversationView: "conversation.view",
   ConversationListed: "conversation.listed",
+  AgentsListed: "agents.listed",
   ConversationSubscriptionEnded: "conversation.subscriptionEnded",
 } as const
 export const ProductHandshakeMethod = "session.authenticate" as const
@@ -2463,6 +2472,8 @@ export const productReadyMethods = [
   "artifact.read",
   "attachment.begin",
   "agents.list",
+  "agents.subscribe",
+  "agents.unsubscribe",
   "conversation.setApprovalMode",
   "agents.installOptions",
   "agents.install",
@@ -2529,6 +2540,8 @@ export const productMethodGrants = {
   "artifact.read": "conversation.read",
   "attachment.begin": "conversation.write",
   "agents.list": "server.read",
+  "agents.subscribe": "server.read",
+  "agents.unsubscribe": "server.read",
   "conversation.setApprovalMode": "conversation.write",
   "agents.installOptions": "server.read",
   "agents.install": "conversation.write",
