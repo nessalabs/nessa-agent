@@ -15,7 +15,15 @@ fn the_tools_are_named_as_a_model_api_accepts_and_run_is_marked_destructive() {
         .iter()
         .map(|tool| tool["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["environments_list", "run", "artifacts_publish"]);
+    assert_eq!(
+        names,
+        [
+            "environments_list",
+            "run",
+            "artifacts_publish",
+            "artifacts_fetch"
+        ]
+    );
     for name in names.iter().chain([SERVER_NAME].iter()) {
         assert!(
             !name.is_empty()
@@ -37,6 +45,12 @@ fn the_tools_are_named_as_a_model_api_accepts_and_run_is_marked_destructive() {
         listed[2]["inputSchema"]["required"],
         json!(["environment", "path"])
     );
+    assert_eq!(listed[3]["annotations"]["destructiveHint"], false);
+    assert_eq!(
+        listed[3]["inputSchema"]["required"],
+        json!(["environment", "digest", "mediaType", "size", "destination"])
+    );
+    assert_eq!(listed[3]["inputSchema"]["additionalProperties"], false);
 }
 
 #[test]
@@ -117,6 +131,197 @@ fn a_publish_answer_mirrors_the_hosts_and_is_an_error_unless_held() {
         assert_eq!(answer["structuredContent"]["refused"], code);
         assert!(answer["structuredContent"]["message"].is_string());
     }
+}
+
+#[test]
+fn artifacts_fetch_reads_its_arguments_and_refuses_anything_else() {
+    let digest = "ab".repeat(32);
+    let call = fetch_call(
+        json!({
+            "environment": "devbox",
+            "digest": digest,
+            "mediaType": "image/png",
+            "size": 20,
+            "destination": "assets/cat.png",
+        }),
+        "c".into(),
+    )
+    .unwrap();
+    assert_eq!(call.environment, "devbox");
+    assert_eq!(call.digest, digest);
+    assert_eq!(call.media_type, "image/png");
+    assert_eq!(call.size, 20);
+    assert_eq!(call.destination, "assets/cat.png");
+    assert_eq!(call.call, "c");
+    let whole = json!({
+        "environment": "devbox",
+        "digest": digest,
+        "mediaType": "image/png",
+        "size": 20,
+        "destination": "a.png",
+    });
+    let mut refused = Vec::new();
+    for field in ["environment", "digest", "mediaType", "size", "destination"] {
+        let mut missing = whole.clone();
+        missing.as_object_mut().unwrap().remove(field);
+        refused.push(missing);
+    }
+    for (field, value) in [
+        ("size", json!(-1)),
+        ("size", json!("20")),
+        ("digest", json!(3)),
+        ("media_type", json!("image/png")),
+        ("bytes", json!("AAAA")),
+        ("replace", json!(true)),
+    ] {
+        let mut wrong = whole.clone();
+        wrong.as_object_mut().unwrap().insert(field.into(), value);
+        refused.push(wrong);
+    }
+    for refused in refused {
+        assert!(
+            fetch_call(refused.clone(), "c".into()).is_err(),
+            "{refused}"
+        );
+    }
+}
+
+#[test]
+fn a_fetch_answer_says_where_the_file_is_and_is_an_error_unless_placed_and_recorded() {
+    let placed_as = |already_placed, recorded| {
+        fetched(&FetchAnswer::Placed {
+            already_placed,
+            path: "/work/a.png".into(),
+            digest: "ab".repeat(32),
+            size: 20,
+            recorded,
+        })
+    };
+    let placed = placed_as(false, true);
+    assert_eq!(placed["isError"], false);
+    assert_eq!(
+        placed["structuredContent"],
+        json!({"outcome": "placed", "path": "/work/a.png", "digest": "ab".repeat(32), "size": 20, "recorded": true})
+    );
+    let again = placed_as(true, true);
+    assert_eq!(again["isError"], false);
+    assert_eq!(again["structuredContent"]["outcome"], "alreadyPlaced");
+    // Placed, but its end is not in the records: said, and an error, as a
+    // command whose end could not be saved is.
+    for already_placed in [false, true] {
+        let unrecorded = placed_as(already_placed, false);
+        assert_eq!(unrecorded["isError"], true);
+        assert_eq!(unrecorded["structuredContent"]["recorded"], false);
+        assert_eq!(unrecorded["structuredContent"]["path"], "/work/a.png");
+    }
+    let refusals = [
+        (FetchCallRefusal::NoTurn, "no_turn"),
+        (
+            FetchCallRefusal::EnvironmentNotLeased,
+            "environment_not_leased",
+        ),
+        (FetchCallRefusal::DuplicateRequest, "duplicate_request"),
+        (FetchCallRefusal::FetchUnavailable, "fetch_unavailable"),
+        (FetchCallRefusal::Invalid, "invalid"),
+        (FetchCallRefusal::NotHeld, "not_held"),
+        (FetchCallRefusal::BudgetExceeded, "budget_exceeded"),
+        (FetchCallRefusal::Busy, "busy"),
+        (FetchCallRefusal::AuditUnavailable, "audit_unavailable"),
+        (FetchCallRefusal::SourceUnavailable, "source_unavailable"),
+        (FetchCallRefusal::ChannelUnavailable, "channel_unavailable"),
+        (
+            FetchCallRefusal::Unanswered { delivered: true },
+            "unanswered",
+        ),
+        (
+            FetchCallRefusal::Unanswered { delivered: false },
+            "unanswered",
+        ),
+        (FetchCallRefusal::TimedOut { delivered: true }, "timed_out"),
+        (FetchCallRefusal::TimedOut { delivered: false }, "timed_out"),
+        (FetchCallRefusal::Cancelled { delivered: true }, "cancelled"),
+        (
+            FetchCallRefusal::Cancelled { delivered: false },
+            "cancelled",
+        ),
+        (
+            FetchCallRefusal::NotPlaced(FetchRefusal::Unavailable),
+            "fetch_unavailable",
+        ),
+        (
+            FetchCallRefusal::NotPlaced(FetchRefusal::OutsideWorkspace),
+            "outside_workspace",
+        ),
+        (
+            FetchCallRefusal::NotPlaced(FetchRefusal::NoDirectory),
+            "no_directory",
+        ),
+        (
+            FetchCallRefusal::NotPlaced(FetchRefusal::Occupied),
+            "occupied",
+        ),
+        (FetchCallRefusal::NotPlaced(FetchRefusal::Size), "size"),
+        (
+            FetchCallRefusal::NotPlaced(FetchRefusal::Invalid),
+            "invalid",
+        ),
+        (FetchCallRefusal::NotPlaced(FetchRefusal::Busy), "busy"),
+        (
+            FetchCallRefusal::NotPlaced(FetchRefusal::Mismatch),
+            "mismatch",
+        ),
+        (
+            FetchCallRefusal::NotPlaced(FetchRefusal::PlacingFailed),
+            "placing_failed",
+        ),
+        (
+            FetchCallRefusal::NotPlaced(FetchRefusal::AuditUnavailable),
+            "audit_unavailable",
+        ),
+        (
+            FetchCallRefusal::NotPlaced(FetchRefusal::LeaseEnded),
+            "lease_ended",
+        ),
+    ];
+    for (refusal, code) in refusals {
+        let answer = fetched(&FetchAnswer::Refused(refusal));
+        assert_eq!(answer["isError"], true, "{code}");
+        assert_eq!(answer["structuredContent"]["refused"], code);
+        assert_eq!(fetch_refusal_code(refusal), code);
+        assert!(answer["structuredContent"]["message"].is_string());
+        assert!(answer["structuredContent"].get("recorded").is_none());
+        // Its end not in the records: the same refusal, said unrecorded.
+        let unrecorded = fetched(&FetchAnswer::RefusedUnrecorded(refusal));
+        assert_eq!(unrecorded["isError"], true, "{code}");
+        assert_eq!(unrecorded["structuredContent"]["refused"], code);
+        assert_eq!(unrecorded["structuredContent"]["recorded"], false);
+    }
+}
+
+/// With no answer, a fetch says whether every byte was delivered, and only
+/// one that was says the file may yet be placed.
+#[test]
+fn a_fetch_with_no_answer_says_it_may_be_placed_only_once_every_byte_was_delivered() {
+    for delivered in [false, true] {
+        for refusal in [
+            FetchCallRefusal::Unanswered { delivered },
+            FetchCallRefusal::TimedOut { delivered },
+            FetchCallRefusal::Cancelled { delivered },
+        ] {
+            let said = &fetched(&FetchAnswer::Refused(refusal))["structuredContent"];
+            assert_eq!(said["delivered"], delivered, "{refusal:?}");
+            let message = said["message"].as_str().unwrap();
+            assert_eq!(message.contains("may"), delivered, "{message}");
+            assert_eq!(
+                message.contains("nothing was placed"),
+                !delivered,
+                "{message}"
+            );
+        }
+    }
+    // An answer that says what happened carries no such word.
+    let said = &fetched(&FetchAnswer::Refused(FetchCallRefusal::NotHeld))["structuredContent"];
+    assert!(said.get("delivered").is_none());
 }
 
 #[test]

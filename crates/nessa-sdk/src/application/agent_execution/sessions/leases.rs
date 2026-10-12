@@ -13,14 +13,14 @@
 //! cannot read is kept as it was written and makes the current lease
 //! [`CurrentLeaseState::Unreadable`] until the next lease is issued: a reader
 //! says it cannot show that lease rather than refusing the whole history.
-use super::StorageError;
+use super::{EnvironmentPath, FetchOutcome, PublishedFile, StorageError};
 use crate::application::agent_execution::permissions::ActionContext;
 use crate::domain::agent_execution::{
     executions::ExecutionId,
     leases::{
         CleanupDecision, CommandExit, CommandOutput, CommandRefusal, CommandTerms, EndDecision,
-        Lease, LeaseCleanup, LeaseEndCause, LeaseError, LeaseId, LeaseRefusal, LeaseRevision,
-        LeaseTerms,
+        Lease, LeaseCleanup, LeaseEndCause, LeaseError, LeaseId, LeasePhase, LeaseRefusal,
+        LeaseRevision, LeaseTerms,
     },
 };
 
@@ -138,6 +138,33 @@ pub enum LeaseRecord {
         /// What releasing it took, when its environment said.
         cleanup: Option<LeaseCleanup>,
     },
+    /// A file the conversation holds was asked to be placed where `lease`,
+    /// the conversation's Live agent lease, runs, before the environment was
+    /// asked. `actor` is who it is fetched for: the person whose turn asked,
+    /// with the tool call, `request`, as their request.
+    FetchAsked {
+        /// The agent lease it is fetched under.
+        lease: LeaseId,
+        /// The tool call that asked.
+        request: String,
+        /// The file named.
+        file: PublishedFile,
+        /// Where it was asked to go, as asked.
+        destination: EnvironmentPath,
+        /// Who it is fetched for.
+        actor: ActionContext,
+    },
+    /// The fetch `request` under `lease` came to `outcome`: one end for every
+    /// fetch asked, whatever its answer. Recorded after `lease` is final, it
+    /// is late evidence, as a command's end is.
+    FetchEnded {
+        /// The agent lease it was fetched under.
+        lease: LeaseId,
+        /// The tool call that asked.
+        request: String,
+        /// What it came to.
+        outcome: FetchOutcome,
+    },
     /// A record of a kind this build cannot read, kept as written: `kind`,
     /// and `body`, its encoded content. Never written by this build.
     Unreadable {
@@ -189,6 +216,10 @@ impl CurrentLease {
     /// Most records one lease keeps. More is corrupt evidence rather than a
     /// lease anybody issued.
     pub const MAX_RECORDS: usize = 64;
+    /// Most fetches one lease has asked and not yet ended. Another is
+    /// corrupt evidence: a gateway asks no more at once, and an environment
+    /// takes no more in flight.
+    pub const MAX_ASKED_FETCHES: usize = 4;
 
     /// Its records, oldest first.
     pub fn records(&self) -> &[LeaseRecord] {
@@ -215,6 +246,14 @@ impl CurrentLease {
             Some(LeaseRecord::Issued { actor, .. }) => Some(actor),
             _ => None,
         }
+    }
+    /// How many fetches the latest lease has asked whose end is not yet
+    /// recorded.
+    pub fn asked_fetches(&self) -> usize {
+        self.records
+            .iter()
+            .filter(|record| matches!(record, LeaseRecord::FetchAsked { .. }))
+            .count()
     }
     /// Who asked for it to end, when somebody did.
     pub fn ended_by(&self) -> Option<&ActionContext> {
@@ -262,7 +301,7 @@ impl CurrentLease {
                     }
                     CurrentLeaseState::Held(lease) => {
                         Self::transition(lease, transition)?;
-                        next.keep_commands(record)?;
+                        next.keep(record)?;
                         return Ok(next);
                     }
                 }
@@ -273,11 +312,17 @@ impl CurrentLease {
     }
 
     /// Keep `record`, just folded onto a held lease, among the records saved
-    /// for it. A command lease's issuance is kept until its end arrives, so a
-    /// saved lease still says which commands run under it and, once the lease
-    /// is final, which ends are still owed as late evidence; its end and a
-    /// refusal change nothing else saved, and stay in the stream alone.
-    fn keep_commands(&mut self, record: &LeaseRecord) -> Result<(), StorageError> {
+    /// for it. A command lease's issuance, and a fetch's asking, is kept until
+    /// its end arrives, so a saved lease still says which commands run and
+    /// which fetches are under way under it and, once the lease is final,
+    /// which ends are still owed as late evidence; an end and a refusal
+    /// change nothing else saved, and stay in the stream alone.
+    ///
+    /// A fetch is asked only once for its request while it is under way, by
+    /// the person whose request it is, and at most
+    /// [`Self::MAX_ASKED_FETCHES`] at once; it ends only once asked. Anything
+    /// else is corrupt.
+    fn keep(&mut self, record: &LeaseRecord) -> Result<(), StorageError> {
         match record {
             LeaseRecord::CommandRefused { .. } => Ok(()),
             LeaseRecord::CommandEnded { lease: ended, .. } => {
@@ -286,8 +331,36 @@ impl CurrentLease {
                 });
                 Ok(())
             }
+            LeaseRecord::FetchAsked { request, actor, .. } => {
+                if actor.request_id() != request {
+                    return Err(corrupt("a fetch is asked for another request"));
+                }
+                if self.asks(request) {
+                    return Err(corrupt("a fetch is asked again while under way"));
+                }
+                if self.asked_fetches() >= Self::MAX_ASKED_FETCHES {
+                    return Err(corrupt("a lease has more fetches under way than it may"));
+                }
+                self.push(record)
+            }
+            LeaseRecord::FetchEnded { request, .. } => {
+                if !self.asks(request) {
+                    return Err(corrupt("a fetch ends that was never asked"));
+                }
+                self.records.retain(|kept| {
+                    !matches!(kept, LeaseRecord::FetchAsked { request: asked, .. } if asked == request)
+                });
+                Ok(())
+            }
             record => self.push(record),
         }
+    }
+
+    /// Whether a fetch for `request` is asked and not yet ended.
+    fn asks(&self, request: &str) -> bool {
+        self.records.iter().any(
+            |kept| matches!(kept, LeaseRecord::FetchAsked { request: asked, .. } if asked == request),
+        )
     }
 
     /// Rebuild a current lease saved as its `records` and the newest
@@ -386,7 +459,9 @@ impl CurrentLease {
             | LeaseRecord::EventDropped { lease, .. }
             | LeaseRecord::CommandIssued { parent: lease, .. }
             | LeaseRecord::CommandRefused { parent: lease, .. }
-            | LeaseRecord::CommandEnded { parent: lease, .. } => lease,
+            | LeaseRecord::CommandEnded { parent: lease, .. }
+            | LeaseRecord::FetchAsked { lease, .. }
+            | LeaseRecord::FetchEnded { lease, .. } => lease,
             LeaseRecord::Issued { .. }
             | LeaseRecord::Refused { .. }
             | LeaseRecord::Unreadable { .. } => {
@@ -424,6 +499,13 @@ impl CurrentLease {
             LeaseRecord::CommandEnded { lease: command, .. } => {
                 lease.end_command(command).map_err(lease_error)
             }
+            // A fetch changes nothing the lease itself holds: it is asked
+            // only while the lease is Live, and may end at any time after,
+            // its records kept as `keep` says.
+            LeaseRecord::FetchAsked { .. } if lease.phase() != LeasePhase::Live => {
+                Err(corrupt("a fetch is asked under a lease that is not Live"))
+            }
+            LeaseRecord::FetchAsked { .. } | LeaseRecord::FetchEnded { .. } => Ok(()),
             LeaseRecord::Issued { .. }
             | LeaseRecord::Refused { .. }
             | LeaseRecord::Unreadable { .. } => {

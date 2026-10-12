@@ -171,14 +171,19 @@ pub use command_environment::CommandResult;
 pub(crate) use command_environment::CommandHold;
 #[cfg(any(unix, test))]
 pub(crate) use command_environment::GrantedCommand;
-pub(crate) use environment::{Environment, EnvironmentFuture, PublishAsk, PublishFailure};
+pub(crate) use environment::{
+    Environment, EnvironmentFuture, FetchAsk, FetchFailure, FetchPlaced, HeldSource,
+    HeldSourceFailure, PublishAsk, PublishFailure,
+};
 // For the adapters, which only the Unix gateway composes (`infrastructure`).
 pub use artifacts::PublishedOutcome;
 pub use artifacts::{
     ArtifactAnswer, ArtifactAnswering, ArtifactBytes, ArtifactChunk, ArtifactOffer,
     ArtifactReadFailure, ARTIFACT_READ_RESUMES,
 };
-pub(crate) use artifacts::{ArtifactBudget, ArtifactCollector, PublishRequests};
+pub(crate) use artifacts::{
+    ArtifactBudget, ArtifactCollector, FetchRequests, FetchTaken, PublishRequests,
+};
 #[cfg(any(unix, test))]
 pub(crate) use environment::{
     EnvironmentDeclaration, EnvironmentLease, GrantedTerms, LeaseHold, LeaseRelease,
@@ -202,7 +207,7 @@ pub(crate) use placement::{ConversationPlacements, PlacementError};
 // For the paired environment adapter, which lives with the Unix-only SSH one.
 #[cfg(unix)]
 pub(crate) use placement::PairedEnvironments;
-pub use placement::PUBLISH_CALL_WAIT;
+pub use placement::{FETCH_CALL_WAIT, PUBLISH_CALL_WAIT};
 pub use ports::{
     ArtifactKept, ArtifactRecordGate, AttachmentRelease, AttachmentReleaseCause,
     ConversationAttachments, ConversationCreation, ConversationCreationAudit,
@@ -212,9 +217,9 @@ pub use ports::{
     ConversationFileLinkState, ConversationFuture, ConversationListing,
     ConversationModeApplication, ConversationModeAudit, ConversationModeAuditPhase,
     ConversationModeRequest, ConversationModeRequestState, ConversationOwnershipState,
-    ConversationRepository, ConversationSummaries, ListedConversation, ListedConversations,
-    ObservationCursor, ObservedConversations, PublishedArtifact, RuntimeReadiness, SubmittedFile,
-    SubmittedImage, SubmittedMessage, UnfinishedDeletions,
+    ConversationRepository, ConversationSummaries, HeldRange, HeldRangeError, ListedConversation,
+    ListedConversations, ObservationCursor, ObservedConversations, PublishedArtifact,
+    RuntimeReadiness, SubmittedFile, SubmittedImage, SubmittedMessage, UnfinishedDeletions,
 };
 pub use provider_sessions::{
     ProviderSessionEraser, ProviderSessionErasers, ProviderSessionHandler,
@@ -231,7 +236,10 @@ pub use service::{
     McpAppResource, QuestionChoiceInput, ReadOpening, RequestedAgent, RequestedConversation,
     SubmissionMode, MAX_APP_CALLS, MAX_LISTED_CONVERSATIONS, MAX_RESOURCE_META_BYTES,
 };
-pub use service::{PublishAnswer, PublishCall, PublishCallRefusal};
+pub use service::{
+    FetchAnswer, FetchCall, FetchCallRefusal, PublishAnswer, PublishCall, PublishCallRefusal,
+    FETCH_BUSY_BACKOFF, FETCH_READS,
+};
 pub(crate) use session_key::conversation_session;
 pub use share_grants::{
     admit_read, reader_of, Reader, ShareConversation, ShareGrant, ShareGrantChange,

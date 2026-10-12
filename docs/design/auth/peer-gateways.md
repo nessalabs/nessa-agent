@@ -259,6 +259,9 @@ sequenceDiagram
   refused before it takes one.
 - **Files it publishes** are read over the connection's own lease frames
   (row I9, below).
+- **Known limits.** Nothing is fetched into a paired environment yet: the
+  connection has no file channel, so the agent's fetch there is refused
+  unavailable before the environment is asked.
 
 ### Reading a published file over the connection (row I9)
 

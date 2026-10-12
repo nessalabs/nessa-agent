@@ -15,7 +15,7 @@
 //! record past [`ArtifactRecord::MAX_PER_CONVERSATION`] is refused, never
 //! made room for. An artifact recorded under a lease this build cannot read is
 //! kept as written, as that lease's own records are.
-use super::{CurrentLeaseState, LeaseRecord, SessionSnapshot, StorageError};
+use super::{CurrentLeaseState, EnvironmentPath, LeaseRecord, SessionSnapshot, StorageError};
 use crate::application::agent_execution::permissions::ActionContext;
 use crate::domain::agent_execution::{
     executions::ExecutionId,
@@ -32,6 +32,8 @@ pub enum ArtifactValueError {
     Name,
     /// The size is zero or larger than [`PublishedFile::MAX_BYTES`].
     Size,
+    /// A path is empty or longer than [`EnvironmentPath::MAX_BYTES`].
+    Path,
 }
 impl fmt::Display for ArtifactValueError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -45,6 +47,11 @@ impl fmt::Display for ArtifactValueError {
                 f,
                 "an artifact must be 1 to {} bytes long",
                 PublishedFile::MAX_BYTES
+            ),
+            Self::Path => write!(
+                f,
+                "a path in an environment must be 1 to {} bytes long",
+                EnvironmentPath::MAX_BYTES
             ),
         }
     }
