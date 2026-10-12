@@ -1,6 +1,8 @@
 //! The relay's listening socket and its random source.
-use super::application::{Relay, RelayEntropy};
+use super::application::{Relay, RelayEntropy, RelayProofs};
 use crate::timer::Timer;
+use nessa_auth::adapters::pairing::verify_relay_proof;
+use nessa_protocol::relay::GatewayKey;
 use socket2::{SockRef, TcpKeepalive};
 use std::{future::Future, sync::Arc, time::Duration};
 use tokio::{
@@ -23,6 +25,15 @@ impl RelayEntropy for OsRelayEntropy {
     fn fill(&self, bytes: &mut [u8]) {
         // A relay that cannot draw a challenge or a token cannot work safely.
         getrandom::fill(bytes).expect("the operating system's random source failed");
+    }
+}
+
+/// The gateway key's Ed25519 signature, checked as nessa-auth makes it.
+pub(crate) struct Ed25519Proofs;
+
+impl RelayProofs for Ed25519Proofs {
+    fn verify(&self, key: &GatewayKey, challenge: &[u8; 32], signature: &[u8; 64]) -> bool {
+        verify_relay_proof(key, challenge, signature)
     }
 }
 

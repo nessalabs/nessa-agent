@@ -7,7 +7,7 @@
 //!                             ──▶ application::Relay (registrations, joins, limits)
 //! application::Relay ──▶ crate::timer (every deadline and ping)
 //!                    ──▶ RelayEntropy (challenges and join tokens)
-//!                    ──▶ nessa_auth's verify_relay_proof (who may register a key)
+//!                    ──▶ RelayProofs: nessa_auth's verify_relay_proof (who may register a key)
 //! ```
 //!
 //! Arrows are construction and the calls each makes. The relay reads only

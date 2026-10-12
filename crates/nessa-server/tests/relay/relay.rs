@@ -1,4 +1,5 @@
 use super::*;
+use crate::relay::infrastructure::Ed25519Proofs;
 use crate::timer::{manual::ManualTimer, Moment};
 use nessa_auth::{adapters::pairing::NativeIdentity, application::pairing::PrivateKeyMaterial};
 use std::{
@@ -26,7 +27,12 @@ struct Fixture {
 
 fn fixture(limits: RelayLimits) -> Fixture {
     let timer = Arc::new(ManualTimer::default());
-    let relay = Relay::new(timer.clone(), Arc::new(Counting::default()), limits);
+    let relay = Relay::new(
+        timer.clone(),
+        Arc::new(Counting::default()),
+        Arc::new(Ed25519Proofs),
+        limits,
+    );
     Fixture { relay, timer }
 }
 

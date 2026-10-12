@@ -19,7 +19,6 @@
 //! cannot hold a task forever; a joined pair is the one exception, as it
 //! may sit idle as long as the two ends like.
 use crate::timer::{within, Moment, Timer};
-use nessa_auth::adapters::pairing::verify_relay_proof;
 use nessa_protocol::relay::{
     key_id, parse_body, parse_header, GatewayKey, JoinToken, RelayFrame, HEADER, JOIN_DEADLINE,
     MAX_FRAME, MISSED_PINGS, PING_INTERVAL, PREAMBLE_DEADLINE,
@@ -39,6 +38,13 @@ use tokio::{
 pub(crate) trait RelayEntropy: Send + Sync {
     /// Fill `bytes` with fresh random bytes.
     fn fill(&self, bytes: &mut [u8]);
+}
+
+/// Who may register a key: whether a signature is that key's proof over a
+/// challenge the relay sent. Composition gives the Ed25519 check.
+pub(crate) trait RelayProofs: Send + Sync {
+    /// Whether `signature` is `key`'s relay proof for `challenge`.
+    fn verify(&self, key: &GatewayKey, challenge: &[u8; 32], signature: &[u8; 64]) -> bool;
 }
 
 /// How much the relay holds at once. Past any of these, what would go over
@@ -95,6 +101,7 @@ pub(crate) struct Relay<S> {
     table: Mutex<Table<S>>,
     timer: Arc<dyn Timer>,
     entropy: Arc<dyn RelayEntropy>,
+    proofs: Arc<dyn RelayProofs>,
     limits: RelayLimits,
     connections: Arc<Semaphore>,
     joined: Arc<Semaphore>,
@@ -108,6 +115,7 @@ where
     pub(crate) fn new(
         timer: Arc<dyn Timer>,
         entropy: Arc<dyn RelayEntropy>,
+        proofs: Arc<dyn RelayProofs>,
         limits: RelayLimits,
     ) -> Arc<Self> {
         Arc::new(Self {
@@ -118,6 +126,7 @@ where
             }),
             timer,
             entropy,
+            proofs,
             limits,
             connections: Arc::new(Semaphore::new(limits.connections)),
             joined: Arc::new(Semaphore::new(limits.joined)),
@@ -164,7 +173,7 @@ where
         let Ok(Ok(RelayFrame::Proof { signature })) = proof else {
             return;
         };
-        if !verify_relay_proof(&key, &nonce, &signature) {
+        if !self.proofs.verify(&key, &nonce, &signature) {
             tracing::debug!(key = %key_id(&key), "relay proof refused");
             return;
         }

@@ -26,6 +26,7 @@ async fn a_gateway_and_a_reader_on_blocking_sockets_are_joined_over_tcp_and_stop
     let relay = Relay::new(
         timer.clone(),
         Arc::new(OsRelayEntropy),
+        Arc::new(Ed25519Proofs),
         RelayLimits::default(),
     );
     let (stop, stopping) = oneshot::channel::<()>();

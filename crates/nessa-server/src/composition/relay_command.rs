@@ -2,7 +2,7 @@
 //! (issue #266, `docs/design/auth/relay.md`).
 //!
 //! ```text
-//! bind HOST:PORT ──▶ Relay (TokioTimer, OsRelayEntropy, default limits)
+//! bind HOST:PORT ──▶ Relay (TokioTimer, OsRelayEntropy, Ed25519Proofs, default limits)
 //!   ──▶ serve_tcp until SIGINT or SIGTERM (Ctrl-C elsewhere) ──▶ every connection closed
 //! ```
 //!
@@ -12,7 +12,7 @@ use crate::{
     core::RunError,
     relay::{
         application::{Relay, RelayLimits},
-        infrastructure::{serve_tcp, OsRelayEntropy},
+        infrastructure::{serve_tcp, Ed25519Proofs, OsRelayEntropy},
     },
     timer::{Timer, TokioTimer},
 };
@@ -35,6 +35,7 @@ pub(super) async fn execute(listen: &str) -> Result<(), RunError> {
     let relay = Relay::new(
         timer.clone(),
         Arc::new(OsRelayEntropy),
+        Arc::new(Ed25519Proofs),
         RelayLimits::default(),
     );
     writeln!(io::stderr(), "Relay listening on {address}")?;
