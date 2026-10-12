@@ -902,7 +902,7 @@ async fn armed_permissions_are_empty_after_the_turn_ends_and_after_provider_canc
         "finish_turn_wire left a deadline armed"
     );
     clock.advance(Duration::from_secs(30));
-    promptly(worker.settle_due_permissions(&mut execution))
+    promptly(worker.settle_due_permissions(&mut execution, clock.now()))
         .await
         .unwrap_or_else(|failure| panic!("{:?}", failure.error()));
     no_published_event(&mut events).await;
@@ -936,7 +936,7 @@ async fn armed_permissions_are_empty_after_the_turn_ends_and_after_provider_canc
         "teardown left a provider-cancelled deadline armed"
     );
     clock.advance(Duration::from_secs(30));
-    promptly(worker.settle_due_permissions(&mut execution))
+    promptly(worker.settle_due_permissions(&mut execution, clock.now()))
         .await
         .unwrap_or_else(|failure| panic!("{:?}", failure.error()));
     no_published_event(&mut events).await;

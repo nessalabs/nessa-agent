@@ -1187,6 +1187,107 @@ async fn two_reviews_settle_in_deadline_order_then_id_order() {
     assert_gone(&same.root, "pid");
 }
 
+/// Records like `RecordingAudit`, and moves the clock the first time an
+/// answer is recorded: time passing while an audit write is awaited.
+struct SlowFirstAnswer {
+    inner: RecordingAudit,
+    clock: std::sync::OnceLock<Arc<ManualClock>>,
+    by: Duration,
+    moved: std::sync::atomic::AtomicBool,
+}
+impl ExecutionAudit for SlowFirstAnswer {
+    fn record(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+        if matches!(record, ExecutionAuditRecord::Answered(_))
+            && !self.moved.swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            self.clock.get().expect("clock set").advance(self.by);
+        }
+        self.inner.record(record)
+    }
+}
+
+// The read (8 s) falls due with answers to it and to the write (30 s)
+// already queued. Recording the read's answer takes until the write is due
+// too. The write's answer was admitted before its deadline, so it decides
+// the write, not the deadline.
+#[tokio::test(flavor = "current_thread")]
+async fn a_review_due_during_another_settlement_keeps_its_queued_answer() {
+    let _slot = process_test_slot().await;
+    let audit = Arc::new(SlowFirstAnswer {
+        inner: RecordingAudit::default(),
+        clock: std::sync::OnceLock::new(),
+        by: Duration::from_secs(22),
+        moved: std::sync::atomic::AtomicBool::new(false),
+    });
+    let (root, mut config, model) = test_acp_configuration("permission-deadline-pair", 16);
+    config.execution_timeout = None;
+    let clock = manual_clock(&mut config);
+    assert!(audit.clock.set(clock.clone()).is_ok());
+    let binding = ClaudeAcpProvider::new(
+        config,
+        &model,
+        TokenLimits::new(900, 100).unwrap(),
+        audit.clone(),
+    )
+    .unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
+    let _active = start(&opened, "write").await;
+    let mut permissions = 0;
+    while permissions < 2 {
+        if let ExecutionUpdate::PermissionRequested { .. } = next(&mut opened).await {
+            permissions += 1;
+        }
+    }
+    timeout(Duration::from_secs(5), async {
+        while !clock
+            .waits()
+            .iter()
+            .any(|wait| wait.limit() == Duration::from_secs(8))
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the read's deadline was never armed");
+
+    let (write, read) = (
+        PermissionId::new("1").unwrap(),
+        PermissionId::new("2").unwrap(),
+    );
+    let mut context = Context::from_waker(Waker::noop());
+    let mut read_answer = opened.session.answer_permission(human_allow(read));
+    assert!(read_answer.as_mut().poll(&mut context).is_pending());
+    let mut deny = human_allow(write.clone());
+    deny.option_id = PermissionOptionId::new("deny-one").unwrap();
+    let mut write_answer = opened.session.answer_permission(deny);
+    assert!(write_answer.as_mut().poll(&mut context).is_pending());
+    clock.advance(Duration::from_secs(8));
+
+    timeout(Duration::from_secs(5), read_answer)
+        .await
+        .expect("the read's answer was not taken")
+        .unwrap();
+    let decided = timeout(Duration::from_secs(5), write_answer)
+        .await
+        .expect("the write's answer was not taken");
+    assert!(
+        decided.is_ok(),
+        "the deadline took the write first: {decided:?}"
+    );
+    assert!(answered(&audit.inner).iter().all(|record| matches!(
+        record.resolution().attribution().basis(),
+        ApprovalBasis::Explicit
+    )));
+    let closing = opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()));
+    let _ = promptly(clock.passing(a_grace, closing)).await;
+    assert_gone(&root, "pid");
+}
+
 #[tokio::test]
 async fn codex_prefers_decline_and_says_when_only_cancel_is_offered() {
     let _slot = process_test_slot().await;

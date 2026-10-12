@@ -214,6 +214,15 @@ if (!validateDeadline({ ...deadline, stopsTurn: true }))
   throw new Error("Product permission deadline rejects a refusal that stops the turn")
 if (validateDeadline({ ...deadline, effect: "allow", stopsTurn: true }))
   throw new Error("Product permission deadline accepts an allow that stops the turn")
+// The reason is a sentence the client shows: not blank, no control characters.
+for (const reason of [" ", "\u3000\t", "denied\nlater", "denied\u0085", "denied\u007f"]) {
+  if (validateDeadline({ ...deadline, reason }))
+    throw new Error(
+      "Product permission deadline accepts a blank or control-character reason",
+    )
+}
+if (!validateDeadline({ ...deadline, reason: " Denied — nobody answered. " }))
+  throw new Error("Product permission deadline rejects a padded sentence")
 // A tool's MCP identity and structured result: optional, bounded, and closed.
 const validateTool = ajv.getSchema(`${schema.$id}#/$defs/ConversationTool`)
 const tool = {

@@ -1397,11 +1397,17 @@ impl<P: AcpProfile> Worker<P> {
                     // Taken commands wait in `carried`, not a local, so an
                     // early return still leaves them for teardown
                     // (`an_admitted_command_outlives_a_deadline_batch_that_stops`).
+                    // `now` is fixed with the snapshot. A review that falls
+                    // due while this batch awaits may have an answer admitted
+                    // after the snapshot, so it waits for its own wake and
+                    // its own snapshot
+                    // (`a_review_due_during_another_settlement_keeps_its_queued_answer`).
+                    let now = self.config.clock.now();
                     let admitted = self.commands.len();
                     let (due, later): (Vec<_>, Vec<_>) =
                         admitted_before_deadline(&mut self.commands, admitted)
                             .into_iter()
-                            .partition(|command| self.command_answers_due_review(command));
+                            .partition(|command| self.command_answers_due_review(command, now));
                     let answers = due.len();
                     self.carried.extend(due);
                     self.carried.extend(later);
@@ -1412,7 +1418,7 @@ impl<P: AcpProfile> Worker<P> {
                             return Ok(());
                         }
                     }
-                    self.settle_due_permissions(execution).await?;
+                    self.settle_due_permissions(execution, now).await?;
                     while let Some(command) = self.carried.pop_front() {
                         self.command(execution, command).await?;
                         if self.deferred_outcome.is_some() {
@@ -3927,8 +3933,7 @@ impl<P: AcpProfile> Worker<P> {
     /// An answer or a cancellation of a review whose deadline has already
     /// passed. That command was admitted before this wait, so it decides the
     /// review. Any other command does not.
-    fn command_answers_due_review(&self, command: &Command) -> bool {
-        let now = self.config.clock.now();
+    fn command_answers_due_review(&self, command: &Command, now: ClockInstant) -> bool {
         let id = match command {
             Command::Answer(answer, _) => &answer.id,
             Command::CancelPermission(request, _) => &request.id,
@@ -3943,14 +3948,14 @@ impl<P: AcpProfile> Worker<P> {
         self.armed_permissions.values().map(|armed| armed.at).min()
     }
 
-    /// Answer every review whose deadline has passed and which nobody else has
-    /// answered. An audit failure is retained and does not stop the turn. A
-    /// failure to tell the provider, or to publish the notice, does.
+    /// Answer every review whose deadline had passed at `now` and which nobody
+    /// else has answered. An audit failure is retained and does not stop the
+    /// turn. A failure to tell the provider, or to publish the notice, does.
     async fn settle_due_permissions(
         &mut self,
         execution: &mut ExecutionController,
+        now: ClockInstant,
     ) -> Result<(), WorkerFailure> {
-        let now = self.config.clock.now();
         let mut due: Vec<(ClockInstant, PermissionId)> = self
             .armed_permissions
             .iter()

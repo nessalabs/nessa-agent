@@ -1258,7 +1258,8 @@
           "minLength": 1,
           "maxLength": 512,
           "x-utf8MaxBytes": 512,
-          "description": "Past-tense reason recorded if the deadline wins. A pending review does not show this sentence; it builds a line from the outcome and the wait."
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
+          "description": "Past-tense reason recorded if the deadline wins: not blank, and free of control characters. A pending review does not show this sentence; it builds a line from the outcome and the wait."
         },
         "stopsTurn": {
           "type": "boolean",
