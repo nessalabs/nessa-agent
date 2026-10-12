@@ -149,11 +149,11 @@ mod passive_read;
 mod placement;
 mod ports;
 mod provider_sessions;
-mod read_grants;
 mod record_read;
 mod retries;
 mod service;
 mod session_key;
+mod share_grants;
 pub use crate::conversation::domain::ReceiverBinding;
 pub use catalogue::{
     CatalogueDescriptor, CatalogueHead, CatalogueKey, CataloguePage, CataloguePageRequest,
@@ -219,10 +219,6 @@ pub use ports::{
 pub use provider_sessions::{
     ProviderSessionEraser, ProviderSessionErasers, ProviderSessionHandler,
 };
-pub use read_grants::{
-    admit_read, reader_of, ReadGrant, ReadGrantChange, ReadGrantTransition, ReadGrants, Reader,
-    ShareConversation, MAX_READ_GRANTS_PER_CONVERSATION,
-};
 pub use record_read::{
     ReadRecords, RecordHead, RecordReadError, RecordReadFuture, RecordReadLease,
     RecordReadOperation, RecordReadResponse, RecordReadSource, RecordReadValue,
@@ -237,6 +233,11 @@ pub use service::{
 };
 pub use service::{PublishAnswer, PublishCall, PublishCallRefusal};
 pub(crate) use session_key::conversation_session;
+pub use share_grants::{
+    admit_read, reader_of, Reader, ShareConversation, ShareGrant, ShareGrantChange,
+    ShareGrantTransition, ShareGrants, MAX_DRIVE_GRANTS_PER_CONVERSATION,
+    MAX_SHARE_GRANTS_PER_CONVERSATION,
+};
 
 #[cfg(test)]
 #[path = "../../../tests/conversation/application.rs"]

@@ -247,7 +247,7 @@
       "grant": "credential.manage"
     },
     "conversation.unshare": {
-      "params": "ConversationShareParams",
+      "params": "ConversationUnshareParams",
       "grant": "credential.manage"
     },
     "conversation.shares": {

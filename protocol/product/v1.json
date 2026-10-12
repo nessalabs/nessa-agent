@@ -2274,10 +2274,90 @@
       },
       "required": ["conversationId", "requestId"]
     },
+    "ConversationShareRole": {
+      "type": "string",
+      "enum": ["read", "comment", "drive"],
+      "description": "What a share grant lets its holder do. read: list, read and watch the conversation's records. comment and drive name what later releases let the holder do (leave notes the agent sees on the owner's next turn; start, steer and stop turns under a tool policy); today both read exactly as read does, and every command that changes the conversation is still refused to a paired party whatever its role."
+    },
+    "ConversationToolPreset": {
+      "type": "string",
+      "enum": ["read_only_tools", "no_shell", "ask_everything", "all"],
+      "description": "A named tool policy. read_only_tools: only tools that read. no_shell: every tool except shell commands. ask_everything: every tool, each one asked for. all: every tool, asked as the conversation's approval mode asks."
+    },
+    "ConversationToolPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The tool policy a drive grant's turns run under: either preset alone, or allow and deny together. Allow and deny hold at most 16 patterns between them, each 1 to 64 UTF-8 bytes with no surrounding whitespace and no control character; anything else is refused invalid_request. A pattern is kept as written; nothing evaluates it yet.",
+      "properties": {
+        "preset": {
+          "$ref": "#/$defs/ConversationToolPreset",
+          "description": "A named policy. Present alone, without allow or deny."
+        },
+        "allow": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "x-utf8MaxBytes": 64
+          },
+          "description": "Tools the holder's turns may call. Present with deny, without preset."
+        },
+        "deny": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "x-utf8MaxBytes": 64
+          },
+          "description": "Tools the holder's turns may never call. Present with allow, without preset."
+        }
+      },
+      "required": []
+    },
     "ConversationShareParams": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Grant (conversation.share) or revoke (conversation.unshare) one paired device Read on one of the caller's conversations. Nothing is granted by default or by list: a paired device sees only the conversations granted to it, one grant per conversation, and an ungranted one is not listed, not readable and not watchable. A grant is refused share_target_not_paired unless the credential is an active paired device or peer gateway of the conversation's owner that holds conversation.read (an environment's credential never does), and conversation_deleted on a deleted conversation; a revoke needs only ownership. Revoking ends the device's next read; a read already admitted may finish. applied is false when nothing changed: granting a grant already held, or revoking one not held. A conversation holds at most 64 grants; one more is refused invalid_request. A retried requestId answers what it answered the first time, so a share retried after a later unshare grants nothing; the same requestId naming another device or the other change is refused invalid_request. A retried share is checked like a new one first, so once the conversation is deleted or the device unpaired it is refused conversation_deleted or share_target_not_paired and changes nothing.",
+      "description": "Grant (conversation.share) one paired device or peer gateway a role on one of the caller's conversations, or change the role and policy it already holds there. Nothing is granted by default or by list: a paired party sees only the conversations granted to it, one grant per conversation, and an ungranted one is not listed, not readable and not watchable. Every role reads; drive needs a policy and read and comment take none, and either mistake is refused invalid_request. A grant is refused share_target_not_paired unless the credential is an active paired device or peer gateway of the conversation's owner that holds conversation.read (an environment's credential never does), and conversation_deleted on a deleted conversation. applied is false when nothing changed: granting the role and policy already held. A conversation holds at most 64 grants, and at most 8 drive grants; one more is refused invalid_request. A retried requestId answers what it answered the first time, so a share retried after a later unshare grants nothing; the same requestId naming another device, another role or policy, or the other change is refused invalid_request. A retried share is checked like a new one first, so once the conversation is deleted or the device unpaired it is refused conversation_deleted or share_target_not_paired and changes nothing.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "credentialId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "The paired device's credential, as credential.list names it."
+        },
+        "role": {
+          "$ref": "#/$defs/ConversationShareRole",
+          "description": "The role to grant."
+        },
+        "policy": {
+          "$ref": "#/$defs/ConversationToolPolicy",
+          "description": "The tool policy. Present exactly when role is drive."
+        }
+      },
+      "required": ["conversationId", "requestId", "credentialId", "role"]
+    },
+    "ConversationUnshareParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Revoke (conversation.unshare) one paired party's grant on one of the caller's conversations, whatever its role. A revoke needs only ownership, so it works on a deleted conversation and for a party since unpaired. Revoking ends the party's next read; a read already admitted may finish. applied is false when no grant was held. A retried requestId answers what it answered the first time; the same requestId naming another device or the other change is refused invalid_request.",
       "properties": {
         "conversationId": {
           "type": "string",
@@ -2320,7 +2400,7 @@
     "ConversationShare": {
       "type": "object",
       "additionalProperties": false,
-      "description": "One Read grant on a conversation.",
+      "description": "One grant on a conversation.",
       "properties": {
         "credentialId": {
           "type": "string",
@@ -2329,9 +2409,18 @@
           "description": "The paired device's credential, as credential.list names it."
         },
         "role": {
-          "type": "string",
-          "enum": ["read"],
-          "description": "What the grant allows. Read: the device may list, read and watch the conversation's records."
+          "$ref": "#/$defs/ConversationShareRole",
+          "description": "What the grant allows."
+        },
+        "policy": {
+          "$ref": "#/$defs/ConversationToolPolicy",
+          "description": "The tool policy. Present exactly when role is drive."
+        },
+        "policyRevision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Moves each time the owner changes this grant's role or policy, and never otherwise. A later release stamps it on the turns a drive grant starts."
         },
         "grantedAtMs": {
           "type": "integer",
@@ -2340,7 +2429,7 @@
           "description": "When the grant was made, Unix milliseconds."
         }
       },
-      "required": ["credentialId", "role", "grantedAtMs"]
+      "required": ["credentialId", "role", "policyRevision", "grantedAtMs"]
     },
     "ConversationSharesResult": {
       "type": "object",

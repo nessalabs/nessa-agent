@@ -898,9 +898,63 @@ pub struct ConversationDeleteParams {
     pub conversation_id: String,
     pub request_id: String,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationShareRole {
+    Read,
+    Comment,
+    Drive,
+}
+impl ConversationShareRole {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Comment => "comment",
+            Self::Drive => "drive",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationToolPreset {
+    ReadOnlyTools,
+    NoShell,
+    AskEverything,
+    All,
+}
+impl ConversationToolPreset {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ReadOnlyTools => "read_only_tools",
+            Self::NoShell => "no_shell",
+            Self::AskEverything => "ask_everything",
+            Self::All => "all",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationToolPolicy {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset: Option<ConversationToolPreset>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deny: Option<Vec<String>>,
+}
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationShareParams {
+    pub conversation_id: String,
+    pub request_id: String,
+    pub credential_id: String,
+    pub role: ConversationShareRole,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<ConversationToolPolicy>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationUnshareParams {
     pub conversation_id: String,
     pub request_id: String,
     pub credential_id: String,
@@ -914,7 +968,10 @@ pub struct ConversationSharesParams {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationShare {
     pub credential_id: String,
-    pub role: String,
+    pub role: ConversationShareRole,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<ConversationToolPolicy>,
+    pub policy_revision: u64,
     pub granted_at_ms: u64,
 }
 #[derive(Deserialize, Serialize)]

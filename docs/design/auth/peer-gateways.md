@@ -98,7 +98,7 @@ peer's receiver, and every read the peer makes asks that receiver's grants:
   `AdmitPassiveRead::execute`, which asks `admit_read` for the receiver's
   grant on that conversation; an ungranted one is `wrong_owner`.
 - **Catalogue manifest and resolve** are narrowed in SQL to the receiver's
-  granted rows (`store::read_grants::granted`). A manifest pass may not reach
+  granted rows (`store::share_grants::granted`). A manifest pass may not reach
   past the receiver's own head, so probing boundaries finds that head and not
   the owner's; an ungranted id resolves as one that does not exist.
 - **Catalogue head** is the latest revision among the receiver's granted rows
@@ -1091,7 +1091,7 @@ sequenceDiagram
 H as a whole is larger than one change. Part 1 (#725) is the granting side;
 part 2a puts a peer's reads behind its grants; part 2b-1 lets the gateway link
 the client and gives the head an access path by receiver
-(`read_grant_changes_by_receiver`); part 2b-2 enrolls and part 2b-3 reads
+(`share_grant_changes_by_receiver`); part 2b-2 enrolls and part 2b-3 reads
 (above). The rest:
 
 - **The peer table's last addresses and local discovery.** The issue lists

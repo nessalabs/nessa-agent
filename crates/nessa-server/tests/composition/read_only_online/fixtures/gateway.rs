@@ -641,10 +641,12 @@ pub(super) async fn share_with_devices(
             .zip(setup.second_credential.clone()),
     ];
     for (receiver, credential) in devices.into_iter().flatten() {
-        crate::conversation::application::ReadGrants::change(
+        crate::conversation::application::ShareGrants::change(
             metadata,
-            crate::conversation::application::ReadGrantChange {
-                transition: crate::conversation::application::ReadGrantTransition::Grant,
+            crate::conversation::application::ShareGrantChange {
+                transition: crate::conversation::application::ShareGrantTransition::Grant(
+                    crate::conversation::domain::ShareAccess::read(),
+                ),
                 conversation_id: id.clone(),
                 receiver_id: Some(receiver),
                 credential_id: nessa_auth::domain::CredentialId::new(credential).unwrap(),

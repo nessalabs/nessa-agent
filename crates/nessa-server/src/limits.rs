@@ -7,8 +7,10 @@
 //! test beside this module refuses a copy that has drifted.
 use crate::attachments::application::{AttachmentLimits, HeldReads};
 use crate::conversation::application::{
-    ArtifactBudget, ARTIFACT_READ_RESUMES, MAX_READ_GRANTS_PER_CONVERSATION, PUBLISH_CALL_WAIT,
+    ArtifactBudget, ARTIFACT_READ_RESUMES, MAX_DRIVE_GRANTS_PER_CONVERSATION,
+    MAX_SHARE_GRANTS_PER_CONVERSATION, PUBLISH_CALL_WAIT,
 };
+use crate::conversation::domain::ToolRules;
 use crate::conversation::infrastructure::{DISCOVERY_STEPS_PER_READ, MAX_CATALOGUE_CHANGE_WATCHES};
 use crate::mcp_servers::infrastructure::{MAX_BUILT_IN_CALLS, MAX_BUILT_IN_LINE_BYTES};
 use crate::peer_gateways::infrastructure::{
@@ -202,10 +204,28 @@ fn catalogue() -> &'static [Limit] {
             meaning: "the catalogue watches every socket shares; a list subscription holds one beside its record watch, as a device's catalogue watch does; past this one is refused subscription_capacity",
         },
         Limit {
-            id: "conversation.read_grants",
+            id: "conversation.share_grants",
             tier: "fixed",
-            owner: "MAX_READ_GRANTS_PER_CONVERSATION in crates/nessa-server/src/conversation/application/read_grants.rs, the schema's ConversationSharesResult maxItems",
-            meaning: "the paired devices one conversation is shared with; one more conversation.share is refused invalid_request, so a conversation.shares answer always fits one frame",
+            owner: "MAX_SHARE_GRANTS_PER_CONVERSATION in crates/nessa-server/src/conversation/application/share_grants.rs, the schema's ConversationSharesResult maxItems",
+            meaning: "the paired parties one conversation is shared with, any role; one more conversation.share is refused invalid_request, so a conversation.shares answer always fits one frame",
+        },
+        Limit {
+            id: "conversation.drive_grants",
+            tier: "fixed",
+            owner: "MAX_DRIVE_GRANTS_PER_CONVERSATION in crates/nessa-server/src/conversation/application/share_grants.rs",
+            meaning: "the drive grants one conversation holds; one more conversation.share naming drive is refused invalid_request, so a conversation.shares answer with every policy at its largest still fits one frame",
+        },
+        Limit {
+            id: "conversation.tool_policy_rules",
+            tier: "fixed",
+            owner: "ToolRules::MAX_RULES in crates/nessa-server/src/conversation/domain/value_objects/share_access.rs, the schema's ConversationToolPolicy",
+            meaning: "the allow and deny patterns one drive grant's tool policy holds together; a conversation.share with more is refused invalid_request",
+        },
+        Limit {
+            id: "conversation.tool_policy_rule_bytes",
+            tier: "fixed",
+            owner: "ToolRules::MAX_RULE_BYTES in crates/nessa-server/src/conversation/domain/value_objects/share_access.rs, the schema's ConversationToolPolicy",
+            meaning: "the longest tool policy pattern, in UTF-8 bytes; a conversation.share with a longer one is refused invalid_request",
         },
         Limit {
             id: "record.read_work_budget",
@@ -474,8 +494,20 @@ pub(crate) fn effective_json(
         count(MAX_CATALOGUE_CHANGE_WATCHES),
     );
     put(
-        "conversation.read_grants",
-        MAX_READ_GRANTS_PER_CONVERSATION.unsigned_abs(),
+        "conversation.share_grants",
+        MAX_SHARE_GRANTS_PER_CONVERSATION.unsigned_abs(),
+    );
+    put(
+        "conversation.drive_grants",
+        MAX_DRIVE_GRANTS_PER_CONVERSATION.unsigned_abs(),
+    );
+    put(
+        "conversation.tool_policy_rules",
+        count(ToolRules::MAX_RULES),
+    );
+    put(
+        "conversation.tool_policy_rule_bytes",
+        count(ToolRules::MAX_RULE_BYTES),
     );
     put("record.read_work_budget", millis(limits.read_work_budget()));
     put("record.discovery_steps", count(DISCOVERY_STEPS_PER_READ));
