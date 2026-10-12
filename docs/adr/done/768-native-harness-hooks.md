@@ -57,8 +57,11 @@ different command. The rows are the orders the store implements.
 `a_process_start_reads_the_earlier_choice_until_the_outcome_is_recorded`,
 `a_harness_named_twice_is_off_whichever_value_comes_last`,
 `a_choice_file_larger_than_any_choice_loads_as_off`,
-`a_retry_is_not_acknowledged_until_the_outcome_records_directory_syncs`, and
-`an_audit_record_larger_than_any_record_fails_the_retry` are those rows.
+`a_retry_is_not_acknowledged_until_the_outcome_records_directory_syncs`,
+`an_audit_record_larger_than_any_record_fails_the_retry`,
+`a_choice_published_without_its_outcome_is_put_back_at_the_next_start`,
+`a_pending_change_whose_outcome_was_recorded_is_kept_at_the_next_start`, and
+`an_unreadable_pending_change_loads_as_off` are those rows.
 The launch row is `claude_native_hook_runs_when_the_launch_omits_suppression`
 and `codex_native_hook_runs_when_the_launch_omits_suppression`. The next start
 of a conversation already open is
@@ -72,10 +75,11 @@ and
 | No requested record | The requested record fails | The file is not written. The flag stays. The command fails |
 | Requested record written, file still off | The outcome record fails | The file and the flag stay off. The command fails |
 | Requested record written, file on, flag still off | The outcome record fails and the revert write succeeds | The file returns to the choice this call started from, and the flag never moved. The command fails |
-| File published | The revert write fails | The flag stays with that file. The command fails. The outcome record is absent |
+| File published | The revert write fails | The flag stays with that file. The command fails. The outcome record is absent, and the next gateway start puts the file back |
 | Requested record written | The file is renamed into place and its directory sync fails | The outcome is recorded and the flag follows the file. The command reports the storage failure. A retry succeeds once the directory syncs, and reports the storage failure until then |
 | File and flag on | The outcome record is readable but reports a failure | Nothing is reverted, because the record says the change took effect. The command fails. A retry succeeds once the record's directory syncs, and reports the audit failure until then |
-| File written, outcome absent | The process starts | The start loads the file |
+| File written, outcome absent, change pending | The gateway starts | The file goes back to the choice before the command. A retry of the command finishes it |
+| File written and settled, outcome record later lost | The gateway starts | The start loads the file |
 | The file is not one JSON object, names a harness twice, or is larger than any choice | The gateway starts | That file loads as off and the gateway keeps starting |
 | Both records written for this choice | The same caller, harness, and request id | The command succeeds. The records stay as first written, including the observation time |
 | Outcome written for a different choice | The same request id | The command fails. The file is unchanged |
@@ -101,5 +105,5 @@ unchanged. OpenCode's launch environment is untouched. The agent catalog
 holds the choice once, at its top level; agent rows do not repeat it.
 Managed and MDM hooks can still run when the choice is off, and allowing
 hooks does not prove a hook ran. A crash after the file is written and before
-the outcome record is written leaves the file ahead of the audit; the next
-start loads the file.
+the outcome record is written is put back at the next gateway start, so the
+file never runs ahead of the audit across a restart.

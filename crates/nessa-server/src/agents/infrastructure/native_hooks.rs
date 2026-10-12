@@ -1,8 +1,10 @@
 //! The native-hooks choice file and its audit records.
 //!
 //! ```text
-//! set -> requested record -> native-hooks.json -> outcome record -> atomic flag
-//! open -> native-hooks.json -> flags (unreadable or invalid documents load as off)
+//! set -> requested record -> pending marker -> native-hooks.json -> outcome record
+//!     -> atomic flag -> marker removed
+//! open -> pending marker settled or put back -> native-hooks.json -> flags
+//!      (unreadable or invalid documents load as off)
 //! process start -> switch.allowed() once -> that start's profile and environment
 //! ```
 //!
@@ -23,8 +25,9 @@
 //! conversation already open. A process already running is not changed.
 //!
 //! A crash after the file is published and before the outcome record leaves
-//! the choice on disk with the requested record and no outcome record. The
-//! next start loads the file. That window is the remaining gap.
+//! the pending marker behind. The next start finds no outcome for it and puts
+//! the file back to the choice before the command, so the file never runs
+//! ahead of the audit across a restart. A retry of that command finishes it.
 
 use crate::agents::application::{
     selection_from_stored, NativeHooksAgent, NativeHooksAudit, NativeHooksChange, NativeHooksError,
@@ -83,7 +86,7 @@ impl NativeHooksPreferences {
         sync: DirectorySync,
     ) -> Result<Arc<Self>, NativeHooksError> {
         create_directory(&directory).map_err(|_| NativeHooksError::Storage)?;
-        let stored = read_choice(&directory.join("native-hooks.json"));
+        let stored = reconcile_pending(&directory, sync);
         Ok(Arc::new(Self {
             directory,
             claude: Arc::new(AtomicBool::new(stored.claude())),
@@ -167,6 +170,23 @@ fn set_blocking(
         return Ok(selection_of(&claude, &codex));
     }
     let updated = selection_of(&claude, &codex).with(change.agent, change.enabled);
+    // Name the change before the file moves, so a gateway that stops before
+    // the outcome is recorded puts the file back at its next start.
+    let pending = PendingChoice {
+        outcome_record: record_name(
+            change.agent,
+            &change.principal_id,
+            &change.request_id,
+            NativeHooksPhase::Outcome,
+        ),
+        agent: change.agent.name().into(),
+        before: current,
+    };
+    if publish(&directory, PENDING, &pending, sync).is_err() {
+        // A marker that did land only names a change that is not in the file,
+        // and the next start's revert of it changes nothing.
+        return Err(NativeHooksError::Storage);
+    }
     // Process starts keep reading the earlier choice until the outcome record
     // is durable: the flag moves last, so no start runs under a choice the
     // audit has not recorded.
@@ -175,7 +195,10 @@ fn set_blocking(
         // Readers already see this file, so it is the choice to record. Its
         // durability is not confirmed, and the command says so.
         Err(Publication::Unconfirmed) => Err(NativeHooksError::Storage),
-        Err(Publication::Unpublished) => return Err(NativeHooksError::Storage),
+        Err(Publication::Unpublished) => {
+            clear_pending(&directory, sync);
+            return Err(NativeHooksError::Storage);
+        }
     };
     if let Err(error) =
         audit.record(&change.evidence(NativeHooksPhase::Outcome, before, Some(change.enabled)))
@@ -184,16 +207,21 @@ fn set_blocking(
         // rollback now would contradict it, and a retry would stop at it.
         if already_recorded(&directory, &change).unwrap_or(false) {
             store(&claude, &codex, change.agent, change.enabled);
+            clear_pending(&directory, sync);
             return Err(error);
         }
         let reverted = updated.with(change.agent, current);
         if write_choice(&directory, &reverted, sync) == Err(Publication::Unpublished) {
-            // The new file is still in place, so the flag follows it.
+            // The new file is still in place, so the flag follows it. The
+            // marker stays, and the next start puts the file back.
             store(&claude, &codex, change.agent, change.enabled);
+        } else {
+            clear_pending(&directory, sync);
         }
         return Err(error);
     }
     store(&claude, &codex, change.agent, change.enabled);
+    clear_pending(&directory, sync);
     written.map(|()| selection_of(&claude, &codex))
 }
 
@@ -262,10 +290,25 @@ fn write_choice(
     selection: &NativeHooksSelection,
     sync: DirectorySync,
 ) -> Result<(), Publication> {
-    let destination = directory.join("native-hooks.json");
-    let value = json!({"claude": selection.claude(), "codex": selection.codex()});
+    publish(
+        directory,
+        "native-hooks.json",
+        &json!({"claude": selection.claude(), "codex": selection.codex()}),
+        sync,
+    )
+}
+
+/// Replace `name` under `directory` with `value`, through a private temporary
+/// file renamed into place.
+fn publish(
+    directory: &Path,
+    name: &str,
+    value: &impl Serialize,
+    sync: DirectorySync,
+) -> Result<(), Publication> {
+    let destination = directory.join(name);
     let mut file = PrivateTempFile::new_in(directory).map_err(|_| Publication::Unpublished)?;
-    serde_json::to_writer(file.as_file_mut(), &value).map_err(|_| Publication::Unpublished)?;
+    serde_json::to_writer(file.as_file_mut(), value).map_err(|_| Publication::Unpublished)?;
     file.as_file_mut()
         .write_all(b"\n")
         .and_then(|_| file.as_file().sync_all())
@@ -273,6 +316,94 @@ fn write_choice(
     file.persist(&destination)
         .map_err(|_| Publication::Unpublished)?;
     sync(directory).map_err(|_| Publication::Unconfirmed)
+}
+
+/// The change a command is about to publish, written before the choice file
+/// moves and removed once the outcome is recorded or the file is put back.
+const PENDING: &str = "native-hooks.pending.json";
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PendingChoice {
+    /// The outcome record that settles this change.
+    outcome_record: String,
+    agent: String,
+    /// The choice to put back when the outcome was never recorded.
+    before: bool,
+}
+
+/// The choice this start loads. A change the gateway stopped in the middle
+/// of, with its outcome never recorded, is put back to the choice before it,
+/// so the file never runs ahead of the audit across a restart. A marker that
+/// cannot be read is treated like a broken choice file: everything is off.
+fn reconcile_pending(directory: &Path, sync: DirectorySync) -> NativeHooksSelection {
+    let stored = read_choice(&directory.join("native-hooks.json"));
+    let pending = match read_pending(&directory.join(PENDING)) {
+        Ok(None) => return stored,
+        Ok(Some(pending)) => pending,
+        Err(()) => {
+            tracing::warn!("native hooks pending change could not be read; loading as off");
+            return NativeHooksSelection::off();
+        }
+    };
+    let settled = matches!(
+        read_record(&audit_record(directory, &pending.outcome_record)),
+        Ok(Some(record)) if record.record_id == pending.outcome_record
+            && record.transition.phase == NativeHooksPhase::Outcome.name()
+    );
+    if settled {
+        clear_pending(directory, sync);
+        return stored;
+    }
+    let agent = match pending.agent.as_str() {
+        "claude" => NativeHooksAgent::Claude,
+        "codex" => NativeHooksAgent::Codex,
+        _ => return NativeHooksSelection::off(),
+    };
+    let reverted = stored.with(agent, pending.before);
+    if write_choice(directory, &reverted, sync) == Ok(()) {
+        clear_pending(directory, sync);
+    }
+    // Even when the file could not be put back, this start uses the choice
+    // the audit last recorded, and the marker stays for the next start.
+    reverted
+}
+
+fn read_pending(path: &Path) -> Result<Option<PendingChoice>, ()> {
+    let file = match open(path, OpenMode::Read) {
+        Ok(file) => file,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(()),
+    };
+    let mut bytes = Vec::new();
+    file.take(MAX_CHOICE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| ())?;
+    if bytes.len() as u64 > MAX_CHOICE_BYTES {
+        return Err(());
+    }
+    let pending: PendingChoice = serde_json::from_slice(&bytes).map_err(|_| ())?;
+    // The record name becomes a path, so it must be one this store makes.
+    let hex = pending
+        .outcome_record
+        .strip_prefix("native-hooks-")
+        .ok_or(())?;
+    if hex.len() != 64
+        || !hex
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        return Err(());
+    }
+    Ok(Some(pending))
+}
+
+/// Best effort: a marker left behind names a change that is settled or
+/// already put back, and the next start finds it so.
+fn clear_pending(directory: &Path, sync: DirectorySync) {
+    if std::fs::remove_file(directory.join(PENDING)).is_ok() {
+        let _ = sync(directory);
+    }
 }
 
 /// The file name of one phase. The same caller, harness, and request id
@@ -740,7 +871,14 @@ mod tests {
         assert!(value["transition"]["after"].is_null());
     }
 
-    fn unsynced(_: &Path) -> std::io::Result<()> {
+    /// Syncs the pending-change marker, then fails every directory sync after
+    /// it. Only `a_choice_renamed_into_place_is_in_effect_when_its_directory_sync_fails`
+    /// uses it, so the count is that test's own.
+    fn unsynced(path: &Path) -> std::io::Result<()> {
+        static SYNCS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        if SYNCS.fetch_add(1, Ordering::SeqCst) == 0 {
+            return sync_directory(path);
+        }
         Err(std::io::Error::other("directory sync failed"))
     }
 
@@ -879,6 +1017,112 @@ mod tests {
                 NativeHooksPhase::Outcome
             ),
         );
+    }
+
+    /// Stops the command where a gateway crash would: after the file is
+    /// published and before its outcome is recorded.
+    struct StopsBeforeTheOutcome {
+        inner: DurableNativeHooksAudit,
+    }
+    impl NativeHooksAudit for StopsBeforeTheOutcome {
+        fn record(&self, evidence: &NativeHooksEvidence) -> Result<(), NativeHooksError> {
+            if evidence.phase == NativeHooksPhase::Outcome {
+                panic!("the gateway stopped");
+            }
+            self.inner.record(evidence)
+        }
+    }
+
+    #[tokio::test]
+    async fn a_choice_published_without_its_outcome_is_put_back_at_the_next_start() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("data");
+        let crashed = NativeHooksPreferences::open_with(
+            directory.clone(),
+            Arc::new(StopsBeforeTheOutcome {
+                inner: DurableNativeHooksAudit::new(
+                    directory.join("audit").join("native-hooks"),
+                    Arc::new(FixedClock),
+                )
+                .unwrap(),
+            }),
+        )
+        .unwrap();
+        let retry = change(NativeHooksAgent::Codex, true, "request-crash");
+        assert_eq!(
+            crashed.set(retry.clone()).await.unwrap_err(),
+            NativeHooksError::Interrupted
+        );
+        let stored = std::fs::read_to_string(directory.join("native-hooks.json")).unwrap();
+        assert!(
+            selection_from_stored(stored.as_bytes()).codex(),
+            "published"
+        );
+        // The next start loads the choice the audit last recorded, not the file.
+        let restarted =
+            NativeHooksPreferences::open(directory.clone(), Arc::new(FixedClock)).unwrap();
+        assert_eq!(restarted.selection(), NativeHooksSelection::off());
+        let stored = std::fs::read_to_string(directory.join("native-hooks.json")).unwrap();
+        assert!(
+            !selection_from_stored(stored.as_bytes()).codex(),
+            "put back"
+        );
+        assert!(!directory.join(PENDING).exists());
+        // The same command can then finish.
+        assert!(restarted.set(retry).await.unwrap().codex());
+        assert!(!directory.join(PENDING).exists());
+    }
+
+    #[tokio::test]
+    async fn a_pending_change_whose_outcome_was_recorded_is_kept_at_the_next_start() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("data");
+        let preferences =
+            NativeHooksPreferences::open(directory.clone(), Arc::new(FixedClock)).unwrap();
+        let done = change(NativeHooksAgent::Claude, true, "request-settled");
+        preferences.set(done.clone()).await.unwrap();
+        // A gateway that stopped after the outcome and before clearing the
+        // marker leaves this behind.
+        let pending = PendingChoice {
+            outcome_record: record_name(
+                done.agent,
+                &done.principal_id,
+                &done.request_id,
+                NativeHooksPhase::Outcome,
+            ),
+            agent: "claude".into(),
+            before: false,
+        };
+        publish(&directory, PENDING, &pending, sync_directory).unwrap();
+        let restarted =
+            NativeHooksPreferences::open(directory.clone(), Arc::new(FixedClock)).unwrap();
+        assert!(restarted.selection().claude());
+        assert!(!directory.join(PENDING).exists());
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_pending_change_loads_as_off() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("data");
+        let preferences =
+            NativeHooksPreferences::open(directory.clone(), Arc::new(FixedClock)).unwrap();
+        preferences
+            .set(change(
+                NativeHooksAgent::Claude,
+                true,
+                "request-before-damage",
+            ))
+            .await
+            .unwrap();
+        publish(
+            &directory,
+            PENDING,
+            &json!({"outcomeRecord": "../../elsewhere", "agent": "claude", "before": false}),
+            sync_directory,
+        )
+        .unwrap();
+        let restarted = NativeHooksPreferences::open(directory, Arc::new(FixedClock)).unwrap();
+        assert_eq!(restarted.selection(), NativeHooksSelection::off());
     }
 
     fn audit_unsynced(path: &Path) -> std::io::Result<()> {
