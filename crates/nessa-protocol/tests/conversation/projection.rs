@@ -2531,6 +2531,80 @@ fn a_pending_review_shows_an_armed_deadline_and_a_restored_one_does_not() {
 }
 
 #[test]
+fn a_saved_deadline_counts_down_while_this_process_holds_the_review() {
+    use std::collections::HashSet;
+    use std::time::Duration;
+    let ExecutionUpdate::PermissionRequested {
+        id,
+        tool_id,
+        observation,
+        input,
+        options,
+        ..
+    } = review("{}".into()).update().clone()
+    else {
+        unreachable!()
+    };
+    let due = 1_700_000_030_000;
+    let restored =
+        PermissionReviewDeadline::stopping(PermissionToolClass::Other, Duration::from_secs(30))
+            .promise(due)
+            .restored(true, Some(due));
+    assert!(!restored.armed());
+    let snapshot = review_snapshot(vec![event(ExecutionUpdate::PermissionRequested {
+        id,
+        tool_id,
+        observation,
+        input,
+        options,
+        deadline: Some(restored),
+    })]);
+    let active = ExecutionId::new("execution").unwrap();
+    let show = |holding: HashSet<(String, String)>| {
+        let mut projection = projection();
+        projection.replace_committed_while_holding(
+            &committed("incarnation", 1, 1, 1, Some(&snapshot)),
+            &[],
+            Some(&active),
+            &holding,
+        );
+        projection.transcript_state(ConversationTranscriptState::Complete);
+        projection.read()
+    };
+    let absent = show(HashSet::new());
+    assert!(
+        absent.permissions[0].deadline.is_none(),
+        "a saved deadline stays off the card when this process is not holding the review"
+    );
+    let other = show(HashSet::from([("execution".into(), "other".into())]));
+    assert!(
+        other.permissions[0].deadline.is_none(),
+        "holding a different review does not show this deadline"
+    );
+    let pending = show(HashSet::from([("execution".into(), "permission".into())]));
+    let deadline = pending.permissions[0]
+        .deadline
+        .as_ref()
+        .expect("a review this process holds counts down from the saved deadline");
+    assert_eq!(deadline.wait_ms, 30_000);
+    assert_eq!(deadline.due_at_ms, due);
+    assert_eq!(deadline.effect, ConversationPermissionOptionEffect::Deny);
+    assert_eq!(deadline.reason, STANDARD_STOP_REASON);
+    assert!(deadline.stops_turn);
+    let mut idle = projection();
+    idle.replace_committed_while_holding(
+        &committed("incarnation", 1, 1, 1, Some(&snapshot)),
+        &[],
+        None,
+        &HashSet::from([("execution".into(), "permission".into())]),
+    );
+    assert!(
+        idle.read().permissions.is_empty(),
+        "a held review that is not the active execution is not offered"
+    );
+}
+
+#[test]
 fn an_automatic_decision_is_named_allowed_or_denied_in_the_notice() {
     let notice = |effect, sentence: &str| {
         let reason =

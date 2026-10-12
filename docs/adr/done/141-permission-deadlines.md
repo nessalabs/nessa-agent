@@ -121,6 +121,7 @@ first row that matches is what happens.
 | The selected-answer audit fails | The provider is still answered. The audit failure is retained and does not stop the turn. |
 | A saved review has no deadline | No automatic decision. The review stays pending until a person answers. |
 | A saved deadline is restored | The deadline stays on the record, including whether it would have stopped the turn and when it was due. It is not armed. The card does not promise a decision the new process will not make. Whether this process will decide is not part of the recorded decision, so a live save of an armed review still matches. |
+| A live read rebuilds a card from a saved deadline, and this process's worker still holds that review | The card counts down from the saved due time. Storage does not record that this process will decide, so the read asks the worker. A saved deadline whose worker is gone stays off the card. |
 | A saved deadline is not a deadline | The record is corrupt, as any other wrong-typed field is. A blank reason or a wait of zero is skipped, and the review waits for a person. |
 
 The permission wait is its own branch in the worker, after the command branch
@@ -198,3 +199,7 @@ elicitation questions are not this decision. A restored session does not
 re-arm a review whose provider request died with the process. The saved
 deadline remains on the record and is not shown as a promise. A review the
 live worker is holding is armed, and its card counts down from `dueAtMs`.
+A later read of that same process rebuilds the card from storage, which
+restores the deadline unarmed. The read asks the worker which reviews it
+still holds, and those cards keep counting down. A saved deadline whose
+worker is gone stays off the card.

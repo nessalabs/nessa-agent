@@ -246,6 +246,11 @@ pub struct Projection {
     /// offered an interaction. It does not, by itself, decide that every
     /// other unfinished record was interrupted.
     live_here: HashSet<String>,
+    /// Reviews this process's worker is still waiting on, as execution id and
+    /// permission id. Storage restores a deadline unarmed. One of these is
+    /// still the promise that worker made, so its card counts down.
+    /// `a_saved_deadline_counts_down_while_this_process_holds_the_review`.
+    holding_reviews: HashSet<(String, String)>,
     /// Unfinished executions present when this projection first accepted a
     /// snapshot, except any this process has since run. A record admitted
     /// later is absent, so a read while it is saved but not active — or no
@@ -277,10 +282,14 @@ fn outcome(value: ExecutionOutcome) -> ConversationMessageStatus {
 }
 fn permission_deadline(
     deadline: &PermissionReviewDeadline,
+    holding: bool,
 ) -> Option<ConversationPermissionDeadline> {
     // A restored deadline is a record of what was promised, not a promise this
-    // process will keep. Only a live armed review is shown with a countdown.
-    if !deadline.armed() {
+    // process will keep. `holding` is a review this process's worker is still
+    // waiting on: storage cannot record that, so the live read says so and
+    // the card counts down. Any other unarmed deadline stays off the card.
+    // `a_saved_deadline_counts_down_while_this_process_holds_the_review`.
+    if !deadline.armed() && !holding {
         return None;
     }
     Some(ConversationPermissionDeadline {
@@ -416,6 +425,7 @@ pub fn retained_view(
         HashSet::new(),
         revision,
         None,
+        &HashSet::new(),
     );
     projection.transcript_state(status.view_state().into());
     bound_view(projection.read())
@@ -427,7 +437,14 @@ impl Projection {
         capabilities: ConversationCapabilities,
         snapshot: Option<&SessionSnapshot>,
     ) -> Self {
-        Self::from_snapshot(id, capabilities, snapshot, HashSet::new(), None)
+        Self::from_snapshot(
+            id,
+            capabilities,
+            snapshot,
+            HashSet::new(),
+            None,
+            &HashSet::new(),
+        )
     }
 
     fn from_snapshot(
@@ -436,6 +453,7 @@ impl Projection {
         snapshot: Option<&SessionSnapshot>,
         live_here: HashSet<String>,
         carried_unfinished: Option<HashSet<String>>,
+        holding_reviews: &HashSet<(String, String)>,
     ) -> Self {
         Self::from_snapshot_with_epoch(
             id,
@@ -444,6 +462,7 @@ impl Projection {
             live_here,
             Uuid::new_v4(),
             carried_unfinished,
+            holding_reviews,
         )
     }
 
@@ -454,6 +473,7 @@ impl Projection {
         live_here: HashSet<String>,
         epoch: Uuid,
         carried_unfinished: Option<HashSet<String>>,
+        holding_reviews: &HashSet<(String, String)>,
     ) -> Self {
         let history_accepted = carried_unfinished.is_some() || snapshot.is_some();
         let unfinished_at_fold = match carried_unfinished {
@@ -472,6 +492,7 @@ impl Projection {
             terminal_executions: HashSet::new(),
             tool_parts: HashMap::new(),
             live_here: live_here.clone(),
+            holding_reviews: holding_reviews.clone(),
             unfinished_at_fold,
             history_accepted,
             tool_uis: Arc::new(NoMcpToolUis),
@@ -553,6 +574,22 @@ impl Projection {
         order: &[ExecutionId],
         active: Option<&ExecutionId>,
     ) -> bool {
+        self.replace_committed_while_holding(committed, order, active, &HashSet::new())
+    }
+
+    /// As [`Self::replace_committed`], and `holding` names each review this
+    /// process's worker is still waiting on, as execution id and permission
+    /// id. A saved deadline is restored unarmed. One of these is still that
+    /// worker's promise, so its card counts down. A restored deadline for any
+    /// other review stays off the card.
+    /// `a_saved_deadline_counts_down_while_this_process_holds_the_review`.
+    pub fn replace_committed_while_holding(
+        &mut self,
+        committed: &CommittedSession,
+        order: &[ExecutionId],
+        active: Option<&ExecutionId>,
+        holding: &HashSet<(String, String)>,
+    ) -> bool {
         let incarnation = committed.incarnation();
         let position = committed.position();
         let downloaded = committed.downloaded();
@@ -580,6 +617,7 @@ impl Projection {
             snapshot,
             active_set,
             carried,
+            holding,
         )
         .with_tool_uis(self.tool_uis.clone());
         next.epoch = self.epoch;
@@ -945,6 +983,9 @@ impl Projection {
         {
             tool.input = input.arguments_json.clone();
         }
+        let holding = self
+            .holding_reviews
+            .contains(&(execution.to_owned(), permission.as_str().to_owned()));
         let value = ConversationPermission {
             execution_id: execution.into(),
             permission_id: permission.as_str().into(),
@@ -957,7 +998,9 @@ impl Projection {
             arguments_json: input.arguments_json.clone(),
             origin: ConversationPermissionOrigin::Harness,
             ask: ConversationPermissionAsk::Tool,
-            deadline: deadline.as_ref().and_then(permission_deadline),
+            deadline: deadline
+                .as_ref()
+                .and_then(|deadline| permission_deadline(deadline, holding)),
             options: options
                 .choices()
                 .iter()
