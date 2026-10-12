@@ -504,11 +504,15 @@ fn sequence_was_cut(events: &[ExecutionEvent], start: usize) -> bool {
     event_included(previous) && text_key(previous) == text_key(&events[index])
 }
 
+/// The event's payload bytes, exact up to the window's byte cap. A larger
+/// result says only that the event is oversized: a tool's elements are not
+/// walked past the cap.
 fn payload_bytes(event: &ExecutionEvent) -> usize {
+    let limit = InvocationObservationWindow::MAX_PAYLOAD_BYTES;
     match event.update() {
         ExecutionUpdate::Finished(_) | ExecutionUpdate::QuestionClosed { .. } => 0,
         ExecutionUpdate::Message(chunk) => chunk.payload_bytes(),
-        ExecutionUpdate::Tool(tool) => tool.payload_bytes(),
+        ExecutionUpdate::Tool(tool) => tool.payload_bytes_up_to(limit),
         ExecutionUpdate::PermissionRequested {
             input,
             observation,
@@ -518,7 +522,7 @@ fn payload_bytes(event: &ExecutionEvent) -> usize {
             .name
             .len()
             .saturating_add(input.arguments_json.len())
-            .saturating_add(observation.payload_bytes())
+            .saturating_add(observation.payload_bytes_up_to(limit))
             .saturating_add(options.payload_bytes()),
         ExecutionUpdate::PermissionCancelled(record) => record
             .input()

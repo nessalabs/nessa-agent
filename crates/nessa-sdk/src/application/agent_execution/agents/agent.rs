@@ -177,6 +177,14 @@ where
             outcome = &mut wait.execution, if !wait.result_known && wait.pending_provider_outcome.is_none() => {
                 *wait.pending_provider_outcome = Some(outcome);
             }
+            // The deadline is checked before the hook's result, so a verdict
+            // that is only seen after the deadline passed is a timeout.
+            _ = &mut deadline => {
+                return PermissionReviewDecision {
+                    index: None,
+                    verdict: ToolVerdict::hook_failed(HookFailureKind::Timeout),
+                };
+            }
             finished = &mut task => {
                 return match finished {
                     Ok(decision) => decision,
@@ -184,12 +192,6 @@ where
                         index: None,
                         verdict: ToolVerdict::hook_failed(HookFailureKind::Panic),
                     },
-                };
-            }
-            _ = &mut deadline => {
-                return PermissionReviewDecision {
-                    index: None,
-                    verdict: ToolVerdict::hook_failed(HookFailureKind::Timeout),
                 };
             }
         }

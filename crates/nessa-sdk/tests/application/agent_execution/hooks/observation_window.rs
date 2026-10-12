@@ -1266,6 +1266,47 @@ async fn a_substituted_message_clock_times_out_a_slow_hook() {
     }
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn a_verdict_first_seen_after_the_deadline_is_a_timeout() {
+    let clock = Arc::new(ManualMessageClock::new());
+    let entered = Arc::new(AtomicBool::new(false));
+    let release = Arc::new(AtomicBool::new(false));
+    let _release = ReleaseOnDrop(release.clone());
+    let fixture = open_on_clock(
+        script(),
+        vec![Arc::new(ReleasableHook {
+            entered: entered.clone(),
+            release: release.clone(),
+        })],
+        FixtureKnobs {
+            turn_cancel: true,
+            fail_delivery: false,
+            fail_turn_cancel: false,
+        },
+        Some(clock.clone()),
+    )
+    .await;
+    let runner = fixture.agent.clone();
+    let turn = tokio::spawn(async move { runner.invoke(request(), close_action()).await });
+    let wait_started = std::time::Instant::now();
+    while !entered.load(Ordering::SeqCst) {
+        assert!(
+            wait_started.elapsed() < std::time::Duration::from_secs(2),
+            "the hook never started"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    // Pass the deadline and let the hook allow, while this test holds the
+    // only runtime thread, so the supervisor next sees both at once.
+    clock.advance(std::time::Duration::from_secs(2));
+    release.store(true, Ordering::SeqCst);
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    turn.await.unwrap().expect("timeout is deny-and-continue");
+    let answers = fixture.answers.lock().unwrap();
+    assert_eq!(answers.len(), 1, "a late allow was accepted");
+    assert_eq!(hook_refusal(&answers[0]).reason(), "hook failed: timeout");
+}
+
 /// Refuses every review, but says it does not review permissions.
 struct OptedOutRefuser;
 

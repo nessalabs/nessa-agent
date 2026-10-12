@@ -51,7 +51,8 @@ evaluation ([ADR 0014](../../../../docs/adr/todo/0014-nessa-owned-policy-hooks.m
 do not change how much history the session retains. Thinking spends the budget.
 An event larger than 64 KiB is omitted whole, and the walk continues past it.
 That event still spends one of the 256 event slots, so the walk never sizes or
-copies more than 256 events.
+copies more than 256 events, and sizing a tool event stops once it passes
+64 KiB.
 The window reports an omitted prefix, omitted text, a cut text sequence, and an
 oversized omission. Only the newest 256 omitted events are checked for text; a
 longer omitted prefix counts as omitted text. `contains_phrase` treats adjacent chunks of the same kind
@@ -65,7 +66,8 @@ permission-review hook runs on a blocking thread until the session's
 message-commit clock advances two seconds, and it yields when stop arrives.
 Dropping that wait does not cancel the callback: the blocking task cannot be
 cancelled, so a hook that overruns keeps its thread until it returns, its late
-verdict is discarded, and it must not re-enter the session. One process runs
+verdict is discarded, and it must not re-enter the session. A verdict first
+seen after the deadline passed is a timeout, even if the hook had returned. One process runs
 at most 32 of those threads. A review that arrives while that budget is held,
 or while this agent's earlier hook thread has not returned, is refused
 immediately as `"hook failed: busy"`, without another blocking thread.
