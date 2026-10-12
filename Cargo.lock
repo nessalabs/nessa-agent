@@ -3092,6 +3092,7 @@ dependencies = [
 name = "nessa-client-core"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "nessa-auth",
  "nessa-local-database",
  "nessa-local-storage",

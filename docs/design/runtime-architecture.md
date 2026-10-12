@@ -1227,6 +1227,20 @@ sequenceDiagram
 - **Not audited.** A read changes nothing and is admitted exactly as
   `conversation.read` is, which is not audited either.
 
+A paired device reads the same way over its protected channel:
+`nessa-client-core`'s `fetch PROFILE CONVERSATION DIGEST MIMETYPE SIZE OUT`
+(`fetch_held_file`) asks one 32 KiB range per operation, holds each answer to
+the range asked, and retries a busy range after each of
+`BUSY_RETRY_DELAYS_MS`. It assembles into `OUT.<sha256 hex>.part`, held with
+an exclusive lock and resumed from its length after a failure, and hard-links
+it at `OUT` only once the part as it is on disk has the named size and SHA-256
+and is synced; the link itself refuses anything at `OUT`, so nothing there is
+ever replaced. A part that is not the file is removed or emptied, so `OUT`
+holds only verified bytes. `show` lists the artifacts that
+name what to fetch. A Terminal enrollment's purge empties the device's cache
+and leaves files it fetched untouched; the order is in
+[the example's fetch rows](read-only-sync-example.md#fetching-a-held-file).
+
 ## Previews: a port, not a file
 
 A dev server the agent started on an environment should open in the

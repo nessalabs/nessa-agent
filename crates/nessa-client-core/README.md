@@ -34,15 +34,16 @@ cache policy/progress and reset ports/requests remain internal.
 | Path | Responsibility |
 | --- | --- |
 | `src/pairing/client.rs` | Native enrollment, strict pinned status and retry, pending-state publication and one retained physical worker. Shared framing and enrollment socket policy come from `nessa-protocol::pairing`. |
-| `src/read_only_sync/domain/` | Immutable attributed cache reset requests. |
-| `src/read_only_sync/application/` | Cache policy and typed evidence, finite records/catalogue drivers, saved-read/reset/purge ports, protected connection policy and bounded watch loop. |
+| `src/read_only_sync/domain/` | Immutable attributed cache reset requests; a held file named as the view names it, and its ranges. |
+| `src/read_only_sync/application/` | Cache policy and typed evidence, finite records/catalogue drivers, saved-read/reset/purge ports, protected connection policy, bounded watch loop, and the held-file fetch (ranges, busy retries, size and digest before keeping). |
 | `src/read_only_sync/infrastructure/cache/` | One private SQLite owner for catalogue values, physical records, SDK checkpoints, progress and purge/reset receipts. |
-| `src/read_only_sync/infrastructure/gateway/` | Protected pinned session, codecs, sources, and operation deadline/cancellation adapter. Its post-I/O/first-cause policy differs from enrollment's phase/wake socket. |
+| `src/read_only_sync/infrastructure/gateway/` | Protected pinned session, codecs, sources (`artifact.read` ranges included), and operation deadline/cancellation adapter. Its post-I/O/first-cause policy differs from enrollment's phase/wake socket. |
+| `src/read_only_sync/infrastructure/held_file.rs` | The output and the `OUT.<sha256 hex>.part` a fetch assembles in, held by one fetch at a time, re-read and checked from disk, synced and hard-linked at `OUT` (the link refuses anything there); an existing `OUT` looked at without following links. |
 | `src/read_only_sync/entrypoint/` | Argument contract and JSON output over supplied handles. |
-| `src/composition/` | Private profile, device/status admission, protected session and cache construction, independent wall/monotonic adapters, immutable command diagnostic facade, and executable input/output. |
+| `src/composition/` | Private profile, device/status admission, protected session and cache construction, independent wall/monotonic adapters and the retry pause, `fetch` (an existing output answered before dialling, then one held file into its part), immutable command diagnostic facade, and executable input/output. |
 | `examples/read_only_sync.rs` | Standalone executable using `composition::run_read_only_example`. |
 | `tests/read_only_sync/` | Matching domain, application, gateway and private-cache boundary evidence, included by the library with `#[path]`. |
-| `tests/composition/` | Private profile, code-input and command diagnostic evidence. Real authenticated online process tests remain in `nessa-server/tests/composition/read_only_online.rs`. |
+| `tests/composition/` | Private profile, code-input, command diagnostic, and composed `fetch` (scripted native peer, real files) evidence. Real authenticated online process tests remain in `nessa-server/tests/composition/read_only_online.rs`. |
 
 The deterministic five-mode saved-output race is
 `tests/read_only_sync/infrastructure/saved_output.rs`. It uses the existing

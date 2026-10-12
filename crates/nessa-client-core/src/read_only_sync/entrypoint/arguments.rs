@@ -1,13 +1,14 @@
 use crate::read_only_sync::application::{CacheError, GatewayError};
-use crate::read_only_sync::domain::CacheReset;
+use crate::read_only_sync::domain::{CacheReset, HeldFile};
 use nessa_protocol::conversation::domain::ConversationId;
+use nessa_sdk::domain::common::value_objects::{MediaType, Sha256Digest};
 use nessa_sync::replication::catalogue::EntryKey;
 use nessa_sync::replication::domain::{Id, Scope};
 use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
-pub(crate) const HELP: &str = "read_only_sync pair PROFILE (code on stdin)\nread_only_sync status PROFILE\nread_only_sync sync-records PROFILE CONVERSATION PAGES\nread_only_sync check-records PROFILE CONVERSATION\nread_only_sync watch PROFILE CONVERSATION PAGES MAX_PASSES\nread_only_sync sync-catalogue PROFILE PAGES\nread_only_sync list CACHE RECEIVER ORIGIN CATALOGUE [AFTER_CREATION AFTER_ID]\nread_only_sync show CACHE RECEIVER ORIGIN CONVERSATION\nread_only_sync reset-records|reset-catalogue CACHE RECEIVER ORIGIN STREAM OPERATION CALLER GENERATION OLD_INCARNATION OLD_SCHEMA OLD_EPOCH NEW_INCARNATION NEW_SCHEMA NEW_EPOCH";
+pub(crate) const HELP: &str = "read_only_sync pair PROFILE (code on stdin)\nread_only_sync status PROFILE\nread_only_sync sync-records PROFILE CONVERSATION PAGES\nread_only_sync check-records PROFILE CONVERSATION\nread_only_sync watch PROFILE CONVERSATION PAGES MAX_PASSES\nread_only_sync sync-catalogue PROFILE PAGES\nread_only_sync fetch PROFILE CONVERSATION DIGEST MIMETYPE SIZE OUT\nread_only_sync list CACHE RECEIVER ORIGIN CATALOGUE [AFTER_CREATION AFTER_ID]\nread_only_sync show CACHE RECEIVER ORIGIN CONVERSATION\nread_only_sync reset-records|reset-catalogue CACHE RECEIVER ORIGIN STREAM OPERATION CALLER GENERATION OLD_INCARNATION OLD_SCHEMA OLD_EPOCH NEW_INCARNATION NEW_SCHEMA NEW_EPOCH";
 
 pub(crate) enum Command {
     Local(LocalCommand),
@@ -38,6 +39,14 @@ pub(crate) enum Command {
         pages: usize,
         max_passes: NonZeroUsize,
     },
+    /// Fetch one file the conversation holds into `out`, assembled in a part
+    /// beside it named for the file's digest, and kept under `out` only once
+    /// its size and digest are verified and nothing is at `out`.
+    Fetch {
+        profile: PathBuf,
+        file: HeldFile,
+        out: PathBuf,
+    },
 }
 
 pub(crate) struct LocalCommand {
@@ -61,6 +70,8 @@ pub(crate) enum CommandError {
     Output,
     Gateway(GatewayError),
     OnlineRefused,
+    /// A fetch stopped on this device's files: its output or part.
+    LocalFile,
 }
 impl Display for CommandError {
     fn fmt(&self, out: &mut Formatter<'_>) -> FmtResult {
@@ -71,6 +82,7 @@ impl Display for CommandError {
             Self::Output => out.write_str("command output unavailable"),
             Self::Gateway(error) => write!(out, "gateway {error:?}"),
             Self::OnlineRefused => out.write_str("online command refused; see JSON outcome"),
+            Self::LocalFile => out.write_str("local file refused; see JSON outcome"),
         }
     }
 }
@@ -92,7 +104,7 @@ pub(crate) fn parse(args: &[String]) -> Result<Command, CommandError> {
                 profile: profile.into(),
                 conversation: ConversationId::new(conversation)
                     .map_err(|_| CommandError::Identity)?,
-                pages: page_count(pages)?,
+                pages: count(pages)?,
             })
         }
         [name, profile, conversation] if name == "check-records" => {
@@ -108,15 +120,27 @@ pub(crate) fn parse(args: &[String]) -> Result<Command, CommandError> {
                 profile: profile.into(),
                 conversation: ConversationId::new(conversation)
                     .map_err(|_| CommandError::Identity)?,
-                pages: page_count(pages)?,
-                max_passes: NonZeroUsize::new(page_count(passes)?)
-                    .ok_or(CommandError::Arguments)?,
+                pages: count(pages)?,
+                max_passes: NonZeroUsize::new(count(passes)?).ok_or(CommandError::Arguments)?,
+            })
+        }
+        [name, profile, conversation, digest, mime_type, size, out] if name == "fetch" => {
+            return Ok(Command::Fetch {
+                profile: profile.into(),
+                file: HeldFile::new(
+                    ConversationId::new(conversation).map_err(|_| CommandError::Identity)?,
+                    Sha256Digest::parse(digest).map_err(|_| CommandError::Arguments)?,
+                    MediaType::parse(mime_type).map_err(|_| CommandError::Arguments)?,
+                    count(size)?,
+                )
+                .map_err(|_| CommandError::Arguments)?,
+                out: out.into(),
             })
         }
         [name, profile, pages] if name == "sync-catalogue" => {
             return Ok(Command::Catalogue {
                 profile: profile.into(),
-                pages: page_count(pages)?,
+                pages: count(pages)?,
             })
         }
         _ => {}
@@ -213,7 +237,8 @@ fn identity(value: &str) -> Result<Id, CommandError> {
     Id::new(value).map_err(|_| CommandError::Identity)
 }
 
-fn page_count(value: &str) -> Result<usize, CommandError> {
+/// Plain decimal digits only: no sign, space or other spelling `parse` takes.
+fn count<T: std::str::FromStr>(value: &str) -> Result<T, CommandError> {
     if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
         return Err(CommandError::Arguments);
     }

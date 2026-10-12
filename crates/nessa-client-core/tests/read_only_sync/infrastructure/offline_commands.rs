@@ -184,3 +184,22 @@ fn offline_catalogue_reset_is_not_empty_source_evidence() {
     assert_eq!(deleted["entries"].as_array().unwrap().len(), 1);
     assert_eq!(valid["state"], "stale");
 }
+
+/// A device finds what to `fetch` in `show`: each artifact the conversation
+/// recorded, with the digest, media type and size `artifact.read` names.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn offline_show_lists_the_artifacts_a_fetch_names() {
+    let root = tempfile::tempdir().unwrap();
+    let (scope, records) = source_records_with_artifact(root.path()).await;
+    let path = cache_path(root.path(), "artifacts.sqlite3");
+    let mut cache = cache(&path);
+    cache.apply(plan(&scope, 0, records)).unwrap();
+    let value = render(&mut cache, "show", scope.stream().as_str());
+    assert_eq!(
+        value["view"]["artifacts"],
+        serde_json::json!([{
+            "lease":"lease-1","name":"report.txt","digest":ARTIFACT_DIGEST,
+            "mimeType":"text/plain","size":12,
+        }])
+    );
+}

@@ -4,10 +4,19 @@ use crate::read_only_sync::application::CachePolicy;
 use nessa_auth::application::ports::Clock;
 use nessa_sdk::{
     application::agent_execution::{
+        permissions::ActionContext,
         providers::ProviderIdentity,
-        sessions::{SessionChange, SessionSaveUnit, SessionSnapshot, SessionStorage},
+        sessions::{
+            ArtifactName, ArtifactRecord, CurrentLease, LeaseRecord, PublishedFile, SessionChange,
+            SessionSaveUnit, SessionSnapshot, SessionStorage,
+        },
+    },
+    domain::agent_execution::leases::{
+        AgentWork, EnvironmentRef, LeaseDeadline, LeaseGrants, LeaseId, LeaseRevision, LeaseTerms,
+        LeaseWork, SandboxProfile,
     },
     domain::agent_execution::sessions::{ExecutionSessionId, ProviderContext, SessionId},
+    domain::common::value_objects::{MediaType, Sha256Digest},
     infrastructure::session_storage::{
         physical_record_schema, RecordReadStatus, RecordStorage, MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
     },
@@ -152,6 +161,78 @@ async fn record_fixture(root: &Path, separate_open: bool, count: usize) -> (Scop
         .await
         .unwrap();
     drop(lease);
+    read_back(storage, session).await
+}
+
+/// The digest of the one artifact `source_records_with_artifact` records.
+pub(super) const ARTIFACT_DIGEST: &str =
+    "sha256:00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff";
+
+/// A conversation whose agent published one file under its lease, recorded
+/// as the gateway records it: opened, the lease issued, the artifact kept.
+pub(super) async fn source_records_with_artifact(root: &Path) -> (Scope, Vec<Record>) {
+    let storage = RecordStorage::new(root.join("source")).unwrap();
+    storage.initialize().await.unwrap();
+    let session = SessionId::new("00000000-0000-0000-0000-000000000001").unwrap();
+    let lease = storage.open(session.clone()).await.unwrap();
+    let provider = ProviderIdentity::new("provider", "model", "workspace").unwrap();
+    let actor = ActionContext::new("person", "desktop", "send").unwrap();
+    let issued = LeaseRecord::Issued {
+        lease: LeaseId::new("lease-1").unwrap(),
+        revision: LeaseRevision::FIRST,
+        terms: LeaseTerms {
+            environment: EnvironmentRef::Here,
+            work: LeaseWork::Agent(AgentWork::new("claude", "sonnet").unwrap()),
+            sandbox: SandboxProfile::HarnessDefault,
+            grants: LeaseGrants::Opening,
+            deadline: LeaseDeadline::UntilEnded,
+        },
+        actor: actor.clone(),
+    };
+    let artifact = ArtifactRecord {
+        lease: LeaseId::new("lease-1").unwrap(),
+        turn: None,
+        name: ArtifactName::new("report.txt").unwrap(),
+        file: PublishedFile::new(
+            Sha256Digest::parse(ARTIFACT_DIGEST).unwrap(),
+            MediaType::parse("text/plain").unwrap(),
+            12,
+        )
+        .unwrap(),
+        actor,
+    };
+    let changes = vec![
+        SessionChange::Opened {
+            id: session.clone(),
+            provider: provider.clone(),
+            context: ProviderContext::Absent,
+        },
+        SessionChange::Lease(issued.clone()),
+        SessionChange::Artifact(artifact.clone()),
+    ];
+    lease
+        .save_changes(
+            lease.load().await.unwrap().binding().clone(),
+            SessionSnapshot {
+                id: session.clone(),
+                provider,
+                provider_context: ProviderContext::Absent,
+                invocations: vec![],
+                queue_history: vec![],
+                lease: Some(CurrentLease::apply(None, &issued).unwrap()),
+                artifacts: vec![artifact],
+            },
+            vec![SessionSaveUnit::new(changes).unwrap()],
+        )
+        .await
+        .unwrap();
+    drop(lease);
+    read_back(storage, session).await
+}
+
+/// Every record `session` has, read from the real source as the gateway
+/// serves them.
+async fn read_back(storage: RecordStorage, session: SessionId) -> (Scope, Vec<Record>) {
     let mut source = storage
         .record_source(&session, id("origin"))
         .await
