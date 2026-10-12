@@ -170,6 +170,9 @@ struct LeaseRoute {
     grant: Option<oneshot::Sender<Result<GrantedTerms, GrantRefusal>>>,
     /// A command lease's run, waiting for its `Ran`.
     ran: Option<oneshot::Sender<CommandAnswer>>,
+    /// A command lease's: its `Ran` ends it, and the host never ends it
+    /// unasked.
+    command: bool,
     ended: Option<oneshot::Sender<Cleanup>>,
     /// Its End was asked: no harness starts under it and none is asked to
     /// stop, as its `Ended` answers their stops.
@@ -569,6 +572,8 @@ impl HostLink {
                 LeaseRoute {
                     grant: Some(answer),
                     ran: None,
+                    // Only a harness's lease publishes.
+                    command: published.is_none(),
                     ended: None,
                     ending: false,
                     end_sent: false,
@@ -1131,12 +1136,13 @@ fn route_frame(routes: &mut Routes, frame: FromEnvironment) -> Routed {
         }
         // The host is ending a lease unasked: said to whoever watches it,
         // who asks its End, which the host answers with what that took.
+        // A command's lease is bounded by its timeout, never ended so.
         FromEnvironment::Ending { lease, cause } => match routes.leases.get(&lease) {
-            Some(route) => {
+            Some(route) if !route.command => {
                 route.environment_ending.send_replace(Some(cause));
                 Routed::Done
             }
-            None => Routed::Dropped,
+            _ => Routed::Dropped,
         },
         FromEnvironment::Ended { lease, cleanup } => match routes.leases.remove(&lease) {
             Some(mut route) => {

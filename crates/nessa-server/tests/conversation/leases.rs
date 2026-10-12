@@ -2860,8 +2860,8 @@ async fn l1_an_environment_granting_other_terms_than_asked_is_refused_and_nothin
 
 /// Row I5 on the gateway: a command whose environment narrowed its timeout
 /// is recorded issued with the timeout granted, never the one asked, and
-/// runs under it; an answer granting longer than asked, or another sandbox,
-/// is recorded refused and never runs.
+/// runs under it; an answer granting longer than asked, another sandbox, or
+/// a lease duration, is recorded refused and never runs.
 #[tokio::test]
 async fn i5_a_narrowed_command_is_recorded_as_granted_and_a_wider_one_is_refused() {
     let root = tempfile::tempdir().unwrap();
@@ -2903,6 +2903,12 @@ async fn i5_a_narrowed_command_is_recorded_as_granted_and_a_wider_one_is_refused
             sandbox: SandboxProfile::None,
             timeout_ms: None,
             lease_ms: None,
+        },
+        // A lease duration nobody asked for: a command has its timeout.
+        GrantedTerms {
+            sandbox: SandboxProfile::None,
+            timeout_ms: Some(2_000),
+            lease_ms: Some(60_000),
         },
     ]
     .into_iter()

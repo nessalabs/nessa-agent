@@ -2765,6 +2765,8 @@ async fn a_lease_past_its_granted_duration_is_stopped_recorded_expired_and_said(
         .entries()
         .iter()
         .any(|entry| matches!(entry, LedgerEntry::Expiring { .. })));
+    // The last frame the gateway sent was read here.
+    let heard = timer.now();
     // At it, the host ends the lease itself and says so.
     timer.advance(Duration::from_millis(1));
     assert_eq!(
@@ -2774,6 +2776,16 @@ async fn a_lease_past_its_granted_duration_is_stopped_recorded_expired_and_said(
             cause: EndingCause::Expired,
         }
     );
+    // A deadline passing is not the gateway heard from: with nothing more
+    // sent, the next read is still bounded by silence from its last frame.
+    let deadline = timer.now();
+    let read = timer
+        .started(|_, wait| wait.started >= deadline && wait.deadline == heard + SILENCE_LIMIT)
+        .await;
+    assert!(timer
+        .waits()
+        .iter()
+        .all(|wait| wait.started < deadline || wait.deadline <= read.deadline));
     // The gateway's End is answered with what that end took.
     assert_eq!(
         gateway.ended(LEASE).await,
@@ -2813,9 +2825,6 @@ async fn a_lease_past_its_granted_duration_is_stopped_recorded_expired_and_said(
             },
         ]
     );
-    // A deadline passing is not the gateway heard from: the silence bound
-    // still runs from the last frame it sent.
-    assert!(!gateway.served.is_finished());
 }
 
 #[tokio::test]
@@ -3016,4 +3025,85 @@ async fn a_command_is_bounded_by_its_timeout_not_the_max_lease() {
             cause: EndCause::Asked,
         })
     );
+}
+
+/// A gateway that sends without pause, so a frame is always ready to read,
+/// still has its lease ended at the deadline; a Start that arrives after it
+/// starts nothing.
+#[tokio::test]
+async fn a_gateway_sending_without_pause_cannot_put_off_an_expiry() {
+    let timer = Arc::new(ManualTimer::default());
+    let mut gateway = expiring(timer.clone(), Arc::new(MemoryLedger::default()));
+    gateway.started_expiring(LEASE).await;
+    let (spare, _) = duplex(1);
+    let mut writer = std::mem::replace(&mut gateway.writer, split(spare).1);
+    let late = Arc::new(AtomicBool::new(false));
+    let (stop, mut stopped) = tokio::sync::watch::channel(false);
+    let sending = {
+        let late = late.clone();
+        tokio::spawn(async move {
+            let mut started = false;
+            while !*stopped.borrow_and_update() {
+                if late.load(Ordering::SeqCst) && !started {
+                    started = true;
+                    let start = ToEnvironment::Start {
+                        lease: LEASE.into(),
+                        channel: 2,
+                        environment: BTreeMap::new(),
+                    };
+                    write_frame(&mut writer, &start).await.unwrap();
+                }
+                if write_frame(&mut writer, &ToEnvironment::Keepalive)
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+    };
+    timer.advance(MAX_LEASE);
+    late.store(true, Ordering::SeqCst);
+    let mut ending = false;
+    let mut late_start = false;
+    while !(ending && late_start) {
+        match gateway.said().await {
+            FromEnvironment::Ending { lease, cause } => {
+                assert_eq!((lease.as_str(), cause), (LEASE, EndingCause::Expired));
+                ending = true;
+            }
+            FromEnvironment::StartFailed {
+                channel: 2, reason, ..
+            } => {
+                assert_eq!(reason, StartFailure::NotGranted);
+                late_start = true;
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+    stop.send_replace(true);
+    sending.await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while ended_entries(&gateway.ledger, LEASE) == 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the expired lease's end is recorded");
+    let entries = gateway.ledger.entries();
+    assert!(entries.contains(&LedgerEntry::Expiring {
+        lease: LEASE.into(),
+        lease_ms: 30_000,
+    }));
+    assert!(entries.contains(&LedgerEntry::Ended {
+        lease: LEASE.into(),
+        cleanup: Cleanup::Confirmed { forced: false },
+        cause: EndCause::Expired,
+    }));
+    // Only the harness started before the deadline was ever launched.
+    assert_eq!(gateway.launcher.launched.lock().unwrap().len(), 1);
+    assert!(!entries
+        .iter()
+        .any(|entry| matches!(entry, LedgerEntry::Started { channel: 2, .. })));
 }

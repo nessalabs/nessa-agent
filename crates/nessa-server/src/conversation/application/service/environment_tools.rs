@@ -468,8 +468,12 @@ impl ConversationService {
 
 /// The terms to record for a command asked as `asked` whose environment
 /// granted `granted`: the same command and sandbox, with the timeout it
-/// granted, no longer than asked. `None` for any other answer.
+/// granted, no longer than asked. `None` for any other answer, a lease
+/// duration among them: a command is bounded by its timeout alone.
 fn granted_terms(asked: &CommandTerms, granted: GrantedTerms) -> Option<CommandTerms> {
+    if granted.lease_ms.is_some() {
+        return None;
+    }
     let timeout_ms = granted
         .timeout_ms
         .filter(|granted| *granted <= asked.command.timeout_ms())?;

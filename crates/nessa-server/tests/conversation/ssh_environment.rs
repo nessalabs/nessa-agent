@@ -183,6 +183,9 @@ enum Reach {
     /// A host that grants the first lease it is asked for, then stops
     /// reading until `gate` opens, and then keeps every frame it reads.
     Stalling(tokio::sync::watch::Receiver<bool>),
+    /// A host that grants the first command lease it is asked for, then
+    /// says it is ending it, as no host may, and keeps reading.
+    EndsItsCommand,
     /// `ssh` cannot be started.
     Unreachable,
     /// The stream ends at once with nothing said on it: no copy of this
@@ -334,6 +337,42 @@ impl LeaseConnector for Connector {
                         tokio::time::sleep(Duration::from_millis(1)).await;
                     }
                     drop(host_out);
+                });
+            }
+            Reach::EndsItsCommand => {
+                tokio::spawn(async move {
+                    let (host_in, mut host_out) = split(host);
+                    let mut stream = FrameStream::new(host_in);
+                    let hello = encode(&FromEnvironment::Hello {
+                        build: VERSION.into(),
+                        protocol: LEASE_PROTOCOL.into(),
+                        workspace: "/srv/work".into(),
+                    })
+                    .unwrap();
+                    host_out.write_all(&hello).await.unwrap();
+                    while let Ok(Some(body)) = stream.next().await {
+                        if let Ok(ToEnvironment::GrantCommand {
+                            lease, timeout_ms, ..
+                        }) = decode(&body)
+                        {
+                            for frame in [
+                                FromEnvironment::Granted {
+                                    lease: lease.clone(),
+                                    terms: WireTerms {
+                                        sandbox: Sandbox::None,
+                                        timeout_ms: Some(timeout_ms),
+                                        lease_ms: None,
+                                    },
+                                },
+                                FromEnvironment::Ending {
+                                    lease,
+                                    cause: nessa_protocol::lease::EndingCause::Expired,
+                                },
+                            ] {
+                                host_out.write_all(&encode(&frame).unwrap()).await.unwrap();
+                            }
+                        }
+                    }
                 });
             }
             Reach::Scripted(bodies) => {
@@ -875,6 +914,37 @@ async fn an_ending_for_a_lease_not_held_is_dropped_with_evidence() {
     .expect("the drop recorded");
     assert_eq!(drop, (Some("never-granted".into()), "ending".into()));
     opening.abort();
+}
+
+/// Row I7: a command's lease is bounded by its timeout alone, so a host
+/// saying it is ending one is dropped and recorded, never applied to it.
+#[tokio::test]
+async fn an_ending_for_a_command_lease_is_dropped_with_evidence() {
+    let audit = Arc::new(Audit::default());
+    let host = environment(Connector::new(Reach::EndsItsCommand), audit.clone());
+    let id = lease();
+    let _hold = host
+        .commands()
+        .unwrap()
+        .grant(&id, &work(&["ls"]))
+        .await
+        .expect("granted")
+        .hold;
+    let drop = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let drop = audit.events().into_iter().find_map(|event| match event {
+                EnvironmentEvent::FrameDropped { lease, frame, .. } => Some((lease, frame)),
+                _ => None,
+            });
+            if let Some(drop) = drop {
+                break drop;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the drop recorded");
+    assert_eq!(drop, (Some(id.as_str().to_owned()), "ending".into()));
 }
 
 /// A binding that stops reading its harness's output does not grow the
