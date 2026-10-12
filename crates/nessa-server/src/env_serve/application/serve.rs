@@ -481,6 +481,7 @@ pub(crate) async fn serve<R, W>(
         ledger,
         outbox,
         inbox: inbox.unwrap_or_else(|| Arc::new(NoInbox)),
+        gone: watch::Sender::new(false),
         timings,
         timer: timer.clone(),
         drops: 0,
@@ -675,6 +676,9 @@ struct Served {
     /// Where fetched files arrive; [`NoInbox`] when this host takes none
     /// (`envServe.artifactsIn` off).
     inbox: Arc<dyn ArtifactInbox>,
+    /// Set once the gateway is gone: what is still to be said to it is
+    /// given up on, so nothing that ends a lease waits on a full queue.
+    gone: watch::Sender<bool>,
     timings: ServeTimings,
     /// What every wait, the stops' own included, is measured on.
     timer: Arc<dyn Timer>,
@@ -1081,6 +1085,7 @@ impl Served {
                     self.inbox.clone(),
                     self.ledger.clone(),
                     self.frames.clone(),
+                    self.gone.subscribe(),
                 ));
                 self.leases.insert(
                     lease.clone(),
@@ -1699,6 +1704,9 @@ impl Served {
     /// The gateway is gone: end every lease it held as lost, and wait for
     /// every end under way.
     async fn lose_all(&mut self) {
+        // First: an end already under way, an expiry's among them, may be
+        // waiting to say something to a gateway that reads nothing.
+        self.gone.send_replace(true);
         let leases: Vec<_> = self.leases.drain().collect();
         for (lease, held) in leases {
             tracing::warn!(lease, "the gateway's connection ended; its lease is lost");

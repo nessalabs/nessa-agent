@@ -4325,6 +4325,47 @@ impl Gateway {
     }
 }
 
+/// A fetch whose answer cannot be sent, the gateway reading nothing, does
+/// not hold serving open once the gateway is gone: its lease's end records
+/// the fetch's last word, and at the silence bound serving ends.
+#[tokio::test]
+async fn a_fetch_answer_blocked_on_a_full_output_queue_does_not_hold_serving_open() {
+    let timer = Arc::new(ManualTimer::default());
+    let inbox = Arc::new(RecordingInbox::default());
+    let mut gateway = expiring_through(
+        512,
+        timer.clone(),
+        Arc::new(MemoryLedger::default()),
+        Arc::new(NoOutbox),
+        Some(inbox.clone()),
+    );
+    gateway.started_expiring(LEASE).await;
+    let (go, held) = std::sync::mpsc::channel();
+    *inbox.hold_part.lock().unwrap() = Some(held);
+    gateway.send(fetch_frame(LEASE, "call-1", "a.png")).await;
+    gateway.settled().await;
+    let asking = gateway.flood(&timer).await;
+    // Its part made only now: its acceptance finds the queue full.
+    go.send(()).unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let ended = tokio::time::timeout(Duration::from_secs(5), async {
+        while !gateway.served.is_finished() {
+            timer.advance(Duration::from_millis(500));
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await;
+    assert!(ended.is_ok(), "{:?}", gateway.ledger.entries());
+    // Its lease ended under it (expired first, at this pace) and its last
+    // word recorded, whether or not the gateway ever reads it.
+    assert!(gateway.ledger.entries().iter().any(|entry| matches!(
+        entry,
+        LedgerEntry::Fetched { request, .. } | LedgerEntry::FetchUnanswered { request, .. }
+            if request == "call-1"
+    )));
+    asking.abort();
+}
+
 /// Wait until `lease` is recorded ended, moving `timer` on only by the
 /// stops' own short bounds, and never past `by`.
 async fn until_ended(gateway: &Gateway, timer: &ManualTimer, lease: &str, by: Duration) {

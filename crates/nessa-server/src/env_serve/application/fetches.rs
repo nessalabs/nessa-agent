@@ -45,7 +45,10 @@ use std::{
         Arc, Mutex, MutexGuard, PoisonError,
     },
 };
-use tokio::{sync::mpsc, task::JoinHandle};
+use tokio::{
+    sync::{mpsc, watch},
+    task::JoinHandle,
+};
 
 /// A file asked for, as the inbox checks it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -223,6 +226,8 @@ pub(crate) struct LeaseFetches {
     frames: mpsc::Sender<FromEnvironment>,
     /// Set once any entry of the lease's fetches could not be recorded.
     unrecorded: Arc<AtomicBool>,
+    /// True once the gateway is gone.
+    gone: watch::Receiver<bool>,
 }
 
 /// Record `entry` in `ledger`, noting in `unrecorded` when it could not be.
@@ -269,6 +274,7 @@ impl LeaseFetches {
         inbox: Arc<dyn ArtifactInbox>,
         ledger: Arc<dyn LeaseLedger>,
         frames: mpsc::Sender<FromEnvironment>,
+        gone: watch::Receiver<bool>,
     ) -> Self {
         Self {
             lease: lease.to_owned(),
@@ -277,6 +283,7 @@ impl LeaseFetches {
             ledger,
             frames,
             unrecorded: Arc::default(),
+            gone,
         }
     }
 
@@ -474,6 +481,7 @@ impl LeaseFetches {
             ledger: self.ledger.clone(),
             frames: self.frames.clone(),
             unrecorded: self.unrecorded.clone(),
+            gone: self.gone.clone(),
         }
     }
 
@@ -492,6 +500,7 @@ struct Handle {
     ledger: Arc<dyn LeaseLedger>,
     frames: mpsc::Sender<FromEnvironment>,
     unrecorded: Arc<AtomicBool>,
+    gone: watch::Receiver<bool>,
 }
 
 impl Handle {
@@ -662,7 +671,14 @@ impl Handle {
         self.send(frame).await;
     }
 
+    /// Queue `frame`, unless the gateway is gone first: its entry is
+    /// already recorded, so a frame nobody will read is given up on rather
+    /// than holding the lease's end on a full queue.
     async fn send(&self, frame: FromEnvironment) {
-        let _ = self.frames.send(frame).await;
+        let mut gone = self.gone.clone();
+        tokio::select! {
+            _ = self.frames.send(frame) => {}
+            _ = gone.wait_for(|gone| *gone) => {}
+        }
     }
 }
