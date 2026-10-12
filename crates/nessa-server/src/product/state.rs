@@ -30,11 +30,12 @@ use nessa_protocol::clock::Clock as UptimeClock;
 use nessa_protocol::product::generated::{
     AgentsListResult, MAX_GLOBAL_CHANGE_WATCHES, MAX_PRINCIPAL_CHANGE_WATCHES,
 };
+use serde_json::Value;
 use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use tokio::sync::Semaphore;
+use tokio::sync::{watch, Semaphore};
 
 /// The receiver bindings, ownership and read grants a paired device's reads
 /// are admitted by.
@@ -44,8 +45,18 @@ pub(crate) type PassiveReadAuthorities = (
     Arc<dyn ReadGrants>,
 );
 
-/// The names of the paired environments connected now.
-pub(crate) type ConnectedEnvironments = Arc<dyn Fn() -> Vec<String> + Send + Sync>;
+/// The paired environments connected now, as `PeerEnvironments` answers
+/// for them: their names, read when asked, and a wake-up each time which of
+/// them are connected may have changed.
+#[derive(Clone)]
+pub(crate) struct ConnectedEnvironments {
+    /// The names of those connected now.
+    pub(crate) names: Arc<dyn Fn() -> Vec<String> + Send + Sync>,
+    /// Moves when one connects, when one's connection ends, and when one is
+    /// revoked; the agent catalogue's subscriptions read the catalogue again
+    /// when it does.
+    pub(crate) changes: watch::Receiver<u64>,
+}
 
 /// Dependencies and trusted gateway selectors for the product route.
 ///
@@ -103,7 +114,7 @@ pub struct ProductRouteState {
     pub(crate) installs: Arc<Semaphore>,
     pub(crate) agents_catalog: Option<Arc<AgentsListResult>>,
     /// The paired environments connected now, by name: added to the
-    /// catalog's places each time it is asked, since they come and go.
+    /// catalog's places each time it is read, since they come and go.
     pub(crate) connected_environments: Option<ConnectedEnvironments>,
     pub(crate) attachments: Option<AttachmentService>,
     /// Where `artifact.read` reads a held file back, over the same store.
@@ -386,12 +397,39 @@ impl ProductRouteState {
         self
     }
 
-    /// Offer the paired environments connected when the catalog is asked as
-    /// places a new conversation may run, after its SSH hosts.
+    /// Offer the paired environments connected when the catalog is read as
+    /// places a new conversation may run, after its SSH hosts, and read it
+    /// again for its subscribers when they change.
     #[cfg_attr(not(any(unix, test)), allow(dead_code))]
     pub(crate) fn with_connected_environments(mut self, connected: ConnectedEnvironments) -> Self {
         self.connected_environments = Some(connected);
         self
+    }
+
+    /// The agent catalog as it is now: the agents and SSH hosts composed at
+    /// startup, then the paired environments connected at this moment.
+    /// `None` where conversations are not configured. `agents.list` answers
+    /// it and every `agents.listed` frame carries it, so the two are read
+    /// the same way.
+    pub(crate) fn agents_catalog_now(&self) -> Option<Value> {
+        let composed = self.agents_catalog.as_ref()?;
+        let mut catalog =
+            serde_json::to_value(composed.as_ref()).expect("generated catalog serializes");
+        if let Some(connected) = &self.connected_environments {
+            if let Some(places) = catalog["environments"].as_array_mut() {
+                places.extend((connected.names)().into_iter().map(Value::String));
+            }
+        }
+        Some(catalog)
+    }
+
+    /// A wake-up each time the agent catalog may have changed, seen as of
+    /// now; `None` where nothing changes it after startup, as on a gateway
+    /// that pairs no environments.
+    pub(crate) fn agents_catalog_changes(&self) -> Option<watch::Receiver<u64>> {
+        let mut changes = self.connected_environments.as_ref()?.changes.clone();
+        changes.mark_unchanged();
+        Some(changes)
     }
 
     /// Share one attachment service between the socket that issues tickets and
