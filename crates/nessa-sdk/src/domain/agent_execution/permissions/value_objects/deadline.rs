@@ -502,7 +502,11 @@ mod tests {
             PermissionToolClass::of(Some(ToolKind::Search)),
             PermissionToolClass::ReadOnly
         );
+        assert_eq!(PermissionToolClass::of(None), PermissionToolClass::Other);
+        // Every kind is classified. A new kind fails to compile until it is.
         for kind in [
+            ToolKind::Read,
+            ToolKind::Search,
             ToolKind::Edit,
             ToolKind::Fetch,
             ToolKind::Execute,
@@ -512,24 +516,18 @@ mod tests {
             ToolKind::SwitchMode,
             ToolKind::Other,
         ] {
-            assert_eq!(
-                PermissionToolClass::of(Some(kind)),
-                PermissionToolClass::Other,
-                "{kind:?}"
-            );
-        }
-        assert_eq!(PermissionToolClass::of(None), PermissionToolClass::Other);
-        // A new kind has to be classified here. Leaving it out fails to compile.
-        match ToolKind::Read {
-            ToolKind::Read | ToolKind::Search => {}
-            ToolKind::Edit
-            | ToolKind::Fetch
-            | ToolKind::Execute
-            | ToolKind::Think
-            | ToolKind::Delete
-            | ToolKind::Move
-            | ToolKind::SwitchMode
-            | ToolKind::Other => {}
+            let class = match kind {
+                ToolKind::Read | ToolKind::Search => PermissionToolClass::ReadOnly,
+                ToolKind::Edit
+                | ToolKind::Fetch
+                | ToolKind::Execute
+                | ToolKind::Think
+                | ToolKind::Delete
+                | ToolKind::Move
+                | ToolKind::SwitchMode
+                | ToolKind::Other => PermissionToolClass::Other,
+            };
+            assert_eq!(PermissionToolClass::of(Some(kind)), class, "{kind:?}");
         }
     }
 
@@ -736,6 +734,12 @@ mod tests {
         assert_eq!(extra.option().unwrap().as_str(), "cancel");
         assert!(extra.deadline().stops_turn());
 
+        let prefers_the_stop = DeadlineDenyPreference::new(["cancel"], ["cancel"]);
+        let preferred_stop =
+            policy.settlement(PermissionToolClass::Other, &command, &prefers_the_stop);
+        assert_eq!(preferred_stop.option().unwrap().as_str(), "cancel");
+        assert!(preferred_stop.deadline().stops_turn());
+
         let claude = policy.settlement(
             PermissionToolClass::Other,
             &command,
@@ -744,6 +748,8 @@ mod tests {
         assert_eq!(claude.option().unwrap().as_str(), "cancel");
         assert!(!claude.deadline().stops_turn());
         assert_eq!(PermissionEffect::Deny.as_str(), "deny");
+        assert_eq!(PermissionEffect::Allow.as_str(), "allow");
+        assert_eq!(<&'static str>::from(PermissionEffect::Allow), "allow");
         assert_eq!(
             PermissionEffect::try_from("allow"),
             Ok(PermissionEffect::Allow)
