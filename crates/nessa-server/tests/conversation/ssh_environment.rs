@@ -1284,6 +1284,86 @@ async fn a_stop_racing_the_lease_end_is_answered_with_the_hosts_evidence() {
     );
 }
 
+/// A fetch given up just before its lease's End is asked tells the host
+/// so first: its `Undelivered` is queued ahead of the End, so the host never
+/// settles it as answered by the lease's end.
+#[tokio::test]
+async fn a_fetch_given_up_just_before_its_lease_ends_is_undelivered_before_the_end() {
+    use crate::conversation::application::{
+        EnvironmentFuture, FetchAsk, HeldSource, HeldSourceFailure,
+    };
+    use nessa_sdk::application::agent_execution::sessions::PublishedFile;
+    use nessa_sdk::domain::common::value_objects::{MediaType, Sha256Digest};
+    /// Never read: the fetch is given up before the host accepts it.
+    struct Unread;
+    impl HeldSource for Unread {
+        fn read(
+            &self,
+            _offset: u64,
+            _max: usize,
+        ) -> EnvironmentFuture<'_, Result<Vec<u8>, HeldSourceFailure>> {
+            Box::pin(async { Err(HeldSourceFailure::NotHeld) })
+        }
+    }
+    let (_open, gate) = tokio::sync::watch::channel(true);
+    let connector = Connector::new(Reach::Stalling(gate));
+    let environment = environment(connector.clone(), Arc::new(Audit::default()));
+    let (binding, _host) = binding(true);
+    let id = lease();
+    let opened = environment
+        .open(&id, &terms("claude"), binding)
+        .await
+        .unwrap_or_else(|_| panic!("granted"));
+    let mut fetch = opened
+        .hold
+        .fetch(FetchAsk {
+            request: "given-up".into(),
+            destination: "a.bin".into(),
+            file: PublishedFile::new(
+                Sha256Digest::parse(&format!("sha256:{}", "0".repeat(64))).unwrap(),
+                MediaType::parse("application/octet-stream").unwrap(),
+                1,
+            )
+            .unwrap(),
+            source: Arc::new(Unread),
+            delivered: Arc::default(),
+        })
+        .expect("a host's lease fetches");
+    // Polled once, so its Fetch is queued; then given up, and the lease's
+    // End asked at once, with nothing awaited between.
+    tokio::select! {
+        biased;
+        _ = &mut fetch => panic!("answered before the host could accept it"),
+        () = std::future::ready(()) => {}
+    }
+    drop(fetch);
+    let _ = tokio::time::timeout(
+        Duration::from_millis(100),
+        opened.hold.end(LeaseEndCause::Closed),
+    )
+    .await;
+    let (undelivered, end) = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            {
+                let frames = connector.frames.lock().unwrap();
+                let undelivered = frames.iter().position(|frame| {
+                    matches!(frame, ToEnvironment::Undelivered { request, .. } if request == "given-up")
+                });
+                let end = frames.iter().position(
+                    |frame| matches!(frame, ToEnvironment::End { lease } if lease == id.as_str()),
+                );
+                if let (Some(undelivered), Some(end)) = (undelivered, end) {
+                    break (undelivered, end);
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the Undelivered and the End reach the host");
+    assert!(undelivered < end, "the Undelivered goes ahead of the End");
+}
+
 /// A harness's stop and a lease's end are delivered even when the host's
 /// queue is full when they are asked: a stop let go of, an end abandoned,
 /// and an end whose caller stopped waiting before it was queued all reach

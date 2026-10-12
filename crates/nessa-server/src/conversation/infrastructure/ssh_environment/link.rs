@@ -1592,16 +1592,20 @@ struct Fetching {
 impl Drop for Fetching {
     fn drop(&mut self) {
         let mut routes = self.routes.lock().unwrap_or_else(PoisonError::into_inner);
-        let held = match routes.leases.get_mut(&self.lease) {
-            Some(route) => {
-                route.fetches.remove(&self.request);
-                true
+        // Its lease's fence, taken under the same lock an End is asked
+        // under: an End not yet asked then waits for the Undelivered to be
+        // queued, so the host settles the fetch as given up, never as the
+        // lease's end. One already asked goes first, as it was asked first.
+        let held = routes.leases.get_mut(&self.lease).map(|route| {
+            route.fetches.remove(&self.request);
+            match route.ending {
+                true => None,
+                false => route.pumps.clone().try_read_owned().ok(),
             }
-            None => false,
-        };
+        });
         drop(routes);
         // A lease no longer held here has no part left to let go.
-        if self.undelivered && held {
+        if let Some(fence) = held.filter(|_| self.undelivered) {
             deliver(
                 &self.frames,
                 None,
@@ -1609,7 +1613,7 @@ impl Drop for Fetching {
                     lease: self.lease.clone(),
                     request: self.request.clone(),
                 },
-                None,
+                fence,
             );
         }
     }
