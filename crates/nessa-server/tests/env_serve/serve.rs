@@ -1695,9 +1695,9 @@ async fn an_unrecorded_input_overflow_stops_the_harness_uncertain() {
 /// and the end of it, reached it: a harness that leaves by itself once its
 /// input ends is not forced for input still on its way.
 ///
-/// The one test here on the runtime's paused clock: what it measures is the
-/// harness's own reading and leaving against the grace its cleanup is given,
-/// and the harness runs on that clock, not on the host's timer.
+/// On the runtime's paused clock: what it measures is the harness's own
+/// reading and leaving against the grace its cleanup is given, and the
+/// harness runs on that clock, not on the host's timer.
 #[tokio::test(start_paused = true)]
 async fn a_stop_starts_its_grace_after_the_harness_has_its_input() {
     let mut gateway = Gateway::start();
@@ -1792,7 +1792,9 @@ struct RecordingOutbox {
     /// Every read fails, as of a copy that is gone.
     unreadable: Mutex<bool>,
     /// Told as each read begins, once set.
-    read_begun: Mutex<Option<std::sync::mpsc::Sender<()>>>,
+    read_begun: Mutex<Option<tokio::sync::mpsc::UnboundedSender<()>>>,
+    /// Told as each read returns, once set.
+    read_done: Mutex<Option<tokio::sync::mpsc::UnboundedSender<()>>>,
 }
 
 /// The bytes of every copy [`RecordingOutbox`] stages: as long as the size
@@ -1864,6 +1866,9 @@ impl crate::env_serve::application::ArtifactOutbox for RecordingOutbox {
                 .wait_timeout_while(held.lock().unwrap(), Duration::from_secs(10), |held| *held)
                 .unwrap(),
         );
+        if let Some(done) = self.read_done.lock().unwrap().as_ref() {
+            let _ = done.send(());
+        }
         if *self.unreadable.lock().unwrap() {
             return Err(std::io::Error::other("the copy is gone"));
         }
@@ -2781,23 +2786,25 @@ impl Drop for ReadsHeld<'_> {
 
 impl RecordingOutbox {
     /// Where each read says it has begun, from now on.
-    fn reads_begun(&self) -> std::sync::mpsc::Receiver<()> {
-        let (begun, receiver) = std::sync::mpsc::channel();
+    fn reads_begun(&self) -> tokio::sync::mpsc::UnboundedReceiver<()> {
+        let (begun, receiver) = tokio::sync::mpsc::unbounded_channel();
         *self.read_begun.lock().unwrap() = Some(begun);
+        receiver
+    }
+    /// Where each read says it has returned, from now on.
+    fn reads_done(&self) -> tokio::sync::mpsc::UnboundedReceiver<()> {
+        let (done, receiver) = tokio::sync::mpsc::unbounded_channel();
+        *self.read_done.lock().unwrap() = Some(done);
         receiver
     }
 }
 
-/// Wait until a read has begun on the outbox.
-async fn read_begun(begun: std::sync::mpsc::Receiver<()>) -> std::sync::mpsc::Receiver<()> {
-    tokio::task::spawn_blocking(move || {
-        begun
-            .recv_timeout(Duration::from_secs(5))
-            .expect("a read begins");
-        begun
-    })
-    .await
-    .unwrap()
+/// Wait until a read on the outbox has said `what`: begun, or returned.
+async fn read_said(said: &mut tokio::sync::mpsc::UnboundedReceiver<()>, what: &str) {
+    tokio::time::timeout(Duration::from_secs(5), said.recv())
+        .await
+        .unwrap_or_else(|_| panic!("a read {what} in time"))
+        .expect("the outbox is still there");
 }
 
 /// A copy let go while it was being read, the gateway having answered it
@@ -2813,10 +2820,10 @@ async fn a_copy_let_go_while_it_is_read_is_answered_not_staged() {
         gateway.said().await,
         FromEnvironment::Published { artifact: 0, .. }
     ));
-    let begun = outbox.reads_begun();
+    let mut begun = outbox.reads_begun();
     let held = ReadsHeld::new(&outbox);
     gateway.send(read_artifact(LEASE, 0, 0, 8)).await;
-    let _begun = read_begun(begun).await;
+    read_said(&mut begun, "began").await;
     gateway
         .send(ToEnvironment::Collected {
             lease: LEASE.into(),
@@ -2836,7 +2843,11 @@ async fn a_copy_let_go_while_it_is_read_is_answered_not_staged() {
 /// A lease ended while reads of its files are under way stops them: no
 /// answer of theirs follows its `Ended`, so the gateway, which lets the
 /// lease go at `Ended`, never gets one for a lease it no longer holds.
-#[tokio::test]
+///
+/// On the runtime's paused clock, which moves only once every task waits
+/// and no read is on the disk: what the reads would do once returned is
+/// done before the account is asked.
+#[tokio::test(start_paused = true)]
 async fn no_read_answers_after_its_lease_ended() {
     let (mut gateway, outbox) = Gateway::publishing();
     gateway.started(LEASE).await;
@@ -2845,12 +2856,13 @@ async fn no_read_answers_after_its_lease_ended() {
         gateway.said().await,
         FromEnvironment::Published { artifact: 0, .. }
     ));
-    let begun = outbox.reads_begun();
+    let mut begun = outbox.reads_begun();
+    let mut done = outbox.reads_done();
     let held = ReadsHeld::new(&outbox);
     gateway.send(read_artifact(LEASE, 0, 0, 8)).await;
     gateway.send(read_artifact(LEASE, 0, 8, 8)).await;
-    let begun = read_begun(begun).await;
-    let _begun = read_begun(begun).await;
+    read_said(&mut begun, "began").await;
+    read_said(&mut begun, "began").await;
     gateway
         .send(ToEnvironment::End {
             lease: LEASE.into(),
@@ -2866,16 +2878,13 @@ async fn no_read_answers_after_its_lease_ended() {
             other => panic!("the lease's end, got {other:?}"),
         }
     }
-    // The reads finish on disk now, and nothing of them is said.
+    // The reads finish on disk now, and nothing of them is said: an answer
+    // of theirs would be on its way ahead of the account, asked once both
+    // returned and everything stands still.
     drop(held);
-    gateway.settled().await;
-    tokio::time::timeout(Duration::from_secs(5), async {
-        while outbox.reads.lock().unwrap().len() < 2 {
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-    })
-    .await
-    .expect("both reads ran");
+    read_said(&mut done, "returned").await;
+    read_said(&mut done, "returned").await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
     gateway.settled().await;
 }
 
@@ -2885,7 +2894,11 @@ async fn no_read_answers_after_its_lease_ended() {
 /// queue and the connection are full, the next read past the bound is
 /// refused `busy`, which the environment waits to say, and it reads no
 /// more frames meanwhile. Nothing more is read off the disk.
-#[tokio::test]
+///
+/// On the runtime's paused clock, which moves only once every task waits
+/// and no read is on the disk: a wait that runs out is the environment
+/// standing still, never a slow machine.
+#[tokio::test(start_paused = true)]
 async fn a_gateway_that_reads_nothing_holds_a_bounded_number_of_answers() {
     use nessa_protocol::lease::{ArtifactReadRefusal, MAX_ARTIFACT_READS_IN_FLIGHT};
     let outbox = Arc::new(RecordingOutbox::default());
@@ -2905,8 +2918,8 @@ async fn a_gateway_that_reads_nothing_holds_a_bounded_number_of_answers() {
         FromEnvironment::Published { artifact: 0, .. }
     ));
     // Asked one at a time without reading anything, each once the one
-    // before it is read off the disk, until one is not: refused, or not
-    // taken at all.
+    // before it is read off the disk, until the environment stands still
+    // with one not read: refused, or not taken at all.
     let asked: u64 = 2_000;
     let mut begun = outbox.reads_begun();
     let mut sent = 0;
@@ -2919,14 +2932,10 @@ async fn a_gateway_that_reads_nothing_holds_a_bounded_number_of_answers() {
             break;
         }
         sent += 1;
-        let waited = tokio::task::spawn_blocking(move || {
-            let read = begun.recv_timeout(Duration::from_secs(1));
-            (read, begun)
-        })
-        .await
-        .unwrap();
-        begun = waited.1;
-        if waited.0.is_err() {
+        if tokio::time::timeout(Duration::from_secs(1), begun.recv())
+            .await
+            .is_err()
+        {
             break;
         }
     }
