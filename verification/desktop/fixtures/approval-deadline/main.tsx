@@ -42,8 +42,6 @@ const reason =
 const waitMs = 10_000
 const dueAtMs = Date.now() + waitMs
 
-const modes = [{ id: "ask", name: "Ask", description: "Asks before each tool it runs." }]
-
 function armed(): ConversationPermission {
   return {
     executionId: "run",
@@ -75,7 +73,9 @@ function shown(
   return conversationView(
     view(conversation, {
       revision: String(revision),
-      approvalModes: modes,
+      approvalModes: [
+        { id: "ask", name: "Ask", description: "Asks before each tool it runs." },
+      ],
       messages: [
         {
           executionId: "run",
