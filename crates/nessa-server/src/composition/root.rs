@@ -119,7 +119,16 @@ impl CompositionRoot {
                 super::env_dial_command::enroll(&address, &code).await
             }
             #[cfg(unix)]
-            Command::EnvDial { address } => super::env_dial_command::dial_in(&address).await,
+            Command::EnvDial {
+                address,
+                drain_deadline_ms,
+            } => {
+                super::env_dial_command::dial_in(
+                    &address,
+                    drain_deadline_ms.map(std::time::Duration::from_millis),
+                )
+                .await
+            }
             #[cfg(not(unix))]
             Command::EnvEnroll { .. } | Command::EnvDial { .. } => Err(RunError::Agent(
                 "a paired environment requires Unix process supervision".into(),

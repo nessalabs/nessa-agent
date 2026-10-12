@@ -212,6 +212,21 @@ fn env_enroll_names_a_gateway_and_a_code_and_env_dial_a_gateway() {
         parse(&args(&["env", "dial", "10.0.0.2:7443"])).unwrap(),
         Command::EnvDial {
             address: "10.0.0.2:7443".into(),
+            drain_deadline_ms: None,
+        }
+    );
+    assert_eq!(
+        parse(&args(&[
+            "env",
+            "dial",
+            "10.0.0.2:7443",
+            "--drain-deadline",
+            "20s"
+        ]))
+        .unwrap(),
+        Command::EnvDial {
+            address: "10.0.0.2:7443".into(),
+            drain_deadline_ms: Some(20_000),
         }
     );
     for refused in [
@@ -222,6 +237,9 @@ fn env_enroll_names_a_gateway_and_a_code_and_env_dial_a_gateway() {
         vec!["env", "dial"],
         vec!["env", "dial", "gw:1", "extra"],
         vec!["env", "dial", "--help"],
+        vec!["env", "dial", "gw:1", "--drain-deadline"],
+        vec!["env", "dial", "gw:1", "--drain-deadline", "soon"],
+        vec!["env", "dial", "--drain-deadline", "20s", "gw:1"],
     ] {
         assert!(parse(&args(&refused)).is_err(), "{refused:?}");
     }

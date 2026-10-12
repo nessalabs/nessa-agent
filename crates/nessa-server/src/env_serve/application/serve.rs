@@ -37,6 +37,10 @@
 //!                          ──Revoked──▶ for each lease held: ledger: revoking
 //!                                       ──▶ stop everything under it ──▶ ledger: ended(revoked);
 //!                                       nothing more admitted; each `End` answered with that
+//! drain asked (the host is stopping) ──▶ for each lease held: ledger: draining
+//!     ──▶ stop everything under it ──▶ ledger: ended(drained) ──▶ Ending{drained};
+//!     nothing more admitted; each `End` answered with that; once nothing is held
+//!     and every lease's End is answered, serving ends and the connection closes
 //! end of stream, or nothing read for `silence` ──▶ every lease ended as lost
 //!                                                ──▶ ledger: ended(lost)
 //! ```
@@ -87,6 +91,17 @@
 //! admitted on it. The gateway asks each lease's `End`, answered with what
 //! that end took, and closes the connection.
 //!
+//! A host that is stopping drains (`drain`, given by composition, never by
+//! the gateway): every lease held is ended with that cause, recorded first
+//! as a revocation's is, and said with `Ending{drained}`, so the gateway
+//! ends its side with this side's cleanup rather than finding the lease
+//! lost; a running command is stopped and answers with its `Ran`. Nothing
+//! more is admitted (`draining`). Once nothing is held, no command runs and
+//! the gateway has asked the `End` of every lease this side ended unasked
+//! (drained, expired or revoked), serving ends:
+//! the connection closes with every end recorded on both sides. A gateway
+//! that never asks an `End` holds serving open until composition stops it.
+//!
 //! A lease's end is answered by that end alone: an `Account`, or another
 //! `End`, of a lease whose end is still under way waits for it, rather than
 //! reading a ledger that does not hold it yet.
@@ -119,7 +134,7 @@ use std::{
 };
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
-    sync::{mpsc, watch},
+    sync::{mpsc, watch, Notify},
     task::JoinHandle,
 };
 
@@ -170,6 +185,9 @@ pub(crate) enum CommandStop {
     /// whether that was recorded for the lease, and unrecorded its end
     /// settles nothing.
     Revoked { recorded: bool },
+    /// The host is draining before it stops; `recorded` as for
+    /// [`Self::Revoked`].
+    Drained { recorded: bool },
 }
 
 /// What running one command came to.
@@ -270,6 +288,9 @@ pub(crate) enum LedgerEntry {
     /// `peer`, the gateway the lease was for, said it no longer lets this
     /// host serve it (`Revoked`): this side is ending the lease.
     Revoking { lease: String, peer: Peer },
+    /// The host is stopping and drains: this side is ending the lease it
+    /// holds for `peer`.
+    Draining { lease: String, peer: Peer },
     /// A lease ended, for `cause`, with what stopping everything under it
     /// took.
     Ended {
@@ -371,6 +392,8 @@ pub(crate) enum EndCause {
     Expired,
     /// The gateway it was for no longer lets this host serve it.
     Revoked,
+    /// The host drained it before stopping.
+    Drained,
 }
 
 /// The environment's own audit of its leases, and the evidence it answers
@@ -459,7 +482,9 @@ pub(crate) struct Serving {
 
 /// Serve one gateway, `serving`'s peer, until its stream ends, then end
 /// every lease it held as lost and return once each is recorded. Every wait
-/// is measured on `timer`.
+/// is measured on `timer`. Once `drain` says true, every lease is ended as
+/// drained and serving returns when nothing is left to answer; a `drain`
+/// whose sender is gone never asks it.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn serve<R, W>(
     input: R,
@@ -473,6 +498,7 @@ pub(crate) async fn serve<R, W>(
     inbox: Option<Arc<dyn ArtifactInbox>>,
     timings: ServeTimings,
     timer: Arc<dyn Timer>,
+    mut drain: watch::Receiver<bool>,
 ) where
     R: AsyncRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin + Send + 'static,
@@ -495,6 +521,10 @@ pub(crate) async fn serve<R, W>(
         ends: HashMap::new(),
         commands: HashMap::new(),
         revoked: false,
+        draining: false,
+        unended: HashSet::new(),
+        unrun: HashMap::new(),
+        finished: Arc::new(Notify::new()),
         gone: watch::channel(false).0,
         runner: commands,
         serving,
@@ -519,8 +549,14 @@ pub(crate) async fn serve<R, W>(
         // read: the read wins `within`'s race, so a gateway that sends
         // without pause would otherwise put an expiry off for good. Saying
         // a lease is ending is bounded as any answer is.
-        if !served.settle(silent).await || timer.now() >= silent {
+        if !served.settle(silent, &mut drain).await || timer.now() >= silent {
             served.silent(timings.silence);
+            break;
+        }
+        // Drained, with every answer handed to the writer: nothing is left
+        // to serve, and closing says so.
+        if served.drained() {
+            tracing::info!("drained: every lease ended and answered; serving ends");
             break;
         }
         // The wait ends at the earliest lease deadline too; one passing is
@@ -529,8 +565,22 @@ pub(crate) async fn serve<R, W>(
             .next_deadline()
             .map_or(silent, |deadline| deadline.min(silent));
         // `next` keeps what a cancelled read had read, so the bound costs
-        // nothing of a frame arriving slowly.
-        let body = match within(&*timer, wake, stream.next()).await {
+        // nothing of a frame arriving slowly, nor a drain asked meanwhile.
+        let finished = served.finished.clone();
+        // A drain asked wins over a frame ready at the same time: a grant
+        // the host reads after the signal is refused, never admitted.
+        let read = tokio::select! {
+            biased;
+            () = drain_asked(&mut drain), if !served.draining => {
+                served.drain();
+                continue;
+            }
+            read = within(&*timer, wake, stream.next()) => read,
+            // A command's `Ran` needs no `End`: draining, its end alone may
+            // leave nothing to serve.
+            () = finished.notified(), if served.draining => continue,
+        };
+        let body = match read {
             Ok(Ok(Some(body))) => body,
             Ok(Ok(None)) => break,
             Ok(Err(error)) => {
@@ -543,7 +593,7 @@ pub(crate) async fn serve<R, W>(
         heard = timer.now();
         // A frame read as a deadline passed acts on what is left after it:
         // a Start under a lease that has expired starts nothing.
-        if !served.settle(heard + timings.silence).await {
+        if !served.settle(heard + timings.silence, &mut drain).await {
             served.silent(timings.silence);
             break;
         }
@@ -693,6 +743,19 @@ struct Served {
     commands: HashMap<String, HeldCommand>,
     /// The gateway said `Revoked`: nothing more is admitted here.
     revoked: bool,
+    /// The host is draining: nothing more is admitted here, and serving
+    /// ends once nothing is left to answer.
+    draining: bool,
+    /// Leases this side ended unasked (drained, expired or revoked) whose
+    /// `End` the gateway has not yet asked: a drain waits for each.
+    unended: HashSet<String>,
+    /// Commands a drain ended unrun, with what their end took, whose `Run`
+    /// or `End` the gateway has not yet sent: a drain waits for each, and
+    /// its `Run` is answered never started with that cleanup.
+    unrun: HashMap<String, Cleanup>,
+    /// Told whenever a command's end is recorded, its `Ran` handed on: a
+    /// drain waiting on it looks again.
+    finished: Arc<Notify>,
     /// Set once the gateway is gone: an answer still waiting for room, a
     /// command's or a fetch's, is given up on, whatever stopped what it
     /// answers, so nothing that ends a lease waits on a full queue.
@@ -826,6 +889,10 @@ impl Served {
                 // Not held on this connection: what its end under way, or
                 // the audit, says of it.
                 None => {
+                    self.unended.remove(&lease);
+                    if let Some(cleanup) = self.unrun.remove(&lease) {
+                        return self.send(FromEnvironment::Ended { lease, cleanup });
+                    }
                     self.answer_ended(lease, |lease, cleanup| FromEnvironment::Ended {
                         lease,
                         cleanup,
@@ -1043,7 +1110,7 @@ impl Served {
     /// is waiting, until nothing is or `silent` passes: `false` then. A wait
     /// for room is given up on at the next lease deadline, which is acted
     /// on at once, so a gateway reading nothing holds no expiry back.
-    async fn settle(&mut self, silent: Moment) -> bool {
+    async fn settle(&mut self, silent: Moment, drain: &mut watch::Receiver<bool>) -> bool {
         let timer = self.timer.clone();
         loop {
             // Ends each due lease without waiting: its `Ending` is queued.
@@ -1054,7 +1121,18 @@ impl Served {
             let wake = self
                 .next_deadline()
                 .map_or(silent, |deadline| deadline.min(silent));
-            if within(&*timer, wake, self.flush()).await.is_err() && timer.now() >= silent {
+            // A drain asked while a gateway that is not reading holds the
+            // writer up starts at once: its leases end, recorded, before a
+            // deadline closes the connection, and are not found lost.
+            let flushed = tokio::select! {
+                biased;
+                () = drain_asked(drain), if !self.draining => {
+                    self.drain();
+                    continue;
+                }
+                flushed = within(&*timer, wake, self.flush()) => flushed,
+            };
+            if flushed.is_err() && timer.now() >= silent {
                 return false;
             }
         }
@@ -1105,6 +1183,9 @@ impl Served {
             // The gateway said it no longer lets this host serve it: the
             // ask crossed that, and the owner's grant has no part in it.
             Some(GrantRefusal::Revoked)
+        } else if self.draining {
+            // The host is stopping: the ask crossed that.
+            Some(GrantRefusal::Draining)
         } else if admit_agent(&self.grant_now(), &agent)
             .map(|admitted| lease_ms = admitted)
             .is_err()
@@ -1450,6 +1531,7 @@ impl Served {
             }
         };
         self.end(lease.clone(), held, EndCause::Expired, recorded);
+        self.unended.insert(lease.clone());
         self.outgoing.push_back(FromEnvironment::Ending {
             lease,
             cause: EndingCause::Expired,
@@ -1569,6 +1651,8 @@ impl Served {
             Err(refusal)
         } else if self.revoked {
             Err(GrantRefusal::Revoked)
+        } else if self.draining {
+            Err(GrantRefusal::Draining)
         } else {
             // The peer's grant first: a peer granted no commands learns
             // nothing of whether the host runs any.
@@ -1635,6 +1719,14 @@ impl Served {
     /// which records how it ended and answers with its `Ran`. A lease not
     /// granted here, or run already, is answered as never started.
     fn run(&mut self, lease: String) {
+        // Ended unrun by a drain: never started, with what its end took.
+        if let Some(cleanup) = self.unrun.remove(&lease) {
+            let not_started = CommandRan {
+                cleanup,
+                ..CommandRan::not_started()
+            };
+            return self.send(ran(lease, not_started));
+        }
         let work = match self.commands.remove(&lease) {
             Some(HeldCommand::Granted(work)) => work,
             // Still running: its own `Ran` will answer.
@@ -1679,6 +1771,7 @@ impl Served {
         let ledger = self.ledger.clone();
         let frames = self.frames.clone();
         let mut gone = self.gone.subscribe();
+        let finished = self.finished.clone();
         tokio::spawn(async move {
             let mut outcome = match started {
                 Some(running) => running.await,
@@ -1701,6 +1794,17 @@ impl Served {
                         outcome.cleanup = Cleanup::Uncertain;
                     }
                     EndCause::Revoked
+                }
+                Some(CommandStop::Drained { recorded }) => {
+                    if !recorded {
+                        outcome.cleanup = Cleanup::Uncertain;
+                    }
+                    // Said so in its `Ran`: the gateway asked no stop, and
+                    // would otherwise take it for lost.
+                    if outcome.end == CommandEnd::Stopped {
+                        outcome.end = CommandEnd::Drained;
+                    }
+                    EndCause::Drained
                 }
                 Some(CommandStop::Ended) | None => EndCause::Asked,
             };
@@ -1741,6 +1845,7 @@ impl Served {
                 }
             }
             done.send_replace(Some(cleanup));
+            finished.notify_one();
         });
     }
 
@@ -1808,7 +1913,8 @@ impl Served {
         leases.sort_by(|(left, _), (right, _)| left.cmp(right));
         for (lease, held) in leases {
             let recorded = self.revoking(&lease);
-            self.end(lease, held, EndCause::Revoked, recorded);
+            self.end(lease.clone(), held, EndCause::Revoked, recorded);
+            self.unended.insert(lease);
         }
         let mut commands: Vec<_> = self.commands.keys().cloned().collect();
         commands.sort();
@@ -1857,6 +1963,97 @@ impl Served {
         }
     }
 
+    /// The host is stopping: end every lease held on this connection as
+    /// drained, each recorded `draining` first, as a revocation is, and say
+    /// `Ending{drained}` for each harness lease, so the gateway asks its
+    /// `End` and gets this end's cleanup rather than finding it lost. A
+    /// running command is stopped and answers with its `Ran`; one granted
+    /// and never run ends holding nothing, and serving waits for the
+    /// gateway's `Run` of it (answered never started) or its `End`. Nothing
+    /// more is admitted. Nothing here waits; asked twice, it acts once.
+    fn drain(&mut self) {
+        if std::mem::replace(&mut self.draining, true) {
+            return;
+        }
+        tracing::info!(
+            leases = self.leases.len(),
+            commands = self.commands.len(),
+            "draining: every lease held here ends before the host stops"
+        );
+        let mut leases: Vec<_> = self.leases.drain().collect();
+        leases.sort_by(|(left, _), (right, _)| left.cmp(right));
+        for (lease, held) in leases {
+            let recorded = self.draining_recorded(&lease);
+            self.end(lease.clone(), held, EndCause::Drained, recorded);
+            self.unended.insert(lease.clone());
+            self.outgoing.push_back(FromEnvironment::Ending {
+                lease,
+                cause: EndingCause::Drained,
+            });
+        }
+        let mut commands: Vec<_> = self.commands.keys().cloned().collect();
+        commands.sort();
+        for lease in commands {
+            match self.commands.get(&lease) {
+                // As a revocation decides it: one whose own task already took
+                // what ended it is not blamed on the drain.
+                Some(HeldCommand::Running { stop, ending, .. }) if stop.borrow().is_none() => {
+                    let ending = ending.lock().unwrap_or_else(PoisonError::into_inner);
+                    if !*ending {
+                        let recorded = self.draining_recorded(&lease);
+                        ask_stop(stop, CommandStop::Drained { recorded });
+                    }
+                }
+                Some(HeldCommand::Granted(_)) => {
+                    self.commands.remove(&lease);
+                    let recorded = self.draining_recorded(&lease);
+                    let cleanup = if recorded {
+                        Cleanup::NotHeld
+                    } else {
+                        Cleanup::Uncertain
+                    };
+                    let cleanup = self.end_unrun_with(&lease, EndCause::Drained, cleanup);
+                    // The gateway takes no `Ending` for a command: its `Run`
+                    // (answered never started) or `End` tells it, so the
+                    // drain waits for one.
+                    self.unrun.insert(lease, cleanup);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Record that `lease` is ending because the host drains: whether that
+    /// was recorded.
+    fn draining_recorded(&self, lease: &str) -> bool {
+        let entry = LedgerEntry::Draining {
+            lease: lease.into(),
+            peer: self.serving.peer,
+        };
+        match self.ledger.record(&entry) {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::error!(lease, %error, "a lease's drain could not be recorded; it is ended still");
+                false
+            }
+        }
+    }
+
+    /// Whether a drain has left nothing to serve: no lease held, no command
+    /// running, the `End` of every lease this side ended unasked asked, the
+    /// `Run` or `End` of every command it ended unrun sent, and every answer
+    /// queued here handed to the writer. Answers already handed
+    /// on, or still awaiting an end's record, reach the gateway before the
+    /// stream closes.
+    fn drained(&self) -> bool {
+        self.draining
+            && self.leases.is_empty()
+            && self.unended.is_empty()
+            && self.unrun.is_empty()
+            && self.outgoing.is_empty()
+            && !self.commands.values().any(HeldCommand::runs)
+    }
+
     /// The gateway is gone: end every lease it held as lost, and wait for
     /// every end under way.
     async fn lose_all(&mut self) {
@@ -1894,6 +2091,13 @@ impl Served {
             leases = self.leases.len(),
             "nothing arrived from the gateway, not even a keepalive; it is taken as gone"
         );
+    }
+}
+
+/// Resolves once `drain` says true; never, once nothing can say it.
+async fn drain_asked(drain: &mut watch::Receiver<bool>) {
+    if drain.wait_for(|drain| *drain).await.is_err() {
+        std::future::pending::<()>().await;
     }
 }
 
