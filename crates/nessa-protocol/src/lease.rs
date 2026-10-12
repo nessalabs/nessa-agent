@@ -331,6 +331,9 @@ pub enum CommandEnd {
     TimedOut,
     /// The gateway's `End`, or its connection's end, stopped it.
     Stopped,
+    /// Its host is draining before it stops, and stopped it: a system
+    /// stop, not a loss.
+    Drained,
     /// Its program could not be started; nothing ran.
     NotStarted,
     /// The environment could not observe how it ended.

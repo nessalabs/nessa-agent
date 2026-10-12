@@ -703,6 +703,10 @@ fn command_result(answer: CommandAnswer, stopped: Option<LeaseEndCause>) -> Comm
         CommandEnd::Stopped => CommandExit::Stopped {
             cause: stopped.unwrap_or(LeaseEndCause::Lost),
         },
+        // The host stopping is a system stop, as a drained lease is.
+        CommandEnd::Drained => CommandExit::Stopped {
+            cause: LeaseEndCause::Stopped,
+        },
         CommandEnd::NotStarted => CommandExit::NotStarted,
         CommandEnd::Unknown => CommandExit::Unanswered,
     };

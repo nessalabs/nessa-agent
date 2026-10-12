@@ -220,6 +220,8 @@ struct Connector {
     runner: Mutex<Option<Arc<dyn CommandRunner>>>,
     /// What a serving host's owner grants this gateway, over SSH.
     grants: Arc<SshGrant>,
+    /// Asks every serving host to drain.
+    drain: tokio::sync::watch::Sender<bool>,
 }
 
 impl Connector {
@@ -250,6 +252,7 @@ impl Connector {
             frames: Arc::new(Mutex::new(Vec::new())),
             runner: Mutex::new(None),
             grants: Arc::default(),
+            drain: tokio::sync::watch::channel(false).0,
         })
     }
     /// Cut every connection both ways, as a network that went away.
@@ -304,7 +307,7 @@ impl LeaseConnector for Connector {
                         ..ServeTimings::default()
                     },
                     Arc::new(TokioTimer::new()),
-                    tokio::sync::watch::channel(false).1,
+                    self.drain.subscribe(),
                 ));
             }
             Reach::Stalling(mut gate) => {
@@ -1844,6 +1847,38 @@ async fn a_stopped_command_is_stopped_on_the_host_and_answers_the_stops_cause() 
         }
     );
     assert_eq!(result.stdout, b"partial");
+    assert_eq!(
+        result.cleanup,
+        Some(LeaseCleanup::Confirmed { forced: true })
+    );
+}
+
+/// Row K1: a command its host stopped as it drained, the gateway asking no
+/// stop, is a system stop, never a lost one.
+#[tokio::test]
+async fn k1_a_command_its_host_drained_is_stopped_by_the_system_not_lost() {
+    let connector = serving_commands();
+    let host = environment(connector.clone(), Arc::new(Audit::default()));
+    let commands = host.commands().unwrap();
+    let hold = commands
+        .grant(&lease(), &work(&["sleep", "60"]))
+        .await
+        .unwrap()
+        .hold;
+    let (_stop, stopped) = tokio::sync::watch::channel(None);
+    let running = tokio::spawn(hold.run(10_000, stopped));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    connector.drain.send_replace(true);
+    let result = tokio::time::timeout(Duration::from_secs(5), running)
+        .await
+        .expect("a drained command is answered")
+        .unwrap();
+    assert_eq!(
+        result.exit,
+        CommandExit::Stopped {
+            cause: LeaseEndCause::Stopped
+        }
+    );
     assert_eq!(
         result.cleanup,
         Some(LeaseCleanup::Confirmed { forced: true })

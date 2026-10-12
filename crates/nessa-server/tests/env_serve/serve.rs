@@ -4047,6 +4047,46 @@ fn expired(gateway: &Gateway, lease: &str) -> bool {
     })
 }
 
+/// Row K1: a drain asked while a gateway that reads nothing holds the host
+/// up answering starts at once: the lease is ended, recorded drained, long
+/// before any deadline, and not left to be found lost.
+#[tokio::test]
+async fn k1_a_drain_asked_while_the_gateway_reads_nothing_ends_the_lease_at_once() {
+    let timer = Arc::new(ManualTimer::default());
+    let mut gateway = expiring_through(
+        512,
+        timer.clone(),
+        Arc::new(MemoryLedger::default()),
+        Arc::new(NoOutbox),
+    );
+    gateway.started_expiring(LEASE).await;
+    let asking = gateway.flood(&timer).await;
+    gateway.drain.send_replace(true);
+    until_ended(&gateway, &timer, LEASE, Duration::from_secs(1)).await;
+    let entries = gateway.ledger.entries();
+    assert!(
+        entries.contains(&LedgerEntry::Draining {
+            lease: LEASE.into(),
+            peer: Peer::Ssh,
+        }),
+        "{entries:?}"
+    );
+    assert!(
+        entries.iter().any(|entry| matches!(
+            entry,
+            LedgerEntry::Ended {
+                lease,
+                cause: EndCause::Drained,
+                ..
+            } if lease == LEASE
+        )),
+        "{entries:?}"
+    );
+    assert!(timer.elapsed() < Duration::from_secs(1));
+    asking.abort();
+    gateway.served.abort();
+}
+
 /// Two leases due at once, the gateway reading nothing: saying the first
 /// is ending waits for room, and the second is ended at the deadline all
 /// the same.
@@ -4711,7 +4751,7 @@ async fn k1_a_drain_ends_every_lease_recorded_then_serving_ends_once_answered() 
     assert!(matches!(
         ran,
         Some(FromEnvironment::Ran {
-            end: CommandEnd::Stopped,
+            end: CommandEnd::Drained,
             cleanup: Cleanup::Confirmed { forced: true },
             ..
         })
@@ -4911,7 +4951,7 @@ async fn k1_a_drain_ends_serving_once_its_last_command_answers() {
     assert!(matches!(
         gateway.said().await,
         FromEnvironment::Ran {
-            end: CommandEnd::Stopped,
+            end: CommandEnd::Drained,
             ..
         }
     ));
@@ -4977,6 +5017,19 @@ async fn k1_an_unrecorded_drain_of_an_unrun_command_answers_its_run_uncertain() 
     gateway.next().await;
     gateway.settled().await;
     gateway.drain.send_replace(true);
+    // Its `Run` is sent once the drain has ended it, not before.
+    let ended = LedgerEntry::Ended {
+        lease: UNRUN.into(),
+        cleanup: Cleanup::Uncertain,
+        cause: EndCause::Drained,
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !ledger.entries().contains(&ended) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the drain ends the unrun command");
     gateway
         .send(ToEnvironment::Run {
             lease: UNRUN.into(),

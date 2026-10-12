@@ -502,7 +502,7 @@ pub(crate) async fn serve<R, W>(
         // read: the read wins `within`'s race, so a gateway that sends
         // without pause would otherwise put an expiry off for good. Saying
         // a lease is ending is bounded as any answer is.
-        if !served.settle(silent).await || timer.now() >= silent {
+        if !served.settle(silent, &mut drain).await || timer.now() >= silent {
             served.silent(timings.silence);
             break;
         }
@@ -543,7 +543,7 @@ pub(crate) async fn serve<R, W>(
         heard = timer.now();
         // A frame read as a deadline passed acts on what is left after it:
         // a Start under a lease that has expired starts nothing.
-        if !served.settle(heard + timings.silence).await {
+        if !served.settle(heard + timings.silence, &mut drain).await {
             served.silent(timings.silence);
             break;
         }
@@ -1002,7 +1002,7 @@ impl Served {
     /// is waiting, until nothing is or `silent` passes: `false` then. A wait
     /// for room is given up on at the next lease deadline, which is acted
     /// on at once, so a gateway reading nothing holds no expiry back.
-    async fn settle(&mut self, silent: Moment) -> bool {
+    async fn settle(&mut self, silent: Moment, drain: &mut watch::Receiver<bool>) -> bool {
         let timer = self.timer.clone();
         loop {
             // Ends each due lease without waiting: its `Ending` is queued.
@@ -1013,7 +1013,17 @@ impl Served {
             let wake = self
                 .next_deadline()
                 .map_or(silent, |deadline| deadline.min(silent));
-            if within(&*timer, wake, self.flush()).await.is_err() && timer.now() >= silent {
+            // A drain asked while a gateway that is not reading holds the
+            // writer up starts at once: its leases end, recorded, before a
+            // deadline closes the connection, and are not found lost.
+            let flushed = tokio::select! {
+                flushed = within(&*timer, wake, self.flush()) => flushed,
+                () = drain_asked(drain), if !self.draining => {
+                    self.drain();
+                    continue;
+                }
+            };
+            if flushed.is_err() && timer.now() >= silent {
                 return false;
             }
         }
@@ -1659,6 +1669,11 @@ impl Served {
                 Some(CommandStop::Drained { recorded }) => {
                     if !recorded {
                         outcome.cleanup = Cleanup::Uncertain;
+                    }
+                    // Said so in its `Ran`: the gateway asked no stop, and
+                    // would otherwise take it for lost.
+                    if outcome.end == CommandEnd::Stopped {
+                        outcome.end = CommandEnd::Drained;
                     }
                     EndCause::Drained
                 }
