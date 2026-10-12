@@ -1,0 +1,6 @@
+# Only what `cargo build -p nessa-server` reads goes into the build context.
+**/target
+**/node_modules
+.git
+dist
+src-tauri/target

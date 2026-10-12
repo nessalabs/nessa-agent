@@ -5,6 +5,7 @@
 //!
 //! ```text
 //! FilePairingEnvironment ──▶ FilePairingState (environment/pairing, locked)
+//!                       ──▶ environment/paired-with (the address enrolled with)
 //!                       ──▶ NativeEnrollmentClient ──▶ TCP to the gateway
 //! ```
 //!
@@ -21,7 +22,7 @@ use nessa_auth::{
 use nessa_client_core::pairing::{NativeClientError, NativeEnrollmentClient};
 use nessa_protocol::{clock::Clock, pairing::wire::NativePairingStatus};
 use std::{
-    io,
+    io::{self, Read, Write},
     net::TcpStream,
     path::{Path, PathBuf},
     sync::Arc,
@@ -30,6 +31,12 @@ use std::{
 
 /// The pairing's directory, beneath `<data>/environment`.
 const PAIRING: &str = "pairing";
+/// Beside the pairing, beneath `<data>/environment`: the address of the
+/// gateway this machine enrolled with. Read only while a pairing exists, so
+/// a code file is never taken as one for a pairing it was not.
+const PAIRED_WITH: &str = "paired-with";
+/// The most a code file or `paired-with` is read of.
+const MAX_READ: u64 = 4096;
 /// How long a TCP connect to the gateway may take when pairing.
 const CONNECT: Duration = Duration::from_secs(5);
 
@@ -37,10 +44,22 @@ const CONNECT: Duration = Duration::from_secs(5);
 /// gateway's pin.
 pub(crate) type Approved = (Arc<NativeIdentity>, [u8; 44]);
 
+/// What [`FilePairingEnvironment::enroll_once`] did.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum EnrolledOnce {
+    /// Nothing was paired here: it enrolled with the code.
+    Now,
+    /// It was already paired with the gateway at this address, approved
+    /// or not: the code, used then, was not sent again.
+    Before,
+}
+
 /// This machine's pairing with the gateway at one address.
 pub(crate) struct FilePairingEnvironment {
     client: NativeEnrollmentClient,
     store: Arc<FilePairingState>,
+    /// `<data>/environment`, canonical.
+    root: PathBuf,
     directory: PathBuf,
     address: String,
 }
@@ -78,6 +97,7 @@ impl FilePairingEnvironment {
             client,
             store,
             directory: root.join(PAIRING),
+            root,
             address: address.to_owned(),
         })
     }
@@ -121,10 +141,76 @@ impl FilePairingEnvironment {
         let stream = connect(&self.address)
             .await
             .map_err(|error| format!("{}: {error}", self.address))?;
+        // Recorded before the code is sent, and only over no pairing: a
+        // reply lost after the pending record is saved still finds this
+        // address on the next start, and a pairing that exists keeps its own.
+        if matches!(self.saved().await?, Saved::Nothing) {
+            self.record_paired_with()
+                .map_err(|error| format!("{PAIRED_WITH} could not be written: {error}"))?;
+        }
         self.client
             .enroll(stream, code, OsEntropy)
             .await
             .map_err(|error| self.enroll_failure(error))
+    }
+
+    /// Enroll with the code in `code_file` when nothing is paired here, as
+    /// a container's entrypoint does on every start: paired already with
+    /// the gateway at this address, nothing is sent, and the code, used
+    /// then, is not read.
+    ///
+    /// # Errors
+    /// This machine is paired with another gateway, or with one it did not
+    /// record; the file holds no code; or enrolling failed. The message says
+    /// what to do.
+    pub(crate) async fn enroll_once(&self, code_file: &Path) -> Result<EnrolledOnce, String> {
+        match self.saved().await? {
+            Saved::Nothing => {
+                let code = read_code(code_file)?;
+                self.enroll(code).await.map(|_| EnrolledOnce::Now)
+            }
+            Saved::Pending | Saved::Approved(_) => match self.paired_with()? {
+                Some(address) if address == self.address => Ok(EnrolledOnce::Before),
+                paired => Err(format!(
+                    "this machine is already paired with {}: run nessa env dial without \
+                     --enroll-code-file to serve it, or remove {} to pair it with {}",
+                    paired.map_or_else(
+                        || "a gateway it did not record".to_owned(),
+                        |address| format!("the gateway at {address}")
+                    ),
+                    self.directory.display(),
+                    self.address,
+                )),
+            },
+        }
+    }
+
+    /// The address this machine enrolled with; `None` when none was recorded.
+    fn paired_with(&self) -> Result<Option<String>, String> {
+        let unreadable = |error: io::Error| format!("{PAIRED_WITH} cannot be read: {error}");
+        let file = match nessa_local_storage::open(
+            &self.root.join(PAIRED_WITH),
+            nessa_local_storage::OpenMode::Read,
+        ) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(unreadable(error)),
+        };
+        let mut address = String::new();
+        file.take(MAX_READ)
+            .read_to_string(&mut address)
+            .map_err(unreadable)?;
+        Ok(Some(address))
+    }
+
+    /// Record the address enrolled with, replacing whatever an earlier
+    /// pairing left.
+    fn record_paired_with(&self) -> io::Result<()> {
+        let mut file = nessa_local_storage::PrivateTempFile::new_in(&self.root)?;
+        file.as_file_mut().write_all(self.address.as_bytes())?;
+        file.as_file().sync_all()?;
+        file.persist(&self.root.join(PAIRED_WITH))?;
+        nessa_local_storage::sync_directory(&self.root)
     }
 
     /// Let go of the pairing client's worker.
@@ -222,6 +308,22 @@ pub(crate) fn answer_to_failure(error: NativeClientError, directory: &Path) -> A
         )),
         other => Answer::Unanswered(format!("{other:?}")),
     }
+}
+
+/// The code `path` holds: one code, with whitespace around it, as a secret
+/// mounted as a file usually has a line end.
+fn read_code(path: &Path) -> Result<ManualCode, String> {
+    let unreadable = |error: io::Error| format!("{}: {error}", path.display());
+    let file = std::fs::File::open(path).map_err(unreadable)?;
+    let mut bytes = Vec::with_capacity(MAX_READ as usize);
+    let read = file.take(MAX_READ).read_to_end(&mut bytes);
+    let code = read.map_err(unreadable).and_then(|_| {
+        ManualCode::parse(bytes.trim_ascii())
+            .map_err(|_| format!("{} holds no pairing code", path.display()))
+    });
+    // The code's own copy erases itself; this one is erased here.
+    bytes.fill(0);
+    code
 }
 
 /// A blocking stream to the gateway for the pairing client, connected

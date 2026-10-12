@@ -1629,3 +1629,154 @@ async fn connection_changes_are_said_as_a_paired_environment_connects_ends_and_i
         .expect("the revoked environment's serving ends")
         .unwrap();
 }
+
+/// A code file as a container's secret holds it: the display form and a
+/// line end.
+fn code_file(directory: &Path, name: &str, code: &ManualCode) -> std::path::PathBuf {
+    let path = directory.join(name);
+    let mut bytes = code.display_bytes().to_vec();
+    bytes.push(b'\n');
+    std::fs::write(&path, bytes).unwrap();
+    path
+}
+
+/// Row K2: `env dial --enroll-code-file` enrolls a machine paired with
+/// nothing, and on every later start, approved or not yet, finds it paired
+/// with that gateway and sends nothing, so a container's entrypoint is the
+/// same command each time.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn k2_a_code_file_enrolls_once_then_dials() {
+    use crate::env_serve::application::approval;
+    use crate::env_serve::infrastructure::{EnrolledOnce, FilePairingEnvironment};
+
+    let directory = tempfile::tempdir().unwrap();
+    let a = Gateway::start(&directory.path().join("a")).await;
+    let created = a
+        .commands
+        .create(&a.session, ConsentClass::PeerEnvironment)
+        .await
+        .unwrap();
+    let code = code_file(directory.path(), "code", created.code());
+    let environment = directory.path().join("e-environment");
+    nessa_local_storage::create_directory(&environment).unwrap();
+    let address = a.native.to_string();
+    let enroll_once = || async {
+        let pairing = FilePairingEnvironment::open(&environment, &address, clock()).unwrap();
+        let enrolled = tokio::time::timeout(WAIT, pairing.enroll_once(&code))
+            .await
+            .unwrap();
+        pairing.shutdown().await;
+        enrolled
+    };
+
+    assert_eq!(enroll_once().await, Ok(EnrolledOnce::Now));
+    // Restarted before the owner approved: still paired with A, nothing sent.
+    assert_eq!(enroll_once().await, Ok(EnrolledOnce::Before));
+    let id = created.record().id();
+    let claimed = a.commands.status(&a.session, id).await.unwrap();
+    let (_, key) = claimed.claim_binding().unwrap();
+    a.commands.approve(&a.session, id, key).await.unwrap();
+    let pairing = FilePairingEnvironment::open(&environment, &address, clock()).unwrap();
+    let (_, running) = watch::channel(false);
+    let (_, pin) = tokio::time::timeout(
+        WAIT,
+        approval(
+            &pairing,
+            Duration::from_millis(20),
+            &TokioTimer::new(),
+            running,
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap()
+    .expect("not stopped");
+    pairing.shutdown().await;
+    drop(pairing);
+    // Restarted once approved: the same, and its pin is A's.
+    assert_eq!(enroll_once().await, Ok(EnrolledOnce::Before));
+    let saved = FilePairingEnvironment::approved_gateway(&environment, clock())
+        .await
+        .unwrap();
+    assert_eq!(saved, Some(pin));
+}
+
+/// Row K2: a volume paired with gateway A, given gateway B's address and
+/// code, refuses to dial B instead of taking B's code as its pairing's, and
+/// sends B nothing: B's invitation is still unclaimed. A pairing that
+/// recorded no gateway refuses too, and a file holding no code says so.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn k2_a_volume_paired_to_one_gateway_refuses_enrolling_with_another() {
+    use crate::env_serve::infrastructure::FilePairingEnvironment;
+
+    let directory = tempfile::tempdir().unwrap();
+    let a = Gateway::start(&directory.path().join("a")).await;
+    let b = Gateway::start(&directory.path().join("b")).await;
+    let environment = directory.path().join("e-environment");
+    nessa_local_storage::create_directory(&environment).unwrap();
+
+    let not_a_code = directory.path().join("not-a-code");
+    std::fs::write(&not_a_code, b"hello\n").unwrap();
+    let pairing =
+        FilePairingEnvironment::open(&environment, &a.native.to_string(), clock()).unwrap();
+    let refused = pairing.enroll_once(&not_a_code).await.unwrap_err();
+    assert!(refused.ends_with("holds no pairing code"), "{refused}");
+    let for_a = a
+        .commands
+        .create(&a.session, ConsentClass::PeerEnvironment)
+        .await
+        .unwrap();
+    // A code the gateway never gave: refused, and the address it recorded
+    // first is left over a pairing that does not exist, read by nothing.
+    let wrong = directory.path().join("wrong");
+    std::fs::write(&wrong, b"ABCD-EFGH\n").unwrap();
+    let refused = tokio::time::timeout(WAIT, pairing.enroll_once(&wrong))
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(refused, "the code is not the one the gateway gave");
+    let code_a = code_file(directory.path(), "code-a", for_a.code());
+    tokio::time::timeout(WAIT, pairing.enroll_once(&code_a))
+        .await
+        .unwrap()
+        .unwrap();
+    pairing.shutdown().await;
+    drop(pairing);
+
+    let for_b = b
+        .commands
+        .create(&b.session, ConsentClass::PeerEnvironment)
+        .await
+        .unwrap();
+    let code_b = code_file(directory.path(), "code-b", for_b.code());
+    let pairing =
+        FilePairingEnvironment::open(&environment, &b.native.to_string(), clock()).unwrap();
+    let refused = pairing.enroll_once(&code_b).await.unwrap_err();
+    assert!(
+        refused.starts_with(&format!(
+            "this machine is already paired with the gateway at {}: run nessa env dial \
+             without --enroll-code-file to serve it, or remove ",
+            a.native
+        )),
+        "{refused}"
+    );
+    pairing.shutdown().await;
+    drop(pairing);
+    let unclaimed = b
+        .commands
+        .status(&b.session, for_b.record().id())
+        .await
+        .unwrap();
+    assert!(unclaimed.claim_binding().is_none());
+
+    // Paired, with no record of which gateway: refused, not guessed.
+    std::fs::remove_file(environment.join("paired-with")).unwrap();
+    let pairing =
+        FilePairingEnvironment::open(&environment, &a.native.to_string(), clock()).unwrap();
+    let refused = pairing.enroll_once(&code_a).await.unwrap_err();
+    assert!(
+        refused.starts_with("this machine is already paired with a gateway it did not record"),
+        "{refused}"
+    );
+    pairing.shutdown().await;
+}

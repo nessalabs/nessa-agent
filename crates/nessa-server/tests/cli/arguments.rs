@@ -213,6 +213,7 @@ fn env_enroll_names_a_gateway_and_a_code_and_env_dial_a_gateway() {
         Command::EnvDial {
             address: "10.0.0.2:7443".into(),
             drain_deadline_ms: None,
+            enroll_code_file: None,
         }
     );
     assert_eq!(
@@ -227,6 +228,24 @@ fn env_enroll_names_a_gateway_and_a_code_and_env_dial_a_gateway() {
         Command::EnvDial {
             address: "10.0.0.2:7443".into(),
             drain_deadline_ms: Some(20_000),
+            enroll_code_file: None,
+        }
+    );
+    assert_eq!(
+        parse(&args(&[
+            "env",
+            "dial",
+            "gw.example:7443",
+            "--enroll-code-file",
+            "/run/secrets/nessa_code",
+            "--drain-deadline",
+            "20s",
+        ]))
+        .unwrap(),
+        Command::EnvDial {
+            address: "gw.example:7443".into(),
+            drain_deadline_ms: Some(20_000),
+            enroll_code_file: Some("/run/secrets/nessa_code".into()),
         }
     );
     for refused in [
@@ -240,6 +259,32 @@ fn env_enroll_names_a_gateway_and_a_code_and_env_dial_a_gateway() {
         vec!["env", "dial", "gw:1", "--drain-deadline"],
         vec!["env", "dial", "gw:1", "--drain-deadline", "soon"],
         vec!["env", "dial", "--drain-deadline", "20s", "gw:1"],
+        vec!["env", "dial", "gw:1", "--enroll-code-file"],
+        vec![
+            "env",
+            "dial",
+            "gw:1",
+            "--enroll-code-file",
+            "--drain-deadline",
+        ],
+        vec![
+            "env",
+            "dial",
+            "gw:1",
+            "--enroll-code-file",
+            "a",
+            "--enroll-code-file",
+            "b",
+        ],
+        vec![
+            "env",
+            "dial",
+            "gw:1",
+            "--drain-deadline",
+            "1s",
+            "--drain-deadline",
+            "2s",
+        ],
     ] {
         assert!(parse(&args(&refused)).is_err(), "{refused:?}");
     }
