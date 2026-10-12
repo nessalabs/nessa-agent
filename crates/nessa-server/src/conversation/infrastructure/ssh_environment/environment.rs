@@ -17,9 +17,11 @@
 //! LiveLease::close ──▶ SshHold::end ──▶ End ──▶ Ended{cleanup}
 //!   connection lost? ──▶ a new connection ──▶ Account ──▶ what the host recorded
 //! account(lease) ──▶ Account ──▶ Accounted{cleanup}
-//! Published{lease, artifact, file} ──▶ LeaseHold::artifacts ──▶ ArtifactOffer
+//! Published{lease, artifact, request, file} ──▶ LeaseHold::artifacts ──▶ ArtifactOffer
 //!   its bytes ──▶ SftpBytes, over an artifact channel, only when pulled
 //!   its answer ──▶ Collected{lease, artifact, outcome}
+//! LeaseHold::publish(ask) ──▶ Publish{lease, request, path} ──▶ offered on the
+//!   same offers as above, naming `request` | NotPublished{reason}
 //! a command: grant ──▶ link.grant_command ──▶ SshCommand
 //!   SshCommand::run ──▶ Run ──▶ Ran{end, output, cleanup}
 //!   stop said ──▶ End (not waited for) ──▶ Ran{Stopped} ──▶ Ended
@@ -46,6 +48,7 @@ use super::{
 use crate::conversation::application::{
     ArtifactAnswer, ArtifactOffer, CommandEnvironment, CommandHold, CommandResult, Environment,
     EnvironmentDeclaration, EnvironmentFuture, EnvironmentLease, LeaseHold, LeaseRelease,
+    PublishAsk, PublishFailure,
 };
 use nessa_auth::application::pairing::DeviceConnectionProof;
 use nessa_protocol::lease::{
@@ -628,6 +631,7 @@ impl LeaseHold for SshHold {
             while let Some(Published {
                 artifact,
                 file,
+                request,
                 unanswered,
             }) = published.recv().await
             {
@@ -644,6 +648,7 @@ impl LeaseHold for SshHold {
                     answer: ArtifactAnswer::new(move |outcome| {
                         answering.collected(&answered, artifact, outcome, unanswered);
                     }),
+                    request,
                 };
                 // Nobody takes them any more: its answer's drop says so.
                 if offers.send(offer).await.is_err() {
@@ -652,6 +657,20 @@ impl LeaseHold for SshHold {
             }
         });
         Some(taken)
+    }
+
+    /// Asked over the lease's own connection; its file is offered on the
+    /// receiver [`Self::artifacts`] handed out, with every other.
+    fn publish(
+        &self,
+        ask: PublishAsk,
+    ) -> Option<EnvironmentFuture<'static, Result<(), PublishFailure>>> {
+        let link = self.link.clone();
+        let lease = self.lease.clone();
+        Some(Box::pin(async move {
+            link.publish(&lease, ask.request, ask.path, ask.media_type)
+                .await
+        }))
     }
 
     fn end(&self, _cause: LeaseEndCause) -> EnvironmentFuture<'_, LeaseRelease> {

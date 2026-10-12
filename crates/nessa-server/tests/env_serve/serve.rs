@@ -1221,9 +1221,8 @@ impl crate::env_serve::application::ArtifactOutbox for NoOutbox {
         _lease: &str,
         _artifact: u32,
         _request: &crate::env_serve::application::PublishRequest,
-    ) -> Result<nessa_protocol::lease::StagedArtifact, crate::env_serve::application::PublishRefusal>
-    {
-        Err(crate::env_serve::application::PublishRefusal::StagingFailed)
+    ) -> Result<nessa_protocol::lease::StagedArtifact, nessa_protocol::lease::PublishRefusal> {
+        Err(nessa_protocol::lease::PublishRefusal::StagingFailed)
     }
     fn discard(&self, _lease: &str, _artifact: u32) {}
     fn close(&self, _lease: &str) {}
@@ -1234,6 +1233,8 @@ impl crate::env_serve::application::ArtifactOutbox for NoOutbox {
 #[derive(Default)]
 struct RecordingOutbox {
     points: Mutex<HashMap<String, mpsc::Sender<crate::env_serve::application::PublishCall>>>,
+    /// Every request staged, as the outbox was asked it.
+    staging: Mutex<Vec<crate::env_serve::application::PublishRequest>>,
     discarded: Mutex<Vec<(String, u32)>>,
     closed: Mutex<Vec<String>>,
     /// When set, the next staging says it began, then waits to be let go.
@@ -1268,9 +1269,9 @@ impl crate::env_serve::application::ArtifactOutbox for RecordingOutbox {
         &self,
         _lease: &str,
         artifact: u32,
-        _request: &crate::env_serve::application::PublishRequest,
-    ) -> Result<nessa_protocol::lease::StagedArtifact, crate::env_serve::application::PublishRefusal>
-    {
+        request: &crate::env_serve::application::PublishRequest,
+    ) -> Result<nessa_protocol::lease::StagedArtifact, nessa_protocol::lease::PublishRefusal> {
+        self.staging.lock().unwrap().push(request.clone());
         let stall = self.stall.lock().unwrap().take();
         if let Some((began, go)) = stall {
             began.send(()).unwrap();
@@ -1380,6 +1381,7 @@ async fn a_published_file_is_offered_by_digest_and_answered_with_what_the_gatewa
         FromEnvironment::Published {
             lease: LEASE.into(),
             artifact: 0,
+            request: None,
             file: RecordingOutbox::staged(0),
         }
     );
@@ -1403,6 +1405,7 @@ async fn a_published_file_is_offered_by_digest_and_answered_with_what_the_gatewa
             LedgerEntry::Published {
                 lease: LEASE.into(),
                 artifact: 0,
+                request: None,
                 digest: "ab".repeat(32),
                 size: 20,
             },
@@ -1479,7 +1482,7 @@ async fn a_lease_ending_during_staging_records_no_publish() {
     assert_eq!(
         answer_of(answered).await,
         crate::env_serve::application::PublishAnswer::NotPublished {
-            reason: crate::env_serve::application::PublishRefusal::LeaseEnded,
+            reason: nessa_protocol::lease::PublishRefusal::LeaseEnded,
         }
     );
     assert!(!gateway
@@ -1541,7 +1544,7 @@ async fn a_publish_past_the_in_flight_bound_is_refused_busy() {
     assert_eq!(
         answer_of(extra).await,
         crate::env_serve::application::PublishAnswer::NotPublished {
-            reason: crate::env_serve::application::PublishRefusal::Busy,
+            reason: nessa_protocol::lease::PublishRefusal::Busy,
         }
     );
     let published = gateway
@@ -1568,6 +1571,196 @@ async fn a_publish_past_the_in_flight_bound_is_refused_busy() {
         gateway.said().await,
         FromEnvironment::Published { artifact: 4, .. }
     ));
+}
+
+fn publish_frame(lease: &str, request: &str, path: &str) -> ToEnvironment {
+    ToEnvironment::Publish {
+        lease: lease.into(),
+        request: request.into(),
+        path: path.into(),
+        media_type: None,
+    }
+}
+
+/// Slice D3a: a publish the gateway asks for is staged through the same
+/// outbox, under the same in-flight bound and ledger, as a harness's; its
+/// path is the workspace's when relative; its `Published` names the
+/// request, and past the bound it is answered `NotPublished` busy by name.
+#[tokio::test]
+async fn a_publish_frame_stages_as_the_publish_point_does_and_is_refused_busy_past_the_bound() {
+    let (mut gateway, outbox) = Gateway::publishing();
+    gateway.started(LEASE).await;
+    gateway
+        .send(publish_frame(LEASE, "call-1", "out/report.pdf"))
+        .await;
+    assert_eq!(
+        gateway.said().await,
+        FromEnvironment::Published {
+            lease: LEASE.into(),
+            artifact: 0,
+            request: Some("call-1".into()),
+            file: RecordingOutbox::staged(0),
+        }
+    );
+    assert_eq!(
+        outbox.staging.lock().unwrap()[0].path,
+        "/work/out/report.pdf"
+    );
+    // Asked, then published naming the ask, in the ledger's order.
+    assert_eq!(
+        gateway.ledger.entries()[2..],
+        [
+            LedgerEntry::PublishAsked {
+                lease: LEASE.into(),
+                request: "call-1".into(),
+            },
+            LedgerEntry::Published {
+                lease: LEASE.into(),
+                artifact: 0,
+                request: Some("call-1".into()),
+                digest: "ab".repeat(32),
+                size: 20,
+            },
+        ]
+    );
+    // A harness's publish and the gateway's share one bound.
+    let harness = publish(&outbox, LEASE).await;
+    assert!(matches!(
+        gateway.said().await,
+        FromEnvironment::Published { request: None, .. }
+    ));
+    for request in ["call-2", "call-3"] {
+        gateway
+            .send(publish_frame(LEASE, request, "/work/a.png"))
+            .await;
+        assert!(matches!(
+            gateway.said().await,
+            FromEnvironment::Published { request: Some(asked), .. } if asked == request
+        ));
+    }
+    gateway.send(publish_frame(LEASE, "call-4", "a.png")).await;
+    assert_eq!(
+        gateway.said().await,
+        FromEnvironment::NotPublished {
+            lease: LEASE.into(),
+            request: "call-4".into(),
+            reason: nessa_protocol::lease::PublishRefusal::Busy,
+        }
+    );
+    // Its collection settles it as any other's, and frees its place.
+    gateway
+        .send(ToEnvironment::Collected {
+            lease: LEASE.into(),
+            artifact: 0,
+            outcome: Collection::Held,
+        })
+        .await;
+    gateway.settled().await;
+    assert!(gateway.ledger.entries().contains(&LedgerEntry::Collected {
+        lease: LEASE.into(),
+        artifact: 0,
+        outcome: Collection::Held,
+    }));
+    assert!(outbox
+        .discarded
+        .lock()
+        .unwrap()
+        .contains(&(LEASE.into(), 0)));
+    gateway.send(publish_frame(LEASE, "call-5", "a.png")).await;
+    assert!(matches!(
+        gateway.said().await,
+        FromEnvironment::Published { artifact: 4, request: Some(asked), .. } if asked == "call-5"
+    ));
+    drop(harness);
+}
+
+/// A publish asked under a lease this connection does not hold, or one
+/// whose outbox could not be opened, is answered by name and offers
+/// nothing.
+#[tokio::test]
+async fn a_publish_frame_for_no_lease_held_or_no_outbox_is_answered_not_published() {
+    let (mut gateway, _outbox) = Gateway::publishing();
+    gateway.started(LEASE).await;
+    gateway
+        .send(publish_frame(
+            "0b7d3a1e-0000-4000-8000-0000000000ff",
+            "call-1",
+            "a.png",
+        ))
+        .await;
+    assert_eq!(
+        gateway.said().await,
+        FromEnvironment::NotPublished {
+            lease: "0b7d3a1e-0000-4000-8000-0000000000ff".into(),
+            request: "call-1".into(),
+            reason: nessa_protocol::lease::PublishRefusal::LeaseEnded,
+        }
+    );
+    let mut bare = Gateway::start();
+    assert_eq!(bare.next().await, hello());
+    bare.granted(LEASE).await;
+    bare.send(publish_frame(LEASE, "call-2", "a.png")).await;
+    assert_eq!(
+        bare.next().await,
+        FromEnvironment::NotPublished {
+            lease: LEASE.into(),
+            request: "call-2".into(),
+            reason: nessa_protocol::lease::PublishRefusal::StagingFailed,
+        }
+    );
+}
+
+/// The lease ending while a gateway's publish is in flight settles it as
+/// it does a harness's: answered lease ended, and its staged copy let go.
+#[tokio::test]
+async fn a_gateway_asked_publish_in_flight_is_settled_by_its_lease_end() {
+    let (mut gateway, outbox) = Gateway::publishing();
+    gateway.started(LEASE).await;
+    gateway.send(publish_frame(LEASE, "call-1", "a.png")).await;
+    assert!(matches!(
+        gateway.said().await,
+        FromEnvironment::Published { artifact: 0, .. }
+    ));
+    gateway
+        .send(ToEnvironment::End {
+            lease: LEASE.into(),
+        })
+        .await;
+    assert!(matches!(
+        gateway.said().await,
+        FromEnvironment::Ended { .. }
+    ));
+    let entries = gateway.ledger.entries();
+    let collected = entries
+        .iter()
+        .position(|entry| {
+            *entry
+                == LedgerEntry::Collected {
+                    lease: LEASE.into(),
+                    artifact: 0,
+                    outcome: Collection::Refused {
+                        reason: nessa_protocol::lease::CollectionRefusal::LeaseEnded,
+                    },
+                }
+        })
+        .expect("settled as ended");
+    let ended = entries
+        .iter()
+        .position(|entry| matches!(entry, LedgerEntry::Ended { .. }))
+        .expect("ended");
+    assert!(collected < ended);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !outbox
+            .discarded
+            .lock()
+            .unwrap()
+            .contains(&(LEASE.into(), 0))
+        {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("its staged copy is let go");
 }
 
 /// The lease ending answers every publish the gateway never answered, and

@@ -604,7 +604,7 @@ as before any other, and `run` is marked `destructiveHint`.
 | Lifetime | Bounded by its tool call. A command is stopped when its timeout passes, when its call is cancelled or its stand-in goes, when its conversation's grant is revoked, or when its parent agent lease ends (L15); its end is recorded while that agent lease is still the conversation's latest, and only logged once a later one replaced it, whose predecessor's end already accounts for it. No receipt to poll | A command outliving its call needs a receipt and a store the person can read later; that is a later slice, if any. A long build fits a long timeout |
 | Timeout | 120 s when the call names none; at most 1 h. A host stops a command past it and answers `timed_out` | |
 | Output | The host keeps the newest 64 KiB of both streams together (one frame) and counts what it dropped; the record keeps the newest 2 KiB of each, as text, with both streams' sizes and the dropped count | output is evidence, bounded like every record; the agent's answer carries the 64 KiB |
-| Artifacts | None: a command publishes nothing. Naming and fetching files is the artifact channel's (`artifacts.publish`), not `run`'s | |
+| Artifacts | None: a command publishes nothing until [#766](https://github.com/nessalabs/nessa-agent/issues/766) gives command leases a publish point. Naming files is the artifact channel's, not `run`'s: `artifacts_publish` (slice D3a, below) publishes only under the agent's own lease, and refuses a command host the agent does not run on `environment_not_leased` | |
 | Concurrency | At most 4 commands at once under one agent lease; a fifth is refused `budget_exceeded` | each holds a process scope on the host |
 | What runs | `argv` exactly, no shell; at most 256 arguments and 4 KiB together; in the host's workspace, or a directory beneath it (at most 1 KiB) | |
 | Its environment | The host's account, with its variables cleared to `PATH`, `HOME`, `USER`, `LOGNAME`, `TMPDIR`, `LANG` and `LC_ALL`; nothing encloses it (sandbox `none`). A host serves commands only when its own `config.json` says `envServe.commands: true` | a command does not inherit what the host's harnesses are started with; a host owner opts in |
@@ -890,9 +890,10 @@ refusals.
 | --- | --- | --- | --- |
 | `environments.list` | The environments this conversation may use: `here`, SSH hosts, paired peers and workers, each with platform, declared sandbox profiles, reachability now, and what this caller may do there (`agent`, `command`) | `environment.list` | Caller's grants; peers filtered to what they grant this principal |
 | `thread.create` | Start a child conversation on a named environment with a prompt, a binding and a sandbox profile; returns the child's id and receipt | `conversation.create` with `environment`, under [ADR 329](../adr/todo/329-subagents.md) parent ownership | Caller's tool policy allows delegation; environment grants `agent`; budgets; parent closure fences children |
-| `run` | Run one command on a named environment with a timeout and bounded output; returns exit status, captured output, and any artifacts it published | `environment.run`: a lease whose work is a command | Caller's tool policy on the command (allowlist, deny patterns); environment grants `command`; sandbox profile; budgets; everything audited with the caller as initiator |
+| `run` | Run one command on a named environment with a timeout and bounded output; returns exit status and captured output. It publishes nothing until [#766](https://github.com/nessalabs/nessa-agent/issues/766): `artifacts_publish` acts only under the agent's own lease, so a file a command made on another host is refused `environment_not_leased` | `environment.run`: a lease whose work is a command | Caller's tool policy on the command (allowlist, deny patterns); environment grants `command`; sandbox profile; budgets; everything audited with the caller as initiator |
 | `preview.open`, `preview.close` | Forward a loopback port the agent's own processes listen on to the surface's loopback for the life of the lease; returns the local URL once a request through it succeeds | The forward on the SSH session, or a bounded stream on a paired connection | The port is owned by the lease's process scope; HTTP, WebSocket and SSE only; recorded and shown; closed with the lease |
-| `artifacts.publish`, `artifacts.fetch` | Attach a file from the environment to the conversation by digest; fetch one by digest into the environment | The artifact channel and lease-scoped tickets | Hold ownership; per-lease byte budgets |
+| `artifacts_publish` | Attach a file from where the agent runs to the conversation by digest; returns `held` or `alreadyHeld` with its digest, size and name, or a typed refusal (slice D3a, served in process) | The artifact channel, asked by the gateway (`Publish`) | Only under the conversation's Live agent lease, where the agent runs; the turn's person as initiator, the lease as cause; per-lease byte budgets |
+| `artifacts.fetch` | Fetch a held file by digest into the environment (slice D3b, to follow) | Lease-scoped tickets | Hold ownership; per-lease byte budgets |
 | `conversation.read`, `message.send`, `turn.cancel` | Already planned under 0012: read a thread's records, leave a note, stop a turn | Existing product methods | Existing grants |
 
 The signatures are the same whatever the box: `run({environment:
@@ -1166,8 +1167,10 @@ sequenceDiagram
   read, no hold is visible: one is written only after the bytes match.
 - **Records.** A kept file is a `SessionChange::Artifact` in the
   conversation's stream naming its lease, the turn running when it was
-  kept, its name and the lease's issuer; the conversation view lists the
-  newest. A file is recorded only once its hold is usable, so the
+  kept, its name and the lease's issuer (for a file the agent asked for
+  with `artifacts_publish`, the turn it asked in and that turn's person;
+  see slice D3a); the conversation view lists the newest. The same file
+  in another turn, or for another person, is recorded again. A file is recorded only once its hold is usable, so the
   conversation never names a file it does not hold; a lease that began
   ending, or a conversation with no room left, refuses the record, and the
   hold is taken back at once. The host is answered before the lease's End
@@ -1326,6 +1329,91 @@ holds only verified bytes. `show` lists the artifacts that
 name what to fetch. A Terminal enrollment's purge empties the device's cache
 and leaves files it fetched untouched; the order is in
 [the example's fetch rows](read-only-sync-example.md#fetching-a-held-file).
+
+### The agent publishes a file (slice D3a)
+
+The agent publishes a file with the `artifacts_publish` tool on the
+in-process `nessa-environments` server (beside `environments_list` and
+`run`, revision `environment-tools/2`), rather than a shell command:
+`{environment, path, mediaType?}`, `path` absolute or relative to the
+workspace. The conversation service decides it as it decides `run`: the
+person whose turn is running asks, with the tool call as their request,
+and only under the conversation's Live agent lease. `environment` must
+name where the agent runs now (`environments_list`'s name for it, `here`
+when it is not placed); anything else, a command host included, is refused
+`environment_not_leased`, since the agent holds no lease there to publish
+under. Command leases publish nothing until
+[#766](https://github.com/nessalabs/nessa-agent/issues/766).
+
+```mermaid
+sequenceDiagram
+    participant A as Agent (tool call)
+    participant C as ConversationService::publish_artifact
+    participant Q as PublishRequests (per live conversation)
+    participant L as HostLink (SSH adapter)
+    participant E as nessa env serve
+    participant K as ArtifactCollector
+    participant S as attachments
+    A->>C: artifacts_publish{environment, path, mediaType?}
+    C->>C: a turn running under the Live agent lease? (no_turn)
+    C->>C: environment is where the agent runs? (environment_not_leased)
+    C->>Q: ask(lease, call, turn, person + call) (duplicate_request)
+    C->>L: LeaseHold::publish (here: publish_unavailable)
+    L->>E: Publish{lease, request, path, mediaType} (no bytes)
+    E->>E: ledger: publish_asked, then as the publish point: workspace, bound, outbox copy, hash
+    alt staged
+        E->>L: Published{lease, artifact, request, file}
+        L->>K: ArtifactOffer{request} on the lease's one receiver
+        K->>Q: take(lease, request): the turn and its person
+        K->>S: keep_published(requested by the person, cause: the lease)
+        S->>E: sftp read, verified, held, recorded (as slice D)
+        K->>E: Collected{lease, artifact, outcome}
+        K->>C: outcome, after the host is answered
+        C-->>A: held | alreadyHeld {digest, size, name}
+    else not staged
+        E->>L: NotPublished{lease, request, reason}
+        L->>C: the reason; Q lets the call go
+        C-->>A: refused {code, message}
+    end
+```
+
+| Ordering | Holds because | Enforced by |
+| --- | --- | --- |
+| Who asked is held before the environment is asked, so an offer never arrives for a request the conversation has not seen | `PublishRequests::ask` returns before `LeaseHold::publish` is called | `a_publish_asked_by_the_turns_person_is_held_with_the_call_as_initiator_and_the_lease_as_cause` |
+| A requested file is recorded for the turn's person in the turn they asked in, the lease as its cause; any other actor is refused | `ArtifactRecord::admit` accepts the lease's issuer, or the person of the turn the record names; read back by the same rule. A turn does not record its lease, so that the turn is the one running under this Live lease is the gateway's check (`publish_artifact`), not the record's | the same test; `a_record_its_turns_person_asked_for_under_the_live_lease_is_admitted_and_nobody_elses` |
+| The same file asked for in another turn, or by another person, is its own record; asked again by the same person in the same turn, under any call, it adds nothing and the first call's record stands | `ArtifactRecord::is_same_record` (lease, file, turn, and the actor's principal and surface) is the one duplicate key, for recording and for room; the collector checks room for the very record it commits, an issuer's turn decided once by `issuer_turn` | `a_file_asked_again_in_a_later_turn_is_recorded_for_that_turn`; `a_file_asked_twice_in_one_turn_is_recorded_once`; `the_same_file_asked_in_another_turn_or_by_another_person_is_recorded_again` |
+| The host is answered before the call | the collector tells the waiter only after it answers the offer (`Collected`) | `ArtifactCollector::collect`, by its order; no test tells the two apart |
+| One publish per tool call at a time | a second ask for the same lease and call is refused while the first is held | `a_publish_for_a_call_already_publishing_is_refused_and_a_cancelled_one_keeps_its_asker` |
+| A cancelled or timed-out call drops only its waiter; a file that arrives after is still kept for who asked | `abandon` keeps the asker; only the environment's answer lets it go | the same test; `a_publish_not_kept_within_its_wait_answers_timed_out_and_a_late_file_keeps_its_asker` |
+| An ask the environment does not stage is let go, so the same call can ask again | `NotPublished`, a refused offer or `Unanswered` forget the request | `a_publish_whose_environment_is_lost_before_it_answers_is_unanswered` |
+| An ask never outlives its lease | the link answers every waiting ask `Unanswered` when the lease's route ends or the connection is lost; the host answers `leaseEnded` | `a_gateway_asked_publish_after_the_lease_ended_or_was_lost_is_answered_so`; `a_gateway_asked_publish_in_flight_is_settled_by_its_lease_end` |
+| A lease that ends between the ask and its offer keeps nothing | the offer is read only while the lease is Live, as every file is | `a_publish_whose_lease_ends_before_its_offer_is_refused_lease_ended` |
+| The host stages it as it stages a harness's file: the same workspace rule, bound (`busy`), outbox and ledger | `Publish` enters `Publisher::publish`; `publish_asked` is on the ledger before anything is staged (`auditUnavailable` otherwise) | `a_publish_frame_stages_as_the_publish_point_does_and_is_refused_busy_past_the_bound` |
+| The call waits at most `artifact.publish_call_wait` from its ask. That is longer than one read's `artifact.publish_deadline`, but a lease's files are kept one at a time, so a file queued behind others can outlast its call; the call then answers `timed_out` and the file, once read, is still kept for the person who asked | `PUBLISH_CALL_WAIT`; `abandon` keeps the asker | `the_publish_call_wait_outlasts_the_reads_own_deadline`; `a_publish_not_kept_within_its_wait_answers_timed_out_and_a_late_file_keeps_its_asker` |
+
+- **Codes.** Decided by the conversation: `no_turn`,
+  `environment_not_leased`, `duplicate_request`, `publish_unavailable`
+  (where the agent runs is this gateway itself), `unanswered`, `timed_out`,
+  `cancelled`. Otherwise the host's reason (`outside_workspace`,
+  `unreadable`, `size`, `invalid`, `busy`, `staging_failed`,
+  `audit_unavailable`, `lease_ended`) or the conversation's refusal to keep
+  it (`budget_exceeded`, `channel_unavailable`, `mismatch`, `not_kept`,
+  `invalid`, `lease_ended`). `timed_out` means not known yet: the file may
+  still be kept and recorded.
+- **Who it is for.** Attribution follows the turn running when the call
+  arrives, as `run`'s does: a tool call does not name its turn, so the
+  newest running turn under the Live agent lease is the one the record
+  names, with its person as the actor.
+- **One record per turn and person.** The same file asked for again in the
+  same turn by the same person, under any tool call, adds nothing, and the
+  first call's record stands; asked in another turn, or for
+  another person, it is held once (`alreadyHeld`) and recorded again for
+  them, within the conversation's record bound.
+- **`here` is not served yet.** In process there is no artifact channel, so
+  a conversation not placed on a host is refused `publish_unavailable`;
+  staging a copy for `here` is a follow-up.
+- **No bytes on the control channel.** `Publish` and its answers carry a
+  path and what the file is, as `Published` always has.
 
 ## Previews: a port, not a file
 

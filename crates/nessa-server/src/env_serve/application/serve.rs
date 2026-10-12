@@ -17,6 +17,8 @@
 //!                          ──End (a command running)──▶ stop it ──▶ Ran ──▶ Ended
 //!                          ──Keepalive▶ (nothing: the gateway is there)
 //!                          ──Collected▶ the lease's artifact answered (artifacts.rs)
+//!                          ──Publish──▶ ledger: publish_asked ──▶ as a harness's publish
+//!                                       ──▶ Published{request} | NotPublished{request}
 //! a harness publishes ──▶ staged copy ──▶ ledger: published ──▶ Published
 //! end of stream, or nothing read for `silence` ──▶ every lease ended as lost
 //!                                                ──▶ ledger: ended(lost)
@@ -47,13 +49,13 @@
 //! A lease's end is answered by that end alone: an `Account`, or another
 //! `End`, of a lease whose end is still under way waits for it, rather than
 //! reading a ledger that does not hold it yet.
-use super::artifacts::{ArtifactOutbox, LeaseArtifacts};
+use super::artifacts::{ArtifactOutbox, LeaseArtifacts, PublishRequest};
 use super::timer::{timeout, within, Timer};
 use super::wire::{write_frame, FrameStream};
 use nessa_protocol::lease::{
     decode, Cleanup, Collection, CommandEnd, Data, FromEnvironment, GrantRefusal, Hello,
-    StartFailure, ToEnvironment, Unavailability, KEEPALIVE_INTERVAL, MAX_DATA_BYTES, MAX_STOP_WAIT,
-    SILENCE_LIMIT,
+    PublishRefusal, StartFailure, ToEnvironment, Unavailability, KEEPALIVE_INTERVAL,
+    MAX_DATA_BYTES, MAX_STOP_WAIT, SILENCE_LIMIT,
 };
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
@@ -65,6 +67,7 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
     future::Future,
     io,
+    path::Path,
     pin::Pin,
     sync::Arc,
     time::Duration,
@@ -176,11 +179,18 @@ pub(crate) enum LedgerEntry {
     /// A harness stopped reading its input until its queue was full, or for
     /// good: it is stopped rather than fed a stream with bytes missing.
     InputOverflow { lease: String, channel: u32 },
-    /// A harness published a file: its staged copy, by digest, was offered
-    /// to the gateway.
+    /// The gateway asked for a file to be published under a lease, for its
+    /// `request`; what came of it is the `published` naming that request,
+    /// or nothing staged.
+    PublishAsked { lease: String, request: String },
+    /// A file was published: its staged copy, by digest, was offered to the
+    /// gateway; `request` is the gateway's ask it answers, `None` for a
+    /// harness's.
     Published {
         lease: String,
         artifact: u32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        request: Option<String>,
         digest: String,
         size: u64,
     },
@@ -632,6 +642,67 @@ impl Served {
                     self.dropped(Some(&lease), None, "collected");
                 }
             }
+            ToEnvironment::Publish {
+                lease,
+                request,
+                path,
+                media_type,
+            } => self.publish(lease, request, path, media_type).await,
+        }
+    }
+
+    /// Publish a file the gateway asked for under `lease`, as its publish
+    /// point would for a harness: the same bound, outbox and ledger. Its
+    /// path is the workspace's when relative; the outbox decides whether it
+    /// is inside it. Not published, it is answered `NotPublished`.
+    async fn publish(
+        &mut self,
+        lease: String,
+        request: String,
+        path: String,
+        media_type: Option<String>,
+    ) {
+        let refusal = match self.leases.get(&lease).map(|held| held.artifacts.is_some()) {
+            // A command lease, or none: nothing is published under it.
+            None => {
+                self.dropped(Some(&lease), None, "publish");
+                Some(PublishRefusal::LeaseEnded)
+            }
+            // Its outbox could not be opened: nothing can be staged for it.
+            Some(false) => Some(PublishRefusal::StagingFailed),
+            Some(true) => {
+                let entry = LedgerEntry::PublishAsked {
+                    lease: lease.clone(),
+                    request: request.clone(),
+                };
+                match self.ledger.record(&entry) {
+                    Ok(()) => None,
+                    Err(error) => {
+                        tracing::error!(lease, %error, "a gateway's publish could not be recorded; it is not published");
+                        Some(PublishRefusal::AuditUnavailable)
+                    }
+                }
+            }
+        };
+        if let Some(reason) = refusal {
+            return self
+                .send(FromEnvironment::NotPublished {
+                    lease,
+                    request,
+                    reason,
+                })
+                .await;
+        }
+        let path = Path::new(self.launcher.workspace())
+            .join(path)
+            .to_string_lossy()
+            .into_owned();
+        if let Some(artifacts) = self
+            .leases
+            .get(&lease)
+            .and_then(|held| held.artifacts.as_ref())
+        {
+            artifacts.ask(request, PublishRequest { path, media_type });
         }
     }
 

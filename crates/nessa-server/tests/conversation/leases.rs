@@ -19,6 +19,9 @@ use super::{
     CommandAnswer, CommandCall, CommandCallError, CommandEnvironment, CommandHold, CommandResult,
     EnvironmentListing, HERE,
 };
+use super::{
+    PublishAnswer, PublishAsk, PublishCall, PublishCallRefusal, PublishFailure, PUBLISH_CALL_WAIT,
+};
 use crate::conversation::domain::CommandPolicy;
 use crate::conversation::infrastructure::{
     in_process_environment, DurableConversationCreationAudit, DurableConversationDeletionAudit,
@@ -36,7 +39,7 @@ use nessa_protocol::conversation::view::{
     ConversationLeaseSandbox, ConversationLeaseState, ConversationMessageStatus,
 };
 use nessa_protocol::lease::{
-    Collection, CollectionRefusal, StagedArtifact, MAX_ARTIFACT_PATH_BYTES,
+    Collection, CollectionRefusal, PublishRefusal, StagedArtifact, MAX_ARTIFACT_PATH_BYTES,
 };
 use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_protocol::{agents::AgentId, conversation::domain::ConversationId};
@@ -1406,7 +1409,47 @@ struct Host {
     offers: Mutex<Option<tokio::sync::mpsc::Receiver<ArtifactOffer>>>,
     /// Told once a lease's end is asked here, which is after it is on record.
     ending: Arc<tokio::sync::Notify>,
+    /// How a publish the gateway asks is answered, and where its offer goes.
+    asked: Arc<Asked>,
 }
+
+/// How a host answers the gateway's publishes (slice D3a): each is noted,
+/// then answered as `script` says.
+#[derive(Default)]
+struct Asked {
+    asks: Mutex<Vec<PublishAsk>>,
+    script: Mutex<PublishScript>,
+    /// Where an offer goes: the first lease's offers.
+    to: Mutex<Option<tokio::sync::mpsc::Sender<ArtifactOffer>>>,
+    /// Said once an ask is noted.
+    noted: tokio::sync::Notify,
+    /// When set, an offer waits for this before it is made.
+    gate: Mutex<Option<oneshot::Receiver<()>>>,
+    /// Set, and said, once a lease's end is asked here: an ask never
+    /// answered is answered unanswered then, as the hold's contract says.
+    ended: AtomicBool,
+    ending: tokio::sync::Notify,
+    /// When set, an offer made at once is also kept before `publish`
+    /// returns (on a multi-threaded runtime): whatever the service must
+    /// hold before it asks is proven held by then.
+    settled_before_return: AtomicBool,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+enum PublishScript {
+    /// Offered at once, inside `publish` before its future is returned
+    /// (after `gate`, when one is set), a file named by the path's last
+    /// part.
+    #[default]
+    Offer,
+    /// Not published, for this reason.
+    Refuse(PublishRefusal),
+    /// Not answered until the lease ends here.
+    Silent,
+    /// The connection lost before it answered.
+    Lost,
+}
+
 impl Host {
     fn new() -> Self {
         Self {
@@ -1415,14 +1458,17 @@ impl Host {
             release: Mutex::new(Some(LeaseCleanup::Confirmed { forced: false })),
             offers: Mutex::new(None),
             ending: Arc::default(),
+            asked: Arc::default(),
         }
     }
 
-    /// A host whose first lease publishes what is sent here.
+    /// A host whose first lease publishes what is sent here, and what the
+    /// gateway asks it to.
     fn publishing() -> (Self, tokio::sync::mpsc::Sender<ArtifactOffer>) {
         let (publish, offers) = tokio::sync::mpsc::channel(4);
         let host = Self::new();
         *host.offers.lock().unwrap() = Some(offers);
+        *host.asked.to.lock().unwrap() = Some(publish.clone());
         (host, publish)
     }
 }
@@ -1445,6 +1491,7 @@ impl Environment for Host {
             release: *self.release.lock().unwrap(),
             offers: Mutex::new(self.offers.lock().unwrap().take()),
             ending: self.ending.clone(),
+            asked: self.asked.clone(),
         });
         Box::pin(async move {
             Ok(EnvironmentLease {
@@ -1463,8 +1510,62 @@ struct HostHold {
     release: Option<LeaseCleanup>,
     offers: Mutex<Option<tokio::sync::mpsc::Receiver<ArtifactOffer>>>,
     ending: Arc<tokio::sync::Notify>,
+    asked: Arc<Asked>,
 }
 impl LeaseHold for HostHold {
+    fn publish(
+        &self,
+        ask: PublishAsk,
+    ) -> Option<EnvironmentFuture<'static, Result<(), PublishFailure>>> {
+        let asked = self.asked.clone();
+        let to = asked.to.lock().unwrap().clone()?;
+        asked.asks.lock().unwrap().push(ask.clone());
+        asked.noted.notify_one();
+        let script = *asked.script.lock().unwrap();
+        let gated = asked.gate.lock().unwrap().is_some();
+        if let (PublishScript::Offer, false) = (script, gated) {
+            // Offered before the service hears back from `publish` at all:
+            // anything it holds for the offer must already be held.
+            let name = ask.path.rsplit('/').next().unwrap().to_owned();
+            let (kept, settled) = std::sync::mpsc::channel();
+            let offered = to
+                .try_send(offer(&name, Some(ask.request), move |outcome| {
+                    let _ = kept.send(outcome);
+                }))
+                .map_err(|_| PublishFailure::Unanswered);
+            if offered.is_ok() && asked.settled_before_return.load(Ordering::SeqCst) {
+                tokio::task::block_in_place(|| {
+                    settled
+                        .recv_timeout(Duration::from_secs(5))
+                        .expect("the offer is answered before publish returns")
+                });
+            }
+            return Some(Box::pin(std::future::ready(offered)));
+        }
+        Some(Box::pin(async move {
+            match script {
+                PublishScript::Refuse(reason) => Err(PublishFailure::NotPublished(reason)),
+                PublishScript::Silent => loop {
+                    let ending = asked.ending.notified();
+                    if asked.ended.load(Ordering::SeqCst) {
+                        break Err(PublishFailure::Unanswered);
+                    }
+                    ending.await;
+                },
+                PublishScript::Lost => Err(PublishFailure::Unanswered),
+                PublishScript::Offer => {
+                    let gate = asked.gate.lock().unwrap().take();
+                    if let Some(gate) = gate {
+                        let _ = gate.await;
+                    }
+                    let name = ask.path.rsplit('/').next().unwrap().to_owned();
+                    to.send(offer(&name, Some(ask.request), |_| {}))
+                        .await
+                        .map_err(|_| PublishFailure::Unanswered)
+                }
+            }
+        }))
+    }
     fn artifacts(&self) -> Option<tokio::sync::mpsc::Receiver<ArtifactOffer>> {
         self.offers.lock().unwrap().take()
     }
@@ -1476,6 +1577,8 @@ impl LeaseHold for HostHold {
     }
     fn end(&self, _cause: LeaseEndCause) -> EnvironmentFuture<'_, LeaseRelease> {
         self.ending.notify_one();
+        self.asked.ended.store(true, Ordering::SeqCst);
+        self.asked.ending.notify_waiters();
         let release = self.release;
         Box::pin(async move {
             match release {
@@ -1512,6 +1615,16 @@ fn with_publishing_host(
     host: Arc<Host>,
     attachments: Arc<MemoryAttachments>,
 ) -> Harness {
+    with_publishing_host_waiting(root, host, attachments, PUBLISH_CALL_WAIT)
+}
+
+/// [`with_publishing_host`], whose `artifacts_publish` calls wait `wait`.
+fn with_publishing_host_waiting(
+    root: &Path,
+    host: Arc<Host>,
+    attachments: Arc<MemoryAttachments>,
+    wait: Duration,
+) -> Harness {
     let hosts: BTreeMap<String, Arc<dyn Environment>> =
         BTreeMap::from([("devbox".into(), host as _)]);
     let placements =
@@ -1524,7 +1637,8 @@ fn with_publishing_host(
             Arc::new(Substitute::new(SandboxProfiles::HARNESS_DEFAULT)),
             hosts,
             placements,
-        ),
+        )
+        .with_publish_wait(wait),
         DELETION_BUDGETS.stop,
         provider,
         binding,
@@ -1557,24 +1671,34 @@ async fn publish_at(
     path: String,
 ) -> oneshot::Receiver<Collection> {
     let (answered, answer) = oneshot::channel();
-    let bytes = b"a disk image".to_vec();
-    publish
-        .send(ArtifactOffer {
-            file: StagedArtifact {
-                name: name.into(),
-                media_type: "application/x-apple-diskimage".into(),
-                size: bytes.len() as u64,
-                digest: "ab".repeat(32),
-                path,
-            },
-            bytes: Box::new(Published(Some(bytes))),
-            answer: ArtifactAnswer::new(move |outcome| {
-                let _ = answered.send(outcome);
-            }),
-        })
-        .await
-        .unwrap();
+    let mut sent = offer(name, None, move |outcome| {
+        let _ = answered.send(outcome);
+    });
+    sent.file.path = path;
+    publish.send(sent).await.unwrap();
     answer
+}
+
+/// A disk image offered as `name`, for `request`, its answer told to
+/// `answered`.
+fn offer(
+    name: &str,
+    request: Option<String>,
+    answered: impl FnOnce(Collection) + Send + 'static,
+) -> ArtifactOffer {
+    let bytes = b"a disk image".to_vec();
+    ArtifactOffer {
+        file: StagedArtifact {
+            name: name.into(),
+            media_type: "application/x-apple-diskimage".into(),
+            size: bytes.len() as u64,
+            digest: "ab".repeat(32),
+            path: format!("/srv/work/.nessa/{name}"),
+        },
+        bytes: Box::new(Published(Some(bytes))),
+        answer: ArtifactAnswer::new(answered),
+        request,
+    }
 }
 
 /// A file a host publishes under a live lease is kept, recorded under that
@@ -2168,13 +2292,18 @@ fn command(environment: &str, argv: &[&str], call: &str) -> CommandCall {
 impl Harness {
     /// Start a turn whose agent waits until `go` is sent.
     async fn running_turn(&self) -> oneshot::Sender<()> {
+        self.running_turn_as("turn-1").await
+    }
+
+    /// Turn `execution` running until the answer is sent.
+    async fn running_turn_as(&self, execution: &str) -> oneshot::Sender<()> {
         let (go, gate) = oneshot::channel();
         *self.provider.execution_gate.lock().unwrap() = Some(gate);
         self.service
             .submit(
                 self.id.clone(),
-                caller("turn-1"),
-                "turn-1".into(),
+                caller(execution),
+                execution.into(),
                 SubmittedMessage {
                     text: "hello".into(),
                     images: Vec::new(),
@@ -2661,4 +2790,503 @@ async fn a_command_that_ends_after_its_agent_lease_ended_is_recorded_as_late_evi
         LeaseRecord::CommandEnded { lease: ended, exit: CommandExit::Exited { code: 0 }, .. }
             if ended == &lease
     )));
+}
+
+// Slice D3a: `artifacts_publish` through the service, on a configured host
+// whose publishes a fake answers; the frames are the SSH adapter's tests'.
+
+fn publish_call(environment: &str, path: &str, call: &str) -> PublishCall {
+    PublishCall {
+        environment: environment.into(),
+        path: path.into(),
+        media_type: None,
+        call: call.into(),
+    }
+}
+
+impl Harness {
+    async fn publish_file(&self, call: PublishCall) -> PublishAnswer {
+        let (_caller, stop) = tokio::sync::watch::channel(false);
+        self.service.publish_artifact(&self.id, call, stop).await
+    }
+}
+
+/// A publishing host's harness with its conversation created there and a
+/// turn running, which `go` lets finish.
+async fn publishing_turn(
+    root: &Path,
+    host: Arc<Host>,
+    attachments: Arc<MemoryAttachments>,
+    wait: Duration,
+) -> (Harness, oneshot::Sender<()>) {
+    let harness = with_publishing_host_waiting(root, host, attachments, wait);
+    harness.create_on("devbox").await.unwrap();
+    let go = harness.running_turn().await;
+    (harness, go)
+}
+
+/// Multi-threaded, so the host can keep the file before `publish` returns:
+/// held for the turn's person only if the service holds who asked before it
+/// asks.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_publish_asked_by_the_turns_person_is_held_with_the_call_as_initiator_and_the_lease_as_cause(
+) {
+    let root = tempfile::tempdir().unwrap();
+    let (host, _publisher) = Host::publishing();
+    host.asked
+        .settled_before_return
+        .store(true, Ordering::SeqCst);
+    let host = Arc::new(host);
+    let attachments = Arc::new(MemoryAttachments::default());
+    let (harness, go) = publishing_turn(
+        root.path(),
+        host.clone(),
+        attachments.clone(),
+        PUBLISH_CALL_WAIT,
+    )
+    .await;
+    // Bounded here: an offer that found nobody asking is refused, and the
+    // call would otherwise wait out its whole wait.
+    let answer = tokio::time::timeout(
+        Duration::from_secs(10),
+        harness.publish_file(publish_call("devbox", "out/build.dmg", "call-1")),
+    )
+    .await
+    .expect("the call is answered once its file is kept");
+    assert_eq!(
+        answer,
+        PublishAnswer::Kept {
+            already_held: false,
+            name: "build.dmg".into(),
+            digest: "ab".repeat(32),
+            size: 12,
+        }
+    );
+    // The host was asked for the path as the agent gave it, by the call.
+    assert_eq!(
+        *host.asked.asks.lock().unwrap(),
+        [PublishAsk {
+            request: "call-1".into(),
+            path: "out/build.dmg".into(),
+            media_type: None,
+        }]
+    );
+    // Kept for the turn's person, with the tool call as the request.
+    let requested_by = attachments.requested_by.lock().unwrap().clone();
+    let [asker] = requested_by.as_slice() else {
+        panic!("one file kept: {requested_by:?}")
+    };
+    assert_eq!(asker.principal_id(), "person");
+    assert_eq!(asker.surface_id(), "desktop");
+    assert_eq!(asker.request_id(), "call-1");
+    go.send(()).unwrap();
+    harness
+        .service
+        .close(harness.id.clone(), caller("close"))
+        .await
+        .unwrap();
+    let snapshot = harness.snapshot().await;
+    let [artifact] = snapshot.artifacts.as_slice() else {
+        panic!("one artifact recorded, got {:?}", snapshot.artifacts)
+    };
+    // Its record names the call's person in the turn they asked in, and
+    // the agent's lease as cause.
+    assert_eq!(&artifact.actor, asker);
+    let [turn] = snapshot.invocations.as_slice() else {
+        panic!("one turn ran")
+    };
+    assert_eq!(artifact.turn.as_ref(), Some(&turn.request.execution_id));
+    let lease = snapshot
+        .lease
+        .as_ref()
+        .and_then(CurrentLease::held)
+        .unwrap();
+    assert_eq!(&artifact.lease, lease.id());
+    assert_eq!(
+        attachments.published.lock().unwrap()[0].0,
+        lease.id().as_str()
+    );
+}
+
+/// One turn asking for the same file twice, under two calls, leaves one
+/// record: the first call's.
+#[tokio::test]
+async fn a_file_asked_twice_in_one_turn_is_recorded_once() {
+    let root = tempfile::tempdir().unwrap();
+    let (host, _publisher) = Host::publishing();
+    let host = Arc::new(host);
+    let attachments = Arc::new(MemoryAttachments::default());
+    let (harness, go) = publishing_turn(
+        root.path(),
+        host.clone(),
+        attachments.clone(),
+        PUBLISH_CALL_WAIT,
+    )
+    .await;
+    for call in ["call-1", "call-2"] {
+        assert!(matches!(
+            harness
+                .publish_file(publish_call("devbox", "out/build.dmg", call))
+                .await,
+            PublishAnswer::Kept { .. }
+        ));
+    }
+    go.send(()).unwrap();
+    harness
+        .service
+        .close(harness.id.clone(), caller("close"))
+        .await
+        .unwrap();
+    let snapshot = harness.snapshot().await;
+    let [artifact] = snapshot.artifacts.as_slice() else {
+        panic!("one record, got {:?}", snapshot.artifacts)
+    };
+    assert_eq!(artifact.actor.request_id(), "call-1");
+}
+
+/// A file already recorded for one turn, asked for in the next, is
+/// recorded again, for that turn and its call.
+#[tokio::test]
+async fn a_file_asked_again_in_a_later_turn_is_recorded_for_that_turn() {
+    let root = tempfile::tempdir().unwrap();
+    let (host, _publisher) = Host::publishing();
+    let host = Arc::new(host);
+    let attachments = Arc::new(MemoryAttachments::default());
+    let (harness, go) = publishing_turn(
+        root.path(),
+        host.clone(),
+        attachments.clone(),
+        PUBLISH_CALL_WAIT,
+    )
+    .await;
+    assert!(matches!(
+        harness
+            .publish_file(publish_call("devbox", "out/build.dmg", "call-1"))
+            .await,
+        PublishAnswer::Kept { .. }
+    ));
+    go.send(()).unwrap();
+    let go = harness.running_turn_as("turn-2").await;
+    assert!(matches!(
+        harness
+            .publish_file(publish_call("devbox", "out/build.dmg", "call-2"))
+            .await,
+        PublishAnswer::Kept { .. }
+    ));
+    go.send(()).unwrap();
+    harness
+        .service
+        .close(harness.id.clone(), caller("close"))
+        .await
+        .unwrap();
+    let snapshot = harness.snapshot().await;
+    let turns: Vec<_> = snapshot
+        .invocations
+        .iter()
+        .map(|turn| Some(turn.request.execution_id.clone()))
+        .collect();
+    let recorded: Vec<_> = snapshot
+        .artifacts
+        .iter()
+        .map(|artifact| artifact.turn.clone())
+        .collect();
+    assert_eq!(recorded, turns);
+    let calls: Vec<_> = snapshot
+        .artifacts
+        .iter()
+        .map(|artifact| artifact.actor.request_id().to_owned())
+        .collect();
+    assert_eq!(calls, ["call-1", "call-2"]);
+    assert_eq!(snapshot.artifacts[0].file, snapshot.artifacts[1].file);
+}
+
+#[tokio::test]
+async fn a_publish_on_an_environment_without_this_conversations_lease_is_refused_typed() {
+    let root = tempfile::tempdir().unwrap();
+    let (host, _publisher) = Host::publishing();
+    let host = Arc::new(host);
+    let attachments = Arc::new(MemoryAttachments::default());
+    let (harness, go) = publishing_turn(
+        root.path(),
+        host.clone(),
+        attachments.clone(),
+        PUBLISH_CALL_WAIT,
+    )
+    .await;
+    for elsewhere in [HERE, "otherbox", "peer:nobody", ""] {
+        assert_eq!(
+            harness
+                .publish_file(publish_call(elsewhere, "a.png", "call-1"))
+                .await,
+            PublishAnswer::Refused(PublishCallRefusal::EnvironmentNotLeased),
+            "{elsewhere:?}"
+        );
+    }
+    // The host's own refusal is said by its reason.
+    *host.asked.script.lock().unwrap() = PublishScript::Refuse(PublishRefusal::OutsideWorkspace);
+    assert_eq!(
+        harness
+            .publish_file(publish_call("devbox", "../secret", "call-2"))
+            .await,
+        PublishAnswer::Refused(PublishCallRefusal::NotPublished(
+            PublishRefusal::OutsideWorkspace
+        ))
+    );
+    assert_eq!(host.asked.asks.lock().unwrap().len(), 1);
+    go.send(()).unwrap();
+    assert!(attachments.published.lock().unwrap().is_empty());
+
+    // With no turn running, nobody it could be published for.
+    let root = tempfile::tempdir().unwrap();
+    let (host, _publisher) = Host::publishing();
+    let host = Arc::new(host);
+    let harness = with_publishing_host(root.path(), host.clone(), attachments.clone());
+    harness.create_on("devbox").await.unwrap();
+    harness.turn("turn-1").await;
+    assert_eq!(
+        harness
+            .publish_file(publish_call("devbox", "a.png", "call-1"))
+            .await,
+        PublishAnswer::Refused(PublishCallRefusal::NoTurn)
+    );
+    assert!(host.asked.asks.lock().unwrap().is_empty());
+}
+
+/// Here publishes nothing yet: a conversation running on this gateway's
+/// own machine is told so by name.
+#[tokio::test]
+async fn a_publish_where_the_agent_runs_here_is_refused_unavailable() {
+    let root = tempfile::tempdir().unwrap();
+    let here = Arc::new(Substitute::new(SandboxProfiles::HARNESS_DEFAULT));
+    let harness = with_host(root.path(), here, None);
+    harness.create().await;
+    let go = harness.running_turn().await;
+    assert_eq!(
+        harness
+            .publish_file(publish_call(HERE, "a.png", "call-1"))
+            .await,
+        PublishAnswer::Refused(PublishCallRefusal::PublishUnavailable)
+    );
+    // Refused, its request is let go: asked again, it is refused the same.
+    assert_eq!(
+        harness
+            .publish_file(publish_call(HERE, "a.png", "call-1"))
+            .await,
+        PublishAnswer::Refused(PublishCallRefusal::PublishUnavailable)
+    );
+    go.send(()).unwrap();
+}
+
+#[tokio::test]
+async fn a_publish_for_a_call_already_publishing_is_refused_and_a_cancelled_one_keeps_its_asker() {
+    let root = tempfile::tempdir().unwrap();
+    let (host, publisher) = Host::publishing();
+    let host = Arc::new(host);
+    *host.asked.script.lock().unwrap() = PublishScript::Silent;
+    let attachments = Arc::new(MemoryAttachments::default());
+    let (harness, go) = publishing_turn(
+        root.path(),
+        host.clone(),
+        attachments.clone(),
+        PUBLISH_CALL_WAIT,
+    )
+    .await;
+    let (caller_gone, stop) = tokio::sync::watch::channel(false);
+    let first = {
+        let service = harness.service.clone();
+        let id = harness.id.clone();
+        tokio::spawn(async move {
+            service
+                .publish_artifact(&id, publish_call("devbox", "a.dmg", "call-1"), stop)
+                .await
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(5), host.asked.noted.notified())
+        .await
+        .expect("the host was asked");
+    assert_eq!(
+        harness
+            .publish_file(publish_call("devbox", "a.dmg", "call-1"))
+            .await,
+        PublishAnswer::Refused(PublishCallRefusal::DuplicateRequest)
+    );
+    assert_eq!(host.asked.asks.lock().unwrap().len(), 1);
+    caller_gone.send_replace(true);
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), first)
+            .await
+            .unwrap()
+            .unwrap(),
+        PublishAnswer::Refused(PublishCallRefusal::Cancelled)
+    );
+    // The call went away; the file it asked for arrives after, and is
+    // still kept for the person who asked.
+    let (answered, answer) = oneshot::channel();
+    publisher
+        .send(offer("a.dmg", Some("call-1".into()), move |outcome| {
+            let _ = answered.send(outcome);
+        }))
+        .await
+        .unwrap();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), answer)
+            .await
+            .unwrap(),
+        Ok(Collection::Held)
+    );
+    assert_eq!(
+        attachments.requested_by.lock().unwrap()[0].request_id(),
+        "call-1"
+    );
+    // An offer naming a request nobody here asked is refused unread.
+    let (answered, answer) = oneshot::channel();
+    publisher
+        .send(offer("b.dmg", Some("call-9".into()), move |outcome| {
+            let _ = answered.send(outcome);
+        }))
+        .await
+        .unwrap();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), answer)
+            .await
+            .unwrap(),
+        Ok(Collection::Refused {
+            reason: CollectionRefusal::Invalid
+        })
+    );
+    assert_eq!(attachments.published.lock().unwrap().len(), 1);
+    go.send(()).unwrap();
+}
+
+#[tokio::test]
+async fn a_publish_not_kept_within_its_wait_answers_timed_out_and_a_late_file_keeps_its_asker() {
+    let root = tempfile::tempdir().unwrap();
+    let (host, publisher) = Host::publishing();
+    let host = Arc::new(host);
+    *host.asked.script.lock().unwrap() = PublishScript::Silent;
+    let attachments = Arc::new(MemoryAttachments::default());
+    let (harness, go) = publishing_turn(
+        root.path(),
+        host.clone(),
+        attachments.clone(),
+        Duration::from_millis(100),
+    )
+    .await;
+    assert_eq!(
+        harness
+            .publish_file(publish_call("devbox", "a.dmg", "call-1"))
+            .await,
+        PublishAnswer::Refused(PublishCallRefusal::TimedOut)
+    );
+    let (answered, answer) = oneshot::channel();
+    publisher
+        .send(offer("a.dmg", Some("call-1".into()), move |outcome| {
+            let _ = answered.send(outcome);
+        }))
+        .await
+        .unwrap();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), answer)
+            .await
+            .unwrap(),
+        Ok(Collection::Held)
+    );
+    assert_eq!(
+        attachments.requested_by.lock().unwrap()[0].request_id(),
+        "call-1"
+    );
+    go.send(()).unwrap();
+}
+
+/// The agent's lease ending between the ask and its offer: the file is
+/// refused as the lease ended, and the call told so.
+#[tokio::test]
+async fn a_publish_whose_lease_ends_before_its_offer_is_refused_lease_ended() {
+    let root = tempfile::tempdir().unwrap();
+    let (host, _publisher) = Host::publishing();
+    let host = Arc::new(host);
+    let (release, gate) = oneshot::channel();
+    *host.asked.gate.lock().unwrap() = Some(gate);
+    let attachments = Arc::new(MemoryAttachments::default());
+    let (harness, go) = publishing_turn(
+        root.path(),
+        host.clone(),
+        attachments.clone(),
+        PUBLISH_CALL_WAIT,
+    )
+    .await;
+    let publishing = {
+        let service = harness.service.clone();
+        let id = harness.id.clone();
+        tokio::spawn(async move {
+            let (_caller, stop) = tokio::sync::watch::channel(false);
+            service
+                .publish_artifact(&id, publish_call("devbox", "a.dmg", "call-1"), stop)
+                .await
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(5), host.asked.noted.notified())
+        .await
+        .expect("the host was asked");
+    let closing = {
+        let service = harness.service.clone();
+        let id = harness.id.clone();
+        tokio::spawn(async move { service.close(id, caller("close")).await })
+    };
+    // Closing waits for the running turn; it ends, and the lease with it.
+    drop(go);
+    tokio::time::timeout(Duration::from_secs(5), host.ending.notified())
+        .await
+        .expect("the lease began ending");
+    release.send(()).unwrap();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), publishing)
+            .await
+            .unwrap()
+            .unwrap(),
+        PublishAnswer::Refused(PublishCallRefusal::NotKept(CollectionRefusal::LeaseEnded))
+    );
+    tokio::time::timeout(Duration::from_secs(5), closing)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(attachments.published.lock().unwrap().is_empty());
+}
+
+/// Connection loss before the host answers: the call is told the answer
+/// could not be had, and its request is let go, so it is not a duplicate.
+#[tokio::test]
+async fn a_publish_whose_environment_is_lost_before_it_answers_is_unanswered() {
+    let root = tempfile::tempdir().unwrap();
+    let (host, _publisher) = Host::publishing();
+    let host = Arc::new(host);
+    *host.asked.script.lock().unwrap() = PublishScript::Lost;
+    let attachments = Arc::new(MemoryAttachments::default());
+    let (harness, go) = publishing_turn(
+        root.path(),
+        host.clone(),
+        attachments.clone(),
+        PUBLISH_CALL_WAIT,
+    )
+    .await;
+    for _ in 0..2 {
+        assert_eq!(
+            harness
+                .publish_file(publish_call("devbox", "a.dmg", "call-1"))
+                .await,
+            PublishAnswer::Refused(PublishCallRefusal::Unanswered)
+        );
+    }
+    assert_eq!(host.asked.asks.lock().unwrap().len(), 2);
+    go.send(()).unwrap();
+}
+
+/// The call's wait is longer than the read it waits on.
+#[test]
+fn the_publish_call_wait_outlasts_the_reads_own_deadline() {
+    assert!(
+        PUBLISH_CALL_WAIT
+            > crate::attachments::application::AttachmentLimits::default().publish_deadline
+    );
 }

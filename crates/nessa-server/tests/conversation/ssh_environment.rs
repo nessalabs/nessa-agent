@@ -1448,9 +1448,8 @@ impl crate::env_serve::application::ArtifactOutbox for NoOutbox {
         _lease: &str,
         _artifact: u32,
         _request: &crate::env_serve::application::PublishRequest,
-    ) -> Result<nessa_protocol::lease::StagedArtifact, crate::env_serve::application::PublishRefusal>
-    {
-        Err(crate::env_serve::application::PublishRefusal::StagingFailed)
+    ) -> Result<nessa_protocol::lease::StagedArtifact, nessa_protocol::lease::PublishRefusal> {
+        Err(nessa_protocol::lease::PublishRefusal::StagingFailed)
     }
     fn discard(&self, _lease: &str, _artifact: u32) {}
     fn close(&self, _lease: &str) {}
