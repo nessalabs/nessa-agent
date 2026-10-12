@@ -113,6 +113,8 @@ impl Gateway {
     fn start(&mut self) -> Server {
         let log_path = self.root.path().join("server.log");
         let log = std::fs::File::create(&log_path).unwrap();
+        // A reused pid must not observe the previous child's endpoint record.
+        remove_endpoint_record(self.root.path());
         let child = command(&self.root.path().join("data"))
             .arg("server")
             .env("NESSA_PORT", "0")
@@ -123,45 +125,26 @@ impl Gateway {
         let mut server = Server(Some(child));
         let pid = server.0.as_ref().unwrap().id();
         // `WAIT` is the hang detector for a process that neither publishes
-        // its endpoint nor exits. The sleep is how often the publication is
-        // re-read, not a guess that the port is free.
+        // its endpoint nor exits. The sleep inside the poll is how often the
+        // address is re-read.
         let deadline = Instant::now() + WAIT;
-        let product = loop {
-            self.fail_if_exited(&mut server);
-            if let Some(address) = self.published_product(pid) {
-                if TcpStream::connect(address).is_ok()
-                    && server.0.as_mut().unwrap().try_wait().unwrap().is_none()
-                {
-                    break address;
-                }
-            }
-            self.fail_if_exited(&mut server);
-            assert!(
-                Instant::now() < deadline,
-                "the gateway did not publish its address\n{}",
-                std::fs::read_to_string(&log_path).unwrap_or_default()
-            );
-            std::thread::sleep(Duration::from_millis(50));
-        };
+        let endpoint = endpoint_record(self.root.path());
+        let product = poll_bound_address(
+            &mut server,
+            &log_path,
+            deadline,
+            "the gateway did not publish its address",
+            || published_product(&endpoint, pid),
+        );
         self.product = Some(product);
         if self.native_enabled {
-            let native = loop {
-                self.fail_if_exited(&mut server);
-                if let Some(address) = reported_native(&log_path) {
-                    if TcpStream::connect(address).is_ok()
-                        && server.0.as_mut().unwrap().try_wait().unwrap().is_none()
-                    {
-                        break address;
-                    }
-                }
-                self.fail_if_exited(&mut server);
-                assert!(
-                    Instant::now() < deadline,
-                    "the gateway did not report its native address\n{}",
-                    std::fs::read_to_string(&log_path).unwrap_or_default()
-                );
-                std::thread::sleep(Duration::from_millis(50));
-            };
+            let native = poll_bound_address(
+                &mut server,
+                &log_path,
+                deadline,
+                "the gateway did not report its native address",
+                || reported_native(&log_path),
+            );
             self.native = Some(native);
         }
         server
@@ -171,6 +154,7 @@ impl Gateway {
     fn start_until_exit(&mut self) -> ExitStatus {
         let log_path = self.root.path().join("server.log");
         let log = std::fs::File::create(&log_path).unwrap();
+        remove_endpoint_record(self.root.path());
         let mut child = command(&self.root.path().join("data"))
             .arg("server")
             .env("NESSA_PORT", "0")
@@ -184,7 +168,7 @@ impl Gateway {
             if let Some(status) = child.try_wait().unwrap() {
                 return status;
             }
-            if self.published_product(pid).is_some() {
+            if published_product(&endpoint_record(self.root.path()), pid).is_some() {
                 let _ = child.kill();
                 let _ = child.wait();
                 panic!(
@@ -201,33 +185,78 @@ impl Gateway {
             std::thread::sleep(Duration::from_millis(50));
         }
     }
-    fn fail_if_exited(&self, server: &mut Server) {
-        if let Some(status) = server.0.as_mut().unwrap().try_wait().unwrap() {
-            panic!(
-                "the gateway exited during startup: {status}\n{}",
-                std::fs::read_to_string(self.root.path().join("server.log")).unwrap_or_default()
-            );
-        }
-    }
-    /// The product address this process published after it bound. The record's
-    /// `processId` has to be this child, which a neighbor's listener is not.
-    fn published_product(&self, pid: u32) -> Option<SocketAddr> {
-        let path = self.root.path().join("data/ci/logs/gateway-endpoint.json");
-        let value: Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
-        if value.get("processId").and_then(Value::as_u64)? != u64::from(pid) {
-            return None;
-        }
-        value
-            .get("webSocketUrl")
-            .and_then(Value::as_str)
-            .and_then(|url| url.strip_prefix("ws://"))
-            .and_then(|address| address.parse().ok())
-    }
     fn product(&self) -> SocketAddr {
         self.product.expect("start publishes the product address")
     }
     fn owner(&self) -> ProductClient {
         ProductClient::connect(self.product(), &self.token)
+    }
+}
+
+fn endpoint_record(root: &Path) -> PathBuf {
+    root.join("data/ci/logs/gateway-endpoint.json")
+}
+
+/// Drop a previous child's publication. A reused pid then has no record until this child writes one.
+fn remove_endpoint_record(root: &Path) {
+    match std::fs::remove_file(endpoint_record(root)) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => panic!("removing the previous endpoint record failed: {error}"),
+    }
+}
+
+/// The product address this process published after it bound. The record's
+/// `processId` has to be this child, which a neighbor's listener is not.
+fn published_product(path: &Path, pid: u32) -> Option<SocketAddr> {
+    let value: Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+    if value.get("processId").and_then(Value::as_u64)? != u64::from(pid) {
+        return None;
+    }
+    value
+        .get("webSocketUrl")
+        .and_then(Value::as_str)
+        .and_then(|url| url.strip_prefix("ws://"))
+        .and_then(|address| address.parse().ok())
+}
+
+/// Wait until `read` yields an address this child still accepts.
+///
+/// `deadline` is the hang detector. The 50ms sleep is how often `read` is
+/// tried again, for the product publication and the native log field alike.
+fn poll_bound_address(
+    server: &mut Server,
+    log_path: &Path,
+    deadline: Instant,
+    waiting_for: &str,
+    mut read: impl FnMut() -> Option<SocketAddr>,
+) -> SocketAddr {
+    loop {
+        if let Some(status) = server.0.as_mut().unwrap().try_wait().unwrap() {
+            panic!(
+                "the gateway exited during startup: {status}\n{}",
+                std::fs::read_to_string(log_path).unwrap_or_default()
+            );
+        }
+        if let Some(address) = read() {
+            if TcpStream::connect(address).is_ok()
+                && server.0.as_mut().unwrap().try_wait().unwrap().is_none()
+            {
+                return address;
+            }
+        }
+        if let Some(status) = server.0.as_mut().unwrap().try_wait().unwrap() {
+            panic!(
+                "the gateway exited during startup: {status}\n{}",
+                std::fs::read_to_string(log_path).unwrap_or_default()
+            );
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{waiting_for}\n{}",
+            std::fs::read_to_string(log_path).unwrap_or_default()
+        );
+        std::thread::sleep(Duration::from_millis(50));
     }
 }
 
