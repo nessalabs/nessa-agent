@@ -320,10 +320,21 @@ impl ArtifactInbox for FileInbox {
             opened
                 .set_permissions(fs::Permissions::from_mode(placed_mode()))
                 .map_err(|_| FetchRefusal::PlacingFailed)?;
+            // Its bytes are on the disk before any name points at them.
+            opened.sync_all().map_err(|_| FetchRefusal::PlacingFailed)?;
             let resolved = self.resolve(destination)?;
             let outcome = self.link(&part, &mut opened, &resolved, file)?;
-            let _ = resolved.directory.sync_all();
-            Ok(outcome)
+            // And the name before it is said placed: one that cannot be
+            // made to last is taken back, unless it can no longer be.
+            match outcome {
+                Placement::Placed(placed) if resolved.directory.sync_all().is_err() => {
+                    match self.take_back(&placed) {
+                        true => Err(FetchRefusal::PlacingFailed),
+                        false => Ok(Placement::Placed(placed)),
+                    }
+                }
+                outcome => Ok(outcome),
+            }
         })();
         self.discard(lease, fetch);
         placed.unwrap_or_else(Placement::Refused)
