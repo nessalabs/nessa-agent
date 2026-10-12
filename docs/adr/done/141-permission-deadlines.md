@@ -133,8 +133,11 @@ The permission wait is its own branch in the worker, after close, a dropped
 consumer, and the execution deadline, and before unrelated commands and the
 provider's next message. It is not folded into the wait that fails the worker.
 An answer or cancellation of a due review already in the command queue is
-taken before that review settles. Any other command waits until it has. A
-stream of those commands cannot hold the deadline
+taken before that review settles. Any other command waits until it has. The
+worker reads at most the commands already waiting, and at most the queue's
+capacity, before it settles, and it does not read again until after that
+settlement. A stream of those commands cannot hold the deadline, and the
+commands set aside cannot grow without bound
 (`an_unrelated_command_already_queued_does_not_hold_a_due_deadline`). Because
 the branch is before the reader, a turn end and a due deadline that arrive
 together resolve deadline-first.

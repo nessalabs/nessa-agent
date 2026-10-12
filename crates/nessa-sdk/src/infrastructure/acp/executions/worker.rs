@@ -4,7 +4,7 @@ use super::super::{
     profile::AcpProfile,
     questions::wire as question_wire,
     sessions::{
-        binding::{Command, Completion, DispatchedPrompt},
+        binding::{Command, Completion, DispatchedPrompt, COMMAND_QUEUE_CAPACITY},
         cleanup::ProcessCleanup,
         forwarded::{attach_arguments, attach_forwarded},
         thought_level, AcpConfig,
@@ -1381,21 +1381,28 @@ impl<P: AcpProfile> Worker<P> {
                 }
                 Input::PermissionDeadline => {
                     // Answers and cancellations of a due review were admitted
-                    // before this wait returned. They decide it. Anything else
-                    // in the queue waits until those reviews are settled, so a
-                    // stream of unrelated commands cannot hold the deadline
+                    // before this wait returned. They decide it. The snapshot
+                    // is taken before anything here is awaited, and it stops
+                    // at the queue's capacity, so a refill cannot postpone
+                    // the deadline or grow without bound. Anything else in
+                    // that snapshot waits until those reviews are settled
                     // (`an_unrelated_command_already_queued_does_not_hold_a_due_deadline`).
-                    let mut later = Vec::new();
-                    loop {
+                    let mut ready = Vec::new();
+                    while ready.len() < COMMAND_QUEUE_CAPACITY {
                         match self.commands.try_recv() {
-                            Ok(command) if self.command_answers_due_review(&command) => {
-                                self.command(execution, command).await?;
-                                if self.deferred_outcome.is_some() {
-                                    return Ok(());
-                                }
-                            }
-                            Ok(command) => later.push(command),
+                            Ok(command) => ready.push(command),
                             Err(_) => break,
+                        }
+                    }
+                    let mut later = Vec::new();
+                    for command in ready {
+                        if self.command_answers_due_review(&command) {
+                            self.command(execution, command).await?;
+                            if self.deferred_outcome.is_some() {
+                                return Ok(());
+                            }
+                        } else {
+                            later.push(command);
                         }
                     }
                     self.settle_due_permissions(execution).await?;
