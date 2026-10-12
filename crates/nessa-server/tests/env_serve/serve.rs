@@ -4978,13 +4978,20 @@ async fn k1_a_drain_waits_for_the_run_of_a_command_it_ended_unrun() {
     gateway.settled().await;
     gateway.drain.send_replace(true);
     // Recorded ended, but the gateway has not heard: serving is open.
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    assert!(!gateway.served.is_finished());
-    assert!(gateway.ledger.entries().contains(&LedgerEntry::Ended {
+    let ended = LedgerEntry::Ended {
         lease: UNRUN.into(),
         cleanup: Cleanup::NotHeld,
         cause: EndCause::Drained,
-    }));
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !gateway.ledger.entries().contains(&ended) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the drain ends the unrun command");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!gateway.served.is_finished());
     gateway
         .send(ToEnvironment::Run {
             lease: UNRUN.into(),
