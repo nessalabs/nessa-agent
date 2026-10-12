@@ -5030,7 +5030,8 @@ async fn a_fetch_timed_out_while_its_asking_is_saved_ends_undelivered_and_never_
 /// `artifacts_publish` and `artifacts_fetch` on X's name are refused
 /// before anything is asked of anyone. The paired environments are the
 /// production registry, which has never seen X's key, with W in place of
-/// a live connection.
+/// a live connection. Paired environments are Unix-only, as the registry is.
+#[cfg(unix)]
 #[tokio::test]
 async fn k3_the_agents_tools_reach_only_this_gateways_own_worker() {
     use crate::conversation::application::PairedEnvironments;
