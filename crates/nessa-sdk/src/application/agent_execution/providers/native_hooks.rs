@@ -29,8 +29,15 @@ use std::sync::{
 pub struct NativeHooksSwitch {
     allowed: Arc<AtomicBool>,
     launches: Arc<Mutex<HashMap<String, bool>>>,
+    /// When set, a conversation that is not already recorded stays off.
+    ///
+    /// The launch file could not be read, or the last snapshot could not be
+    /// written. Granting the flag then would turn hooks on for a conversation
+    /// that may have opened with them off. A successful snapshot clears it.
+    withhold: Arc<AtomicBool>,
     /// Writes the remembered choices after a new session is recorded.
-    /// The lock is not held. The default does nothing.
+    /// The map lock is not held. The writer serializes its own snapshot.
+    /// The default does nothing.
     persist: Arc<dyn Fn() + Send + Sync>,
 }
 
@@ -66,20 +73,23 @@ impl NativeHooksSwitch {
         Self::sharing(
             allowed,
             Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(AtomicBool::new(false)),
             Arc::new(|| {}),
         )
     }
 
-    /// Share the flag, the conversations already opened, and how a new
-    /// memory is written down.
+    /// Share the flag, the conversations already opened, whether an unknown
+    /// conversation must stay off, and how a new memory is written down.
     pub fn sharing(
         allowed: Arc<AtomicBool>,
         launches: Arc<Mutex<HashMap<String, bool>>>,
+        withhold: Arc<AtomicBool>,
         persist: Arc<dyn Fn() + Send + Sync>,
     ) -> Self {
         Self {
             allowed,
             launches,
+            withhold,
             persist,
         }
     }
@@ -92,10 +102,10 @@ impl NativeHooksSwitch {
     /// The choice for this conversation open.
     ///
     /// `session` is the conversation's session id. The first open records the
-    /// flag's value then. A later open of the same session returns that
-    /// record, including after the flag changes. No session id reads the flag
-    /// and records nothing: a launch that names no conversation cannot be
-    /// told apart from the next one.
+    /// flag's value then, or off when the launch memory is untrusted. A later
+    /// open of the same session returns that record, including after the flag
+    /// changes. No session id reads the flag and records nothing: a launch
+    /// that names no conversation cannot be told apart from the next one.
     pub fn choice_for(&self, session: Option<&str>) -> bool {
         let Some(session) = session.filter(|session| !session.is_empty()) else {
             return self.allowed();
@@ -107,7 +117,7 @@ impl NativeHooksSwitch {
         if let Some(stored) = launches.get(session).copied() {
             return stored;
         }
-        let allowed = self.allowed();
+        let allowed = self.allowed() && !self.withhold.load(Ordering::Acquire);
         launches.insert(session.to_owned(), allowed);
         drop(launches);
         (self.persist)();

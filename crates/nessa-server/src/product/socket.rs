@@ -2706,7 +2706,19 @@ mod tests {
     }
 
     fn snapshot(role: MembershipRole, status: MembershipStatus) -> AccessSnapshot {
+        snapshot_with(role, status, &["server.read", "credential.manage"])
+    }
+
+    fn snapshot_with(
+        role: MembershipRole,
+        status: MembershipStatus,
+        actions: &[&str],
+    ) -> AccessSnapshot {
         let organization = OrganizationId::new("organization").unwrap();
+        let resource = Resource::new(
+            organization.clone(),
+            ResourceId::new("gateway-resource").unwrap(),
+        );
         AccessSnapshot {
             credential: Credential::new(
                 CredentialId::new("credential").unwrap(),
@@ -2715,22 +2727,10 @@ mod tests {
                 AudienceId::new("gateway").unwrap(),
                 100,
                 200,
-                vec![
-                    Grant::new(
-                        Action::new("server.read").unwrap(),
-                        Resource::new(
-                            organization.clone(),
-                            ResourceId::new("gateway-resource").unwrap(),
-                        ),
-                    ),
-                    Grant::new(
-                        Action::new("credential.manage").unwrap(),
-                        Resource::new(
-                            organization.clone(),
-                            ResourceId::new("gateway-resource").unwrap(),
-                        ),
-                    ),
-                ],
+                actions
+                    .iter()
+                    .map(|action| Grant::new(Action::new(*action).unwrap(), resource.clone()))
+                    .collect(),
             )
             .unwrap(),
             membership: Membership::new(
@@ -3202,7 +3202,9 @@ mod tests {
         }
     }
 
-    /// A member is refused before params are read, and nothing is written.
+    /// A member who can write conversations is refused before params are read,
+    /// and nothing is written. The credential also carries `conversation.write`,
+    /// so a method mapped to that grant would pass this caller.
     #[tokio::test]
     async fn review_setting_native_hooks_needs_the_owner_grant() {
         let root = tempfile::tempdir().unwrap();
@@ -3212,7 +3214,15 @@ mod tests {
             Arc::new(HooksClock),
         )
         .unwrap();
-        let (state, _) = fixture(MembershipRole::Member);
+        let (state, authority) = fixture(MembershipRole::Member);
+        *authority
+            .snapshot
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = snapshot_with(
+            MembershipRole::Member,
+            MembershipStatus::Active,
+            &["server.read", "conversation.write", "credential.manage"],
+        );
         let state = state.with_native_hooks(preferences);
         let session = authenticate(&state).await;
         assert_eq!(

@@ -190,8 +190,19 @@ impl<P: AcpProfile + Clone> WorkerFactory<P> {
         let _entered = span.enter();
         let started = self.config.clock.now();
         tracing::info!(target: "nessa_sdk::timing", phase = "process_start", "agent startup started");
+        // Negotiated facts reset until this process answers. The hooks choice
+        // is already on the profile and stays published: a reader during
+        // startup stamps tool rows from it, and those rows are not rewritten.
+        let native_hooks_allowed = self
+            .profile
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .native_hooks_allowed();
         self.operation_capabilities
-            .send_replace(ProviderOperationCapabilities::default());
+            .send_replace(ProviderOperationCapabilities {
+                native_hooks_allowed,
+                ..ProviderOperationCapabilities::default()
+            });
         let mut executable_use = match self.config.executable.admit() {
             Ok(guard) => guard,
             Err(failure) => {
@@ -1277,6 +1288,9 @@ impl ExecutionEventStream for Events {
     }
 }
 
+#[cfg(test)]
+#[path = "../../../../tests/infrastructure/acp/sessions/launch_capabilities.rs"]
+mod launch_capabilities_tests;
 #[cfg(test)]
 #[path = "../../../../tests/infrastructure/acp/sessions/restoration_recovery.rs"]
 mod restoration_recovery_tests;

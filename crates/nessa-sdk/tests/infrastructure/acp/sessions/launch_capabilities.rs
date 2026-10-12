@@ -1,0 +1,198 @@
+//! A process restart publishes the launch's hooks choice before the process exists.
+//!
+//! ```text
+//! profile.native_hooks_allowed -> start() replaces the capability watch
+//!                              -> process() fails -> the watch still says that choice
+//! ```
+//!
+//! The arrow is one failed start. Negotiated facts go back to unknown. The
+//! hooks choice does not: tool rows stamped while startup is still running
+//! keep the value they read, and this reset used to publish off.
+use super::*;
+use crate::application::agent_execution::agents::AgentFuture;
+use crate::application::agent_execution::executions::ExecutionAuditRecord;
+use crate::application::agent_execution::providers::{
+    ExecutableUseSnapshot, OperationCapabilities,
+};
+use crate::application::agent_execution::tools::ToolReviewInput;
+use crate::application::dto::{ModalitiesDto, ModelMetadataDto};
+use crate::domain::agent_execution::permissions::PermissionOfferPolicy;
+use crate::domain::agent_execution::tools::ToolCallUpdate;
+use crate::domain::common::value_objects::TokenLimits;
+use crate::domain::effective_capabilities::value_objects::{
+    BindingRestrictions, EffectiveCapabilities,
+};
+use crate::domain::model_metadata::entities::ModelMetadata;
+use crate::domain::model_metadata::value_objects::{Modalities, ModelFeatures};
+use crate::infrastructure::acp::profile::AcpProfile;
+use serde_json::Value;
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+use std::time::Duration;
+
+#[derive(Clone)]
+struct HooksProfile {
+    allowed: bool,
+}
+
+impl AcpProfile for HooksProfile {
+    fn native_hooks_allowed(&self) -> bool {
+        self.allowed
+    }
+    fn validate_initialize(&self, _: &Value) -> Result<(), AgentError> {
+        Ok(())
+    }
+    fn new_session_params(&self, _: &AcpConfig, _: &EffectiveCapabilities) -> Value {
+        Value::Null
+    }
+    fn session_configuration(&self, _: &str) -> Vec<Value> {
+        Vec::new()
+    }
+    fn verify_session(
+        &self,
+        _: &Value,
+        _: &EffectiveCapabilities,
+        _: bool,
+    ) -> Result<(), AgentError> {
+        Ok(())
+    }
+    fn verify_update(
+        &self,
+        _: &str,
+        _: &Value,
+        _: &EffectiveCapabilities,
+        _: bool,
+    ) -> Result<(), AgentError> {
+        Ok(())
+    }
+    fn validate_execution(
+        &self,
+        _: &ExecutionRequest,
+        _: &EffectiveCapabilities,
+    ) -> Result<(), AgentError> {
+        Ok(())
+    }
+    fn begin_execution(&mut self) {}
+    fn tool_call(&mut self, _: &Value) -> Result<ToolCallUpdate, AgentError> {
+        Err(AgentError::Closed)
+    }
+    fn permission_input(&self, _: &Value) -> Result<ToolReviewInput, AgentError> {
+        Err(AgentError::Closed)
+    }
+}
+
+struct QuietAudit;
+
+impl ExecutionAudit for QuietAudit {
+    fn record(&self, _: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+fn capabilities() -> EffectiveCapabilities {
+    let text = ModalitiesDto {
+        text: true,
+        image: false,
+        audio: false,
+    };
+    let model = ModelMetadata::try_from(ModelMetadataDto {
+        provider: "anthropic".into(),
+        model_id: "fixture".into(),
+        display_name: "Fixture".into(),
+        input: text,
+        image_input: None,
+        output: text,
+        tool_use: true,
+        reasoning: None,
+        fast_mode: false,
+        max_context_window_tokens: 1000,
+        max_output_tokens: 100,
+        knowledge_cutoff: "2026-01".into(),
+        documentation_url: "https://example.com".into(),
+    })
+    .unwrap();
+    let text = Modalities::new(true, false, false).unwrap();
+    EffectiveCapabilities::new(
+        &model,
+        BindingRestrictions::new(
+            ModelFeatures::new(text, text, true, false, false),
+            model.limits(),
+        ),
+        TokenLimits::new(1000, 100).unwrap(),
+    )
+    .unwrap()
+}
+
+fn config() -> AcpConfig {
+    AcpConfig {
+        executable: ExecutableUseSnapshot::unmanaged(PathBuf::from("/usr/bin/true")),
+        arguments: Vec::new(),
+        environment: BTreeMap::new(),
+        credential_environment: BTreeMap::new(),
+        workspace: PathBuf::from("/tmp"),
+        tools_enabled: true,
+        mcp_servers: crate::infrastructure::acp::sessions::McpServerList::none(),
+        stand_ins: crate::infrastructure::acp::sessions::StandInSessions::none(),
+        permissions: PermissionOfferPolicy::once_only(),
+        refusal: crate::application::agent_execution::permissions::ConfiguredRefusal::continue_turn(
+        ),
+        launch_timeout: Duration::from_secs(1),
+        startup_timeout: Duration::from_secs(1),
+        execution_timeout: None,
+        shutdown_grace: Duration::from_millis(1),
+        kill_timeout: Duration::from_millis(1),
+        event_capacity: 16,
+        max_frame_bytes: 4096,
+        max_incoming_frame_bytes: 4096,
+        images: None,
+        clock: Arc::new(crate::infrastructure::clock::RuntimeClock::new()),
+    }
+}
+
+/// What `start` publishes when the process is refused before it exists.
+fn published_when_start_fails(allowed: bool) -> ProviderOperationCapabilities {
+    let (operation_capabilities, _receiver) = watch::channel(ProviderOperationCapabilities {
+        negotiated: true,
+        native_hooks_allowed: !allowed,
+        native_steering: true,
+        session_resume: true,
+        ..ProviderOperationCapabilities::default()
+    });
+    let process: ProcessFactory =
+        Arc::new(|| Err(AgentError::Configuration("stopped before launch".into()).into()));
+    let factory = WorkerFactory {
+        event_budget: EventQueueBudget::new(),
+        operation_capabilities,
+        permission_authority: PermissionAuthoritySource::default(),
+        process,
+        config: config(),
+        capabilities: capabilities(),
+        profile: ControlMutex::new(HooksProfile { allowed }),
+        audit: Arc::new(QuietAudit),
+        session_key: Some("conversation".into()),
+        permission_sequence: Arc::new(AtomicU64::new(0)),
+        question_sequence: Arc::new(AtomicU64::new(0)),
+        _stand_in_grant: None,
+    };
+    let Err(error) = factory.start(None) else {
+        panic!("the process is refused before it exists");
+    };
+    assert!(matches!(error.into_parts().0, AgentError::Configuration(_)));
+    let published = *factory.operation_capabilities.borrow();
+    published
+}
+
+#[test]
+fn a_restart_publishes_the_launch_hooks_choice_before_the_process_exists() {
+    for allowed in [true, false] {
+        let published = published_when_start_fails(allowed);
+        assert_eq!(published.native_hooks_allowed, allowed);
+        assert_eq!(
+            OperationCapabilities::resolve(published).native_hooks_allowed(),
+            allowed
+        );
+        assert!(!published.negotiated);
+        assert!(!published.native_steering);
+        assert!(!published.session_resume);
+    }
+}

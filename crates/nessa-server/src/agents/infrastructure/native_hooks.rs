@@ -4,16 +4,23 @@
 //! set -> requested record -> native-hooks.json -> atomic flag -> outcome record
 //! open -> native-hooks.json -> flags (unreadable or invalid documents load as off)
 //! open -> claude-launch-hooks.json and codex-launch-hooks.json -> the choice each conversation opened with
+//! choice_for -> map insert -> persist (clone and write under one gate)
 //! ```
 //!
-//! Arrows are the order of one change and of one startup read. A failed
-//! requested record writes nothing. A failed outcome record reverts the file
-//! and the flag. A retry of the same principal, harness, and request id keeps
-//! the record already written, including its observation time, when the choice
-//! matches, and fails when that id was used for a different choice. The
-//! adapter assigns the record id and the observation time. There is no
-//! provider process in this transition: the next launch reads the flag, and a
-//! process already running is not changed.
+//! Arrows are the order of one change, of one startup read, and of one
+//! remembered open. A failed requested record writes nothing. A failed
+//! outcome record reverts the file and the flag. A retry of the same
+//! principal, harness, and request id keeps the record already written,
+//! including its observation time, when the choice matches, and fails when
+//! that id was used for a different choice. The adapter assigns the record id
+//! and the observation time. There is no provider process in this transition:
+//! the next launch reads the flag, and a process already running is not
+//! changed. Two conversations can open at once. Each persist clones the map
+//! after it holds the write gate, so the snapshot that lands last includes
+//! every session recorded before that write. A missing launch file is an
+//! empty memory. A launch file that cannot be read, and a snapshot that
+//! cannot be written, withholds hooks from a conversation the file does not
+//! name until a later snapshot is written.
 //!
 //! A crash after the file is published and before the outcome record leaves
 //! the choice on disk with the requested record and no outcome record. The
@@ -45,6 +52,8 @@ pub struct NativeHooksPreferences {
     codex: Arc<AtomicBool>,
     claude_launches: Arc<Mutex<HashMap<String, bool>>>,
     codex_launches: Arc<Mutex<HashMap<String, bool>>>,
+    claude_withhold: Arc<AtomicBool>,
+    codex_withhold: Arc<AtomicBool>,
     gate: Arc<Mutex<()>>,
     audit: Arc<dyn NativeHooksAudit>,
 }
@@ -67,16 +76,16 @@ impl NativeHooksPreferences {
     ) -> Result<Arc<Self>, NativeHooksError> {
         create_directory(&directory).map_err(|_| NativeHooksError::Storage)?;
         let stored = read_choice(&directory.join("native-hooks.json"));
+        let claude_launches = read_launches(&directory.join("claude-launch-hooks.json"));
+        let codex_launches = read_launches(&directory.join("codex-launch-hooks.json"));
         Ok(Arc::new(Self {
             directory: directory.clone(),
             claude: Arc::new(AtomicBool::new(stored.claude())),
             codex: Arc::new(AtomicBool::new(stored.codex())),
-            claude_launches: Arc::new(Mutex::new(read_launches(
-                &directory.join("claude-launch-hooks.json"),
-            ))),
-            codex_launches: Arc::new(Mutex::new(read_launches(
-                &directory.join("codex-launch-hooks.json"),
-            ))),
+            claude_launches: Arc::new(Mutex::new(claude_launches.sessions)),
+            codex_launches: Arc::new(Mutex::new(codex_launches.sessions)),
+            claude_withhold: Arc::new(AtomicBool::new(claude_launches.withhold)),
+            codex_withhold: Arc::new(AtomicBool::new(codex_launches.withhold)),
             gate: Arc::new(Mutex::new(())),
             audit,
         }))
@@ -94,30 +103,28 @@ impl NativeHooksPreferences {
     /// conversation of that harness already opened with. OpenCode is not
     /// represented. A new conversation records its choice beside the flag.
     pub fn switch(&self, agent: NativeHooksAgent) -> NativeHooksSwitch {
-        let (flag, launches, name) = match agent {
+        let (flag, launches, withhold, name) = match agent {
             NativeHooksAgent::Claude => (
                 self.claude.clone(),
                 self.claude_launches.clone(),
+                self.claude_withhold.clone(),
                 "claude-launch-hooks.json",
             ),
             NativeHooksAgent::Codex => (
                 self.codex.clone(),
                 self.codex_launches.clone(),
+                self.codex_withhold.clone(),
                 "codex-launch-hooks.json",
             ),
         };
         let directory = self.directory.clone();
         let memory = launches.clone();
+        let recorded = withhold.clone();
+        let write_gate = Arc::new(Mutex::new(()));
         let persist: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
-            let sessions = memory
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .clone();
-            if let Err(error) = write_launches(&directory, name, &sessions) {
-                tracing::warn!(%error, "native hooks launch memory could not be written");
-            }
+            persist_launches(&write_gate, &memory, &recorded, &directory, name, &|| {});
         });
-        NativeHooksSwitch::sharing(flag, launches, persist)
+        NativeHooksSwitch::sharing(flag, launches, withhold, persist)
     }
 
     /// Record the request, write the file, then record the outcome.
@@ -221,34 +228,98 @@ fn read_choice(path: &Path) -> NativeHooksSelection {
     selection_from_stored(&bytes)
 }
 
-fn read_launches(path: &Path) -> HashMap<String, bool> {
+struct StoredLaunches {
+    sessions: HashMap<String, bool>,
+    /// Unknown conversations stay off until a complete snapshot is written.
+    withhold: bool,
+}
+
+impl StoredLaunches {
+    fn empty() -> Self {
+        Self {
+            sessions: HashMap::new(),
+            withhold: false,
+        }
+    }
+
+    fn untrusted() -> Self {
+        Self {
+            sessions: HashMap::new(),
+            withhold: true,
+        }
+    }
+}
+
+/// A missing file is the first start: empty, and new conversations follow
+/// the flag. Every other failure withholds. Off is the safe direction for a
+/// conversation the file no longer names, and it must not stop the gateway.
+fn read_launches(path: &Path) -> StoredLaunches {
     let mut file = match open(path, OpenMode::Read) {
         Ok(file) => file,
-        Err(error) if error.kind() == ErrorKind::NotFound => return HashMap::new(),
+        Err(error) if error.kind() == ErrorKind::NotFound => return StoredLaunches::empty(),
         Err(error) => {
-            tracing::warn!(%error, path = %path.display(), "native hooks launch memory could not be opened; starting empty");
-            return HashMap::new();
+            tracing::warn!(%error, path = %path.display(), "native hooks launch memory could not be opened; unknown conversations stay off");
+            return StoredLaunches::untrusted();
         }
     };
     let mut bytes = Vec::new();
     if let Err(error) = file.read_to_end(&mut bytes) {
-        tracing::warn!(%error, path = %path.display(), "native hooks launch memory could not be read; starting empty");
-        return HashMap::new();
+        tracing::warn!(%error, path = %path.display(), "native hooks launch memory could not be read; unknown conversations stay off");
+        return StoredLaunches::untrusted();
     }
     let Ok(value) = serde_json::from_slice::<Value>(&bytes) else {
-        tracing::warn!(path = %path.display(), "native hooks launch memory is not JSON; starting empty");
-        return HashMap::new();
+        tracing::warn!(path = %path.display(), "native hooks launch memory is not JSON; unknown conversations stay off");
+        return StoredLaunches::untrusted();
     };
-    let Some(object) = value.as_object() else {
-        tracing::warn!(path = %path.display(), "native hooks launch memory is not an object; starting empty");
-        return HashMap::new();
+    let Some(sessions) = value.get("sessions").and_then(Value::as_object) else {
+        tracing::warn!(path = %path.display(), "native hooks launch memory has no sessions; unknown conversations stay off");
+        return StoredLaunches::untrusted();
     };
-    object
-        .iter()
-        .filter_map(|(session, allowed)| {
-            allowed.as_bool().map(|allowed| (session.clone(), allowed))
-        })
-        .collect()
+    let Some(withhold) = value.get("withhold").and_then(Value::as_bool) else {
+        tracing::warn!(path = %path.display(), "native hooks launch memory has no withhold flag; unknown conversations stay off");
+        return StoredLaunches::untrusted();
+    };
+    let mut stored = HashMap::new();
+    for (session, allowed) in sessions {
+        let Some(allowed) = allowed.as_bool() else {
+            tracing::warn!(path = %path.display(), "native hooks launch memory has a non-boolean choice; unknown conversations stay off");
+            return StoredLaunches::untrusted();
+        };
+        stored.insert(session.clone(), allowed);
+    }
+    StoredLaunches {
+        sessions: stored,
+        withhold,
+    }
+}
+
+/// Clone the map and write it while `gate` is held, so a snapshot taken
+/// earlier cannot replace one taken later. `after_snapshot` runs after the
+/// clone and before the write, still under the gate.
+fn persist_launches(
+    gate: &Mutex<()>,
+    memory: &Mutex<HashMap<String, bool>>,
+    withhold: &AtomicBool,
+    directory: &Path,
+    name: &str,
+    after_snapshot: &dyn Fn(),
+) {
+    let _write = gate.lock().unwrap_or_else(|error| error.into_inner());
+    let sessions = memory
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone();
+    after_snapshot();
+    match write_launches(directory, name, &sessions, false) {
+        Ok(()) => withhold.store(false, Ordering::Release),
+        Err(error) => {
+            tracing::warn!(%error, "native hooks launch memory could not be written; unknown conversations stay off");
+            withhold.store(true, Ordering::Release);
+            if let Err(error) = write_launches(directory, name, &sessions, true) {
+                tracing::warn!(%error, "native hooks launch memory could not record that it is incomplete");
+            }
+        }
+    }
 }
 
 fn write_choice(
@@ -266,8 +337,13 @@ fn write_launches(
     directory: &Path,
     name: &str,
     sessions: &HashMap<String, bool>,
+    withhold: bool,
 ) -> Result<(), NativeHooksError> {
-    publish_json(directory, &directory.join(name), &json!(sessions))
+    publish_json(
+        directory,
+        &directory.join(name),
+        &json!({"sessions": sessions, "withhold": withhold}),
+    )
 }
 
 fn publish_json(
@@ -754,11 +830,148 @@ mod tests {
             .unwrap();
         assert!(switch.choice_for(Some("conversation-1")));
         assert!(!switch.choice_for(Some("conversation-2")));
+        let stored: Value = serde_json::from_str(
+            &std::fs::read_to_string(directory.join("claude-launch-hooks.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(stored["withhold"], false);
+        assert_eq!(stored["sessions"]["conversation-1"], true);
+        assert_eq!(stored["sessions"]["conversation-2"], false);
         let reopened = NativeHooksPreferences::open(directory, Arc::new(FixedClock)).unwrap();
         let again = reopened.switch(NativeHooksAgent::Claude);
         assert!(again.choice_for(Some("conversation-1")));
         assert!(!again.choice_for(Some("conversation-2")));
         assert!(!again.allowed());
+    }
+
+    #[tokio::test]
+    async fn two_conversations_opened_together_both_survive_a_restart() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("data");
+        let preferences =
+            NativeHooksPreferences::open(directory.clone(), Arc::new(FixedClock)).unwrap();
+        preferences
+            .set(change(NativeHooksAgent::Claude, true, "request-both"))
+            .await
+            .unwrap();
+        let switch = preferences.switch(NativeHooksAgent::Claude);
+        let left = switch.clone();
+        let right = switch.clone();
+        let (first, second) = std::thread::scope(|scope| {
+            let one = scope.spawn(|| left.choice_for(Some("conversation-a")));
+            let other = scope.spawn(|| right.choice_for(Some("conversation-b")));
+            (one.join().unwrap(), other.join().unwrap())
+        });
+        assert!(first);
+        assert!(second);
+        let reopened = NativeHooksPreferences::open(directory, Arc::new(FixedClock)).unwrap();
+        let again = reopened.switch(NativeHooksAgent::Claude);
+        assert!(again.choice_for(Some("conversation-a")));
+        assert!(again.choice_for(Some("conversation-b")));
+    }
+
+    #[test]
+    fn a_later_persist_keeps_a_session_inserted_during_the_earlier_write() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("data");
+        create_directory(&directory).unwrap();
+        let gate = Mutex::new(());
+        let memory = Mutex::new(HashMap::from([("conversation-a".into(), false)]));
+        let withhold = AtomicBool::new(false);
+        let seen = AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                persist_launches(
+                    &gate,
+                    &memory,
+                    &withhold,
+                    &directory,
+                    "claude-launch-hooks.json",
+                    &|| {
+                        seen.store(true, Ordering::Release);
+                        std::thread::sleep(std::time::Duration::from_millis(80));
+                    },
+                );
+            });
+            while !seen.load(Ordering::Acquire) {
+                std::thread::yield_now();
+            }
+            memory
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .insert("conversation-b".into(), false);
+            persist_launches(
+                &gate,
+                &memory,
+                &withhold,
+                &directory,
+                "claude-launch-hooks.json",
+                &|| {},
+            );
+        });
+        let stored: Value = serde_json::from_str(
+            &std::fs::read_to_string(directory.join("claude-launch-hooks.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(stored["sessions"]["conversation-a"], false);
+        assert_eq!(stored["sessions"]["conversation-b"], false);
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_launch_file_does_not_grant_hooks() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("data");
+        let preferences =
+            NativeHooksPreferences::open(directory.clone(), Arc::new(FixedClock)).unwrap();
+        preferences
+            .set(change(NativeHooksAgent::Claude, true, "request-unreadable"))
+            .await
+            .unwrap();
+        std::fs::create_dir(directory.join("claude-launch-hooks.json")).unwrap();
+        let loaded = NativeHooksPreferences::open(directory.clone(), Arc::new(FixedClock)).unwrap();
+        assert!(loaded.selection().claude());
+        let switch = loaded.switch(NativeHooksAgent::Claude);
+        assert!(!switch.choice_for(Some("opened-while-unreadable")));
+        std::fs::remove_dir(directory.join("claude-launch-hooks.json")).unwrap();
+        assert!(!switch.choice_for(Some("opened-while-unreadable")));
+        assert!(!switch.choice_for(Some("opened-before-the-memory-was-rewritten")));
+        assert!(switch.choice_for(Some("opened-after-the-memory-was-rewritten")));
+        let again = NativeHooksPreferences::open(directory, Arc::new(FixedClock))
+            .unwrap()
+            .switch(NativeHooksAgent::Claude);
+        assert!(!again.choice_for(Some("opened-while-unreadable")));
+        assert!(!again.choice_for(Some("opened-before-the-memory-was-rewritten")));
+        assert!(again.choice_for(Some("opened-after-the-memory-was-rewritten")));
+    }
+
+    #[tokio::test]
+    async fn a_failed_launch_write_keeps_the_next_conversation_off() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("data");
+        let preferences =
+            NativeHooksPreferences::open(directory.clone(), Arc::new(FixedClock)).unwrap();
+        std::fs::create_dir(directory.join("claude-launch-hooks.json")).unwrap();
+        let switch = preferences.switch(NativeHooksAgent::Claude);
+        assert!(!switch.choice_for(Some("kept-off")));
+        std::fs::remove_dir(directory.join("claude-launch-hooks.json")).unwrap();
+        preferences
+            .set(change(
+                NativeHooksAgent::Claude,
+                true,
+                "request-after-failure",
+            ))
+            .await
+            .unwrap();
+        assert!(!switch.choice_for(Some("kept-off")));
+        assert!(!switch.choice_for(Some("still-withheld")));
+        assert!(switch.choice_for(Some("after-the-write-succeeds")));
+        let again = NativeHooksPreferences::open(directory, Arc::new(FixedClock))
+            .unwrap()
+            .switch(NativeHooksAgent::Claude);
+        assert!(!again.choice_for(Some("kept-off")));
+        assert!(!again.choice_for(Some("still-withheld")));
+        assert!(again.choice_for(Some("after-the-write-succeeds")));
+        assert!(again.allowed());
     }
 
     #[cfg(unix)]
