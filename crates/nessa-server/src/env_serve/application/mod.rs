@@ -8,11 +8,13 @@
 //! arriving and placed through an [`ArtifactInbox`]; `redial.rs` keeps a
 //! paired environment dialed in to its gateway, serving each connection it
 //! gets, once `approval.rs` has seen its owner approve it through an
-//! [`EnvironmentPairing`]; `grants.rs` is where serving reads what this
+//! [`EnvironmentPairing`], which `enrollment.rs` pairs once through an
+//! [`EnrollingPairing`]; `grants.rs` is where serving reads what this
 //! host's owner grants each gateway, through [`PeerGrants`]; `timer.rs` is
 //! the [`Timer`] all three wait on.
 mod approval;
 mod artifacts;
+mod enrollment;
 mod fetches;
 mod grants;
 mod redial;
@@ -23,6 +25,9 @@ pub(crate) use approval::{approval, Answer, EnvironmentPairing, NotApproved, Sav
 pub(crate) use artifacts::{
     ArtifactOutbox, PublishAnswer, PublishCall, PublishPoint, PublishRequest,
     PUBLISH_POINT_VARIABLE,
+};
+pub(crate) use enrollment::{
+    enroll, enroll_once, EnrolledOnce, EnrollingPairing, EnrollmentCode, NotEnrolled,
 };
 pub(crate) use fetches::{
     ArtifactInbox, Destination, FetchedFile, FileIdentity, PlacedFile, Placement,
