@@ -467,32 +467,22 @@ pub(crate) async fn serve<R, W>(
             served.silent(timings.silence);
             break;
         }
-        // Handling is bounded by the silence bound and by the earliest
-        // lease deadline, whichever comes first (see below).
-        let bound = heard + timings.silence;
-        let wake = served
-            .next_deadline()
-            .map_or(bound, |deadline| deadline.min(bound));
-        let handled = async {
-            match decode::<ToEnvironment>(&body) {
-                Ok(frame) => served.handle(frame).await,
-                Err(error) => {
-                    tracing::warn!(%error, "an unreadable lease frame was dropped");
-                    served.dropped(None, None, "unreadable");
-                }
+        // Handling waits for nothing: its answers are queued, and the next
+        // pass hands them to the writer bounded by the deadlines as they
+        // stand then, a lease this frame granted among them. They reach the
+        // writer before another frame is read, as when handling sent them.
+        match decode::<ToEnvironment>(&body) {
+            Ok(frame) => served.handle(frame),
+            Err(error) => {
+                tracing::warn!(%error, "an unreadable lease frame was dropped");
+                served.dropped(None, None, "unreadable");
             }
-        };
-        // A frame's handling waits only to send its answers, after every
-        // state change it makes, and an answer leaves `outgoing` only once
-        // the writer has room for it. So handling given up on, at the
-        // silence bound or at a lease's deadline, leaves nothing half-done
-        // and loses no answer: the next pass ends the expired lease, and
-        // its `Ending` goes after the answers still waiting.
-        if within(&*timer, wake, handled).await.is_err() && timer.now() >= bound {
-            served.silent(timings.silence);
-            break;
         }
     }
+    // However serving ends, at the silence bound above all, a lease whose
+    // deadline has come is expired, as it would have been a moment
+    // earlier; only what is left is lost.
+    served.expire_passed();
     served.lose_all().await;
     drop(served);
     // What is still queued for a gateway that reads nothing is given up on,
@@ -633,18 +623,18 @@ struct Served {
 }
 
 impl Served {
-    async fn handle(&mut self, frame: ToEnvironment) {
+    fn handle(&mut self, frame: ToEnvironment) {
         match frame {
             ToEnvironment::Grant {
                 lease,
                 agent,
                 sandbox,
-            } => self.grant(lease, agent, sandbox).await,
+            } => self.grant(lease, agent, sandbox),
             ToEnvironment::Start {
                 lease,
                 channel,
                 environment,
-            } => self.start(lease, channel, &environment).await,
+            } => self.start(lease, channel, &environment),
             ToEnvironment::Input {
                 lease,
                 channel,
@@ -712,8 +702,7 @@ impl Served {
                             lease,
                             channel,
                             cleanup: Cleanup::NotHeld,
-                        })
-                        .await;
+                        });
                     }
                 }
             }
@@ -722,10 +711,10 @@ impl Served {
                 argv,
                 cwd,
                 timeout_ms,
-            } => self.grant_command(lease, argv, cwd, timeout_ms).await,
-            ToEnvironment::Run { lease } => self.run(lease).await,
+            } => self.grant_command(lease, argv, cwd, timeout_ms),
+            ToEnvironment::Run { lease } => self.run(lease),
             ToEnvironment::End { lease } if self.commands.contains_key(&lease) => {
-                self.end_command(lease).await;
+                self.end_command(lease);
             }
             ToEnvironment::End { lease } => match self.leases.remove(&lease) {
                 Some(held) => self.end(lease, held, EndCause::Asked, true),
@@ -735,16 +724,14 @@ impl Served {
                     self.answer_ended(lease, |lease, cleanup| FromEnvironment::Ended {
                         lease,
                         cleanup,
-                    })
-                    .await;
+                    });
                 }
             },
             ToEnvironment::Account { lease } => {
                 self.answer_ended(lease, |lease, cleanup| FromEnvironment::Accounted {
                     lease,
                     cleanup,
-                })
-                .await;
+                });
             }
             ToEnvironment::Keepalive => {}
             ToEnvironment::Collected {
@@ -767,14 +754,14 @@ impl Served {
     /// Answer what became of `lease`, a lease this connection no longer
     /// holds: once its end under way here is recorded, with what that took,
     /// or else from the audit.
-    async fn answer_ended(
+    fn answer_ended(
         &mut self,
         lease: String,
         answer: impl FnOnce(String, Cleanup) -> FromEnvironment + Send + 'static,
     ) {
         let Some(mut ending) = self.ends.get(&lease).cloned() else {
             let cleanup = self.accounted(&lease);
-            return self.send(answer(lease, cleanup)).await;
+            return self.send(answer(lease, cleanup));
         };
         let frames = self.frames.clone();
         tokio::spawn(async move {
@@ -787,9 +774,10 @@ impl Served {
         });
     }
 
-    async fn send(&mut self, frame: FromEnvironment) {
+    /// Queue an answer. It reaches the writer from [`Self::settle`], so a
+    /// handler never waits on a gateway that is not reading.
+    fn send(&mut self, frame: FromEnvironment) {
         self.outgoing.push_back(frame);
-        self.flush().await;
     }
 
     /// Hand the writer every answer still waiting, in order. Cancellable at
@@ -862,7 +850,7 @@ impl Served {
         }
     }
 
-    async fn grant(&mut self, lease: String, agent: String, sandbox: Sandbox) {
+    fn grant(&mut self, lease: String, agent: String, sandbox: Sandbox) {
         // How long the peer's grant lets it last, once admitted.
         let mut lease_ms = None;
         let refusal = if LeaseId::new(lease.clone()).is_err() || self.granted.contains(&lease) {
@@ -921,7 +909,7 @@ impl Served {
                     timeout_ms: None,
                     lease_ms,
                 };
-                self.send(FromEnvironment::Granted { lease, terms }).await;
+                self.send(FromEnvironment::Granted { lease, terms });
             }
             Some(reason) => {
                 if reason != GrantRefusal::AuditUnavailable {
@@ -935,7 +923,7 @@ impl Served {
                         tracing::error!(lease, %error, "a refused lease could not be recorded");
                     }
                 }
-                self.send(FromEnvironment::Refused { lease, reason }).await;
+                self.send(FromEnvironment::Refused { lease, reason });
             }
         }
     }
@@ -960,15 +948,13 @@ impl Served {
         }
     }
 
-    async fn start(&mut self, lease: String, channel: u32, environment: &BTreeMap<String, String>) {
+    fn start(&mut self, lease: String, channel: u32, environment: &BTreeMap<String, String>) {
         let free = self.leases.get(&lease).is_some_and(|held| {
             !held.channels.contains_key(&channel) && !held.stopped.contains_key(&channel)
         });
         if !free {
             self.dropped(Some(&lease), Some(channel), "start");
-            return self
-                .start_failed(lease, channel, StartFailure::NotGranted)
-                .await;
+            return self.start_failed(lease, channel, StartFailure::NotGranted);
         }
         let entry = LedgerEntry::Started {
             lease: lease.clone(),
@@ -976,9 +962,7 @@ impl Served {
         };
         if let Err(error) = self.ledger.record(&entry) {
             tracing::error!(lease, channel, %error, "a harness start could not be recorded; nothing started");
-            return self
-                .start_failed(lease, channel, StartFailure::AuditUnavailable)
-                .await;
+            return self.start_failed(lease, channel, StartFailure::AuditUnavailable);
         }
         let (agent, publish_point) = self
             .leases
@@ -1005,9 +989,7 @@ impl Served {
                 if let Err(error) = self.ledger.record(&entry) {
                     tracing::error!(lease, channel, %error, "a failed harness start could not be recorded");
                 }
-                return self
-                    .start_failed(lease, channel, StartFailure::SpawnFailed)
-                    .await;
+                return self.start_failed(lease, channel, StartFailure::SpawnFailed);
             }
         };
         let HarnessProcess {
@@ -1036,13 +1018,12 @@ impl Served {
         }
     }
 
-    async fn start_failed(&mut self, lease: String, channel: u32, reason: StartFailure) {
+    fn start_failed(&mut self, lease: String, channel: u32, reason: StartFailure) {
         self.send(FromEnvironment::StartFailed {
             lease,
             channel,
             reason,
-        })
-        .await;
+        });
     }
 
     fn input(&mut self, lease: &str, channel: u32, data: Data) {
@@ -1294,7 +1275,7 @@ impl Served {
     /// harness's: only as the peer's grant has it, its timeout narrowed to
     /// the grant's longest, then only on a host that runs commands, and only
     /// for a command a command lease can hold with the timeout granted.
-    async fn grant_command(
+    fn grant_command(
         &mut self,
         lease: String,
         argv: Vec<String>,
@@ -1349,7 +1330,7 @@ impl Served {
                 self.granted.insert(lease.clone());
                 self.commands
                     .insert(lease.clone(), HeldCommand::Granted(work));
-                self.send(FromEnvironment::Granted { lease, terms }).await;
+                self.send(FromEnvironment::Granted { lease, terms });
             }
             Err(reason) => {
                 if reason != GrantRefusal::AuditUnavailable {
@@ -1367,7 +1348,7 @@ impl Served {
                         tracing::error!(lease, %error, "a refused command lease could not be recorded");
                     }
                 }
-                self.send(FromEnvironment::Refused { lease, reason }).await;
+                self.send(FromEnvironment::Refused { lease, reason });
             }
         }
     }
@@ -1375,7 +1356,7 @@ impl Served {
     /// Run a granted command lease's command, once, on a task of its own,
     /// which records how it ended and answers with its `Ran`. A lease not
     /// granted here, or run already, is answered as never started.
-    async fn run(&mut self, lease: String) {
+    fn run(&mut self, lease: String) {
         let work = match self.commands.remove(&lease) {
             Some(HeldCommand::Granted(work)) => work,
             // Still running: its own `Ran` will answer.
@@ -1390,7 +1371,7 @@ impl Served {
                 // Never granted here, or run already: nothing runs, and that
                 // is said, so the gateway does not wait for an answer.
                 self.dropped(Some(&lease), None, "run");
-                return self.send(ran(lease, CommandRan::not_started())).await;
+                return self.send(ran(lease, CommandRan::not_started()));
             }
         };
         let Some(runner) = self.runner.clone() else {
@@ -1477,7 +1458,7 @@ impl Served {
 
     /// End a command lease: stop its command if it runs, and answer its end
     /// once that is recorded; one never run ends holding nothing.
-    async fn end_command(&mut self, lease: String) {
+    fn end_command(&mut self, lease: String) {
         match self.commands.remove(&lease) {
             Some(HeldCommand::Running { stop, ran }) => {
                 ask_stop(&stop, CommandStop::Ended);
@@ -1486,12 +1467,11 @@ impl Served {
                 self.answer_ended(lease, |lease, cleanup| FromEnvironment::Ended {
                     lease,
                     cleanup,
-                })
-                .await;
+                });
             }
             Some(HeldCommand::Granted(_)) => {
                 let cleanup = self.end_unrun(&lease, EndCause::Asked);
-                self.send(FromEnvironment::Ended { lease, cleanup }).await;
+                self.send(FromEnvironment::Ended { lease, cleanup });
             }
             None => unreachable!("only a held command lease is ended here"),
         }

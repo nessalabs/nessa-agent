@@ -3409,3 +3409,149 @@ async fn staggered_deadlines_each_expire_at_their_own() {
     asking.abort();
     gateway.served.abort();
 }
+
+/// Wait until the host starts no more waits on `timer` for 200 ms: it is
+/// then waiting on what it cannot do, or on nothing.
+async fn quiet(timer: &ManualTimer) {
+    let mut seen = timer.waits().len();
+    loop {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let now = timer.waits().len();
+        if now == seen {
+            break;
+        }
+        seen = now;
+    }
+}
+
+/// A gateway that reads nothing: a lease with no deadline whose harness
+/// echoes far more than the connection and the output queue hold, then a
+/// grant of [`OTHER_LEASE`] for at most `lease_ms`, its `Granted` waiting
+/// for room. Nothing has moved `timer` on, so nothing has been heard
+/// since its start.
+async fn granted_unread(timer: &Arc<ManualTimer>, lease_ms: u64) -> Gateway {
+    let grants = MemoryGrants::none();
+    grants.set(Peer::Ssh, Some(PeerGrant::everything()));
+    let mut gateway = Gateway::through(
+        512,
+        Peer::Ssh,
+        grants.clone(),
+        Arc::new(MemoryLedger::default()),
+        Arc::new(NoOutbox),
+        true,
+        timer.clone(),
+    );
+    gateway.started(LEASE).await;
+    for _ in 0..200 {
+        gateway
+            .send(ToEnvironment::Input {
+                lease: LEASE.into(),
+                channel: 1,
+                data: Data(vec![b'x'; 2048]),
+            })
+            .await;
+    }
+    quiet(timer).await;
+    grants.set(
+        Peer::Ssh,
+        Some(PeerGrant::everything().with_max_lease(MaxLease::new(lease_ms).unwrap())),
+    );
+    gateway
+        .send(ToEnvironment::Grant {
+            lease: OTHER_LEASE.into(),
+            agent: "claude".into(),
+            sandbox: Sandbox::HarnessDefault,
+        })
+        .await;
+    quiet(timer).await;
+    assert!(gateway.ledger.entries().iter().any(|entry| matches!(
+        entry,
+        LedgerEntry::Granted { lease, lease_ms: Some(ms), .. }
+            if lease == OTHER_LEASE && *ms == lease_ms
+    )));
+    gateway
+}
+
+/// Whether `lease` is recorded expiring, for `lease_ms`, and then ended
+/// as expired.
+fn expired_after_expiring(entries: &[LedgerEntry], lease: &str, lease_ms: u64) -> bool {
+    let expiring = entries.iter().position(|entry| {
+        *entry
+            == LedgerEntry::Expiring {
+                lease: lease.into(),
+                lease_ms,
+            }
+    });
+    let ended = entries.iter().position(|entry| {
+        matches!(
+            entry,
+            LedgerEntry::Ended {
+                lease: id,
+                cause: EndCause::Expired,
+                ..
+            } if id == lease
+        )
+    });
+    matches!((expiring, ended), (Some(expiring), Some(ended)) if expiring < ended)
+}
+
+/// A lease granted while the gateway reads nothing, its `Granted` waiting
+/// for room behind a harness's output: it is ended at its own deadline,
+/// the earliest there is, and not taken as lost at the silence bound.
+#[tokio::test]
+async fn a_lease_granted_while_the_gateway_reads_nothing_expires_at_its_deadline() {
+    let timer = Arc::new(ManualTimer::default());
+    let lease_ms = 5_000;
+    let gateway = granted_unread(&timer, lease_ms).await;
+    let deadline = Duration::from_millis(lease_ms);
+    timer.advance(deadline);
+    until_ended(
+        &gateway,
+        &timer,
+        OTHER_LEASE,
+        deadline + Duration::from_secs(1),
+    )
+    .await;
+    let entries = gateway.ledger.entries();
+    assert!(
+        expired_after_expiring(&entries, OTHER_LEASE, lease_ms),
+        "{entries:?}"
+    );
+    assert!(timer.elapsed() < SILENCE_LIMIT);
+    // The lease with no deadline still runs.
+    assert_eq!(ended_entries(&gateway.ledger, LEASE), 0);
+    gateway.served.abort();
+}
+
+/// A lease due at the very moment the gateway is taken as gone is
+/// expired, not lost; the lease with no deadline is lost.
+#[tokio::test]
+async fn a_lease_due_as_the_gateway_falls_silent_is_expired_not_lost() {
+    let timer = Arc::new(ManualTimer::default());
+    let lease_ms = SILENCE_LIMIT.as_millis() as u64;
+    let gateway = granted_unread(&timer, lease_ms).await;
+    timer.advance(SILENCE_LIMIT);
+    // Taken as gone: what it held is ended, moved on only by the stops'
+    // own short bounds.
+    until_ended(
+        &gateway,
+        &timer,
+        LEASE,
+        SILENCE_LIMIT + Duration::from_secs(1),
+    )
+    .await;
+    let entries = gateway.ledger.entries();
+    assert!(
+        expired_after_expiring(&entries, OTHER_LEASE, lease_ms),
+        "{entries:?}"
+    );
+    assert!(entries.iter().all(|entry| !matches!(
+        entry,
+        LedgerEntry::Ended { lease, cause: EndCause::Lost, .. } if lease == OTHER_LEASE
+    )));
+    assert!(entries.iter().any(|entry| matches!(
+        entry,
+        LedgerEntry::Ended { lease, cause: EndCause::Lost, .. } if lease == LEASE
+    )));
+    gateway.served.abort();
+}
