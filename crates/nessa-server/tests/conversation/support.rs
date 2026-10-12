@@ -1836,12 +1836,16 @@ pub(crate) fn capabilities(image_input: bool) -> EffectiveCapabilities {
 }
 
 /// Read grants for tests about something else: every paired device holds a
-/// grant on every conversation it asks about. It lists no set and takes no
-/// change; a test of read grants uses the store's own table.
+/// Read grant on every conversation it asks about. It lists no set and takes
+/// no change; a test of share grants uses the store's own table.
 pub(crate) struct EveryConversationGranted;
 impl crate::conversation::application::ShareGrants for EveryConversationGranted {
-    fn is_granted<'a>(&'a self, _: &'a ConversationId, _: &'a str) -> ConversationFuture<'a, bool> {
-        Box::pin(async { Ok(true) })
+    fn held_role<'a>(
+        &'a self,
+        _: &'a ConversationId,
+        _: &'a str,
+    ) -> ConversationFuture<'a, Option<crate::conversation::domain::ShareRole>> {
+        Box::pin(async { Ok(Some(crate::conversation::domain::ShareRole::Read)) })
     }
     fn change(
         &self,

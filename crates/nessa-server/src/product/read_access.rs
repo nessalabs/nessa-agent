@@ -12,20 +12,21 @@
 //! every session is the owner's and reads exactly as before (row G11).
 use super::{
     conversation::{caller, conversation_id},
-    socket::{failure, success},
+    socket::{admit_action, admit_grant, failure, success},
     state::ProductRouteState,
 };
 use crate::conversation::application::{
-    admit_read, error_code, reader_of, ConversationError, Reader, ShareConversation, ShareGrant,
+    admit_drive, admit_read, binding_of, error_code, reader_of, ConversationError, DriveRefusal,
+    Reader, ShareConversation, ShareGrant,
 };
 use crate::conversation::domain::{ShareRole, ToolPolicy, ToolPreset, ToolRules};
 use nessa_auth::{application::session::AuthenticatedSession, domain::CredentialId};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::conversation::read_scope::ReadRefusal;
 use nessa_protocol::product::generated::{
-    ConversationMutationResult, ConversationShare, ConversationShareParams, ConversationShareRole,
-    ConversationSharesParams, ConversationSharesResult, ConversationToolPolicy,
-    ConversationToolPreset, ConversationUnshareParams,
+    action_for_method, ConversationMutationResult, ConversationShare, ConversationShareParams,
+    ConversationShareRole, ConversationSharesParams, ConversationSharesResult,
+    ConversationToolPolicy, ConversationToolPreset, ConversationUnshareParams,
 };
 use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
@@ -72,6 +73,125 @@ pub(super) async fn admit_list(
         Reader::Owner => Ok(()),
         Reader::PairedDevice { .. } => Err("forbidden"),
     }
+}
+
+/// The commands a Drive grant admits on the conversation it names (row J11):
+/// start and steer a turn, stop it, answer or cancel its permission request,
+/// answer its question, and look up those commands' receipts. Drive never
+/// deletes, archives, exports, re-shares or changes the model (issue 707).
+const DRIVE_METHODS: [&str; 7] = [
+    "conversation.send",
+    "conversation.steer",
+    "conversation.stop",
+    "conversation.answer",
+    "conversation.answerQuestion",
+    "conversation.cancel",
+    "conversation.receipt",
+];
+
+/// The methods behind Cedar's `conversation.write` that a paired session
+/// reaches only to be admitted again by its grants: the read and the view
+/// subscription ask [`admit_conversation`], the lists ask [`admit_list`],
+/// and an unsubscribe ends only what was admitted. Rows G12 and G13.
+const ADMITTED_BY_ITS_OWN_CHECK: [&str; 6] = [
+    "conversation.read",
+    "conversation.list",
+    "conversation.observe",
+    "conversation.subscribe",
+    "conversation.subscribeList",
+    "conversation.unsubscribe",
+];
+
+/// The one admission of a socket request, after its session was found
+/// current. The owner's surfaces, and every method outside Cedar's
+/// `conversation.write`, are admitted by the method's grant as before.
+///
+/// A paired session holding `conversation.write` would otherwise act as its
+/// owner, so for it every `conversation.write` method is refused unless it
+/// is one its grants admit again ([`ADMITTED_BY_ITS_OWN_CHECK`]) or a Drive
+/// command ([`DRIVE_METHODS`], row J12). A Drive command asks Cedar for the
+/// grant pairing mints, `conversation.read`, and then the share grant on the
+/// one conversation the command names, so a Drive grant is what lets the
+/// device drive that conversation and no other (row J11). Its tools run
+/// unchecked until the grant's policy is enforced (slice J4).
+pub(super) async fn admit_request(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+    frame: &RequestFrame,
+) -> Result<(), &'static str> {
+    let method = frame.method.as_str();
+    let writes = action_for_method(method) == Some("conversation.write");
+    if !writes || ADMITTED_BY_ITS_OWN_CHECK.contains(&method) {
+        return admit_action(state, session, method).await;
+    }
+    let Some((receivers, _, grants)) = state.passive_read.as_ref() else {
+        return admit_action(state, session, method).await;
+    };
+    let Some(binding) = binding_of(receivers.as_ref(), session.context())
+        .await
+        .map_err(refusal_code)?
+    else {
+        return admit_action(state, session, method).await;
+    };
+    // A device signs in as its owner, so its command is the owner's from
+    // the device's surface. A peer gateway signs in as its own principal
+    // and forwards its people's commands in a later slice.
+    if !DRIVE_METHODS.contains(&method) || binding.owner_id != *session.context().principal_id() {
+        return Err("forbidden");
+    }
+    let reader = Reader::of(Some(&binding));
+    admit_grant(state, session, PAIRING_GRANT).await?;
+    let id = drive_target(frame)?;
+    admit_drive(grants.as_ref(), &reader, &id)
+        .await
+        .map_err(|refusal| match refusal {
+            DriveRefusal::NotGranted => refusal_code(ReadRefusal::WrongOwner),
+            DriveRefusal::BelowDrive => "forbidden",
+            DriveRefusal::Unverifiable => refusal_code(ReadRefusal::Unverifiable),
+        })?;
+    drives_only_text(frame)
+}
+
+/// The grant pairing mints a device (`device_pairing`), which a Drive
+/// command asks Cedar for in place of `conversation.write`.
+const PAIRING_GRANT: &str = "conversation.read";
+
+/// The conversation a Drive command names. Its params are checked in full
+/// by the handler; a command naming none, or no valid id, is refused here as
+/// the handler would refuse it.
+fn drive_target(frame: &RequestFrame) -> Result<ConversationId, &'static str> {
+    frame
+        .params
+        .get("conversationId")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|id| conversation_id(id).ok())
+        .ok_or(ConversationErrorCode::InvalidRequest.as_str())
+}
+
+/// A driver sends text. An image is named by a digest in the owner's
+/// attachment store and a linked file by a path on the owner's machine, so
+/// a driver could name what was never shared with it; both are refused, and
+/// a receipt names only a command a driver may make (row J14).
+fn drives_only_text(frame: &RequestFrame) -> Result<(), &'static str> {
+    let non_empty = |name: &str| {
+        frame
+            .params
+            .get(name)
+            .is_some_and(|value| !value.is_null() && *value != serde_json::json!([]))
+    };
+    if non_empty("attachments") || non_empty("files") {
+        return Err("forbidden");
+    }
+    if frame.method == "conversation.receipt"
+        && frame
+            .params
+            .get("operation")
+            .and_then(serde_json::Value::as_str)
+            == Some("create")
+    {
+        return Err("forbidden");
+    }
+    Ok(())
 }
 
 /// `WrongOwner` is how an ungranted id is refused; to the socket that is a

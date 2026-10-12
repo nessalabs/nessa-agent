@@ -1466,7 +1466,7 @@ async fn dispatch(
         }
         return success(&frame.id, &session_ready(state, &session, &snapshot));
     }
-    match admit_action(state, &session, &frame.method).await {
+    match super::read_access::admit_request(state, &session, &frame).await {
         Ok(()) => dispatch_authorized(state, &session, frame).await,
         Err(code) => failure(&frame.id, code),
     }
@@ -1482,6 +1482,17 @@ pub(super) async fn admit_action(
     method: &str,
 ) -> Result<(), &'static str> {
     let action_name = action_for_method(method).ok_or("unknown_method")?;
+    admit_grant(state, session, action_name).await
+}
+
+/// [`admit_action`] for a grant named directly: `action_name` under current
+/// policy, then browser presence. A paired session's Drive command asks it
+/// for pairing's own grant (`read_access::admit_request`).
+pub(super) async fn admit_grant(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+    action_name: &str,
+) -> Result<(), &'static str> {
     match authorize(state, session, action_name).await {
         Ok(Decision::Allow) => ensure_browser_session_present(state, session)
             .await
