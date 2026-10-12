@@ -1781,7 +1781,10 @@ impl Agent {
                                         }
                                         events = attached.events.lock().await;
                                     }
-                                    if !matches!(decision.verdict, ToolVerdict::Stopped) {
+                                    // A refused review is already answered or
+                                    // withdrawn, and a stopping one is not for a
+                                    // person: only an allowed review is published.
+                                    if matches!(decision.verdict, ToolVerdict::Allow) {
                                         let _ = self.inner.updates.send(event);
                                     }
                                 }

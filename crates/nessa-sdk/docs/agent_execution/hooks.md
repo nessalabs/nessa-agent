@@ -75,7 +75,9 @@ deadline is saved before a review hook runs, so the hook's wait does not
 delay that save.
 `ToolVerdict::Allow` leaves the review for the provider's ordinary answer.
 `ToolVerdict::Stopped` means the turn is already stopping: the review is
-retained, not published, and not answered. `ToolVerdict::refuse(_, Continue)` keeps the
+retained, not published, and not answered. A refused review is also retained
+and not published: the hook has already answered or withdrawn it, so there is
+nothing left for a person to answer. `ToolVerdict::refuse(_, Continue)` keeps the
 review and answers the provider's deny option as the hook
 (`permission-review-hook`, `ApprovalBasis::Hook`), so the agent continues. The
 basis keeps the registration index when a hook returned, the reason capped

@@ -648,6 +648,36 @@ async fn a_continue_refusal_keeps_the_review_and_the_session() {
 }
 
 #[tokio::test]
+async fn a_refused_review_is_not_published_for_a_person_to_answer() {
+    let fixture = agent_with(
+        script(),
+        vec![Arc::new(ReviewHook {
+            seen: Arc::new(Mutex::new(Vec::new())),
+            verdict: ToolVerdict::refuse("stop this call", RefusalOutcome::Continue),
+        })],
+    )
+    .await;
+    let mut published = fixture.agent.subscribe();
+    fixture
+        .agent
+        .invoke(request(), close_action())
+        .await
+        .expect("deny-and-continue finishes the turn");
+    assert_eq!(fixture.answered.load(Ordering::SeqCst), 1);
+    let mut saw_message = false;
+    while let Ok(Ok(Some(event))) =
+        tokio::time::timeout(std::time::Duration::from_millis(50), published.next()).await
+    {
+        assert!(
+            !matches!(event.update(), ExecutionUpdate::PermissionRequested { .. }),
+            "a review the hook already answered was published as pending"
+        );
+        saw_message |= matches!(event.update(), ExecutionUpdate::Message(_));
+    }
+    assert!(saw_message, "the turn's other events were not published");
+}
+
+#[tokio::test]
 async fn a_continue_without_a_deny_option_does_not_invent_one() {
     let mut events = script();
     events.pop();

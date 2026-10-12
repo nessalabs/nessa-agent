@@ -82,7 +82,9 @@ cancellation code. A hook error, panic, timeout, or busy guard is
 deny-and-continue with the reason `"hook failed: error"`,
 `"hook failed: panic"`, `"hook failed: timeout"`, or `"hook failed: busy"`.
 A stop that arrives while the hook is running, or that was already observed
-before the review, does not publish the review and does not answer it. While
+before the review, does not publish the review and does not answer it. A
+refused review is not published either, because the hook has already answered
+or withdrawn it. While
 an earlier hook thread is still running, or while the process already holds
 its 32 hook threads, a later review is refused immediately, without another
 blocking thread.
