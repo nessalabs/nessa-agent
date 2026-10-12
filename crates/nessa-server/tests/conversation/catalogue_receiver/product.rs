@@ -86,11 +86,16 @@ struct Owners {
     bindings: Mutex<HashMap<CredentialId, ReceiverBinding>>,
 }
 impl Owners {
+    /// Each owner's phone, paired as `{owner}-receiver`, and desktop, the
+    /// owner's own surface with no receiver binding.
     fn new() -> Self {
         let mut snapshots = HashMap::new();
         let mut bindings = HashMap::new();
-        for owner in ["alice", "bob"] {
-            let credential = CredentialId::new(format!("{owner}-phone")).unwrap();
+        for (owner, device) in ["alice", "bob"]
+            .into_iter()
+            .flat_map(|owner| [(owner, "phone"), (owner, "desktop")])
+        {
+            let credential = CredentialId::new(format!("{owner}-{device}")).unwrap();
             let principal = PrincipalId::new(owner).unwrap();
             let mut current = snapshot(MembershipRole::Member, MembershipStatus::Active);
             current.credential = Credential::new(
@@ -122,6 +127,9 @@ impl Owners {
                 MembershipStatus::Active,
             );
             snapshots.insert(credential.clone(), current);
+            if device != "phone" {
+                continue;
+            }
             bindings.insert(
                 credential.clone(),
                 ReceiverBinding {
@@ -523,14 +531,25 @@ struct ProductSource {
     fault: Option<WireFault>,
 }
 impl ProductSource {
-    fn connect(port: u16, owner: &str, epoch: &str, cache_path: PathBuf, events: bool) -> Self {
+    /// A socket signed in as `credential`.
+    fn authenticate(port: u16, credential: &str) -> WebSocket<MaybeTlsStream<TcpStream>> {
         let (mut socket, _) =
             tungstenite::connect(format!("ws://127.0.0.1:{port}/session")).unwrap();
         let challenge: Value =
             serde_json::from_str(socket.read().unwrap().to_text().unwrap()).unwrap();
-        socket.send(Message::Text(json!({"type":"req","id":"auth","method":"session.authenticate","params":{"minVersion":1,"maxVersion":1,"nonce":challenge["payload"]["nonce"],"credential":format!("{owner}-phone"),"client":{"id":"catalogue-receiver"},"surface":{"kind":"cli","instance":"catalogue-receiver"}}}).to_string().into())).unwrap();
+        socket.send(Message::Text(json!({"type":"req","id":"auth","method":"session.authenticate","params":{"minVersion":1,"maxVersion":1,"nonce":challenge["payload"]["nonce"],"credential":credential,"client":{"id":"catalogue-receiver"},"surface":{"kind":"cli","instance":"catalogue-receiver"}}}).to_string().into())).unwrap();
         let ready: Value = serde_json::from_str(socket.read().unwrap().to_text().unwrap()).unwrap();
         assert_eq!(ready["ok"], true, "{ready}");
+        socket
+    }
+    /// A source on `socket`, before it has asked for its catalogue head.
+    fn signed_in(
+        socket: WebSocket<MaybeTlsStream<TcpStream>>,
+        owner: &str,
+        epoch: &str,
+        cache_path: PathBuf,
+        events: bool,
+    ) -> Self {
         let placeholder = Scope::new(
             sid("receiver"),
             sid("origin"),
@@ -539,7 +558,7 @@ impl ProductSource {
             sid("schema"),
             sid(epoch),
         );
-        let mut source = Self {
+        Self {
             socket,
             next: 0,
             scope: placeholder,
@@ -550,7 +569,27 @@ impl ProductSource {
             cache_path,
             delayed: false,
             fault: None,
-        };
+        }
+    }
+    /// The owner's own surface, `{owner}-desktop`: it pairs nothing, so it
+    /// sends and closes the owner's conversations and reads no catalogue.
+    fn connect_owner(port: u16, owner: &str, cache_path: PathBuf) -> Self {
+        Self::signed_in(
+            Self::authenticate(port, &format!("{owner}-desktop")),
+            owner,
+            "7",
+            cache_path,
+            false,
+        )
+    }
+    fn connect(port: u16, owner: &str, epoch: &str, cache_path: PathBuf, events: bool) -> Self {
+        let mut source = Self::signed_in(
+            Self::authenticate(port, &format!("{owner}-phone")),
+            owner,
+            epoch,
+            cache_path,
+            events,
+        );
         let reply = source.call(
             "conversation.catalogueHead",
             json!({"receiverId":format!("{owner}-receiver"),"accessEpoch":epoch}),
@@ -1177,7 +1216,14 @@ fn socket_close_stops_active_provider_while_catalogue_workers_are_full_and_a_cal
             )
         })
         .collect::<Vec<_>>();
-    let reply=clients[0].call("conversation.send",json!({"conversationId":cid("alice",1).to_string(),"requestId":Uuid::new_v4().to_string(),"executionId":Uuid::new_v4().to_string(),"text":"held provider work","attachments":[],"files":[]}));
+    // The owner's own surface sends and closes: a paired phone may not close
+    // a conversation (issue 707, row J12).
+    let mut owner = ProductSource::connect_owner(
+        gateway.port,
+        "alice",
+        directory.path().join("unused-owner"),
+    );
+    let reply=owner.call("conversation.send",json!({"conversationId":cid("alice",1).to_string(),"requestId":Uuid::new_v4().to_string(),"executionId":Uuid::new_v4().to_string(),"text":"held provider work","attachments":[],"files":[]}));
     assert_eq!(reply["ok"], true, "{reply}");
     gateway.command(json!({"action":"wait-execution"}));
     let before = gateway.command(json!({"action":"stats"}));
@@ -1219,7 +1265,7 @@ fn socket_close_stops_active_provider_while_catalogue_workers_are_full_and_a_cal
         "{refusal}"
     );
     let started = Instant::now();
-    let stopped = clients[0].call(
+    let stopped = owner.call(
         "conversation.close",
         json!({"conversationId":cid("alice",1).to_string(),"requestId":Uuid::new_v4().to_string()}),
     );

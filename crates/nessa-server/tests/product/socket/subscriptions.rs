@@ -456,6 +456,28 @@ impl SubscriptionFixture {
         assert_eq!(sent["ok"], true, "{sent}");
     }
 
+    /// A turn the owner sends, while the fixture's session is a paired device
+    /// or its receiver lookups are scripted: sent as a gateway that pairs
+    /// nothing would send it, so it asks no receiver binding.
+    async fn owner_turn(&self, execution: &str) {
+        let mut owner = self.state.clone();
+        owner.passive_read = None;
+        let params = json!({
+            "conversationId": self.id.to_string(),
+            "requestId": format!("send-{execution}"),
+            "executionId": execution,
+            "text": format!("question {execution}"),
+            "attachments": [],
+            "files": [],
+        });
+        let frame = RequestFrame::new("call", "conversation.send", &params).unwrap();
+        let OutgoingMessage::Response(sent) = dispatch(&owner, &self.session, frame).await else {
+            panic!("a response")
+        };
+        let sent = serde_json::to_value(sent).unwrap();
+        assert_eq!(sent["ok"], true, "{sent}");
+    }
+
     /// A one-shot read of the fixture's conversation, until it has settled
     /// with `messages` messages.
     async fn settled_read(&self, messages: usize) -> Value {
@@ -1983,7 +2005,7 @@ async fn a_revoke_ends_a_device_subscription_before_its_next_batch() {
     fixture
         .grant_to(crate::conversation::application::ShareGrantTransition::Revoke)
         .await;
-    fixture.turn("after-revoke").await;
+    fixture.owner_turn("after-revoke").await;
     let frames = client
         .until(&id, |frame| frame["event"] == "conversation.subscriptionEnded")
         .await;
@@ -2034,7 +2056,7 @@ async fn an_owner_subscription_outlasts_one_failed_receiver_lookup() {
     let id = client.subscribe("subscribe", &fixture.id).await;
     client.next().await;
     *receivers.0.lock().unwrap() = 1;
-    fixture.turn("after-a-miss").await;
+    fixture.owner_turn("after-a-miss").await;
     let frames = client
         .until(&id, |frame| {
             frame["event"] == "conversation.view"
