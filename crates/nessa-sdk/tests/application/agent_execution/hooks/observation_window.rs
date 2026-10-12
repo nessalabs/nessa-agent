@@ -57,6 +57,8 @@ impl ExecutionEventStream for ScriptedEvents {
 
 struct ScriptedBackend {
     started: Arc<Started>,
+    /// The session state a failed turn cancel reports.
+    cancel_failure_state: Arc<Mutex<ProviderSessionState>>,
     answered: Arc<AtomicUsize>,
     cancelled: Arc<AtomicUsize>,
     turn_cancels: Arc<AtomicUsize>,
@@ -240,12 +242,18 @@ impl ProviderSessionBackend for ScriptedBackend {
         let reviews = self.reviews.clone();
         let release = self.release.clone();
         let fail = self.fail_turn_cancel;
+        let failure_state = self.cancel_failure_state.lock().unwrap().clone();
         Box::pin(async move {
             turn_cancels.fetch_add(1, Ordering::SeqCst);
             if fail {
+                // A failure that reports cleanup has ended the session, and
+                // its execution with it.
+                if failure_state != ProviderSessionState::Usable {
+                    release.notify_waiters();
+                }
                 return Err(ProviderOperationFailure::new(
                     AgentError::Transport("turn cancel failed".into()),
-                    ProviderSessionState::Usable,
+                    failure_state,
                 ));
             }
             clear_turn_reviews(&controller, &turn, &reviews);
@@ -263,6 +271,7 @@ impl ProviderSessionBackend for ScriptedBackend {
 struct ScriptedProvider {
     events: Mutex<Option<Vec<ExecutionEvent>>>,
     started: Arc<Started>,
+    cancel_failure_state: Arc<Mutex<ProviderSessionState>>,
     answered: Arc<AtomicUsize>,
     cancelled: Arc<AtomicUsize>,
     turn_cancels: Arc<AtomicUsize>,
@@ -294,6 +303,7 @@ impl AgentProvider for ScriptedProvider {
                     ExecutionSessionId::new("context").unwrap(),
                     Arc::new(ScriptedBackend {
                         started: self.started.clone(),
+                        cancel_failure_state: self.cancel_failure_state.clone(),
                         answered: self.answered.clone(),
                         cancelled: self.cancelled.clone(),
                         turn_cancels: self.turn_cancels.clone(),
@@ -389,6 +399,7 @@ struct Fixture {
     authority: PermissionAuthoritySource,
     /// Lets the scripted provider settle its execution.
     release: Arc<tokio::sync::Notify>,
+    cancel_failure_state: Arc<Mutex<ProviderSessionState>>,
 }
 
 struct FixtureKnobs {
@@ -434,10 +445,12 @@ async fn open_on_clock(
     let controller = ExecutionController::new(ExecutionSessionId::new("context").unwrap());
     let authority = controller.permission_authority_source();
     let release = Arc::new(tokio::sync::Notify::new());
+    let cancel_failure_state = Arc::new(Mutex::new(ProviderSessionState::Usable));
     let agent = attached_agent(
         Arc::new(ScriptedProvider {
             events: Mutex::new(Some(events)),
             started: Arc::new(Started::default()),
+            cancel_failure_state: cancel_failure_state.clone(),
             answered: answered.clone(),
             cancelled: cancelled.clone(),
             turn_cancels: turn_cancels.clone(),
@@ -472,6 +485,7 @@ async fn open_on_clock(
         withdrawals,
         authority,
         release,
+        cancel_failure_state,
     }
 }
 
@@ -1760,6 +1774,38 @@ async fn a_failed_denial_and_a_failed_turn_cancel_are_both_reported() {
     );
     assert_eq!(fixture.turn_cancels.load(Ordering::SeqCst), 1);
     assert!(!fixture.closes.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_failed_turn_cancel_that_reports_cleanup_is_still_reported() {
+    let fixture = open_fixture(
+        script(),
+        vec![Arc::new(ReviewHook {
+            seen: Arc::new(Mutex::new(Vec::new())),
+            verdict: ToolVerdict::refuse("stop the turn", RefusalOutcome::EndTurn),
+        })],
+        FixtureKnobs {
+            turn_cancel: true,
+            fail_delivery: false,
+            fail_turn_cancel: true,
+        },
+    )
+    .await;
+    // The failed cancel confirms cleanup, which ends the turn's activity.
+    *fixture.cancel_failure_state.lock().unwrap() =
+        ProviderSessionState::CleanupReported(CleanupReport::confirmed(CloseOutcome {
+            forced: false,
+        }));
+    let failure = fixture
+        .agent
+        .invoke(request(), close_action())
+        .await
+        .expect_err("a failed cancel is not mistaken for a settled turn");
+    let AgentError::ExecutionObservation { error, .. } = &failure else {
+        panic!("the cancel failure was reported as {failure:?}");
+    };
+    assert_eq!(**error, AgentError::Transport("turn cancel failed".into()));
+    assert_eq!(fixture.turn_cancels.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

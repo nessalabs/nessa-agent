@@ -1974,17 +1974,32 @@ impl Agent {
         if delivery_failure.is_none() && effective != RefusalOutcome::EndTurn {
             return AppliedVerdict::default();
         }
+        // The provider can settle while the hook runs. That turn has already
+        // ended, so there is nothing left to cancel.
+        if !self.turn_is_active(event.execution_id()) {
+            return AppliedVerdict {
+                closed: None,
+                failure: delivery_failure,
+            };
+        }
         match self.cancel_turn(event.execution_id().clone()).await {
             Ok(()) => AppliedVerdict {
                 closed: None,
                 failure: delivery_failure,
             },
-            // The provider settled while the hook ran, so the turn has already
-            // ended and there is nothing left to cancel.
-            Err(_) if !self.turn_is_active(event.execution_id()) => AppliedVerdict {
-                closed: None,
-                failure: delivery_failure,
-            },
+            // Settled between that check and the cancel's own: the cancel was
+            // refused before reaching the provider. A cancel that did reach it
+            // keeps its failure, even when its cleanup report ended the turn.
+            Err(failure)
+                if matches!(failure.error(), AgentError::Unsupported(_))
+                    && matches!(failure.session_state(), ProviderSessionState::Usable)
+                    && !self.turn_is_active(event.execution_id()) =>
+            {
+                AppliedVerdict {
+                    closed: None,
+                    failure: delivery_failure,
+                }
+            }
             Err(failure) => {
                 let cancel_failure = failure.into_error();
                 let failure = match delivery_failure {
