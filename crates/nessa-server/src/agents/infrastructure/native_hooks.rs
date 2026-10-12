@@ -33,7 +33,8 @@ use crate::agents::application::{
 use nessa_auth::application::ports::Clock;
 use nessa_local_storage::{create_directory, open, sync_directory, OpenMode, PrivateTempFile};
 use nessa_sdk::application::agent_execution::providers::NativeHooksSwitch;
-use serde_json::{json, Value};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::{
     io::{ErrorKind, Read, Write},
@@ -282,7 +283,9 @@ fn record_name(
     request: &str,
     phase: NativeHooksPhase,
 ) -> String {
-    let correlation = format!("{}:{principal}:{request}:{}", agent.name(), phase.name());
+    // A JSON array escapes every part, so ids that contain the separator
+    // cannot spell another caller's tuple.
+    let correlation = json!([agent.name(), principal, request, phase.name()]).to_string();
     let digest = Sha256::digest(correlation.as_bytes());
     format!("native-hooks-{digest:x}")
 }
@@ -301,7 +304,7 @@ fn audit_record(directory: &Path, name: &str) -> PathBuf {
 /// record fails the command instead of being held in memory whole.
 const MAX_RECORD_BYTES: u64 = 64 * 1024;
 
-fn read_record(path: &Path) -> Result<Option<Value>, NativeHooksError> {
+fn read_record(path: &Path) -> Result<Option<StoredRecord>, NativeHooksError> {
     let file = match open(path, OpenMode::Read) {
         Ok(file) => file,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
@@ -338,14 +341,20 @@ fn already_recorded(
     change: &NativeHooksChange,
 ) -> Result<bool, NativeHooksError> {
     let path = record_path(directory, change, NativeHooksPhase::Outcome);
-    let Some(value) = read_record(&path)? else {
+    let Some(stored) = read_record(&path)? else {
         return Ok(false);
     };
-    let same = value["target"]["agent"].as_str() == Some(change.agent.name())
-        && value["transition"]["requested"].as_bool() == Some(change.enabled)
-        && value["transition"]["after"].as_bool() == Some(change.enabled)
-        && value["correlationId"].as_str() == Some(change.request_id.as_str());
-    if same {
+    // The record must be the one this command writes, field for field. Only
+    // the before value and the observation time come from the first attempt.
+    let expected = StoredRecord::new(
+        &change.evidence(
+            NativeHooksPhase::Outcome,
+            stored.transition.before,
+            Some(change.enabled),
+        ),
+        stored.observed_at_ms,
+    );
+    if stored == expected {
         Ok(true)
     } else {
         Err(NativeHooksError::Audit)
@@ -359,16 +368,90 @@ fn recorded_before(
     change: &NativeHooksChange,
 ) -> Result<Option<bool>, NativeHooksError> {
     let path = record_path(directory, change, NativeHooksPhase::Requested);
-    let Some(value) = read_record(&path)? else {
+    let Some(stored) = read_record(&path)? else {
         return Ok(None);
     };
-    if value["transition"]["requested"].as_bool() != Some(change.enabled) {
-        return Err(NativeHooksError::Audit);
+    let expected = StoredRecord::new(
+        &change.evidence(NativeHooksPhase::Requested, stored.transition.before, None),
+        stored.observed_at_ms,
+    );
+    if stored == expected {
+        Ok(Some(stored.transition.before))
+    } else {
+        Err(NativeHooksError::Audit)
     }
-    value["transition"]["before"]
-        .as_bool()
-        .map(Some)
-        .ok_or(NativeHooksError::Audit)
+}
+
+/// One audit record as it is stored. Writing and reading share this shape,
+/// so a record missing a field, carrying an extra one, or naming a field
+/// twice does not read back as evidence.
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StoredRecord {
+    record_id: String,
+    kind: String,
+    target: StoredTarget,
+    transition: StoredTransition,
+    cause: String,
+    initiator: StoredInitiator,
+    correlation_id: String,
+    observed_at_ms: u64,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredTarget {
+    agent: String,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredTransition {
+    before: bool,
+    requested: bool,
+    after: Option<bool>,
+    phase: String,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StoredInitiator {
+    kind: String,
+    principal_id: String,
+    surface_id: String,
+    organization_id: String,
+}
+
+impl StoredRecord {
+    fn new(evidence: &NativeHooksEvidence, observed_at_ms: u64) -> Self {
+        Self {
+            record_id: record_name(
+                evidence.agent,
+                &evidence.principal_id,
+                &evidence.request_id,
+                evidence.phase,
+            ),
+            kind: "native_hooks".into(),
+            target: StoredTarget {
+                agent: evidence.agent.name().into(),
+            },
+            transition: StoredTransition {
+                before: evidence.before,
+                requested: evidence.requested,
+                after: evidence.after,
+                phase: evidence.phase.name().into(),
+            },
+            cause: "caller_requested".into(),
+            initiator: StoredInitiator {
+                kind: evidence.caller_kind.clone(),
+                principal_id: evidence.principal_id.clone(),
+                surface_id: evidence.surface_id.clone(),
+                organization_id: evidence.organization_id.clone(),
+            },
+            correlation_id: evidence.request_id.clone(),
+            observed_at_ms,
+        }
+    }
 }
 
 struct DurableNativeHooksAudit {
@@ -385,45 +468,20 @@ impl DurableNativeHooksAudit {
 
 impl NativeHooksAudit for DurableNativeHooksAudit {
     fn record(&self, evidence: &NativeHooksEvidence) -> Result<(), NativeHooksError> {
-        let id = record_name(
-            evidence.agent,
-            &evidence.principal_id,
-            &evidence.request_id,
-            evidence.phase,
-        );
-        let value = json!({
-            "recordId": id,
-            "kind": "native_hooks",
-            "target": {"agent": evidence.agent.name()},
-            "transition": {
-                "before": evidence.before,
-                "requested": evidence.requested,
-                "after": evidence.after,
-                "phase": evidence.phase.name(),
-            },
-            "cause": "caller_requested",
-            "initiator": {
-                "kind": evidence.caller_kind,
-                "principalId": evidence.principal_id,
-                "surfaceId": evidence.surface_id,
-                "organizationId": evidence.organization_id,
-            },
-            "correlationId": evidence.request_id,
-            "observedAtMs": self.clock.unix_milliseconds(),
-        });
-        let destination = self.directory.join(format!("{id}.json"));
-        if agrees(&destination, &value)? {
+        let record = StoredRecord::new(evidence, self.clock.unix_milliseconds());
+        let destination = self.directory.join(format!("{}.json", record.record_id));
+        if agrees(&destination, &record)? {
             return sync_directory(&self.directory).map_err(|_| NativeHooksError::Audit);
         }
         let mut file =
             PrivateTempFile::new_in(&self.directory).map_err(|_| NativeHooksError::Audit)?;
-        serde_json::to_writer(file.as_file_mut(), &value).map_err(|_| NativeHooksError::Audit)?;
+        serde_json::to_writer(file.as_file_mut(), &record).map_err(|_| NativeHooksError::Audit)?;
         file.as_file_mut()
             .write_all(b"\n")
             .and_then(|_| file.as_file().sync_all())
             .map_err(|_| NativeHooksError::Audit)?;
         if let Err(error) = file.publish(&destination) {
-            if error.kind() != ErrorKind::AlreadyExists || !agrees(&destination, &value)? {
+            if error.kind() != ErrorKind::AlreadyExists || !agrees(&destination, &record)? {
                 return Err(NativeHooksError::Audit);
             }
         }
@@ -431,21 +489,16 @@ impl NativeHooksAudit for DurableNativeHooksAudit {
     }
 }
 
-fn agrees(destination: &Path, expected: &Value) -> Result<bool, NativeHooksError> {
+fn agrees(destination: &Path, expected: &StoredRecord) -> Result<bool, NativeHooksError> {
     let Some(stored) = read_record(destination)? else {
         return Ok(false);
     };
     // The observation time is assigned when the record is first written. A
     // retry builds a new time and still matches that record.
-    Ok(without_observation(&stored) == without_observation(expected))
-}
-
-fn without_observation(value: &Value) -> Value {
-    let mut copy = value.clone();
-    if let Some(object) = copy.as_object_mut() {
-        object.remove("observedAtMs");
-    }
-    copy
+    Ok(StoredRecord {
+        observed_at_ms: expected.observed_at_ms,
+        ..stored
+    } == *expected)
 }
 
 #[cfg(test)]
@@ -513,7 +566,7 @@ mod tests {
             .map(|path| std::fs::read_to_string(path).unwrap())
             .find(|text| text.contains("\"phase\":\"requested\""))
             .unwrap();
-        let value: Value = serde_json::from_str(&requested).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&requested).unwrap();
         assert_eq!(value["target"]["agent"], "claude");
         assert_eq!(value["transition"]["before"], false);
         assert_eq!(value["transition"]["requested"], true);
@@ -680,7 +733,7 @@ mod tests {
             .map(|path| std::fs::read_to_string(path).unwrap())
             .find(|text| text.contains("\"phase\":\"requested\""))
             .unwrap();
-        let value: Value = serde_json::from_str(&requested).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&requested).unwrap();
         assert_eq!(value["observedAtMs"], 10);
         assert_eq!(value["transition"]["before"], false);
         assert_eq!(value["transition"]["requested"], true);
@@ -785,6 +838,46 @@ mod tests {
         assert_eq!(
             preferences.set(retry).await.unwrap_err(),
             NativeHooksError::Audit
+        );
+    }
+
+    #[tokio::test]
+    async fn an_outcome_record_missing_its_attribution_is_not_evidence() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("data");
+        let preferences =
+            NativeHooksPreferences::open(directory.clone(), Arc::new(FixedClock)).unwrap();
+        let retry = change(NativeHooksAgent::Claude, true, "request-bare");
+        preferences.set(retry.clone()).await.unwrap();
+        let outcome = record_path(&directory, &retry, NativeHooksPhase::Outcome);
+        // The four fields a retry once looked at, and nothing that says who
+        // asked, when, or from what.
+        std::fs::write(
+            &outcome,
+            r#"{"target":{"agent":"claude"},"transition":{"requested":true,"after":true},"correlationId":"request-bare"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            preferences.set(retry).await.unwrap_err(),
+            NativeHooksError::Audit
+        );
+    }
+
+    #[test]
+    fn ids_that_contain_the_separator_name_separate_records() {
+        assert_ne!(
+            record_name(
+                NativeHooksAgent::Claude,
+                "a:b",
+                "c",
+                NativeHooksPhase::Outcome
+            ),
+            record_name(
+                NativeHooksAgent::Claude,
+                "a",
+                "b:c",
+                NativeHooksPhase::Outcome
+            ),
         );
     }
 
@@ -932,7 +1025,7 @@ mod tests {
             .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
             .find(|text| text.contains("\"phase\":\"requested\""))
             .unwrap();
-        let value: Value = serde_json::from_str(&recorded).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&recorded).unwrap();
         assert_eq!(value["initiator"]["kind"], "agent");
     }
 

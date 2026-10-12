@@ -46,23 +46,15 @@ export interface NativeHooksGateway {
   ): Promise<NativeHooksWrite>
 }
 
-/** The stored choice, and whether each harness is in the catalog. */
-function selection(
-  listed: Awaited<ReturnType<AgentsApi["list"]>>,
-): NativeHooksChoice | undefined {
-  const hooks = listed.nativeHooks
-  if (
-    !hooks ||
-    !Object.hasOwn(hooks, "claude") ||
-    !Object.hasOwn(hooks, "codex") ||
-    (hooks.claude !== "off" && hooks.claude !== "on") ||
-    (hooks.codex !== "off" && hooks.codex !== "on")
-  )
-    return undefined
+/**
+ * The stored choice, and whether each harness is in the catalog. `list()`
+ * has already checked the result against the protocol, so this only reads it.
+ */
+function selection(listed: Awaited<ReturnType<AgentsApi["list"]>>): NativeHooksChoice {
   const names = new Set(listed.agents.map((agent) => agent.agent))
   return {
-    claude: hooks.claude === "on",
-    codex: hooks.codex === "on",
+    claude: listed.nativeHooks.claude === "on",
+    codex: listed.nativeHooks.codex === "on",
     claudeConfigured: names.has("claude"),
     codexConfigured: names.has("codex"),
   }
@@ -76,9 +68,7 @@ export function nativeHooksGateway(options: {
     read: async () => {
       try {
         const listed = await agents().then((api) => api.list())
-        const choice = selection(listed)
-        if (!choice) return { ok: false }
-        return { ok: true, choice }
+        return { ok: true, choice: selection(listed) }
       } catch {
         return { ok: false }
       }

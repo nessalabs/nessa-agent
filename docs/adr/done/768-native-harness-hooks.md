@@ -82,7 +82,7 @@ and
 | The choice is on | That harness's process starts | Claude sends setting sources user, project, and local and omits `disableAllHooks`. Codex omits `features.hooks` and `notify`. A process already running is not restarted |
 | The choice is on | A session is deleted | The deletion process keeps hooks suppressed. Deleting is Nessa's housekeeping, not a run of the agent |
 | Claude or Codex starts a process | Before any request reaches it | The launch record is written with the choice, the cause (an open for a session's attachment, a direct open with no session, or the runtime's restart), and whether saved context was resumed. No hook can run before it: the earliest hook, SessionStart, needs a session, and no session is requested until the record is durable |
-| A process start runs a tool call | The call's events are saved | Each tool event carries that start's choice, so a reader after a restart shows the choice the call ran under. An event saved without one shows none |
+| A process start runs a tool call | The call's events are saved | Each tool event carries that start's choice, so a reader after a restart shows the choice the call ran under. An event saved without one shows none, and so does every call of an execution whose saved choices disagree |
 
 ## Alternatives considered
 
