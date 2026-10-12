@@ -11,6 +11,8 @@
 //!   gateway ◀── Output / OutputClosed ── harness stdout
 //!   gateway ── Stop{grace, kill} ──▶ … ── Stopped{cleanup} ──▶ gateway
 //! gateway ── End{lease} ──▶ environment ── Ended{cleanup} ──▶ gateway
+//! environment ── Ending{lease, expired} ──▶ gateway   (past Granted's leaseMs: it stops
+//!   everything) ── gateway ── End{lease} ──▶ environment ── Ended{cleanup} ──▶ gateway
 //! gateway ── Account{lease} ──▶ environment ── Accounted{cleanup} ──▶ gateway
 //! gateway ── Keepalive ──▶ environment   (every KEEPALIVE_INTERVAL, always)
 //! environment ── Keepalive ──▶ gateway   (when idle KEEPALIVE_INTERVAL)
@@ -46,7 +48,11 @@
 //! its `Granted` says the terms it granted ([`GrantedTerms`]), which are what
 //! the gateway records, never what it asked. The sandbox is granted exactly
 //! as asked or the lease is refused; a command's timeout may come back
-//! shorter, never longer.
+//! shorter, never longer. A harness's lease may come back with a
+//! `leaseMs` it was not asked for: a limit is narrower than none. The
+//! environment ends such a lease itself once it has lasted that long, and
+//! says so with [`FromEnvironment::Ending`]; the gateway keeps no timer of
+//! its own for it.
 //!
 //! A command lease runs one command, once, and its `Ran` ends it: the
 //! environment answers it with the command's captured output, at most
@@ -241,6 +247,19 @@ pub struct GrantedTerms {
     /// command lease.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
+    /// How long a harness's lease may last from its grant before the
+    /// environment ends it ([`FromEnvironment::Ending`]); only for a
+    /// harness's lease, and `None` when it may last until ended.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lease_ms: Option<u64>,
+}
+
+/// Why an environment is ending a lease the gateway did not ask it to end.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum EndingCause {
+    /// The lease lasted as long as it was granted ([`GrantedTerms::lease_ms`]).
+    Expired,
 }
 
 /// How a command lease's command ended.
@@ -529,6 +548,15 @@ pub enum FromEnvironment {
         /// Its cleanup.
         cleanup: Cleanup,
     },
+    /// The environment is ending the lease for `cause`, unasked: it stops
+    /// everything under it, and answers the gateway's `End` with what that
+    /// took.
+    Ending {
+        /// The lease's id.
+        lease: String,
+        /// Why.
+        cause: EndingCause,
+    },
     /// The lease ended; everything under it was stopped.
     Ended {
         /// The lease's id.
@@ -581,6 +609,7 @@ impl FromEnvironment {
             | Self::Output { lease, .. }
             | Self::OutputClosed { lease, .. }
             | Self::Stopped { lease, .. }
+            | Self::Ending { lease, .. }
             | Self::Ended { lease, .. }
             | Self::Accounted { lease, .. }
             | Self::Published { lease, .. }

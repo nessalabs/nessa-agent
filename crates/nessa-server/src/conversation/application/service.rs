@@ -1447,6 +1447,7 @@ impl ConversationService {
                                     binding: configured.sandbox,
                                 },
                                 configured.provider.clone(),
+                                service.inner.clock.as_ref(),
                             )
                             .await;
                             let agent = Agent::prepare(
@@ -1703,8 +1704,8 @@ impl ConversationService {
                 // Opened or not, a view's lifecycle says so now.
                 service.inner.live_changes.publish(&id);
                 if let Ok(live) = result {
-                    if let Some(lost) = live.lease.lost() {
-                        service.stop_when_lost(id, Arc::downgrade(&owner), lost);
+                    if let Some(ends) = live.lease.ends() {
+                        service.stop_when_environment_ends(id, Arc::downgrade(&owner), ends);
                     }
                 }
             });
@@ -1712,21 +1713,24 @@ impl ConversationService {
     }
 
     /// Stop the opening `slot` holds once its environment can no longer run
-    /// anything for its lease, such as its SSH connection being lost (row
-    /// L10): the lease ends as lost, the system's stop, recorded first like
-    /// any other end. There is no reconnect budget: a connection lost is the
-    /// lease lost. Nothing is stopped once the slot is let go, stopping, or
-    /// holds another opening; `lost` also resolves when the lease ends, so
-    /// this never outlives the opening.
-    fn stop_when_lost(
+    /// anything for its lease: its SSH connection lost (row L10), or the
+    /// environment ending it past the duration it granted (row I7). The
+    /// lease ends for that cause, the system's stop and never a person's,
+    /// recorded first like any other end; its End is still asked, and the
+    /// environment answers it with what its own end took. There is no
+    /// reconnect budget: a connection lost is the lease lost. Nothing is
+    /// stopped once the slot is let go, stopping, or holds another opening;
+    /// `ends` also resolves when the lease ends, so this never outlives the
+    /// opening.
+    fn stop_when_environment_ends(
         &self,
         id: ConversationId,
         slot: std::sync::Weak<Slot>,
-        lost: super::EnvironmentFuture<'static, ()>,
+        ends: super::EnvironmentFuture<'static, LeaseEndCause>,
     ) {
         let service = self.clone();
         tokio::spawn(async move {
-            lost.await;
+            let cause = ends.await;
             let Some(slot) = slot.upgrade() else {
                 return;
             };
@@ -1736,25 +1740,21 @@ impl ConversationService {
             {
                 return;
             }
-            let Ok(actor) = ActionContext::new(
-                "gateway",
-                "environment_lost",
-                format!("lost-{}", Uuid::new_v4()),
-            ) else {
+            let (operation, prefix) = match cause {
+                LeaseEndCause::Expired => ("environment_expired", "expired"),
+                _ => ("environment_lost", "lost"),
+            };
+            let Ok(actor) =
+                ActionContext::new("gateway", operation, format!("{prefix}-{}", Uuid::new_v4()))
+            else {
                 return;
             };
-            tracing::warn!(conversation_id = %id, "the environment lost this conversation's lease; stopping it");
+            tracing::warn!(conversation_id = %id, ?cause, "the environment ended this conversation's lease; stopping it");
             if let Err(stop) = service
-                .stop_and_release(
-                    &id,
-                    slot,
-                    &actor,
-                    &McpAppInitiator::System,
-                    LeaseEndCause::Lost,
-                )
+                .stop_and_release(&id, slot, &actor, &McpAppInitiator::System, cause)
                 .await
             {
-                tracing::warn!(conversation_id = %id, ?stop, "a lost lease's stop did not confirm cleanup");
+                tracing::warn!(conversation_id = %id, ?stop, "an environment-ended lease's stop did not confirm cleanup");
             }
         });
     }

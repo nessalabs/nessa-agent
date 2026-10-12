@@ -1,7 +1,7 @@
 //! The environment role's frame loop, driven in process over a pipe: what it
 //! answers, what it records, and what it does when the gateway goes away.
 use super::*;
-use crate::env_serve::domain::{AgentName, Agents, CommandGrant};
+use crate::env_serve::domain::{AgentName, Agents, CommandGrant, MaxLease};
 use crate::env_serve::{application::timer::manual::ManualTimer, infrastructure::TokioTimer};
 use nessa_protocol::lease::{KEEPALIVE_INTERVAL, SILENCE_LIMIT};
 use nessa_sdk::application::agent_execution::providers::{CloseOutcome, HarnessCleanupFuture};
@@ -171,6 +171,8 @@ struct MemoryLedger {
     publishing: tokio::sync::Notify,
     /// Refuses only a command's exit, as a disk that went away for one write.
     failing_command_ran: AtomicBool,
+    /// Refuses only a lease's expiry, likewise.
+    failing_expiring: AtomicBool,
 }
 
 impl MemoryLedger {
@@ -184,6 +186,8 @@ impl LeaseLedger for MemoryLedger {
         if self.failing.load(Ordering::SeqCst)
             || (matches!(entry, LedgerEntry::CommandRan { .. })
                 && self.failing_command_ran.load(Ordering::SeqCst))
+            || (matches!(entry, LedgerEntry::Expiring { .. })
+                && self.failing_expiring.load(Ordering::SeqCst))
         {
             return Err(io::Error::other("disk gone"));
         }
@@ -266,6 +270,7 @@ fn harness_terms() -> GrantedTerms {
     GrantedTerms {
         sandbox: Sandbox::HarnessDefault,
         timeout_ms: None,
+        lease_ms: None,
     }
 }
 
@@ -273,6 +278,7 @@ fn command_terms(timeout_ms: u64) -> GrantedTerms {
     GrantedTerms {
         sandbox: Sandbox::None,
         timeout_ms: Some(timeout_ms),
+        lease_ms: None,
     }
 }
 
@@ -493,6 +499,7 @@ async fn a_lease_runs_a_harness_and_its_end_is_answered_with_recorded_cleanup() 
                 peer: Peer::Ssh,
                 agent: "claude".into(),
                 sandbox: Sandbox::HarnessDefault,
+                lease_ms: None,
             },
             LedgerEntry::Started {
                 lease: LEASE.into(),
@@ -506,7 +513,7 @@ async fn a_lease_runs_a_harness_and_its_end_is_answered_with_recorded_cleanup() 
             LedgerEntry::Ended {
                 lease: LEASE.into(),
                 cleanup: Cleanup::Confirmed { forced: false },
-                lost: false,
+                cause: EndCause::Asked,
             },
         ]
     );
@@ -625,7 +632,7 @@ async fn the_gateway_gone_ends_every_lease_as_lost_with_recorded_cleanup() {
         Some(&LedgerEntry::Ended {
             lease: LEASE.into(),
             cleanup: Cleanup::Confirmed { forced: false },
-            lost: true,
+            cause: EndCause::Lost,
         })
     );
     let mut later = Gateway::with(ledger);
@@ -653,17 +660,19 @@ async fn account_answers_only_what_was_recorded() {
             peer: Peer::Ssh,
             agent: "claude".into(),
             sandbox: Sandbox::HarnessDefault,
+            lease_ms: None,
         },
         LedgerEntry::Ended {
             lease: "ended".into(),
             cleanup: Cleanup::Confirmed { forced: true },
-            lost: true,
+            cause: EndCause::Lost,
         },
         LedgerEntry::Granted {
             lease: "unfinished".into(),
             peer: Peer::Ssh,
             agent: "claude".into(),
             sandbox: Sandbox::HarnessDefault,
+            lease_ms: None,
         },
     ] {
         ledger.record(&entry).unwrap();
@@ -1370,7 +1379,7 @@ async fn a_silent_gateway_is_lost_and_serving_ends() {
         Some(&LedgerEntry::Ended {
             lease: LEASE.into(),
             cleanup: Cleanup::Confirmed { forced: false },
-            lost: true,
+            cause: EndCause::Lost,
         })
     );
 }
@@ -2438,7 +2447,7 @@ async fn a_command_lease_runs_its_command_once_and_its_ran_ends_it() {
             LedgerEntry::Ended {
                 lease: COMMAND.into(),
                 cleanup: Cleanup::Confirmed { forced: false },
-                lost: false,
+                cause: EndCause::Asked,
             },
         ]
     );
@@ -2612,12 +2621,12 @@ async fn a_lost_connection_stops_running_commands_and_records_them_lost() {
     assert!(entries.contains(&LedgerEntry::Ended {
         lease: COMMAND.into(),
         cleanup: Cleanup::Confirmed { forced: true },
-        lost: true,
+        cause: EndCause::Lost,
     }));
     assert!(entries.contains(&LedgerEntry::Ended {
         lease: OTHER.into(),
         cleanup: Cleanup::NotHeld,
-        lost: true,
+        cause: EndCause::Lost,
     }));
 }
 
@@ -2657,5 +2666,354 @@ async fn a_command_whose_exit_cannot_be_recorded_ends_uncertain_in_the_ledger_to
     assert_eq!(
         gateway.ledger.accounted(COMMAND).unwrap(),
         Cleanup::Uncertain
+    );
+}
+
+// Row I7: a lease lasts at most what the peer's grant lets it, measured on
+// the serving timer, and this side ends it itself past that.
+
+/// How long the tests below let a harness's lease last: short of the silence
+/// bound, so a deadline is reached on a connection still served.
+const MAX_LEASE: Duration = Duration::from_secs(30);
+
+/// Served as SSH granted everything, its leases lasting at most
+/// [`MAX_LEASE`], on `timer`, recording in `ledger`.
+fn expiring(timer: Arc<ManualTimer>, ledger: Arc<MemoryLedger>) -> Gateway {
+    let grants = MemoryGrants::none();
+    grants.set(
+        Peer::Ssh,
+        Some(
+            PeerGrant::everything()
+                .with_max_lease(MaxLease::new(MAX_LEASE.as_millis() as u64).unwrap()),
+        ),
+    );
+    Gateway::for_peer(Peer::Ssh, grants, ledger, Arc::new(NoOutbox), true, timer)
+}
+
+impl Gateway {
+    /// A lease granted for at most [`MAX_LEASE`], with one harness started
+    /// under it.
+    async fn started_expiring(&mut self, lease: &str) {
+        assert_eq!(self.next().await, hello());
+        self.send(ToEnvironment::Grant {
+            lease: lease.into(),
+            agent: "claude".into(),
+            sandbox: Sandbox::HarnessDefault,
+        })
+        .await;
+        assert_eq!(
+            self.next().await,
+            FromEnvironment::Granted {
+                lease: lease.into(),
+                terms: GrantedTerms {
+                    lease_ms: Some(MAX_LEASE.as_millis() as u64),
+                    ..harness_terms()
+                },
+            }
+        );
+        self.send(ToEnvironment::Start {
+            lease: lease.into(),
+            channel: 1,
+            environment: BTreeMap::new(),
+        })
+        .await;
+        self.settled().await;
+    }
+    /// What the host answers an `End` of `lease` with.
+    async fn ended(&mut self, lease: &str) -> FromEnvironment {
+        self.send(ToEnvironment::End {
+            lease: lease.into(),
+        })
+        .await;
+        self.said().await
+    }
+}
+
+fn ended_entries(ledger: &MemoryLedger, lease: &str) -> usize {
+    ledger
+        .entries()
+        .iter()
+        .filter(|entry| matches!(entry, LedgerEntry::Ended { lease: id, .. } if id == lease))
+        .count()
+}
+
+#[tokio::test]
+async fn a_lease_past_its_granted_duration_is_stopped_recorded_expired_and_said() {
+    let timer = Arc::new(ManualTimer::default());
+    let mut gateway = expiring(timer.clone(), Arc::new(MemoryLedger::default()));
+    gateway.started_expiring(LEASE).await;
+    // A moment short of it, nothing has happened: the harness still echoes.
+    timer.advance(MAX_LEASE - Duration::from_millis(1));
+    gateway
+        .send(ToEnvironment::Input {
+            lease: LEASE.into(),
+            channel: 1,
+            data: Data(b"ping\n".to_vec()),
+        })
+        .await;
+    assert_eq!(
+        gateway.next().await,
+        FromEnvironment::Output {
+            lease: LEASE.into(),
+            channel: 1,
+            data: Data(b"ping\n".to_vec()),
+        }
+    );
+    assert_eq!(gateway.stopped.load(Ordering::SeqCst), 0);
+    assert!(!gateway
+        .ledger
+        .entries()
+        .iter()
+        .any(|entry| matches!(entry, LedgerEntry::Expiring { .. })));
+    // At it, the host ends the lease itself and says so.
+    timer.advance(Duration::from_millis(1));
+    assert_eq!(
+        gateway.said().await,
+        FromEnvironment::Ending {
+            lease: LEASE.into(),
+            cause: EndingCause::Expired,
+        }
+    );
+    // The gateway's End is answered with what that end took.
+    assert_eq!(
+        gateway.ended(LEASE).await,
+        FromEnvironment::Ended {
+            lease: LEASE.into(),
+            cleanup: Cleanup::Confirmed { forced: false },
+        }
+    );
+    assert_eq!(gateway.stopped.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        gateway.ledger.entries(),
+        [
+            LedgerEntry::Granted {
+                lease: LEASE.into(),
+                peer: Peer::Ssh,
+                agent: "claude".into(),
+                sandbox: Sandbox::HarnessDefault,
+                lease_ms: Some(30_000),
+            },
+            LedgerEntry::Started {
+                lease: LEASE.into(),
+                channel: 1,
+            },
+            LedgerEntry::Expiring {
+                lease: LEASE.into(),
+                lease_ms: 30_000,
+            },
+            LedgerEntry::Stopped {
+                lease: LEASE.into(),
+                channel: 1,
+                cleanup: Cleanup::Confirmed { forced: false },
+            },
+            LedgerEntry::Ended {
+                lease: LEASE.into(),
+                cleanup: Cleanup::Confirmed { forced: false },
+                cause: EndCause::Expired,
+            },
+        ]
+    );
+    // A deadline passing is not the gateway heard from: the silence bound
+    // still runs from the last frame it sent.
+    assert!(!gateway.served.is_finished());
+}
+
+#[tokio::test]
+async fn an_end_and_a_deadline_at_once_end_the_lease_once() {
+    let timer = Arc::new(ManualTimer::default());
+    let mut gateway = expiring(timer.clone(), Arc::new(MemoryLedger::default()));
+    gateway.started_expiring(LEASE).await;
+    gateway
+        .send(ToEnvironment::End {
+            lease: LEASE.into(),
+        })
+        .await;
+    timer.advance(MAX_LEASE);
+    // Whichever came first ends it; the End is answered by that end.
+    let ended = loop {
+        match gateway.said().await {
+            FromEnvironment::Ending { .. } => continue,
+            other => break other,
+        }
+    };
+    assert_eq!(
+        ended,
+        FromEnvironment::Ended {
+            lease: LEASE.into(),
+            cleanup: Cleanup::Confirmed { forced: false },
+        }
+    );
+    gateway.settled().await;
+    assert_eq!(gateway.stopped.load(Ordering::SeqCst), 1);
+    assert_eq!(ended_entries(&gateway.ledger, LEASE), 1);
+}
+
+#[tokio::test]
+async fn a_lease_with_no_max_never_expires() {
+    let timer = Arc::new(ManualTimer::default());
+    let mut gateway = Gateway::timed(timer.clone());
+    assert_eq!(gateway.next().await, hello());
+    // Granted with no duration: it lasts until it is ended.
+    gateway.granted(LEASE).await;
+    gateway
+        .send(ToEnvironment::Start {
+            lease: LEASE.into(),
+            channel: 1,
+            environment: BTreeMap::new(),
+        })
+        .await;
+    gateway.settled().await;
+    for _ in 0..8 {
+        timer.advance(KEEPALIVE_INTERVAL);
+        gateway.send(ToEnvironment::Keepalive).await;
+        // Its wait ends only at the silence bound: no deadline shortens it.
+        let heard = timer.now();
+        timer
+            .started(|_, wait| wait.deadline == heard + SILENCE_LIMIT)
+            .await;
+    }
+    assert_eq!(
+        gateway.ended(LEASE).await,
+        FromEnvironment::Ended {
+            lease: LEASE.into(),
+            cleanup: Cleanup::Confirmed { forced: false },
+        }
+    );
+    assert_eq!(
+        gateway.ledger.entries().last(),
+        Some(&LedgerEntry::Ended {
+            lease: LEASE.into(),
+            cleanup: Cleanup::Confirmed { forced: false },
+            cause: EndCause::Asked,
+        })
+    );
+    assert!(!gateway
+        .ledger
+        .entries()
+        .iter()
+        .any(|entry| matches!(entry, LedgerEntry::Expiring { .. })));
+}
+
+#[tokio::test]
+async fn an_expiry_that_cannot_be_recorded_still_stops_and_answers_uncertain() {
+    let timer = Arc::new(ManualTimer::default());
+    let ledger = Arc::new(MemoryLedger::default());
+    ledger.failing_expiring.store(true, Ordering::SeqCst);
+    let mut gateway = expiring(timer.clone(), ledger.clone());
+    gateway.started_expiring(LEASE).await;
+    timer.advance(MAX_LEASE);
+    assert_eq!(
+        gateway.said().await,
+        FromEnvironment::Ending {
+            lease: LEASE.into(),
+            cause: EndingCause::Expired,
+        }
+    );
+    assert_eq!(
+        gateway.ended(LEASE).await,
+        FromEnvironment::Ended {
+            lease: LEASE.into(),
+            cleanup: Cleanup::Uncertain,
+        }
+    );
+    assert_eq!(gateway.stopped.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        ledger.entries().last(),
+        Some(&LedgerEntry::Ended {
+            lease: LEASE.into(),
+            cleanup: Cleanup::Uncertain,
+            cause: EndCause::Expired,
+        })
+    );
+}
+
+#[tokio::test]
+async fn a_deadline_after_the_connection_is_lost_records_nothing_more() {
+    let timer = Arc::new(ManualTimer::default());
+    let mut gateway = expiring(timer.clone(), Arc::new(MemoryLedger::default()));
+    gateway.started_expiring(LEASE).await;
+    let Gateway {
+        writer,
+        frames,
+        served,
+        ledger,
+        stopped,
+        ..
+    } = gateway;
+    drop(writer);
+    drop(frames);
+    tokio::time::timeout(Duration::from_secs(5), served)
+        .await
+        .expect("serving ends with its stream")
+        .unwrap();
+    let lost = ledger.entries();
+    assert_eq!(
+        lost.last(),
+        Some(&LedgerEntry::Ended {
+            lease: LEASE.into(),
+            cleanup: Cleanup::Confirmed { forced: false },
+            cause: EndCause::Lost,
+        })
+    );
+    timer.advance(MAX_LEASE * 2);
+    tokio::task::yield_now().await;
+    assert_eq!(ledger.entries(), lost);
+    assert_eq!(stopped.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn a_command_is_bounded_by_its_timeout_not_the_max_lease() {
+    let timer = Arc::new(ManualTimer::default());
+    let mut gateway = expiring(timer.clone(), Arc::new(MemoryLedger::default()));
+    assert_eq!(gateway.next().await, hello());
+    gateway.send(grant_command(COMMAND, &["wait"], None)).await;
+    // Its timeout is its deadline: no lease duration is granted it.
+    assert_eq!(
+        gateway.next().await,
+        FromEnvironment::Granted {
+            lease: COMMAND.into(),
+            terms: command_terms(1_000),
+        }
+    );
+    gateway
+        .send(ToEnvironment::Run {
+            lease: COMMAND.into(),
+        })
+        .await;
+    gateway.settled().await;
+    timer.advance(MAX_LEASE * 2 / 3);
+    gateway.settled().await;
+    timer.advance(MAX_LEASE * 2 / 3);
+    gateway.settled().await;
+    // Past the max lease, the command still runs, with the timeout granted.
+    assert_eq!(gateway.commands.ran.lock().unwrap()[0].timeout_ms(), 1_000);
+    gateway
+        .send(ToEnvironment::End {
+            lease: COMMAND.into(),
+        })
+        .await;
+    assert!(matches!(
+        gateway.next().await,
+        FromEnvironment::Ran {
+            end: CommandEnd::Stopped,
+            ..
+        }
+    ));
+    assert!(matches!(
+        gateway.next().await,
+        FromEnvironment::Ended { .. }
+    ));
+    assert!(!gateway
+        .ledger
+        .entries()
+        .iter()
+        .any(|entry| matches!(entry, LedgerEntry::Expiring { .. })));
+    assert_eq!(
+        gateway.ledger.entries().last(),
+        Some(&LedgerEntry::Ended {
+            lease: COMMAND.into(),
+            cleanup: Cleanup::Confirmed { forced: true },
+            cause: EndCause::Asked,
+        })
     );
 }

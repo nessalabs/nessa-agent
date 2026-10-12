@@ -48,6 +48,7 @@ impl Environment for InProcessEnvironment {
                 granted: GrantedTerms {
                     sandbox: grant.sandbox,
                     timeout_ms: None,
+                    lease_ms: None,
                 },
                 // The gateway's own, which it already knows.
                 workspace: None,
@@ -70,7 +71,7 @@ impl Environment for InProcessEnvironment {
 struct InProcessHold;
 
 impl LeaseHold for InProcessHold {
-    fn lost(&self) -> Option<EnvironmentFuture<'static, ()>> {
+    fn ends(&self) -> Option<EnvironmentFuture<'static, LeaseEndCause>> {
         None
     }
 

@@ -27,7 +27,7 @@ use crate::{
     core::RunError,
     env_serve::{
         application::{change_grant, ChangeFailed},
-        domain::{AgentName, Agents, CommandGrant, GrantOperation, Peer},
+        domain::{AgentName, Agents, CommandGrant, GrantOperation, MaxLease, Peer},
         infrastructure::{
             parse_peer, peer_name, printed, FileGrantAudit, FileGrants, FilePairingEnvironment,
         },
@@ -39,15 +39,17 @@ use std::{io::Write, path::Path};
 
 /// `nessa env grant`: grant `peer` the `agents`, and commands of at most
 /// `max_timeout_ms` each, beside the agents it has now. `max_timeout_ms`
-/// replaces the peer's longest command run, shorter or longer.
+/// replaces the peer's longest command run, shorter or longer, and
+/// `max_lease_ms` the longest a harness's lease may last.
 ///
 /// # Errors
-/// The peer or an agent is not one, the timeout is out of bounds, or the
-/// grants could not be read or written.
+/// The peer or an agent is not one, the timeout or lease limit is out of
+/// bounds, or the grants could not be read or written.
 pub(super) async fn grant(
     peer: Option<&str>,
     agents: Option<GrantedAgents>,
     max_timeout_ms: Option<u64>,
+    max_lease_ms: Option<u64>,
 ) -> Result<(), RunError> {
     let agents = agents.map(granted_agents).transpose()?;
     let commands = max_timeout_ms
@@ -60,9 +62,27 @@ pub(super) async fn grant(
             })
         })
         .transpose()?;
+    let max_lease = max_lease_ms
+        .map(|ms| {
+            MaxLease::new(ms).map_err(|_| {
+                RunError::Agent(format!(
+                    "--max-lease is at most {} days",
+                    MaxLease::MOST_MS / 86_400_000
+                ))
+            })
+        })
+        .transpose()?;
     let directory = environment_directory()?;
     let peer = peer_named(&directory, peer).await?;
-    change(&directory, peer, GrantOperation::Grant { agents, commands })
+    change(
+        &directory,
+        peer,
+        GrantOperation::Grant {
+            agents,
+            commands,
+            max_lease,
+        },
+    )
 }
 
 /// `nessa env ungrant`: take `what` back from `peer`.

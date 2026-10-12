@@ -9,6 +9,14 @@ use nessa_sdk::application::agent_execution::sessions::StorageError;
 use nessa_sdk::domain::agent_execution::{executions::MessageChunk, leases::LeaseRevision};
 use std::collections::VecDeque;
 
+/// A wall clock stopped at one moment.
+struct At(u64);
+impl Clock for At {
+    fn unix_milliseconds(&self) -> u64 {
+        self.0
+    }
+}
+
 struct Script(VecDeque<ExecutionEvent>);
 impl ExecutionEventStream for Script {
     fn next(&mut self) -> ProviderObservationFuture<'_> {
@@ -49,6 +57,7 @@ async fn l1_the_in_process_environment_grants_the_harness_default_and_the_fence_
         in_process_environment().as_ref(),
         request(SandboxProfiles::HARNESS_DEFAULT),
         binding(),
+        &At(0),
     )
     .await;
     assert_eq!(opening.refusal, None);
@@ -66,6 +75,7 @@ async fn l2_a_binding_that_declares_no_profile_is_refused_and_its_fence_opens_no
         in_process_environment().as_ref(),
         request(SandboxProfiles::NONE),
         binding(),
+        &At(0),
     )
     .await;
     assert_eq!(opening.refusal, Some(LeaseRefusal::SandboxUnavailable));
@@ -79,6 +89,7 @@ async fn l9_events_settle_while_ending_and_are_dropped_with_evidence_once_closed
         in_process_environment().as_ref(),
         request(SandboxProfiles::HARNESS_DEFAULT),
         binding(),
+        &At(0),
     )
     .await;
     let fence = &opening.fence;
@@ -115,6 +126,7 @@ async fn l9_a_cursor_counts_every_event_under_the_lease_across_its_sessions() {
         in_process_environment().as_ref(),
         request(SandboxProfiles::HARNESS_DEFAULT),
         binding(),
+        &At(0),
     )
     .await;
     let fence = &opening.fence;
@@ -142,6 +154,7 @@ async fn l9_drops_past_the_kept_bound_are_counted_and_not_kept_over_the_whole_le
         in_process_environment().as_ref(),
         request(SandboxProfiles::HARNESS_DEFAULT),
         binding(),
+        &At(0),
     )
     .await;
     let fence = &opening.fence;
@@ -318,6 +331,7 @@ async fn a_published_file_is_read_only_while_its_lease_is_live() {
         in_process_environment().as_ref(),
         request(SandboxProfiles::HARNESS_DEFAULT),
         binding(),
+        &At(0),
     )
     .await;
     let live = LiveLease::new(&opening);
@@ -350,6 +364,7 @@ async fn a_read_waiting_when_its_lease_ends_is_cut_off_at_once() {
         in_process_environment().as_ref(),
         request(SandboxProfiles::HARNESS_DEFAULT),
         binding(),
+        &At(0),
     )
     .await;
     let live = LiveLease::new(&opening);
@@ -382,6 +397,7 @@ async fn a_read_that_fails_as_its_lease_ends_is_answered_as_ended() {
         in_process_environment().as_ref(),
         request(SandboxProfiles::HARNESS_DEFAULT),
         binding(),
+        &At(0),
     )
     .await;
     let live = LiveLease::new(&opening);

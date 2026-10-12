@@ -12,6 +12,7 @@ use super::paired_environments::{ListenerEnvironments, RegistryServing};
 use super::peer_reading_tests::{inputs, owned, uuid, NoAgents, WAIT};
 use super::runtime_config::NativeConfig;
 use crate::app::dependencies::RuntimeDependencies;
+use crate::conversation::application::LeaseRelease;
 use crate::conversation::application::{CommandResult, EnvironmentFuture, PairedEnvironments};
 use crate::conversation::infrastructure::ssh_environment::{
     DurableEnvironmentAudit, PeerEnvironments, ServingCredentials, SshTimings,
@@ -22,9 +23,9 @@ use crate::env::{LEASE_PROTOCOL, VERSION};
 use crate::env_serve::application::{
     serve, CommandRan, CommandRunner, CommandStop, Runners, ServeTimings, Serving,
 };
-use crate::env_serve::domain::{CommandGrant, Peer, PeerGrant};
+use crate::env_serve::domain::{Agents, CommandGrant, MaxLease, Peer, PeerGrant};
 use crate::env_serve::infrastructure::{
-    dial, ConfiguredLauncher, FileGrants, FileLedger, FileOutbox, TokioTimer,
+    dial, ConfiguredLauncher, FileGrants, FileLedger, FileOutbox, LaunchSpec, TokioTimer,
 };
 use crate::product::{ProductDependencies, ProductRouteState};
 use nessa_auth::adapters::cedar::CedarPolicyEvaluator;
@@ -40,6 +41,16 @@ use nessa_auth::domain::{AudienceId, OrganizationId, Resource, ResourceId};
 use nessa_client_core::pairing::NativeEnrollmentClient;
 use nessa_protocol::lease::{Cleanup, CommandEnd};
 use nessa_protocol::pairing::wire::NativePairingStatus;
+use nessa_sdk::application::agent_execution::{
+    agents::AgentError,
+    providers::{
+        AgentProvider, HarnessHost, HarnessLaunch, ProviderIdentity, ProviderOpenError,
+        ProviderOpenFuture, ProviderOpenRequest,
+    },
+};
+use nessa_sdk::domain::agent_execution::leases::{
+    AgentWork, LeaseDeadline, LeaseEndCause, LeaseGrants, LeaseTerms, LeaseWork, SandboxProfile,
+};
 use nessa_sdk::domain::agent_execution::leases::{
     CommandExit, CommandRefusal, CommandWork, LeaseCleanup, LeaseId, LeaseRefusal, PeerEnvironment,
 };
@@ -52,6 +63,7 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::io::AsyncReadExt;
 use tokio::sync::{watch, Notify};
 use tokio::task::JoinHandle;
 
@@ -280,6 +292,8 @@ struct Host {
     launcher: Arc<ConfiguredLauncher>,
     peer: Peer,
     grants: Arc<FileGrants>,
+    /// Where `ledger` is written.
+    ledger_path: std::path::PathBuf,
 }
 
 impl Host {
@@ -292,9 +306,20 @@ impl Host {
 
     /// A host whose owner granted the gateway `pin` names nothing yet.
     fn ungranted(root: &Path, pin: [u8; 44]) -> Self {
+        Self::running(root, pin, HashMap::new())
+    }
+
+    /// A host whose configuration starts `agents`, its owner granting the
+    /// gateway `pin` names nothing yet.
+    fn running(
+        root: &Path,
+        pin: [u8; 44],
+        agents: HashMap<nessa_protocol::agents::AgentId, LaunchSpec>,
+    ) -> Self {
         nessa_local_storage::create_directory(root).unwrap();
         let workspace = root.canonicalize().unwrap();
         Self {
+            ledger_path: workspace.join("leases.jsonl"),
             peer: Peer::Gateway { pin },
             grants: Arc::new(FileGrants::new(&workspace)),
             ledger: Arc::new(FileLedger::open(workspace.join("leases.jsonl")).unwrap()),
@@ -308,7 +333,7 @@ impl Host {
             ),
             launcher: Arc::new(ConfiguredLauncher::new(
                 workspace.to_string_lossy().into_owned(),
-                HashMap::new(),
+                agents,
             )),
         }
     }
@@ -741,4 +766,147 @@ async fn a_pin_that_is_not_a_key_is_invalid_input_and_another_key_is_not() {
         .err()
         .expect("another key's pin does not match the gateway");
     assert_eq!(not_the_gateway.kind(), ErrorKind::ConnectionAborted);
+}
+
+/// A binding that runs its harness on whichever host it is given, and
+/// remembers that host.
+struct OnHost {
+    capabilities: nessa_sdk::domain::effective_capabilities::value_objects::EffectiveCapabilities,
+    host: Arc<std::sync::Mutex<Option<Arc<dyn HarnessHost>>>>,
+}
+
+impl AgentProvider for OnHost {
+    fn identity(&self) -> ProviderIdentity {
+        ProviderIdentity::new("fixture", "model", "context").expect("a fixed identity is valid")
+    }
+    fn capabilities(
+        &self,
+    ) -> &nessa_sdk::domain::effective_capabilities::value_objects::EffectiveCapabilities {
+        &self.capabilities
+    }
+    fn open(&self, _request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
+        Box::pin(async { Err(ProviderOpenError::no_resources(AgentError::Closed)) })
+    }
+    fn on_host(&self, host: Arc<dyn HarnessHost>) -> Result<Arc<dyn AgentProvider>, AgentError> {
+        *self.host.lock().unwrap() = Some(host);
+        Ok(Arc::new(Self {
+            capabilities: self.capabilities.clone(),
+            host: self.host.clone(),
+        }))
+    }
+}
+
+/// Row I7 end to end: E's owner lets A's agent leases last a while. A asks
+/// for one with no deadline and is granted it with that duration; past it,
+/// E stops the harness, records the lease expiring and ended as expired,
+/// and says so; A's hold sees the lease ended as expired, and A's End is
+/// answered with what E's own end took.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_paired_environment_expires_a_lease_and_both_sides_record_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let a = Gateway::start(&directory.path().join("a")).await;
+    let e = a
+        .pair(
+            &directory.path().join("e-state"),
+            ConsentClass::PeerEnvironment,
+        )
+        .await;
+    let stream = dial(a.native, e.identity.clone(), e.pin, clock())
+        .await
+        .unwrap();
+    // E runs `claude` as `cat`, which runs until it is stopped.
+    let cat = LaunchSpec {
+        executable: "/bin/cat".into(),
+        args: Vec::new(),
+        environment: Default::default(),
+    };
+    let host = Arc::new(Host::running(
+        &directory.path().join("e"),
+        e.pin,
+        HashMap::from([(nessa_protocol::agents::AgentId::Claude, cat)]),
+    ));
+    let max_lease = MaxLease::new(1_500).unwrap();
+    host.grants
+        .change(&host.peer, |_| {
+            Ok::<_, ()>(Some(
+                PeerGrant::nothing()
+                    .with_agents(Agents::All)
+                    .with_max_lease(max_lease),
+            ))
+        })
+        .unwrap();
+    let (from_gateway, to_gateway) = tokio::io::split(stream);
+    let _serving = {
+        let host = host.clone();
+        tokio::spawn(async move { host.serve(from_gateway, to_gateway).await })
+    };
+    a.until_connected(e.peer, true).await;
+
+    let environment = a.peers.environment(&e.peer);
+    let lease = LeaseId::new(uuid()).unwrap();
+    let terms = LeaseTerms {
+        environment: environment.declaration().environment,
+        work: LeaseWork::Agent(AgentWork::new("claude", "model").unwrap()),
+        sandbox: SandboxProfile::HarnessDefault,
+        grants: LeaseGrants::Opening,
+        deadline: LeaseDeadline::UntilEnded,
+    };
+    let given = Arc::new(std::sync::Mutex::new(None));
+    let binding = Arc::new(OnHost {
+        capabilities: crate::conversation_test_support::Provider::new(Arc::new(
+            crate::conversation_test_support::ProviderFactory::default(),
+        ))
+        .capabilities()
+        .clone(),
+        host: given.clone(),
+    });
+    let opened = tokio::time::timeout(WAIT, environment.open(&lease, &terms, binding))
+        .await
+        .unwrap()
+        .unwrap_or_else(|refusal| panic!("granted: {refusal:?}"));
+    // Granted with the duration E's owner set, though none was asked.
+    assert_eq!(opened.granted.lease_ms, Some(1_500));
+    let harness_host = given.lock().unwrap().clone().unwrap();
+    let mut harness = harness_host.start(HarnessLaunch::default()).unwrap();
+    let ends = opened
+        .hold
+        .ends()
+        .expect("a paired environment's lease can end there");
+    assert_eq!(
+        tokio::time::timeout(WAIT, ends).await.expect("E ends it"),
+        LeaseEndCause::Expired
+    );
+    // A's End is answered with E's own end's cleanup.
+    let released = tokio::time::timeout(WAIT, opened.hold.end(LeaseEndCause::Expired))
+        .await
+        .unwrap();
+    assert!(
+        matches!(
+            released,
+            LeaseRelease::Released(LeaseCleanup::Confirmed { .. })
+        ),
+        "{released:?}"
+    );
+    // The harness was stopped there: its output ends.
+    let mut rest = Vec::new();
+    let _ = tokio::time::timeout(WAIT, harness.output.read_to_end(&mut rest)).await;
+    let entries: Vec<serde_json::Value> = std::fs::read_to_string(&host.ledger_path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .filter(|entry: &serde_json::Value| entry["lease"] == lease.as_str())
+        .collect();
+    let kinds: Vec<_> = entries
+        .iter()
+        .map(|entry| entry["kind"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        kinds,
+        ["granted", "started", "expiring", "stopped", "ended"],
+        "{entries:?}"
+    );
+    assert_eq!(entries[0]["leaseMs"], 1_500);
+    assert_eq!(entries[2]["leaseMs"], 1_500);
+    assert_eq!(entries[4]["cause"], "expired");
+    assert_eq!(entries[4]["cleanup"]["outcome"], "confirmed");
 }
