@@ -7,7 +7,7 @@
 //! test beside this module refuses a copy that has drifted.
 use crate::attachments::application::{AttachmentLimits, HeldReads};
 use crate::conversation::application::{
-    ArtifactBudget, ARTIFACT_READ_RESUMES, MAX_READ_GRANTS_PER_CONVERSATION,
+    ArtifactBudget, ARTIFACT_READ_RESUMES, MAX_READ_GRANTS_PER_CONVERSATION, PUBLISH_CALL_WAIT,
 };
 use crate::conversation::infrastructure::{DISCOVERY_STEPS_PER_READ, MAX_CATALOGUE_CHANGE_WATCHES};
 use crate::mcp_servers::infrastructure::{MAX_BUILT_IN_CALLS, MAX_BUILT_IN_LINE_BYTES};
@@ -280,6 +280,12 @@ fn catalogue() -> &'static [Limit] {
             meaning: "a published file not read and checked by then is refused, and nothing held",
         },
         Limit {
+            id: "artifact.publish_call_wait",
+            tier: "fixed",
+            owner: "conversation PUBLISH_CALL_WAIT",
+            meaning: "an artifacts_publish call whose file is not kept this long after it asked answers timed_out; counted from the ask, so it covers staging and any wait behind files already offered under the lease as well as the read; a timed_out file may still be kept, named for the call's person",
+        },
+        Limit {
             id: "record.discovery_steps",
             tier: "fixed",
             owner: "record read DISCOVERY_STEPS_PER_READ",
@@ -490,6 +496,7 @@ pub(crate) fn effective_json(
         "artifact.publish_deadline",
         millis(AttachmentLimits::default().publish_deadline),
     );
+    put("artifact.publish_call_wait", millis(PUBLISH_CALL_WAIT));
     put("peer.poll_interval", millis(POLL_INTERVAL));
     put("peer.poll_backoff_cap", millis(POLL_BACKOFF_CAP));
     put("peer.read_budget", millis(READ_BUDGET));

@@ -33,6 +33,7 @@
 //! today, is `conversation::infrastructure::environment`; nothing in
 //! `product/` names either.
 use futures_util::FutureExt;
+use nessa_protocol::lease::{CollectionRefusal, PublishRefusal};
 use nessa_sdk::application::agent_execution::{
     agents::{Agent, AgentError},
     permissions::ActionContext,
@@ -150,6 +151,50 @@ pub(crate) trait LeaseHold: Send + Sync {
     fn artifacts(&self) -> Option<tokio::sync::mpsc::Receiver<super::ArtifactOffer>> {
         None
     }
+    /// Ask the environment to publish a file under the lease for the agent's
+    /// own tool call (issue #701, slice D3a). What it answers is whether the
+    /// file was offered: once it is, it arrives on [`Self::artifacts`] like
+    /// any other, naming `ask.request`, and is kept or refused there. `None`
+    /// for an environment that publishes nothing, as in process. It
+    /// resolves once the environment answers, or as
+    /// [`PublishFailure::Unanswered`] once the lease is no longer held there,
+    /// so it never outlives the lease: an ask is let go only by its answer.
+    fn publish(
+        &self,
+        _ask: PublishAsk,
+    ) -> Option<EnvironmentFuture<'static, Result<(), PublishFailure>>> {
+        None
+    }
+}
+
+/// A file the agent asked to publish, as the environment is asked for it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PublishAsk {
+    /// The tool call it is for; its offer names it.
+    pub(crate) request: String,
+    /// The file: absolute, or relative to the environment's workspace,
+    /// which the environment resolves and holds it to.
+    pub(crate) path: String,
+    /// Its media type, when the agent named one.
+    pub(crate) media_type: Option<String>,
+}
+
+/// Why a file asked for was not offered to be kept.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    not(unix),
+    allow(dead_code, reason = "answered by the Unix gateway's SSH adapter")
+)]
+pub(crate) enum PublishFailure {
+    /// The environment did not publish it: nothing of it was offered.
+    NotPublished(PublishRefusal),
+    /// The environment offered it and it was refused before the
+    /// conversation could take it, as no more could be taken just then.
+    Refused(CollectionRefusal),
+    /// No answer could be had: the connection to the environment was lost,
+    /// or the lease is no longer held there. Whether it staged the file is
+    /// not known here.
+    Unanswered,
 }
 
 /// What an environment answered when its lease was ended.
@@ -682,6 +727,15 @@ impl LiveLease {
     /// gateway itself.
     pub(crate) fn lost(&self) -> Option<EnvironmentFuture<'static, ()>> {
         self.hold.as_ref().and_then(|hold| hold.lost())
+    }
+
+    /// Ask the environment to publish a file under this lease; see
+    /// [`LeaseHold::publish`].
+    pub(crate) fn publish(
+        &self,
+        ask: PublishAsk,
+    ) -> Option<EnvironmentFuture<'static, Result<(), PublishFailure>>> {
+        self.hold.as_ref().and_then(|hold| hold.publish(ask))
     }
 
     /// The files published under this lease, handed out once; see

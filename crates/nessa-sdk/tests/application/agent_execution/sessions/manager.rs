@@ -1425,7 +1425,7 @@ mod artifact_records {
             .await
             .unwrap();
         let saves = lease.changes.lock().unwrap().len();
-        let mut renamed = artifact("lease-1", None);
+        let mut renamed = artifact("lease-1", Some("active"));
         renamed.name = ArtifactName::new("again.pdf").unwrap();
         assert_eq!(manager.record_artifact(renamed).await, Ok(()));
         assert_eq!(lease.changes.lock().unwrap().len(), saves);
@@ -1475,6 +1475,59 @@ mod artifact_records {
         assert_eq!(
             manager.record_artifact(artifact("lease-1", None)).await,
             Err(ArtifactRecordError::NotThisLease)
+        );
+    }
+
+    /// The same file is a record of its own for each turn, and for each
+    /// person who asked for it; asked again by the same one in the same
+    /// turn, it is not.
+    #[tokio::test]
+    async fn the_same_file_asked_in_another_turn_or_by_another_person_is_recorded_again() {
+        let (manager, lease) = leased().await;
+        let issuers = artifact("lease-1", Some("active"));
+        manager.record_artifact(issuers.clone()).await.unwrap();
+        let no_turn = artifact("lease-1", None);
+        let turns_person = ArtifactRecord {
+            actor: ActionContext::new("user", "test", "call-1").unwrap(),
+            ..issuers.clone()
+        };
+        for record in [no_turn.clone(), turns_person.clone()] {
+            let saves = lease.changes.lock().unwrap().len();
+            assert_eq!(manager.record_artifact(record.clone()).await, Ok(()));
+            assert_eq!(
+                lease.changes.lock().unwrap().last().unwrap(),
+                &vec![SessionChange::Artifact(record)]
+            );
+            assert_eq!(lease.changes.lock().unwrap().len(), saves + 1);
+        }
+        // The same person in the same turn, asking with another request, is
+        // the same record: the first one's request stands.
+        let saves = lease.changes.lock().unwrap().len();
+        let asked_again = ArtifactRecord {
+            actor: ActionContext::new("user", "test", "call-2").unwrap(),
+            ..turns_person.clone()
+        };
+        assert!(asked_again.is_same_record(&turns_person));
+        assert_eq!(manager.record_artifact(asked_again.clone()).await, Ok(()));
+        assert_eq!(manager.record_artifact(turns_person.clone()).await, Ok(()));
+        assert_eq!(lease.changes.lock().unwrap().len(), saves);
+        assert_eq!(
+            observed_artifacts(&manager).await,
+            vec![issuers, no_turn, turns_person]
+        );
+        // Read back as written.
+        let load = lease.load().await.unwrap();
+        assert_eq!(load.snapshot().unwrap().artifacts.len(), 3);
+        // A record may name only a turn the conversation accepted.
+        assert!(
+            manager
+                .accepts_turn(&ExecutionId::new("active").unwrap())
+                .await
+        );
+        assert!(
+            !manager
+                .accepts_turn(&ExecutionId::new("never").unwrap())
+                .await
         );
     }
 
@@ -1529,12 +1582,7 @@ mod artifact_records {
             .unwrap()
             .artifacts
             .resize(ArtifactRecord::MAX_PER_CONVERSATION, recorded.clone());
-        assert_eq!(
-            manager
-                .has_artifact_room(&recorded.lease, &recorded.file)
-                .await,
-            Some(true)
-        );
+        assert_eq!(manager.has_artifact_room(&recorded).await, Some(true));
         assert_eq!(manager.record_artifact(recorded.clone()).await, Ok(()));
         assert_eq!(lease.changes.lock().unwrap().len(), saves);
         let other = PublishedFile::new(
@@ -1544,7 +1592,19 @@ mod artifact_records {
         )
         .unwrap();
         assert_eq!(
-            manager.has_artifact_room(&recorded.lease, &other).await,
+            manager
+                .has_artifact_room(&ArtifactRecord {
+                    file: other,
+                    ..recorded.clone()
+                })
+                .await,
+            Some(false)
+        );
+        // The same file in another turn is another record, with no room.
+        assert_eq!(
+            manager
+                .has_artifact_room(&artifact("lease-1", Some("active")))
+                .await,
             Some(false)
         );
     }
