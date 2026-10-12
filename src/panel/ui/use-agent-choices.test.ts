@@ -15,6 +15,8 @@ import { useBindCatalogFallback, useConversationChoices } from "./use-agent-choi
 
 let container: HTMLElement
 let root: Root
+const OFF = { claude: "off", codex: "off" } as const
+
 const setSelection = vi.fn()
 
 function Draft(props: {
@@ -114,13 +116,16 @@ it("replaces the choices with each catalog the follow sends, and stops it on unm
   act(() => root.render(React.createElement(Choices, { available: true, follow })))
   expect(container.textContent).toBe("none")
   act(() =>
-    show?.({ catalog: { agents: [], environments: ["devbox"] }, chosenAgent: undefined }),
+    show?.({
+      catalog: { agents: [], environments: ["devbox"], nativeHooks: OFF },
+      chosenAgent: undefined,
+    }),
   )
   expect(container.textContent).toBe("devbox")
   const peer = `peer:${"ab".repeat(32)}`
   act(() =>
     show?.({
-      catalog: { agents: [], environments: ["devbox", peer] },
+      catalog: { agents: [], environments: ["devbox", peer], nativeHooks: OFF },
       chosenAgent: undefined,
     }),
   )
@@ -142,7 +147,10 @@ it("stops the follow and offers nothing while the gateway is unavailable", () =>
   }
   act(() => root.render(React.createElement(Choices, { available: true, follow })))
   act(() =>
-    show?.({ catalog: { agents: [], environments: ["devbox"] }, chosenAgent: undefined }),
+    show?.({
+      catalog: { agents: [], environments: ["devbox"], nativeHooks: OFF },
+      chosenAgent: undefined,
+    }),
   )
   act(() => root.render(React.createElement(Choices, { available: false, follow })))
   expect(stop).toHaveBeenCalledOnce()

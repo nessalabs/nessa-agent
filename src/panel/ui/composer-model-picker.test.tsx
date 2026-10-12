@@ -34,6 +34,7 @@ const model = (modelId: string, displayName: string, tokens: number) => ({
 
 const catalog: AgentsListResult = {
   environments: [],
+  nativeHooks: { claude: "off", codex: "off" },
   agents: [
     {
       agent: "claude",

@@ -7,6 +7,10 @@
 //!              speaking its own shapes
 //!           -> hooks: Claude and OpenCode report unknown across open, prompt,
 //!              and restoration. Codex's unsupported fact is in `codex`
+//!           -> native_hooks: Claude and Codex, when the switch is on, omit
+//!              suppression. Claude sends setting sources user, project, and
+//!              local. The fixture then runs a planted command hook.
+//!              OpenCode has no switch
 //!           -> images (advertised prompt capability, byte source, content blocks)
 //!           -> deletion (a connection of its own: initialize, session/delete)
 //!           -> effort (a selected level sent and read back; offered levels narrowed)
@@ -30,6 +34,7 @@ mod identity;
 mod images;
 mod live;
 mod live_presets;
+mod native_hooks;
 mod opencode;
 mod permissions;
 mod prompts;

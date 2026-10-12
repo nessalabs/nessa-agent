@@ -201,6 +201,7 @@ const tool = {
   status: "completed",
   details: "Two rows.",
   input: "",
+  nativeHooks: "off",
 }
 const mcpName = "😀".repeat(32)
 for (const valid of [

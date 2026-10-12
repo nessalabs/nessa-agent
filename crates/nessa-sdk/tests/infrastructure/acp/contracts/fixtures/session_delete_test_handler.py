@@ -25,6 +25,9 @@ root = pathlib.Path.cwd()
 # Where this process was told its home is: a binding that launches in a
 # private directory points it there, and must release it.
 (root / "home").write_text(os.environ.get("HOME", ""))
+# The session configuration a Codex launch was given, so a test can see what
+# the deletion process asked of the agent's own hooks.
+(root / "codex-config").write_text(os.environ.get("CODEX_CONFIG", ""))
 methods = []
 
 

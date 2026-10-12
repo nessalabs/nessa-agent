@@ -265,3 +265,39 @@ async fn an_unsolicited_cancellation_drops_arguments_before_the_next_generation(
     )
     .await;
 }
+
+#[tokio::test]
+async fn each_tool_event_carries_the_hooks_choice_its_process_start_used() {
+    let _process_slot = process_test_slot().await;
+    let (_root, binding) = test_acp_binding("unsupported-tool-content", 32);
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
+    let running = start(&opened, "first").await;
+    let mut tools = 0;
+    loop {
+        let event = timeout(Duration::from_secs(3), opened.events.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        match event.update() {
+            // This start kept hooks suppressed, and the event says so.
+            ExecutionUpdate::Tool(_) => {
+                assert_eq!(event.native_hooks(), Some(false));
+                tools += 1;
+            }
+            ExecutionUpdate::Finished(_) => break,
+            _ => assert_eq!(event.native_hooks(), None),
+        }
+    }
+    assert!(tools > 0);
+    assert_eq!(running.await.unwrap(), Ok(ExecutionOutcome::Completed));
+    opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await
+        .into_result()
+        .unwrap();
+}
