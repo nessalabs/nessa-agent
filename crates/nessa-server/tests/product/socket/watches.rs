@@ -519,9 +519,10 @@ async fn watch_admission_worker_loss_retains_original_owner_while_other_read_and
     );
     let control = text(peer.message().await);
     assert_eq!(control["id"], "control-while-watch-held");
-    // Current policy admitted and the actual control dispatcher answered. This
-    // fixture has no Agent/service, so it proves dispatch progress, not a stopped Agent.
-    assert_eq!(control["error"]["code"], "conversations_not_configured");
+    // The control was read and answered while the watch is held: this session
+    // is a paired device, so admission refuses its close (issue 707, row
+    // J12). That answer proves dispatch progress, not a stopped Agent.
+    assert_eq!(control["error"]["code"], "forbidden");
     assert_eq!(work.completed.load(Ordering::SeqCst), 0);
     drop(peer);
     socket.await.unwrap();
