@@ -61,15 +61,21 @@ fn tool_rules_are_bounded_and_plain() {
     let kept = rules(&["Read", &longest], &["Bash(rm -rf:*)"]).unwrap();
     assert_eq!(kept.allow(), ["Read".to_owned(), longest.clone()]);
     assert_eq!(kept.deny(), ["Bash(rm -rf:*)".to_owned()]);
-    assert!(rules(&[], &[]).is_ok());
+    assert_eq!(rules(&[], &[]), Err(ToolPolicyError::NoRules));
+    assert!(rules(&["Read"], &[]).is_ok());
+    assert!(rules(&[], &["Bash"]).is_ok());
 
+    // Each list is bounded on its own: both full is allowed, one past is not.
     let full: Vec<String> = (0..ToolRules::MAX_RULES).map(|n| format!("t{n}")).collect();
-    let (allow, deny) = full.split_at(ToolRules::MAX_RULES / 2);
-    assert!(ToolRules::new(allow.to_vec(), deny.to_vec()).is_ok());
-    let mut over = deny.to_vec();
+    assert!(ToolRules::new(full.clone(), full.clone()).is_ok());
+    let mut over = full.clone();
     over.push("one-more".into());
     assert_eq!(
-        ToolRules::new(allow.to_vec(), over),
+        ToolRules::new(over.clone(), full.clone()),
+        Err(ToolPolicyError::TooManyRules)
+    );
+    assert_eq!(
+        ToolRules::new(full, over),
         Err(ToolPolicyError::TooManyRules)
     );
     // The bound is bytes: one multi-byte character past it is refused.

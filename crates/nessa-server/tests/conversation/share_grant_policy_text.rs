@@ -8,8 +8,8 @@ use super::*;
 fn a_policy_reads_back_as_itself_within_its_bound() {
     let longest = "\"".repeat(ToolRules::MAX_RULE_BYTES);
     let rules = ToolRules::new(
-        vec![longest.clone(); ToolRules::MAX_RULES / 2],
-        vec![longest; ToolRules::MAX_RULES / 2],
+        vec![longest.clone(); ToolRules::MAX_RULES],
+        vec![longest; ToolRules::MAX_RULES],
     )
     .unwrap();
     let mut policies = vec![ToolPolicy::Rules(rules)];
@@ -33,6 +33,7 @@ fn a_policy_reads_back_as_itself_within_its_bound() {
         r#"{"preset":"everything"}"#,
         r#"{"allow":[]}"#,
         r#"{"allow":[],"deny":[""]}"#,
+        r#"{"allow":[],"deny":[]}"#,
         r#"{"preset":"all","allow":[]}"#,
     ] {
         assert_eq!(policy_from(damaged), None, "{damaged}");

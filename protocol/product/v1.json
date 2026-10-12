@@ -2287,7 +2287,7 @@
     "ConversationToolPolicy": {
       "type": "object",
       "additionalProperties": false,
-      "description": "The tool policy a drive grant's turns run under: either preset alone, or allow and deny together. Allow and deny hold at most 16 patterns between them, each 1 to 64 UTF-8 bytes with no surrounding whitespace and no control character; anything else is refused invalid_request. A pattern is kept as written; nothing evaluates it yet.",
+      "description": "The tool policy a drive grant's turns run under: either preset alone, or allow and deny together. Allow and deny each hold at most 16 patterns, and at least one of the two holds one (both empty is refused); each pattern is 1 to 48 UTF-8 bytes with no surrounding whitespace and no control character; anything else is refused invalid_request. A pattern is kept as written; nothing evaluates it yet.",
       "properties": {
         "preset": {
           "$ref": "#/$defs/ConversationToolPreset",
@@ -2299,8 +2299,8 @@
           "items": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 64,
-            "x-utf8MaxBytes": 64
+            "maxLength": 48,
+            "x-utf8MaxBytes": 48
           },
           "description": "Tools the holder's turns may call. Present with deny, without preset."
         },
@@ -2310,8 +2310,8 @@
           "items": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 64,
-            "x-utf8MaxBytes": 64
+            "maxLength": 48,
+            "x-utf8MaxBytes": 48
           },
           "description": "Tools the holder's turns may never call. Present with allow, without preset."
         }

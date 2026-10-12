@@ -924,7 +924,7 @@ export const ConversationToolPreset = {
 } as const
 export type ConversationToolPreset =
   (typeof ConversationToolPreset)[keyof typeof ConversationToolPreset]
-/** The tool policy a drive grant's turns run under: either preset alone, or allow and deny together. Allow and deny hold at most 16 patterns between them, each 1 to 64 UTF-8 bytes with no surrounding whitespace and no control character; anything else is refused invalid_request. A pattern is kept as written; nothing evaluates it yet. */
+/** The tool policy a drive grant's turns run under: either preset alone, or allow and deny together. Allow and deny each hold at most 16 patterns, and at least one of the two holds one (both empty is refused); each pattern is 1 to 48 UTF-8 bytes with no surrounding whitespace and no control character; anything else is refused invalid_request. A pattern is kept as written; nothing evaluates it yet. */
 export interface ConversationToolPolicy {
   /** A named policy. Present alone, without allow or deny. */
   preset?: ConversationToolPreset

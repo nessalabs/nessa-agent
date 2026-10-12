@@ -160,8 +160,8 @@ J2 admits Drive's commands, J3 Comment's notes, J4 enforces the policy.
   of "holds a grant", of any role.
 - **The tool policy** is `ToolPolicy`: a preset (`read_only_tools`,
   `no_shell`, `ask_everything`, `all`) or allow and deny patterns. It is
-  checked for shape and size only: at most 16 patterns between the two lists,
-  each 1 to 64 bytes, plain text. Nothing evaluates it yet. `ShareAccess`
+  checked for shape and size only: at most 16 patterns in each list, at
+  least one pattern in one of them, each 1 to 48 bytes, plain text. Nothing evaluates it yet. `ShareAccess`
   holds the two together, so a Drive grant always has a policy and a Read or
   Comment grant never has one (row J3). The store keeps the policy as JSON
   and reads it back through the same constructors.

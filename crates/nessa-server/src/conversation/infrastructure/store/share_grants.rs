@@ -114,7 +114,12 @@ fn policy_from(text: &str) -> Option<ToolPolicy> {
 /// and the object around them. A stored
 /// text past it is read as damage before it is parsed.
 const MAX_POLICY_TEXT_BYTES: usize =
-    ToolRules::MAX_RULES * (2 * ToolRules::MAX_RULE_BYTES + 3) + 32;
+    2 * ToolRules::MAX_RULES * (2 * ToolRules::MAX_RULE_BYTES + 3) + 32;
+
+/// A stored journal sequence, which SQLite numbers from 1.
+fn sequence(value: i64) -> Option<u64> {
+    u64::try_from(value).ok().filter(|sequence| *sequence > 0)
+}
 
 /// What a transition asks the party to hold.
 fn wanted(transition: &ShareGrantTransition) -> Held {
@@ -417,7 +422,7 @@ impl ShareGrants for LocalConversationStore {
                             receiver_id,
                             credential_id: CredentialId::new(credential).ok()?,
                             access: ShareAccess::new(role_named(&role)?, policy).ok()?,
-                            policy_revision: time(policy_revision)?,
+                            policy_revision: sequence(policy_revision)?,
                             granted_at_ms: time(granted_at)?,
                         })
                     },

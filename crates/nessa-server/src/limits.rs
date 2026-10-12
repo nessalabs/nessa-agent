@@ -219,7 +219,7 @@ fn catalogue() -> &'static [Limit] {
             id: "conversation.tool_policy_rules",
             tier: "fixed",
             owner: "ToolRules::MAX_RULES in crates/nessa-server/src/conversation/domain/value_objects/share_access.rs, the schema's ConversationToolPolicy",
-            meaning: "the allow and deny patterns one drive grant's tool policy holds together; a conversation.share with more is refused invalid_request",
+            meaning: "the patterns each of a drive grant's allow and deny lists holds; a conversation.share with more in either is refused invalid_request",
         },
         Limit {
             id: "conversation.tool_policy_rule_bytes",

@@ -24,13 +24,12 @@ fn the_largest_shares_answer_fits_one_frame() {
         format!("{tag}{}", "\"".repeat(bytes - tag.len()))
     };
     let pattern = "\"".repeat(ToolRules::MAX_RULE_BYTES);
-    let half = ToolRules::MAX_RULES / 2;
     let drive = ShareAccess::new(
         ShareRole::Drive,
         Some(ToolPolicy::Rules(
             ToolRules::new(
-                vec![pattern.clone(); half],
-                vec![pattern; ToolRules::MAX_RULES - half],
+                vec![pattern.clone(); ToolRules::MAX_RULES],
+                vec![pattern; ToolRules::MAX_RULES],
             )
             .unwrap(),
         )),
@@ -77,6 +76,7 @@ fn the_schema_states_the_share_bounds_the_domain_enforces() {
     let definitions = &schema["$defs"];
     let max = ToolRules::MAX_RULES as u64;
     let bytes = ToolRules::MAX_RULE_BYTES as u64;
+    // Each list is bounded on its own, as `ToolRules::new` checks it.
     for list in ["allow", "deny"] {
         let property = &definitions["ConversationToolPolicy"]["properties"][list];
         assert_eq!(property["maxItems"].as_u64(), Some(max), "{list}");

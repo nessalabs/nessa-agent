@@ -54,17 +54,21 @@ pub struct ToolRules {
 }
 
 impl ToolRules {
-    /// The most patterns one policy holds, allow and deny together.
+    /// The most patterns each list holds: allow, and separately deny.
     pub const MAX_RULES: usize = 16;
     /// The longest pattern, in UTF-8 bytes.
-    pub const MAX_RULE_BYTES: usize = 64;
+    pub const MAX_RULE_BYTES: usize = 48;
 
-    /// Rules from `allow` and `deny`, refused when there are more than
-    /// [`Self::MAX_RULES`] patterns, or a pattern is empty, longer than
+    /// Rules from `allow` and `deny`, refused when both are empty (a Drive
+    /// grant's policy must say something), when either holds more than
+    /// [`Self::MAX_RULES`] patterns, or when a pattern is empty, longer than
     /// [`Self::MAX_RULE_BYTES`], has surrounding whitespace, or holds a
     /// control character.
     pub fn new(allow: Vec<String>, deny: Vec<String>) -> Result<Self, ToolPolicyError> {
-        if allow.len() + deny.len() > Self::MAX_RULES {
+        if allow.is_empty() && deny.is_empty() {
+            return Err(ToolPolicyError::NoRules);
+        }
+        if allow.len() > Self::MAX_RULES || deny.len() > Self::MAX_RULES {
             return Err(ToolPolicyError::TooManyRules);
         }
         for rule in allow.iter().chain(&deny) {
@@ -99,7 +103,9 @@ pub enum ToolPolicy {
 /// Why a set of tool rules was refused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolPolicyError {
-    /// More than [`ToolRules::MAX_RULES`] patterns, allow and deny together.
+    /// Neither an allow nor a deny pattern.
+    NoRules,
+    /// More than [`ToolRules::MAX_RULES`] patterns in allow, or in deny.
     TooManyRules,
     /// A pattern longer than [`ToolRules::MAX_RULE_BYTES`].
     RuleTooLong,
