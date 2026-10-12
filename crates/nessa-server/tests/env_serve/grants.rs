@@ -36,13 +36,13 @@ fn a_peer_without_an_entry_has_its_defaults() {
 #[test]
 fn an_agent_is_admitted_only_when_granted() {
     let some = PeerGrant::new(named(&["claude"]), None);
-    assert_eq!(admit_agent(&some, "claude"), Ok(()));
+    assert_eq!(admit_agent(&some, "claude"), Ok(None));
     assert_eq!(admit_agent(&some, "codex"), Err(NotGranted));
     assert_eq!(
         admit_agent(&PeerGrant::nothing(), "claude"),
         Err(NotGranted)
     );
-    assert_eq!(admit_agent(&PeerGrant::everything(), "codex"), Ok(()));
+    assert_eq!(admit_agent(&PeerGrant::everything(), "codex"), Ok(None));
 }
 
 /// A command is admitted only with commands granted, for the timeout asked

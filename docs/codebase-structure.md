@@ -817,7 +817,9 @@ bounded FIFO with ordinary admission permits and reserved HTTP control capacity;
 `http` owns provisional/validated binding claims
 and the modern POST authorization/status policy shared by startup and recovery;
 [ADR 392](adr/todo/392-remote-mcp-servers.md) maps its orderings to
-`http_progress`, the owning `http_shutdown` close-fence tests, `connection_end`
+`http_progress`, `http_task_panic` (a custom-adapter panic in a reply reader,
+legacy stream, server stream, or recovery), the owning `http_shutdown`
+close-fence tests, `connection_end`
 for the Connection-private State/watch admission snapshot, `post_streams`
 and their shared `post_body` test fixture, tested in
 `tests/infrastructure/mcp/` against in-process and process fixtures. The

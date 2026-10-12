@@ -10,21 +10,22 @@ use super::{
     install::{
         Build, BuildSource, HostInstaller, InstallTimings, OwnExecutable, RemoteShell, ShellFuture,
     },
+    link::{HostLink, Liveness},
     open_ssh::OpenSshConnector,
 };
 use crate::conversation::application::{Environment, GrantedTerms, LeaseRelease};
 use crate::env::{LEASE_PROTOCOL, VERSION};
 use crate::env_serve::application::FrameStream;
 use crate::env_serve::application::{
-    serve, CommandRan, CommandRunner, CommandStop, HarnessLauncher, LeaseLedger, LedgerEntry,
-    PeerGrants, Runners, ServeTimings, Serving,
+    serve, CommandRan, CommandRunner, CommandStop, EndCause, HarnessLauncher, LeaseLedger,
+    LedgerEntry, PeerGrants, Runners, ServeTimings, Serving,
 };
 use crate::env_serve::domain::{Agents, CommandGrant, Peer, PeerGrant};
 use crate::env_serve::infrastructure::TokioTimer;
 use crate::env_serve::install::Platform;
 use nessa_protocol::lease::{
     decode, encode, Cleanup, CommandEnd, Data, FromEnvironment, GrantedTerms as WireTerms, Sandbox,
-    ToEnvironment,
+    ToEnvironment, KEEPALIVE_INTERVAL, SILENCE_LIMIT,
 };
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
@@ -183,6 +184,17 @@ enum Reach {
     /// A host that grants the first lease it is asked for, then stops
     /// reading until `gate` opens, and then keeps every frame it reads.
     Stalling(tokio::sync::watch::Receiver<bool>),
+    /// A host that grants the first command lease it is asked for, then
+    /// says it is ending it, as no host may, and keeps reading.
+    EndsItsCommand,
+    /// A host that grants every lease, says it is ending one as expired at
+    /// once when `early`, and, told it is revoked, says each is ending as
+    /// expired and then ended; keeps every frame it reads.
+    Expiring { early: bool },
+    /// A host that answers each Grant it reads only once `gate` opens,
+    /// granting it, and, told it is revoked, says each lease it granted
+    /// ended; keeps every frame it reads.
+    GrantingLate(tokio::sync::watch::Receiver<bool>),
     /// `ssh` cannot be started.
     Unreachable,
     /// The stream ends at once with nothing said on it: no copy of this
@@ -317,6 +329,7 @@ impl LeaseConnector for Connector {
                                 terms: WireTerms {
                                     sandbox: Sandbox::HarnessDefault,
                                     timeout_ms: None,
+                                    lease_ms: None,
                                 },
                             })
                             .unwrap();
@@ -333,6 +346,145 @@ impl LeaseConnector for Connector {
                         tokio::time::sleep(Duration::from_millis(1)).await;
                     }
                     drop(host_out);
+                });
+            }
+            Reach::EndsItsCommand => {
+                tokio::spawn(async move {
+                    let (host_in, mut host_out) = split(host);
+                    let mut stream = FrameStream::new(host_in);
+                    let hello = encode(&FromEnvironment::Hello {
+                        build: VERSION.into(),
+                        protocol: LEASE_PROTOCOL.into(),
+                        workspace: "/srv/work".into(),
+                    })
+                    .unwrap();
+                    host_out.write_all(&hello).await.unwrap();
+                    while let Ok(Some(body)) = stream.next().await {
+                        if let Ok(ToEnvironment::GrantCommand {
+                            lease, timeout_ms, ..
+                        }) = decode(&body)
+                        {
+                            for frame in [
+                                FromEnvironment::Granted {
+                                    lease: lease.clone(),
+                                    terms: WireTerms {
+                                        sandbox: Sandbox::None,
+                                        timeout_ms: Some(timeout_ms),
+                                        lease_ms: None,
+                                    },
+                                },
+                                FromEnvironment::Ending {
+                                    lease,
+                                    cause: nessa_protocol::lease::EndingCause::Expired,
+                                },
+                            ] {
+                                host_out.write_all(&encode(&frame).unwrap()).await.unwrap();
+                            }
+                        }
+                    }
+                });
+            }
+            Reach::Expiring { early } => {
+                let frames = self.frames.clone();
+                tokio::spawn(async move {
+                    let (host_in, mut host_out) = split(host);
+                    let mut stream = FrameStream::new(host_in);
+                    let hello = encode(&FromEnvironment::Hello {
+                        build: VERSION.into(),
+                        protocol: LEASE_PROTOCOL.into(),
+                        workspace: "/srv/work".into(),
+                    })
+                    .unwrap();
+                    host_out.write_all(&hello).await.unwrap();
+                    let mut granted = Vec::new();
+                    while let Ok(Some(body)) = stream.next().await {
+                        let Ok(frame) = decode::<ToEnvironment>(&body) else {
+                            continue;
+                        };
+                        frames.lock().unwrap().push(frame.clone());
+                        let ending = |lease: &str| FromEnvironment::Ending {
+                            lease: lease.into(),
+                            cause: nessa_protocol::lease::EndingCause::Expired,
+                        };
+                        let mut said = Vec::new();
+                        match frame {
+                            ToEnvironment::Grant { lease, .. } => {
+                                said.push(FromEnvironment::Granted {
+                                    lease: lease.clone(),
+                                    terms: WireTerms {
+                                        sandbox: Sandbox::HarnessDefault,
+                                        timeout_ms: None,
+                                        lease_ms: None,
+                                    },
+                                });
+                                if early {
+                                    said.push(ending(&lease));
+                                }
+                                granted.push(lease);
+                            }
+                            ToEnvironment::Revoked => {
+                                for lease in &granted {
+                                    said.push(ending(lease));
+                                    said.push(FromEnvironment::Ended {
+                                        lease: lease.clone(),
+                                        cleanup: Cleanup::Confirmed { forced: false },
+                                    });
+                                }
+                            }
+                            _ => {}
+                        }
+                        for frame in said {
+                            host_out.write_all(&encode(&frame).unwrap()).await.unwrap();
+                        }
+                    }
+                });
+            }
+            Reach::GrantingLate(mut gate) => {
+                let frames = self.frames.clone();
+                tokio::spawn(async move {
+                    let (host_in, mut host_out) = split(host);
+                    let mut stream = FrameStream::new(host_in);
+                    let hello = encode(&FromEnvironment::Hello {
+                        build: VERSION.into(),
+                        protocol: LEASE_PROTOCOL.into(),
+                        workspace: "/srv/work".into(),
+                    })
+                    .unwrap();
+                    host_out.write_all(&hello).await.unwrap();
+                    let mut granted = Vec::new();
+                    while let Ok(Some(body)) = stream.next().await {
+                        let Ok(frame) = decode::<ToEnvironment>(&body) else {
+                            continue;
+                        };
+                        frames.lock().unwrap().push(frame.clone());
+                        let mut said = Vec::new();
+                        match frame {
+                            ToEnvironment::Grant { lease, .. } => {
+                                let _ = gate.wait_for(|open| *open).await;
+                                said.push(FromEnvironment::Granted {
+                                    lease: lease.clone(),
+                                    terms: WireTerms {
+                                        sandbox: Sandbox::HarnessDefault,
+                                        timeout_ms: None,
+                                        lease_ms: None,
+                                    },
+                                });
+                                granted.push(lease);
+                            }
+                            ToEnvironment::Revoked => {
+                                for lease in &granted {
+                                    said.push(FromEnvironment::Ended {
+                                        lease: lease.clone(),
+                                        cleanup: Cleanup::Confirmed { forced: false },
+                                    });
+                                }
+                            }
+                            _ => {}
+                        }
+                        for frame in said {
+                            host_out.write_all(&encode(&frame).unwrap()).await.unwrap();
+                        }
+                    }
                 });
             }
             Reach::Scripted(bodies) => {
@@ -364,7 +516,7 @@ impl LeaseConnector for Connector {
             from_environment: Box::new(from_environment),
             to_environment: Box::new(to_environment),
             keep: Box::new(()),
-            artifacts: Arc::new(NoChannels),
+            artifacts: super::connector::ArtifactTransport::Channels(Arc::new(NoChannels)),
         })
     }
 }
@@ -560,18 +712,12 @@ async fn a_lease_runs_its_harness_on_the_host_and_ends_with_the_hosts_evidence()
     assert!(entries.contains(&LedgerEntry::Ended {
         lease: id.as_str().into(),
         cleanup: Cleanup::Confirmed { forced: false },
-        lost: false,
+        cause: EndCause::Asked,
     }));
     // The lease's end resolves its watch: nothing is left waiting on it.
     tokio::time::timeout(
         Duration::from_secs(5),
-        opened.hold.lost().map_or_else(
-            || {
-                Box::pin(async {})
-                    as crate::conversation::application::EnvironmentFuture<'static, ()>
-            },
-            |lost| lost,
-        ),
+        opened.hold.ends().expect("a host's lease can end there"),
     )
     .await
     .expect("an ended lease's watch resolves");
@@ -714,11 +860,12 @@ async fn a_lost_connection_is_seen_and_the_end_is_accounted_on_a_new_one() {
     let mut process = host.start(HarnessLaunch::default()).unwrap();
     process.input.write_all(b"x").await.unwrap();
     assert_eq!(read_some(process.output.as_mut()).await, b"x");
-    let lost = opened.hold.lost().expect("a host's lease can be lost");
+    let lost = opened.hold.ends().expect("a host's lease can be lost");
     connector.cut();
-    tokio::time::timeout(Duration::from_secs(5), lost)
+    let cause = tokio::time::timeout(Duration::from_secs(5), lost)
         .await
         .expect("the loss is seen");
+    assert_eq!(cause, LeaseEndCause::Lost);
     assert!(matches!(
         host.start(HarnessLaunch::default()),
         Err(AgentError::Closed)
@@ -755,7 +902,7 @@ async fn a_lost_connection_is_seen_and_the_end_is_accounted_on_a_new_one() {
         .contains(&LedgerEntry::Ended {
             lease: id.as_str().into(),
             cleanup: Cleanup::Confirmed { forced: false },
-            lost: true,
+            cause: EndCause::Lost,
         }));
 }
 
@@ -770,7 +917,7 @@ async fn with_the_host_unreachable_a_lost_lease_has_no_evidence() {
         .open(&id, &terms("claude"), binding_only())
         .await
         .unwrap_or_else(|_| panic!("granted"));
-    let lost = opened.hold.lost().unwrap();
+    let lost = opened.hold.ends().unwrap();
     *connector.reach.lock().unwrap() = Reach::Unreachable;
     connector.cut();
     lost.await;
@@ -796,6 +943,7 @@ async fn frames_naming_nothing_held_are_dropped_with_evidence() {
         terms: WireTerms {
             sandbox: Sandbox::HarnessDefault,
             timeout_ms: None,
+            lease_ms: None,
         },
     })
     .unwrap();
@@ -841,6 +989,74 @@ async fn frames_naming_nothing_held_are_dropped_with_evidence() {
         ]
     );
     opening.abort();
+}
+
+/// Row I7 and L9: a host saying it is ending a lease this gateway does not
+/// hold is dropped and recorded, never applied to another lease.
+#[tokio::test]
+async fn an_ending_for_a_lease_not_held_is_dropped_with_evidence() {
+    let ending = serde_json::to_vec(&FromEnvironment::Ending {
+        lease: "never-granted".into(),
+        cause: nessa_protocol::lease::EndingCause::Expired,
+    })
+    .unwrap();
+    let connector = Connector::new(Reach::Scripted(vec![hello_body(LEASE_PROTOCOL), ending]));
+    let audit = Arc::new(Audit::default());
+    let environment = environment(connector, audit.clone());
+    // The grant is never answered by this host; the opening is bounded.
+    let opening = tokio::spawn(async move {
+        environment
+            .open(&lease(), &terms("claude"), binding_only())
+            .await
+            .err()
+    });
+    let drop = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let drop = audit.events().into_iter().find_map(|event| match event {
+                EnvironmentEvent::FrameDropped { lease, frame, .. } => Some((lease, frame)),
+                _ => None,
+            });
+            if let Some(drop) = drop {
+                break drop;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the drop recorded");
+    assert_eq!(drop, (Some("never-granted".into()), "ending".into()));
+    opening.abort();
+}
+
+/// Row I7: a command's lease is bounded by its timeout alone, so a host
+/// saying it is ending one is dropped and recorded, never applied to it.
+#[tokio::test]
+async fn an_ending_for_a_command_lease_is_dropped_with_evidence() {
+    let audit = Arc::new(Audit::default());
+    let host = environment(Connector::new(Reach::EndsItsCommand), audit.clone());
+    let id = lease();
+    let _hold = host
+        .commands()
+        .unwrap()
+        .grant(&id, &work(&["ls"]))
+        .await
+        .expect("granted")
+        .hold;
+    let drop = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let drop = audit.events().into_iter().find_map(|event| match event {
+                EnvironmentEvent::FrameDropped { lease, frame, .. } => Some((lease, frame)),
+                _ => None,
+            });
+            if let Some(drop) = drop {
+                break drop;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the drop recorded");
+    assert_eq!(drop, (Some(id.as_str().to_owned()), "ending".into()));
 }
 
 /// A binding that stops reading its harness's output does not grow the
@@ -1064,7 +1280,7 @@ async fn a_connection_lost_before_its_watch_is_asked_for_is_still_seen() {
     .expect("the loss is recorded");
     let lost = opened
         .hold
-        .lost()
+        .ends()
         .expect("a lease on a host can be lost, and this one was");
     tokio::time::timeout(Duration::from_secs(5), lost)
         .await
@@ -1463,7 +1679,7 @@ async fn a_loss_whose_audit_fails_leaves_the_lease_unanswered() {
         .open(&lease(), &terms("claude"), binding_only())
         .await
         .unwrap_or_else(|_| panic!("granted"));
-    let lost = opened.hold.lost().unwrap();
+    let lost = opened.hold.ends().unwrap();
     audit.1.store(true, Ordering::SeqCst);
     connector.cut();
     tokio::time::timeout(Duration::from_secs(5), lost)
@@ -1490,6 +1706,15 @@ impl crate::env_serve::application::ArtifactOutbox for NoOutbox {
         _request: &crate::env_serve::application::PublishRequest,
     ) -> Result<nessa_protocol::lease::StagedArtifact, nessa_protocol::lease::PublishRefusal> {
         Err(nessa_protocol::lease::PublishRefusal::StagingFailed)
+    }
+    fn read(
+        &self,
+        _lease: &str,
+        _artifact: u32,
+        _offset: u64,
+        _length: usize,
+    ) -> std::io::Result<Vec<u8>> {
+        Err(std::io::Error::other("no outbox"))
     }
     fn discard(&self, _lease: &str, _artifact: u32) {}
     fn close(&self, _lease: &str) {}
@@ -1681,6 +1906,7 @@ async fn what_the_hosts_owner_did_not_grant_is_refused_and_a_narrowed_timeout_is
         GrantedTerms {
             sandbox: SandboxProfile::None,
             timeout_ms: Some(2_000),
+            lease_ms: None,
         }
     );
     drop(granted);
@@ -2468,5 +2694,433 @@ async fn first_use_over_real_ssh() {
             "{}: installed, served, leased; then found and not touched",
             host.as_str()
         );
+    }
+}
+
+// ---- revocation of a paired host (row I8) ----
+
+/// Ends the connection it keeps, as a paired connection's TLS stream ends
+/// once let go.
+struct Cut(Arc<Connector>);
+impl Drop for Cut {
+    fn drop(&mut self) {
+        self.0.cut();
+    }
+}
+
+/// A link over a connection `connector` makes, as a paired host's: closing
+/// it ends the stream.
+async fn dialed_link(connector: &Arc<Connector>, audit: Arc<Audit>) -> Arc<HostLink> {
+    let mut connection = connector.connect(&devbox(), String::new()).unwrap();
+    connection.keep = Box::new(Cut(connector.clone()));
+    HostLink::over(
+        "peer:test",
+        connection,
+        audit,
+        Duration::from_secs(5),
+        Liveness {
+            keepalive: KEEPALIVE_INTERVAL,
+            silence: SILENCE_LIMIT,
+        },
+    )
+    .await
+    .unwrap_or_else(|_| panic!("the host answers"))
+}
+
+async fn let_go(gone: &mut tokio::sync::watch::Receiver<()>) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while gone.changed().await.is_ok() {}
+    })
+    .await
+    .expect("the lease is let go");
+}
+
+/// Row I8 on the gateway's link: once revoked, no lease is admitted, the
+/// lease running on it ends as revoked, the host is told and ends it with
+/// that cause, its End is answered with the host's cleanup, the revocation
+/// is recorded with the lease, and the connection closes once the lease is
+/// let go.
+#[tokio::test]
+async fn a_revoked_link_ends_each_lease_as_revoked_and_closes_once_they_are_ended() {
+    let connector = Connector::new(Reach::Serving);
+    let audit = Arc::new(Audit::default());
+    let link = dialed_link(&connector, audit.clone()).await;
+    let id = lease();
+    let mut granted = link
+        .grant(
+            id.as_str(),
+            "claude",
+            Sandbox::HarnessDefault,
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+    let mut harness = link.start(id.as_str(), BTreeMap::new()).unwrap();
+    harness.input.write_all(b"ping").await.unwrap();
+    assert_eq!(read_some(&mut harness.output).await, b"ping");
+    link.revoke(Duration::from_secs(30));
+    link.revoke(Duration::from_secs(30));
+    // From the moment it is revoked, nothing more is started or published
+    // on it: the host is ending every lease.
+    assert_eq!(
+        link.start(id.as_str(), BTreeMap::new()).err(),
+        Some(super::link::StartError::Closed)
+    );
+    assert_eq!(
+        link.publish(id.as_str(), "call".into(), "out.txt".into(), None)
+            .await
+            .err(),
+        Some(
+            crate::conversation::application::PublishFailure::NotPublished(
+                nessa_protocol::lease::PublishRefusal::LeaseEnded
+            )
+        )
+    );
+    assert_eq!(
+        *granted.ending.wait_for(Option::is_some).await.unwrap(),
+        Some(LeaseEndCause::Revoked)
+    );
+    assert!(link.is_open() && !link.is_serving() && link.revoked());
+    // Nothing more is admitted on it.
+    assert_eq!(
+        link.grant(
+            lease().as_str(),
+            "claude",
+            Sandbox::HarnessDefault,
+            Duration::from_secs(5)
+        )
+        .await
+        .err(),
+        Some(LeaseRefusal::EnvironmentUnreachable)
+    );
+    // Its End is answered with what the host's own end took.
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), link.end(id.as_str()))
+            .await
+            .unwrap(),
+        Some(Cleanup::Confirmed { forced: false })
+    );
+    let_go(&mut granted.gone).await;
+    tokio::time::timeout(Duration::from_secs(5), link.ended())
+        .await
+        .expect("the revoked connection closes once its leases are let go");
+    assert!(!link.unaudited(id.as_str()));
+    assert_eq!(connector.stopped.load(Ordering::SeqCst), 1);
+    let events = audit.events();
+    let revoked = EnvironmentEvent::Revoked {
+        host: "peer:test".into(),
+        leases: vec![id.as_str().into()],
+    };
+    assert_eq!(
+        events.iter().filter(|event| **event == revoked).count(),
+        1,
+        "{events:?}"
+    );
+    assert!(events.contains(&EnvironmentEvent::ConnectionLost {
+        host: "peer:test".into(),
+        leases: Vec::new(),
+    }));
+    let entries = connector.ledger.0.lock().unwrap().clone();
+    let revoking = entries
+        .iter()
+        .position(|entry| matches!(entry, LedgerEntry::Revoking { lease, peer: Peer::Ssh } if lease == id.as_str()))
+        .expect("the host records why it ends the lease");
+    let ended = entries
+        .iter()
+        .position(|entry| {
+            *entry
+                == LedgerEntry::Ended {
+                    lease: id.as_str().into(),
+                    cleanup: Cleanup::Confirmed { forced: false },
+                    cause: EndCause::Revoked,
+                }
+        })
+        .expect("and that it ended as revoked");
+    assert!(revoking < ended, "{entries:?}");
+}
+
+/// A lease the host grants after its connection was revoked, its Grant
+/// already on its way ahead of the `Revoked`, is named in a revocation
+/// record of its own, as every lease the host granted is, and ends as
+/// revoked. That record unwritten, the lease settles nothing as confirmed.
+#[tokio::test]
+async fn a_lease_granted_after_its_revocation_is_recorded_revoked_on_its_own() {
+    for failing in [false, true] {
+        let (open, gate) = tokio::sync::watch::channel(false);
+        let connector = Connector::new(Reach::GrantingLate(gate));
+        let audit = Arc::new(Audit::default());
+        let link = dialed_link(&connector, audit.clone()).await;
+        let id = lease();
+        let asking = {
+            let link = link.clone();
+            let id = id.clone();
+            tokio::spawn(async move {
+                link.grant(
+                    id.as_str(),
+                    "claude",
+                    Sandbox::HarnessDefault,
+                    Duration::from_secs(5),
+                )
+                .await
+            })
+        };
+        // The host has read its Grant, and holds its answer.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !connector
+                .frames
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|frame| matches!(frame, ToEnvironment::Grant { .. }))
+            {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the host reads the Grant");
+        if failing {
+            // Only the revocation's own record is written.
+            audit.2.store(audit.events().len() + 1, Ordering::SeqCst);
+        }
+        link.revoke(Duration::from_secs(30));
+        open.send_replace(true);
+        let mut granted = tokio::time::timeout(Duration::from_secs(5), asking)
+            .await
+            .expect("answered")
+            .unwrap()
+            .expect("the host granted it, its Grant ahead of the revocation");
+        assert_eq!(
+            *granted.ending.wait_for(Option::is_some).await.unwrap(),
+            Some(LeaseEndCause::Revoked)
+        );
+        // The host ends it as told; once it is let go, the connection closes.
+        let_go(&mut granted.gone).await;
+        // Its Ended is read after its Granted was handled.
+        let revocations: Vec<_> = audit
+            .events()
+            .into_iter()
+            .filter(|event| matches!(event, EnvironmentEvent::Revoked { .. }))
+            .collect();
+        let alone = EnvironmentEvent::Revoked {
+            host: "peer:test".into(),
+            leases: vec![id.as_str().into()],
+        };
+        let first = EnvironmentEvent::Revoked {
+            host: "peer:test".into(),
+            leases: Vec::new(),
+        };
+        if failing {
+            assert_eq!(revocations, vec![first], "failing");
+            assert!(link.unaudited(id.as_str()));
+        } else {
+            assert_eq!(revocations, vec![first, alone]);
+            assert!(!link.unaudited(id.as_str()));
+        }
+        drop(granted);
+        tokio::time::timeout(Duration::from_secs(5), link.ended())
+            .await
+            .expect("closed once it is let go");
+    }
+}
+
+/// A revoked connection whose lease nobody ends is closed at its drain
+/// bound all the same: its permit is not held for good.
+#[tokio::test]
+async fn a_revoked_link_closes_at_its_bound_when_a_lease_is_never_ended() {
+    let connector = Connector::new(Reach::Serving);
+    let audit = Arc::new(Audit::default());
+    let link = dialed_link(&connector, audit.clone()).await;
+    let id = lease();
+    let _granted = link
+        .grant(
+            id.as_str(),
+            "claude",
+            Sandbox::HarnessDefault,
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+    link.revoke(Duration::from_millis(100));
+    tokio::time::timeout(Duration::from_secs(5), link.ended())
+        .await
+        .expect("closed at the bound");
+    assert!(audit.events().contains(&EnvironmentEvent::ConnectionLost {
+        host: "peer:test".into(),
+        leases: vec![id.as_str().into()],
+    }));
+}
+
+/// A revocation that cannot be recorded still ends and closes everything,
+/// but settles none of its leases as confirmed: a command the host stops
+/// for it answers no cleanup, where a recorded revocation answers the
+/// host's.
+#[tokio::test]
+async fn a_revocation_whose_audit_fails_leaves_its_leases_unconfirmed() {
+    for failing in [false, true] {
+        let audit = Arc::new(Audit::default());
+        let connector = serving_commands();
+        let host = environment(connector.clone(), audit.clone());
+        let commands = host.commands().unwrap();
+        let hold = commands
+            .grant(&lease(), &work(&["sleep", "60"]))
+            .await
+            .unwrap()
+            .hold;
+        let (_stop, stopped) = tokio::sync::watch::channel(None);
+        let running = tokio::spawn(hold.run(10_000, stopped));
+        // Revoked once the host is running it, so its stop is the revocation's.
+        until_recorded(&connector, |entry| {
+            matches!(entry, LedgerEntry::CommandStarted { .. })
+        })
+        .await;
+        audit.1.store(failing, Ordering::SeqCst);
+        host.revoke_connection().await;
+        let result = tokio::time::timeout(Duration::from_secs(5), running)
+            .await
+            .expect("the host stops it and answers")
+            .unwrap();
+        assert_eq!(
+            result.exit,
+            CommandExit::Stopped {
+                cause: LeaseEndCause::Revoked
+            }
+        );
+        assert_eq!(
+            result.cleanup,
+            (!failing).then_some(LeaseCleanup::Confirmed { forced: true }),
+            "audit failing: {failing}"
+        );
+    }
+
+    let connector = Connector::new(Reach::Serving);
+    let audit = Arc::new(Audit::default());
+    let link = dialed_link(&connector, audit.clone()).await;
+    let id = lease();
+    let mut granted = link
+        .grant(
+            id.as_str(),
+            "claude",
+            Sandbox::HarnessDefault,
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+    audit.1.store(true, Ordering::SeqCst);
+    link.revoke(Duration::from_secs(30));
+    assert_eq!(
+        *granted.ending.wait_for(Option::is_some).await.unwrap(),
+        Some(LeaseEndCause::Revoked)
+    );
+    assert!(link.unaudited(id.as_str()));
+    let _ = tokio::time::timeout(Duration::from_secs(5), link.end(id.as_str())).await;
+    tokio::time::timeout(Duration::from_secs(5), link.ended())
+        .await
+        .expect("closed all the same");
+}
+
+/// Waits until the host's ledger holds an entry `recorded` matches.
+async fn until_recorded(connector: &Connector, recorded: impl Fn(&LedgerEntry) -> bool) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !connector.ledger.0.lock().unwrap().iter().any(&recorded) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the host records it");
+}
+
+/// A command granted before its connection was revoked, and run after, is
+/// still sent to the host, which answers it never started and holds
+/// nothing: its lease ended revoked, on the host's own record.
+#[tokio::test]
+async fn a_command_run_after_its_revocation_is_answered_never_started() {
+    let connector = serving_commands();
+    let host = environment(connector.clone(), Arc::new(Audit::default()));
+    let commands = host.commands().unwrap();
+    let id = lease();
+    let hold = commands
+        .grant(&id, &work(&["sleep", "60"]))
+        .await
+        .unwrap()
+        .hold;
+    host.revoke_connection().await;
+    until_recorded(
+        &connector,
+        |entry| matches!(entry, LedgerEntry::Ended { lease, .. } if lease == id.as_str()),
+    )
+    .await;
+    let (_stop, stopped) = tokio::sync::watch::channel(None);
+    let result = tokio::time::timeout(Duration::from_secs(5), hold.run(10_000, stopped))
+        .await
+        .expect("the host answers it");
+    assert_eq!(result.exit, CommandExit::NotStarted);
+    assert_eq!(result.cleanup, Some(LeaseCleanup::NotHeld));
+    let entries = connector.ledger.0.lock().unwrap().clone();
+    assert!(
+        entries.contains(&LedgerEntry::Revoking {
+            lease: id.as_str().into(),
+            peer: Peer::Ssh,
+        }),
+        "{entries:?}"
+    );
+    assert!(
+        entries.contains(&LedgerEntry::Ended {
+            lease: id.as_str().into(),
+            cleanup: Cleanup::NotHeld,
+            cause: EndCause::Revoked,
+        }),
+        "{entries:?}"
+    );
+    assert!(
+        !entries
+            .iter()
+            .any(|entry| matches!(entry, LedgerEntry::CommandStarted { .. })),
+        "{entries:?}"
+    );
+}
+
+/// The first cause known is the one kept: an expiry the host said before
+/// the revocation stays the lease's cause, and an expiry said after it does
+/// not replace the revocation. The host is told once however often asked.
+#[tokio::test]
+async fn a_lease_ending_for_one_cause_keeps_it_when_the_other_comes() {
+    for (early, kept) in [
+        (true, LeaseEndCause::Expired),
+        (false, LeaseEndCause::Revoked),
+    ] {
+        let connector = Connector::new(Reach::Expiring { early });
+        let link = dialed_link(&connector, Arc::new(Audit::default())).await;
+        let id = lease();
+        let mut granted = link
+            .grant(
+                id.as_str(),
+                "claude",
+                Sandbox::HarnessDefault,
+                Duration::from_secs(5),
+            )
+            .await
+            .unwrap();
+        if early {
+            assert_eq!(
+                *granted.ending.wait_for(Option::is_some).await.unwrap(),
+                Some(LeaseEndCause::Expired)
+            );
+        }
+        link.revoke(Duration::from_secs(30));
+        link.revoke(Duration::from_secs(30));
+        // The host's Ending, then its Ended, follow the revocation.
+        let_go(&mut granted.gone).await;
+        assert_eq!(*granted.ending.borrow(), Some(kept));
+        tokio::time::timeout(Duration::from_secs(5), link.ended())
+            .await
+            .expect("closed");
+        let revoked = connector
+            .frames
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|frame| **frame == ToEnvironment::Revoked)
+            .count();
+        assert_eq!(revoked, 1);
     }
 }

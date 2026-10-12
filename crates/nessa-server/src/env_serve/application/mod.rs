@@ -26,11 +26,13 @@ pub(crate) use grants::{
     PeerGrants,
 };
 pub(crate) use redial::{redial, Backoff};
-#[cfg(test)]
-pub(crate) use serve::Asked;
 pub(crate) use serve::{
     refuse, serve, CommandRan, CommandRunner, CommandStop, HarnessLauncher, LeaseLedger,
     LedgerEntry, Runners, ServeTimings, Serving,
 };
+#[cfg(test)]
+pub(crate) use serve::{Asked, EndCause};
+#[cfg(test)]
+pub(crate) use timer::manual::ManualTimer;
 pub(crate) use timer::{Moment, Sleep, Timer};
 pub(crate) use wire::FrameStream;
