@@ -169,6 +169,8 @@ pub use command_environment::CommandResult;
 // Held by the SSH adapter, which is Unix only, and by tests.
 #[cfg_attr(not(any(unix, test)), allow(unused_imports))]
 pub(crate) use command_environment::CommandHold;
+#[cfg(any(unix, test))]
+pub(crate) use command_environment::GrantedCommand;
 pub(crate) use environment::{Environment, EnvironmentFuture, PublishAsk, PublishFailure};
 // For the adapters, which only the Unix gateway composes (`infrastructure`).
 pub use artifacts::PublishedOutcome;
@@ -178,7 +180,9 @@ pub use artifacts::{
 };
 pub(crate) use artifacts::{ArtifactBudget, ArtifactCollector, PublishRequests};
 #[cfg(any(unix, test))]
-pub(crate) use environment::{EnvironmentDeclaration, EnvironmentLease, LeaseHold, LeaseRelease};
+pub(crate) use environment::{
+    EnvironmentDeclaration, EnvironmentLease, GrantedTerms, LeaseHold, LeaseRelease,
+};
 pub use error::{ConversationError, DeletionFailures, StopFailure};
 pub use error_code::error_code;
 pub use live_changes::{LiveChangePublisher, LiveChanges};

@@ -18,7 +18,7 @@
 //! end of stream ──▶ every route dropped: waiters unanswered, outputs ended,
 //!                   each lease's `gone` closed ──▶ ConnectionLost
 //! publish(lease, request) ──▶ waiter by request ──▶ Publish ──▶ Published | NotPublished
-//! a command lease: grant_command ──▶ GrantCommand ──▶ Granted | Refused
+//! a command lease: grant_command ──▶ GrantCommand ──▶ Granted{terms} | Refused
 //!                  run ──▶ Run ──▶ Ran (routed to its waiter; the lease is done
 //!                  there unless its End is asked, whose Ended follows)
 //! a harness: binding's input ──▶ its pump ──▶ Input… InputClosed ──▶ Stop
@@ -57,8 +57,8 @@ use crate::env_serve::application::FrameStream;
 use futures_util::FutureExt;
 use nessa_protocol::lease::{
     decode, encode, read_hello, stop_steps, Cleanup, Collection, CollectionRefusal, CommandEnd,
-    Data, FromEnvironment, GrantRefusal, PublishRefusal, StagedArtifact, ToEnvironment,
-    Unavailability, MAX_ARTIFACTS_IN_FLIGHT, MAX_DATA_BYTES,
+    Data, FromEnvironment, GrantRefusal, GrantedTerms, PublishRefusal, Sandbox, StagedArtifact,
+    ToEnvironment, Unavailability, MAX_ARTIFACTS_IN_FLIGHT, MAX_DATA_BYTES,
 };
 use nessa_sdk::domain::agent_execution::leases::{LeaseRefusal, SshDestination};
 use std::{
@@ -148,9 +148,29 @@ pub(crate) enum AdmissionRefused {
     Unreachable,
 }
 
+/// A host's refusal of a harness's lease, as the lease's: each reason the
+/// host gives that the gateway records as its own, and no answer, or one a
+/// lease of an agent cannot meet, as unreachable.
+fn lease_refusal(refused: AdmissionRefused) -> LeaseRefusal {
+    match refused {
+        AdmissionRefused::Host(GrantRefusal::AgentUnavailable) => LeaseRefusal::AgentUnavailable,
+        AdmissionRefused::Host(GrantRefusal::NotGranted) => LeaseRefusal::EnvironmentNotGranted,
+        AdmissionRefused::Host(GrantRefusal::SandboxUnavailable) => {
+            LeaseRefusal::SandboxUnavailable
+        }
+        AdmissionRefused::Host(
+            GrantRefusal::Duplicate
+            | GrantRefusal::AuditUnavailable
+            | GrantRefusal::CommandsUnavailable
+            | GrantRefusal::InvalidCommand,
+        )
+        | AdmissionRefused::Unreachable => LeaseRefusal::EnvironmentUnreachable,
+    }
+}
+
 /// One lease held on this connection.
 struct LeaseRoute {
-    grant: Option<oneshot::Sender<Result<(), GrantRefusal>>>,
+    grant: Option<oneshot::Sender<Result<GrantedTerms, GrantRefusal>>>,
     /// A command lease's run, waiting for its `Ran`.
     ran: Option<oneshot::Sender<CommandAnswer>>,
     ended: Option<oneshot::Sender<Cleanup>>,
@@ -198,9 +218,12 @@ pub(crate) struct Published {
     pub(crate) unanswered: OwnedRwLockReadGuard<()>,
 }
 
-/// What a granted lease is handed: its watch, and the files published
-/// under it.
+/// What a granted lease is handed: the terms the host granted, its watch,
+/// and the files published under it.
 pub(crate) struct Granted {
+    /// As the host answered them; the gateway checks them against what it
+    /// asked.
+    pub(crate) terms: GrantedTerms,
     /// Closes once the lease is no longer routed here.
     pub(crate) gone: watch::Receiver<()>,
     /// Ends once the lease is no longer routed here.
@@ -441,35 +464,38 @@ impl HostLink {
         while ended.changed().await.is_ok() {}
     }
 
-    /// Ask the host to admit `lease` for `agent`, waiting at most `deadline`.
+    /// Ask the host to admit `lease` for `agent` in `sandbox`, waiting at
+    /// most `deadline`.
     /// Granted, it answers the lease's watch: it closes once the lease is no
     /// longer routed here — ended, or the connection lost — and, being the
     /// lease's own from its grant, says so even when that happened before
     /// anyone looked.
     ///
     /// # Errors
-    /// The typed refusal; a connection lost or silent is unreachable.
+    /// The typed refusal: the host's own, as the lease's; a connection lost
+    /// or silent is unreachable.
     pub(crate) async fn grant(
         &self,
         lease: &str,
         agent: &str,
+        sandbox: Sandbox,
         deadline: Duration,
     ) -> Result<Granted, LeaseRefusal> {
         let (offers, published) = mpsc::channel(MAX_ARTIFACTS_IN_FLIGHT);
         let frame = ToEnvironment::Grant {
             lease: lease.into(),
             agent: agent.into(),
+            sandbox,
         };
-        let gone = self
+        let (gone, terms) = self
             .admit(lease, frame, Some(offers), deadline)
             .await
-            .map_err(|refused| match refused {
-                AdmissionRefused::Host(GrantRefusal::AgentUnavailable) => {
-                    LeaseRefusal::AgentUnavailable
-                }
-                _ => LeaseRefusal::EnvironmentUnreachable,
-            })?;
-        Ok(Granted { gone, published })
+            .map_err(lease_refusal)?;
+        Ok(Granted {
+            terms,
+            gone,
+            published,
+        })
     }
 
     /// Ask the host to admit command lease `lease` to run `argv` once, as
@@ -484,7 +510,7 @@ impl HostLink {
         cwd: Option<String>,
         timeout_ms: u64,
         deadline: Duration,
-    ) -> Result<watch::Receiver<()>, AdmissionRefused> {
+    ) -> Result<(watch::Receiver<()>, GrantedTerms), AdmissionRefused> {
         let frame = ToEnvironment::GrantCommand {
             lease: lease.into(),
             argv,
@@ -520,14 +546,14 @@ impl HostLink {
 
     /// Route `lease`, offering what it publishes to `published`, and send
     /// `frame`, the request to admit it, and wait at most `deadline` for the
-    /// host's answer.
+    /// host's answer: the lease's watch and the terms it granted.
     async fn admit(
         &self,
         lease: &str,
         frame: ToEnvironment,
         published: Option<mpsc::Sender<Published>>,
         deadline: Duration,
-    ) -> Result<watch::Receiver<()>, AdmissionRefused> {
+    ) -> Result<(watch::Receiver<()>, GrantedTerms), AdmissionRefused> {
         let (answer, answered) = oneshot::channel();
         let gone = {
             let mut routes = self.routes();
@@ -559,7 +585,7 @@ impl HostLink {
             return Err(AdmissionRefused::Unreachable);
         }
         match tokio::time::timeout(deadline, answered).await {
-            Ok(Ok(Ok(()))) => Ok(gone),
+            Ok(Ok(Ok(terms))) => Ok((gone, terms)),
             refused => {
                 self.routes().leases.remove(lease);
                 if refused.is_err() {
@@ -1053,14 +1079,14 @@ fn route_frame(routes: &mut Routes, frame: FromEnvironment) -> Routed {
             }
             None => Routed::Dropped,
         },
-        FromEnvironment::Granted { lease } => {
+        FromEnvironment::Granted { lease, terms } => {
             match routes
                 .leases
                 .get_mut(&lease)
                 .and_then(|route| route.grant.take())
             {
                 Some(waiter) => {
-                    let _ = waiter.send(Ok(()));
+                    let _ = waiter.send(Ok(terms));
                     Routed::Done
                 }
                 None => Routed::Dropped,

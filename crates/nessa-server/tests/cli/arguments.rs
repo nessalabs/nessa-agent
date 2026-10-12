@@ -1,5 +1,5 @@
 use crate::agent_install::domain::AgentName;
-use crate::cli::entrypoint::{parse, Command, LocalProvisioning};
+use crate::cli::entrypoint::{parse, Command, GrantedAgents, LocalProvisioning, Ungranted};
 fn args(words: &[&str]) -> Vec<String> {
     words.iter().map(|s| (*s).into()).collect()
 }
@@ -227,4 +227,137 @@ fn env_enroll_names_a_gateway_and_a_code_and_env_dial_a_gateway() {
     }
     assert!(crate::cli::entrypoint::HELP.contains("nessa env enroll ADDRESS CODE"));
     assert!(crate::cli::entrypoint::HELP.contains("nessa env dial ADDRESS"));
+}
+
+#[test]
+fn env_grant_names_agents_or_every_agent_and_commands_with_their_longest_run() {
+    assert_eq!(
+        parse(&args(&[
+            "env", "grant", "--agent", "claude", "--agent", "codex"
+        ]))
+        .unwrap(),
+        Command::EnvGrant {
+            peer: None,
+            agents: Some(GrantedAgents::Named(vec!["claude".into(), "codex".into()])),
+            max_timeout_ms: None,
+        }
+    );
+    assert_eq!(
+        parse(&args(&[
+            "env",
+            "grant",
+            "--peer",
+            "ssh",
+            "--all-agents",
+            "--commands",
+            "--max-timeout",
+            "10m",
+        ]))
+        .unwrap(),
+        Command::EnvGrant {
+            peer: Some("ssh".into()),
+            agents: Some(GrantedAgents::All),
+            max_timeout_ms: Some(600_000),
+        }
+    );
+    assert_eq!(
+        parse(&args(&[
+            "env",
+            "grant",
+            "--commands",
+            "--max-timeout",
+            "90s"
+        ]))
+        .unwrap(),
+        Command::EnvGrant {
+            peer: None,
+            agents: None,
+            max_timeout_ms: Some(90_000),
+        }
+    );
+    assert_eq!(
+        parse(&args(&[
+            "env",
+            "grant",
+            "--commands",
+            "--max-timeout",
+            "1h"
+        ]))
+        .unwrap(),
+        Command::EnvGrant {
+            peer: None,
+            agents: None,
+            max_timeout_ms: Some(3_600_000),
+        }
+    );
+    for refused in [
+        vec!["env", "grant"],
+        vec!["env", "grant", "--agent"],
+        vec!["env", "grant", "--agent", "--all-agents"],
+        vec!["env", "grant", "--agent", "claude", "--all-agents"],
+        vec!["env", "grant", "--commands"],
+        vec!["env", "grant", "--max-timeout", "10m"],
+        vec!["env", "grant", "--commands", "--max-timeout", "10"],
+        vec!["env", "grant", "--commands", "--max-timeout", "0s"],
+        vec!["env", "grant", "--commands", "--max-timeout", "-5m"],
+        vec!["env", "grant", "--commands", "--max-timeout", "1.5h"],
+        vec!["env", "grant", "--commands", "--max-timeout", "m"],
+        vec![
+            "env",
+            "grant",
+            "--peer",
+            "ssh",
+            "--peer",
+            "ssh",
+            "--all-agents",
+        ],
+        vec!["env", "grant", "--all-agents", "extra"],
+    ] {
+        assert!(parse(&args(&refused)).is_err(), "{refused:?}");
+    }
+    assert!(crate::cli::entrypoint::HELP.contains(
+        "nessa env grant [--peer ssh|PIN] [--agent NAME... | --all-agents] [--commands --max-timeout 10m]"
+    ));
+}
+
+#[test]
+fn env_ungrant_takes_one_thing_back_and_env_grants_lists_them() {
+    assert_eq!(
+        parse(&args(&["env", "ungrant", "--agent", "claude"])).unwrap(),
+        Command::EnvUngrant {
+            peer: None,
+            what: Ungranted::Agent("claude".into()),
+        }
+    );
+    assert_eq!(
+        parse(&args(&["env", "ungrant", "--commands", "--peer", "ssh"])).unwrap(),
+        Command::EnvUngrant {
+            peer: Some("ssh".into()),
+            what: Ungranted::Commands,
+        }
+    );
+    assert_eq!(
+        parse(&args(&["env", "ungrant", "--all"])).unwrap(),
+        Command::EnvUngrant {
+            peer: None,
+            what: Ungranted::All,
+        }
+    );
+    assert_eq!(
+        parse(&args(&["env", "grants"])).unwrap(),
+        Command::EnvGrants
+    );
+    for refused in [
+        vec!["env", "ungrant"],
+        vec!["env", "ungrant", "--peer", "ssh"],
+        vec!["env", "ungrant", "--agent"],
+        vec!["env", "ungrant", "--commands", "--all"],
+        vec!["env", "ungrant", "--agent", "claude", "--agent", "codex"],
+        vec!["env", "grants", "--json"],
+    ] {
+        assert!(parse(&args(&refused)).is_err(), "{refused:?}");
+    }
+    let help = crate::cli::entrypoint::HELP;
+    assert!(help.contains("nessa env ungrant [--peer ssh|PIN] (--agent NAME | --commands | --all)"));
+    assert!(help.contains("nessa env grants"));
 }

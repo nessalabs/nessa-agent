@@ -9,7 +9,8 @@
 //!           installed, or present already ──▶ connect once more
 //!         (an account of a lost lease connects only: it never installs)
 //!   ──▶ binding.on_host(LeaseHost) ──▶ the same binding, starting its harness there
-//!   ──▶ link.grant(lease, agent) ──▶ EnvironmentLease { provider, SshHold }
+//!   ──▶ link.grant(lease, agent, sandbox) ──▶ EnvironmentLease { provider, SshHold,
+//!                                              the terms the host granted }
 //! binding opens a session ──▶ LeaseHost::start ──▶ Start{lease, channel}
 //!   harness stdin/stdout ⇄ Input / Output frames
 //!   close ──▶ SshControl::cleanup ──▶ (after its input) Stop ──▶ Stopped{cleanup}
@@ -22,7 +23,7 @@
 //!   its answer ──▶ Collected{lease, artifact, outcome}
 //! LeaseHold::publish(ask) ──▶ Publish{lease, request, path} ──▶ offered on the
 //!   same offers as above, naming `request` | NotPublished{reason}
-//! a command: grant ──▶ link.grant_command ──▶ SshCommand
+//! a command: grant ──▶ link.grant_command ──▶ SshCommand, the terms the host granted
 //!   SshCommand::run ──▶ Run ──▶ Ran{end, output, cleanup}
 //!   stop said ──▶ End (not waited for) ──▶ Ran{Stopped} ──▶ Ended
 //!   no Ran within its timeout and COMMAND_STOP_WAIT ──▶ unanswered
@@ -47,12 +48,12 @@ use super::{
 };
 use crate::conversation::application::{
     ArtifactAnswer, ArtifactOffer, CommandEnvironment, CommandHold, CommandResult, Environment,
-    EnvironmentDeclaration, EnvironmentFuture, EnvironmentLease, LeaseHold, LeaseRelease,
-    PublishAsk, PublishFailure,
+    EnvironmentDeclaration, EnvironmentFuture, EnvironmentLease, GrantedCommand, GrantedTerms,
+    LeaseHold, LeaseRelease, PublishAsk, PublishFailure,
 };
 use nessa_auth::application::pairing::DeviceConnectionProof;
 use nessa_protocol::lease::{
-    Cleanup, CommandEnd, GrantRefusal, COMMAND_STOP_WAIT, KEEPALIVE_INTERVAL, SILENCE_LIMIT,
+    self, Cleanup, CommandEnd, GrantRefusal, COMMAND_STOP_WAIT, KEEPALIVE_INTERVAL, SILENCE_LIMIT,
 };
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
@@ -406,13 +407,23 @@ impl Environment for SshEnvironment {
                 tracing::warn!(agent = work.agent(), %error, "this agent's binding cannot start its harness on a host");
                 LeaseRefusal::AgentUnavailable
             })?;
-            let Granted { gone, published } = link
-                .grant(lease.as_str(), work.agent(), self.inner.timings.answer)
+            let Granted {
+                terms,
+                gone,
+                published,
+            } = link
+                .grant(
+                    lease.as_str(),
+                    work.agent(),
+                    grant.sandbox.into(),
+                    self.inner.timings.answer,
+                )
                 .await?;
             let workspace = Some(link.workspace().to_string_lossy().into_owned());
             Ok(EnvironmentLease {
                 provider,
                 workspace,
+                granted: granted(terms),
                 hold: Arc::new(SshHold {
                     inner: self.inner.clone(),
                     link,
@@ -450,33 +461,46 @@ impl CommandEnvironment for SshEnvironment {
         &'a self,
         lease: &'a LeaseId,
         command: &'a CommandWork,
-    ) -> EnvironmentFuture<'a, Result<Box<dyn CommandHold>, CommandRefusal>> {
+    ) -> EnvironmentFuture<'a, Result<GrantedCommand, CommandRefusal>> {
         Box::pin(async move {
             let link = self
                 .inner
                 .link(Install::IfAbsent(lease.as_str()))
                 .await
                 .map_err(CommandRefusal::Environment)?;
-            link.grant_command(
-                lease.as_str(),
-                command
-                    .argv()
-                    .iter()
-                    .map(|argument| argument.to_string())
-                    .collect(),
-                command.cwd().map(Into::into),
-                command.timeout_ms(),
-                self.inner.timings.answer,
-            )
-            .await
-            .map_err(|refused| command_refusal(&self.inner.name(), refused))?;
-            Ok(Box::new(SshCommand {
-                inner: self.inner.clone(),
-                link,
-                lease: lease.as_str().into(),
-                timeout: Duration::from_millis(command.timeout_ms()),
-            }) as Box<dyn CommandHold>)
+            let (_, terms) = link
+                .grant_command(
+                    lease.as_str(),
+                    command
+                        .argv()
+                        .iter()
+                        .map(|argument| argument.to_string())
+                        .collect(),
+                    command.cwd().map(Into::into),
+                    command.timeout_ms(),
+                    self.inner.timings.answer,
+                )
+                .await
+                .map_err(|refused| command_refusal(&self.inner.name(), refused))?;
+            // The terms as the host answered them: the service checks them
+            // and runs the hold with the timeout it checked.
+            Ok(GrantedCommand {
+                hold: Box::new(SshCommand {
+                    inner: self.inner.clone(),
+                    link,
+                    lease: lease.as_str().into(),
+                }),
+                granted: granted(terms),
+            })
         })
+    }
+}
+
+/// The terms a host granted, as the gateway's.
+fn granted(terms: lease::GrantedTerms) -> GrantedTerms {
+    GrantedTerms {
+        sandbox: terms.sandbox.into(),
+        timeout_ms: terms.timeout_ms,
     }
 }
 
@@ -485,6 +509,14 @@ fn command_refusal(host: &str, refused: AdmissionRefused) -> CommandRefusal {
     match refused {
         AdmissionRefused::Host(GrantRefusal::CommandsUnavailable) => {
             CommandRefusal::CommandsUnavailable
+        }
+        // The host's owner grants this gateway no commands there: the
+        // environment's refusal, not this gateway's own policy.
+        AdmissionRefused::Host(GrantRefusal::NotGranted) => {
+            CommandRefusal::Environment(LeaseRefusal::EnvironmentNotGranted)
+        }
+        AdmissionRefused::Host(GrantRefusal::SandboxUnavailable) => {
+            CommandRefusal::Environment(LeaseRefusal::SandboxUnavailable)
         }
         // The gateway checked it against the same bounds: a host that
         // disagrees has another reading of its workspace, so it is not run.
@@ -509,12 +541,12 @@ struct SshCommand {
     inner: Arc<Inner>,
     link: Arc<HostLink>,
     lease: String,
-    timeout: Duration,
 }
 
 impl CommandHold for SshCommand {
     fn run(
         self: Box<Self>,
+        timeout_ms: u64,
         mut stop: watch::Receiver<Option<LeaseEndCause>>,
     ) -> EnvironmentFuture<'static, CommandResult> {
         Box::pin(async move {
@@ -533,7 +565,8 @@ impl CommandHold for SshCommand {
                     ..CommandResult::unanswered()
                 };
             }
-            let bound = self.timeout + COMMAND_STOP_WAIT + self.inner.timings.answer;
+            let bound =
+                Duration::from_millis(timeout_ms) + COMMAND_STOP_WAIT + self.inner.timings.answer;
             let mut stopped = None;
             let answer = tokio::time::timeout(bound, async {
                 let run = self.link.run(&self.lease);

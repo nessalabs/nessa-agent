@@ -86,6 +86,10 @@ const REFUSED_V3: &str = "refused_v3";
 /// unreadable instead of corrupt.
 const ISSUED_V3: &str = "issued_v3";
 const REFUSED_V4: &str = "refused_v4";
+/// A refusal because the environment did not grant the lease as asked (issue
+/// #706), on any environment, which no earlier shape can hold: a build that
+/// knows only those reads it as unreadable instead of corrupt.
+const REFUSED_V5: &str = "refused_v5";
 const ENDING: &str = "ending";
 const ENDED: &str = "ended";
 const INTERRUPTED: &str = "interrupted";
@@ -96,6 +100,9 @@ const COMMAND_REFUSED: &str = "command_refused";
 /// A command lease on a paired environment, likewise.
 const COMMAND_ISSUED_V2: &str = "command_issued_v2";
 const COMMAND_REFUSED_V2: &str = "command_refused_v2";
+/// A command lease refused as an environment refused it for not granting it
+/// as asked (issue #706), on any environment, likewise.
+const COMMAND_REFUSED_V3: &str = "command_refused_v3";
 const COMMAND_ENDED: &str = "command_ended";
 
 #[derive(Serialize, Deserialize)]
@@ -238,6 +245,7 @@ enum Refusal {
     AgentUnavailable,
     EnvironmentPlatformUnsupported,
     EnvironmentInstallFailed,
+    EnvironmentNotGranted,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -475,6 +483,7 @@ impl From<LeaseRefusal> for Refusal {
             LeaseRefusal::AgentUnavailable => Self::AgentUnavailable,
             LeaseRefusal::EnvironmentPlatformUnsupported => Self::EnvironmentPlatformUnsupported,
             LeaseRefusal::EnvironmentInstallFailed => Self::EnvironmentInstallFailed,
+            LeaseRefusal::EnvironmentNotGranted => Self::EnvironmentNotGranted,
         }
     }
 }
@@ -488,14 +497,19 @@ impl From<Refusal> for LeaseRefusal {
             Refusal::AgentUnavailable => Self::AgentUnavailable,
             Refusal::EnvironmentPlatformUnsupported => Self::EnvironmentPlatformUnsupported,
             Refusal::EnvironmentInstallFailed => Self::EnvironmentInstallFailed,
+            Refusal::EnvironmentNotGranted => Self::EnvironmentNotGranted,
         }
     }
 }
 
-/// The kind an issuance or refusal is stored under: the newest for a paired
+/// The kind an issuance or refusal is stored under: the newest for a lease
+/// the environment did not grant as asked, the one before for a paired
 /// environment's, slice A's while its shape holds the record, the third for
 /// an install's refusal, the second otherwise.
 fn issuance_kind(terms: &LeaseTerms, refusal: Option<LeaseRefusal>) -> &'static str {
+    if refusal == Some(LeaseRefusal::EnvironmentNotGranted) {
+        return REFUSED_V5;
+    }
     if matches!(terms.environment, EnvironmentRef::Peer(_)) {
         return if refusal.is_none() {
             ISSUED_V3
@@ -520,12 +534,20 @@ fn issuance_kind(terms: &LeaseTerms, refusal: Option<LeaseRefusal>) -> &'static 
     }
 }
 
-/// The kind a command lease's issuance or refusal is stored under: the second
+/// The kind a command lease's issuance or refusal is stored under: the third
+/// for a refusal an environment gave for not granting it as asked, the second
 /// for a paired environment's, the first otherwise.
-fn command_kind(terms: &CommandTerms, refused: bool) -> &'static str {
+fn command_kind(terms: &CommandTerms, refusal: Option<CommandRefusal>) -> &'static str {
+    if refusal
+        == Some(CommandRefusal::Environment(
+            LeaseRefusal::EnvironmentNotGranted,
+        ))
+    {
+        return COMMAND_REFUSED_V3;
+    }
     match (
         matches!(terms.environment, EnvironmentRef::Peer(_)),
-        refused,
+        refusal.is_some(),
     ) {
         (false, false) => COMMAND_ISSUED,
         (false, true) => COMMAND_REFUSED,
@@ -639,7 +661,7 @@ impl From<&LeaseRecord> for WireLease {
                 terms,
                 actor,
             } => text(
-                command_kind(terms, false),
+                command_kind(terms, None),
                 &CommandIssuance {
                     lease: lease.as_str().into(),
                     parent: parent.as_str().into(),
@@ -655,7 +677,7 @@ impl From<&LeaseRecord> for WireLease {
                 refusal,
                 actor,
             } => text(
-                command_kind(terms, true),
+                command_kind(terms, Some(*refusal)),
                 &CommandIssuance {
                     lease: lease.as_str().into(),
                     parent: parent.as_str().into(),
@@ -694,7 +716,8 @@ impl WireLease {
             return Err(corrupt("a lease record exceeds its stored bound"));
         }
         Ok(match self.kind.as_str() {
-            ISSUED | REFUSED | ISSUED_V2 | REFUSED_V2 | REFUSED_V3 | ISSUED_V3 | REFUSED_V4 => {
+            ISSUED | REFUSED | ISSUED_V2 | REFUSED_V2 | REFUSED_V3 | ISSUED_V3 | REFUSED_V4
+            | REFUSED_V5 => {
                 let saved: Issuance = body(&self.body)?;
                 let lease = lease(saved.lease)?;
                 let revision = revision(saved.revision)?;
@@ -713,15 +736,16 @@ impl WireLease {
                         terms,
                         actor,
                     },
-                    (Some(refusal), REFUSED | REFUSED_V2 | REFUSED_V3 | REFUSED_V4) => {
-                        LeaseRecord::Refused {
-                            lease,
-                            revision,
-                            terms,
-                            refusal,
-                            actor,
-                        }
-                    }
+                    (
+                        Some(refusal),
+                        REFUSED | REFUSED_V2 | REFUSED_V3 | REFUSED_V4 | REFUSED_V5,
+                    ) => LeaseRecord::Refused {
+                        lease,
+                        revision,
+                        terms,
+                        refusal,
+                        actor,
+                    },
                     _ => return Err(corrupt("a lease issuance and its refusal disagree")),
                 }
             }
@@ -757,28 +781,30 @@ impl WireLease {
                     cursor: saved.cursor,
                 }
             }
-            COMMAND_ISSUED | COMMAND_REFUSED | COMMAND_ISSUED_V2 | COMMAND_REFUSED_V2 => {
+            COMMAND_ISSUED | COMMAND_REFUSED | COMMAND_ISSUED_V2 | COMMAND_REFUSED_V2
+            | COMMAND_REFUSED_V3 => {
                 let saved: CommandIssuance = body(&self.body)?;
                 let lease = lease(saved.lease)?;
                 let parent = self::lease(saved.parent)?;
                 let terms = saved.terms.decode()?;
                 let actor = saved.actor.decode()?;
-                if command_kind(&terms, saved.refusal.is_some()) != self.kind {
+                let refusal = saved.refusal.map(CommandRefusal::from);
+                if command_kind(&terms, refusal) != self.kind {
                     return Err(corrupt("a command lease is stored under the wrong kind"));
                 }
-                match (saved.refusal, self.kind.as_str()) {
+                match (refusal, self.kind.as_str()) {
                     (None, COMMAND_ISSUED | COMMAND_ISSUED_V2) => LeaseRecord::CommandIssued {
                         lease,
                         parent,
                         terms,
                         actor,
                     },
-                    (Some(refusal), COMMAND_REFUSED | COMMAND_REFUSED_V2) => {
+                    (Some(refusal), COMMAND_REFUSED | COMMAND_REFUSED_V2 | COMMAND_REFUSED_V3) => {
                         LeaseRecord::CommandRefused {
                             lease,
                             parent,
                             terms,
-                            refusal: refusal.into(),
+                            refusal,
                             actor,
                         }
                     }
@@ -1154,6 +1180,31 @@ mod tests {
                 },
                 REFUSED_V4,
             ),
+            (
+                // Not granted as asked, which no earlier shape can hold,
+                // on a host as on a paired environment.
+                LeaseRecord::Refused {
+                    lease: id("lease-1"),
+                    revision: LeaseRevision::FIRST,
+                    terms: on_peer(),
+                    refusal: LeaseRefusal::EnvironmentNotGranted,
+                    actor: actor(),
+                },
+                REFUSED_V5,
+            ),
+            (
+                LeaseRecord::Refused {
+                    lease: id("lease-1"),
+                    revision: LeaseRevision::FIRST,
+                    terms: LeaseTerms {
+                        environment: EnvironmentRef::Ssh(SshDestination::new("devbox").unwrap()),
+                        ..terms(LeaseDeadline::UntilEnded)
+                    },
+                    refusal: LeaseRefusal::EnvironmentNotGranted,
+                    actor: actor(),
+                },
+                REFUSED_V5,
+            ),
         ];
         for (record, kind) in cases {
             let wire = WireLease::from(&record);
@@ -1174,6 +1225,7 @@ mod tests {
                 REFUSED_V2 => &[REFUSED],
                 ISSUED_V3 => &[ISSUED, ISSUED_V2],
                 REFUSED_V4 => &[REFUSED, REFUSED_V2, REFUSED_V3],
+                REFUSED_V5 => &[REFUSED, REFUSED_V2, REFUSED_V3, REFUSED_V4],
                 _ => &[REFUSED, REFUSED_V2],
             };
             for first in earlier {
@@ -1253,6 +1305,38 @@ mod tests {
             .decode(),
             Err(StorageError::Corrupt(_))
         ));
+    }
+
+    /// A command an environment refused for not granting it as asked is kept
+    /// under a kind of its own, on a host as on a paired environment, and is
+    /// corrupt under every earlier one.
+    #[test]
+    fn a_command_an_environment_did_not_grant_is_kept_under_a_kind_of_its_own() {
+        for environment in [command_terms(None).environment, on_peer().environment] {
+            let record = LeaseRecord::CommandRefused {
+                lease: id("cmd"),
+                parent: id("lease"),
+                terms: CommandTerms {
+                    environment,
+                    ..command_terms(None)
+                },
+                refusal: CommandRefusal::Environment(LeaseRefusal::EnvironmentNotGranted),
+                actor: actor(),
+            };
+            let wire = WireLease::from(&record);
+            assert_eq!(wire.kind, COMMAND_REFUSED_V3);
+            let moved = |kind: &str| WireLease {
+                kind: kind.into(),
+                body: wire.body.clone(),
+            };
+            assert_eq!(moved(COMMAND_REFUSED_V3).decode().unwrap(), record);
+            for earlier in [COMMAND_REFUSED, COMMAND_REFUSED_V2] {
+                assert!(matches!(
+                    moved(earlier).decode(),
+                    Err(StorageError::Corrupt(_))
+                ));
+            }
+        }
     }
 
     #[test]

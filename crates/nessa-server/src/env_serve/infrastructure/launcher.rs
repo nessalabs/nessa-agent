@@ -21,6 +21,7 @@ use crate::env_serve::application::{HarnessLauncher, PUBLISH_POINT_VARIABLE};
 use nessa_protocol::agents::AgentId;
 use nessa_sdk::{
     application::agent_execution::{agents::AgentError, providers::HarnessProcess},
+    domain::agent_execution::leases::SandboxProfiles,
     infrastructure::{
         claude_acp::sessions::ClaudeAcpProvider, codex_acp::sessions::CodexAcpProvider,
         harness_process::SupervisedHarness,
@@ -74,6 +75,12 @@ impl HarnessLauncher for ConfiguredLauncher {
     fn runs(&self, agent: &str) -> bool {
         AgentId::parse(agent)
             .is_some_and(|agent| accepted(agent).is_some() && self.agents.contains_key(&agent))
+    }
+
+    /// Only the harness's own default: the host starts it as configured and
+    /// sets nothing that would enclose it more.
+    fn sandboxes(&self) -> SandboxProfiles {
+        SandboxProfiles::HARNESS_DEFAULT
     }
 
     fn launch(

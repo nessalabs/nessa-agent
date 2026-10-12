@@ -5,7 +5,8 @@
 #![cfg(unix)]
 
 use nessa_protocol::lease::{
-    decode, encode, Cleanup, Data, FromEnvironment, GrantRefusal, ToEnvironment, Unavailability,
+    decode, encode, Cleanup, Data, FromEnvironment, GrantRefusal, GrantedTerms, Sandbox,
+    ToEnvironment, Unavailability,
 };
 use std::{
     collections::BTreeMap,
@@ -168,17 +169,23 @@ fn a_lease_runs_its_harness_on_the_host_and_ends_with_evidence_in_the_ledger() {
     serving.send(ToEnvironment::Grant {
         lease: LEASE.into(),
         agent: "claude".into(),
+        sandbox: Sandbox::HarnessDefault,
     });
     assert_eq!(
         serving.next(),
         FromEnvironment::Granted {
-            lease: LEASE.into()
+            lease: LEASE.into(),
+            terms: GrantedTerms {
+                sandbox: Sandbox::HarnessDefault,
+                timeout_ms: None,
+            },
         }
     );
     // A second grant of the same lease is refused: one live lease per id.
     serving.send(ToEnvironment::Grant {
         lease: LEASE.into(),
         agent: "claude".into(),
+        sandbox: Sandbox::HarnessDefault,
     });
     assert_eq!(
         serving.next(),
@@ -259,6 +266,7 @@ fn a_lease_held_when_the_gateways_stream_ends_is_ended_as_lost_and_accounted_aft
     serving.send(ToEnvironment::Grant {
         lease: LEASE.into(),
         agent: "claude".into(),
+        sandbox: Sandbox::HarnessDefault,
     });
     assert!(matches!(serving.next(), FromEnvironment::Granted { .. }));
     serving.send(ToEnvironment::Start {
