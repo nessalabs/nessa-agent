@@ -72,8 +72,6 @@ struct Gateway {
     auth: Arc<LocalCredentialStore>,
     session: AuthenticatedSession,
     owner: String,
-    /// The one organization this gateway is.
-    organization: String,
     commands: PairingOwnerCommands,
     peers: Arc<PeerEnvironments>,
     /// Holds the next ask of whether a key serves, once armed.
@@ -155,7 +153,7 @@ impl Gateway {
         let prepared = prepared.with_environments(Arc::new(ListenerEnvironments(peers.clone())));
         let state = ProductRouteState::new(
             ResourceId::new(gateway.clone()).unwrap(),
-            OrganizationId::new(organization.clone()).unwrap(),
+            OrganizationId::new(organization).unwrap(),
             AudienceId::new(gateway).unwrap(),
             ProductDependencies {
                 verifier: auth.clone(),
@@ -175,7 +173,6 @@ impl Gateway {
             auth,
             session,
             owner,
-            organization,
             commands,
             peers,
             gate,
@@ -1794,19 +1791,21 @@ async fn k2_a_volume_paired_to_one_gateway_refuses_enrolling_with_another() {
 /// paired one to each, serving from workspaces of their own. Each gateway
 /// leases, runs commands, and reads published files only on its own
 /// worker; the other's key is refused at A's door, its name is
-/// unreachable from A, and a path out of a worker's workspace is refused.
-/// Each worker's ledger and each gateway's environment audit name only
-/// the other side of its own pairing.
+/// unreachable from each gateway, and a path out of a worker's workspace
+/// is refused. Each worker's ledger holds its own gateway's leases alone,
+/// and each gateway's environment audit names its own worker alone.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn k3_two_organizations_share_no_lease_workspace_artifact_tool_or_audit() {
-    use crate::conversation::application::{ArtifactOffer, PublishAsk, PublishFailure};
+    use crate::conversation::application::{
+        ArtifactOffer, EnvironmentLease, PublishAsk, PublishFailure,
+    };
     use nessa_protocol::lease::{Collection, PublishRefusal};
 
     let directory = tempfile::tempdir().unwrap();
     let (a_root, b_root) = (directory.path().join("a"), directory.path().join("b"));
+    // Two gateways, each started as its own organization.
     let a = Gateway::start(&a_root).await;
     let b = Gateway::start(&b_root).await;
-    assert_ne!(a.organization, b.organization);
     let w = a
         .pair(
             &directory.path().join("w-state"),
@@ -1821,33 +1820,31 @@ async fn k3_two_organizations_share_no_lease_workspace_artifact_tool_or_audit() 
         .await;
 
     // Leases: X's key is not paired with A. With A's pin it is refused at
-    // A's door; with its own, it reaches B's key, not A's, and the dial fails.
+    // A's door; with its own pin, the key it finds is not B's, and the dial
+    // is cut there.
     let refused = dial(a.native, x.identity.clone(), w.pin, clock())
         .await
         .err()
         .expect("a key paired with B is refused by A");
     assert_eq!(refused.kind(), ErrorKind::PermissionDenied);
-    assert!(dial(a.native, x.identity.clone(), x.pin, clock())
+    let not_b = dial(a.native, x.identity.clone(), x.pin, clock())
         .await
-        .is_err());
+        .err()
+        .expect("A is not the gateway X's pin names");
+    assert_eq!(not_b.kind(), ErrorKind::ConnectionAborted);
 
-    // Each worker runs `claude` as a shell that notes its publish point,
-    // then runs as `cat` until it is stopped; each owner grants its own
-    // gateway agents and commands.
-    let harness = LaunchSpec {
-        executable: "/bin/sh".into(),
-        args: vec![
-            "-c".into(),
-            r#"printf %s "$NESSA_ARTIFACTS" > point.part && mv point.part point && exec cat"#
-                .into(),
-        ],
+    // Each worker runs `claude` as `cat`, which runs until it is stopped;
+    // each owner grants its own gateway agents and commands.
+    let cat = LaunchSpec {
+        executable: "/bin/cat".into(),
+        args: Vec::new(),
         environment: Default::default(),
     };
     let worker = |name: &str, pin: [u8; 44]| {
         let host = Arc::new(Host::running(
             &directory.path().join(name),
             pin,
-            HashMap::from([(nessa_protocol::agents::AgentId::Claude, harness.clone())]),
+            HashMap::from([(nessa_protocol::agents::AgentId::Claude, cat.clone())]),
         ));
         let commands = CommandGrant::new(CommandWork::MAX_TIMEOUT_MS).unwrap();
         host.grants
@@ -1879,8 +1876,8 @@ async fn k3_two_organizations_share_no_lease_workspace_artifact_tool_or_audit() 
         }));
         gateway.until_connected(machine.peer, true).await;
     }
-    // Tools: each gateway's paired environments, which `environments_list`
-    // lists and `run` and `artifacts_*` resolve names through, are its own.
+    // Each gateway's paired environments hold its own worker alone; a
+    // command on the other's name finds no connection.
     assert_eq!(a.peers.connected(), [w.peer]);
     assert_eq!(b.peers.connected(), [x.peer]);
     assert_eq!(a.echo(w.peer, "a").await.unwrap().stdout, b"a");
@@ -1894,40 +1891,13 @@ async fn k3_two_organizations_share_no_lease_workspace_artifact_tool_or_audit() 
         CommandRefusal::Environment(LeaseRefusal::EnvironmentUnreachable)
     );
 
-    // Nor does an agent lease on the other's name reach it.
-    for (gateway, theirs) in [(&a, &x), (&b, &w)] {
-        let environment = gateway.peers.environment(&theirs.peer);
-        let terms = LeaseTerms {
-            environment: environment.declaration().environment,
-            work: LeaseWork::Agent(AgentWork::new("claude", "model").unwrap()),
-            sandbox: SandboxProfile::HarnessDefault,
-            grants: LeaseGrants::Opening,
-            deadline: LeaseDeadline::UntilEnded,
-        };
-        let binding = Arc::new(OnHost {
-            capabilities: crate::conversation_test_support::Provider::new(Arc::new(
-                crate::conversation_test_support::ProviderFactory::default(),
-            ))
-            .capabilities()
-            .clone(),
-            host: Arc::new(std::sync::Mutex::new(None)),
-        });
-        let lease = LeaseId::new(uuid()).unwrap();
-        let refused = tokio::time::timeout(WAIT, environment.open(&lease, &terms, binding))
-            .await
-            .unwrap()
-            .err()
-            .expect("no lease on the other organization's worker");
-        assert_eq!(refused, LeaseRefusal::EnvironmentUnreachable);
-    }
-
-    // Workspaces and artifacts: the same name in each workspace holds that
-    // organization's file, and each gateway's lease reads its own.
-    for (name, text) in [("w", "for A"), ("x", "for B")] {
-        std::fs::write(directory.path().join(name).join("report.txt"), text).unwrap();
-    }
-    let mut leases = Vec::new();
-    for (gateway, machine, text) in [(&a, &w, "for A"), (&b, &x, "for B")] {
+    // An agent lease `gateway` asks of `machine`, with the harness host it
+    // is given.
+    type Given = Arc<std::sync::Mutex<Option<Arc<dyn HarnessHost>>>>;
+    async fn agent_lease(
+        gateway: &Gateway,
+        machine: &Machine,
+    ) -> (LeaseId, Result<EnvironmentLease, LeaseRefusal>, Given) {
         let environment = gateway.peers.environment(&machine.peer);
         let lease = LeaseId::new(uuid()).unwrap();
         let terms = LeaseTerms {
@@ -1937,7 +1907,7 @@ async fn k3_two_organizations_share_no_lease_workspace_artifact_tool_or_audit() 
             grants: LeaseGrants::Opening,
             deadline: LeaseDeadline::UntilEnded,
         };
-        let given = Arc::new(std::sync::Mutex::new(None));
+        let given: Given = Arc::new(std::sync::Mutex::new(None));
         let binding = Arc::new(OnHost {
             capabilities: crate::conversation_test_support::Provider::new(Arc::new(
                 crate::conversation_test_support::ProviderFactory::default(),
@@ -1948,8 +1918,29 @@ async fn k3_two_organizations_share_no_lease_workspace_artifact_tool_or_audit() 
         });
         let opened = tokio::time::timeout(WAIT, environment.open(&lease, &terms, binding))
             .await
-            .unwrap()
-            .unwrap_or_else(|refusal| panic!("granted: {refusal:?}"));
+            .unwrap();
+        (lease, opened, given)
+    }
+    // Nor does an agent lease on the other's name reach it.
+    for (gateway, theirs) in [(&a, &x), (&b, &w)] {
+        let (_, refused, _) = agent_lease(gateway, theirs).await;
+        assert_eq!(
+            refused
+                .err()
+                .expect("no lease on the other organization's worker"),
+            LeaseRefusal::EnvironmentUnreachable
+        );
+    }
+
+    // Workspaces and artifacts: the same name in each workspace holds that
+    // organization's file, and each gateway's lease reads its own.
+    for (name, text) in [("w", "for A"), ("x", "for B")] {
+        std::fs::write(directory.path().join(name).join("report.txt"), text).unwrap();
+    }
+    let mut leases = Vec::new();
+    for (gateway, machine, text) in [(&a, &w, "for A"), (&b, &x, "for B")] {
+        let (lease, opened, given) = agent_lease(gateway, machine).await;
+        let opened = opened.unwrap_or_else(|refusal| panic!("granted: {refusal:?}"));
         let mut offers = opened
             .hold
             .artifacts()
@@ -1975,8 +1966,8 @@ async fn k3_two_organizations_share_no_lease_workspace_artifact_tool_or_audit() 
         answer.answer(Collection::Held).await;
         leases.push((lease, opened, harness));
     }
-    // A path out of W's workspace, into X's, is refused before anything is
-    // read.
+    // A path out of W's workspace, into X's, where a file is, is refused
+    // before anything is read.
     let across = leases[0]
         .1
         .hold
@@ -2005,32 +1996,26 @@ async fn k3_two_organizations_share_no_lease_workspace_artifact_tool_or_audit() 
         );
     }
 
-    // Audit: each worker's ledger holds its own gateway's leases alone,
-    // each granted to one gateway, the same one, and never the other's.
-    let granted_to = |host: &Host| -> Vec<String> {
-        std::fs::read_to_string(&host.ledger_path)
-            .unwrap()
-            .lines()
-            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
-            .filter_map(|entry| entry["peer"].as_str().map(str::to_owned))
-            .collect()
-    };
-    let (to_a, to_b) = (granted_to(&w_host), granted_to(&x_host));
-    assert_eq!(to_a.len(), 2, "a command and an agent: {to_a:?}");
-    assert_eq!(to_b.len(), 2, "a command and an agent: {to_b:?}");
-    assert!(to_a.iter().all(|peer| *peer == to_a[0]), "{to_a:?}");
-    assert!(to_b.iter().all(|peer| *peer == to_b[0]), "{to_b:?}");
-    assert_ne!(to_a[0], to_b[0]);
+    // Audit: each worker's ledger records the leases its own gateway asked,
+    // granted and ended, and none of the other's.
     for (host, mine, theirs) in [
         (&w_host, &leases[0].0, &leases[1].0),
         (&x_host, &leases[1].0, &leases[0].0),
     ] {
         let ledger = std::fs::read_to_string(&host.ledger_path).unwrap();
-        assert!(ledger.contains(mine.as_str()));
+        let kinds: Vec<String> = ledger
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .filter(|entry| entry["lease"] == mine.as_str())
+            .map(|entry| entry["kind"].as_str().unwrap().to_owned())
+            .collect();
+        assert_eq!(kinds.first().map(String::as_str), Some("granted"));
+        assert_eq!(kinds.last().map(String::as_str), Some("ended"));
         assert!(!ledger.contains(theirs.as_str()));
     }
-    // Each gateway's environment audit names its own worker, at its own
-    // workspace, and nothing of the other's.
+    // Each gateway's environment audit, which records its workers'
+    // connections, names its own worker at that worker's workspace, and
+    // nothing of the other's.
     for (root, mine, theirs, workspace) in [(&a_root, &w, &x, "w"), (&b_root, &x, &w, "x")] {
         let records = Gateway::environment_audit(root);
         assert!(!records.is_empty());

@@ -672,10 +672,10 @@ async fn an_environment_is_paired_but_never_shared_with() {
 /// Row K3 (`docs/design/auth/peer-gateways.md`): a hosted worker holds no
 /// read grant outside its leases. Paired as an environment, its key and
 /// credential open a session on the gateway it serves, holding
-/// `environment.serve` alone, and every read on the native channel is
-/// refused `forbidden`: the catalogue, a conversation's records, and a
-/// watch of either. A device the owner shared that conversation with is
-/// let past the same checks with the same calls.
+/// `environment.serve` alone, and the catalogue head, a conversation's
+/// records head, and a watch of either are each refused `forbidden`. A
+/// device the owner shared that conversation with is let past the same
+/// checks with the same calls.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn k3_a_worker_reads_nothing_on_the_gateway_it_serves() {
     let fixture = Fixture::new().await;
@@ -748,11 +748,30 @@ async fn k3_a_worker_reads_nothing_on_the_gateway_it_serves() {
             (ready, calls)
         })
     };
-    // The device, shared with, is let through each check of who may read.
+    // The device, shared with, is let past each check of who may read, as
+    // row H8 finds: its catalogue head is answered, its records head finds
+    // no history yet, and this fixture keeps no watches.
     let (_, by_device) = calls(&device).await;
-    for (method, answer) in &by_device {
-        assert_ne!(code(answer), "forbidden", "device {method}: {answer}");
-    }
+    let device_codes: Vec<_> = by_device
+        .iter()
+        .map(|(method, answer)| (*method, code(answer).to_owned()))
+        .collect();
+    assert_eq!(
+        device_codes,
+        [
+            ("conversation.catalogueHead", String::new()),
+            (
+                "conversation.watchCatalogue",
+                "temporarily_unavailable".into()
+            ),
+            ("conversation.recordsHead", "history_pruned".into()),
+            (
+                "conversation.watchRecords",
+                "temporarily_unavailable".into()
+            ),
+        ]
+    );
+    assert_eq!(by_device[0].1["ok"], true, "{}", by_device[0].1);
     // The worker is who it was paired as, holding serving alone, and is
     // refused each.
     let (ready, by_worker) = calls(&worker).await;
@@ -771,6 +790,7 @@ async fn k3_a_worker_reads_nothing_on_the_gateway_it_serves() {
     }
     stop.send(()).unwrap();
     listener.await.unwrap().unwrap();
+    fixture.gateway.shutdown().await;
 }
 
 /// Row H8 (`docs/design/auth/peer-gateways.md`): a paired peer reads, on the
