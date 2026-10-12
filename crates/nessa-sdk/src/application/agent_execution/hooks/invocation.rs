@@ -2,12 +2,12 @@
 
 use super::observations::{EvaluationSuffix, InvocationObservationWindow, ProposedToolCall};
 use crate::application::agent_execution::agents::AgentError;
-use crate::application::agent_execution::executions::{
-    ExecutionEvent, ExecutionRequest, ExecutionUpdate,
-};
+use crate::application::agent_execution::executions::ExecutionRequest;
 use crate::application::agent_execution::permissions::cap_hook_reason;
+use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::domain::agent_execution::{
     executions::ExecutionOutcome, permissions::RefusalOutcome, sessions::ExecutionSessionId,
+    tools::ToolCallId,
 };
 use std::{
     panic::{catch_unwind, AssertUnwindSafe},
@@ -347,22 +347,17 @@ impl InvocationHooks {
         Ok(())
     }
 
-    /// Decide the permission-gated call in `event` against the retained prefix.
+    /// Decide the proposed call against the retained prefix.
     ///
     /// Only hooks that review permissions are called. The first refusal wins,
     /// and its registration index is returned with the verdict. A hook error
     /// or panic is deny-and-continue, and the reason names which.
     pub(crate) fn before_permission_review(
         &self,
-        event: &ExecutionEvent,
+        tool_id: &ToolCallId,
+        input: &ToolReviewInput,
         evaluation: &EvaluationSuffix,
     ) -> PermissionReviewDecision {
-        let ExecutionUpdate::PermissionRequested { tool_id, input, .. } = event.update() else {
-            return PermissionReviewDecision {
-                index: None,
-                verdict: ToolVerdict::Allow,
-            };
-        };
         let call = ProposedToolCall::new(tool_id, input);
         let observations = evaluation.window();
         let reviewing = self

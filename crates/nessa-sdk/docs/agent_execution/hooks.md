@@ -98,7 +98,10 @@ withdrawn as the hook either way, so the provider is not left waiting.
 naming the outcome, and then cancels the turn when the binding can. A turn
 the provider already finished while the hook ran, shown by its reply having
 arrived, is not cancelled again. A turn that cleanup retired without a reply
-is not finished: the session still stops on the failure path. Only a
+is not finished: the session still stops on the failure path. The answer,
+withdrawal and cancel run while the execution is still polled, as saves do,
+so a provider that completes them through its execution cannot deadlock. The
+hook thread receives only the proposed call, not the whole review. Only a
 continue is ever an answer, and the execution controller rejects a hook answer
 with any other outcome, so no answer carries a terminal outcome to replay.
 An end-turn the binding cannot perform is recorded as continue and does not

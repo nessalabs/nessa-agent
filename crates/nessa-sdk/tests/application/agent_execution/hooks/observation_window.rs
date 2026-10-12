@@ -55,10 +55,20 @@ impl ExecutionEventStream for ScriptedEvents {
     }
 }
 
+/// A provider whose withdrawal completes only after its execution handles the
+/// reply, as an adapter with one reader for both does.
+#[derive(Default)]
+struct Handshake {
+    required: AtomicBool,
+    request: tokio::sync::Notify,
+    reply: tokio::sync::Notify,
+}
+
 struct ScriptedBackend {
     started: Arc<Started>,
     /// The session state a failed delivery or turn cancel reports.
     failure_state: Arc<Mutex<ProviderSessionState>>,
+    handshake: Arc<Handshake>,
     answered: Arc<AtomicUsize>,
     cancelled: Arc<AtomicUsize>,
     turn_cancels: Arc<AtomicUsize>,
@@ -154,12 +164,21 @@ impl ProviderSessionBackend for ScriptedBackend {
         let controller = self.controller.clone();
         let reviews = self.reviews.clone();
         let release = self.release.clone();
+        let handshake = self.handshake.clone();
         Box::pin(async move {
             // Register for release before the stream can run to its end.
             let released = release.notified();
+            tokio::pin!(released);
             admit_reviews(&controller, &input.execution_id, &reviews);
             started.set();
-            released.await;
+            loop {
+                tokio::select! {
+                    _ = &mut released => break,
+                    // A control that needs the execution polled is acknowledged
+                    // only while something polls it.
+                    _ = handshake.request.notified() => handshake.reply.notify_one(),
+                }
+            }
             ProviderExecutionReply::Finished(ExecutionReport::new(
                 Some(Ok(ExecutionOutcome::Completed)),
                 None,
@@ -226,8 +245,13 @@ impl ProviderSessionBackend for ScriptedBackend {
         let fail = self.fail_delivery;
         let failure_state = self.failure_state.lock().unwrap().clone();
         let release = self.release.clone();
+        let handshake = self.handshake.clone();
         Box::pin(async move {
             cancelled.fetch_add(1, Ordering::SeqCst);
+            if handshake.required.load(Ordering::SeqCst) {
+                handshake.request.notify_one();
+                handshake.reply.notified().await;
+            }
             withdrawals
                 .lock()
                 .expect("fixture withdrawals")
@@ -283,6 +307,7 @@ impl ProviderSessionBackend for ScriptedBackend {
 }
 
 struct ScriptedProvider {
+    handshake: Arc<Handshake>,
     events: Mutex<Option<Vec<ExecutionEvent>>>,
     started: Arc<Started>,
     failure_state: Arc<Mutex<ProviderSessionState>>,
@@ -318,6 +343,7 @@ impl AgentProvider for ScriptedProvider {
                     Arc::new(ScriptedBackend {
                         started: self.started.clone(),
                         failure_state: self.failure_state.clone(),
+                        handshake: self.handshake.clone(),
                         answered: self.answered.clone(),
                         cancelled: self.cancelled.clone(),
                         turn_cancels: self.turn_cancels.clone(),
@@ -414,6 +440,7 @@ struct Fixture {
     /// Lets the scripted provider settle its execution.
     release: Arc<tokio::sync::Notify>,
     failure_state: Arc<Mutex<ProviderSessionState>>,
+    handshake: Arc<Handshake>,
 }
 
 struct FixtureKnobs {
@@ -460,11 +487,13 @@ async fn open_on_clock(
     let authority = controller.permission_authority_source();
     let release = Arc::new(tokio::sync::Notify::new());
     let failure_state = Arc::new(Mutex::new(ProviderSessionState::Usable));
+    let handshake = Arc::new(Handshake::default());
     let agent = attached_agent(
         Arc::new(ScriptedProvider {
             events: Mutex::new(Some(events)),
             started: Arc::new(Started::default()),
             failure_state: failure_state.clone(),
+            handshake: handshake.clone(),
             answered: answered.clone(),
             cancelled: cancelled.clone(),
             turn_cancels: turn_cancels.clone(),
@@ -500,6 +529,7 @@ async fn open_on_clock(
         authority,
         release,
         failure_state,
+        handshake,
     }
 }
 
@@ -1823,7 +1853,7 @@ async fn a_failed_turn_cancel_that_reports_cleanup_is_still_reported() {
 }
 
 #[tokio::test]
-async fn a_failed_delivery_that_reports_cleanup_still_stops_the_invocation() {
+async fn a_reply_that_arrives_during_a_failed_delivery_needs_no_cancel() {
     let fixture = open_fixture(
         script(),
         vec![Arc::new(ReviewHook {
@@ -1837,8 +1867,8 @@ async fn a_failed_delivery_that_reports_cleanup_still_stops_the_invocation() {
         },
     )
     .await;
-    // The failed withdrawal confirms cleanup, which retires the turn before
-    // the supervisor has the provider's reply.
+    // The failed withdrawal confirms cleanup, which ends the execution: its
+    // reply arrives while the withdrawal is still being awaited.
     *fixture.failure_state.lock().unwrap() =
         ProviderSessionState::CleanupReported(CleanupReport::confirmed(CloseOutcome {
             forced: false,
@@ -1848,15 +1878,39 @@ async fn a_failed_delivery_that_reports_cleanup_still_stops_the_invocation() {
         fixture.agent.invoke(request(), close_action()),
     )
     .await
-    .expect("cleanup reported by the delivery is not mistaken for a settled turn")
+    .expect("the invocation settles")
     .expect_err("the failed delivery is reported");
     let AgentError::ExecutionObservation { error, .. } = &failure else {
         panic!("the delivery failure was reported as {failure:?}");
     };
-    let AgentError::MultipleOperationFailures { first_error, .. } = error.as_ref() else {
-        panic!("the delivery failure was reported as {error:?}");
-    };
-    assert_eq!(**first_error, AgentError::StalePermission);
+    assert_eq!(**error, AgentError::StalePermission);
+    assert_eq!(
+        fixture.turn_cancels.load(Ordering::SeqCst),
+        0,
+        "the reply was seen during the delivery, so no turn was left to cancel"
+    );
+}
+
+#[tokio::test]
+async fn a_withdrawal_that_needs_the_execution_polled_completes() {
+    let fixture = agent_with(
+        script(),
+        vec![Arc::new(ReviewHook {
+            seen: Arc::new(Mutex::new(Vec::new())),
+            verdict: ToolVerdict::refuse("stop the turn", RefusalOutcome::EndTurn),
+        })],
+    )
+    .await;
+    fixture.handshake.required.store(true, Ordering::SeqCst);
+    tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        fixture.agent.invoke(request(), close_action()),
+    )
+    .await
+    .expect("the execution is polled while the hook's withdrawal runs")
+    .expect("the refused turn ends");
+    assert_eq!(fixture.cancelled.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.turn_cancels.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
