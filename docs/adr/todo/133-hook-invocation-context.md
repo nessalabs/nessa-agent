@@ -105,9 +105,10 @@ directly, can claim an outcome nothing applied.
 Only hooks that review permissions take part. A hook opts out by returning
 `false` from `reviews_permissions`; the typed before- and after-invocation
 registrations do. An opted-out hook is never called for a review, even when
-another hook in the invocation reviews it. With no reviewing hook, a review is
-handled exactly as with no hooks at all, so the runtime can never refuse it as
-busy or timed out.
+another hook in the invocation reviews it. A hook whose `reviews_permissions`
+panics takes part and refuses each review as a panic. With no reviewing hook,
+a review is handled exactly as with no hooks at all, so the runtime can never
+refuse it as busy or timed out.
 Message text still waiting for its commit deadline is saved before the hook
 runs, because the hook's wait cannot poll that deadline.
 

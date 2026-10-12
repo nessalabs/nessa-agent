@@ -244,7 +244,9 @@ pub trait InvocationHook: Send + Sync {
     /// an invocation reviews permissions, a review goes to the
     /// person exactly as it would with no hooks: no hook thread is started and
     /// no runtime refusal (busy or timeout) can deny it. The default is `true`,
-    /// so an implementation that reviews is never skipped. Return `false` from
+    /// so an implementation that reviews is never skipped. A panic here makes
+    /// each review of that invocation `"hook failed: panic"` for this hook.
+    /// Return `false` from
     /// a hook that only runs before or after the invocation. The typed
     /// [`BeforeInvocation`](super::BeforeInvocation) and
     /// [`AfterInvocation`](super::AfterInvocation) registrations return `false`.
@@ -272,19 +274,32 @@ pub trait InvocationHook: Send + Sync {
 pub struct InvocationHooks {
     handlers: Arc<[Arc<dyn InvocationHook>]>,
     /// Per registration, whether that hook reviews permissions.
-    reviewers: Arc<[bool]>,
+    reviewers: Arc<[Participation]>,
+}
+
+/// What one hook's [`InvocationHook::reviews_permissions`] answered.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Participation {
+    Reviews,
+    Skips,
+    /// The answer panicked. The hook takes part, and its review is a panic refusal.
+    Panicked,
 }
 
 impl InvocationHooks {
     /// Freeze `handlers` in registration order for one invocation; clones share
     /// callbacks. An empty list performs no extension work.
     pub fn new(handlers: Vec<Arc<dyn InvocationHook>>) -> Self {
-        // A panic here counts as reviewing, so a broken hook is never skipped.
+        // A panic here is kept, so a broken hook refuses rather than being skipped.
         let reviewers = handlers
             .iter()
-            .map(|hook| {
-                catch_unwind(AssertUnwindSafe(|| hook.reviews_permissions())).unwrap_or(true)
-            })
+            .map(
+                |hook| match catch_unwind(AssertUnwindSafe(|| hook.reviews_permissions())) {
+                    Ok(true) => Participation::Reviews,
+                    Ok(false) => Participation::Skips,
+                    Err(_) => Participation::Panicked,
+                },
+            )
             .collect();
         Self {
             handlers: handlers.into(),
@@ -299,7 +314,9 @@ impl InvocationHooks {
     /// Whether any hook here reviews permissions. When none does, a review
     /// runs no hook thread and cannot be refused by the runtime.
     pub(crate) fn reviews_permissions(&self) -> bool {
-        self.reviewers.contains(&true)
+        self.reviewers
+            .iter()
+            .any(|participation| *participation != Participation::Skips)
     }
 
     pub(crate) fn before(
@@ -347,9 +364,14 @@ impl InvocationHooks {
             .iter()
             .zip(self.reviewers.iter())
             .enumerate()
-            .filter_map(|(index, (handler, reviews))| reviews.then_some((index, handler)));
-        for (index, handler) in reviewing {
-            match invoke_verdict(|| handler.before_permission_review(&call, &observations)) {
+            .filter(|(_, (_, participation))| **participation != Participation::Skips);
+        for (index, (handler, participation)) in reviewing {
+            let verdict = if *participation == Participation::Panicked {
+                Err(HookError::Panicked)
+            } else {
+                invoke_verdict(|| handler.before_permission_review(&call, &observations))
+            };
+            match verdict {
                 Ok(ToolVerdict::Allow) => {}
                 Ok(ToolVerdict::Stopped) => {
                     return PermissionReviewDecision {

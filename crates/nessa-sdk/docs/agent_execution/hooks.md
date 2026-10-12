@@ -70,7 +70,9 @@ or while this agent's earlier hook thread has not returned, is refused
 immediately as `"hook failed: busy"`, without another blocking thread.
 A hook reviews permissions unless its `reviews_permissions` returns `false`,
 as the typed `BeforeInvocation` and `AfterInvocation` registrations do. A hook
-that opts out is never called for a review, even beside one that reviews. When
+that opts out is never called for a review, even beside one that reviews. A
+hook whose `reviews_permissions` panics takes part, and each of its reviews is
+`"hook failed: panic"`. When
 no hook in the invocation reviews permissions, a review goes to the person
 exactly as it would with no hooks: no hook thread runs, so no busy or timeout
 refusal can deny it. Message text that is still waiting for its commit

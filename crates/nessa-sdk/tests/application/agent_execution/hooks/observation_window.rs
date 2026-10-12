@@ -871,6 +871,85 @@ impl InvocationHook for PanicHook {
     }
 }
 
+/// Panics when asked whether it reviews, and would otherwise allow.
+struct PanickingParticipant;
+
+impl InvocationHook for PanickingParticipant {
+    fn reviews_permissions(&self) -> bool {
+        panic!("participation bug");
+    }
+}
+
+#[tokio::test]
+async fn a_hook_that_panics_on_participation_refuses_the_review() {
+    let fixture = agent_with(script(), vec![Arc::new(PanickingParticipant)]).await;
+    fixture
+        .agent
+        .invoke(request(), close_action())
+        .await
+        .expect("a panicked hook does not close the session");
+    assert_eq!(fixture.answered.load(Ordering::SeqCst), 1);
+    let answers = fixture.answers.lock().unwrap();
+    let refusal = hook_refusal(&answers[0]);
+    assert_eq!(refusal.reason(), "hook failed: panic");
+    assert_eq!(refusal.index(), Some(0));
+}
+
+/// Registers another hook on the same agent, from another thread, while
+/// `reviews_permissions` runs, and records whether that registration had to wait.
+struct RegisteringHook {
+    agent: Arc<Mutex<Option<Agent>>>,
+    blocked: Arc<AtomicBool>,
+    registered: Arc<AtomicBool>,
+}
+
+impl InvocationHook for RegisteringHook {
+    fn reviews_permissions(&self) -> bool {
+        let agent = self.agent.lock().unwrap().clone();
+        if let Some(agent) = agent {
+            let (done, registered) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                agent.add_invocation_hook(Arc::new(AllowingReviewer));
+                let _ = done.send(());
+            });
+            match registered.recv_timeout(std::time::Duration::from_secs(2)) {
+                Ok(()) => self.registered.store(true, Ordering::SeqCst),
+                Err(_) => self.blocked.store(true, Ordering::SeqCst),
+            }
+        }
+        false
+    }
+}
+
+#[tokio::test]
+async fn hook_code_runs_after_the_hook_registry_is_released() {
+    let agent = Arc::new(Mutex::new(None));
+    let blocked = Arc::new(AtomicBool::new(false));
+    let registered = Arc::new(AtomicBool::new(false));
+    let fixture = agent_with(
+        script(),
+        vec![Arc::new(RegisteringHook {
+            agent: agent.clone(),
+            blocked: blocked.clone(),
+            registered: registered.clone(),
+        })],
+    )
+    .await;
+    *agent.lock().unwrap() = Some(fixture.agent.clone());
+    let invoked = fixture.agent.invoke(request(), close_action()).await;
+    // Break the agent -> hook -> agent cycle so the agent is dropped.
+    agent.lock().unwrap().take();
+    invoked.expect("the turn runs");
+    assert!(
+        registered.load(Ordering::SeqCst),
+        "the hook did not register another hook during the invocation"
+    );
+    assert!(
+        !blocked.load(Ordering::SeqCst),
+        "hook code ran while the invocation held the hook registry"
+    );
+}
+
 #[tokio::test]
 async fn a_hook_that_returns_stopped_is_deny_and_continue() {
     let fixture = agent_with(

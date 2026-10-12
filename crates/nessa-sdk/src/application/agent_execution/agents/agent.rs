@@ -1375,7 +1375,9 @@ impl Agent {
                 .settle_undispatched_invocation(index, saved_index, work, error)
                 .await;
         }
-        let hooks = InvocationHooks::new(self.inner.hooks.read().expect("hook registry").clone());
+        // Drop the registry guard before hook code runs: a hook may register another.
+        let registered = self.inner.hooks.read().expect("hook registry").clone();
+        let hooks = InvocationHooks::new(registered);
         let session_id = attached.session.id().clone();
         let before_gate = if hooks.is_empty() {
             Ok(())
