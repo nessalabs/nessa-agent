@@ -231,11 +231,12 @@ pub struct Projection {
     revision: u64,
     committed_position: Option<(String, u64, u64, u64)>,
     resolved_permissions: HashSet<(String, String)>,
-    /// Permission ids a request named in this execution, with the effect and
-    /// reason of the deadline that request published. A deadline notice is
-    /// shown only when it repeats that deadline: one whose id is absent, whose
-    /// request published no deadline, or whose outcome differs is ignored.
-    requested_permissions: HashMap<(String, String), Option<(PermissionEffect, String)>>,
+    /// Permission ids a request named in this execution, with the deadline
+    /// that request published. A deadline notice is shown only when it repeats
+    /// that deadline: one whose id is absent, whose request published no
+    /// deadline, or whose outcome differs is ignored. A deadline cancellation
+    /// must decide as it in full, not only share its outcome.
+    requested_permissions: HashMap<(String, String), Option<PermissionReviewDeadline>>,
     /// Reviews cancelled for a reason other than their own deadline. Their
     /// deadline did not settle them, so a later notice is ignored.
     cancelled_otherwise: HashSet<(String, String)>,
@@ -947,9 +948,7 @@ impl Projection {
         // request this execution saw, even when the card could not be shown.
         self.requested_permissions.insert(
             (execution.to_owned(), permission.as_str().to_owned()),
-            deadline
-                .as_ref()
-                .map(|deadline| (deadline.effect(), deadline.reason().to_owned())),
+            deadline.clone(),
         );
         if self
             .resolved_permissions
@@ -1067,8 +1066,7 @@ impl Projection {
                         if self.deadline_settled(
                             execution,
                             cancellation.request().id().as_str(),
-                            deadline.effect(),
-                            deadline.reason(),
+                            |published| published.decides_as(deadline),
                         )
                 );
                 if !by_deadline {
@@ -1080,7 +1078,9 @@ impl Projection {
                 self.resolved_permission(execution, cancellation.request().id().as_str());
             }
             ExecutionUpdate::DeadlineAnswered { id, effect, reason } => {
-                if self.deadline_settled(execution, id.as_str(), *effect, reason.as_str()) {
+                if self.deadline_settled(execution, id.as_str(), |published| {
+                    published.effect() == *effect && published.reason() == reason.as_str()
+                }) {
                     self.resolved_permission(execution, id.as_str());
                 }
             }
@@ -1099,21 +1099,19 @@ impl Projection {
         }
     }
 
-    /// Whether `permission` published a deadline with this `effect` and
-    /// `reason`, and nothing but that deadline ended it. A stale, duplicate,
-    /// or contradictory notice in restored history is not one.
+    /// Whether `permission` published a deadline that `settled_by` accepts,
+    /// and nothing but that deadline ended it. A stale, duplicate, or
+    /// contradictory notice in restored history is not one.
     fn deadline_settled(
         &self,
         execution: &str,
         permission: &str,
-        effect: PermissionEffect,
-        reason: &str,
+        settled_by: impl FnOnce(&PermissionReviewDeadline) -> bool,
     ) -> bool {
         let key = (execution.to_owned(), permission.to_owned());
         matches!(
             self.requested_permissions.get(&key),
-            Some(Some((published, published_reason)))
-                if *published == effect && published_reason == reason
+            Some(Some(published)) if settled_by(published)
         ) && !self.cancelled_otherwise.contains(&key)
     }
 
@@ -1130,10 +1128,11 @@ impl Projection {
                 effect,
                 reason,
             } => {
-                self.deadline_settled(id, permission.as_str(), *effect, reason.as_str())
-                    && !self.view.messages[index].parts.iter().any(|part| {
-                        part.kind == "local_notice" && part.notice_id == permission.as_str()
-                    })
+                self.deadline_settled(id, permission.as_str(), |published| {
+                    published.effect() == *effect && published.reason() == reason.as_str()
+                }) && !self.view.messages[index].parts.iter().any(|part| {
+                    part.kind == "local_notice" && part.notice_id == permission.as_str()
+                })
             }
             _ => false,
         };

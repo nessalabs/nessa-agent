@@ -2884,15 +2884,29 @@ fn a_deadline_notice_is_shown_only_as_the_one_settlement_its_review_published() 
         (vec![], 0),
         "an execution timeout shares the reason, but the review's deadline did not settle it"
     );
-    let deadline = |effect, reason| {
+    let deadline_after = |wait, effect, reason| {
         PermissionReviewDeadline::new(
             PermissionToolClass::Other,
-            std::time::Duration::from_secs(30),
+            std::time::Duration::from_secs(wait),
             effect,
             reason,
         )
         .unwrap()
     };
+    let deadline = |effect, reason| deadline_after(30, effect, reason);
+    assert_eq!(
+        shown(vec![
+            published(),
+            deadline_cancelled_review(deadline_after(
+                8,
+                PermissionEffect::Deny,
+                STANDARD_DENY_REASON
+            )),
+            deny(),
+        ]),
+        (vec![], 0),
+        "a cancellation by a deadline that shares the outcome but not the wait settles nothing"
+    );
     assert_eq!(
         shown(vec![
             published(),
