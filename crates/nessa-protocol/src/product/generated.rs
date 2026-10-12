@@ -561,8 +561,10 @@ impl ConversationPermissionOptionEffect {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationPermissionDeadline {
     pub wait_ms: u64,
+    pub due_at_ms: u64,
     pub effect: ConversationPermissionOptionEffect,
     pub reason: String,
+    pub stops_turn: bool,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

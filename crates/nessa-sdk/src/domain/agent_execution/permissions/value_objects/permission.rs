@@ -13,6 +13,34 @@ pub enum PermissionEffect {
     Deny,
 }
 
+impl PermissionEffect {
+    /// `allow` or `deny`, the spelling audits and views record.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Allow => "allow",
+            Self::Deny => "deny",
+        }
+    }
+}
+
+impl From<PermissionEffect> for &'static str {
+    fn from(effect: PermissionEffect) -> Self {
+        effect.as_str()
+    }
+}
+
+impl TryFrom<&str> for PermissionEffect {
+    type Error = ();
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "allow" => Ok(Self::Allow),
+            "deny" => Ok(Self::Deny),
+            _ => Err(()),
+        }
+    }
+}
+
 /// Where a decision applies. Request scope means the exact owning PermissionRequest,
 /// and its correlated tool. The application retains the review input.
 /// Session IDs are qualified by their application boundary.

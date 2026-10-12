@@ -303,6 +303,12 @@ pub(super) struct SavedDeadline {
     pub(super) wait_ms: u64,
     pub(super) effect: SavedEffect,
     pub(super) reason: String,
+    /// Whether the selected refusal stops the turn.
+    pub(super) stops_turn: bool,
+    /// Unix milliseconds the live worker promised, when it promised one.
+    /// Restoring it does not re-arm the review.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) due_at_ms: Option<u64>,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -315,6 +321,22 @@ pub(super) enum SavedClass {
 pub(super) enum SavedEffect {
     Allow,
     Deny,
+}
+impl From<PermissionEffect> for SavedEffect {
+    fn from(effect: PermissionEffect) -> Self {
+        match effect {
+            PermissionEffect::Allow => Self::Allow,
+            PermissionEffect::Deny => Self::Deny,
+        }
+    }
+}
+impl From<SavedEffect> for PermissionEffect {
+    fn from(effect: SavedEffect) -> Self {
+        match effect {
+            SavedEffect::Allow => Self::Allow,
+            SavedEffect::Deny => Self::Deny,
+        }
+    }
 }
 #[derive(Serialize, Deserialize)]
 pub(super) enum DeclineReason {
@@ -383,10 +405,7 @@ impl From<&InvocationRecord> for Metadata {
     }
 }
 fn saved_effect(effect: PermissionEffect) -> SavedEffect {
-    match effect {
-        PermissionEffect::Allow => SavedEffect::Allow,
-        PermissionEffect::Deny => SavedEffect::Deny,
-    }
+    effect.into()
 }
 
 fn saved_deadline(deadline: &PermissionReviewDeadline) -> SavedDeadline {
@@ -395,31 +414,32 @@ fn saved_deadline(deadline: &PermissionReviewDeadline) -> SavedDeadline {
             PermissionToolClass::ReadOnly => SavedClass::ReadOnly,
             PermissionToolClass::Other => SavedClass::Other,
         },
-        wait_ms: u64::try_from(deadline.wait().as_millis()).unwrap_or(u64::MAX),
+        wait_ms: crate::domain::agent_execution::permissions::wait_ms(deadline.wait()),
         effect: saved_effect(deadline.effect()),
         reason: deadline.reason().to_owned(),
+        stops_turn: deadline.stops_turn(),
+        due_at_ms: deadline.due_at_ms(),
     }
 }
 
 /// A deadline that is not one this build can record is absent. The review
-/// then waits for a person. A wrong-typed deadline never reaches here: serde
-/// rejects it as corrupt before this runs.
+/// then waits for a person, and the card does not promise a decision. A
+/// wrong-typed deadline never reaches here: serde rejects it as corrupt
+/// before this runs. Restoring does not arm the deadline: the provider
+/// request died with the process that saved it.
 fn restore_deadline(saved: SavedDeadline) -> Option<PermissionReviewDeadline> {
     let class = match saved.class {
         SavedClass::ReadOnly => PermissionToolClass::ReadOnly,
         SavedClass::Other => PermissionToolClass::Other,
     };
-    let effect = match saved.effect {
-        SavedEffect::Allow => PermissionEffect::Allow,
-        SavedEffect::Deny => PermissionEffect::Deny,
-    };
     PermissionReviewDeadline::new(
         class,
         std::time::Duration::from_millis(saved.wait_ms),
-        effect,
+        saved.effect.into(),
         saved.reason,
     )
     .ok()
+    .map(|deadline| deadline.restored(saved.stops_turn, saved.due_at_ms))
 }
 
 impl<'a> From<&'a ExecutionEvent> for Event<&'a str> {
@@ -478,7 +498,7 @@ impl<'a> From<&'a ExecutionEvent> for Event<&'a str> {
                     Update::DeadlineAnswered {
                         id: id.as_str().into(),
                         effect: saved_effect(*effect),
-                        reason: reason.clone(),
+                        reason: reason.as_str().into(),
                     }
                 }
                 ExecutionUpdate::QuestionClosed { id } => Update::QuestionClosed {
@@ -652,19 +672,14 @@ impl Event {
             }
             Update::DeadlineAnswered { id, effect, reason } => {
                 validate_observation_id(&id).map_err(corrupt)?;
-                let effect = match effect {
-                    SavedEffect::Allow => PermissionEffect::Allow,
-                    SavedEffect::Deny => PermissionEffect::Deny,
-                };
-                let reason = String::from(
+                let reason =
                     crate::domain::agent_execution::permissions::value_objects::checked_deadline_reason(
                         reason,
                     )
-                    .map_err(corrupt)?,
-                );
+                    .map_err(corrupt)?;
                 ExecutionUpdate::DeadlineAnswered {
                     id: PermissionId::new(id).map_err(corrupt)?,
-                    effect,
+                    effect: effect.into(),
                     reason,
                 }
             }
@@ -788,5 +803,116 @@ mod borrowed_event_tests {
                 .unwrap();
             assert_eq!(decoded, event);
         }
+    }
+
+    #[test]
+    fn a_deadline_and_its_answer_round_trip_and_a_corrupt_deadline_is_skipped() {
+        use crate::application::agent_execution::tools::ToolReviewInput;
+        use crate::domain::agent_execution::permissions::{
+            PermissionDecision, PermissionEffect, PermissionId, PermissionOfferPolicy,
+            PermissionOption, PermissionOptionId, PermissionOptions, PermissionReviewDeadline,
+            PermissionScope, PermissionToolClass, STANDARD_DENY_REASON, STANDARD_STOP_REASON,
+        };
+        use crate::domain::agent_execution::tools::{ToolCallId, ToolObservation};
+        use std::time::Duration;
+
+        let deadline =
+            PermissionReviewDeadline::stopping(PermissionToolClass::Other, Duration::from_secs(30))
+                .promise(1_700_000_030_000);
+        let options = PermissionOptions::new(
+            vec![PermissionOption::new(
+                PermissionOptionId::new("cancel").unwrap(),
+                "Cancel",
+                PermissionDecision::new(PermissionEffect::Deny, PermissionScope::request()),
+            )
+            .unwrap()],
+            &PermissionOfferPolicy::once_only(),
+        )
+        .unwrap();
+        let event = ExecutionEvent::new(
+            ExecutionId::new("output").unwrap(),
+            ExecutionUpdate::PermissionRequested {
+                id: PermissionId::new("permission").unwrap(),
+                tool_id: ToolCallId::new("tool").unwrap(),
+                observation: ToolObservation::default(),
+                input: ToolReviewInput {
+                    name: "Write".into(),
+                    arguments_json: "{}".into(),
+                },
+                options,
+                deadline: Some(deadline.clone()),
+            },
+        );
+        let borrowed = Event::from(&event);
+        let bytes = serde_json::to_vec(&borrowed).unwrap();
+        assert!(bytes.windows(8).any(|window| window == b"deadline"));
+        assert!(std::str::from_utf8(&bytes).unwrap().contains("stops_turn"));
+        let owned: Event = serde_json::from_slice(&bytes).unwrap();
+        let decoded = owned
+            .decode(
+                &crate::domain::agent_execution::sessions::ExecutionSessionId::new("remote")
+                    .unwrap(),
+                event.execution_id(),
+            )
+            .unwrap();
+        let ExecutionUpdate::PermissionRequested {
+            deadline: restored, ..
+        } = decoded.update()
+        else {
+            panic!("review");
+        };
+        let restored = restored
+            .as_ref()
+            .expect("save and restore keep the deadline");
+        assert_eq!(restored.class(), PermissionToolClass::Other);
+        assert_eq!(restored.wait(), Duration::from_secs(30));
+        assert_eq!(restored.effect(), PermissionEffect::Deny);
+        assert_eq!(restored.reason(), STANDARD_STOP_REASON);
+        assert!(restored.stops_turn());
+        assert_eq!(restored.due_at_ms(), Some(1_700_000_030_000));
+        assert!(!restored.armed(), "a restored deadline is not a promise");
+
+        let answered = ExecutionEvent::new(
+            ExecutionId::new("output").unwrap(),
+            ExecutionUpdate::DeadlineAnswered {
+                id: PermissionId::new("permission").unwrap(),
+                effect: PermissionEffect::Deny,
+                reason: deadline.recorded_reason(),
+            },
+        );
+        let answered_owned: Event =
+            serde_json::from_slice(&serde_json::to_vec(&Event::from(&answered)).unwrap()).unwrap();
+        assert_eq!(
+            answered_owned
+                .decode(
+                    &crate::domain::agent_execution::sessions::ExecutionSessionId::new("remote")
+                        .unwrap(),
+                    answered.execution_id(),
+                )
+                .unwrap(),
+            answered
+        );
+
+        let blank = SavedDeadline {
+            class: SavedClass::ReadOnly,
+            wait_ms: 8_000,
+            effect: SavedEffect::Allow,
+            reason: " ".into(),
+            stops_turn: false,
+            due_at_ms: None,
+        };
+        assert!(restore_deadline(blank).is_none());
+        let zero = SavedDeadline {
+            class: SavedClass::Other,
+            wait_ms: 0,
+            effect: SavedEffect::Deny,
+            reason: STANDARD_DENY_REASON.into(),
+            stops_turn: false,
+            due_at_ms: None,
+        };
+        assert!(restore_deadline(zero).is_none());
+        let kept = restore_deadline(saved_deadline(&deadline)).unwrap();
+        assert_eq!(kept.reason(), STANDARD_STOP_REASON);
+        assert!(!kept.armed());
     }
 }

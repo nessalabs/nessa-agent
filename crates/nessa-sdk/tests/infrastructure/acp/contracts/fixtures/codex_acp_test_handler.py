@@ -194,6 +194,31 @@ for line in sys.stdin:
             update({"sessionUpdate": "tool_call_update", "toolCallId": "command-1", "status": "completed",
                     "rawOutput": {"formatted_output": "compiling\n2 passed\n", "exit_code": 0},
                     "_meta": {"terminal_exit": {"exit_code": 0, "signal": None, "terminal_id": "command-1"}}})
+        elif mode in ("deadline-decline", "deadline-cancel-only"):
+            # Real Codex ACP 1.12.0 shapes. Command decisions offer decline
+            # then cancel, both reject_once. File edits offer only cancel.
+            if mode == "deadline-decline":
+                options = [
+                    {"optionId": "allow_once", "kind": "allow_once", "name": "Yes"},
+                    {"optionId": "cancel", "kind": "reject_once", "name": "No, and tell Codex what to do differently"},
+                    {"optionId": "decline", "kind": "reject_once", "name": "No, continue without running it"},
+                ]
+                call = {"toolCallId": "command-1", "kind": "execute", "status": "pending", "title": "Run tests",
+                        "rawInput": {"command": "cargo test"}}
+            else:
+                options = [
+                    {"optionId": "allow_once", "kind": "allow_once", "name": "Yes, proceed"},
+                    {"optionId": "allow_always", "kind": "allow_always", "name": "Yes, and don't ask again for this session"},
+                    {"optionId": "cancel", "kind": "reject_once", "name": "No, and tell Codex what to do differently"},
+                ]
+                call = {"toolCallId": "file-change-1", "kind": "edit", "status": "pending", "title": "Edit config",
+                        "locations": [{"path": str(root / "config.txt")}]}
+            update({"sessionUpdate": "tool_call", **call})
+            send({"id": "file-review", "method": "session/request_permission", "params": {
+                "sessionId": session, "toolCall": {key: value for key, value in call.items() if key != "title"},
+                "options": options,
+            }})
+            continue
         elif mode in ("file-change-permission", "mcp-sparse-permission"):
             if mode == "mcp-sparse-permission":
                 update({"sessionUpdate": "tool_call", "toolCallId": "file-change-1", "kind": "execute",
@@ -223,8 +248,11 @@ for line in sys.stdin:
             result(pending, {"stopReason": "cancelled"})
             pending = None
     elif msg.get("id") == "file-review":
-        outcome = msg["result"]["outcome"]
-        (root / "permission-outcome").write_text(json.dumps(outcome))
+        if mode in ("deadline-decline", "deadline-cancel-only"):
+            (root / "permission-outcome").write_text(json.dumps(msg["result"]))
+        else:
+            outcome = msg["result"]["outcome"]
+            (root / "permission-outcome").write_text(json.dumps(outcome))
         update({"sessionUpdate": "tool_call_update", "toolCallId": "file-change-1", "status": "completed"})
         result(pending, {"stopReason": "end_turn"})
         pending = None

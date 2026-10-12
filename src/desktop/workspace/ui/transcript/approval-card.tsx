@@ -1,4 +1,6 @@
+import { deadlinePendingLine } from "@nessa/client"
 import { memo } from "react"
+import { useNow } from "../../adapters/dom/clock"
 import { DesktopIcon } from "../../../ui/icons"
 import { approve, deny } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
@@ -35,6 +37,7 @@ export const ApprovalCard = memo(function ApprovalCard({
     selectAnswer(state, sessionId, approval.id),
   )
   const waiting = answering(answer, approval.id)
+  const now = useNow(1000)
   return (
     <div
       className="workspace-approval"
@@ -61,7 +64,7 @@ export const ApprovalCard = memo(function ApprovalCard({
           className="workspace-approval-deadline"
           data-deadline={approval.deadline.effect}
         >
-          <Saying said={[approval.deadline.reason]} />
+          <Saying said={[deadlinePendingLine(approval.deadline, now)]} />
         </p>
       ) : null}
       {answer?.failure ? (

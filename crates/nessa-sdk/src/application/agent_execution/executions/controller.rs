@@ -259,7 +259,7 @@ impl ExecutionController {
         execution: &ExecutionId,
         id: PermissionId,
         effect: PermissionEffect,
-        reason: String,
+        reason: crate::domain::agent_execution::permissions::DeadlineReason,
     ) -> Result<ExecutionEvent, AgentError> {
         self.event(
             execution,

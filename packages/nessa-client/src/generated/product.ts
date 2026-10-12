@@ -519,12 +519,16 @@ export type ConversationPermissionOptionEffect =
   (typeof ConversationPermissionOptionEffect)[keyof typeof ConversationPermissionOptionEffect]
 /** What happens if nobody answers this review, and when. Absent on a review that waits for a person. */
 export interface ConversationPermissionDeadline {
-  /** How many milliseconds the review waits before this outcome is taken. */
+  /** How many milliseconds the review waits before this outcome is taken, measured when the review was armed. */
   waitMs: number
+  /** Unix milliseconds when the deadline decides. A reloaded client counts down from this rather than starting waitMs again. */
+  dueAtMs: number
   /** The outcome taken when the wait ends with no answer. */
   effect: ConversationPermissionOptionEffect
-  /** Why that outcome is taken. Shown while the review is pending and recorded if the deadline wins. */
+  /** Past-tense reason recorded if the deadline wins. A pending review does not show this sentence; it builds a line from the outcome and the wait. */
   reason: string
+  /** True when the only refusal this agent offered stops the turn. The pending line and the notice say that, rather than that the turn continues without the tool. */
+  stopsTurn: boolean
 }
 /** A pending review with its complete offered choices. */
 export interface ConversationPermission {

@@ -321,9 +321,11 @@ describe("a conversation view as a transcript", () => {
             argumentsJson: '{"command":"rm -rf build"}',
             deadline: {
               waitMs: 30_000,
+              dueAtMs: 1_700_000_030_000,
               effect: "deny",
               reason:
                 "No human answered in time. Continue without this tool or try another approach.",
+              stopsTurn: true,
             },
           },
         ],
@@ -333,9 +335,11 @@ describe("a conversation view as a transcript", () => {
     )
     expect(waiting.approval?.deadline).toEqual({
       waitMs: 30_000,
+      dueAtMs: 1_700_000_030_000,
       effect: "deny",
       reason:
         "No human answered in time. Continue without this tool or try another approach.",
+      stopsTurn: true,
     })
     expect(reviewOf(transcript.approval!.id)).toEqual({
       executionId: "e/1",

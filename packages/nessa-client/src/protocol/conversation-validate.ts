@@ -44,10 +44,10 @@ const utf8 = new TextEncoder()
 /** A canonical lowercase hyphenated UUID: the schema's pattern for a conversation identity. */
 export const conversationIdPattern = new RegExp(bounds.conversationIdPattern)
 
-/** A pending review's deadline: a positive wait within a day, an effect, and a reason. */
+/** A pending review's deadline: the wait, when it is due, the outcome, and whether that refusal stops the turn. */
 function deadlineOf(value: unknown) {
   const deadline = record(value)
-  exact(deadline, ["waitMs", "effect", "reason"])
+  exact(deadline, ["waitMs", "dueAtMs", "effect", "reason", "stopsTurn"])
   const waitMs = deadline.waitMs
   if (
     typeof waitMs !== "number" ||
@@ -56,10 +56,14 @@ function deadlineOf(value: unknown) {
     waitMs > 86_400_000
   )
     throw new Error("Invalid conversation waitMs")
+  const dueAtMs = deadline.dueAtMs
+  if (typeof dueAtMs !== "number" || !Number.isSafeInteger(dueAtMs) || dueAtMs < 1)
+    throw new Error("Invalid conversation dueAtMs")
   oneOf(text(deadline, "effect", 16), Object.values(ConversationPermissionOptionEffect))
   const reason = text(deadline, "reason", 512, false)
   if (!reason.trim() || /\p{Cc}/u.test(reason))
     throw new Error("Invalid conversation reason")
+  flag(deadline, "stopsTurn")
 }
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value))

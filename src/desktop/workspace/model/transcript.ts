@@ -93,11 +93,18 @@ export interface ApprovalOption {
  */
 export type ApprovalAsk = "tool" | "message"
 
-/** What happens if nobody answers, and the sentence that says so. */
+/**
+ * What happens if nobody answers. `reason` is the past-tense record; the
+ * card builds its line from `dueAtMs`, `effect`, and `stopsTurn`.
+ */
 export interface ApprovalDeadline {
   readonly waitMs: number
+  /** Unix milliseconds when the deadline decides. A reload counts down from this. */
+  readonly dueAtMs: number
   readonly effect: "allow" | "deny"
   readonly reason: string
+  /** The only refusal offered stops the turn. */
+  readonly stopsTurn: boolean
 }
 
 /**

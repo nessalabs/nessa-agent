@@ -275,8 +275,15 @@ pub struct ConversationPermission {
 #[serde(rename_all = "camelCase")]
 pub struct ConversationPermissionDeadline {
     pub wait_ms: u64,
+    /// Unix milliseconds when the deadline decides. A reloaded client counts
+    /// down from this, not from `wait_ms` measured again at reload.
+    pub due_at_ms: u64,
     pub effect: ConversationPermissionOptionEffect,
+    /// Past-tense reason recorded if the deadline wins. The pending card does
+    /// not show this sentence.
     pub reason: String,
+    /// The only refusal offered stops the agent's turn.
+    pub stops_turn: bool,
 }
 /// What a review asks the person to allow: running a tool, or an MCP App
 /// sending one message in the conversation as them.

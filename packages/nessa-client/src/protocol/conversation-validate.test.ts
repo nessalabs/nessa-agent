@@ -446,24 +446,59 @@ describe("conversation view agreement", () => {
     }
     const reason =
       "No human answered in time. Continue without this tool or try another approach."
-    const read = conversationView(
-      withDeadline({ waitMs: 30_000, effect: "deny", reason }),
-      "conversation",
-    )
-    expect(read.permissions[0]!.deadline).toEqual({
+    const deadline = {
       waitMs: 30_000,
-      effect: "deny",
+      dueAtMs: 1_700_000_030_000,
+      effect: "deny" as const,
       reason,
-    })
-    for (const deadline of [
-      { waitMs: 0, effect: "deny", reason },
-      { waitMs: 86_400_001, effect: "deny", reason },
-      { waitMs: 30_000, effect: "later", reason },
-      { waitMs: 30_000, effect: "deny", reason: " " },
-      { waitMs: 30_000, effect: "deny", reason: "line\nbreak" },
-      { waitMs: 30_000, effect: "deny" },
+      stopsTurn: false,
+    }
+    const read = conversationView(withDeadline(deadline), "conversation")
+    expect(read.permissions[0]!.deadline).toEqual(deadline)
+    for (const broken of [
+      { waitMs: 0, dueAtMs: deadline.dueAtMs, effect: "deny", reason, stopsTurn: false },
+      {
+        waitMs: 86_400_001,
+        dueAtMs: deadline.dueAtMs,
+        effect: "deny",
+        reason,
+        stopsTurn: false,
+      },
+      { waitMs: 30_000, dueAtMs: 0, effect: "deny", reason, stopsTurn: false },
+      { waitMs: 30_000, dueAtMs: 1.5, effect: "deny", reason, stopsTurn: false },
+      {
+        waitMs: 30_000,
+        dueAtMs: deadline.dueAtMs,
+        effect: "later",
+        reason,
+        stopsTurn: false,
+      },
+      {
+        waitMs: 30_000,
+        dueAtMs: deadline.dueAtMs,
+        effect: "deny",
+        reason: " ",
+        stopsTurn: false,
+      },
+      {
+        waitMs: 30_000,
+        dueAtMs: deadline.dueAtMs,
+        effect: "deny",
+        reason: "line\nbreak",
+        stopsTurn: false,
+      },
+      { waitMs: 30_000, dueAtMs: deadline.dueAtMs, effect: "deny", stopsTurn: false },
+      { waitMs: 30_000, effect: "deny", reason, stopsTurn: false },
+      {
+        waitMs: 30_000,
+        dueAtMs: deadline.dueAtMs,
+        effect: "deny",
+        reason,
+        stopsTurn: "no",
+      },
+      { ...deadline, later: true },
     ])
-      expect(() => conversationView(withDeadline(deadline), "conversation")).toThrow()
+      expect(() => conversationView(withDeadline(broken), "conversation")).toThrow()
   })
 
   it("refuses an app's review that names a tool other than the one it reviews", () => {

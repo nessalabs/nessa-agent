@@ -1175,7 +1175,12 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 86400000,
-          "description": "How many milliseconds the review waits before this outcome is taken."
+          "description": "How many milliseconds the review waits before this outcome is taken, measured when the review was armed."
+        },
+        "dueAtMs": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Unix milliseconds when the deadline decides. A reloaded client counts down from this rather than starting waitMs again."
         },
         "effect": {
           "$ref": "#/$defs/ConversationPermissionOptionEffect",
@@ -1186,10 +1191,14 @@
           "minLength": 1,
           "maxLength": 512,
           "x-utf8MaxBytes": 512,
-          "description": "Why that outcome is taken. Shown while the review is pending and recorded if the deadline wins."
+          "description": "Past-tense reason recorded if the deadline wins. A pending review does not show this sentence; it builds a line from the outcome and the wait."
+        },
+        "stopsTurn": {
+          "type": "boolean",
+          "description": "True when the only refusal this agent offered stops the turn. The pending line and the notice say that, rather than that the turn continues without the tool."
         }
       },
-      "required": ["waitMs", "effect", "reason"]
+      "required": ["waitMs", "dueAtMs", "effect", "reason", "stopsTurn"]
     },
     "ConversationPermission": {
       "type": "object",

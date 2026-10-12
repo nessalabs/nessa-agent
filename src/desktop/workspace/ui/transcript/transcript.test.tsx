@@ -450,16 +450,18 @@ describe("a transcript", () => {
         ...approval,
         deadline: {
           waitMs: 30_000,
+          dueAtMs: 31_000,
           effect: "deny",
           reason:
             "No human answered in time. Continue without this tool or try another approach.",
+          stopsTurn: false,
         },
       },
     })
     const deadline = host.querySelector<HTMLElement>("[data-deadline]")
     expect(deadline?.dataset.deadline).toBe("deny")
     expect(deadline?.textContent).toBe(
-      "No human answered in time. Continue without this tool or try another approach.",
+      "If nobody answers within 30 seconds, this is denied automatically.",
     )
     expect(host.querySelector(".workspace-approval-reason")?.textContent).toBe(
       "Runs the tests.",

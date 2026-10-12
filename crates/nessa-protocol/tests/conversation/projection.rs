@@ -41,8 +41,9 @@ use nessa_sdk::domain::agent_execution::executions::{
 use nessa_sdk::domain::agent_execution::permissions::{
     PermissionApplicationId, PermissionCancellationReason, PermissionDecision, PermissionEffect,
     PermissionId, PermissionOfferPolicy, PermissionOption, PermissionOptionId, PermissionOptions,
-    PermissionScope, PermissionSessionId, ReviewDecline, ReviewDeclineId, ReviewDeclineObservation,
-    ReviewDeclineReason, ReviewDeclineStage,
+    PermissionReviewDeadline, PermissionScope, PermissionSessionId, PermissionToolClass,
+    ReviewDecline, ReviewDeclineId, ReviewDeclineObservation, ReviewDeclineReason,
+    ReviewDeclineStage, STANDARD_DENY_REASON, STANDARD_STOP_REASON,
 };
 use nessa_sdk::domain::agent_execution::prompts::{PromptText, UserMessage};
 use nessa_sdk::domain::agent_execution::questions::{
@@ -2457,6 +2458,98 @@ fn selection_and_runtime_replacements_own_revision_without_transcript_output() {
     });
     assert_ne!(projection.read().revision, running.revision);
     assert!(projection.read().messages.is_empty());
+}
+
+#[test]
+fn a_pending_review_shows_an_armed_deadline_and_a_restored_one_does_not() {
+    use std::time::Duration;
+    let ExecutionUpdate::PermissionRequested {
+        id,
+        tool_id,
+        observation,
+        input,
+        options,
+        ..
+    } = review("{}".into()).update().clone()
+    else {
+        unreachable!()
+    };
+    let armed = PermissionReviewDeadline::new(
+        PermissionToolClass::Other,
+        Duration::from_secs(30),
+        PermissionEffect::Deny,
+        STANDARD_DENY_REASON,
+    )
+    .unwrap()
+    .promise(1_700_000_030_000);
+    let show = |deadline| {
+        let snapshot = review_snapshot(vec![event(ExecutionUpdate::PermissionRequested {
+            id: id.clone(),
+            tool_id: tool_id.clone(),
+            observation: observation.clone(),
+            input: input.clone(),
+            options: options.clone(),
+            deadline,
+        })]);
+        let mut projection = projection();
+        projection.replace_committed(
+            &committed("incarnation", 1, 1, 1, Some(&snapshot)),
+            &[],
+            Some(&ExecutionId::new("execution").unwrap()),
+        );
+        projection.transcript_state(ConversationTranscriptState::Complete);
+        projection.read()
+    };
+    let pending = show(Some(armed));
+    let deadline = pending.permissions[0]
+        .deadline
+        .as_ref()
+        .expect("an armed deadline is on the pending review");
+    assert_eq!(deadline.wait_ms, 30_000);
+    assert_eq!(deadline.due_at_ms, 1_700_000_030_000);
+    assert_eq!(deadline.effect, ConversationPermissionOptionEffect::Deny);
+    assert_eq!(deadline.reason, STANDARD_DENY_REASON);
+    assert!(!deadline.stops_turn);
+    let restored =
+        PermissionReviewDeadline::stopping(PermissionToolClass::Other, Duration::from_secs(30));
+    assert!(
+        show(Some(restored)).permissions[0].deadline.is_none(),
+        "a deadline nothing will decide is not promised"
+    );
+}
+
+#[test]
+fn an_automatic_decision_is_named_allowed_or_denied_in_the_notice() {
+    let notice = |effect, sentence: &str| {
+        let reason =
+            nessa_sdk::domain::agent_execution::permissions::DeadlineReason::new(sentence).unwrap();
+        let snapshot = review_snapshot(vec![event(ExecutionUpdate::DeadlineAnswered {
+            id: PermissionId::new("permission").unwrap(),
+            effect,
+            reason,
+        })]);
+        let mut projection = projection();
+        projection.replace_committed(
+            &committed("incarnation", 1, 1, 1, Some(&snapshot)),
+            &[],
+            Some(&ExecutionId::new("execution").unwrap()),
+        );
+        projection.transcript_state(ConversationTranscriptState::Complete);
+        let view = projection.read();
+        view.messages[0].parts[0].text.clone()
+    };
+    assert_eq!(
+        notice(PermissionEffect::Deny, STANDARD_DENY_REASON),
+        format!("Denied automatically: {STANDARD_DENY_REASON}")
+    );
+    assert_eq!(
+        notice(PermissionEffect::Allow, "allowed because nobody was there"),
+        "Allowed automatically: allowed because nobody was there"
+    );
+    assert_eq!(
+        notice(PermissionEffect::Deny, STANDARD_STOP_REASON),
+        format!("Denied automatically: {STANDARD_STOP_REASON}")
+    );
 }
 
 #[test]

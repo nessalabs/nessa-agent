@@ -321,8 +321,10 @@ export function transcriptFrom(
         ask: asked.ask,
         deadline: asked.deadline && {
           waitMs: asked.deadline.waitMs,
+          dueAtMs: asked.deadline.dueAtMs,
           effect: asked.deadline.effect,
           reason: asked.deadline.reason,
+          stopsTurn: asked.deadline.stopsTurn,
         },
       }
     : null

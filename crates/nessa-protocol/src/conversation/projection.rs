@@ -267,12 +267,21 @@ fn outcome(value: ExecutionOutcome) -> ConversationMessageStatus {
         | ExecutionOutcome::Refused => ConversationMessageStatus::Failed,
     }
 }
-fn permission_deadline(deadline: &PermissionReviewDeadline) -> ConversationPermissionDeadline {
-    ConversationPermissionDeadline {
-        wait_ms: u64::try_from(deadline.wait().as_millis()).unwrap_or(u64::MAX),
+fn permission_deadline(
+    deadline: &PermissionReviewDeadline,
+) -> Option<ConversationPermissionDeadline> {
+    // A restored deadline is a record of what was promised, not a promise this
+    // process will keep. Only a live armed review is shown with a countdown.
+    if !deadline.armed() {
+        return None;
+    }
+    Some(ConversationPermissionDeadline {
+        wait_ms: nessa_sdk::domain::agent_execution::permissions::wait_ms(deadline.wait()),
+        due_at_ms: deadline.due_at_ms()?,
         effect: ConversationPermissionOptionEffect::from(deadline.effect()),
         reason: deadline.reason().to_owned(),
-    }
+        stops_turn: deadline.stops_turn(),
+    })
 }
 fn deadline_notice(effect: PermissionEffect, reason: &str) -> String {
     let verb = match effect {
@@ -935,7 +944,7 @@ impl Projection {
             arguments_json: input.arguments_json.clone(),
             origin: ConversationPermissionOrigin::Harness,
             ask: ConversationPermissionAsk::Tool,
-            deadline: deadline.as_ref().map(permission_deadline),
+            deadline: deadline.as_ref().and_then(permission_deadline),
             options: options
                 .choices()
                 .iter()
@@ -1049,7 +1058,7 @@ impl Projection {
                 })
             }
             ExecutionUpdate::DeadlineAnswered { id, effect, reason } => {
-                let text = deadline_notice(*effect, reason);
+                let text = deadline_notice(*effect, reason.as_str());
                 let bounded = clipped(&text, available);
                 if bounded.len() != text.len() {
                     self.view.truncated = true;

@@ -1,3 +1,4 @@
+import { deadlinePendingLine } from "@nessa/client"
 import type { Conversation } from "../model"
 import { controlConversation } from "../adapters/store/slice"
 import { useConversationDispatch } from "../adapters/store/hooks"
@@ -54,7 +55,7 @@ export function ConversationControls({
               <ToolApprovalTitle>{permission.title}</ToolApprovalTitle>
               <ToolApprovalDescription>
                 {permission.deadline
-                  ? `${permission.toolName}. ${permission.deadline.reason}`
+                  ? `${permission.toolName}. ${deadlinePendingLine(permission.deadline, Date.now())}`
                   : permission.toolName}
               </ToolApprovalDescription>
             </ToolApprovalHeading>

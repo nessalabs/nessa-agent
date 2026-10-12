@@ -160,7 +160,7 @@ impl ExecutionEvent {
                 .saturating_add(question.allocation_bytes()),
             ExecutionUpdate::QuestionClosed { id } => id.as_str().len(),
             ExecutionUpdate::DeadlineAnswered { id, reason, .. } => {
-                id.as_str().len().saturating_add(reason.len())
+                id.as_str().len().saturating_add(reason.as_str().len())
             }
         };
         size_of::<Self>()
@@ -229,7 +229,10 @@ pub enum ExecutionUpdate {
         /// Absent means the review waits for a person.
         deadline: Option<PermissionReviewDeadline>,
     },
-    /// The review's deadline passed and selected `effect`. The turn continues.
+    /// The review's deadline passed and selected `effect`.
+    ///
+    /// Selecting a refusal that stops the turn is still this event; the reason
+    /// says so. The turn continues when the selected option does not stop it.
     ///
     /// This is the lasting fact a surface reads after the pending review is
     /// gone. It is not a second decision: the answer itself is the audit record.
@@ -239,7 +242,7 @@ pub enum ExecutionUpdate {
         /// The outcome the deadline took.
         effect: PermissionEffect,
         /// The reason the deadline recorded, already bounded by construction.
-        reason: String,
+        reason: crate::domain::agent_execution::permissions::DeadlineReason,
     },
     /// A question the agent put to a person, waiting on an answer.
     ///

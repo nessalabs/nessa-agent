@@ -2,10 +2,12 @@
 use super::super::support::*;
 use std::task::{Context, Waker};
 
-const DENY_REASON: &str =
-    "No human answered in time. Continue without this tool or try another approach.";
-const ALLOW_REASON: &str =
-    "No human answered in time. This read-only tool was allowed so the turn could continue.";
+const DENY_REASON: &str = STANDARD_DENY_REASON;
+const ALLOW_REASON: &str = STANDARD_ALLOW_REASON;
+
+fn recorded(text: &str) -> DeadlineReason {
+    DeadlineReason::new(text).unwrap()
+}
 
 struct PendingReview {
     root: TempDir,
@@ -135,7 +137,7 @@ async fn an_unanswered_review_is_denied_at_its_deadline_and_the_turn_continues()
             ExecutionUpdate::DeadlineAnswered {
                 id: review.id.clone(),
                 effect: PermissionEffect::Deny,
-                reason: DENY_REASON.to_owned(),
+                reason: recorded(DENY_REASON),
             },
             ExecutionUpdate::Message(MessageChunk::text(DENY_REASON)),
             ExecutionUpdate::Finished(ExecutionOutcome::Completed),
@@ -183,7 +185,7 @@ async fn an_unanswered_read_is_allowed_when_its_shorter_deadline_passes() {
             ExecutionUpdate::DeadlineAnswered {
                 id: review.id.clone(),
                 effect: PermissionEffect::Allow,
-                reason: ALLOW_REASON.to_owned(),
+                reason: recorded(ALLOW_REASON),
             },
             ExecutionUpdate::Message(MessageChunk::text(ALLOW_REASON)),
             ExecutionUpdate::Finished(ExecutionOutcome::Completed),
@@ -494,7 +496,7 @@ async fn a_review_with_no_deny_option_is_cancelled_and_the_turn_continues() {
             effect: PermissionEffect::Deny,
             reason,
             ..
-        } if reason == deadline.reason()
+        } if reason.as_str() == deadline.reason()
     )));
     assert!(updates.iter().any(|update| matches!(
         update,
@@ -516,4 +518,333 @@ async fn a_review_with_no_deny_option_is_cancelled_and_the_turn_continues() {
     assert_eq!(wire["outcome"]["outcome"], "cancelled");
     close(&clock, &opened).await;
     assert_gone(&root, "pid");
+}
+
+async fn quiet_after(clock: &ManualClock, opened: &mut OpenedProviderSession) {
+    clock.advance(Duration::from_secs(30));
+    let late = timeout(Duration::from_millis(400), opened.events.next()).await;
+    match late {
+        Err(_) | Ok(Ok(None)) | Ok(Err(_)) => {}
+        Ok(Ok(Some(event))) => assert!(
+            !matches!(event.update(), ExecutionUpdate::DeadlineAnswered { .. }),
+            "a deadline must not answer after the turn is over: {event:?}"
+        ),
+    }
+}
+
+#[tokio::test]
+async fn a_turn_that_ends_with_a_request_pending_does_not_answer_it_later() {
+    let _slot = process_test_slot().await;
+    let mut review = pending("permission-finished").await;
+    let updates = until_finished(&mut review.opened).await;
+    assert!(
+        updates
+            .iter()
+            .any(|update| matches!(update, ExecutionUpdate::Finished(_))),
+        "{updates:?}"
+    );
+    assert!(updates
+        .iter()
+        .all(|update| !matches!(update, ExecutionUpdate::DeadlineAnswered { .. })));
+    quiet_after(&review.clock, &mut review.opened).await;
+    assert_eq!(
+        promptly(review.active).await.unwrap(),
+        Ok(ExecutionOutcome::Completed)
+    );
+    close(&review.clock, &review.opened).await;
+    assert_gone(&review.root, "pid");
+}
+
+#[tokio::test]
+async fn a_provider_cancelled_turn_forgets_the_armed_deadline() {
+    let _slot = process_test_slot().await;
+    let mut review = pending("permission-deadline-provider-cancel").await;
+    let updates = until_finished(&mut review.opened).await;
+    assert!(
+        updates.iter().any(|update| matches!(
+            update,
+            ExecutionUpdate::Finished(ExecutionOutcome::Cancelled)
+        )),
+        "{updates:?}"
+    );
+    assert!(updates
+        .iter()
+        .all(|update| !matches!(update, ExecutionUpdate::DeadlineAnswered { .. })));
+    quiet_after(&review.clock, &mut review.opened).await;
+    close(&review.clock, &review.opened).await;
+    assert_gone(&review.root, "pid");
+}
+
+#[tokio::test]
+async fn close_during_a_pending_request_forgets_the_deadline() {
+    let _slot = process_test_slot().await;
+    let mut review = pending("permission-deadline").await;
+    close(&review.clock, &review.opened).await;
+    // Forgetting the armed deadline is what lets close finish the turn. A
+    // worker that still holds it panics in that branch, and this result is
+    // the protocol error that panic becomes.
+    assert_eq!(
+        promptly(review.active).await.unwrap(),
+        Ok(ExecutionOutcome::Cancelled)
+    );
+    quiet_after(&review.clock, &mut review.opened).await;
+    assert_gone(&review.root, "pid");
+}
+
+#[tokio::test]
+async fn stopping_a_turn_during_a_pending_request_holds_the_next_prompt() {
+    let _slot = process_test_slot().await;
+    let audit = Arc::new(RecordingAudit::default());
+    let (root, mut config, model) = test_acp_configuration("permission-deadline-stop", 16);
+    config.execution_timeout = None;
+    // Longer than the pending review's wait, so running that wait out does not
+    // also expire the stopped prompt's grace.
+    config.shutdown_grace = Duration::from_secs(60);
+    config.refusal = ConfiguredRefusal::stopping(StopKind::EndTurn, super::stopping_rule());
+    let clock = manual_clock(&mut config);
+    let binding =
+        ClaudeAcpProvider::new(config, &model, TokenLimits::new(900, 100).unwrap(), audit).unwrap();
+    let mut opened = super::open_that_stops(&binding, Arc::new(RecordingAudit::default())).await;
+    let first = start(&opened, "write").await;
+    let mut armed = false;
+    let mut declined = false;
+    let mut finished = false;
+    for _ in 0..12 {
+        match next(&mut opened).await {
+            ExecutionUpdate::PermissionRequested { deadline, .. } => {
+                let deadline = deadline.expect("the open review is armed");
+                assert!(deadline.armed());
+                assert_eq!(deadline.wait(), Duration::from_secs(30));
+                armed = true;
+            }
+            ExecutionUpdate::ReviewDeclined(_) => declined = true,
+            ExecutionUpdate::DeadlineAnswered { .. } => {
+                panic!("the deadline answered a turn that was stopping")
+            }
+            ExecutionUpdate::Finished(ExecutionOutcome::Cancelled) => {
+                finished = true;
+                break;
+            }
+            _ => {}
+        }
+    }
+    assert!(armed, "the write was not left pending");
+    assert!(declined, "the shell was not the stop");
+    assert!(finished, "the stopped turn did not finish");
+    let second = start(&opened, "second-turn").await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(
+        !second.is_finished(),
+        "the next prompt ran before the stopped reply"
+    );
+    clock.advance(Duration::from_secs(30));
+    let late = timeout(Duration::from_millis(400), opened.events.next()).await;
+    match late {
+        Err(_) | Ok(Ok(None)) | Ok(Err(_)) => {}
+        Ok(Ok(Some(event))) => assert!(
+            !matches!(event.update(), ExecutionUpdate::DeadlineAnswered { .. }),
+            "a stopped turn's deadline answered during the hold: {event:?}"
+        ),
+    }
+    assert!(
+        !second.is_finished(),
+        "the held prompt ran when the clock did"
+    );
+    std::fs::write(root.path().join("release-stopped-result"), "yes").unwrap();
+    assert_eq!(
+        promptly(first).await.unwrap(),
+        Ok(ExecutionOutcome::Cancelled)
+    );
+    let second_updates = until_finished(&mut opened).await;
+    assert!(second_updates
+        .iter()
+        .all(|update| !matches!(update, ExecutionUpdate::DeadlineAnswered { .. })));
+    assert_eq!(
+        promptly(second).await.unwrap(),
+        Ok(ExecutionOutcome::Completed)
+    );
+    quiet_after(&clock, &mut opened).await;
+    close(&clock, &opened).await;
+    assert_gone(&root, "pid");
+}
+
+#[tokio::test]
+async fn a_read_outside_the_workspace_is_denied_and_one_inside_is_allowed() {
+    let _slot = process_test_slot().await;
+    for (mode, class, wait, effect, sentence) in [
+        (
+            "permission-read-outside",
+            PermissionToolClass::Other,
+            Duration::from_secs(30),
+            PermissionEffect::Deny,
+            DENY_REASON,
+        ),
+        (
+            "permission-read-symlink",
+            PermissionToolClass::Other,
+            Duration::from_secs(30),
+            PermissionEffect::Deny,
+            DENY_REASON,
+        ),
+        (
+            "permission-read-no-path",
+            PermissionToolClass::Other,
+            Duration::from_secs(30),
+            PermissionEffect::Deny,
+            DENY_REASON,
+        ),
+    ] {
+        let review = pending(mode).await;
+        assert_eq!(review.deadline.class(), class, "{mode}");
+        assert_eq!(review.deadline.wait(), wait, "{mode}");
+        assert_eq!(review.deadline.effect(), effect, "{mode}");
+        assert_eq!(review.deadline.reason(), sentence, "{mode}");
+        assert!(review.deadline.armed(), "{mode}");
+        assert!(review.deadline.due_at_ms().is_some(), "{mode}");
+        close(&review.clock, &review.opened).await;
+        assert_gone(&review.root, "pid");
+    }
+}
+
+async fn both_pending(mode: &str) -> PendingReview {
+    let audit = Arc::new(RecordingAudit::default());
+    let (root, binding, clock) = test_acp_binding_on_clock(mode, audit.clone(), None);
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
+    let active = start(&opened, "write").await;
+    let mut permissions = 0;
+    let mut id = PermissionId::new("pending").unwrap();
+    let mut deadline = None;
+    while permissions < 2 {
+        match next(&mut opened).await {
+            ExecutionUpdate::Tool(_) => {}
+            ExecutionUpdate::PermissionRequested {
+                id: requested,
+                deadline: armed,
+                ..
+            } => {
+                id = requested;
+                deadline = Some(armed.expect("each review is armed"));
+                permissions += 1;
+            }
+            update => panic!("{mode}: expected the two reviews, got {update:?}"),
+        }
+    }
+    PendingReview {
+        root,
+        opened,
+        active,
+        clock,
+        audit,
+        id,
+        deadline: deadline.expect("two reviews"),
+    }
+}
+
+#[tokio::test]
+async fn two_reviews_settle_in_deadline_order_then_id_order() {
+    let _slot = process_test_slot().await;
+    let mut review = both_pending("permission-deadline-pair").await;
+    review.clock.advance(Duration::from_secs(30));
+    let updates = until_finished(&mut review.opened).await;
+    let answered: Vec<_> = updates
+        .iter()
+        .filter_map(|update| match update {
+            ExecutionUpdate::DeadlineAnswered { id, effect, .. } => {
+                Some((id.as_str().to_owned(), *effect))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        answered,
+        vec![
+            ("2".into(), PermissionEffect::Allow),
+            ("1".into(), PermissionEffect::Deny),
+        ],
+        "the earlier deadline settles first even though its id sorts later: {updates:?}"
+    );
+    assert!(updates.iter().any(|update| matches!(
+        update,
+        ExecutionUpdate::Finished(ExecutionOutcome::Completed)
+    )));
+    close(&review.clock, &review.opened).await;
+    assert_gone(&review.root, "pid");
+
+    let mut same = both_pending("permission-deadline-same").await;
+    same.clock.advance(Duration::from_secs(30));
+    let updates = until_finished(&mut same.opened).await;
+    let ids: Vec<_> = updates
+        .iter()
+        .filter_map(|update| match update {
+            ExecutionUpdate::DeadlineAnswered { id, .. } => Some(id.as_str().to_owned()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ids, vec!["1".to_owned(), "2".to_owned()], "{updates:?}");
+    close(&same.clock, &same.opened).await;
+    assert_gone(&same.root, "pid");
+}
+
+#[tokio::test]
+async fn codex_prefers_decline_and_says_when_only_cancel_is_offered() {
+    let _slot = process_test_slot().await;
+    for (mode, option, sentence, stops) in [
+        ("deadline-decline", "decline", DENY_REASON, false),
+        ("deadline-cancel-only", "cancel", STANDARD_STOP_REASON, true),
+    ] {
+        let audit = Arc::new(RecordingAudit::default());
+        let (root, mut config, model) = codex_configuration(mode, 16);
+        config.execution_timeout = None;
+        let clock = manual_clock(&mut config);
+        let binding = CodexAcpProvider::new(
+            config,
+            &model,
+            TokenLimits::new(900, 100).unwrap(),
+            audit.clone(),
+        )
+        .unwrap();
+        let mut opened = binding
+            .open(ProviderOpenRequest::without_startup_control(None))
+            .await
+            .unwrap();
+        let active = start(&opened, "write").await;
+        let deadline = loop {
+            match next(&mut opened).await {
+                ExecutionUpdate::Tool(_) => {}
+                ExecutionUpdate::PermissionRequested { deadline, .. } => {
+                    break deadline.expect("codex review is armed")
+                }
+                update => panic!("{mode}: expected permission, got {update:?}"),
+            }
+        };
+        assert_eq!(deadline.stops_turn(), stops, "{mode}");
+        assert_eq!(deadline.reason(), sentence, "{mode}");
+        assert!(deadline.armed(), "{mode}");
+        clock
+            .run_out(|wait| wait.limit() == Duration::from_secs(30))
+            .await;
+        let updates = until_finished(&mut opened).await;
+        assert!(
+            updates.iter().any(|update| matches!(
+                update,
+                ExecutionUpdate::DeadlineAnswered { reason, .. } if reason.as_str() == sentence
+            )),
+            "{mode}: {updates:?}"
+        );
+        assert_eq!(
+            promptly(active).await.unwrap(),
+            Ok(ExecutionOutcome::Completed)
+        );
+        let wire: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.path().join("permission-outcome")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(wire["outcome"]["optionId"], option, "{mode}");
+        assert_eq!(wire["_meta"]["deadlineReason"], sentence, "{mode}");
+        close(&clock, &opened).await;
+        assert_gone(&root, "pid");
+    }
 }

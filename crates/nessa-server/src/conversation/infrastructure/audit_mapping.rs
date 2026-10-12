@@ -16,8 +16,8 @@ use nessa_sdk::domain::agent_execution::{
     },
     permissions::{
         PermissionCancellationReason, PermissionCancellationReasonView, PermissionDecision,
-        PermissionEffect, PermissionRequest, PermissionScopeView, PermissionStateView,
-        RefusalOutcome, ReviewDeclineReason,
+        PermissionRequest, PermissionScopeView, PermissionStateView, RefusalOutcome,
+        ReviewDeclineReason,
     },
     questions::{
         AgentQuestion, AnswerShape, QuestionCancellation, QuestionRefusalReason, QuestionResponse,
@@ -139,10 +139,7 @@ pub(super) fn record_value(record: &ExecutionAuditRecord) -> Value {
                     "kind": "deadline",
                     "class": deadline.class().as_str(),
                     "waitMs": deadline.wait().as_millis(),
-                    "effect": match deadline.effect() {
-                        nessa_sdk::domain::agent_execution::permissions::PermissionEffect::Allow => "allow",
-                        nessa_sdk::domain::agent_execution::permissions::PermissionEffect::Deny => "deny",
-                    },
+                    "effect": deadline.effect().as_str(),
                     "reason": deadline.reason(),
                 }),
             };
@@ -418,7 +415,7 @@ fn decision(value: &PermissionDecision) -> Value {
             json!({"kind":"session","applicationId":application_id.as_str(),"sessionId":session_id.as_str()})
         }
     };
-    json!({"effect":match value.effect(){PermissionEffect::Allow=>"allow",PermissionEffect::Deny=>"deny"},"scope":scope})
+    json!({"effect":value.effect().as_str(),"scope":scope})
 }
 fn permission(value: &PermissionRequest) -> Value {
     let state = match value.state() {

@@ -428,11 +428,37 @@ while True:
             send({"id": permission_id, "method": "session/request_permission", "params": {
                 "sessionId": session, "toolCall": {key: value for key, value in tool().items() if key != "title"}, "options": [
                     {"optionId": "approve-one", "kind": "allow_once", "name": "Allow once"}]}})
-        elif mode in ("permission-deadline", "permission-read-deadline"):
-            call = tool("Read" if mode == "permission-read-deadline" else "Write")
+        elif mode in (
+            "permission-deadline",
+            "permission-read-deadline",
+            "permission-read-outside",
+            "permission-read-symlink",
+            "permission-read-no-path",
+            "permission-deadline-provider-cancel",
+        ):
+            call = tool("Read" if mode.startswith("permission-read") else "Write")
             if mode == "permission-read-deadline":
+                (root / "fixture.txt").write_text("fixture")
                 call["kind"] = "read"
                 call["title"] = "Read fixture.txt"
+                call["locations"] = [{"path": str(root / "fixture.txt")}]
+            elif mode == "permission-read-outside":
+                outside = (root / ".." / "home-ssh").resolve()
+                outside.write_text("key")
+                call["kind"] = "read"
+                call["title"] = "Read ssh"
+                call["locations"] = [{"path": str(outside)}]
+            elif mode == "permission-read-symlink":
+                outside = (root / ".." / "linked-secret").resolve()
+                outside.write_text("secret")
+                link = root / "looks-inside"
+                link.symlink_to(outside)
+                call["kind"] = "read"
+                call["title"] = "Read link"
+                call["locations"] = [{"path": str(link)}]
+            elif mode == "permission-read-no-path":
+                call["kind"] = "read"
+                call["title"] = "Read nothing"
             update({"sessionUpdate": "tool_call", **call})
             send({"id": permission_id, "method": "session/request_permission", "params": {
                 "sessionId": session,
@@ -441,6 +467,63 @@ while True:
                     {"optionId": "approve-one", "kind": "allow_once", "name": "Allow once"},
                     {"optionId": "deny-one", "kind": "reject_once", "name": "Deny once"},
                     {"optionId": "never-choose", "kind": "allow_always", "name": "Always"}]}})
+            if mode == "permission-deadline-provider-cancel":
+                result(pending, {"stopReason": "cancelled"})
+                pending = None
+        elif mode == "permission-deadline-stop":
+            # A reviewable write stays pending, then a shell review is declined
+            # and stops the turn. The cancelled reply waits so the next prompt
+            # is held, which is the stop this deadline must not outlive.
+            if (root / "cancel-observed").exists():
+                text(user_text)
+                result(pending, {"stopReason": "end_turn"})
+                pending = None
+            else:
+                write = tool("Write")
+                update({"sessionUpdate": "tool_call", **write})
+                send({"id": permission_id, "method": "session/request_permission", "params": {
+                    "sessionId": session,
+                    "toolCall": {key: value for key, value in write.items() if key != "title"},
+                    "options": [
+                        {"optionId": "approve-one", "kind": "allow_once", "name": "Allow once"},
+                        {"optionId": "deny-one", "kind": "reject_once", "name": "Deny once"}]}})
+                bash = tool("Bash")
+                bash["toolCallId"] = "bash-1"
+                update({"sessionUpdate": "tool_call", **bash})
+                send({"id": "bash-review", "method": "session/request_permission", "params": {
+                    "sessionId": session,
+                    "toolCall": {key: value for key, value in bash.items() if key != "title"},
+                    "options": [
+                        {"optionId": "approve-one", "kind": "allow_once", "name": "Allow once"},
+                        {"optionId": "deny-one", "kind": "reject_once", "name": "Deny once"}]}})
+        elif mode in ("permission-deadline-pair", "permission-deadline-same"):
+            calls = []
+            if mode == "permission-deadline-pair":
+                (root / "fixture.txt").write_text("fixture")
+                read = tool("Read")
+                read["kind"] = "read"
+                read["toolCallId"] = "read-1"
+                read["title"] = "Read fixture.txt"
+                read["locations"] = [{"path": str(root / "fixture.txt")}]
+                write = tool("Write")
+                write["toolCallId"] = "write-1"
+                # The write is requested first so its id sorts first. Its
+                # deadline is later, which is what the order test is about.
+                calls = [(write, "write-review"), (read, "read-review")]
+            else:
+                first = tool("Write")
+                second = tool("Write")
+                second["toolCallId"] = "file-2"
+                calls = [(first, "first-review"), (second, "second-review")]
+            for call, _review_id in calls:
+                update({"sessionUpdate": "tool_call", **call})
+            for call, review_id in calls:
+                send({"id": review_id, "method": "session/request_permission", "params": {
+                    "sessionId": session,
+                    "toolCall": {key: value for key, value in call.items() if key != "title"},
+                    "options": [
+                        {"optionId": "approve-one", "kind": "allow_once", "name": "Allow once"},
+                        {"optionId": "deny-one", "kind": "reject_once", "name": "Deny once"}]}})
         elif mode in ("permission", "permission-write-failure", "permission-stop", "permission-failure", "permission-finished", "permission-provider-error", "permission-byte-flood", "unknown-tool"):
             update({"sessionUpdate": "tool_call", **tool("Bash" if mode == "unknown-tool" else "Write")})
             if mode == "permission-write-failure":
@@ -727,7 +810,11 @@ while True:
                 "sessionId": session, "mode": "form", "message": "One more thing?",
                 "requestedSchema": {"type": "object", "properties": {
                     "question_0": {"type": "string", "oneOf": [{"const": "yes"}]}}}}})
-        if mode in (
+        if mode == "permission-deadline-stop" and pending is not None:
+            wait_for_release("release-stopped-result")
+            result(pending, {"stopReason": "cancelled"})
+            pending = None
+        elif mode in (
             "refusal-end-turn",
             "refusal-close-session",
             "refusal-stale-next",
@@ -834,7 +921,25 @@ while True:
         text(msg["result"]["outcome"]["outcome"])
         result(pending, {"stopReason": "end_turn"})
         pending = None
-    elif mode in ("permission-deadline", "permission-read-deadline") and msg.get("id") == permission_id:
+    elif mode == "permission-deadline-stop" and msg.get("id") in (permission_id, "bash-review"):
+        # The stop cancels these reviews. The prompt stays open until session/cancel.
+        record(str(msg["id"]) + "-outcome", json.dumps(msg["result"]))
+    elif mode in ("permission-deadline-pair", "permission-deadline-same") and msg.get("id") in (
+        "read-review", "write-review", "first-review", "second-review",
+    ):
+        record(str(msg["id"]) + "-outcome", json.dumps(msg["result"]))
+        needed = ("read-review", "write-review") if mode == "permission-deadline-pair" else ("first-review", "second-review")
+        if all((root / (name + "-outcome")).exists() for name in needed) and pending is not None:
+            text("both settled")
+            result(pending, {"stopReason": "end_turn"})
+            pending = None
+    elif mode in (
+        "permission-deadline",
+        "permission-read-deadline",
+        "permission-read-outside",
+        "permission-read-symlink",
+        "permission-read-no-path",
+    ) and msg.get("id") == permission_id:
         # Echo the deadline's own reason. A selected option with no reason is
         # not that answer, and the turn still ends so the wait can be told
         # from a stall.

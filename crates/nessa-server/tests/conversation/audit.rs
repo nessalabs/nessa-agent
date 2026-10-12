@@ -395,6 +395,120 @@ fn audit_maps_permission_selection_delivery_and_custom_cancellation_exactly() {
         "Explicit guard explanation"
     );
 }
+
+#[test]
+fn audit_maps_a_deadline_answer_exactly() {
+    use nessa_sdk::domain::agent_execution::permissions::{
+        PermissionReviewDeadline, PermissionToolClass, STANDARD_DENY_REASON,
+    };
+    use serde_json::json;
+    use std::time::Duration;
+
+    let id = ExecutionId::new("execution").unwrap();
+    let permission = PermissionId::new("permission").unwrap();
+    let tool = ToolCallId::new("tool").unwrap();
+    let session = ExecutionSessionId::new("session").unwrap();
+    let input = ToolReviewInput {
+        name: "Write".into(),
+        arguments_json: r#"{"path":"reviewed-file"}"#.into(),
+    };
+    let choices = PermissionOptions::new(
+        vec![
+            PermissionOption::new(
+                PermissionOptionId::new("deny-once").unwrap(),
+                "Deny once",
+                PermissionDecision::new(PermissionEffect::Deny, PermissionScope::request()),
+            )
+            .unwrap(),
+            PermissionOption::new(
+                PermissionOptionId::new("allow-once").unwrap(),
+                "Allow once",
+                PermissionDecision::new(PermissionEffect::Allow, PermissionScope::request()),
+            )
+            .unwrap(),
+        ],
+        &PermissionOfferPolicy::once_only(),
+    )
+    .unwrap();
+    let mut controller = ExecutionController::new(session);
+    controller.begin_execution(id.clone()).unwrap();
+    controller
+        .request_permission(
+            &id,
+            permission.clone(),
+            ToolCallUpdate::new(tool, Some("Write file".into()), None, None, None, None),
+            input.clone(),
+            choices,
+            None,
+        )
+        .unwrap();
+    let deadline = PermissionReviewDeadline::new(
+        PermissionToolClass::Other,
+        Duration::from_secs(30),
+        PermissionEffect::Deny,
+        STANDARD_DENY_REASON,
+    )
+    .unwrap();
+    let answer = controller
+        .answer_permission(PermissionAnswer {
+            execution_id: id,
+            id: permission,
+            option_id: PermissionOptionId::new("deny-once").unwrap(),
+            attribution: ApprovalAttribution::deadline(
+                &PermissionId::new("permission").unwrap(),
+                deadline,
+            )
+            .unwrap(),
+        })
+        .unwrap();
+    let value = record_value(&ExecutionAuditRecord::Answered(
+        PermissionAnswerRecord::new(answer, PermissionAnswerDelivery::Selected),
+    ));
+    assert_eq!(
+        value,
+        json!({
+            "kind": "permission_answered",
+            "sessionId": "session",
+            "request": {
+                "permissionId": "permission",
+                "executionId": "execution",
+                "toolId": "tool",
+                "options": [
+                    {
+                        "id": "deny-once",
+                        "label": "Deny once",
+                        "decision": {"effect": "deny", "scope": {"kind": "request"}},
+                    },
+                    {
+                        "id": "allow-once",
+                        "label": "Allow once",
+                        "decision": {"effect": "allow", "scope": {"kind": "request"}},
+                    },
+                ],
+                "transition": {
+                    "before": "pending",
+                    "after": "answered",
+                    "optionId": "deny-once",
+                    "decision": {"effect": "deny", "scope": {"kind": "request"}},
+                },
+            },
+            "input": {"name": "Write", "argumentsJson": r#"{"path":"reviewed-file"}"#},
+            "actor": {
+                "principalId": "permission-deadline",
+                "surfaceId": "other",
+                "requestId": "permission",
+            },
+            "basis": {
+                "kind": "deadline",
+                "class": "other",
+                "waitMs": 30000,
+                "effect": "deny",
+                "reason": STANDARD_DENY_REASON,
+            },
+            "delivery": {"stage": "selected"},
+        })
+    );
+}
 #[test]
 fn audit_maps_explicit_close_without_claiming_physical_cleanup() {
     let mut session = ExecutionSession::new(ExecutionSessionId::new("session").unwrap());

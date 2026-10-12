@@ -1,6 +1,6 @@
 use super::super::{
     fields,
-    permissions::wire as permission_wire,
+    permissions::{wire as permission_wire, workspace::review_class},
     profile::AcpProfile,
     questions::wire as question_wire,
     sessions::{
@@ -50,8 +50,8 @@ use crate::domain::agent_execution::executions::{
 use crate::domain::agent_execution::permissions::{
     PermissionCancellationReason, PermissionCancellationReasonView, PermissionDeadlineSettlement,
     PermissionDecision, PermissionEffect, PermissionId, PermissionOfferPolicy, PermissionOptionId,
-    PermissionScope, PermissionToolClass, RefusalOutcome, ReviewDecline, ReviewDeclineId,
-    ReviewDeclineObservation, ReviewDeclineReason, ReviewDeclineStage,
+    PermissionScope, RefusalOutcome, ReviewDecline, ReviewDeclineId, ReviewDeclineObservation,
+    ReviewDeclineReason, ReviewDeclineStage,
 };
 use crate::domain::agent_execution::prompts::UserMessage;
 use crate::domain::agent_execution::questions::{
@@ -1296,6 +1296,10 @@ impl<P: AcpProfile> Worker<P> {
             match input {
                 Input::Close | Input::Command(None) => {
                     self.armed_permissions.clear();
+                    assert!(
+                        self.armed_permissions.is_empty(),
+                        "close forgets armed permission deadlines before it waits"
+                    );
                     self.closing = true;
                     self.begin_shutdown_grace();
                     let request = self
@@ -2239,7 +2243,13 @@ impl<P: AcpProfile> Worker<P> {
                     self.turn_cancel_requested.take().as_ref() == Some(&active_turn);
                 if result == ExecutionOutcome::Cancelled && !turn_cancel_requested {
                     // Keep pending reviews until correlated session teardown. Never publish
-                    // tool/process cancellation from protocol evidence alone.
+                    // tool/process cancellation from protocol evidence alone. The deadline
+                    // is not that teardown: the turn is already over, so it must not answer.
+                    self.armed_permissions.clear();
+                    assert!(
+                        self.armed_permissions.is_empty(),
+                        "a provider-cancelled turn forgets armed permission deadlines"
+                    );
                     self.deferred_outcome = Some(result);
                 } else {
                     let target = &self
@@ -2518,15 +2528,23 @@ impl<P: AcpProfile> Worker<P> {
             .as_ref()
             .expect("validated active prompt")
             .execution_id;
-        let class = PermissionToolClass::of(*tool.kind());
-        let settlement = self.config.permission_deadlines.settlement(class, &options);
+        let class = review_class(*tool.kind(), tool.locations(), &self.config.workspace);
+        let settlement = self.config.permission_deadlines.settlement(
+            class,
+            &options,
+            &self.profile.deadline_deny_preference(),
+        );
+        let promised = settlement
+            .deadline()
+            .clone()
+            .promise(unix_deadline_ms(settlement.deadline().wait()));
         let event = execution.request_permission(
             target,
             permission_id.clone(),
             tool,
             input,
             options,
-            Some(settlement.deadline().clone()),
+            Some(promised),
         )?;
         let at = self.config.clock.now() + settlement.deadline().wait();
         self.permissions.insert(permission_id.clone(), wire_id);
@@ -2618,7 +2636,11 @@ impl<P: AcpProfile> Worker<P> {
                 AuditEffectPhase::PermissionSelection,
             )
             .await;
-        let response = match rejection_option(params, &self.config.permissions) {
+        let response = match rejection_option(
+            params,
+            &self.config.permissions,
+            &self.profile.deadline_deny_preference(),
+        ) {
             Some(option) => permission_wire::selected(&wire_id, &option),
             None => permission_wire::permission_cancel(&wire_id),
         };
@@ -2758,7 +2780,11 @@ impl<P: AcpProfile> Worker<P> {
                 self.stop_reply_deadline = Some(deadline);
             }
         }
-        let response = match rejection_option(params, &self.config.permissions) {
+        let response = match rejection_option(
+            params,
+            &self.config.permissions,
+            &self.profile.deadline_deny_preference(),
+        ) {
             Some(option) => permission_wire::selected(&wire_id, &option),
             None => permission_wire::permission_cancel(&wire_id),
         };
@@ -3623,6 +3649,9 @@ impl<P: AcpProfile> Worker<P> {
     /// review cancellation returns early, and must not decide whether an ask
     /// is told. The first failure to tell the provider anything is returned.
     async fn cancel_wire_requests(&mut self) -> Result<(), AgentError> {
+        // The turn these reviews belonged to is over. A deadline that fired
+        // afterwards would answer a request the provider is no longer waiting on.
+        self.armed_permissions.clear();
         let asked: Vec<QuestionId> = self.questions.keys().cloned().collect();
         let mut failure = None;
         for id in asked {
@@ -3763,20 +3792,39 @@ fn declared_tool_name(params: &Value) -> Option<&str> {
 /// this binding to answer one on its behalf, and such a review is cancelled
 /// instead. The identity is validated as a domain option identity, not by a
 /// second rule invented here.
-fn rejection_option(params: &Value, policy: &PermissionOfferPolicy) -> Option<String> {
+fn rejection_option(
+    params: &Value,
+    policy: &PermissionOfferPolicy,
+    deny_preference: &crate::domain::agent_execution::permissions::DeadlineDenyPreference,
+) -> Option<String> {
     let deny = PermissionDecision::new(PermissionEffect::Deny, PermissionScope::request());
     if !policy.decisions().contains(&deny) {
         return None;
     }
-    params
+    let ids: Vec<PermissionOptionId> = params
         .get("options")
         .and_then(Value::as_array)?
         .iter()
-        .find(|option| option.get("kind").and_then(Value::as_str) == Some("reject_once"))
-        .and_then(|option| option.get("optionId"))
-        .and_then(Value::as_str)
-        .and_then(|id| PermissionOptionId::new(id).ok())
-        .map(|id| id.as_str().to_owned())
+        .filter(|option| option.get("kind").and_then(Value::as_str) == Some("reject_once"))
+        .filter_map(|option| option.get("optionId").and_then(Value::as_str))
+        .filter_map(|id| PermissionOptionId::new(id).ok())
+        .collect();
+    deny_preference
+        .select(ids.iter())
+        .map(|(id, _)| id.as_str().to_owned())
+}
+
+/// Unix milliseconds when a review armed now, waiting `wait`, comes due.
+fn unix_deadline_ms(wait: std::time::Duration) -> u64 {
+    let wait_ms = crate::domain::agent_execution::permissions::wait_ms(wait);
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|now| {
+            u64::try_from(now.as_millis())
+                .unwrap_or(u64::MAX)
+                .saturating_add(wait_ms)
+        })
+        .unwrap_or(wait_ms)
 }
 
 impl<P: AcpProfile> Worker<P> {
@@ -3792,13 +3840,18 @@ impl<P: AcpProfile> Worker<P> {
         execution: &mut ExecutionController,
     ) -> Result<(), WorkerFailure> {
         let now = self.config.clock.now();
-        let due: Vec<PermissionId> = self
+        let mut due: Vec<(ClockInstant, PermissionId)> = self
             .armed_permissions
             .iter()
             .filter(|(_, armed)| now >= armed.at)
-            .map(|(id, _)| id.clone())
+            .map(|(id, armed)| (armed.at, id.clone()))
             .collect();
-        for id in due {
+        due.sort_by(|(left_at, left_id), (right_at, right_id)| {
+            left_at
+                .cmp(right_at)
+                .then_with(|| left_id.as_str().cmp(right_id.as_str()))
+        });
+        for (_, id) in due {
             let Some(armed) = self.armed_permissions.remove(&id) else {
                 continue;
             };
@@ -3826,7 +3879,7 @@ impl<P: AcpProfile> Worker<P> {
             return Ok(());
         };
         let deadline = armed.settlement.deadline().clone();
-        let reason = deadline.reason().to_owned();
+        let reason = deadline.recorded_reason();
         let effect = deadline.effect();
         let mut delivery_correlation = None;
         let sent = if let Some(option_id) = armed.settlement.option().cloned() {
@@ -3854,6 +3907,8 @@ impl<P: AcpProfile> Worker<P> {
                 )
                 .await
             {
+                // Retained on the settlement facts. An audit failure must not
+                // stop the turn: the provider is still answered below.
                 let _ = failure;
             }
             let wire_id = self
@@ -3864,7 +3919,7 @@ impl<P: AcpProfile> Worker<P> {
                 .send(permission_wire::selected_because(
                     &wire_id,
                     option_id.as_str(),
-                    &reason,
+                    reason.as_str(),
                 ))
                 .await;
             let delivery = match &sent {
@@ -3872,6 +3927,8 @@ impl<P: AcpProfile> Worker<P> {
                 Err(error) => PermissionAnswerDelivery::Failed(error.clone()),
             };
             if let Err(failure) = self.record_answer(resolution, delivery, correlation).await {
+                // Same as the selection audit: kept, and not a reason to skip
+                // the notice or to fail the turn when the write itself succeeded.
                 let _ = failure;
             }
             sent
@@ -3890,6 +3947,8 @@ impl<P: AcpProfile> Worker<P> {
                 .map_err(|error| self.record_failure(OperationEffectPhase::Worker, error))?
             {
                 if let Err(failure) = self.record_cancellations(vec![record]).await {
+                    // The cancellation is already the local fact. Losing the
+                    // audit record does not change that the review was cancelled.
                     let _ = failure;
                 }
             }
