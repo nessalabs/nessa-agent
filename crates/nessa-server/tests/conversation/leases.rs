@@ -5021,3 +5021,149 @@ async fn a_fetch_timed_out_while_its_asking_is_saved_ends_undelivered_and_never_
     }
     go.send(()).unwrap();
 }
+
+/// Row K3 through the agent's tools: on a gateway whose own worker W is
+/// connected, the tools reach W and nothing of another organization's
+/// worker X. `environments_list` lists W alone; `run` runs on W and is
+/// refused `environmentUnreachable` on X's name by the gateway's own
+/// paired environments, though this gateway's policy names both; and
+/// `artifacts_publish` and `artifacts_fetch` on X's name are refused
+/// before anything is asked of anyone. The paired environments are the
+/// production registry, which has never seen X's key, with W in place of
+/// a live connection.
+#[tokio::test]
+async fn k3_the_agents_tools_reach_only_this_gateways_own_worker() {
+    use crate::conversation::application::PairedEnvironments;
+    use crate::conversation::infrastructure::ssh_environment::{
+        DurableEnvironmentAudit, PeerEnvironments, ServingCredentials, SshTimings,
+    };
+    use nessa_auth::application::pairing::DeviceConnectionProof;
+    use nessa_auth::application::ports::AccessError;
+    use nessa_sdk::domain::agent_execution::leases::PeerEnvironment;
+
+    /// Every key serves: the registry's refusal then comes from its having
+    /// no connection for the key, never from a credential.
+    struct Serving;
+    impl ServingCredentials for Serving {
+        fn serves<'a>(
+            &'a self,
+            _proof: &'a DeviceConnectionProof,
+        ) -> EnvironmentFuture<'a, Result<bool, AccessError>> {
+            Box::pin(async { Ok(true) })
+        }
+    }
+    /// This gateway's paired environments: W connected, as `host`; every
+    /// other key, as the production registry answers it.
+    struct OwnWorker {
+        w: PeerEnvironment,
+        host: Arc<CommandHost>,
+        registry: PeerEnvironments,
+    }
+    impl PairedEnvironments for OwnWorker {
+        fn environment(&self, peer: &PeerEnvironment) -> Arc<dyn Environment> {
+            if *peer == self.w {
+                self.host.clone()
+            } else {
+                self.registry.environment(peer)
+            }
+        }
+        fn connected(&self) -> Vec<PeerEnvironment> {
+            let mut connected = vec![self.w];
+            connected.extend(self.registry.connected());
+            connected
+        }
+    }
+
+    let root = tempfile::tempdir().unwrap();
+    let (w, x) = (PeerEnvironment::new([1; 32]), PeerEnvironment::new([2; 32]));
+    let host = CommandHost::new();
+    let registry = PeerEnvironments::new(
+        Arc::new(Serving),
+        DurableEnvironmentAudit::new(root.path().join("environments"), Arc::new(TestClock))
+            .unwrap(),
+        SshTimings::default(),
+    );
+    let placements = Arc::new(
+        FilePlacements::new(root.path().join("conversations").join("placements")).unwrap(),
+    );
+    let provider = Arc::new(ProviderFactory::default());
+    let binding = Arc::new(Provider::new(provider.clone()));
+    let environments = Environments::new(in_process_environment(), BTreeMap::new(), placements)
+        .with_peers(Arc::new(OwnWorker {
+            w,
+            host: host.clone(),
+            registry,
+        }))
+        .with_commands(CommandPolicy::new([w.name(), x.name()], None, Vec::new()));
+    let harness = harness_in(
+        root.path(),
+        environments,
+        DELETION_BUDGETS.stop,
+        provider,
+        binding,
+    );
+    harness.create().await;
+
+    let listed: Vec<String> = harness
+        .service
+        .list_environments(&harness.id)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|listing| listing.name)
+        .collect();
+    assert_eq!(listed, [HERE.to_owned(), w.name()]);
+
+    let go = harness.running_turn().await;
+    let mine = {
+        let service = harness.service.clone();
+        let id = harness.id.clone();
+        let name = w.name();
+        tokio::spawn(async move {
+            let (_caller, stop) = tokio::sync::watch::channel(false);
+            service
+                .run_command(&id, command(&name, &["echo", "mine"], "call-1"), stop)
+                .await
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while host.granted.load(Ordering::SeqCst) == 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("W is asked to run it");
+    host.finish
+        .send_replace(Some(CommandExit::Exited { code: 0 }));
+    let mine = tokio::time::timeout(Duration::from_secs(5), mine)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(mine, Ok(CommandAnswer::Ran { .. })), "{mine:?}");
+    let theirs = harness
+        .run(command(&x.name(), &["echo", "theirs"], "call-2"))
+        .await;
+    assert!(
+        matches!(
+            theirs,
+            Ok(CommandAnswer::Refused(CommandRefusal::Environment(
+                LeaseRefusal::EnvironmentUnreachable
+            )))
+        ),
+        "{theirs:?}"
+    );
+    assert_eq!(host.granted.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        harness
+            .publish_file(publish_call(&x.name(), "report.txt", "call-3"))
+            .await,
+        PublishAnswer::Refused(PublishCallRefusal::EnvironmentNotLeased)
+    );
+    assert_eq!(
+        harness
+            .fetch_file(fetch_call(&x.name(), b"bytes", "report.txt", "call-4"))
+            .await,
+        FetchAnswer::Refused(FetchCallRefusal::EnvironmentNotLeased)
+    );
+    go.send(()).unwrap();
+}
