@@ -104,7 +104,7 @@ first row that matches is what happens.
 | --- | --- |
 | A person's answer is admitted, and the deadline has not passed | That answer. Basis `explicit` (or the basis the person supplied). The deadline is disarmed. |
 | The deadline has passed, and no answer has been admitted | The deadline's outcome. Basis `deadline`. |
-| The person's answer and the deadline are both ready in one wait | The person's answer. The command is taken before the deadline wait. |
+| The person's answer and the deadline are both ready in one wait | The person's answer. An answer or cancellation of that review already in the command queue is taken before the deadline settles. |
 | The provider withdraws the review, or the person cancels it, first | That cancellation. The deadline is disarmed. |
 | The execution's own deadline passes | The worker fails, as it does today. The permission deadline is a separate wait and does not shorten this one. |
 | The configured effect has no offered option, and deny is offered | Deny, with the deny sentence, after the same wait. An allow is never sent as a deny. A missing allow does not reuse the allow sentence. |
@@ -124,10 +124,15 @@ first row that matches is what happens.
 | A live read rebuilds a card from a saved deadline, and this process's worker still holds that review | The card counts down from the saved due time. Storage does not record that this process will decide, so the read asks the worker. A saved deadline whose worker is gone stays off the card. |
 | A saved deadline is not a deadline | The record is corrupt, as any other wrong-typed field is. A blank reason or a wait of zero is skipped, and the review waits for a person. |
 
-The permission wait is its own branch in the worker, after the command branch
-and before the provider's next message. It is not folded into the wait that
-fails the worker. Because that branch is before the reader, a turn end and a
-due deadline that arrive together resolve deadline-first.
+The permission wait is its own branch in the worker, after close, a dropped
+consumer, and the execution deadline, and before unrelated commands and the
+provider's next message. It is not folded into the wait that fails the worker.
+An answer or cancellation of a due review already in the command queue is
+taken before that review settles. Any other command waits until it has. A
+stream of those commands cannot hold the deadline
+(`an_unrelated_command_already_queued_does_not_hold_a_due_deadline`). Because
+the branch is before the reader, a turn end and a due deadline that arrive
+together resolve deadline-first.
 
 ## What a person sees
 

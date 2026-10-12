@@ -344,6 +344,69 @@ async fn an_answer_already_waiting_at_the_deadline_beats_the_deadline() {
     assert_gone(&review.root, "pid");
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn an_unrelated_command_already_queued_does_not_hold_a_due_deadline() {
+    let _slot = process_test_slot().await;
+    // The provider has left a frame unfinished. Dispatching another prompt
+    // drains that output before it returns, so it cannot return until the
+    // review is answered. Queuing the prompt and reaching the deadline in
+    // one wait must still settle the deadline.
+    let mut review = pending("permission-unfinished-frame").await;
+    timeout(Duration::from_secs(5), async {
+        loop {
+            if review
+                .clock
+                .waits()
+                .iter()
+                .any(|wait| wait.limit() == Duration::from_secs(30))
+            {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the review's deadline was never armed");
+
+    // Queue another prompt without letting the worker run, then reach the
+    // deadline. The prompt is not an answer to the due review. Taking it
+    // first waits on the unfinished frame and never settles the deadline.
+    let mut second = review.opened.session.execute(prompt("later"));
+    let mut context = Context::from_waker(Waker::noop());
+    assert!(second.as_mut().poll(&mut context).is_pending());
+    review.clock.advance(Duration::from_secs(30));
+
+    let mut saw_deadline = false;
+    let updates = timeout(Duration::from_secs(5), async {
+        let mut updates = Vec::new();
+        loop {
+            let update = review
+                .opened
+                .events
+                .next()
+                .await
+                .expect("the event stream stayed open")
+                .expect("the session stayed open")
+                .into_update();
+            let finished = matches!(update, ExecutionUpdate::Finished(_));
+            saw_deadline |= matches!(update, ExecutionUpdate::DeadlineAnswered { .. });
+            updates.push(update);
+            if finished {
+                return updates;
+            }
+        }
+    })
+    .await
+    .expect("a queued prompt held the deadline");
+    assert!(
+        saw_deadline,
+        "a queued prompt held the deadline: {updates:?}"
+    );
+    drop(second);
+    close(&review.clock, &review.opened).await;
+    assert_gone(&review.root, "pid");
+}
+
 #[tokio::test]
 async fn a_configured_read_deadline_replaces_the_standard_allow() {
     let _slot = process_test_slot().await;

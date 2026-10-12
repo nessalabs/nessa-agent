@@ -537,7 +537,7 @@ while True:
             stdin_lines.wait_for_file("release-turn-2", seconds=30)
             result(pending, {"stopReason": "end_turn"})
             pending = None
-        elif mode in ("permission", "permission-write-failure", "permission-stop", "permission-failure", "permission-finished", "permission-provider-error", "permission-byte-flood", "unknown-tool"):
+        elif mode in ("permission", "permission-unfinished-frame", "permission-write-failure", "permission-stop", "permission-failure", "permission-finished", "permission-provider-error", "permission-byte-flood", "unknown-tool"):
             update({"sessionUpdate": "tool_call", **tool("Bash" if mode == "unknown-tool" else "Write")})
             if mode == "permission-write-failure":
                 os.close(sys.stdin.fileno())
@@ -546,6 +546,12 @@ while True:
                     {"optionId": "approve-one", "kind": "allow_once", "name": "Allow once"},
                     {"optionId": "deny-one", "kind": "reject_once", "name": "Deny once"},
                     {"optionId": "never-choose", "kind": "allow_always", "name": "Always"}]}})
+            if mode == "permission-unfinished-frame":
+                # No newline. The next command that drains provider output
+                # cannot return until the review is answered and this frame
+                # is finished. `an_unrelated_command_already_queued_does_not_hold_a_due_deadline`.
+                sys.stdout.write('{"jsonrpc":"2.0","method":"session/update","params":')
+                sys.stdout.flush()
             if mode == "permission-write-failure":
                 signal.pause()
             if mode == "permission-byte-flood":
@@ -978,6 +984,14 @@ while True:
             result(pending, {"stopReason": "end_turn"})
             pending = None
     elif msg.get("id") == permission_id:
+        if mode == "permission-unfinished-frame":
+            # Close the frame opened when the review was asked, then end the
+            # turn the same way any other answered review does.
+            sys.stdout.write(json.dumps({
+                "sessionId": session,
+                "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "held"}},
+            }) + "}\n")
+            sys.stdout.flush()
         choice = msg["result"]["outcome"]
         if provider_cancel_mode:
             assert (root / "provider-cancel-response").exists()

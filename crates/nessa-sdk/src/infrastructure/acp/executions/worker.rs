@@ -1285,12 +1285,18 @@ impl<P: AcpProfile> Worker<P> {
             let input = if self.close_requested.borrow().is_some() && !self.closing {
                 Input::Close
             } else {
+                // A due permission deadline is ahead of unrelated commands. An
+                // answer or cancellation of that review already in the queue is
+                // taken before it settles. A provider frame stays behind it, so
+                // a turn end that is also ready is read after the deadline.
+                // `an_answer_already_waiting_at_the_deadline_beats_the_deadline`
+                // and `an_unrelated_command_already_queued_does_not_hold_a_due_deadline`.
                 tokio::select! { biased;
                     _ = self.close_requested.changed(), if !self.closing => Input::Close,
                     _ = self.events.closed() => Input::ConsumerGone,
                     _ = wait_for_deadline(&*self.config.clock, deadline), if deadline.is_some() => Input::Deadline,
-                    command = self.commands.recv(), if !self.closing => Input::Command(command),
                     _ = wait_for_deadline(&*self.config.clock, permission_deadline), if permission_deadline.is_some() => Input::PermissionDeadline,
+                    command = self.commands.recv(), if !self.closing => Input::Command(command),
                     message = self.reader.next() => Input::Message(message),
                 }
             };
@@ -1369,7 +1375,31 @@ impl<P: AcpProfile> Worker<P> {
                     }
                 }
                 Input::PermissionDeadline => {
+                    // Answers and cancellations of a due review were admitted
+                    // before this wait returned. They decide it. Anything else
+                    // in the queue waits until those reviews are settled, so a
+                    // stream of unrelated commands cannot hold the deadline
+                    // (`an_unrelated_command_already_queued_does_not_hold_a_due_deadline`).
+                    let mut later = Vec::new();
+                    loop {
+                        match self.commands.try_recv() {
+                            Ok(command) if self.command_answers_due_review(&command) => {
+                                self.command(execution, command).await?;
+                                if self.deferred_outcome.is_some() {
+                                    return Ok(());
+                                }
+                            }
+                            Ok(command) => later.push(command),
+                            Err(_) => break,
+                        }
+                    }
                     self.settle_due_permissions(execution).await?;
+                    for command in later {
+                        self.command(execution, command).await?;
+                        if self.deferred_outcome.is_some() {
+                            return Ok(());
+                        }
+                    }
                 }
                 Input::Message(message) => {
                     let message = message.map_err(|error| {
@@ -3845,6 +3875,21 @@ fn unix_deadline_ms(clock: &dyn Clock, wait: std::time::Duration) -> u64 {
 }
 
 impl<P: AcpProfile> Worker<P> {
+    /// An answer or a cancellation of a review whose deadline has already
+    /// passed. That command was admitted before this wait, so it decides the
+    /// review. Any other command does not.
+    fn command_answers_due_review(&self, command: &Command) -> bool {
+        let now = self.config.clock.now();
+        let id = match command {
+            Command::Answer(answer, _) => &answer.id,
+            Command::CancelPermission(request, _) => &request.id,
+            _ => return false,
+        };
+        self.armed_permissions
+            .get(id)
+            .is_some_and(|armed| now >= armed.at)
+    }
+
     fn next_permission_deadline(&self) -> Option<ClockInstant> {
         self.armed_permissions.values().map(|armed| armed.at).min()
     }
