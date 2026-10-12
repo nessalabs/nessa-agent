@@ -147,8 +147,7 @@ fn closed_before_dispatch_and_repeated_close_release_private_scope() {
     assert_eq!(connector.calls.load(Ordering::SeqCst), 0);
     session.close().unwrap();
     session.close().unwrap();
-    let reopened =
-        FilePairingState::open(&root.path().canonicalize().unwrap(), Path::new("private")).unwrap();
+    let reopened = FilePairingState::open(root.path(), Path::new("private")).unwrap();
     drop(reopened);
     assert!(matches!(session.status(), Err(SessionFailure::Closed)));
 }
@@ -166,7 +165,7 @@ fn concurrent_calls_refuse_and_close_waits_for_physical_connector_before_reuse()
     session.request_close().unwrap();
     // Signalling does not release the private lock while a physical call remains.
     assert!(matches!(
-        FilePairingState::open(&root.path().canonicalize().unwrap(), Path::new("private")),
+        FilePairingState::open(root.path(), Path::new("private")),
         Err(PrivateStateError::Locked)
     ));
     let closed = Arc::new(AtomicUsize::new(0));
@@ -187,7 +186,6 @@ fn concurrent_calls_refuse_and_close_waits_for_physical_connector_before_reuse()
     ));
     closer.join().unwrap();
     assert_eq!(closed.load(Ordering::SeqCst), 1);
-    let reopened =
-        FilePairingState::open(&root.path().canonicalize().unwrap(), Path::new("private")).unwrap();
+    let reopened = FilePairingState::open(root.path(), Path::new("private")).unwrap();
     drop(reopened);
 }
