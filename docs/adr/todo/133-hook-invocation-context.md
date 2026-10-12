@@ -55,8 +55,10 @@ harness runs without asking is not offered to this hook. The hook returns
 `ToolVerdict`: allow, or refuse with a [`RefusalOutcome`]. Refuse-and-continue
 keeps the review and answers it with the provider's deny option, so the agent
 continues. A continue that has no deny option is an end-turn, reported as an
-end-turn. End-turn cancels the turn when the binding can cancel one turn, and
-does not close the session. Close-session closes with
+end-turn. End-turn answers the deny option when one is offered. When none is
+offered, it withdraws the pending review so the provider is not left waiting,
+then cancels the turn when the binding can cancel one turn. It does not close
+the session. Close-session closes with
 `SessionCloseRequest::PolicyRefusal`. A hook error, panic, or timeout is
 deny-and-continue with the reason `"hook failed"`.
 

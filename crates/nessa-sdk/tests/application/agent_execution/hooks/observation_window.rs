@@ -32,6 +32,7 @@ impl ExecutionEventStream for ScriptedEvents {
 struct ScriptedBackend {
     started: Arc<AtomicBool>,
     answered: Arc<AtomicUsize>,
+    cancelled: Arc<AtomicUsize>,
     closes: Arc<Mutex<Vec<SessionCloseRequest>>>,
 }
 
@@ -75,7 +76,9 @@ impl ProviderSessionBackend for ScriptedBackend {
         &self,
         _: PermissionCancellationRequest,
     ) -> ProviderOperationFuture<'_, PermissionCancellation> {
-        Box::pin(async {
+        let cancelled = self.cancelled.clone();
+        Box::pin(async move {
+            cancelled.fetch_add(1, Ordering::SeqCst);
             Err(ProviderOperationFailure::new(
                 AgentError::StalePermission,
                 ProviderSessionState::Usable,
@@ -92,6 +95,7 @@ struct ScriptedProvider {
     events: Mutex<Option<Vec<ExecutionEvent>>>,
     started: Arc<AtomicBool>,
     answered: Arc<AtomicUsize>,
+    cancelled: Arc<AtomicUsize>,
     closes: Arc<Mutex<Vec<SessionCloseRequest>>>,
 }
 
@@ -110,6 +114,7 @@ impl AgentProvider for ScriptedProvider {
                     Arc::new(ScriptedBackend {
                         started: self.started.clone(),
                         answered: self.answered.clone(),
+                        cancelled: self.cancelled.clone(),
                         closes: self.closes.clone(),
                     }),
                     capabilities(),
@@ -184,18 +189,21 @@ struct Fixture {
     agent: Agent,
     storage: MemoryStorage,
     answered: Arc<AtomicUsize>,
+    cancelled: Arc<AtomicUsize>,
     closes: Arc<Mutex<Vec<SessionCloseRequest>>>,
 }
 
 async fn agent_with(events: Vec<ExecutionEvent>, hooks: Vec<Arc<dyn InvocationHook>>) -> Fixture {
     let storage = MemoryStorage::default();
     let answered = Arc::new(AtomicUsize::new(0));
+    let cancelled = Arc::new(AtomicUsize::new(0));
     let closes = Arc::new(Mutex::new(Vec::new()));
     let agent = attached_agent(
         Arc::new(ScriptedProvider {
             events: Mutex::new(Some(events)),
             started: Arc::new(AtomicBool::new(false)),
             answered: answered.clone(),
+            cancelled: cancelled.clone(),
             closes: closes.clone(),
         }),
         storage.manager().await,
@@ -209,6 +217,7 @@ async fn agent_with(events: Vec<ExecutionEvent>, hooks: Vec<Arc<dyn InvocationHo
         agent,
         storage,
         answered,
+        cancelled,
         closes,
     }
 }
@@ -364,6 +373,7 @@ async fn a_continue_refusal_keeps_the_review_and_the_session() {
         .await
         .expect("deny-and-continue finishes the turn");
     assert_eq!(fixture.answered.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.cancelled.load(Ordering::SeqCst), 0);
     assert!(fixture.closes.lock().unwrap().is_empty());
     let saved = fixture.storage.snapshot();
     let events = &saved.invocations[0].events;
@@ -396,6 +406,7 @@ async fn a_continue_without_a_deny_option_does_not_invent_one() {
         .await
         .expect("a continue with no deny option ends the turn without closing");
     assert_eq!(fixture.answered.load(Ordering::SeqCst), 0);
+    assert_eq!(fixture.cancelled.load(Ordering::SeqCst), 1);
     assert!(fixture.closes.lock().unwrap().is_empty());
     fixture
         .agent
@@ -419,6 +430,8 @@ async fn an_end_turn_refusal_does_not_close_the_session() {
         .invoke(request(), close_action())
         .await
         .expect("ending the turn leaves the session open");
+    assert_eq!(fixture.answered.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.cancelled.load(Ordering::SeqCst), 0);
     assert!(fixture.closes.lock().unwrap().is_empty());
     fixture
         .agent

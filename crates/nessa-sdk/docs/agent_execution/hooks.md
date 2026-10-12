@@ -62,8 +62,9 @@ permission-review hook runs on a blocking thread for at most two seconds and
 yields when stop arrives. `ToolVerdict::Allow` leaves the review for the
 provider's ordinary answer. `Refuse { Continue }` keeps the review and answers
 the provider's deny option, so the agent continues. A continue with no deny
-option is an end-turn. `Refuse { EndTurn }` cancels the turn when the binding
-can, and does not close the session. `Refuse { CloseSession }` closes with
+option is an end-turn. `Refuse { EndTurn }` answers the deny option when one
+is offered, and withdraws the pending review when none is. It then cancels the
+turn when the binding can, and does not close the session. `Refuse { CloseSession }` closes with
 `SessionCloseRequest::PolicyRefusal`. A hook error, panic, or timeout is
 deny-and-continue with the reason `"hook failed"`. An incomplete window is
 reported to the hook. It does not by itself reject the tool.

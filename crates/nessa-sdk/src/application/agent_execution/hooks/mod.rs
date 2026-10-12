@@ -5,7 +5,7 @@
 //! PermissionRequested --> ProposedToolCall --> permission-review hook
 //! ToolVerdict::Allow --> retain the review
 //! ToolVerdict::Refuse { Continue } --> retain, answer the provider's deny option
-//! ToolVerdict::Refuse { EndTurn } --> retain, cancel the turn when the binding can
+//! ToolVerdict::Refuse { EndTurn } --> retain, answer a deny or withdraw the review, then cancel the turn when the binding can
 //! ToolVerdict::Refuse { CloseSession } --> retain, close with PolicyRefusal
 //! Agent dispatch -> before hooks -> ProviderSessionBackend -> after hooks -> caller
 //! ```

@@ -40,8 +40,8 @@ use crate::application::agent_execution::sessions::{
     StorageError,
 };
 use crate::domain::agent_execution::permissions::{
-    PermissionAuthorityError, PermissionEffect, PermissionId, PermissionOptionId, PermissionScope,
-    RefusalOutcome,
+    CustomPermissionCancellationReason, PermissionAuthorityError, PermissionCancellationReason,
+    PermissionEffect, PermissionId, PermissionOptionId, PermissionScope, RefusalOutcome,
 };
 use crate::domain::model_metadata::value_objects::{EffortLevel, EffortLevels};
 use crate::domain::{
@@ -1796,7 +1796,11 @@ impl Agent {
                 None
             }
             RefusalOutcome::EndTurn => {
-                self.answer_denial(session, actor, event).await;
+                if deny_option(event).is_some() {
+                    self.answer_denial(session, actor, event).await;
+                } else {
+                    self.cancel_unanswered_review(session, actor, event).await;
+                }
                 if session.supports_turn_cancel() {
                     if let Err(error) = session.cancel_turn(event.execution_id().clone()).await {
                         tracing::warn!(?error, "permission-review hook could not end the turn");
@@ -1834,6 +1838,32 @@ impl Agent {
         };
         if let Err(error) = session.answer_permission(answer).await {
             tracing::warn!(?error, "permission-review hook denial was not delivered");
+        }
+    }
+
+    async fn cancel_unanswered_review(
+        &self,
+        session: &ProviderSession,
+        actor: &ActionContext,
+        event: &ExecutionEvent,
+    ) {
+        let ExecutionUpdate::PermissionRequested { id, .. } = event.update() else {
+            return;
+        };
+        let Ok(reason) = CustomPermissionCancellationReason::new(
+            "hook-refusal",
+            "the permission-review hook ended the turn",
+        ) else {
+            return;
+        };
+        let input = PermissionCancellationRequest {
+            execution_id: event.execution_id().clone(),
+            id: id.clone(),
+            reason: PermissionCancellationReason::custom(reason),
+            actor: actor.clone(),
+        };
+        if let Err(error) = session.cancel_permission(input).await {
+            tracing::warn!(?error, "permission-review hook could not cancel the review");
         }
     }
     // Confirmed teardown must settle admitted execution work, including audit-only
