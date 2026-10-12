@@ -194,7 +194,7 @@ for line in sys.stdin:
             update({"sessionUpdate": "tool_call_update", "toolCallId": "command-1", "status": "completed",
                     "rawOutput": {"formatted_output": "compiling\n2 passed\n", "exit_code": 0},
                     "_meta": {"terminal_exit": {"exit_code": 0, "signal": None, "terminal_id": "command-1"}}})
-        elif mode in ("deadline-decline", "deadline-cancel-only"):
+        elif mode in ("deadline-decline", "deadline-cancel-only", "deadline-decline-unasked-cancel"):
             # A later prompt in the same session, after cancel already ended
             # the turn. The session is still open.
             if mode == "deadline-cancel-only" and (root / "permission-outcome").exists():
@@ -204,7 +204,7 @@ for line in sys.stdin:
                 continue
             # Real Codex ACP 1.12.0 shapes. Command decisions offer decline
             # then cancel, both reject_once. File edits offer only cancel.
-            if mode == "deadline-decline":
+            if mode in ("deadline-decline", "deadline-decline-unasked-cancel"):
                 options = [
                     {"optionId": "allow_once", "kind": "allow_once", "name": "Yes"},
                     {"optionId": "cancel", "kind": "reject_once", "name": "No, and tell Codex what to do differently"},
@@ -255,7 +255,7 @@ for line in sys.stdin:
             result(pending, {"stopReason": "cancelled"})
             pending = None
     elif msg.get("id") == "file-review":
-        if mode in ("deadline-decline", "deadline-cancel-only"):
+        if mode in ("deadline-decline", "deadline-cancel-only", "deadline-decline-unasked-cancel"):
             (root / "permission-outcome").write_text(json.dumps(msg["result"]))
         else:
             outcome = msg["result"]["outcome"]
@@ -263,6 +263,13 @@ for line in sys.stdin:
         if mode == "deadline-cancel-only":
             # Real Codex stops the turn when cancel is selected. The edit
             # does not complete and the prompt does not continue.
+            result(pending, {"stopReason": "cancelled"})
+            pending = None
+            continue
+        if mode == "deadline-decline-unasked-cancel":
+            # Decline does not stop the turn. The prompt then ends on its
+            # own: no session/cancel was sent.
+            assert msg["result"]["outcome"]["optionId"] == "decline"
             result(pending, {"stopReason": "cancelled"})
             pending = None
             continue

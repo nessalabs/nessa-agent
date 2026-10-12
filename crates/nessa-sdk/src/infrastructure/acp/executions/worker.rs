@@ -2023,8 +2023,10 @@ impl<P: AcpProfile> Worker<P> {
         let response = permission_wire::selected(&wire_id, option_id.as_str());
         let result = self.send(response).await;
         // Codex ends the turn when the person picks `cancel`. The cancelled
-        // result that follows is that turn ending. Without this, it is an
-        // unrequested cancel and the session is torn down.
+        // result that follows is that turn ending. `decline` does not stop
+        // the turn, so the same cancelled result after it is unrequested and
+        // the session is torn down. Without the stop check, every answer
+        // would be treated as that turn ending.
         if result.is_ok()
             && self
                 .profile
