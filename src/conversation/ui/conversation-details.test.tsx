@@ -164,6 +164,35 @@ it("says the current switch applies at the next start when this run differs", as
   expect(group("Approvals")).toContain("only for projects you trust")
 })
 
+it("reads the switch again when the window is focused", async () => {
+  const item = attached()
+  let choice: "off" | "on" = "on"
+  await act(async () => {
+    root.render(
+      <ConversationDetails
+        conversation={item}
+        rename={false}
+        onClose={() => {}}
+        onRename={() => {}}
+        readNativeHooks={async () => choice}
+      />,
+    )
+  })
+  expect(group("Approvals")).toContain(
+    "Applies the next time each conversation's agent starts.",
+  )
+  choice = "off"
+  await act(async () => {
+    window.dispatchEvent(new Event("focus"))
+  })
+  expect(group("Approvals")).toContain(
+    "For this run, Nessa asks this agent to leave its own hooks off.",
+  )
+  expect(group("Approvals")).not.toContain(
+    "Applies the next time each conversation's agent starts.",
+  )
+})
+
 it("keeps this run's sentence when the switch still matches", async () => {
   const item = attached()
   await act(async () => {

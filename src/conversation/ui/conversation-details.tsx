@@ -277,21 +277,33 @@ export function ConversationDetails({
   useEffect(() => {
     // Drop the previous conversation's switch before this read answers, so a
     // difference that belonged to the last one is not shown on this one.
+    // A later focus reads again: Settings lives in the other window, and the
+    // sheet stays open while the switch moves.
     if (!readNativeHooks) {
       setNativeHooksSwitch(undefined)
       return
     }
     let current = true
+    const apply = (choice: "off" | "on" | undefined) => {
+      if (current) setNativeHooksSwitch(choice)
+    }
+    const read = () => {
+      void readNativeHooks()
+        .then(apply)
+        .catch(() => apply(undefined))
+    }
     setNativeHooksSwitch(undefined)
-    void readNativeHooks()
-      .then((choice) => {
-        if (current) setNativeHooksSwitch(choice)
-      })
-      .catch(() => {
-        if (current) setNativeHooksSwitch(undefined)
-      })
+    read()
+    const onFocus = () => read()
+    const onVisible = () => {
+      if (document.visibilityState === "visible") read()
+    }
+    window.addEventListener("focus", onFocus)
+    document.addEventListener("visibilitychange", onVisible)
     return () => {
       current = false
+      window.removeEventListener("focus", onFocus)
+      document.removeEventListener("visibilitychange", onVisible)
     }
   }, [readNativeHooks])
   return (
