@@ -469,6 +469,10 @@ struct Worker<P> {
     /// cancelled result is session teardown, which disarms deadlines.
     turn_cancel_requested: Option<ExecutionId>,
     deferred_outcome: Option<ExecutionOutcome>,
+    /// Commands a deadline took from the queue and has not run yet. They were
+    /// admitted, so a batch that stops early leaves them here for teardown to
+    /// answer, as it would have found them in the queue.
+    carried: VecDeque<Command>,
     provider_result: Option<Result<ExecutionOutcome, AgentError>>,
     settlement_facts: SettlementFacts,
     correlation_sequence: u64,
@@ -534,6 +538,7 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
         closing: false,
         turn_cancel_requested: None,
         deferred_outcome: None,
+        carried: VecDeque::new(),
         provider_result: None,
         settlement_facts: SettlementFacts::new(),
         correlation_sequence: 0,
@@ -1389,21 +1394,26 @@ impl<P: AcpProfile> Worker<P> {
                     // Anything else in that snapshot waits until those reviews
                     // are settled
                     // (`an_unrelated_command_already_queued_does_not_hold_a_due_deadline`).
+                    // Taken commands wait in `carried`, not a local, so an
+                    // early return still leaves them for teardown
+                    // (`an_admitted_command_outlives_a_deadline_batch_that_stops`).
                     let admitted = self.commands.len();
-                    let ready = admitted_before_deadline(&mut self.commands, admitted);
-                    let mut later = Vec::new();
-                    for command in ready {
-                        if self.command_answers_due_review(&command) {
-                            self.command(execution, command).await?;
-                            if self.deferred_outcome.is_some() {
-                                return Ok(());
-                            }
-                        } else {
-                            later.push(command);
+                    let (due, later): (Vec<_>, Vec<_>) =
+                        admitted_before_deadline(&mut self.commands, admitted)
+                            .into_iter()
+                            .partition(|command| self.command_answers_due_review(command));
+                    let answers = due.len();
+                    self.carried.extend(due);
+                    self.carried.extend(later);
+                    for _ in 0..answers {
+                        let command = self.carried.pop_front().expect("carried answer");
+                        self.command(execution, command).await?;
+                        if self.deferred_outcome.is_some() {
+                            return Ok(());
                         }
                     }
                     self.settle_due_permissions(execution).await?;
-                    for command in later {
+                    while let Some(command) = self.carried.pop_front() {
                         self.command(execution, command).await?;
                         if self.deferred_outcome.is_some() {
                             return Ok(());
@@ -1435,7 +1445,16 @@ impl<P: AcpProfile> Worker<P> {
         // notification arrived over an independently ordered watch channel.
         self.commands.close();
         let mut failure: Option<WorkerFailure> = None;
-        while let Some(command) = self.commands.recv().await {
+        // A deadline batch that stopped early holds commands admitted before
+        // those still queued, so they are answered first.
+        loop {
+            let command = match self.carried.pop_front() {
+                Some(command) => command,
+                None => match self.commands.recv().await {
+                    Some(command) => command,
+                    None => break,
+                },
+            };
             match command {
                 command @ (Command::Answer(..)
                 | Command::CancelPermission(..)

@@ -186,6 +186,7 @@ async fn nested_startup_response_writes_observe_remaining_rpc_deadline() {
                     closing: false,
                     turn_cancel_requested: None,
                     deferred_outcome: None,
+                    carried: std::collections::VecDeque::new(),
                     provider_result: None,
                     settlement_facts: SettlementFacts::new(),
                     correlation_sequence: 0,

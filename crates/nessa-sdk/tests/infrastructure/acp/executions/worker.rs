@@ -251,6 +251,7 @@ async fn worker_initial_and_fallback_cancellation_share_grace_with_a_full_pipe()
             closing: true,
             turn_cancel_requested: None,
             deferred_outcome: None,
+            carried: std::collections::VecDeque::new(),
             provider_result: None,
             settlement_facts: SettlementFacts::new(),
             correlation_sequence: 0,

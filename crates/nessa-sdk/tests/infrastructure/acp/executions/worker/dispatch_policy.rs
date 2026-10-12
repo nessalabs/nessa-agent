@@ -305,6 +305,7 @@ async fn worker_with_ready_frames_boundary(
             closing: false,
             turn_cancel_requested: None,
             deferred_outcome: None,
+            carried: std::collections::VecDeque::new(),
             provider_result: None,
             settlement_facts: SettlementFacts::new(),
             correlation_sequence: 0,

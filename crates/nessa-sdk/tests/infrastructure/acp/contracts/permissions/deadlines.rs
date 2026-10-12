@@ -559,6 +559,73 @@ impl ExecutionAudit for AnswerAuditThatFails {
     }
 }
 
+// Two answers to the due review are queued as the deadline passes. The
+// first fails its audit, which ends the drive loop. The second was admitted
+// too, so teardown still answers it: it is told the review is already
+// decided, not that the session went away.
+#[tokio::test(flavor = "current_thread")]
+async fn an_admitted_command_outlives_a_deadline_batch_that_stops() {
+    let _slot = process_test_slot().await;
+    let (root, mut config, model) = test_acp_configuration("permission", 16);
+    config.execution_timeout = None;
+    let clock = manual_clock(&mut config);
+    let binding = ClaudeAcpProvider::new(
+        config,
+        &model,
+        TokenLimits::new(900, 100).unwrap(),
+        Arc::new(AnswerAuditThatFails),
+    )
+    .unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
+    let _active = start(&opened, "write").await;
+    assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
+    let ExecutionUpdate::PermissionRequested { id, .. } = next(&mut opened).await else {
+        panic!("expected permission");
+    };
+    timeout(Duration::from_secs(5), async {
+        while !clock
+            .waits()
+            .iter()
+            .any(|wait| wait.limit() == Duration::from_secs(30))
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the review's deadline was never armed");
+
+    let mut context = Context::from_waker(Waker::noop());
+    let mut first = opened.session.answer_permission(human_allow(id.clone()));
+    assert!(first.as_mut().poll(&mut context).is_pending());
+    let mut second = opened.session.answer_permission(human_allow(id));
+    assert!(second.as_mut().poll(&mut context).is_pending());
+    clock.advance(Duration::from_secs(30));
+
+    let first = timeout(Duration::from_secs(5), first)
+        .await
+        .expect("the first answer was not taken")
+        .unwrap_err();
+    assert_eq!(first.error(), &AgentError::AuditFailure);
+    let second = timeout(Duration::from_secs(5), second)
+        .await
+        .expect("the second answer was never answered")
+        .unwrap_err();
+    assert_eq!(
+        second.permission_selection(),
+        Some(PermissionSelectionState::Pending),
+        "the admitted answer was dropped: {second:?}"
+    );
+    assert_ne!(second.error(), &AgentError::Closed, "{second:?}");
+    let closing = opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()));
+    let _ = promptly(clock.passing(a_grace, closing)).await;
+    assert_gone(&root, "pid");
+}
+
 #[tokio::test]
 async fn a_failed_answer_audit_still_denies_and_the_turn_continues() {
     let _slot = process_test_slot().await;
