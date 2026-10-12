@@ -34,7 +34,8 @@ export type AgentsApi = {
    * Allow or restore suppression of one harness's own hooks. The next launch
    * omits Nessa's suppression request when `enabled` is true. OpenCode is not
    * a value of `agent`. A lost response does not undo the change; list again
-   * before retrying. `requestId` must be well-formed Unicode within the
+   * before retrying. The result's `enabled` is the choice now in effect, not
+   * an echo: a retry after a later change reports that later choice. `requestId` must be well-formed Unicode within the
    * product schema's bound. The gateway retains this attempt with
    * authenticated audit attribution. When enabled, a hook can deny or change
    * a tool call before Nessa asks.
