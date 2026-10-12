@@ -194,13 +194,15 @@ impl<P: AcpProfile + Clone> WorkerFactory<P> {
         // the switch once, onto the profile, before anything is published: a
         // reader during startup stamps tool rows from that value, and those
         // rows are not rewritten. The process factory reads the same bool.
-        let native_hooks_allowed = {
+        // The worker gets the profile cloned under the same lock, so a start
+        // racing this one cannot hand it a different capture.
+        let (native_hooks_allowed, launched_profile) = {
             let mut profile = self
                 .profile
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             profile.capture_native_hooks();
-            profile.native_hooks_allowed()
+            (profile.native_hooks_allowed(), profile.clone())
         };
         self.operation_capabilities
             .send_replace(ProviderOperationCapabilities {
@@ -270,10 +272,7 @@ impl<P: AcpProfile + Clone> WorkerFactory<P> {
         tokio::spawn(
             worker::run(
                 scope,
-                self.profile
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .clone(),
+                launched_profile,
                 self.config.clone(),
                 self.capabilities.clone(),
                 receiver,

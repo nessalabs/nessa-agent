@@ -157,7 +157,6 @@ export function agentInstallResult(value: unknown): AgentInstallResult {
 
 const hookAgents = new Set<string>(Object.values(NativeHooksAgent))
 
-/** Validate the choice now in effect before a control shows it. */
 /** Validate a hooks result, and that it answers the command that was sent:
  * the same request ID and harness. */
 export function agentsSetNativeHooks(

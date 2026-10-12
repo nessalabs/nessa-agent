@@ -668,6 +668,35 @@ mod tests {
     use crate::domain::agent_execution::permissions::CustomPermissionCancellationReason;
 
     #[test]
+    fn a_launched_controller_stamps_tool_events_and_nothing_else() {
+        use crate::domain::agent_execution::tools::{ToolCallId, ToolCallUpdate};
+        let execution = ExecutionId::new("turn").unwrap();
+        let tool =
+            || ToolCallUpdate::new(ToolCallId::new("t").unwrap(), None, None, None, None, None);
+        for (launched, stamp) in [
+            (Some(true), Some(true)),
+            (Some(false), Some(false)),
+            (None, None),
+        ] {
+            let mut controller =
+                ExecutionController::new(ExecutionSessionId::new("session").unwrap())
+                    .launched_with(launched);
+            controller.begin_execution(execution.clone()).unwrap();
+            assert_eq!(
+                controller
+                    .tool_event(&execution, tool())
+                    .unwrap()
+                    .native_hooks(),
+                stamp
+            );
+            let message = controller
+                .message_event(&execution, MessageChunk::text("hi"))
+                .unwrap();
+            assert_eq!(message.native_hooks(), None);
+        }
+    }
+
+    #[test]
     fn cause_origin_validation_preserves_pending_state_and_retained_budgets() {
         let reasons = [
             (
