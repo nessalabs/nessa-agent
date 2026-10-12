@@ -1589,11 +1589,6 @@ fn catalog_with_hooks(
                             .collect(),
                     })
                     .collect(),
-                native_hooks: match agent.agent.as_str() {
-                    "claude" => Some(choice(selection.claude())),
-                    "codex" => Some(choice(selection.codex())),
-                    _ => None,
-                },
             })
             .collect(),
         environments: catalog.environments.clone(),

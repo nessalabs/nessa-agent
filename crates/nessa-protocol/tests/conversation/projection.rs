@@ -599,18 +599,28 @@ fn arguments_on_a_later_update_join_the_identity_that_update_does_not_repeat() {
     assert!(bare.tools[0].mcp.is_none());
 }
 
+fn tool_named(name: &str) -> ExecutionUpdate {
+    ExecutionUpdate::Tool(ToolCallUpdate::new(
+        ToolCallId::new(name).unwrap(),
+        None,
+        None,
+        None,
+        None,
+        None,
+    ))
+}
+
 #[test]
-fn a_later_read_keeps_a_tool_mark_from_the_start_that_inserted_it() {
-    let first = completed_snapshot(
+fn a_restored_tool_shows_the_hooks_choice_saved_with_it_not_the_one_in_effect_now() {
+    // After a restart with the switch turned on, the saved calls still say
+    // what each process start used.
+    let saved = completed_snapshot(
         "execution",
-        vec![event(ExecutionUpdate::Tool(ToolCallUpdate::new(
-            ToolCallId::new("read").unwrap(),
-            None,
-            None,
-            None,
-            None,
-            None,
-        )))],
+        vec![
+            event(tool_named("read")).with_native_hooks(false),
+            event(tool_named("edit")).with_native_hooks(true),
+            event(tool_named("older")),
+        ],
     );
     let mut capabilities = ConversationCapabilities {
         queue: true,
@@ -620,101 +630,53 @@ fn a_later_read_keeps_a_tool_mark_from_the_start_that_inserted_it() {
         image_input: false,
         agent_features: OperationCapabilities::default().into(),
     };
-    let mut projection = Projection::new("conversation".into(), capabilities.clone(), Some(&first));
-    assert_eq!(
-        projection.view().tools[0].native_hooks,
-        NativeHooksChoice::Off
-    );
     capabilities.agent_features.native_hooks = NativeHooksChoice::On;
-    projection.capabilities(capabilities);
-    let second = completed_snapshot(
-        "execution",
-        vec![
-            event(ExecutionUpdate::Tool(ToolCallUpdate::new(
-                ToolCallId::new("read").unwrap(),
-                None,
-                None,
-                None,
-                None,
-                None,
-            ))),
-            event(ExecutionUpdate::Tool(ToolCallUpdate::new(
-                ToolCallId::new("edit").unwrap(),
-                None,
-                None,
-                None,
-                None,
-                None,
-            ))),
-        ],
-    );
+    let mut projection = Projection::new("conversation".into(), capabilities.clone(), None);
     assert!(projection.replace_committed(
-        &committed("incarnation", 2, 2, 2, Some(&second)),
+        &committed("incarnation", 1, 1, 1, Some(&saved)),
         &[],
         None,
     ));
     let tools = &projection.view().tools;
-    let read = tools.iter().find(|tool| tool.tool_id == "read").unwrap();
-    let edit = tools.iter().find(|tool| tool.tool_id == "edit").unwrap();
-    assert_eq!(read.native_hooks, NativeHooksChoice::Off);
-    assert_eq!(edit.native_hooks, NativeHooksChoice::On);
+    let mark = |id: &str| {
+        tools
+            .iter()
+            .find(|tool| tool.tool_id == id)
+            .unwrap()
+            .native_hooks
+    };
+    assert_eq!(mark("read"), Some(NativeHooksChoice::Off));
+    assert_eq!(mark("edit"), Some(NativeHooksChoice::On));
+    // Saved without a choice: nothing is claimed for it.
+    assert_eq!(mark("older"), None);
+    assert_eq!(projection.view().capabilities, capabilities);
 }
 
 #[test]
-fn a_tool_inserted_by_a_later_read_takes_the_noted_choice_without_clearing_capabilities() {
-    let first = completed_snapshot(
-        "execution",
-        vec![event(ExecutionUpdate::Tool(ToolCallUpdate::new(
-            ToolCallId::new("read").unwrap(),
-            None,
-            None,
-            None,
-            None,
-            None,
-        )))],
-    );
-    let capabilities = ConversationCapabilities {
-        queue: true,
-        steer: true,
-        resume: false,
-        permissions: true,
-        image_input: false,
-        agent_features: OperationCapabilities::default().into(),
-    };
-    let mut projection = Projection::new("conversation".into(), capabilities.clone(), Some(&first));
-    projection.hooks_for_tools_being_inserted(NativeHooksChoice::On);
-    let second = completed_snapshot(
+fn a_later_update_of_an_unmarked_tool_fills_in_its_hooks_choice() {
+    let saved = completed_snapshot(
         "execution",
         vec![
-            event(ExecutionUpdate::Tool(ToolCallUpdate::new(
-                ToolCallId::new("read").unwrap(),
-                None,
-                None,
-                None,
-                None,
-                None,
-            ))),
-            event(ExecutionUpdate::Tool(ToolCallUpdate::new(
-                ToolCallId::new("edit").unwrap(),
-                None,
-                None,
-                None,
-                None,
-                None,
-            ))),
+            event(tool_named("read")),
+            event(tool_named("read")).with_native_hooks(false),
         ],
     );
-    assert!(projection.replace_committed(
-        &committed("incarnation", 2, 2, 2, Some(&second)),
-        &[],
-        None,
-    ));
-    let tools = &projection.view().tools;
-    let read = tools.iter().find(|tool| tool.tool_id == "read").unwrap();
-    let edit = tools.iter().find(|tool| tool.tool_id == "edit").unwrap();
-    assert_eq!(read.native_hooks, NativeHooksChoice::Off);
-    assert_eq!(edit.native_hooks, NativeHooksChoice::On);
-    assert_eq!(projection.view().capabilities, capabilities);
+    let projection = Projection::new(
+        "conversation".into(),
+        ConversationCapabilities {
+            queue: true,
+            steer: true,
+            resume: false,
+            permissions: true,
+            image_input: false,
+            agent_features: OperationCapabilities::default().into(),
+        },
+        Some(&saved),
+    );
+    assert_eq!(
+        projection.view().tools[0].native_hooks,
+        Some(NativeHooksChoice::Off)
+    );
 }
 
 #[test]
@@ -806,7 +768,6 @@ fn a_tool_without_an_mcp_identity_is_written_as_before() {
             "executionId",
             "input",
             "kind",
-            "nativeHooks",
             "status",
             "title",
             "toolId"

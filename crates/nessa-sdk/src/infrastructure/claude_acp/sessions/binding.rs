@@ -312,15 +312,6 @@ impl ClaudeAcpProvider {
             }
         }
     }
-    /// The profile for the flag as it stands now.
-    ///
-    /// Deletion uses this. A conversation's process start does not: it reads
-    /// the switch once inside the start, on the profile `open` builds.
-    /// Claude's process factory does not read the switch.
-    pub(crate) fn profile(&self) -> ClaudeProfile {
-        self.profile_allowing(self.native_hooks.allowed())
-    }
-
     /// The profile a process start captures from the live switch.
     fn launch_profile(&self) -> ClaudeProfile {
         ClaudeProfile::new(
@@ -332,7 +323,11 @@ impl ClaudeAcpProvider {
     }
 
     /// The profile a launch speaks when native hooks are `allowed`.
-    pub(super) fn profile_allowing(&self, allowed: bool) -> ClaudeProfile {
+    ///
+    /// Deletion passes `false`. A conversation's process start does not use
+    /// this: it reads the switch once inside the start, on the profile `open`
+    /// builds. Claude's process factory does not read the switch.
+    pub(crate) fn profile_allowing(&self, allowed: bool) -> ClaudeProfile {
         ClaudeProfile::new(
             self.system_prompt.clone(),
             self.approval_mode,

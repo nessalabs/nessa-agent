@@ -174,7 +174,7 @@ it("sends a native-hooks choice and reads the choice now in effect", async () =>
   })
 })
 
-it("rejects an unknown harness and a boolean catalog flag before display", async () => {
+it("rejects an unknown harness and a hooks copy on an agent row before display", async () => {
   const request = vi
     .fn()
     .mockResolvedValue({ requestId: "turn", agent: "opencode", enabled: true })
@@ -182,14 +182,24 @@ it("rejects an unknown harness and a boolean catalog flag before display", async
   await expect(api.setNativeHooks("claude", true, "turn")).rejects.toThrow(
     "Invalid native hooks agent",
   )
+  // The catalog-level choice is the only copy: a row repeating it could disagree.
   request.mockResolvedValue({
     ...offered,
     agents: [{ ...offered.agents[0], nativeHooks: "on" }],
   })
-  expect((await api.list()).agents[0].nativeHooks).toBe("on")
-  request.mockResolvedValue({
-    ...offered,
-    agents: [{ ...offered.agents[0], nativeHooks: false }],
-  })
-  await expect(api.list()).rejects.toThrow("Invalid native hooks choice")
+  await expect(api.list()).rejects.toThrow()
+})
+
+it("rejects a hooks result that answers another request or harness", async () => {
+  const request = vi
+    .fn()
+    .mockResolvedValue({ requestId: "other", agent: "claude", enabled: true })
+  const api = createAgentsApi({ request })
+  await expect(api.setNativeHooks("claude", true, "turn")).rejects.toThrow(
+    "Native hooks result answers a different command",
+  )
+  request.mockResolvedValue({ requestId: "turn", agent: "codex", enabled: true })
+  await expect(api.setNativeHooks("claude", true, "turn")).rejects.toThrow(
+    "Native hooks result answers a different command",
+  )
 })

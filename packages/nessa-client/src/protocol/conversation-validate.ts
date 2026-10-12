@@ -507,9 +507,12 @@ export function conversationView(value: unknown, expected: string): Conversation
       "structuredContent",
       "nativeHooks",
     ])
-    const nativeHooks = text(tool, "nativeHooks", 3)
-    if (nativeHooks !== "off" && nativeHooks !== "on")
-      throw new Error("Invalid native hooks choice")
+    // Absent when the process start the call ran under recorded no choice.
+    if (Object.hasOwn(tool, "nativeHooks")) {
+      const nativeHooks = text(tool, "nativeHooks", 3)
+      if (nativeHooks !== "off" && nativeHooks !== "on")
+        throw new Error("Invalid native hooks choice")
+    }
     identity(tool, "executionId")
     identity(tool, "toolId")
     const toolKey = JSON.stringify([tool.executionId, tool.toolId])

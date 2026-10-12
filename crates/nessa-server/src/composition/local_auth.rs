@@ -1384,7 +1384,6 @@ fn agent_catalog(
                 agent: agent.name().into(),
                 default_model: default_model.into(),
                 models: options,
-                native_hooks: None,
             })
         })
         .collect::<Result<Vec<_>, RunError>>()?;

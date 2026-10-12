@@ -1168,10 +1168,14 @@ impl<P: AcpProfile> Worker<P> {
         };
         // Retain the known context before later configuration can fail. Teardown
         // must audit its closure even when startup never publishes ready.
-        let execution = execution.insert(ExecutionController::with_authority_source(
-            id,
-            self.permission_authority.clone(),
-        ));
+        let execution = execution.insert(
+            ExecutionController::with_authority_source(id, self.permission_authority.clone())
+                .launched_with(
+                    self.profile
+                        .native_hooks_launch()
+                        .map(|(_, allowed)| allowed),
+                ),
+        );
         if self
             .startup_advisory_session
             .take()

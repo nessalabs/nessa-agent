@@ -8,7 +8,10 @@
 //!
 //! Arrows are the order of one change, of one startup read, and of one
 //! process start. A failed requested record writes nothing. A failed
-//! outcome record reverts the file and the flag. A retry of the same
+//! outcome record reverts the file and the flag, unless the outcome record
+//! can be read back: then the change stands, because the record says it
+//! took effect. A file that was renamed into place and then failed its
+//! directory sync is the new choice, so the flag follows it. A retry of the same
 //! principal, harness, and request id keeps the record already written,
 //! including its observation time, when the choice matches, and fails when
 //! that id was used for a different choice. The adapter assigns the record id
@@ -45,7 +48,11 @@ pub struct NativeHooksPreferences {
     codex: Arc<AtomicBool>,
     gate: Arc<Mutex<()>>,
     audit: Arc<dyn NativeHooksAudit>,
+    sync: DirectorySync,
 }
+
+/// How the choice file's directory is made durable after a rename.
+type DirectorySync = fn(&Path) -> std::io::Result<()>;
 
 impl NativeHooksPreferences {
     /// Load `native-hooks.json` under `directory`, or off when it is missing
@@ -63,6 +70,14 @@ impl NativeHooksPreferences {
         directory: PathBuf,
         audit: Arc<dyn NativeHooksAudit>,
     ) -> Result<Arc<Self>, NativeHooksError> {
+        Self::open_syncing(directory, audit, sync_directory)
+    }
+
+    fn open_syncing(
+        directory: PathBuf,
+        audit: Arc<dyn NativeHooksAudit>,
+        sync: DirectorySync,
+    ) -> Result<Arc<Self>, NativeHooksError> {
         create_directory(&directory).map_err(|_| NativeHooksError::Storage)?;
         let stored = read_choice(&directory.join("native-hooks.json"));
         Ok(Arc::new(Self {
@@ -71,6 +86,7 @@ impl NativeHooksPreferences {
             codex: Arc::new(AtomicBool::new(stored.codex())),
             gate: Arc::new(Mutex::new(())),
             audit,
+            sync,
         }))
     }
 
@@ -96,9 +112,10 @@ impl NativeHooksPreferences {
     ///
     /// A retry of the same request id keeps the records already written when
     /// they are for this choice. Failure of either record, or of the file,
-    /// returns an error. An outcome-record failure puts the flag back. When
-    /// the file can be written, it goes back too. When that write fails, the
-    /// flag stays with the file that was published.
+    /// returns an error. The flag always ends equal to the file on disk: a
+    /// file renamed into place counts as written even when its directory sync
+    /// failed. An outcome-record failure puts the file and the flag back,
+    /// unless the outcome record can be read back.
     pub async fn set(
         &self,
         change: NativeHooksChange,
@@ -108,9 +125,10 @@ impl NativeHooksPreferences {
         let codex = self.codex.clone();
         let audit = self.audit.clone();
         let gate = self.gate.clone();
+        let sync = self.sync;
         tokio::task::spawn_blocking(move || {
             let _guard = gate.lock().unwrap_or_else(|error| error.into_inner());
-            set_blocking(directory, claude, codex, audit, change)
+            set_blocking(directory, claude, codex, audit, sync, change)
         })
         .await
         // A panicked or cancelled task did not finish. That is not an audit
@@ -124,6 +142,7 @@ fn set_blocking(
     claude: Arc<AtomicBool>,
     codex: Arc<AtomicBool>,
     audit: Arc<dyn NativeHooksAudit>,
+    sync: DirectorySync,
     change: NativeHooksChange,
 ) -> Result<NativeHooksSelection, NativeHooksError> {
     // A retry of a command that already recorded its outcome keeps that
@@ -139,19 +158,38 @@ fn set_blocking(
         return Ok(selection_of(&claude, &codex));
     }
     let updated = selection_of(&claude, &codex).with(change.agent, change.enabled);
-    write_choice(&directory, &updated)?;
+    if let Err(stage) = write_choice(&directory, &updated, sync) {
+        if stage == Publication::Unconfirmed {
+            store(&claude, &codex, change.agent, change.enabled);
+        }
+        return Err(NativeHooksError::Storage);
+    }
     store(&claude, &codex, change.agent, change.enabled);
     if let Err(error) =
         audit.record(&change.evidence(NativeHooksPhase::Outcome, before, Some(change.enabled)))
     {
-        store(&claude, &codex, change.agent, current);
-        let reverted = selection_of(&claude, &codex);
-        if write_choice(&directory, &reverted).is_err() {
-            store(&claude, &codex, change.agent, change.enabled);
+        // An outcome record that reads back says the change took effect. A
+        // rollback now would contradict it, and a retry would stop at it.
+        if already_recorded(&directory, &change).unwrap_or(false) {
+            return Err(error);
+        }
+        let reverted = updated.with(change.agent, current);
+        if write_choice(&directory, &reverted, sync) != Err(Publication::Unpublished) {
+            store(&claude, &codex, change.agent, current);
         }
         return Err(error);
     }
     Ok(selection_of(&claude, &codex))
+}
+
+/// How far a failed publication got.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Publication {
+    /// The destination still holds what it held before.
+    Unpublished,
+    /// The destination holds the new document, but its directory was not
+    /// synced. A reader sees the new document.
+    Unconfirmed,
 }
 
 fn flag(claude: &AtomicBool, codex: &AtomicBool, agent: NativeHooksAgent) -> bool {
@@ -198,28 +236,19 @@ fn read_choice(path: &Path) -> NativeHooksSelection {
 fn write_choice(
     directory: &Path,
     selection: &NativeHooksSelection,
-) -> Result<(), NativeHooksError> {
-    publish_json(
-        directory,
-        &directory.join("native-hooks.json"),
-        &json!({"claude": selection.claude(), "codex": selection.codex()}),
-    )
-}
-
-fn publish_json(
-    directory: &Path,
-    destination: &Path,
-    value: &Value,
-) -> Result<(), NativeHooksError> {
-    let mut file = PrivateTempFile::new_in(directory).map_err(|_| NativeHooksError::Storage)?;
-    serde_json::to_writer(file.as_file_mut(), value).map_err(|_| NativeHooksError::Storage)?;
+    sync: DirectorySync,
+) -> Result<(), Publication> {
+    let destination = directory.join("native-hooks.json");
+    let value = json!({"claude": selection.claude(), "codex": selection.codex()});
+    let mut file = PrivateTempFile::new_in(directory).map_err(|_| Publication::Unpublished)?;
+    serde_json::to_writer(file.as_file_mut(), &value).map_err(|_| Publication::Unpublished)?;
     file.as_file_mut()
         .write_all(b"\n")
         .and_then(|_| file.as_file().sync_all())
-        .map_err(|_| NativeHooksError::Storage)?;
-    file.persist(destination)
-        .map_err(|_| NativeHooksError::Storage)?;
-    sync_directory(directory).map_err(|_| NativeHooksError::Storage)
+        .map_err(|_| Publication::Unpublished)?;
+    file.persist(&destination)
+        .map_err(|_| Publication::Unpublished)?;
+    sync(directory).map_err(|_| Publication::Unconfirmed)
 }
 
 /// The file name of one phase. The same caller, harness, and request id
@@ -622,6 +651,80 @@ mod tests {
         assert_eq!(value["transition"]["before"], false);
         assert_eq!(value["transition"]["requested"], true);
         assert!(value["transition"]["after"].is_null());
+    }
+
+    fn unsynced(_: &Path) -> std::io::Result<()> {
+        Err(std::io::Error::other("directory sync failed"))
+    }
+
+    #[tokio::test]
+    async fn a_choice_renamed_into_place_is_in_effect_when_its_directory_sync_fails() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("data");
+        let audit = Arc::new(
+            DurableNativeHooksAudit::new(
+                directory.join("audit").join("native-hooks"),
+                Arc::new(FixedClock),
+            )
+            .unwrap(),
+        );
+        let preferences =
+            NativeHooksPreferences::open_syncing(directory.clone(), audit, unsynced).unwrap();
+        let error = preferences
+            .set(change(NativeHooksAgent::Claude, true, "request-unsynced"))
+            .await
+            .unwrap_err();
+        assert_eq!(error, NativeHooksError::Storage);
+        let stored = std::fs::read_to_string(directory.join("native-hooks.json")).unwrap();
+        assert!(selection_from_stored(stored.as_bytes()).claude());
+        // The running switch agrees with the file the next start will load.
+        assert!(preferences.selection().claude());
+        assert!(preferences.switch(NativeHooksAgent::Claude).allowed());
+        let reloaded = NativeHooksPreferences::open(directory, Arc::new(FixedClock)).unwrap();
+        assert_eq!(reloaded.selection(), preferences.selection());
+    }
+
+    /// Publishes every record, then reports the outcome record as failed: the
+    /// record is readable, but its directory sync was not confirmed.
+    struct OutcomeUnconfirmed {
+        inner: DurableNativeHooksAudit,
+    }
+    impl NativeHooksAudit for OutcomeUnconfirmed {
+        fn record(&self, evidence: &NativeHooksEvidence) -> Result<(), NativeHooksError> {
+            self.inner.record(evidence)?;
+            if evidence.phase == NativeHooksPhase::Outcome {
+                return Err(NativeHooksError::Audit);
+            }
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn a_readable_outcome_record_keeps_the_change_it_records() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("data");
+        let audit = Arc::new(OutcomeUnconfirmed {
+            inner: DurableNativeHooksAudit::new(
+                directory.join("audit").join("native-hooks"),
+                Arc::new(FixedClock),
+            )
+            .unwrap(),
+        });
+        let preferences = NativeHooksPreferences::open_with(directory.clone(), audit).unwrap();
+        let error = preferences
+            .set(change(NativeHooksAgent::Codex, true, "request-unconfirmed"))
+            .await
+            .unwrap_err();
+        assert_eq!(error, NativeHooksError::Audit);
+        assert!(preferences.selection().codex());
+        let stored = std::fs::read_to_string(directory.join("native-hooks.json")).unwrap();
+        assert!(selection_from_stored(stored.as_bytes()).codex());
+        // The retry meets the outcome record and reports the choice it records.
+        let selection = preferences
+            .set(change(NativeHooksAgent::Codex, true, "request-unconfirmed"))
+            .await
+            .unwrap();
+        assert!(selection.codex());
     }
 
     #[tokio::test]

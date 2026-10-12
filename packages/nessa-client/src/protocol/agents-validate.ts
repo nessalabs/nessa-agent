@@ -76,8 +76,7 @@ export function agentsList(value: unknown): AgentsListResult {
   const agents = new Set<string>()
   for (const entry of result.agents) {
     const agent = object(entry)
-    exact(agent, ["agent", "defaultModel", "models", "nativeHooks"])
-    if (Object.hasOwn(agent, "nativeHooks")) hooksChoice(agent.nativeHooks)
+    exact(agent, ["agent", "defaultModel", "models"])
     const name = text(agent, "agent", 32)
     if (agents.has(name)) throw new Error("Repeated configured agent")
     agents.add(name)
@@ -159,13 +158,22 @@ export function agentInstallResult(value: unknown): AgentInstallResult {
 const hookAgents = new Set<string>(Object.values(NativeHooksAgent))
 
 /** Validate the choice now in effect before a control shows it. */
-export function agentsSetNativeHooks(value: unknown): AgentsSetNativeHooksResult {
+/** Validate a hooks result, and that it answers the command that was sent:
+ * the same request ID and harness. */
+export function agentsSetNativeHooks(
+  value: unknown,
+  sent: { readonly agent: string; readonly requestId: string },
+): AgentsSetNativeHooksResult {
   const result = object(value)
   exact(result, ["requestId", "agent", "enabled"])
   const agent = text(result, "agent", 32)
   if (!hookAgents.has(agent)) throw new Error("Invalid native hooks agent")
-  nativeHooksRequestId(text(result, "requestId", bounds.maxNativeHooksRequestIdBytes))
+  const requestId = nativeHooksRequestId(
+    text(result, "requestId", bounds.maxNativeHooksRequestIdBytes),
+  )
   if (typeof result.enabled !== "boolean") throw new Error("Invalid native hooks choice")
+  if (requestId !== sent.requestId || agent !== sent.agent)
+    throw new Error("Native hooks result answers a different command")
   return value as AgentsSetNativeHooksResult
 }
 

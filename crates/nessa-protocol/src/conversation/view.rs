@@ -364,8 +364,10 @@ pub struct ConversationTool {
     /// in [`MAX_STRUCTURED_CONTENT_BYTES`]; its text stays in `details`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub structured_content: Option<String>,
-    /// The hooks choice of the launch this call ran under.
-    pub native_hooks: NativeHooksChoice,
+    /// The hooks choice of the process start this call ran under, read from
+    /// the call's saved events. Absent when that start recorded none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_hooks: Option<NativeHooksChoice>,
 }
 /// The most bytes of a tool's structured result a view carries. The schema
 /// states it again; `nessa-server/tests/conversation/agreement.rs` holds the two together.

@@ -50,8 +50,10 @@ different command. The rows are the orders the store implements.
 `a_failed_outcome_record_reverts_the_choice`,
 `a_file_without_an_outcome_loads_as_written`,
 `a_retry_after_a_failed_outcome_keeps_the_first_observation`, and
-`a_reused_request_id_for_a_different_choice_fails`, and
-`a_failed_revert_leaves_the_flag_with_the_published_file` are those rows.
+`a_reused_request_id_for_a_different_choice_fails`,
+`a_failed_revert_leaves_the_flag_with_the_published_file`,
+`a_choice_renamed_into_place_is_in_effect_when_its_directory_sync_fails`, and
+`a_readable_outcome_record_keeps_the_change_it_records` are those rows.
 The launch row is `claude_native_hook_runs_when_the_launch_omits_suppression`
 and `codex_native_hook_runs_when_the_launch_omits_suppression`. The next start
 of a conversation already open is
@@ -66,10 +68,14 @@ and
 | Requested record written, file still off | The outcome record fails | The file and the flag stay off. The command fails |
 | Requested record written, file and flag on | The outcome record fails and the revert write succeeds | The file and the flag return to the choice this call started from. The command fails |
 | File published | The revert write fails | The flag stays with that file. The command fails. The outcome record is absent |
+| Requested record written | The file is renamed into place and its directory sync fails | The flag follows the file. The command fails. A retry records the outcome |
+| File and flag on | The outcome record is readable but reports a failure | Nothing is reverted, because the record says the change took effect. The command fails. A retry succeeds |
 | File written, outcome absent | The process starts | The start loads the file |
 | Both records written for this choice | The same caller, harness, and request id | The command succeeds. The records stay as first written, including the observation time |
 | Outcome written for a different choice | The same request id | The command fails. The file is unchanged |
 | The choice is on | That harness's process starts | Claude sends setting sources user, project, and local and omits `disableAllHooks`. Codex omits `features.hooks` and `notify`. A process already running is not restarted |
+| The choice is on | A session is deleted | The deletion process keeps hooks suppressed. Deleting is Nessa's housekeeping, not a run of the agent |
+| A process start runs a tool call | The call's events are saved | Each tool event carries that start's choice, so a reader after a restart shows the choice the call ran under. An event saved without one shows none |
 
 ## Alternatives considered
 
@@ -84,7 +90,8 @@ needs one current value.
 
 Each process start of Claude or Codex follows the stored choice, including
 the next start of a conversation already open. A process already running is
-unchanged. OpenCode's launch environment is untouched.
+unchanged. OpenCode's launch environment is untouched. The agent catalog
+holds the choice once, at its top level; agent rows do not repeat it.
 Managed and MDM hooks can still run when the choice is off, and allowing
 hooks does not prove a hook ran. A crash after the file is written and before
 the outcome record is written leaves the file ahead of the audit; the next

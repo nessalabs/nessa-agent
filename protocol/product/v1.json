@@ -1394,10 +1394,10 @@
         },
         "nativeHooks": {
           "$ref": "#/$defs/NativeHooksChoice",
-          "description": "The hooks choice of the launch this tool call ran under. Recorded input and output are what the model proposed or the tool returned, and a hook may have changed or approved them when this is on."
+          "description": "The hooks choice of the process start this tool call ran under, saved with the call so it survives a gateway restart. Absent when that start recorded none: a harness without the choice, or a call saved before it was recorded. Recorded input and output are what the model proposed or the tool returned, and a hook may have changed or approved them when this is on."
         }
       },
-      "required": ["executionId", "toolId", "title", "kind", "status", "details", "input", "nativeHooks"]
+      "required": ["executionId", "toolId", "title", "kind", "status", "details", "input"]
     },
     "ConversationMcpTool": {
       "type": "object",
@@ -3970,10 +3970,6 @@
           "items": { "$ref": "#/$defs/AgentModelOption" },
           "maxItems": 256,
           "description": "Models runnable by this agent."
-        },
-        "nativeHooks": {
-          "$ref": "#/$defs/NativeHooksChoice",
-          "description": "The stored choice this agent's next process start reads. Present for Claude and Codex. Absent for OpenCode, which stays suppressed. Hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts. For Claude, on also applies the repo's .claude settings, including its allow rules and startup hooks, so turn it on only for projects you trust. Applies the next time each conversation's agent starts."
         }
       },
       "required": ["agent", "defaultModel", "models"]
@@ -4045,7 +4041,7 @@
         },
         "nativeHooks": {
           "$ref": "#/$defs/AgentsNativeHooks",
-          "description": "The stored choice the next process start of Claude and Codex reads, whether or not that agent is in this catalog."
+          "description": "The stored choice the next process start of Claude and Codex reads, whether or not that agent is in this catalog. This is the catalog's only copy of it: agent rows do not repeat it. OpenCode has no entry and stays suppressed."
         }
       },
       "required": ["agents", "environments", "nativeHooks"]

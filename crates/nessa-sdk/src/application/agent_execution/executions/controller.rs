@@ -56,6 +56,7 @@ pub struct ExecutionController {
     admitted_question_ids: HashSet<QuestionId>,
     retained_tool_bytes: usize,
     retained_review_bytes: usize,
+    native_hooks: Option<bool>,
 }
 impl ExecutionController {
     /// Maximum distinct question admissions in one execution, including answered
@@ -78,7 +79,15 @@ impl ExecutionController {
             admitted_question_ids: HashSet::new(),
             retained_tool_bytes: 0,
             retained_review_bytes: 0,
+            native_hooks: None,
         }
+    }
+    /// Stamp every tool event with the hooks choice of the process start this
+    /// controller belongs to. One execution runs on one process start, so the
+    /// stamp is the choice each call ran under. `None` leaves events unstamped.
+    pub(crate) fn launched_with(mut self, native_hooks: Option<bool>) -> Self {
+        self.native_hooks = native_hooks;
+        self
     }
     /// Read-only carrier for the handles this controller issues on successful begin.
     pub fn permission_authority_source(&self) -> PermissionAuthoritySource {
@@ -158,7 +167,11 @@ impl ExecutionController {
     ) -> Result<ExecutionEvent, AgentError> {
         self.validate_tool_retention(execution, &update)?;
         self.observe_tool(execution, update.clone())?;
-        self.event(execution, ExecutionUpdate::Tool(update))
+        let event = self.event(execution, ExecutionUpdate::Tool(update))?;
+        Ok(match self.native_hooks {
+            Some(allowed) => event.with_native_hooks(allowed),
+            None => event,
+        })
     }
     /// Bind an adapter-minted ask identity and question to this active execution.
     ///

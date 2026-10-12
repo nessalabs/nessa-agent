@@ -598,8 +598,8 @@ export interface ConversationTool {
   mcp?: ConversationMcpTool
   /** The call's structured result (MCP structuredContent) as JSON text, when the harness passed it on and it fits; absent otherwise. The result's text stays in details either way. */
   structuredContent?: string
-  /** The hooks choice of the launch this tool call ran under. Recorded input and output are what the model proposed or the tool returned, and a hook may have changed or approved them when this is on. */
-  nativeHooks: NativeHooksChoice
+  /** The hooks choice of the process start this tool call ran under, saved with the call so it survives a gateway restart. Absent when that start recorded none: a harness without the choice, or a call saved before it was recorded. Recorded input and output are what the model proposed or the tool returned, and a hook may have changed or approved them when this is on. */
+  nativeHooks?: NativeHooksChoice
 }
 /** An MCP tool's identity: the server by the name it was configured under, and the tool on it; the UI the tool declared, when known; and the arguments the gateway's connection saw for the call, when it could match them. */
 export interface ConversationMcpTool {
@@ -1639,8 +1639,6 @@ export interface AgentOption {
   defaultModel: string
   /** Models runnable by this agent. */
   models: AgentModelOption[]
-  /** The stored choice this agent's next process start reads. Present for Claude and Codex. Absent for OpenCode, which stays suppressed. Hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts. For Claude, on also applies the repo's .claude settings, including its allow rules and startup hooks, so turn it on only for projects you trust. Applies the next time each conversation's agent starts. */
-  nativeHooks?: NativeHooksChoice
 }
 /** Allow or stop allowing one harness to run its own hooks. The next launch of that harness omits Nessa's suppression request when enabled is true. OpenCode is not a value of agent. */
 export interface AgentsSetNativeHooksParams {
@@ -1666,7 +1664,7 @@ export interface AgentsListResult {
   agents: AgentOption[]
   /** Places a new conversation may run besides this gateway: the SSH destinations config.json names, in the order it names them, then each paired environment connected when the catalog is asked, as `peer:` and its key in lowercase hex. At most 16 of the first and 8 of the second. */
   environments: string[]
-  /** The stored choice the next process start of Claude and Codex reads, whether or not that agent is in this catalog. */
+  /** The stored choice the next process start of Claude and Codex reads, whether or not that agent is in this catalog. This is the catalog's only copy of it: agent rows do not repeat it. OpenCode has no entry and stays suppressed. */
   nativeHooks: AgentsNativeHooks
 }
 /** The choice in effect for the next process start of each harness. Off keeps Nessa's request to leave that harness's hooks off. On means hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts. For Claude, on also applies the repo's .claude settings, including its allow rules and startup hooks, so turn it on only for projects you trust. Applies the next time each conversation's agent starts. */

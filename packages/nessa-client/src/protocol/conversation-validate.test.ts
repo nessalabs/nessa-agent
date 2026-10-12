@@ -98,6 +98,21 @@ function view() {
 }
 
 describe("conversation view agreement", () => {
+  it("accepts a tool with no recorded hooks choice and refuses an unknown one", () => {
+    const base = view() as { tools: Record<string, unknown>[] }
+    const { nativeHooks: _, ...unmarked } = base.tools[0]
+    expect(
+      conversationView({ ...base, tools: [unmarked] }, "conversation").tools[0]
+        .nativeHooks,
+    ).toBeUndefined()
+    expect(() =>
+      conversationView(
+        { ...base, tools: [{ ...base.tools[0], nativeHooks: "yes" }] },
+        "conversation",
+      ),
+    ).toThrow("Invalid native hooks choice")
+  })
+
   it("requires a current transcript state and refuses unconfirmed controls", () => {
     const missing: Record<string, unknown> = view()
     delete missing.transcriptState

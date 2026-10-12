@@ -352,7 +352,7 @@ impl CodexAcpProvider {
 
     /// The profile a launch speaks when native hooks are `allowed`.
     ///
-    /// Deletion reads the switch once and passes that value here and to
+    /// Deletion passes `false` here and to
     /// [`process_factory_allowing`](Self::process_factory_allowing). A
     /// conversation's process start uses the profile `open` builds, which
     /// reads the switch once at that start.
@@ -365,7 +365,7 @@ impl CodexAcpProvider {
         .allowing_native_hooks(allowed)
     }
 
-    /// How a deletion process is launched for one read of the current switch.
+    /// How a deletion process is launched with hooks `allowed` or suppressed.
     ///
     /// The closure keeps `allowed`. A conversation's process start does not
     /// use this: it reads the shared cell the profile writes at that start.

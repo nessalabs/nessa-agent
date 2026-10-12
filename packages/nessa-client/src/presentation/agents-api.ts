@@ -66,6 +66,7 @@ export function createAgentsApi(session: RpcRequester): AgentsApi {
           enabled,
           requestId: nativeHooksRequestId(requestId),
         }),
+        { agent, requestId },
       ),
   }
 }
