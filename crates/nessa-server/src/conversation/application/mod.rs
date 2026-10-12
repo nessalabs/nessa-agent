@@ -242,9 +242,9 @@ pub use service::{
 };
 pub(crate) use session_key::conversation_session;
 pub use share_grants::{
-    admit_read, reader_of, Reader, ShareConversation, ShareGrant, ShareGrantChange,
-    ShareGrantTransition, ShareGrants, MAX_DRIVE_GRANTS_PER_CONVERSATION,
-    MAX_SHARE_GRANTS_PER_CONVERSATION,
+    admit_drive, admit_read, binding_of, reader_of, DriveRefusal, Reader, ShareConversation,
+    ShareGrant, ShareGrantChange, ShareGrantTransition, ShareGrants,
+    MAX_DRIVE_GRANTS_PER_CONVERSATION, MAX_SHARE_GRANTS_PER_CONVERSATION,
 };
 
 #[cfg(test)]
