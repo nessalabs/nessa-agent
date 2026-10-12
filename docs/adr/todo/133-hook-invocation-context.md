@@ -52,15 +52,32 @@ payloads. That is a log-size bound, not a secrecy switch.
 
 The permission-review hook runs when the harness asks about a tool. A tool the
 harness runs without asking is not offered to this hook. The hook returns
-`ToolVerdict`: allow, or refuse with a [`RefusalOutcome`]. Refuse-and-continue
-keeps the review and answers it with the provider's deny option, so the agent
-continues. A continue that has no deny option is an end-turn, reported as an
-end-turn. End-turn answers the deny option when one is offered. When none is
-offered, it withdraws the pending review so the provider is not left waiting,
-then cancels the turn when the binding can cancel one turn. It does not close
-the session. Close-session closes with
-`SessionCloseRequest::PolicyRefusal`. A hook error, panic, or timeout is
-deny-and-continue with the reason `"hook failed"`.
+`ToolVerdict`: allow, or refuse with a [`RefusalOutcome`]. The runner can also
+record that the turn is already stopping. A refusal is attributed to the hook,
+principal `permission-review-hook`, not the person who submitted the turn.
+`ApprovalBasis::Hook` keeps the registration index, the reason capped at 1024
+bytes, and the outcome that was applied. That shape matches the deadline basis
+from the open permission-deadline work: a variant on the approval basis and a
+non-person actor. This branch does not depend on that work's types.
+
+Refuse-and-continue answers the provider's deny option through the agent's
+permission answer, so the agent continues. A continue that has no deny option,
+when the binding can cancel one turn, is an end-turn: the pending review is
+withdrawn as the hook, then the turn is cancelled. When the binding cannot
+cancel one turn, that refusal is recorded as continue and the review is still
+withdrawn, so the provider is not left waiting. End-turn answers the deny
+option when one is offered, then cancels the turn. An end-turn the binding
+cannot perform is recorded as continue and does not cancel the turn. It does
+not close the session. Close-session closes with
+`SessionCloseRequest::PolicyRefusal` and does not answer the review. The deny,
+the withdrawal, and the turn cancel go through the agent's control path. If
+the deny or the withdrawal fails, the turn is cancelled; if that fails too,
+the session stops on the observation-failure path. A hook error, panic, or
+timeout is deny-and-continue with the reason `"hook failed: error"`,
+`"hook failed: panic"`, or `"hook failed: timeout"`. A stop that arrives while
+the hook is running does not publish the review and does not answer it. While
+an earlier hook thread is still running, a later review is refused immediately,
+without another blocking thread.
 
 The review is human-paced. The suffix is copied, the evidence lock is released,
 and the hook runs on a blocking thread for at most two seconds, selected
@@ -97,7 +114,8 @@ event's kind apart. They treat an inconclusive phrase and an incomplete window
 as a no when they need the whole turn. Permission-review callbacks return
 within two seconds and do not hold the evidence lock. A hook error does not
 close the session. A close-session verdict does, and the close is a policy
-refusal.
+refusal. A refusal is audited as the hook, with its index, capped reason, and
+the outcome that was applied.
 
 No history bound changes. No schema version changes. OpenCode is not given a
 separate adapter: the shared application path is the one Claude Code and Codex

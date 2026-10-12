@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::domain::agent_execution::{
-    permissions::{PermissionRequest, PermissionStateView},
+    permissions::{PermissionId, PermissionRequest, PermissionStateView, RefusalOutcome},
     sessions::ExecutionSessionId,
 };
 
@@ -149,6 +149,73 @@ pub enum ApprovalBasis {
     Mode(ApprovalModeSnapshot),
     /// An identified rule revision selected the option.
     Rule(ApprovalRuleReference),
+    /// A permission-review hook selected the option.
+    ///
+    /// The actor is the hook (`permission-review-hook`), not the person who
+    /// submitted the turn. The value keeps the registration index, the capped
+    /// reason, and the outcome that was actually applied.
+    Hook(HookRefusal),
+}
+
+/// A permission-review hook's refusal, retained with the answer or withdrawal.
+///
+/// The reason is capped so a hook cannot put an unbounded string into the
+/// audit record. Construction does not answer a review.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HookRefusal {
+    index: usize,
+    reason: Box<str>,
+    outcome: RefusalOutcome,
+}
+
+impl HookRefusal {
+    /// Maximum UTF-8 byte length of the retained hook reason.
+    pub const MAX_REASON_BYTES: usize = 1024;
+
+    /// Retain `index`, a capped `reason`, and the outcome that was applied.
+    ///
+    /// A blank reason becomes `"hook refused"`. A reason longer than
+    /// [`Self::MAX_REASON_BYTES`] is cut on a character boundary. This does
+    /// not answer a review.
+    pub fn new(index: usize, reason: impl Into<String>, outcome: RefusalOutcome) -> Self {
+        Self {
+            index,
+            reason: cap_hook_reason(reason.into()).into_boxed_str(),
+            outcome,
+        }
+    }
+
+    /// Zero-based position of the hook in the invocation's registration list.
+    /// A timeout that did not finish a hook records index 0.
+    pub fn index(&self) -> usize {
+        self.index
+    }
+
+    /// Why the hook refused, capped at [`Self::MAX_REASON_BYTES`].
+    pub fn reason(&self) -> &str {
+        &self.reason
+    }
+
+    /// The outcome that was applied. An end-turn the binding cannot perform
+    /// is recorded as continue.
+    pub fn outcome(&self) -> &RefusalOutcome {
+        &self.outcome
+    }
+}
+
+fn cap_hook_reason(reason: String) -> String {
+    let reason = reason.trim();
+    if reason.is_empty() {
+        return "hook refused".to_owned();
+    }
+    if reason.len() <= HookRefusal::MAX_REASON_BYTES {
+        return reason.to_owned();
+    }
+    let mut end = HookRefusal::MAX_REASON_BYTES;
+    while !reason.is_char_boundary(end) {
+        end -= 1;
+    }
+    reason[..end].to_owned()
 }
 
 /// Who answered and why, required for allowances and denials alike.
@@ -167,9 +234,25 @@ impl ApprovalAttribution {
     pub fn actor(&self) -> &ActionContext {
         &self.actor
     }
-    /// Exact explicit, mode, or rule basis retained with the decision.
+    /// Exact explicit, mode, rule, or hook basis retained with the decision.
     pub fn basis(&self) -> &ApprovalBasis {
         &self.basis
+    }
+
+    /// The permission-review hook answering `permission` with `refusal`.
+    ///
+    /// The principal is `permission-review-hook` and the surface is the hook's
+    /// registration index. Neither is the person who submitted the turn.
+    /// Construction does not answer the review.
+    pub fn hook(permission: &PermissionId, refusal: HookRefusal) -> Result<Self, AgentError> {
+        Ok(Self::new(
+            ActionContext::new(
+                "permission-review-hook",
+                refusal.index().to_string(),
+                permission.as_str(),
+            )?,
+            ApprovalBasis::Hook(refusal),
+        ))
     }
 }
 

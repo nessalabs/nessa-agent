@@ -56,9 +56,12 @@ pub struct HookFailure {
 /// What a permission-review hook decides about the proposed call.
 ///
 /// [`Allow`](Self::Allow) admits the review to the provider's ordinary answer
-/// path. [`Refuse`](Self::Refuse) keeps the review and answers it. A hook
-/// error, panic, or timeout is not a distinct outcome: it is a refusal that
-/// continues the turn with the reason `"hook failed"`.
+/// path. [`Refuse`](Self::Refuse) keeps the review and answers it as the hook,
+/// not as the person who submitted the turn. [`Stopped`](Self::Stopped) means
+/// the turn is already stopping, so the review is not published. A hook error,
+/// panic, or timeout is a refusal that continues the turn. Its reason names
+/// the kind: `"hook failed: error"`, `"hook failed: panic"`, or
+/// `"hook failed: timeout"`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ToolVerdict {
     /// The review proceeds. The hook does not answer it.
@@ -70,6 +73,28 @@ pub enum ToolVerdict {
         /// What the refusal does to the turn.
         outcome: RefusalOutcome,
     },
+    /// The turn is stopping. The review is not published for a person to answer.
+    Stopped,
+}
+
+/// Why a permission-review hook did not return a verdict of its own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HookFailureKind {
+    /// The hook returned [`HookError`], or another hook thread was still running.
+    Error,
+    /// The hook panicked.
+    Panic,
+    /// The hook was still running when [`PRE_TOOL_HOOK_DEADLINE`] elapsed.
+    Timeout,
+}
+
+/// The registration index that produced `verdict`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PermissionReviewDecision {
+    /// Zero-based position in this invocation's frozen registration list.
+    pub index: usize,
+    /// What that hook decided, or a failure standing in for it.
+    pub verdict: ToolVerdict,
 }
 
 impl ToolVerdict {
@@ -81,8 +106,13 @@ impl ToolVerdict {
         }
     }
 
-    pub(crate) fn hook_failed() -> Self {
-        Self::refuse("hook failed", RefusalOutcome::Continue)
+    pub(crate) fn hook_failed(kind: HookFailureKind) -> Self {
+        let kind = match kind {
+            HookFailureKind::Error => "error",
+            HookFailureKind::Panic => "panic",
+            HookFailureKind::Timeout => "timeout",
+        };
+        Self::refuse(format!("hook failed: {kind}"), RefusalOutcome::Continue)
     }
 }
 
@@ -104,10 +134,13 @@ pub trait InvocationHook: Send + Sync {
     /// invocation prefix already retained, not including this review, and it
     /// includes thinking. Tools the harness runs without asking are not offered
     /// here. [`Ok`]`(Allow)` admits the review. [`Ok`]`(Refuse)` keeps the
-    /// review and answers it according to [`RefusalOutcome`]. [`Err`] is a hook
+    /// review and answers it according to [`RefusalOutcome`], attributed to the
+    /// hook rather than the person who submitted the turn. [`Err`] is a hook
     /// failure: the review is kept and answered as deny-and-continue with the
-    /// reason `"hook failed"`. The borrows last only for this call. The hook
-    /// must return promptly and must not re-enter the session.
+    /// reason `"hook failed: error"`. The borrows last only for this call. The
+    /// hook must return promptly and must not re-enter the session. Do not
+    /// return [`ToolVerdict::Stopped`]; the runner does that when the turn is
+    /// already stopping, and it does not answer the review.
     fn before_permission_review(
         &self,
         _call: &ProposedToolCall<'_>,
@@ -174,25 +207,46 @@ impl InvocationHooks {
 
     /// Decide the permission-gated call in `event` against the retained prefix.
     ///
-    /// The first refusal wins. A hook error or panic is deny-and-continue.
+    /// The first refusal wins, and its registration index is returned with the
+    /// verdict. A hook error or panic is deny-and-continue, and the reason
+    /// names which.
     pub(crate) fn before_permission_review(
         &self,
         event: &ExecutionEvent,
         evaluation: &EvaluationSuffix,
-    ) -> ToolVerdict {
+    ) -> PermissionReviewDecision {
         let ExecutionUpdate::PermissionRequested { tool_id, input, .. } = event.update() else {
-            return ToolVerdict::Allow;
+            return PermissionReviewDecision {
+                index: 0,
+                verdict: ToolVerdict::Allow,
+            };
         };
         let call = ProposedToolCall::new(tool_id, input);
         let observations = evaluation.window();
-        for handler in self.handlers.iter() {
+        for (index, handler) in self.handlers.iter().enumerate() {
             match invoke_verdict(|| handler.before_permission_review(&call, &observations)) {
                 Ok(ToolVerdict::Allow) => {}
-                Ok(refusal) => return refusal,
-                Err(_) => return ToolVerdict::hook_failed(),
+                Ok(verdict) => {
+                    return PermissionReviewDecision { index, verdict };
+                }
+                Err(HookError::Panicked) => {
+                    return PermissionReviewDecision {
+                        index,
+                        verdict: ToolVerdict::hook_failed(HookFailureKind::Panic),
+                    };
+                }
+                Err(HookError::Failed(_)) => {
+                    return PermissionReviewDecision {
+                        index,
+                        verdict: ToolVerdict::hook_failed(HookFailureKind::Error),
+                    };
+                }
             }
         }
-        ToolVerdict::Allow
+        PermissionReviewDecision {
+            index: 0,
+            verdict: ToolVerdict::Allow,
+        }
     }
 
     pub(crate) fn after(

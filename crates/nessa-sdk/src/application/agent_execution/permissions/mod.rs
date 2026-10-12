@@ -28,7 +28,7 @@ pub use answer::{
 };
 pub use approval::{
     ActionContext, ApprovalAttribution, ApprovalBasis, ApprovalModeSnapshot, ApprovalRuleReference,
-    PermissionResolution,
+    HookRefusal, PermissionResolution,
 };
 pub use audit::{
     PermissionAnswerDelivery, PermissionAnswerRecord, QuestionAnswerRecord, QuestionRefusalRecord,

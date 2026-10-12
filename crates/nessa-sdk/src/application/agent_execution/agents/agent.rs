@@ -21,11 +21,11 @@ use crate::application::agent_execution::executions::{
     ExecutionAudit, ExecutionAuditRecord, ExecutionEvent, ExecutionRequest, ExecutionUpdate,
 };
 use crate::application::agent_execution::hooks::{
-    EvaluationSuffix, HookRegistration, InvocationHook, InvocationHooks, ToolVerdict,
-    PRE_TOOL_HOOK_DEADLINE,
+    EvaluationSuffix, HookFailureKind, HookRegistration, InvocationHook, InvocationHooks,
+    PermissionReviewDecision, ToolVerdict, PRE_TOOL_HOOK_DEADLINE,
 };
 use crate::application::agent_execution::permissions::{
-    ActionContext, ApprovalAttribution, ApprovalBasis, PermissionAnswer, PermissionAnswerFailure,
+    ActionContext, ApprovalAttribution, HookRefusal, PermissionAnswer, PermissionAnswerFailure,
     PermissionAnswerFuture, PermissionCancellation, PermissionCancellationRequest,
     PermissionSelectionState, QuestionAnswer,
 };
@@ -33,7 +33,7 @@ use crate::application::agent_execution::providers::{
     validate_configured_input, AgentProvider, ApprovalMode, CleanupReport, CloseOutcome,
     ExecutionEventStream, ExecutionReportSource, ObservationFailure, ObservationFailureCause,
     OperationCapabilities, ProviderExecutionReply, ProviderOperationFailure,
-    ProviderOperationResult, ProviderSession, ProviderSessionState, SessionCloseRequest,
+    ProviderOperationResult, ProviderSessionState, SessionCloseRequest,
 };
 use crate::application::agent_execution::sessions::{
     AttachmentOpenFailureSource, InvocationCancellationEvent, ProviderContext, SessionManager,
@@ -55,7 +55,10 @@ use std::{
     future::{poll_fn, Future},
     panic::{catch_unwind, AssertUnwindSafe},
     pin::Pin,
-    sync::{Arc, RwLock},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, RwLock,
+    },
     task::Poll,
 };
 use tokio::sync::{broadcast, watch, Mutex};
@@ -99,20 +102,45 @@ struct SupervisedWait<'a, Execution> {
     result_known: bool,
 }
 
+struct ClearHookGuard(Arc<AtomicBool>);
+
+impl Drop for ClearHookGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
 /// Run the permission-review hooks without holding the evidence lock.
 ///
-/// Stop wins when it is already signaled. A timeout or a panicked task is a
-/// hook failure, which denies the call and lets the turn continue.
+/// Stop wins when it is already signaled and returns [`ToolVerdict::Stopped`].
+/// A timeout or a panicked task is a hook failure, which denies the call and
+/// lets the turn continue. A previous hook thread that is still running is
+/// refused immediately, without another blocking thread.
 async fn run_pre_tool_hook<Execution>(
     hooks: InvocationHooks,
     event: ExecutionEvent,
     suffix: EvaluationSuffix,
+    running: &Arc<AtomicBool>,
     wait: &mut SupervisedWait<'_, Execution>,
-) -> ToolVerdict
+) -> PermissionReviewDecision
 where
     Execution: Future<Output = (ProviderExecutionReply, Option<InvocationCancellationEvent>)>,
 {
-    let task = tokio::task::spawn_blocking(move || hooks.before_permission_review(&event, &suffix));
+    if running
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return PermissionReviewDecision {
+            index: 0,
+            verdict: ToolVerdict::hook_failed(HookFailureKind::Error),
+        };
+    }
+    let guard = ClearHookGuard(Arc::clone(running));
+    let task = tokio::task::spawn_blocking(move || {
+        let decision = hooks.before_permission_review(&event, &suffix);
+        drop(guard);
+        decision
+    });
     tokio::pin!(task);
     let deadline = tokio::time::sleep(PRE_TOOL_HOOK_DEADLINE);
     tokio::pin!(deadline);
@@ -121,19 +149,40 @@ where
             biased;
             _ = wait.stop_notice.changed(), if !*wait.stop_observed => {
                 *wait.stop_observed = true;
-                return ToolVerdict::Allow;
+                return PermissionReviewDecision { index: 0, verdict: ToolVerdict::Stopped };
             }
             outcome = &mut wait.execution, if !wait.result_known && wait.pending_provider_outcome.is_none() => {
                 *wait.pending_provider_outcome = Some(outcome);
             }
             finished = &mut task => {
                 return match finished {
-                    Ok(verdict) => verdict,
-                    Err(_) => ToolVerdict::hook_failed(),
+                    Ok(decision) => decision,
+                    Err(_) => PermissionReviewDecision {
+                        index: 0,
+                        verdict: ToolVerdict::hook_failed(HookFailureKind::Panic),
+                    },
                 };
             }
-            _ = &mut deadline => return ToolVerdict::hook_failed(),
+            _ = &mut deadline => {
+                return PermissionReviewDecision {
+                    index: 0,
+                    verdict: ToolVerdict::hook_failed(HookFailureKind::Timeout),
+                };
+            }
         }
+    }
+}
+
+fn effective_hook_outcome(
+    outcome: RefusalOutcome,
+    has_deny: bool,
+    can_end_turn: bool,
+) -> RefusalOutcome {
+    match outcome {
+        RefusalOutcome::CloseSession => RefusalOutcome::CloseSession,
+        RefusalOutcome::EndTurn if !can_end_turn => RefusalOutcome::Continue,
+        RefusalOutcome::Continue if !has_deny && can_end_turn => RefusalOutcome::EndTurn,
+        other => other,
     }
 }
 
@@ -171,6 +220,9 @@ pub(super) struct Inner {
     pub(super) manager: SessionManager,
     pub(super) invocation: Arc<Mutex<()>>,
     hooks: RwLock<Vec<Arc<dyn InvocationHook>>>,
+    /// True while a permission-review hook thread has not returned. A later
+    /// review is refused immediately so blocking threads stay bounded.
+    permission_hook_running: Arc<AtomicBool>,
     updates: broadcast::Sender<ExecutionEvent>,
     pub(super) reorder: Mutex<()>,
     pub(super) scheduler: Mutex<Scheduler>,
@@ -698,6 +750,7 @@ impl Agent {
                 manager: session_manager,
                 invocation: Arc::new(Mutex::new(())),
                 hooks: RwLock::new(Vec::new()),
+                permission_hook_running: Arc::new(AtomicBool::new(false)),
                 reorder: Mutex::new(()),
                 scheduler: Mutex::new(Scheduler::new()),
                 lifecycle,
@@ -1600,7 +1653,10 @@ impl Agent {
                                 stop_after_ready_settlement = !confirmed;
                                 continue;
                             }
-                            let mut refusal = None;
+                            let mut decision = PermissionReviewDecision {
+                                index: 0,
+                                verdict: ToolVerdict::Allow,
+                            };
                             if event.execution_id() == &input.execution_id
                                 && matches!(event.update(), ExecutionUpdate::PermissionRequested { .. })
                                 && !hooks.is_empty()
@@ -1613,10 +1669,11 @@ impl Agent {
                                     .with_invocation_events(index, EvaluationSuffix::capture)
                                     .await
                                     .unwrap_or_else(|_| EvaluationSuffix::incomplete());
-                                let verdict = run_pre_tool_hook(
+                                decision = run_pre_tool_hook(
                                     hooks.clone(),
                                     review,
                                     suffix,
+                                    &self.inner.permission_hook_running,
                                     &mut SupervisedWait {
                                         execution: execution.as_mut(),
                                         stop_notice: &mut stop_notice,
@@ -1627,9 +1684,6 @@ impl Agent {
                                 )
                                 .await;
                                 events = attached.events.lock().await;
-                                if !matches!(verdict, ToolVerdict::Allow) {
-                                    refusal = Some(verdict);
-                                }
                             }
                             match await_supervised_save(
                                 self.inner.manager.event(event.clone()),
@@ -1640,14 +1694,13 @@ impl Agent {
                                 result.is_some(),
                             ).await {
                                 Ok(()) => {
-                                    if let Some(verdict) = refusal {
+                                    if let ToolVerdict::Refuse { .. } = &decision.verdict {
                                         drop(events);
                                         if let Some((confirmed, failure)) = self
                                             .apply_permission_verdict(
-                                                &attached.session,
-                                                &actor,
                                                 &event,
-                                                verdict,
+                                                decision.index,
+                                                decision.verdict.clone(),
                                             )
                                             .await
                                         {
@@ -1659,7 +1712,9 @@ impl Agent {
                                         }
                                         events = attached.events.lock().await;
                                     }
-                                    let _ = self.inner.updates.send(event);
+                                    if !matches!(decision.verdict, ToolVerdict::Stopped) {
+                                        let _ = self.inner.updates.send(event);
+                                    }
                                 }
                                 Err(error) => {
                                     pending_save_failure = Some(error);
@@ -1772,98 +1827,93 @@ impl Agent {
 
     /// Apply a permission-review refusal after the review has been retained.
     ///
-    /// `Some` means the verdict closed the session. The bool is whether that
-    /// close was confirmed, and the error is a cleanup failure.
+    /// The refusal is attributed to the hook and delivered through the same
+    /// control path as an explicit answer, withdrawal, or turn cancel. An
+    /// end-turn the binding cannot perform is recorded as continue. A continue
+    /// with no deny option becomes an end-turn when the binding can cancel the
+    /// turn. A delivery failure ends the turn; if that also fails, the session
+    /// stops on the observation-failure path.
+    ///
+    /// `Some` means that path closed the session. The bool is whether the close
+    /// was confirmed, and the error is the failure to report.
     async fn apply_permission_verdict(
         &self,
-        session: &ProviderSession,
-        actor: &ActionContext,
         event: &ExecutionEvent,
+        index: usize,
         verdict: ToolVerdict,
     ) -> Option<(bool, Option<AgentError>)> {
-        let ToolVerdict::Refuse { outcome, .. } = verdict else {
+        let ToolVerdict::Refuse { reason, outcome } = verdict else {
             return None;
         };
-        // A continue that has no deny choice cannot tell the provider no and
-        // leave the turn running. That is an end-turn, said as an end-turn.
-        let outcome = match outcome {
-            RefusalOutcome::Continue if deny_option(event).is_none() => RefusalOutcome::EndTurn,
-            other => other,
-        };
-        match outcome {
-            RefusalOutcome::Continue => {
-                self.answer_denial(session, actor, event).await;
-                None
-            }
-            RefusalOutcome::EndTurn => {
-                if deny_option(event).is_some() {
-                    self.answer_denial(session, actor, event).await;
-                } else {
-                    self.cancel_unanswered_review(session, actor, event).await;
+        if outcome == RefusalOutcome::CloseSession {
+            let cleanup = self
+                .shutdown_after_failure(SessionCloseRequest::PolicyRefusal)
+                .await;
+            let confirmed = cleanup.is_confirmed();
+            return Some((confirmed, cleanup.into_result().err()));
+        }
+        let effective = effective_hook_outcome(
+            outcome,
+            deny_option(event).is_some(),
+            self.supports_turn_cancel(),
+        );
+        let delivered = self
+            .deliver_hook_refusal(event, index, &reason, effective)
+            .await;
+        if delivered.is_err() || effective == RefusalOutcome::EndTurn {
+            match self.cancel_turn(event.execution_id().clone()).await {
+                Ok(()) => None,
+                Err(failure) => {
+                    let (error, confirmed) = self
+                        .stop_after_observation_failure(
+                            failure.into_error(),
+                            ObservationFailureCause::ExecutionFailed,
+                        )
+                        .await;
+                    Some((confirmed, Some(error)))
                 }
-                if session.supports_turn_cancel() {
-                    if let Err(error) = session.cancel_turn(event.execution_id().clone()).await {
-                        tracing::warn!(?error, "permission-review hook could not end the turn");
-                    }
-                }
-                None
             }
-            RefusalOutcome::CloseSession => {
-                let cleanup = self
-                    .shutdown_after_failure(SessionCloseRequest::PolicyRefusal)
-                    .await;
-                let confirmed = cleanup.is_confirmed();
-                Some((confirmed, cleanup.into_result().err()))
-            }
+        } else {
+            None
         }
     }
 
-    async fn answer_denial(
+    async fn deliver_hook_refusal(
         &self,
-        session: &ProviderSession,
-        actor: &ActionContext,
         event: &ExecutionEvent,
-    ) {
-        let Some(option_id) = deny_option(event) else {
-            return;
-        };
+        index: usize,
+        reason: &str,
+        outcome: RefusalOutcome,
+    ) -> Result<(), AgentError> {
         let ExecutionUpdate::PermissionRequested { id, .. } = event.update() else {
-            return;
+            return Err(AgentError::Protocol(
+                "permission-review hook refusal has no review".into(),
+            ));
         };
-        let answer = PermissionAnswer {
-            attribution: ApprovalAttribution::new(actor.clone(), ApprovalBasis::Explicit),
-            execution_id: event.execution_id().clone(),
-            id: id.clone(),
-            option_id,
-        };
-        if let Err(error) = session.answer_permission(answer).await {
-            tracing::warn!(?error, "permission-review hook denial was not delivered");
-        }
-    }
-
-    async fn cancel_unanswered_review(
-        &self,
-        session: &ProviderSession,
-        actor: &ActionContext,
-        event: &ExecutionEvent,
-    ) {
-        let ExecutionUpdate::PermissionRequested { id, .. } = event.update() else {
-            return;
-        };
-        let Ok(reason) = CustomPermissionCancellationReason::new(
-            "hook-refusal",
-            "the permission-review hook ended the turn",
-        ) else {
-            return;
-        };
-        let input = PermissionCancellationRequest {
-            execution_id: event.execution_id().clone(),
-            id: id.clone(),
-            reason: PermissionCancellationReason::custom(reason),
-            actor: actor.clone(),
-        };
-        if let Err(error) = session.cancel_permission(input).await {
-            tracing::warn!(?error, "permission-review hook could not cancel the review");
+        let refusal = HookRefusal::new(index, reason, outcome);
+        let explanation = refusal.reason().to_owned();
+        let attribution = ApprovalAttribution::hook(id, refusal)?;
+        if let Some(option_id) = deny_option(event) {
+            self.answer_permission(PermissionAnswer {
+                attribution,
+                execution_id: event.execution_id().clone(),
+                id: id.clone(),
+                option_id,
+            })
+            .await
+            .map(|_| ())
+            .map_err(|failure| failure.into_parts().0)
+        } else {
+            let custom = CustomPermissionCancellationReason::new("hook-refusal", explanation)
+                .map_err(|error| AgentError::InvalidInput(error.to_string()))?;
+            self.cancel_permission(PermissionCancellationRequest {
+                execution_id: event.execution_id().clone(),
+                id: id.clone(),
+                reason: PermissionCancellationReason::custom(custom),
+                actor: attribution.actor().clone(),
+            })
+            .await
+            .map(|_| ())
         }
     }
     // Confirmed teardown must settle admitted execution work, including audit-only

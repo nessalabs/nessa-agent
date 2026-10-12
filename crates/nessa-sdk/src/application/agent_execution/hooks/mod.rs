@@ -4,8 +4,9 @@
 //! retained events --bounded copy--> InvocationObservationWindow --> hook callback
 //! PermissionRequested --> ProposedToolCall --> permission-review hook
 //! ToolVerdict::Allow --> retain the review
-//! ToolVerdict::Refuse { Continue } --> retain, answer the provider's deny option
-//! ToolVerdict::Refuse { EndTurn } --> retain, answer a deny or withdraw the review, then cancel the turn when the binding can
+//! ToolVerdict::Stopped --> retain, do not publish, do not answer
+//! ToolVerdict::Refuse { Continue } --> retain, Agent answers the provider's deny option as the hook
+//! ToolVerdict::Refuse { EndTurn } --> retain, Agent answers a deny or withdraws as the hook, then cancels the turn when the binding can
 //! ToolVerdict::Refuse { CloseSession } --> retain, close with PolicyRefusal
 //! Agent dispatch -> before hooks -> ProviderSessionBackend -> after hooks -> caller
 //! ```
@@ -26,10 +27,10 @@ pub use observations::{
 
 mod invocation;
 
-pub(crate) use invocation::PRE_TOOL_HOOK_DEADLINE;
 pub use invocation::{
     HookError, HookFailure, InvocationContext, InvocationHook, InvocationHooks, ToolVerdict,
 };
+pub(crate) use invocation::{HookFailureKind, PermissionReviewDecision, PRE_TOOL_HOOK_DEADLINE};
 
 mod callbacks;
 pub use callbacks::{

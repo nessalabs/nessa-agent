@@ -13,8 +13,8 @@
 use crate::application::agent_execution::executions::{ExecutionEvent, ExecutionUpdate};
 use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::domain::agent_execution::{
-    executions::{ExecutionId, MessageKind},
-    tools::{ToolCallId, ToolCallUpdate, ToolStatus},
+    executions::MessageKind,
+    tools::{ToolCallId, ToolStatus},
 };
 use std::fmt;
 
@@ -179,8 +179,26 @@ struct WindowFacts {
 /// sequences. An oversized event is omitted whole and does not end the walk.
 #[derive(Clone, Copy)]
 pub struct InvocationObservationWindow<'a> {
-    events: &'a [ExecutionEvent],
+    events: BorrowedSuffix<'a>,
     facts: WindowFacts,
+}
+
+/// One borrowed suffix. A copied suffix stores omissions beside the events so
+/// a provider tool id is never used as a hidden marker.
+#[derive(Clone, Copy)]
+enum BorrowedSuffix<'a> {
+    Events(&'a [ExecutionEvent]),
+    Copied(&'a [SuffixEntry]),
+}
+
+enum SuffixView<'a> {
+    Event(&'a ExecutionEvent),
+    Omitted,
+}
+
+enum SuffixEntry {
+    Event(Box<ExecutionEvent>),
+    Omitted,
 }
 
 impl fmt::Debug for InvocationObservationWindow<'_> {
@@ -259,7 +277,10 @@ impl<'a> InvocationObservationWindow<'a> {
             incomplete_text: sequence_was_cut(events, start),
             excluded_oversized,
         };
-        Self { events, facts }
+        Self {
+            events: BorrowedSuffix::Events(events),
+            facts,
+        }
     }
 
     /// Observations that fit in the suffix.
@@ -305,13 +326,18 @@ impl<'a> InvocationObservationWindow<'a> {
 
     /// Included observations in retained order.
     ///
-    /// Oversized events and the internal separator used by a copied suffix are
-    /// not yielded. Use [`ObservationKind::of`] on each item to tell thinking,
-    /// model text, a tool call, and a tool result apart.
+    /// Oversized events are not yielded. An omission in a copied suffix is not
+    /// an event, so a provider tool id cannot hide a real observation. Use
+    /// [`ObservationKind::of`] on each item to tell thinking, model text, a
+    /// tool call, and a tool result apart.
     pub fn iter(&self) -> impl Iterator<Item = &'a ExecutionEvent> + 'a {
-        self.events[self.facts.start..]
-            .iter()
-            .filter(|event| event_included(event))
+        let start = self.facts.start;
+        let events = self.events;
+        let len = self.len();
+        (start..len).filter_map(move |index| match slot_at(events, index) {
+            SuffixView::Event(event) if event_included(event) => Some(event),
+            _ => None,
+        })
     }
 
     /// Search included logical text sequences for `phrase`.
@@ -353,13 +379,18 @@ impl<'a> InvocationObservationWindow<'a> {
         let fail = failure_table(needle);
         let mut matched = 0usize;
         let mut previous: Option<usize> = None;
-        for (index, event) in self.events.iter().enumerate().skip(self.facts.start) {
+        for index in self.facts.start..self.len() {
+            let SuffixView::Event(event) = self.slot(index) else {
+                previous = None;
+                matched = 0;
+                continue;
+            };
             let Some(text) = searchable_text(event) else {
                 previous = None;
                 matched = 0;
                 continue;
             };
-            if previous.is_some_and(|prior| text_key(&self.events[prior]) != text_key(event)) {
+            if previous.is_some_and(|prior| self.text_key_at(prior) != text_key(event)) {
                 matched = 0;
             }
             previous = Some(index);
@@ -377,11 +408,38 @@ impl<'a> InvocationObservationWindow<'a> {
         }
         false
     }
+
+    fn len(&self) -> usize {
+        match self.events {
+            BorrowedSuffix::Events(events) => events.len(),
+            BorrowedSuffix::Copied(entries) => entries.len(),
+        }
+    }
+
+    fn slot(&self, index: usize) -> SuffixView<'a> {
+        slot_at(self.events, index)
+    }
+
+    fn text_key_at(&self, index: usize) -> Option<(MessageKind, Option<&str>)> {
+        match self.slot(index) {
+            SuffixView::Event(event) => text_key(event),
+            SuffixView::Omitted => None,
+        }
+    }
+}
+
+fn slot_at(events: BorrowedSuffix<'_>, index: usize) -> SuffixView<'_> {
+    match events {
+        BorrowedSuffix::Events(events) => SuffixView::Event(&events[index]),
+        BorrowedSuffix::Copied(entries) => match &entries[index] {
+            SuffixEntry::Event(event) => SuffixView::Event(event.as_ref()),
+            SuffixEntry::Omitted => SuffixView::Omitted,
+        },
+    }
 }
 
 fn event_included(event: &ExecutionEvent) -> bool {
-    !is_separator_marker(event)
-        && payload_bytes(event) <= InvocationObservationWindow::MAX_PAYLOAD_BYTES
+    payload_bytes(event) <= InvocationObservationWindow::MAX_PAYLOAD_BYTES
 }
 
 fn is_message(event: &ExecutionEvent) -> bool {
@@ -452,27 +510,6 @@ fn payload_bytes(event: &ExecutionEvent) -> usize {
     }
 }
 
-fn is_separator_marker(event: &ExecutionEvent) -> bool {
-    matches!(
-        event.update(),
-        ExecutionUpdate::Tool(tool) if tool.id().as_str().starts_with('\u{0}')
-    )
-}
-
-fn separator_marker(id: &ExecutionId) -> ExecutionEvent {
-    ExecutionEvent::new(
-        id.clone(),
-        ExecutionUpdate::Tool(ToolCallUpdate::new(
-            ToolCallId::new("\u{0}omitted").expect("separator id is not empty"),
-            None,
-            None,
-            None,
-            None,
-            None,
-        )),
-    )
-}
-
 fn failure_table(needle: &[u8]) -> Vec<usize> {
     let mut fail = vec![0usize; needle.len()];
     let mut length = 0usize;
@@ -493,12 +530,12 @@ fn failure_table(needle: &[u8]) -> Vec<usize> {
 
 /// Owned suffix of one invocation, used when a hook must not hold the evidence lock.
 ///
-/// The copy includes only events that fit, plus a marker where an oversized
-/// event sat inside the span so adjacent text does not join. It does not copy
-/// the omitted prefix and does not clone an oversized body. The markers are not
-/// part of [`InvocationObservationWindow::iter`].
+/// The copy includes only events that fit. An oversized event inside the span
+/// is an [`SuffixEntry::Omitted`] slot, not a fake tool event, so adjacent
+/// text does not join and a provider tool id cannot hide an observation. The
+/// omitted prefix is not copied, and an oversized body is not cloned.
 pub(crate) struct EvaluationSuffix {
-    events: Vec<ExecutionEvent>,
+    entries: Vec<SuffixEntry>,
     facts: WindowFacts,
 }
 
@@ -506,21 +543,19 @@ impl EvaluationSuffix {
     /// Copy the suffix [`InvocationObservationWindow::view`] would expose.
     pub(crate) fn capture(events: &[ExecutionEvent]) -> Self {
         let view = InvocationObservationWindow::view(events);
-        let mut copied = Vec::new();
-        if let Some(id) = events
-            .get(view.facts.start)
-            .map(ExecutionEvent::execution_id)
-        {
-            for event in events.iter().skip(view.facts.start) {
+        let entries = events
+            .iter()
+            .skip(view.facts.start)
+            .map(|event| {
                 if payload_bytes(event) > InvocationObservationWindow::MAX_PAYLOAD_BYTES {
-                    copied.push(separator_marker(id));
+                    SuffixEntry::Omitted
                 } else {
-                    copied.push(event.clone());
+                    SuffixEntry::Event(Box::new(event.clone()))
                 }
-            }
-        }
+            })
+            .collect();
         Self {
-            events: copied,
+            entries,
             facts: WindowFacts {
                 start: 0,
                 ..view.facts
@@ -531,7 +566,7 @@ impl EvaluationSuffix {
     /// Window over this suffix. The omission facts are the ones capture recorded.
     pub(crate) fn window(&self) -> InvocationObservationWindow<'_> {
         InvocationObservationWindow {
-            events: &self.events,
+            events: BorrowedSuffix::Copied(&self.entries),
             facts: self.facts,
         }
     }
@@ -539,7 +574,7 @@ impl EvaluationSuffix {
     /// No events, and the omission flags say the turn was not captured.
     pub(crate) fn incomplete() -> Self {
         Self {
-            events: Vec::new(),
+            entries: Vec::new(),
             facts: WindowFacts {
                 start: 0,
                 included_events: 0,

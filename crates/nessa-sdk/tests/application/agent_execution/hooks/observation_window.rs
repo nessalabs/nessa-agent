@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 struct ScriptedEvents {
     events: Vec<ExecutionEvent>,
     started: Arc<AtomicBool>,
+    release: Arc<tokio::sync::Notify>,
     index: usize,
 }
 
@@ -20,6 +21,7 @@ impl ExecutionEventStream for ScriptedEvents {
                 return std::future::pending().await;
             }
             if self.index >= self.events.len() {
+                self.release.notify_waiters();
                 return Ok(None);
             }
             let event = self.events[self.index].clone();
@@ -33,16 +35,102 @@ struct ScriptedBackend {
     started: Arc<AtomicBool>,
     answered: Arc<AtomicUsize>,
     cancelled: Arc<AtomicUsize>,
+    turn_cancels: Arc<AtomicUsize>,
     closes: Arc<Mutex<Vec<SessionCloseRequest>>>,
+    answers: Arc<Mutex<Vec<PermissionAnswer>>>,
+    withdrawals: Arc<Mutex<Vec<PermissionCancellationRequest>>>,
+    controller: Arc<Mutex<ExecutionController>>,
+    authority: PermissionAuthoritySource,
+    reviews: Arc<Vec<ExecutionEvent>>,
+    release: Arc<tokio::sync::Notify>,
+    turn_cancel: bool,
+    fail_delivery: bool,
+}
+
+fn admit_reviews(
+    controller: &Mutex<ExecutionController>,
+    execution: &ExecutionId,
+    reviews: &[ExecutionEvent],
+) {
+    let mut controller = controller.lock().expect("fixture controller");
+    if controller.begin_execution(execution.clone()).is_err() {
+        return;
+    }
+    for event in reviews {
+        if event.execution_id() != execution {
+            continue;
+        }
+        let ExecutionUpdate::PermissionRequested {
+            id,
+            tool_id,
+            input,
+            options,
+            ..
+        } = event.update()
+        else {
+            continue;
+        };
+        controller
+            .request_permission(
+                execution,
+                id.clone(),
+                ToolCallUpdate::new(tool_id.clone(), None, None, None, None, None),
+                input.clone(),
+                options.clone(),
+            )
+            .expect("fixture admits the scripted review");
+    }
+}
+
+fn clear_turn_reviews(
+    controller: &Mutex<ExecutionController>,
+    turn: &ExecutionId,
+    reviews: &[ExecutionEvent],
+) {
+    let mut controller = controller.lock().expect("fixture controller");
+    let actor = ActionContext::new("permission-review-hook", "turn-cancel", turn.as_str())
+        .expect("fixture turn-cancel actor");
+    let reason = PermissionCancellationReason::custom(
+        CustomPermissionCancellationReason::new("turn-cancelled", "the turn was cancelled")
+            .expect("fixture turn-cancel reason"),
+    );
+    for event in reviews {
+        if event.execution_id() != turn {
+            continue;
+        }
+        let ExecutionUpdate::PermissionRequested { id, .. } = event.update() else {
+            continue;
+        };
+        let _ = controller.cancel_permission(
+            turn,
+            id,
+            reason.clone(),
+            CancellationOrigin::Client(actor.clone()),
+        );
+    }
 }
 
 impl ProviderSessionBackend for ScriptedBackend {
+    fn permission_authority(
+        &self,
+    ) -> Result<Option<PermissionAuthority>, PermissionAuthorityError> {
+        self.authority.read()
+    }
+    fn supports_turn_cancel(&self) -> bool {
+        self.turn_cancel
+    }
     fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {
         Box::pin(async { Ok(()) })
     }
-    fn execute(&self, _: ExecutionRequest) -> ProviderExecutionFuture<'_> {
+    fn execute(&self, input: ExecutionRequest) -> ProviderExecutionFuture<'_> {
+        let started = self.started.clone();
+        let controller = self.controller.clone();
+        let reviews = self.reviews.clone();
+        let release = self.release.clone();
         Box::pin(async move {
-            self.started.store(true, Ordering::SeqCst);
+            admit_reviews(&controller, &input.execution_id, &reviews);
+            started.store(true, Ordering::SeqCst);
+            release.notified().await;
             ProviderExecutionReply::Finished(ExecutionReport::new(
                 Some(Ok(ExecutionOutcome::Completed)),
                 None,
@@ -60,33 +148,80 @@ impl ProviderSessionBackend for ScriptedBackend {
     }
     fn answer_permission(
         &self,
-        _: PermissionAnswer,
+        answer: PermissionAnswer,
     ) -> ProviderOperationFuture<'_, PermissionResolution> {
         let answered = self.answered.clone();
+        let answers = self.answers.clone();
+        let controller = self.controller.clone();
+        let fail = self.fail_delivery;
         Box::pin(async move {
             answered.fetch_add(1, Ordering::SeqCst);
-            Err(ProviderOperationFailure::permission_answer(
-                AgentError::StalePermission,
-                ProviderSessionState::Usable,
-                PermissionSelectionState::Pending,
-            ))
+            answers
+                .lock()
+                .expect("fixture answers")
+                .push(answer.clone());
+            if fail {
+                return Err(ProviderOperationFailure::permission_answer(
+                    AgentError::StalePermission,
+                    ProviderSessionState::Usable,
+                    PermissionSelectionState::Pending,
+                ));
+            }
+            controller
+                .lock()
+                .expect("fixture controller")
+                .answer_permission(answer)
+                .map_err(|error| {
+                    ProviderOperationFailure::permission_answer(
+                        error,
+                        ProviderSessionState::Usable,
+                        PermissionSelectionState::Pending,
+                    )
+                })
         })
     }
     fn cancel_permission(
         &self,
-        _: PermissionCancellationRequest,
+        input: PermissionCancellationRequest,
     ) -> ProviderOperationFuture<'_, PermissionCancellation> {
         let cancelled = self.cancelled.clone();
+        let withdrawals = self.withdrawals.clone();
+        let controller = self.controller.clone();
+        let fail = self.fail_delivery;
         Box::pin(async move {
             cancelled.fetch_add(1, Ordering::SeqCst);
-            Err(ProviderOperationFailure::new(
-                AgentError::StalePermission,
-                ProviderSessionState::Usable,
-            ))
+            withdrawals
+                .lock()
+                .expect("fixture withdrawals")
+                .push(input.clone());
+            if fail {
+                return Err(ProviderOperationFailure::new(
+                    AgentError::StalePermission,
+                    ProviderSessionState::Usable,
+                ));
+            }
+            controller
+                .lock()
+                .expect("fixture controller")
+                .cancel_review(input)
+                .map_err(|error| ProviderOperationFailure::new(error, ProviderSessionState::Usable))
+        })
+    }
+    fn cancel_turn(&self, turn: ExecutionId) -> ProviderOperationFuture<'_, ()> {
+        let turn_cancels = self.turn_cancels.clone();
+        let controller = self.controller.clone();
+        let reviews = self.reviews.clone();
+        let release = self.release.clone();
+        Box::pin(async move {
+            turn_cancels.fetch_add(1, Ordering::SeqCst);
+            clear_turn_reviews(&controller, &turn, &reviews);
+            release.notify_waiters();
+            Ok(())
         })
     }
     fn close(&self, request: SessionCloseRequest) -> CleanupFuture<'_> {
         self.closes.lock().unwrap().push(request);
+        self.release.notify_waiters();
         Box::pin(async { CleanupReport::confirmed(CloseOutcome { forced: false }) })
     }
 }
@@ -96,7 +231,15 @@ struct ScriptedProvider {
     started: Arc<AtomicBool>,
     answered: Arc<AtomicUsize>,
     cancelled: Arc<AtomicUsize>,
+    turn_cancels: Arc<AtomicUsize>,
     closes: Arc<Mutex<Vec<SessionCloseRequest>>>,
+    answers: Arc<Mutex<Vec<PermissionAnswer>>>,
+    withdrawals: Arc<Mutex<Vec<PermissionCancellationRequest>>>,
+    controller: Arc<Mutex<ExecutionController>>,
+    authority: PermissionAuthoritySource,
+    release: Arc<tokio::sync::Notify>,
+    turn_cancel: bool,
+    fail_delivery: bool,
 }
 
 impl AgentProvider for ScriptedProvider {
@@ -108,6 +251,9 @@ impl AgentProvider for ScriptedProvider {
     }
     fn open(&self, _: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         Box::pin(async move {
+            let events = self.events.lock().unwrap().take().unwrap();
+            let reviews = Arc::new(events.clone());
+            let release = self.release.clone();
             Ok(OpenedProviderSession {
                 session: ProviderSession::new(
                     ExecutionSessionId::new("context").unwrap(),
@@ -115,13 +261,23 @@ impl AgentProvider for ScriptedProvider {
                         started: self.started.clone(),
                         answered: self.answered.clone(),
                         cancelled: self.cancelled.clone(),
+                        turn_cancels: self.turn_cancels.clone(),
                         closes: self.closes.clone(),
+                        answers: self.answers.clone(),
+                        withdrawals: self.withdrawals.clone(),
+                        controller: self.controller.clone(),
+                        authority: self.authority.clone(),
+                        reviews,
+                        release: release.clone(),
+                        turn_cancel: self.turn_cancel,
+                        fail_delivery: self.fail_delivery,
                     }),
                     capabilities(),
                 ),
                 events: Box::new(ScriptedEvents {
-                    events: self.events.lock().unwrap().take().unwrap(),
+                    events,
                     started: self.started.clone(),
+                    release,
                     index: 0,
                 }),
             })
@@ -190,21 +346,59 @@ struct Fixture {
     storage: MemoryStorage,
     answered: Arc<AtomicUsize>,
     cancelled: Arc<AtomicUsize>,
+    turn_cancels: Arc<AtomicUsize>,
     closes: Arc<Mutex<Vec<SessionCloseRequest>>>,
+    answers: Arc<Mutex<Vec<PermissionAnswer>>>,
+    withdrawals: Arc<Mutex<Vec<PermissionCancellationRequest>>>,
+    authority: PermissionAuthoritySource,
+}
+
+struct FixtureKnobs {
+    turn_cancel: bool,
+    fail_delivery: bool,
 }
 
 async fn agent_with(events: Vec<ExecutionEvent>, hooks: Vec<Arc<dyn InvocationHook>>) -> Fixture {
+    open_fixture(
+        events,
+        hooks,
+        FixtureKnobs {
+            turn_cancel: true,
+            fail_delivery: false,
+        },
+    )
+    .await
+}
+
+async fn open_fixture(
+    events: Vec<ExecutionEvent>,
+    hooks: Vec<Arc<dyn InvocationHook>>,
+    knobs: FixtureKnobs,
+) -> Fixture {
     let storage = MemoryStorage::default();
     let answered = Arc::new(AtomicUsize::new(0));
     let cancelled = Arc::new(AtomicUsize::new(0));
+    let turn_cancels = Arc::new(AtomicUsize::new(0));
     let closes = Arc::new(Mutex::new(Vec::new()));
+    let answers = Arc::new(Mutex::new(Vec::new()));
+    let withdrawals = Arc::new(Mutex::new(Vec::new()));
+    let controller = ExecutionController::new(ExecutionSessionId::new("context").unwrap());
+    let authority = controller.permission_authority_source();
     let agent = attached_agent(
         Arc::new(ScriptedProvider {
             events: Mutex::new(Some(events)),
             started: Arc::new(AtomicBool::new(false)),
             answered: answered.clone(),
             cancelled: cancelled.clone(),
+            turn_cancels: turn_cancels.clone(),
             closes: closes.clone(),
+            answers: answers.clone(),
+            withdrawals: withdrawals.clone(),
+            controller: Arc::new(Mutex::new(controller)),
+            authority: authority.clone(),
+            release: Arc::new(tokio::sync::Notify::new()),
+            turn_cancel: knobs.turn_cancel,
+            fail_delivery: knobs.fail_delivery,
         }),
         storage.manager().await,
     )
@@ -218,8 +412,29 @@ async fn agent_with(events: Vec<ExecutionEvent>, hooks: Vec<Arc<dyn InvocationHo
         storage,
         answered,
         cancelled,
+        turn_cancels,
         closes,
+        answers,
+        withdrawals,
+        authority,
     }
+}
+
+fn hook_refusal(answer: &PermissionAnswer) -> &HookRefusal {
+    match answer.attribution.basis() {
+        ApprovalBasis::Hook(refusal) => refusal,
+        other => panic!("hook refusal was recorded as {other:?}"),
+    }
+}
+
+fn review_still_pending(fixture: &Fixture, permission: &str) -> bool {
+    fixture
+        .authority
+        .read()
+        .expect("fixture authority")
+        .expect("fixture published a review authority")
+        .pending(&PermissionId::new(permission).unwrap())
+        .expect("fixture review owner is alive")
 }
 
 fn request() -> ExecutionRequest {
@@ -356,15 +571,30 @@ impl InvocationHook for AfterHook {
     }
 }
 
+struct AllowHook;
+
+impl InvocationHook for AllowHook {
+    fn before_permission_review(
+        &self,
+        _: &ProposedToolCall<'_>,
+        _: &InvocationObservationWindow<'_>,
+    ) -> Result<ToolVerdict, HookError> {
+        Ok(ToolVerdict::Allow)
+    }
+}
+
 #[tokio::test]
 async fn a_continue_refusal_keeps_the_review_and_the_session() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let fixture = agent_with(
         script(),
-        vec![Arc::new(ReviewHook {
-            seen: seen.clone(),
-            verdict: ToolVerdict::refuse("stop this call", RefusalOutcome::Continue),
-        })],
+        vec![
+            Arc::new(AllowHook),
+            Arc::new(ReviewHook {
+                seen: seen.clone(),
+                verdict: ToolVerdict::refuse("stop this call", RefusalOutcome::Continue),
+            }),
+        ],
     )
     .await;
     fixture
@@ -374,6 +604,23 @@ async fn a_continue_refusal_keeps_the_review_and_the_session() {
         .expect("deny-and-continue finishes the turn");
     assert_eq!(fixture.answered.load(Ordering::SeqCst), 1);
     assert_eq!(fixture.cancelled.load(Ordering::SeqCst), 0);
+    assert_eq!(fixture.turn_cancels.load(Ordering::SeqCst), 0);
+    {
+        let answers = fixture.answers.lock().unwrap();
+        let refusal = hook_refusal(&answers[0]);
+        assert_eq!(refusal.index(), 1);
+        assert_eq!(refusal.reason(), "stop this call");
+        assert_eq!(refusal.outcome(), &RefusalOutcome::Continue);
+        assert_eq!(
+            answers[0].attribution.actor().principal_id(),
+            "permission-review-hook"
+        );
+        assert_eq!(answers[0].attribution.actor().surface_id(), "1");
+        assert_ne!(
+            answers[0].attribution.actor().principal_id(),
+            close_action().principal_id()
+        );
+    }
     assert!(fixture.closes.lock().unwrap().is_empty());
     let saved = fixture.storage.snapshot();
     let events = &saved.invocations[0].events;
@@ -407,6 +654,24 @@ async fn a_continue_without_a_deny_option_does_not_invent_one() {
         .expect("a continue with no deny option ends the turn without closing");
     assert_eq!(fixture.answered.load(Ordering::SeqCst), 0);
     assert_eq!(fixture.cancelled.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.turn_cancels.load(Ordering::SeqCst), 1);
+    {
+        let withdrawals = fixture.withdrawals.lock().unwrap();
+        assert_eq!(
+            withdrawals[0].actor.principal_id(),
+            "permission-review-hook"
+        );
+        assert_eq!(withdrawals[0].actor.surface_id(), "0");
+        assert_eq!(withdrawals[0].actor.request_id(), "review");
+        match withdrawals[0].reason.view() {
+            PermissionCancellationReasonView::Custom(reason) => {
+                assert_eq!(reason.code(), "hook-refusal");
+                assert_eq!(reason.explanation(), "no");
+            }
+            other => panic!("withdrawal reason was {other:?}"),
+        }
+    }
+    assert!(!review_still_pending(&fixture, "review"));
     assert!(fixture.closes.lock().unwrap().is_empty());
     fixture
         .agent
@@ -432,6 +697,20 @@ async fn an_end_turn_refusal_does_not_close_the_session() {
         .expect("ending the turn leaves the session open");
     assert_eq!(fixture.answered.load(Ordering::SeqCst), 1);
     assert_eq!(fixture.cancelled.load(Ordering::SeqCst), 0);
+    assert_eq!(fixture.turn_cancels.load(Ordering::SeqCst), 1);
+    {
+        let answers = fixture.answers.lock().unwrap();
+        assert_eq!(
+            hook_refusal(&answers[0]).outcome(),
+            &RefusalOutcome::EndTurn
+        );
+        assert_eq!(hook_refusal(&answers[0]).reason(), "stop the turn");
+        assert_eq!(
+            answers[0].attribution.actor().principal_id(),
+            "permission-review-hook"
+        );
+    }
+    assert!(!review_still_pending(&fixture, "review"));
     assert!(fixture.closes.lock().unwrap().is_empty());
     fixture
         .agent
@@ -449,6 +728,11 @@ async fn a_hook_error_denies_and_continues() {
         .await
         .expect("a hook error does not close the session");
     assert_eq!(fixture.answered.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.turn_cancels.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        hook_refusal(&fixture.answers.lock().unwrap()[0]).reason(),
+        "hook failed: error"
+    );
     let saved = fixture.storage.snapshot();
     assert!(saved.invocations[0]
         .events
@@ -508,6 +792,10 @@ async fn a_panicked_review_hook_denies_and_continues() {
         .await
         .expect("a panicked hook does not close the session");
     assert_eq!(fixture.answered.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        hook_refusal(&fixture.answers.lock().unwrap()[0]).reason(),
+        "hook failed: panic"
+    );
     fixture
         .agent
         .invoke(second_request(), close_action())
@@ -577,6 +865,7 @@ async fn review_slow_pre_tool_hook_delays_close() {
         })],
     )
     .await;
+    let mut published = fixture.agent.subscribe();
     let runner = fixture.agent.clone();
     let turn = tokio::spawn(async move { runner.invoke(request(), close_action()).await });
     while !entered.load(Ordering::SeqCst) {
@@ -593,6 +882,27 @@ async fn review_slow_pre_tool_hook_delays_close() {
     assert!(
         close_elapsed < std::time::Duration::from_secs(1),
         "close waited {close_elapsed:?} behind a permission-review hook ({closed:?}); turn {turn_result:?}"
+    );
+    assert_eq!(
+        fixture.answered.load(Ordering::SeqCst),
+        0,
+        "a stop answered the review"
+    );
+    let mut saw_review = false;
+    loop {
+        match tokio::time::timeout(std::time::Duration::from_millis(50), published.next()).await {
+            Ok(Ok(Some(event)))
+                if matches!(event.update(), ExecutionUpdate::PermissionRequested { .. }) =>
+            {
+                saw_review = true;
+            }
+            Ok(Ok(Some(_))) => {}
+            _ => break,
+        }
+    }
+    assert!(
+        !saw_review,
+        "a stop published the review for a person to answer"
     );
 }
 
@@ -616,4 +926,239 @@ async fn review_pre_tool_rejection_leaves_the_session_usable() {
         .invoke(second_request(), close_action())
         .await
         .expect("a hook refusal of one tool left the session unusable");
+}
+
+// ---- reviewer round-2 probes (local only) ----
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn r2_a_hook_past_the_deadline_is_deny_and_continue() {
+    let entered = Arc::new(AtomicBool::new(false));
+    let fixture = agent_with(
+        script(),
+        vec![Arc::new(SlowToolHook {
+            entered,
+            hold: std::time::Duration::from_secs(4),
+        })],
+    )
+    .await;
+    let started = std::time::Instant::now();
+    fixture
+        .agent
+        .invoke(request(), close_action())
+        .await
+        .expect("timeout is deny-and-continue");
+    let elapsed = started.elapsed();
+    assert_eq!(
+        fixture.answered.load(Ordering::SeqCst),
+        1,
+        "a hook that overran the deadline was not answered as a deny"
+    );
+    assert!(
+        elapsed < std::time::Duration::from_millis(3500),
+        "turn waited {elapsed:?}"
+    );
+    assert_eq!(
+        hook_refusal(&fixture.answers.lock().unwrap()[0]).reason(),
+        "hook failed: timeout"
+    );
+    fixture
+        .agent
+        .invoke(second_request(), close_action())
+        .await
+        .expect("the session stays usable");
+}
+
+#[tokio::test]
+async fn r2_a_hook_refusal_leaves_evidence_of_who_refused_and_why() {
+    let fixture = agent_with(
+        script(),
+        vec![Arc::new(ReviewHook {
+            seen: Arc::new(Mutex::new(Vec::new())),
+            verdict: ToolVerdict::refuse("UNIQUE_HOOK_REASON", RefusalOutcome::Continue),
+        })],
+    )
+    .await;
+    fixture
+        .agent
+        .invoke(request(), close_action())
+        .await
+        .unwrap();
+    // The session snapshot does not store an approval basis. The answer the
+    // adapter received is the refusal evidence.
+    let answers = fixture.answers.lock().unwrap();
+    let refusal = hook_refusal(&answers[0]);
+    assert_eq!(refusal.reason(), "UNIQUE_HOOK_REASON");
+    assert_eq!(refusal.index(), 0);
+    assert_eq!(refusal.outcome(), &RefusalOutcome::Continue);
+    assert_eq!(
+        answers[0].attribution.actor().principal_id(),
+        "permission-review-hook"
+    );
+    assert_ne!(
+        answers[0].attribution.actor().principal_id(),
+        close_action().principal_id()
+    );
+}
+
+fn named_review(id: &str, tool: &str) -> ExecutionEvent {
+    let options = PermissionOptions::new(
+        vec![PermissionOption::new(
+            PermissionOptionId::new("deny").unwrap(),
+            "Deny",
+            PermissionDecision::new(PermissionEffect::Deny, PermissionScope::request()),
+        )
+        .unwrap()],
+        &PermissionOfferPolicy::once_only(),
+    )
+    .unwrap();
+    ExecutionEvent::new(
+        ExecutionId::new("turn").unwrap(),
+        ExecutionUpdate::PermissionRequested {
+            id: PermissionId::new(id).unwrap(),
+            tool_id: ToolCallId::new(tool).unwrap(),
+            observation: ToolObservation::default(),
+            input: ToolReviewInput {
+                name: "Bash".into(),
+                arguments_json: "{\"command\":\"rm\"}".into(),
+            },
+            options,
+        },
+    )
+}
+
+#[tokio::test]
+async fn an_end_turn_the_binding_cannot_cancel_is_recorded_as_continue() {
+    let fixture = open_fixture(
+        script(),
+        vec![Arc::new(ReviewHook {
+            seen: Arc::new(Mutex::new(Vec::new())),
+            verdict: ToolVerdict::refuse("stop the turn", RefusalOutcome::EndTurn),
+        })],
+        FixtureKnobs {
+            turn_cancel: false,
+            fail_delivery: false,
+        },
+    )
+    .await;
+    fixture
+        .agent
+        .invoke(request(), close_action())
+        .await
+        .expect("an end-turn the binding cannot perform continues");
+    assert_eq!(fixture.turn_cancels.load(Ordering::SeqCst), 0);
+    assert_eq!(fixture.answered.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        hook_refusal(&fixture.answers.lock().unwrap()[0]).outcome(),
+        &RefusalOutcome::Continue
+    );
+    fixture
+        .agent
+        .invoke(second_request(), close_action())
+        .await
+        .expect("the session stays usable");
+}
+
+#[tokio::test]
+async fn a_continue_without_a_deny_option_stays_open_when_the_binding_cannot_cancel() {
+    let mut events = script();
+    events.pop();
+    events.push(allow_only_review());
+    let fixture = open_fixture(
+        events,
+        vec![Arc::new(ReviewHook {
+            seen: Arc::new(Mutex::new(Vec::new())),
+            verdict: ToolVerdict::refuse("no", RefusalOutcome::Continue),
+        })],
+        FixtureKnobs {
+            turn_cancel: false,
+            fail_delivery: false,
+        },
+    )
+    .await;
+    fixture
+        .agent
+        .invoke(request(), close_action())
+        .await
+        .expect("withdrawing the review leaves the session open");
+    assert_eq!(fixture.answered.load(Ordering::SeqCst), 0);
+    assert_eq!(fixture.cancelled.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.turn_cancels.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        fixture.withdrawals.lock().unwrap()[0].actor.principal_id(),
+        "permission-review-hook"
+    );
+    assert!(!review_still_pending(&fixture, "review"));
+    assert!(fixture.closes.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_failed_hook_denial_ends_the_turn_and_leaves_no_review_pending() {
+    let fixture = open_fixture(
+        script(),
+        vec![Arc::new(ReviewHook {
+            seen: Arc::new(Mutex::new(Vec::new())),
+            verdict: ToolVerdict::refuse("stop this call", RefusalOutcome::Continue),
+        })],
+        FixtureKnobs {
+            turn_cancel: true,
+            fail_delivery: true,
+        },
+    )
+    .await;
+    fixture
+        .agent
+        .invoke(request(), close_action())
+        .await
+        .expect("a failed denial ends the turn without closing");
+    assert_eq!(fixture.answered.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.turn_cancels.load(Ordering::SeqCst), 1);
+    assert!(fixture.closes.lock().unwrap().is_empty());
+    assert_eq!(
+        fixture.agent.pending_permission(
+            &ExecutionId::new("turn").unwrap(),
+            &PermissionId::new("review").unwrap(),
+        ),
+        Ok(false)
+    );
+    assert!(
+        !review_still_pending(&fixture, "review"),
+        "the failed denial left the review pending"
+    );
+    fixture
+        .agent
+        .invoke(second_request(), close_action())
+        .await
+        .expect("the session stays usable");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_second_review_does_not_start_another_hook_thread() {
+    let entered = Arc::new(AtomicBool::new(false));
+    let fixture = agent_with(
+        vec![
+            message(false, "hello"),
+            review(),
+            named_review("review-2", "bash-2"),
+        ],
+        vec![Arc::new(SlowToolHook {
+            entered,
+            hold: std::time::Duration::from_secs(4),
+        })],
+    )
+    .await;
+    let started = std::time::Instant::now();
+    fixture
+        .agent
+        .invoke(request(), close_action())
+        .await
+        .expect("a busy hook refuses the next review immediately");
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(3500),
+        "the second review waited for another hook thread"
+    );
+    assert_eq!(fixture.answered.load(Ordering::SeqCst), 2);
+    let answers = fixture.answers.lock().unwrap();
+    assert_eq!(hook_refusal(&answers[0]).reason(), "hook failed: timeout");
+    assert_eq!(hook_refusal(&answers[1]).reason(), "hook failed: error");
+    assert_eq!(hook_refusal(&answers[1]).index(), 0);
 }

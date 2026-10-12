@@ -8,8 +8,9 @@ use nessa_sdk::application::agent_execution::{
     },
     permissions::{
         ActionContext, ApprovalAttribution, ApprovalBasis, ApprovalRuleReference,
-        CancellationOrigin, PermissionAnswer, PermissionAnswerDelivery, PermissionAnswerRecord,
-        QuestionAnswerRecord, QuestionRefusalRecord, RefusedAsk, ReviewDeclineRecord,
+        CancellationOrigin, HookRefusal, PermissionAnswer, PermissionAnswerDelivery,
+        PermissionAnswerRecord, QuestionAnswerRecord, QuestionRefusalRecord, RefusedAsk,
+        ReviewDeclineRecord,
     },
     tools::ToolReviewInput,
 };
@@ -393,6 +394,58 @@ fn audit_maps_permission_selection_delivery_and_custom_cancellation_exactly() {
         "Explicit guard explanation"
     );
 }
+#[test]
+fn audit_maps_a_hook_refusal_as_the_hook_and_not_the_person() {
+    let id = ExecutionId::new("execution").unwrap();
+    let permission = PermissionId::new("permission").unwrap();
+    let session = ExecutionSessionId::new("session").unwrap();
+    let input = ToolReviewInput {
+        name: "Bash".into(),
+        arguments_json: "{}".into(),
+    };
+    let mut controller = ExecutionController::new(session);
+    controller.begin_execution(id.clone()).unwrap();
+    controller
+        .request_permission(
+            &id,
+            permission.clone(),
+            ToolCallUpdate::new(
+                ToolCallId::new("tool").unwrap(),
+                None,
+                None,
+                None,
+                None,
+                None,
+            ),
+            input,
+            options(),
+        )
+        .unwrap();
+    let attribution = ApprovalAttribution::hook(
+        &permission,
+        HookRefusal::new(2, "UNIQUE_HOOK_REASON", RefusalOutcome::EndTurn),
+    )
+    .unwrap();
+    let answer = controller
+        .answer_permission(PermissionAnswer {
+            execution_id: id,
+            id: permission,
+            option_id: PermissionOptionId::new("allow-once").unwrap(),
+            attribution,
+        })
+        .unwrap();
+    let value = record_value(&ExecutionAuditRecord::Answered(
+        PermissionAnswerRecord::new(answer, PermissionAnswerDelivery::Selected),
+    ));
+    assert_eq!(value["basis"]["kind"], "hook");
+    assert_eq!(value["basis"]["index"], 2);
+    assert_eq!(value["basis"]["reason"], "UNIQUE_HOOK_REASON");
+    assert_eq!(value["basis"]["outcome"], "end_turn");
+    assert_eq!(value["actor"]["principalId"], "permission-review-hook");
+    assert_eq!(value["actor"]["surfaceId"], "2");
+    assert_ne!(value["actor"]["principalId"], actor().principal_id());
+}
+
 #[test]
 fn audit_maps_explicit_close_without_claiming_physical_cleanup() {
     let mut session = ExecutionSession::new(ExecutionSessionId::new("session").unwrap());

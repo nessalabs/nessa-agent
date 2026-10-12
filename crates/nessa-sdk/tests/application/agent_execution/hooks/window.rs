@@ -458,3 +458,40 @@ fn review_pathological_needle_is_linear() {
     assert_eq!(view.contains_phrase(&huge), PhrasePresence::Absent);
     assert!(started.elapsed() < std::time::Duration::from_secs(2));
 }
+
+// ---- reviewer round-2 probes (local only) ----
+
+#[test]
+fn r2_small_thoughts_between_texts_keep_the_copy_bounded() {
+    let mut events = vec![text("a")];
+    for _ in 0..1000 {
+        events.push(thought(&"t".repeat(1024)));
+    }
+    events.push(text("b"));
+    MESSAGE_CLONES.with(|counter| counter.set((0, 0)));
+    let _suffix = EvaluationSuffix::capture(&events);
+    let (clones, bytes) = MESSAGE_CLONES.with(|counter| counter.get());
+    assert!(clones <= InvocationObservationWindow::MAX_EVENTS);
+    assert!(bytes <= InvocationObservationWindow::MAX_PAYLOAD_BYTES);
+}
+
+#[test]
+fn r2_a_provider_tool_id_cannot_hide_an_event_from_the_hook() {
+    let spoof = ExecutionEvent::new(
+        execution(),
+        ExecutionUpdate::Tool(ToolCallUpdate::new(
+            ToolCallId::new("\u{0}evil").unwrap(),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )),
+    );
+    let events = [text("hello"), spoof];
+    assert_eq!(
+        window(&events).iter().count(),
+        2,
+        "a tool event whose provider id starts with NUL is invisible to hooks"
+    );
+}
