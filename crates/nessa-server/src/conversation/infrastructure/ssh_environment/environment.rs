@@ -19,7 +19,8 @@
 //!   connection lost? ──▶ a new connection ──▶ Account ──▶ what the host recorded
 //! account(lease) ──▶ Account ──▶ Accounted{cleanup}
 //! Published{lease, artifact, request, file} ──▶ LeaseHold::artifacts ──▶ ArtifactOffer
-//!   its bytes ──▶ SftpBytes, over an artifact channel, only when pulled
+//!   its bytes ──▶ SftpBytes, over an artifact channel, only when pulled; on a
+//!   paired connection, FrameBytes, over the lease frames themselves
 //!   its answer ──▶ Collected{lease, artifact, outcome}
 //! LeaseHold::publish(ask) ──▶ Publish{lease, request, path} ──▶ offered on the
 //!   same offers as above, naming `request` | NotPublished{reason}
@@ -43,19 +44,20 @@
 //! fenced by the lease as any provider's events are.
 use super::{
     audit::EnvironmentAudit,
-    connector::{LeaseConnection, LeaseConnector},
+    connector::{ArtifactTransport, LeaseConnection, LeaseConnector},
     install::HostInstaller,
     link::{
         AdmissionRefused, CommandAnswer, Granted, HostLink, Liveness, Opening, Published,
         StartError,
     },
     peer::ServingCredentials,
-    transfer::SftpBytes,
+    transfer::{FrameBytes, SftpBytes},
 };
 use crate::conversation::application::{
-    ArtifactAnswer, ArtifactOffer, CommandEnvironment, CommandHold, CommandResult, Environment,
-    EnvironmentDeclaration, EnvironmentFuture, EnvironmentLease, FetchAsk, FetchFailure,
-    FetchPlaced, GrantedCommand, GrantedTerms, LeaseHold, LeaseRelease, PublishAsk, PublishFailure,
+    ArtifactAnswer, ArtifactBytes, ArtifactOffer, CommandEnvironment, CommandHold, CommandResult,
+    Environment, EnvironmentDeclaration, EnvironmentFuture, EnvironmentLease, FetchAsk,
+    FetchFailure, FetchPlaced, GrantedCommand, GrantedTerms, LeaseHold, LeaseRelease, PublishAsk,
+    PublishFailure,
 };
 use nessa_auth::application::pairing::DeviceConnectionProof;
 use nessa_protocol::lease::{
@@ -745,13 +747,22 @@ impl LeaseHold for SshHold {
             {
                 let answering = link.clone();
                 let answered = lease.clone();
-                let offer = ArtifactOffer {
-                    bytes: Box::new(SftpBytes::new(
-                        link.artifact_channels(),
+                let bytes: Box<dyn ArtifactBytes> = match link.artifact_transport() {
+                    ArtifactTransport::Channels(channels) => Box::new(SftpBytes::new(
+                        channels,
                         file.path.clone(),
                         file.size,
                         gone.clone(),
                     )),
+                    ArtifactTransport::Frames => Box::new(FrameBytes::new(
+                        link.clone(),
+                        lease.clone(),
+                        artifact,
+                        file.size,
+                    )),
+                };
+                let offer = ArtifactOffer {
+                    bytes,
                     file,
                     answer: ArtifactAnswer::new(move |outcome| {
                         answering.collected(&answered, artifact, outcome, unanswered)
@@ -768,16 +779,11 @@ impl LeaseHold for SshHold {
     }
 
     /// Asked over the lease's own connection; its file is offered on the
-    /// receiver [`Self::artifacts`] handed out, with every other. `None`
-    /// on a connection that carries no files, as a paired one.
+    /// receiver [`Self::artifacts`] handed out, with every other.
     fn publish(
         &self,
         ask: PublishAsk,
     ) -> Option<EnvironmentFuture<'static, Result<(), PublishFailure>>> {
-        // A file that could never be collected is never staged.
-        if !self.link.carries_files() {
-            return None;
-        }
         let link = self.link.clone();
         let lease = self.lease.clone();
         Some(Box::pin(async move {
@@ -794,7 +800,7 @@ impl LeaseHold for SshHold {
         ask: FetchAsk,
     ) -> Option<EnvironmentFuture<'static, Result<FetchPlaced, FetchFailure>>> {
         // Bytes that could never be written are never asked for.
-        if !self.link.carries_files() {
+        if !self.link.writes_files() {
             return None;
         }
         let link = self.link.clone();

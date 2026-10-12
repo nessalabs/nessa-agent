@@ -29,6 +29,9 @@
 //!         written ──▶ Delivered ──▶ Fetched{outcome}
 //!         not written ──▶ Undelivered (unanswered)
 //!   the call gone after Fetch, before the last word or Delivered ──▶ Undelivered
+//! read_artifact(lease, artifact, offset) ──▶ waiter by artifact and offset
+//!   ──▶ ReadArtifact ──▶ ArtifactRead | ArtifactNotRead (a paired connection's
+//!   file bytes, which have no artifact channel beside it)
 //! a command lease: grant_command ──▶ GrantCommand ──▶ Granted{terms} | Refused
 //!                  run ──▶ Run ──▶ Ran (routed to its waiter; the lease is done
 //!                  there unless its End is asked, whose Ended follows)
@@ -61,7 +64,7 @@
 //! lease's end has no evidence, so it is Interrupted. A dropped frame's
 //! record failing is logged only: it records no transition of any lease.
 use super::audit::{EnvironmentAudit, EnvironmentEvent};
-use super::connector::{ArtifactChannels, LeaseConnection, LeaseConnector};
+use super::connector::{ArtifactChannels, ArtifactTransport, LeaseConnection, LeaseConnector};
 use super::transfer::{write_part, WriteFailure};
 use crate::conversation::application::{
     ArtifactAnswering, FetchAsk, FetchFailure, FetchPlaced, PublishFailure,
@@ -70,14 +73,14 @@ use crate::env::LEASE_PROTOCOL;
 use crate::env_serve::application::FrameStream;
 use futures_util::FutureExt;
 use nessa_protocol::lease::{
-    decode, encode, read_hello, stop_steps, Cleanup, Collection, CollectionRefusal, CommandEnd,
-    Data, EndingCause, FetchOutcome, FetchRefusal, FromEnvironment, GrantRefusal, GrantedTerms,
-    PublishRefusal, Sandbox, StagedArtifact, ToEnvironment, Unavailability,
-    MAX_ARTIFACTS_IN_FLIGHT, MAX_DATA_BYTES,
+    decode, encode, read_hello, stop_steps, ArtifactReadRefusal, Cleanup, Collection,
+    CollectionRefusal, CommandEnd, Data, EndingCause, FetchOutcome, FetchRefusal, FromEnvironment,
+    GrantRefusal, GrantedTerms, PublishRefusal, Sandbox, StagedArtifact, ToEnvironment,
+    Unavailability, MAX_ARTIFACTS_IN_FLIGHT, MAX_DATA_BYTES,
 };
 use nessa_sdk::domain::agent_execution::leases::{LeaseEndCause, LeaseRefusal, SshDestination};
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{hash_map::Entry, BTreeMap, HashMap, HashSet},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, MutexGuard, PoisonError},
     time::Duration,
@@ -217,9 +220,17 @@ struct LeaseRoute {
     /// Each fetch this gateway asked under it, by request, waiting for the
     /// host's answers. Dropped with the route, which ends each wait.
     fetches: HashMap<String, mpsc::Sender<FetchAnswer>>,
+    /// Each read of a published file this gateway asked under it, by
+    /// artifact and offset, waiting for the host's bytes or why not.
+    /// Dropped with the route, which ends each wait.
+    reads: HashMap<(u32, u64), oneshot::Sender<ArtifactReadAnswer>>,
     /// Dropped with the route: the lease is no longer routed here.
     gone: watch::Sender<()>,
 }
+
+/// What the host answered one read of a published file: its bytes, or why
+/// not.
+pub(crate) type ArtifactReadAnswer = Result<Vec<u8>, ArtifactReadRefusal>;
 
 #[derive(Default)]
 struct Routes {
@@ -284,8 +295,8 @@ pub(crate) struct HostLink {
     routes: Arc<Mutex<Routes>>,
     audit: Arc<dyn EnvironmentAudit>,
     keep: Mutex<Box<dyn Send>>,
-    /// Opens artifact channels on this same connection.
-    artifacts: Arc<dyn ArtifactChannels>,
+    /// How a published file's bytes are read off the host.
+    artifacts: ArtifactTransport,
     /// Closes once the demux ends: the connection is over.
     ended: watch::Receiver<()>,
 }
@@ -484,14 +495,25 @@ impl HostLink {
         &self.workspace
     }
 
-    /// How artifact channels are opened on this connection.
-    pub(crate) fn artifact_channels(&self) -> Arc<dyn ArtifactChannels> {
+    /// How a published file's bytes are read off the host.
+    pub(crate) fn artifact_transport(&self) -> ArtifactTransport {
         self.artifacts.clone()
     }
 
-    /// Whether this connection's artifact channels can carry a file.
-    pub(crate) fn carries_files(&self) -> bool {
-        self.artifacts.carries_files()
+    /// Whether a file can be written to the host over this connection: only
+    /// over artifact channels beside its lease frames, never over the
+    /// frames themselves, so never on a paired connection.
+    pub(crate) fn writes_files(&self) -> bool {
+        self.file_channels().is_some()
+    }
+
+    /// The artifact channels a file is written to the host over; `None` on
+    /// a connection that has none.
+    fn file_channels(&self) -> Option<Arc<dyn ArtifactChannels>> {
+        match &self.artifacts {
+            ArtifactTransport::Channels(channels) => Some(channels.clone()),
+            ArtifactTransport::Frames => None,
+        }
     }
 
     /// Whether the connection still carries leases: those on it may still
@@ -762,6 +784,7 @@ impl HostLink {
                     ending_cause: ending_sender,
                     publishes: HashMap::new(),
                     fetches: HashMap::new(),
+                    reads: HashMap::new(),
                     gone: gone_sender,
                 },
             );
@@ -1115,6 +1138,10 @@ impl HostLink {
             source,
             delivered: said_delivered,
         } = ask;
+        // Bytes that could never be written are never asked for.
+        let Some(channels) = self.file_channels() else {
+            return Err(FetchFailure::Refused(FetchRefusal::Unavailable));
+        };
         let frame = ToEnvironment::Fetch {
             lease: lease.into(),
             request: request.clone(),
@@ -1177,7 +1204,6 @@ impl HostLink {
                 };
             }
         };
-        let channels = self.artifacts.clone();
         let written = tokio::select! {
             written = write_part(channels.as_ref(), &part, file.size(), source, gone) => written,
             // The host's last word while the bytes are written: the lease
@@ -1246,6 +1272,51 @@ impl HostLink {
             }
             drop(unanswered);
         })
+    }
+
+    /// Ask the host for `length` bytes of the file it published under
+    /// `lease` as `artifact`, from `offset`, over this connection's own
+    /// frames: where its answer arrives. `None` when it is not asked: the
+    /// lease is not held here, the connection is gone, or that range is
+    /// already asked. Whether the file may still be read is the host's to
+    /// say: it answers only for a staged copy still waiting for its answer,
+    /// so once revoked, which ends every lease there, a read is answered
+    /// not staged. The answer's wait ends with the
+    /// lease's route, so it never outlives the lease here. Only for a
+    /// connection whose transport is [`ArtifactTransport::Frames`].
+    pub(crate) async fn read_artifact(
+        &self,
+        lease: &str,
+        artifact: u32,
+        offset: u64,
+        length: u32,
+    ) -> Option<oneshot::Receiver<ArtifactReadAnswer>> {
+        let answered = {
+            let mut routes = self.routes();
+            if routes.closed {
+                return None;
+            }
+            let route = routes.leases.get_mut(lease)?;
+            let Entry::Vacant(waiting) = route.reads.entry((artifact, offset)) else {
+                return None;
+            };
+            let (answer, answered) = oneshot::channel();
+            waiting.insert(answer);
+            answered
+        };
+        let frame = ToEnvironment::ReadArtifact {
+            lease: lease.into(),
+            artifact,
+            offset,
+            length,
+        };
+        if self.frames.send(frame).await.is_err() {
+            if let Some(route) = self.routes().leases.get_mut(lease) {
+                route.reads.remove(&(artifact, offset));
+            }
+            return None;
+        }
+        Some(answered)
     }
 
     /// What the host recorded of `lease`; `None` when it cannot be had. The
@@ -1507,6 +1578,18 @@ fn route_frame(routes: &mut Routes, frame: FromEnvironment) -> Routed {
                 ),
             }
         }
+        FromEnvironment::ArtifactRead {
+            lease,
+            artifact,
+            offset,
+            data,
+        } => answer_read(routes, &lease, artifact, offset, Ok(data.0)),
+        FromEnvironment::ArtifactNotRead {
+            lease,
+            artifact,
+            offset,
+            reason,
+        } => answer_read(routes, &lease, artifact, offset, Err(reason)),
         // The host is ending a lease unasked: said to whoever watches it,
         // who asks its End, which the host answers with what that took.
         // A command's lease is bounded by its timeout, never ended so. A
@@ -1807,6 +1890,28 @@ impl Drop for Fetching {
     }
 }
 
+/// Hand a read's answer to whoever asked it; a read nobody asked is dropped.
+/// One asked by bytes whose reader let go is answered to nobody.
+fn answer_read(
+    routes: &mut Routes,
+    lease: &str,
+    artifact: u32,
+    offset: u64,
+    answer: ArtifactReadAnswer,
+) -> Routed {
+    match routes
+        .leases
+        .get_mut(lease)
+        .and_then(|route| route.reads.remove(&(artifact, offset)))
+    {
+        Some(waiter) => {
+            let _ = waiter.send(answer);
+            Routed::Done
+        }
+        None => Routed::Dropped,
+    }
+}
+
 fn channel_route<'a>(
     routes: &'a mut Routes,
     lease: &str,
@@ -1834,6 +1939,8 @@ fn frame_name(frame: &FromEnvironment) -> &'static str {
         FromEnvironment::FetchAccepted { .. } => "fetch_accepted",
         FromEnvironment::FetchRefused { .. } => "fetch_refused",
         FromEnvironment::Fetched { .. } => "fetched",
+        FromEnvironment::ArtifactRead { .. } => "artifact_read",
+        FromEnvironment::ArtifactNotRead { .. } => "artifact_not_read",
         FromEnvironment::Ran { .. } => "ran",
     }
 }

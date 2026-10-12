@@ -28,6 +28,8 @@
 //!                                     taking no files refuses each, recorded)
 //!                                     ──▶ FetchAccepted | FetchRefused | Fetched
 //!                          ──Delivered / Undelivered──▶ the lease's fetches
+//!                          ──ReadArtifact──▶ a staged copy waiting for its Collected?
+//!                                            ──▶ ArtifactRead | ArtifactNotRead (artifacts.rs)
 //! a harness publishes ──▶ staged copy ──▶ ledger: published ──▶ Published
 //! a lease lasts its granted leaseMs ──▶ ledger: expiring ──▶ stop every harness
 //!     ──▶ ledger: ended(expired) ──▶ Ending{expired}; the gateway's End is
@@ -95,9 +97,9 @@ use super::timer::{timeout, within, Moment, Timer};
 use super::wire::{write_frame, FrameStream};
 use crate::env_serve::domain::{admit_agent, admit_command, Peer, PeerGrant};
 use nessa_protocol::lease::{
-    decode, Cleanup, Collection, CommandEnd, Data, EndingCause, FetchOutcome, FetchRefusal,
-    FromEnvironment, GrantRefusal, GrantedTerms, Hello, PublishRefusal, Sandbox, StartFailure,
-    ToEnvironment, Unavailability, KEEPALIVE_INTERVAL, MAX_DATA_BYTES, MAX_STOP_WAIT,
+    decode, ArtifactReadRefusal, Cleanup, Collection, CommandEnd, Data, EndingCause, FetchOutcome,
+    FetchRefusal, FromEnvironment, GrantRefusal, GrantedTerms, Hello, PublishRefusal, Sandbox,
+    StartFailure, ToEnvironment, Unavailability, KEEPALIVE_INTERVAL, MAX_DATA_BYTES, MAX_STOP_WAIT,
     SILENCE_LIMIT,
 };
 use nessa_sdk::application::agent_execution::{
@@ -910,6 +912,33 @@ impl Served {
                     self.dropped(Some(&lease), None, "undelivered");
                 }
             }
+            ToEnvironment::ReadArtifact {
+                lease,
+                artifact,
+                offset,
+                length,
+            } => {
+                let read = match self
+                    .leases
+                    .get(&lease)
+                    .and_then(|held| held.artifacts.as_ref())
+                {
+                    Some(artifacts) => artifacts.read(artifact, offset, length),
+                    None => {
+                        self.dropped(Some(&lease), None, "read_artifact");
+                        Err(ArtifactReadRefusal::NotStaged)
+                    }
+                };
+                // Said, so the gateway does not wait for bytes that never come.
+                if let Err(reason) = read {
+                    self.send(FromEnvironment::ArtifactNotRead {
+                        lease,
+                        artifact,
+                        offset,
+                        reason,
+                    });
+                }
+            }
         }
     }
 
@@ -1110,6 +1139,7 @@ impl Served {
                     self.outbox.clone(),
                     self.ledger.clone(),
                     self.frames.clone(),
+                    self.gone.subscribe(),
                 );
                 let fetches = Some(LeaseFetches::new(
                     &lease,
@@ -1440,9 +1470,11 @@ impl Served {
         // flight (it took none); once lost, expired or revoked, the gateway
         // may have kept it, so it is recorded unanswered rather than
         // refused.
-        if let Some(artifacts) = held.artifacts.take() {
-            artifacts.end(cause != EndCause::Asked);
-        }
+        let reads = held
+            .artifacts
+            .take()
+            .map(|artifacts| artifacts.end(cause != EndCause::Asked))
+            .unwrap_or_default();
         // Nothing more is taken or placed under it from here; what is under
         // way finishes and is answered before its end is.
         let fetches = held
@@ -1470,6 +1502,10 @@ impl Served {
         let ledger = self.ledger.clone();
         let frames = self.frames.clone();
         tokio::spawn(async move {
+            // Its reads were stopped: none answers after its end is known.
+            for read in reads {
+                let _ = read.await;
+            }
             // A fetch whose entry went unrecorded leaves its end unknown.
             let fetches_recorded = match fetches {
                 Some(fetches) => fetches.await,

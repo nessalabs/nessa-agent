@@ -1409,11 +1409,18 @@ sequenceDiagram
   first call's record stands; asked in another turn, or for
   another person, it is held once (`alreadyHeld`) and recorded again for
   them, within the conversation's record bound.
+- **Over a paired connection** there is no second channel to open, so the
+  gateway reads the staged copy over the lease frames, by artifact and
+  range, at most four 64 KiB ranges of one file unanswered; the
+  environment answers only for a copy still waiting for its `Collected`.
+  The budgets, records and refusals above hold unchanged, but nothing is
+  resumed: when the connection goes, the lease goes with it (row I9 in
+  [peer gateways](auth/peer-gateways.md#reading-a-published-file-over-the-connection-row-i9)).
 - **`here` is not served yet.** In process there is no artifact channel, so
   a conversation not placed on a host is refused `publish_unavailable`;
   staging a copy for `here` is a follow-up. A paired connection has none
-  either, so a publish there is refused the same way, before the host is
-  asked.
+  either, but its files are read over the lease frames (row I9), so a
+  publish there is asked as anywhere else.
 - **No bytes on the control channel.** `Publish` carries the path and,
   when the agent named one, the media type; `Published` carries the file's
   metadata (what it is and where its staged copy lies); `NotPublished`
@@ -1498,7 +1505,7 @@ sequenceDiagram
 | No file bytes on the lease's control stream | `Fetch`, `FetchAccepted`, `Delivered`, `Fetched` carry paths and names only | `a_fetch_names_its_file_and_its_answers_carry_no_bytes`; `a_fetched_file_is_written_over_an_artifact_channel_and_placed_verified` |
 | A host that did not opt in takes nothing | `serve` holds `NoInbox` unless `envServe.artifactsIn`; each fetch is refused `unavailable` at its destination, recorded as any refusal (`auditUnavailable` when it cannot be) | `a_fetch_is_refused_with_its_reason_and_takes_nothing` |
 | A fetch call never waits past its wait or its caller: every step that can wait, the placement store's and the held file's reads included, runs inside `artifact.fetch_call_wait` and the call's stop | `fetch_artifact` bounds all of `fetch_within` by both; what it reserved is let go by `Taken`'s drop | `a_fetch_whose_placement_read_stalls_is_timed_out_or_cancelled`; `a_fetch_not_answered_within_its_wait_answers_timed_out` |
-| A connection that carries no files (a paired one) is never asked to fetch or publish: the agent is refused `fetch_unavailable` or `publish_unavailable` before any frame, and the host stages, makes and records nothing | `ArtifactChannels::carries_files` (false for a paired connection's `NoArtifactChannels`); `SshHold::fetch` and `SshHold::publish` answer `None` then | `a_connection_that_carries_no_files_is_never_asked_to_publish_or_fetch` |
+| A connection with no file channel (a paired one) is never asked to fetch: the agent is refused `fetch_unavailable` before any frame, and the host makes and records nothing | `HostLink::writes_files` (true only for `ArtifactTransport::Channels`); `SshHold::fetch` answers `None` then | `a_paired_connection_is_never_asked_to_fetch` |
 
 - **Codes.** Decided by the conversation: `no_turn`,
   `environment_not_leased`, `invalid`, `fetch_unavailable`,
@@ -1676,7 +1683,7 @@ locally.
 | Phone commands | None | Durable intent outbox, receipt lookup before retry, exact-turn Stop | `nessa-client-core`; gateway receipts | #267 |
 | Where agents run | In process only: gateway composes the SDK `Agent` and its ACP binding per conversation; Nessa advertises no ACP client filesystem or terminal | An `Environment` port in the conversation application with the in-process adapter first; a lease recorded for every run | Gateway `conversation` composition | A [#698](https://github.com/nessalabs/nessa-agent/issues/698) |
 | SSH environments | None | `nessa env serve` on the remote host, installed on first use; lease frames over SSH stdio | Gateway environment adapter; `nessa-server` CLI | B [#699](https://github.com/nessalabs/nessa-agent/issues/699), F [#703](https://github.com/nessalabs/nessa-agent/issues/703) |
-| Peer gateways and hosted workers | A gateway invites a peer with the device enrollment under its own consent class; the credential names a `gateway` principal that can hold only reads (H, first part: [peer gateways](auth/peer-gateways.md)). A paired environment holding `environment.serve` dials the native listener and serves leases over that connection as an SSH host does (I, parts 1a and 1b: [environment peers](auth/peer-gateways.md#environment-peers)) | Gateway-to-gateway pairing under a `gateway` principal kind; outbound connection from the environment side; relay fallback; environment-only gateways as workers | Gateway `device_pairing`, environment role; `nessa-auth` | H [#705](https://github.com/nessalabs/nessa-agent/issues/705), I [#706](https://github.com/nessalabs/nessa-agent/issues/706), K [#708](https://github.com/nessalabs/nessa-agent/issues/708) |
+| Peer gateways and hosted workers | A gateway invites a peer with the device enrollment under its own consent class; the credential names a `gateway` principal that can hold only reads (H, first part: [peer gateways](auth/peer-gateways.md)). A paired environment holding `environment.serve` dials the native listener and serves leases over that connection as an SSH host does (I, parts 1a and 1b: [environment peers](auth/peer-gateways.md#environment-peers)), and the files it publishes are read over that same connection (I-2b) | Gateway-to-gateway pairing under a `gateway` principal kind; outbound connection from the environment side; relay fallback; environment-only gateways as workers | Gateway `device_pairing`, environment role; `nessa-auth` | H [#705](https://github.com/nessalabs/nessa-agent/issues/705), I [#706](https://github.com/nessalabs/nessa-agent/issues/706), K [#708](https://github.com/nessalabs/nessa-agent/issues/708) |
 | Sandboxes | Whatever the harness does by default | Sandbox profiles in the lease, declared per binding and per environment, refused when unenforceable | SDK bindings; environment adapters | A [#698](https://github.com/nessalabs/nessa-agent/issues/698) declares; later profiles per binding |
 | Policy hooks | Capability reporting merged (#142); no configured pre-tool runtime | Verdicts at the gateway; pre-tool verdicts enforced by the environment's SDK from the snapshot the lease carries, with evidence | SDK application owner (0014) | #130 slices |
 | Extensions | MCP Apps in a sandboxed iframe; one MCP connection per harness session; remote MCP with gateway-owned OAuth | Unchanged; an extension holds only the opening's token | Gateway `mcp_servers`, `mcp_authorization` | 344, 392 |

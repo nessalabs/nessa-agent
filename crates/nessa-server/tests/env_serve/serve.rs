@@ -1743,9 +1743,9 @@ async fn an_unrecorded_input_overflow_stops_the_harness_uncertain() {
 /// and the end of it, reached it: a harness that leaves by itself once its
 /// input ends is not forced for input still on its way.
 ///
-/// The one test here on the runtime's paused clock: what it measures is the
-/// harness's own reading and leaving against the grace its cleanup is given,
-/// and the harness runs on that clock, not on the host's timer.
+/// On the runtime's paused clock: what it measures is the harness's own
+/// reading and leaving against the grace its cleanup is given, and the
+/// harness runs on that clock, not on the host's timer.
 #[tokio::test(start_paused = true)]
 async fn a_stop_starts_its_grace_after_the_harness_has_its_input() {
     let mut gateway = Gateway::start();
@@ -1808,6 +1808,15 @@ impl crate::env_serve::application::ArtifactOutbox for NoOutbox {
     ) -> Result<nessa_protocol::lease::StagedArtifact, nessa_protocol::lease::PublishRefusal> {
         Err(nessa_protocol::lease::PublishRefusal::StagingFailed)
     }
+    fn read(
+        &self,
+        _lease: &str,
+        _artifact: u32,
+        _offset: u64,
+        _length: usize,
+    ) -> std::io::Result<Vec<u8>> {
+        Err(std::io::Error::other("no outbox"))
+    }
     fn discard(&self, _lease: &str, _artifact: u32) {}
     fn close(&self, _lease: &str) {}
 }
@@ -1823,7 +1832,22 @@ struct RecordingOutbox {
     closed: Mutex<Vec<String>>,
     /// When set, the next staging says it began, then waits to be let go.
     stall: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
+    /// Every read of a staged copy, as asked: lease, artifact, offset and
+    /// length.
+    reads: Mutex<Vec<(String, u32, u64, usize)>>,
+    /// While true, every read waits, at most ten seconds.
+    reads_held: (Mutex<bool>, std::sync::Condvar),
+    /// Every read fails, as of a copy that is gone.
+    unreadable: Mutex<bool>,
+    /// Told as each read begins, once set.
+    read_begun: Mutex<Option<tokio::sync::mpsc::UnboundedSender<()>>>,
+    /// Told as each read returns, once set.
+    read_done: Mutex<Option<tokio::sync::mpsc::UnboundedSender<()>>>,
 }
+
+/// The bytes of every copy [`RecordingOutbox`] stages: as long as the size
+/// it says it staged.
+const STAGED_BYTES: &[u8; 20] = b"0123456789abcdefghij";
 
 impl RecordingOutbox {
     fn staged(artifact: u32) -> nessa_protocol::lease::StagedArtifact {
@@ -1834,6 +1858,12 @@ impl RecordingOutbox {
             digest: "ab".repeat(32),
             path: format!("/outbox/{artifact}"),
         }
+    }
+    /// Hold every read, or let them go.
+    fn hold_reads(&self, hold: bool) {
+        let (held, released) = &self.reads_held;
+        *held.lock().unwrap() = hold;
+        released.notify_all();
     }
     fn point(&self, lease: &str) -> mpsc::Sender<crate::env_serve::application::PublishCall> {
         self.points.lock().unwrap()[lease].clone()
@@ -1862,6 +1892,37 @@ impl crate::env_serve::application::ArtifactOutbox for RecordingOutbox {
             let _ = go.recv();
         }
         Ok(Self::staged(artifact))
+    }
+    fn read(
+        &self,
+        lease: &str,
+        artifact: u32,
+        offset: u64,
+        length: usize,
+    ) -> std::io::Result<Vec<u8>> {
+        self.reads
+            .lock()
+            .unwrap()
+            .push((lease.into(), artifact, offset, length));
+        if let Some(begun) = self.read_begun.lock().unwrap().as_ref() {
+            let _ = begun.send(());
+        }
+        let (held, released) = &self.reads_held;
+        // Bounded, so a test that fails while reads are held still ends.
+        drop(
+            released
+                .wait_timeout_while(held.lock().unwrap(), Duration::from_secs(10), |held| *held)
+                .unwrap(),
+        );
+        if let Some(done) = self.read_done.lock().unwrap().as_ref() {
+            let _ = done.send(());
+        }
+        if *self.unreadable.lock().unwrap() {
+            return Err(std::io::Error::other("the copy is gone"));
+        }
+        let start = usize::try_from(offset).unwrap().min(STAGED_BYTES.len());
+        let end = start.saturating_add(length).min(STAGED_BYTES.len());
+        Ok(STAGED_BYTES[start..end].to_vec())
     }
     fn discard(&self, lease: &str, artifact: u32) {
         self.discarded
@@ -2601,6 +2662,402 @@ async fn a_collection_naming_nothing_published_is_dropped() {
             digest: "ab".repeat(32),
             size: 20,
         }
+    );
+}
+
+fn read_artifact(lease: &str, artifact: u32, offset: u64, length: u32) -> ToEnvironment {
+    ToEnvironment::ReadArtifact {
+        lease: lease.into(),
+        artifact,
+        offset,
+        length,
+    }
+}
+
+fn artifact_read(offset: u64, data: &[u8]) -> FromEnvironment {
+    FromEnvironment::ArtifactRead {
+        lease: LEASE.into(),
+        artifact: 0,
+        offset,
+        data: Data(data.to_vec()),
+    }
+}
+
+fn not_read(
+    lease: &str,
+    artifact: u32,
+    offset: u64,
+    reason: nessa_protocol::lease::ArtifactReadRefusal,
+) -> FromEnvironment {
+    FromEnvironment::ArtifactNotRead {
+        lease: lease.into(),
+        artifact,
+        offset,
+        reason,
+    }
+}
+
+/// Row I9, the environment's side: a gateway reads a staged copy over the
+/// lease stream by artifact and range, never by path, and only while that
+/// artifact waits for its answer. A range past the copy's end comes back
+/// short, or empty; a longer one than a frame carries is read as one that
+/// does. One never published, of a lease not held (a drop, recorded), or
+/// already answered is not staged.
+#[tokio::test]
+async fn a_staged_copy_is_read_by_range_only_while_it_waits_for_its_answer() {
+    use nessa_protocol::lease::{ArtifactReadRefusal, MAX_DATA_BYTES};
+    let (mut gateway, outbox) = Gateway::publishing();
+    gateway.started(LEASE).await;
+    let answered = publish(&outbox, LEASE).await;
+    assert!(matches!(
+        gateway.said().await,
+        FromEnvironment::Published { artifact: 0, .. }
+    ));
+    for (frame, said) in [
+        (read_artifact(LEASE, 0, 0, 8), artifact_read(0, b"01234567")),
+        (read_artifact(LEASE, 0, 16, 100), artifact_read(16, b"ghij")),
+        (read_artifact(LEASE, 0, 20, 8), artifact_read(20, b"")),
+        (
+            read_artifact(LEASE, 0, 0, u32::MAX),
+            artifact_read(0, STAGED_BYTES),
+        ),
+        (
+            read_artifact(LEASE, 9, 0, 8),
+            not_read(LEASE, 9, 0, ArtifactReadRefusal::NotStaged),
+        ),
+        (
+            read_artifact("other", 0, 0, 8),
+            not_read("other", 0, 0, ArtifactReadRefusal::NotStaged),
+        ),
+    ] {
+        gateway.send(frame).await;
+        assert_eq!(gateway.said().await, said);
+    }
+    assert_eq!(
+        *outbox.reads.lock().unwrap(),
+        [
+            (LEASE.to_owned(), 0, 0, 8),
+            (LEASE.to_owned(), 0, 16, 100),
+            (LEASE.to_owned(), 0, 20, 8),
+            (LEASE.to_owned(), 0, 0, MAX_DATA_BYTES),
+        ]
+    );
+    gateway
+        .send(ToEnvironment::Collected {
+            lease: LEASE.into(),
+            artifact: 0,
+            outcome: Collection::Held,
+        })
+        .await;
+    assert!(matches!(
+        answer_of(answered).await,
+        crate::env_serve::application::PublishAnswer::Held { .. }
+    ));
+    gateway.send(read_artifact(LEASE, 0, 0, 8)).await;
+    assert_eq!(
+        gateway.said().await,
+        not_read(LEASE, 0, 0, ArtifactReadRefusal::NotStaged)
+    );
+    assert_eq!(outbox.reads.lock().unwrap().len(), 4);
+    let drops: Vec<_> = gateway
+        .ledger
+        .entries()
+        .into_iter()
+        .filter_map(|entry| match entry {
+            LedgerEntry::Dropped { lease, frame, .. } => Some((lease, frame)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(drops, [(Some("other".into()), "read_artifact".into())]);
+}
+
+/// A gateway past the bound of reads of one artifact unanswered is refused
+/// `busy` for the one past it, and the others are answered; a copy that
+/// cannot be read is said to be unreadable.
+#[tokio::test]
+async fn reads_past_the_bound_are_refused_busy_and_an_unreadable_copy_is_said() {
+    use nessa_protocol::lease::{ArtifactReadRefusal, MAX_ARTIFACT_READS_IN_FLIGHT};
+    let (mut gateway, outbox) = Gateway::publishing();
+    gateway.started(LEASE).await;
+    let _answered = publish(&outbox, LEASE).await;
+    assert!(matches!(
+        gateway.said().await,
+        FromEnvironment::Published { artifact: 0, .. }
+    ));
+    let held = ReadsHeld::new(&outbox);
+    let bound = MAX_ARTIFACT_READS_IN_FLIGHT as u64;
+    for offset in 0..=bound {
+        gateway.send(read_artifact(LEASE, 0, offset, 1)).await;
+    }
+    assert_eq!(
+        gateway.said().await,
+        not_read(LEASE, 0, bound, ArtifactReadRefusal::Busy)
+    );
+    drop(held);
+    let mut answered = Vec::new();
+    for _ in 0..bound {
+        match gateway.said().await {
+            FromEnvironment::ArtifactRead { offset, data, .. } => answered.push((offset, data.0)),
+            other => panic!("a read's bytes, got {other:?}"),
+        }
+    }
+    answered.sort();
+    let expected: Vec<_> = (0..bound)
+        .map(|offset| (offset, vec![STAGED_BYTES[offset as usize]]))
+        .collect();
+    assert_eq!(answered, expected);
+    // Answered, they leave room: the next is read.
+    *outbox.unreadable.lock().unwrap() = true;
+    gateway.send(read_artifact(LEASE, 0, 0, 1)).await;
+    assert_eq!(
+        gateway.said().await,
+        not_read(LEASE, 0, 0, ArtifactReadRefusal::Unreadable)
+    );
+}
+
+/// Holds every read of `outbox` until dropped, so a test that fails while
+/// reads are held leaves none waiting.
+struct ReadsHeld<'a>(&'a RecordingOutbox);
+
+impl<'a> ReadsHeld<'a> {
+    fn new(outbox: &'a RecordingOutbox) -> Self {
+        outbox.hold_reads(true);
+        Self(outbox)
+    }
+}
+
+impl Drop for ReadsHeld<'_> {
+    fn drop(&mut self) {
+        self.0.hold_reads(false);
+    }
+}
+
+impl RecordingOutbox {
+    /// Where each read says it has begun, from now on.
+    fn reads_begun(&self) -> tokio::sync::mpsc::UnboundedReceiver<()> {
+        let (begun, receiver) = tokio::sync::mpsc::unbounded_channel();
+        *self.read_begun.lock().unwrap() = Some(begun);
+        receiver
+    }
+    /// Where each read says it has returned, from now on.
+    fn reads_done(&self) -> tokio::sync::mpsc::UnboundedReceiver<()> {
+        let (done, receiver) = tokio::sync::mpsc::unbounded_channel();
+        *self.read_done.lock().unwrap() = Some(done);
+        receiver
+    }
+}
+
+/// Wait until a read on the outbox has said `what`: begun, or returned.
+async fn read_said(said: &mut tokio::sync::mpsc::UnboundedReceiver<()>, what: &str) {
+    tokio::time::timeout(Duration::from_secs(5), said.recv())
+        .await
+        .unwrap_or_else(|_| panic!("a read {what} in time"))
+        .expect("the outbox is still there");
+}
+
+/// A copy let go while it was being read, the gateway having answered it
+/// already, is answered not staged, whatever the read made of it: the
+/// bytes of a copy no longer staged are not sent, and a copy gone is not
+/// damaged.
+#[tokio::test]
+async fn a_copy_let_go_while_it_is_read_is_answered_not_staged() {
+    copy_let_go_while_read(false).await;
+}
+
+/// [`a_copy_let_go_while_it_is_read_is_answered_not_staged`], for a read
+/// that failed: still not staged, not unreadable.
+#[tokio::test]
+async fn a_copy_let_go_while_it_is_read_and_failing_is_answered_not_staged() {
+    copy_let_go_while_read(true).await;
+}
+
+async fn copy_let_go_while_read(unreadable: bool) {
+    use nessa_protocol::lease::ArtifactReadRefusal;
+    let (mut gateway, outbox) = Gateway::publishing();
+    gateway.started(LEASE).await;
+    let _answered = publish(&outbox, LEASE).await;
+    assert!(matches!(
+        gateway.said().await,
+        FromEnvironment::Published { artifact: 0, .. }
+    ));
+    let mut begun = outbox.reads_begun();
+    let held = ReadsHeld::new(&outbox);
+    gateway.send(read_artifact(LEASE, 0, 0, 8)).await;
+    read_said(&mut begun, "began").await;
+    gateway
+        .send(ToEnvironment::Collected {
+            lease: LEASE.into(),
+            artifact: 0,
+            outcome: Collection::Held,
+        })
+        .await;
+    gateway.settled().await;
+    *outbox.unreadable.lock().unwrap() = unreadable;
+    drop(held);
+    assert_eq!(
+        gateway.said().await,
+        not_read(LEASE, 0, 0, ArtifactReadRefusal::NotStaged)
+    );
+}
+
+/// A lease ended while reads of its files are under way stops them: no
+/// answer of theirs follows its `Ended`, so the gateway, which lets the
+/// lease go at `Ended`, never gets one for a lease it no longer holds. A
+/// read already on the disk cannot be stopped there, so `Ended` waits for
+/// it to return: no read holds a file of a lease said ended.
+///
+/// On the runtime's paused clock, which moves only once every task waits
+/// and no read is on the disk: what the reads would do once returned is
+/// done before the account is asked.
+#[tokio::test(start_paused = true)]
+async fn no_read_answers_after_its_lease_ended() {
+    let (mut gateway, outbox) = Gateway::publishing();
+    gateway.started(LEASE).await;
+    let _answered = publish(&outbox, LEASE).await;
+    assert!(matches!(
+        gateway.said().await,
+        FromEnvironment::Published { artifact: 0, .. }
+    ));
+    let mut begun = outbox.reads_begun();
+    let mut done = outbox.reads_done();
+    let held = ReadsHeld::new(&outbox);
+    gateway.send(read_artifact(LEASE, 0, 0, 8)).await;
+    gateway.send(read_artifact(LEASE, 0, 8, 8)).await;
+    read_said(&mut begun, "began").await;
+    read_said(&mut begun, "began").await;
+    gateway
+        .send(ToEnvironment::End {
+            lease: LEASE.into(),
+        })
+        .await;
+    // The reads are let go from outside the runtime a little later, so an
+    // `Ended` that did not wait for them would be said while they are held.
+    let releasing = outbox.clone();
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        releasing.hold_reads(false);
+    });
+    loop {
+        match gateway.said().await {
+            FromEnvironment::Stopped { .. } => continue,
+            FromEnvironment::Ended { lease, .. } => {
+                assert_eq!(lease, LEASE);
+                break;
+            }
+            other => panic!("the lease's end, got {other:?}"),
+        }
+    }
+    // Both reads had returned from the disk before it was said.
+    assert!(done.try_recv().is_ok() && done.try_recv().is_ok());
+    release.join().unwrap();
+    drop(held);
+    // Nothing of theirs is said: an answer would be on its way ahead of the
+    // account, asked once everything stands still.
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    gateway.settled().await;
+}
+
+/// A gateway that keeps asking for ranges but reads nothing holds a bounded
+/// number of answers on the environment: each read keeps its place under
+/// the bound until its answer reaches the writer, so once the writer's
+/// queue and the connection are full, the next read past the bound is
+/// refused `busy`, which the environment waits to say, and it reads no
+/// more frames meanwhile. Nothing more is read off the disk.
+///
+/// On the runtime's paused clock, which moves only once every task waits
+/// and no read is on the disk: a wait that runs out is the environment
+/// standing still, never a slow machine.
+#[tokio::test(start_paused = true)]
+async fn a_gateway_that_reads_nothing_holds_a_bounded_number_of_answers() {
+    use nessa_protocol::lease::{ArtifactReadRefusal, MAX_ARTIFACT_READS_IN_FLIGHT};
+    let outbox = Arc::new(RecordingOutbox::default());
+    let mut gateway = Gateway::through(
+        4096,
+        Peer::Ssh,
+        MemoryGrants::none(),
+        Arc::new(MemoryLedger::default()),
+        outbox.clone(),
+        None,
+        true,
+        real_time(),
+    );
+    gateway.started(LEASE).await;
+    let _answered = publish(&outbox, LEASE).await;
+    assert!(matches!(
+        gateway.said().await,
+        FromEnvironment::Published { artifact: 0, .. }
+    ));
+    // Asked one at a time without reading anything, each once the one
+    // before it is read off the disk, until the environment stands still
+    // with one not read: refused, or not taken at all.
+    let asked: u64 = 2_000;
+    let mut begun = outbox.reads_begun();
+    let mut sent = 0;
+    for offset in 0..asked {
+        let send = gateway.send(read_artifact(LEASE, 0, offset % 20, 1));
+        if tokio::time::timeout(Duration::from_secs(1), send)
+            .await
+            .is_err()
+        {
+            break;
+        }
+        sent += 1;
+        if tokio::time::timeout(Duration::from_secs(1), begun.recv())
+            .await
+            .is_err()
+        {
+            break;
+        }
+    }
+    assert!(sent < asked, "the environment read all {asked} asks");
+    // What was read off the disk is bounded by what the writer's queue and
+    // the connection hold, and the reads holding their places.
+    let read = outbox.reads.lock().unwrap().len();
+    // No answer frame is under 64 bytes, and the writer holds one more.
+    let bound = OUTPUT_QUEUE + 4096 / 64 + MAX_ARTIFACT_READS_IN_FLIGHT + 1;
+    assert!(read <= bound, "{read} reads off the disk, past {bound}");
+    // Read again, the gateway hears the refusal among the answers.
+    let busy = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let FromEnvironment::ArtifactNotRead { reason, .. } = gateway.said().await {
+                break reason;
+            }
+        }
+    })
+    .await
+    .expect("the refusal in time");
+    assert_eq!(busy, ArtifactReadRefusal::Busy);
+}
+
+/// Once the gateway says `Revoked`, the lease ends and its copies go with
+/// it: a read of a file it had offered is answered not staged.
+#[tokio::test]
+async fn a_read_after_the_gateway_revoked_is_answered_not_staged() {
+    use nessa_protocol::lease::ArtifactReadRefusal;
+    let (mut gateway, outbox) = Gateway::publishing();
+    gateway.started(LEASE).await;
+    let answered = publish(&outbox, LEASE).await;
+    assert!(matches!(
+        gateway.said().await,
+        FromEnvironment::Published { artifact: 0, .. }
+    ));
+    gateway.send(ToEnvironment::Revoked).await;
+    gateway.send(read_artifact(LEASE, 0, 0, 8)).await;
+    let refused = loop {
+        match gateway.said().await {
+            FromEnvironment::Stopped { .. } => continue,
+            other => break other,
+        }
+    };
+    assert_eq!(
+        refused,
+        not_read(LEASE, 0, 0, ArtifactReadRefusal::NotStaged)
+    );
+    assert!(outbox.reads.lock().unwrap().is_empty());
+    // Ended unasked by the gateway: its publisher is told it is not known.
+    assert_eq!(
+        answer_of(answered).await,
+        crate::env_serve::application::PublishAnswer::Unanswered
     );
 }
 

@@ -517,7 +517,7 @@ impl LeaseConnector for Connector {
             from_environment: Box::new(from_environment),
             to_environment: Box::new(to_environment),
             keep: Box::new(()),
-            artifacts: Arc::new(NoChannels),
+            artifacts: super::connector::ArtifactTransport::Channels(Arc::new(NoChannels)),
         })
     }
 }
@@ -528,10 +528,6 @@ struct NoChannels;
 impl super::connector::ArtifactChannels for NoChannels {
     fn open(&self) -> io::Result<super::connector::ArtifactChannel> {
         Err(io::Error::other("no artifact channels"))
-    }
-
-    fn carries_files(&self) -> bool {
-        true
     }
 }
 
@@ -1792,6 +1788,15 @@ impl crate::env_serve::application::ArtifactOutbox for NoOutbox {
         _request: &crate::env_serve::application::PublishRequest,
     ) -> Result<nessa_protocol::lease::StagedArtifact, nessa_protocol::lease::PublishRefusal> {
         Err(nessa_protocol::lease::PublishRefusal::StagingFailed)
+    }
+    fn read(
+        &self,
+        _lease: &str,
+        _artifact: u32,
+        _offset: u64,
+        _length: usize,
+    ) -> std::io::Result<Vec<u8>> {
+        Err(std::io::Error::other("no outbox"))
     }
     fn discard(&self, _lease: &str, _artifact: u32) {}
     fn close(&self, _lease: &str) {}

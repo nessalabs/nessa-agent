@@ -9,7 +9,7 @@
 //! inside a Unix socket's bound (104 bytes on macOS).
 use super::connector::{
     channel_arguments, master_arguments, ssh_arguments, ArtifactChannel, ArtifactChannels,
-    LeaseConnection, LeaseConnector,
+    ArtifactTransport, LeaseConnection, LeaseConnector,
 };
 use super::install::{RemoteShell, ShellFuture};
 use nessa_sdk::domain::agent_execution::leases::SshDestination;
@@ -148,10 +148,10 @@ impl LeaseConnector for OpenSshConnector {
             from_environment: Box::new(stdout),
             to_environment: Box::new(stdin),
             keep: Box::new(KeptChild(child)),
-            artifacts: Arc::new(Channels {
+            artifacts: ArtifactTransport::Channels(Arc::new(Channels {
                 host: host.clone(),
                 control,
-            }),
+            })),
         })
     }
 }
@@ -187,10 +187,6 @@ impl ArtifactChannels for Channels {
             to_host: Box::new(stdin),
             keep: Box::new(KeptChild(child)),
         })
-    }
-
-    fn carries_files(&self) -> bool {
-        true
     }
 }
 
