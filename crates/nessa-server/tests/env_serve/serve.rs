@@ -4017,8 +4017,17 @@ async fn a_command_stopped_for_a_revocation_never_holds_serving_open_once_the_ga
         .await;
     gateway.settled().await;
     // From here the gateway reads nothing: the harness's echoes fill what
-    // the connection and the host's queue hold.
-    for _ in 0..200 {
+    // the connection and the host's queue hold, until the harness, unread,
+    // stops reading its input and overflows it. Only then is every place a
+    // `Ran` could go full.
+    let overflowed = |ledger: &MemoryLedger| {
+        ledger.entries().iter().any(
+            |entry| matches!(entry, LedgerEntry::InputOverflow { lease, .. } if lease == LEASE),
+        )
+    };
+    let mut sent = 0;
+    while !overflowed(&ledger) {
+        assert!(sent < 5000, "the harness never stopped reading its input");
         gateway
             .send(ToEnvironment::Input {
                 lease: LEASE.into(),
@@ -4026,8 +4035,9 @@ async fn a_command_stopped_for_a_revocation_never_holds_serving_open_once_the_ga
                 data: Data(vec![b'x'; 4000]),
             })
             .await;
+        sent += 1;
+        tokio::task::yield_now().await;
     }
-    tokio::time::sleep(Duration::from_millis(200)).await;
     gateway.send(ToEnvironment::Revoked).await;
     // The command is stopped and its end recorded; its `Ran` waits for room.
     tokio::time::timeout(Duration::from_secs(5), async {
@@ -4045,7 +4055,7 @@ async fn a_command_stopped_for_a_revocation_never_holds_serving_open_once_the_ga
     // stays, unread.
     let Gateway {
         writer,
-        frames: _unread,
+        frames: mut unread,
         mut served,
         ..
     } = gateway;
@@ -4067,4 +4077,18 @@ async fn a_command_stopped_for_a_revocation_never_holds_serving_open_once_the_ga
         cleanup: Cleanup::Confirmed { forced: true },
         cause: EndCause::Revoked,
     }));
+    // What did reach the gateway's unread half, up to a frame the host was
+    // cut off writing, never held the `Ran`: it was still waiting for room
+    // when the gateway went, as this test means.
+    let mut delivered = Vec::new();
+    while let Ok(Ok(Some(body))) = tokio::time::timeout(Duration::from_secs(5), unread.next()).await
+    {
+        delivered.push(decode::<FromEnvironment>(&body).unwrap());
+    }
+    assert!(
+        !delivered
+            .iter()
+            .any(|frame| matches!(frame, FromEnvironment::Ran { lease, .. } if lease == COMMAND)),
+        "the Ran reached the gateway before it went"
+    );
 }

@@ -482,7 +482,8 @@ impl HostLink {
 
     /// The host no longer holds a credential to serve this gateway. No lease
     /// is admitted on this connection any more, nor a harness started or a
-    /// file asked for; the revocation is recorded with every lease the host
+    /// file asked for (a command's `Run` still goes, and the host answers
+    /// it as never started); the revocation is recorded with every lease the host
     /// granted on it; the host is told (`Revoked`), and ends
     /// each lease itself with that cause; then each harness lease's ending
     /// cause becomes revoked, unless the host already said why it is ending
@@ -531,9 +532,15 @@ impl HostLink {
         };
         if !recorded {
             // A grant still being answered is included: granted after all,
-            // its end settles nothing either. Refused, it is forgotten
-            // with its route.
-            self.routes().unaudited.extend(carried);
+            // its end settles nothing either. Only leases still routed are
+            // added, under the same lock: one refused or let go meanwhile
+            // was already forgotten, and is not brought back.
+            let mut routes = self.routes();
+            let still: Vec<String> = carried
+                .into_iter()
+                .filter(|lease| routes.leases.contains_key(lease))
+                .collect();
+            routes.unaudited.extend(still);
         }
         let link = self.clone();
         tokio::spawn(async move {
@@ -674,10 +681,6 @@ impl HostLink {
         let (answer, answered) = oneshot::channel();
         {
             let mut routes = self.routes();
-            // Once revoked, the host ends the command lease unrun.
-            if routes.revoked {
-                return None;
-            }
             let route = routes
                 .leases
                 .get_mut(lease)

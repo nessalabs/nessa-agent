@@ -2699,8 +2699,8 @@ async fn a_revoked_link_ends_each_lease_as_revoked_and_closes_once_they_are_ende
     assert_eq!(read_some(&mut harness.output).await, b"ping");
     link.revoke(Duration::from_secs(30));
     link.revoke(Duration::from_secs(30));
-    // From the moment it is revoked, nothing more is started, published or
-    // run on it: the host is ending every lease.
+    // From the moment it is revoked, nothing more is started or published
+    // on it: the host is ending every lease.
     assert_eq!(
         link.start(id.as_str(), BTreeMap::new()).err(),
         Some(super::link::StartError::Closed)
@@ -2715,7 +2715,6 @@ async fn a_revoked_link_ends_each_lease_as_revoked_and_closes_once_they_are_ende
             )
         )
     );
-    assert_eq!(link.run(id.as_str()).await, None);
     assert_eq!(
         *granted.ending.wait_for(Option::is_some).await.unwrap(),
         Some(LeaseEndCause::Revoked)
@@ -2814,7 +2813,8 @@ async fn a_revoked_link_closes_at_its_bound_when_a_lease_is_never_ended() {
 async fn a_revocation_whose_audit_fails_leaves_its_leases_unconfirmed() {
     for failing in [false, true] {
         let audit = Arc::new(Audit::default());
-        let host = environment(serving_commands(), audit.clone());
+        let connector = serving_commands();
+        let host = environment(connector.clone(), audit.clone());
         let commands = host.commands().unwrap();
         let hold = commands
             .grant(&lease(), &work(&["sleep", "60"]))
@@ -2823,7 +2823,11 @@ async fn a_revocation_whose_audit_fails_leaves_its_leases_unconfirmed() {
             .hold;
         let (_stop, stopped) = tokio::sync::watch::channel(None);
         let running = tokio::spawn(hold.run(10_000, stopped));
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        // Revoked once the host is running it, so its stop is the revocation's.
+        until_recorded(&connector, |entry| {
+            matches!(entry, LedgerEntry::CommandStarted { .. })
+        })
+        .await;
         audit.1.store(failing, Ordering::SeqCst);
         host.revoke_connection().await;
         let result = tokio::time::timeout(Duration::from_secs(5), running)
@@ -2867,6 +2871,67 @@ async fn a_revocation_whose_audit_fails_leaves_its_leases_unconfirmed() {
     tokio::time::timeout(Duration::from_secs(5), link.ended())
         .await
         .expect("closed all the same");
+}
+
+/// Waits until the host's ledger holds an entry `recorded` matches.
+async fn until_recorded(connector: &Connector, recorded: impl Fn(&LedgerEntry) -> bool) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !connector.ledger.0.lock().unwrap().iter().any(&recorded) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the host records it");
+}
+
+/// A command granted before its connection was revoked, and run after, is
+/// still sent to the host, which answers it never started and holds
+/// nothing: its lease ended revoked, on the host's own record.
+#[tokio::test]
+async fn a_command_run_after_its_revocation_is_answered_never_started() {
+    let connector = serving_commands();
+    let host = environment(connector.clone(), Arc::new(Audit::default()));
+    let commands = host.commands().unwrap();
+    let id = lease();
+    let hold = commands
+        .grant(&id, &work(&["sleep", "60"]))
+        .await
+        .unwrap()
+        .hold;
+    host.revoke_connection().await;
+    until_recorded(
+        &connector,
+        |entry| matches!(entry, LedgerEntry::Ended { lease, .. } if lease == id.as_str()),
+    )
+    .await;
+    let (_stop, stopped) = tokio::sync::watch::channel(None);
+    let result = tokio::time::timeout(Duration::from_secs(5), hold.run(10_000, stopped))
+        .await
+        .expect("the host answers it");
+    assert_eq!(result.exit, CommandExit::NotStarted);
+    assert_eq!(result.cleanup, Some(LeaseCleanup::NotHeld));
+    let entries = connector.ledger.0.lock().unwrap().clone();
+    assert!(
+        entries.contains(&LedgerEntry::Revoking {
+            lease: id.as_str().into(),
+            peer: Peer::Ssh,
+        }),
+        "{entries:?}"
+    );
+    assert!(
+        entries.contains(&LedgerEntry::Ended {
+            lease: id.as_str().into(),
+            cleanup: Cleanup::NotHeld,
+            cause: EndCause::Revoked,
+        }),
+        "{entries:?}"
+    );
+    assert!(
+        !entries
+            .iter()
+            .any(|entry| matches!(entry, LedgerEntry::CommandStarted { .. })),
+        "{entries:?}"
+    );
 }
 
 /// The first cause known is the one kept: an expiry the host said before
