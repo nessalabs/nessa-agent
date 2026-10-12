@@ -113,6 +113,33 @@ describe("conversation view agreement", () => {
     ).toThrow("Invalid native hooks choice")
   })
 
+  it("refuses two hooks choices for one execution", () => {
+    const base = view() as {
+      tools: Record<string, unknown>[]
+      messages: { parts: Record<string, unknown>[] }[]
+    }
+    base.messages[1].parts.push({
+      offset: 1,
+      kind: "tool",
+      text: "",
+      toolId: "second",
+      noticeId: "",
+    })
+    const second = { ...base.tools[0], toolId: "second" }
+    expect(
+      conversationView(
+        { ...base, tools: [base.tools[0], { ...second, nativeHooks: "off" }] },
+        "conversation",
+      ).tools,
+    ).toHaveLength(2)
+    expect(() =>
+      conversationView(
+        { ...base, tools: [base.tools[0], { ...second, nativeHooks: "on" }] },
+        "conversation",
+      ),
+    ).toThrow("An execution names two native hooks choices")
+  })
+
   it("requires a current transcript state and refuses unconfirmed controls", () => {
     const missing: Record<string, unknown> = view()
     delete missing.transcriptState

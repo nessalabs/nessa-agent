@@ -253,9 +253,12 @@ fn set_blocking(
         // rollback now would contradict it, and a retry would stop at it.
         // The marker stays: the record's directory may not be synced, and
         // the next command or start syncs it before clearing the marker.
+        // The flag follows the record only once its directory syncs; until
+        // then a crash could lose it, so that harness is off.
         match already_recorded(&directory, &change) {
             Ok(true) => {
-                store(&claude, &codex, change.agent, change.enabled);
+                let durable = sync(&audit_directory(&directory)).is_ok();
+                store(&claude, &codex, change.agent, change.enabled && durable);
                 return Err(error);
             }
             Ok(false) => {}
@@ -450,8 +453,10 @@ fn settle_pending(
     if agreed {
         // The command that wrote the record may have stopped before its
         // directory synced.
+        // Until it has, a crash could still lose the record, so that harness
+        // stays off.
         if sync(&audit_directory(directory)).is_err() {
-            return Err((stored, NativeHooksError::Audit));
+            return Err((stored.with(agent, false), NativeHooksError::Audit));
         }
         // The file's own rename may not have survived either. The record
         // decides: the file is written to say what it says, and synced.
@@ -1182,7 +1187,8 @@ mod tests {
         let stored = std::fs::read_to_string(directory.join("native-hooks.json")).unwrap();
         assert!(selection_from_stored(stored.as_bytes()).codex());
         // The record's directory is not confirmed, so the marker stays. A
-        // start that cannot sync that directory keeps both.
+        // start that cannot sync that directory keeps the marker, and keeps
+        // that harness off until the record is durable.
         assert!(directory.join(PENDING).exists());
         let restarted = NativeHooksPreferences::open_syncing(
             directory.clone(),
@@ -1190,7 +1196,7 @@ mod tests {
             audit_unsynced,
         )
         .unwrap();
-        assert!(restarted.selection().codex());
+        assert!(!restarted.selection().codex());
         assert!(directory.join(PENDING).exists());
         // The retry syncs it, meets the outcome record, and reports the
         // choice it records.
@@ -1712,6 +1718,31 @@ mod tests {
             return Err(std::io::Error::other("audit directory sync failed"));
         }
         sync_directory(path)
+    }
+
+    #[tokio::test]
+    async fn a_readable_outcome_whose_directory_does_not_sync_keeps_the_harness_off() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("data");
+        let audit = Arc::new(OutcomeUnconfirmed {
+            inner: DurableNativeHooksAudit::new(
+                directory.join("audit").join("native-hooks"),
+                Arc::new(FixedClock),
+            )
+            .unwrap(),
+        });
+        let preferences =
+            NativeHooksPreferences::open_syncing(directory.clone(), audit, audit_unsynced).unwrap();
+        assert_eq!(
+            preferences
+                .set(change(NativeHooksAgent::Codex, true, "request-not-durable"))
+                .await
+                .unwrap_err(),
+            NativeHooksError::Audit
+        );
+        // A crash could still lose the record, so no start runs with hooks.
+        assert!(!preferences.selection().codex());
+        assert!(directory.join(PENDING).exists());
     }
 
     #[tokio::test]

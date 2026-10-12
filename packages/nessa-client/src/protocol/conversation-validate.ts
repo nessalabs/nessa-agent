@@ -494,6 +494,8 @@ export function conversationView(value: unknown, expected: string): Conversation
     }
   }
   const toolIds = new Set<string>()
+  // One execution runs in one process, so its tools share that start's choice.
+  const executionHooks = new Map<string, string>()
   for (const tool of items(item, "tools", 128)) {
     exact(tool, [
       "executionId",
@@ -513,7 +515,13 @@ export function conversationView(value: unknown, expected: string): Conversation
       if (nativeHooks !== "off" && nativeHooks !== "on")
         throw new Error("Invalid native hooks choice")
     }
-    identity(tool, "executionId")
+    const executionId = identity(tool, "executionId")
+    if (Object.hasOwn(tool, "nativeHooks")) {
+      const recorded = executionHooks.get(executionId)
+      if (recorded !== undefined && recorded !== tool.nativeHooks)
+        throw new Error("An execution names two native hooks choices")
+      executionHooks.set(executionId, tool.nativeHooks as string)
+    }
     identity(tool, "toolId")
     const toolKey = JSON.stringify([tool.executionId, tool.toolId])
     if (toolIds.has(toolKey)) throw new Error("Conversation response repeats a tool")
