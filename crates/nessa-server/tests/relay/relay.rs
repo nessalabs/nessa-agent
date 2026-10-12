@@ -140,6 +140,44 @@ async fn rl1_rl6_a_reader_is_joined_to_its_registered_gateway_and_their_bytes_cr
 }
 
 #[tokio::test]
+async fn rl6_a_pair_ended_from_the_gateway_side_closes_the_reader_and_gives_back_its_places() {
+    let fixture = fixture(RelayLimits {
+        connections: 3,
+        joined: 1,
+        ..small()
+    });
+    let gateway = identity(1);
+    let key = gateway.public_key();
+    let mut serve = fixture.register(&gateway).await;
+    let mut reader = fixture.connect(key).await;
+    let mut accepted = fixture.accept(&mut serve, key).await;
+    assert_eq!(receive(&mut reader).await, RelayFrame::Joined);
+    assert_eq!(receive(&mut accepted).await, RelayFrame::Joined);
+    // Both legs of the pair hold a connection place, the gateway's too.
+    assert!(fixture.relay.admit().is_none());
+
+    drop(accepted);
+    closed(&mut reader).await;
+    // Nothing kept: the joined slot and both connection places come back,
+    // so a second pair forms through the same small limits.
+    let mut second = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if fixture.relay.connections.available_permits() == 2
+                && fixture.relay.joined.available_permits() == 1
+            {
+                return fixture.connect(key).await;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the pair's places came back");
+    let mut accepted = fixture.accept(&mut serve, key).await;
+    assert_eq!(receive(&mut second).await, RelayFrame::Joined);
+    assert_eq!(receive(&mut accepted).await, RelayFrame::Joined);
+}
+
+#[tokio::test]
 async fn rl4_a_reader_asking_for_a_gateway_with_no_registration_is_told_offline() {
     let fixture = fixture(small());
     let mut reader = fixture.connect(identity(1).public_key()).await;
@@ -171,6 +209,42 @@ async fn rl4b_a_registered_gateway_that_does_not_accept_in_time_is_no_answer_nev
         receive(&mut serve).await,
         RelayFrame::Incoming { .. }
     ));
+}
+
+#[tokio::test]
+async fn rl4b_a_reader_that_gave_up_leaves_nothing_waiting_and_its_token_takes_no_one() {
+    let fixture = fixture(RelayLimits {
+        waiting_per_gateway: 1,
+        ..small()
+    });
+    let gateway = identity(1);
+    let key = gateway.public_key();
+    let mut serve = fixture.register(&gateway).await;
+    let mut reader = fixture.connect(key).await;
+    let RelayFrame::Incoming { token } = receive(&mut serve).await else {
+        panic!("no incoming reader");
+    };
+    let join = fixture
+        .timer
+        .started(|_, wait| wait.limit() == JOIN_DEADLINE)
+        .await;
+    fixture.timer.advance_to(join.deadline);
+    assert_eq!(receive(&mut reader).await, RelayFrame::NoAnswer);
+    closed(&mut reader).await;
+    // Its waiting place is free again for the next reader.
+    let mut next = fixture.connect(key).await;
+    let RelayFrame::Incoming { token: theirs } = receive(&mut serve).await else {
+        panic!("no incoming reader");
+    };
+    // A late accept for the first is closed and takes nobody, the next
+    // reader included.
+    let mut late = fixture.open();
+    send(&mut late, RelayFrame::Accept { key, token }).await;
+    closed(&mut late).await;
+    let mut accepted = fixture.open();
+    send(&mut accepted, RelayFrame::Accept { key, token: theirs }).await;
+    assert_eq!(receive(&mut next).await, RelayFrame::Joined);
+    assert_eq!(receive(&mut accepted).await, RelayFrame::Joined);
 }
 
 #[tokio::test]

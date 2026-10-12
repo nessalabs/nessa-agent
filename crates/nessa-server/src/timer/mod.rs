@@ -32,6 +32,7 @@ impl Moment {
         self.0
     }
     /// How long after `earlier` this moment is; zero when it is not after it.
+    #[cfg(any(unix, test))]
     pub(crate) fn since(self, earlier: Self) -> Duration {
         self.0.saturating_sub(earlier.0)
     }
@@ -49,7 +50,7 @@ impl Add<Duration> for Moment {
 /// Resolves once the timer has reached the moment it was asked to wait for.
 pub(crate) type Sleep = Pin<Box<dyn Future<Output = ()> + Send>>;
 
-/// Where the environment role's waits are measured.
+/// Where the environment role's and the relay's waits are measured.
 pub(crate) trait Timer: Send + Sync {
     /// The current moment. Never earlier than one this timer returned before.
     fn now(&self) -> Moment;
@@ -84,6 +85,7 @@ pub(crate) async fn within<T>(
 }
 
 /// [`within`] a deadline `period` from now, read when this is called.
+#[cfg(unix)]
 pub(crate) fn timeout<'a, T: 'a>(
     timer: &'a dyn Timer,
     period: Duration,

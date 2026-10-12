@@ -104,9 +104,9 @@ impl fmt::Debug for RelayFrame {
     /// Keys and tokens are shown short, signatures and nonces not at all.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Serve { key } => write!(f, "Serve({})", short(key)),
-            Self::Connect { key } => write!(f, "Connect({})", short(key)),
-            Self::Accept { key, .. } => write!(f, "Accept({})", short(key)),
+            Self::Serve { key } => write!(f, "Serve({})", key_id(key)),
+            Self::Connect { key } => write!(f, "Connect({})", key_id(key)),
+            Self::Accept { key, .. } => write!(f, "Accept({})", key_id(key)),
             Self::Challenge { .. } => f.write_str("Challenge"),
             Self::Proof { .. } => f.write_str("Proof"),
             Self::Registered => f.write_str("Registered"),
@@ -120,7 +120,8 @@ impl fmt::Debug for RelayFrame {
     }
 }
 
-fn short(key: &GatewayKey) -> String {
+/// A key shortened for logs: its first four bytes in hex.
+pub fn key_id(key: &GatewayKey) -> String {
     key[..4].iter().map(|byte| format!("{byte:02x}")).collect()
 }
 

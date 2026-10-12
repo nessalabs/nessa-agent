@@ -1,6 +1,6 @@
 # Forwarding relay and the sleeping gateway — issue 266
 
-Status: design accepted for building, slice R1 next. Part of
+Status: design accepted; slice R1 (the relay service) in review. Part of
 [#263](https://github.com/nessalabs/nessa-agent/issues/263); it also carries
 the relay half of slice I ([#706](https://github.com/nessalabs/nessa-agent/issues/706)),
 so one relay serves phones, peer gateways and paired environments. The map's
@@ -111,8 +111,9 @@ relay.
 
 The relay speaks a tiny framed preamble on each TCP connection, then
 either keeps the connection as a serve connection or joins it to another
-and stops framing. Frames are a version byte, a type byte and a fixed or
-length-bounded body; no frame is larger than 128 bytes, and a connection
+and stops framing. Frames are a version byte, a type byte, a length byte
+and a body whose length each type fixes; no frame is larger than 67 bytes,
+and a connection
 that sends anything else, or nothing for the preamble deadline, is closed.
 
 | First frame | Who sends it | What follows |
@@ -147,16 +148,22 @@ dials again.
 
 The relay is meant to be cheap to run and hard to misuse:
 
-- At most a fixed number of registrations, of readers waiting for one K,
-  and of joined pairs at once; past any of them a new connection is closed
-  at its first frame.
+- At most a fixed number of open connections (both legs of a joined pair
+  count), of registrations, of readers waiting for one K, and of joined
+  pairs. A connection past the first is closed unread. A new key past the
+  registration limit is closed after its proof, and a key already
+  registered may still replace itself. A reader past the waiting or joined
+  limit is answered `NoAnswer`, so it is never told `Offline` for a
+  gateway that is there.
 - A preamble deadline and a join deadline on the injected clock, as
   `env_serve` waits on its `Timer`.
-- A keepalive on each serve connection: a `Ping` at a fixed interval, and
-  a registration with no `Pong` for three intervals is dropped. That is
-  what turns a sleeping laptop into `Offline` in under a minute instead of
-  when TCP gives up hours later.
+- A keepalive on each serve connection: a `Ping` every 15 seconds, and a
+  registration that has left three in a row unanswered is dropped when the
+  fourth falls due. That is what turns a sleeping laptop into `Offline`
+  within a minute of its last `Pong`, instead of when TCP gives up hours
+  later.
 - A joined pair ends when either side closes; the relay closes the other.
+  There is no half-close: TLS's own close needs none.
   No idle limit is put on a joined pair, because a retained read may sit
   quiet for a long time; TCP keepalive on both legs bounds a dead one.
 
@@ -243,7 +250,7 @@ so typing it once at pairing is enough for the first relay.
 | RL5 | `Accept{K, t}` with a t the relay never sent K, or one already used | Closed; the waiting reader unaffected | R1 |
 | RL6 | A joined pair; either side closes | The other side is closed; nothing kept | R1 |
 | RL7 | A serve connection that misses three `Pong`s | Registration dropped; the next `Connect{K}` is `Offline` | R1 |
-| RL8 | Any limit reached, or a preamble that is malformed, too large or too slow | That connection closed at its first frame; every other registration and pair untouched | R1 |
+| RL8 | Any limit reached, or a preamble that is malformed, too large or too slow | A connection past the connection limit closed unread; a new key past the registration limit closed after its proof; a reader past the waiting or joined limit answered `NoAnswer`; a bad or slow preamble closed. Every other registration and pair untouched | R1 |
 | RL9 | A reader whose direct dial fails and whose relay joins it | The same protected session as direct: same admission, same records, same checkpoint | R2 |
 | RL10 | A relay that alters, drops, reorders or replays bytes after the join, or answers as the gateway | The TLS session fails; the read is `unreachable`; nothing reaches the cache | R2 |
 | RL11 | A revoked reader through the relay | Refused by the gateway exactly as on a direct connection | R2 |

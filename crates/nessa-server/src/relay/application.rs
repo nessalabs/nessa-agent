@@ -21,8 +21,8 @@
 use crate::timer::{within, Moment, Timer};
 use nessa_auth::adapters::pairing::verify_relay_proof;
 use nessa_protocol::relay::{
-    parse_body, parse_header, GatewayKey, JoinToken, RelayFrame, HEADER, JOIN_DEADLINE, MAX_FRAME,
-    MISSED_PINGS, PING_INTERVAL, PREAMBLE_DEADLINE,
+    key_id, parse_body, parse_header, GatewayKey, JoinToken, RelayFrame, HEADER, JOIN_DEADLINE,
+    MAX_FRAME, MISSED_PINGS, PING_INTERVAL, PREAMBLE_DEADLINE,
 };
 use std::{
     collections::HashMap,
@@ -79,7 +79,9 @@ struct Registration {
 /// One reader waiting for its gateway to accept.
 struct Waiting<S> {
     key: GatewayKey,
-    deliver: oneshot::Sender<S>,
+    /// The gateway's new connection, with its connection permit: the
+    /// reader's task holds both for as long as the pair is joined.
+    deliver: oneshot::Sender<(S, OwnedSemaphorePermit)>,
 }
 
 struct Table<S> {
@@ -128,8 +130,9 @@ where
         self.connections.clone().try_acquire_owned().ok()
     }
 
-    /// Serve one admitted connection to its end. Dropping the future
-    /// closes the connection and takes back what it held.
+    /// Serve one admitted connection to its end, holding `permit` as long
+    /// as the connection is open. Dropping the future closes the
+    /// connection and takes back everything it entered in the relay.
     pub(crate) async fn handle(self: Arc<Self>, mut stream: S, permit: OwnedSemaphorePermit) {
         let deadline = self.timer.now() + PREAMBLE_DEADLINE;
         let Ok(Ok(first)) = within(&*self.timer, deadline, read_frame(&mut stream)).await else {
@@ -138,7 +141,8 @@ where
         match first {
             RelayFrame::Serve { key } => self.serve(stream, key, deadline).await,
             RelayFrame::Connect { key } => self.connect(stream, key).await,
-            RelayFrame::Accept { key, token } => self.accept(stream, key, token),
+            // The permit goes with the stream to the reader's task.
+            RelayFrame::Accept { key, token } => return self.accept(stream, key, token, permit),
             other => tracing::debug!(frame = ?other, "relay connection opened with another frame"),
         }
         drop(permit);
@@ -161,7 +165,7 @@ where
             return;
         };
         if !verify_relay_proof(&key, &nonce, &signature) {
-            tracing::debug!(key = ?RelayFrame::Serve { key }, "relay proof refused");
+            tracing::debug!(key = %key_id(&key), "relay proof refused");
             return;
         }
         let (incoming, mut tokens) = mpsc::channel(self.limits.waiting_per_gateway);
@@ -189,6 +193,14 @@ where
             id
         };
         let (reader, mut writer) = split(stream);
+        // Declared after the stream's halves, so it is dropped before them:
+        // the key is gone from the table by the time the gateway sees its
+        // connection close.
+        let _entered = Registered {
+            relay: self,
+            key,
+            id,
+        };
         // Pings fall due every interval from the registration, however long
         // each write took.
         let mut next_ping = self.timer.now() + PING_INTERVAL;
@@ -228,32 +240,22 @@ where
                 }
             }
         }
-        let mut table = self.lock();
-        if table
-            .registrations
-            .get(&key)
-            .is_some_and(|registration| registration.id == id)
-        {
-            table.registrations.remove(&key);
-        }
     }
 
     /// Join a reader to the gateway registered under `key`, or say why not
     /// (rows RL4, RL4b and RL6).
     async fn connect(&self, mut stream: S, key: GatewayKey) {
-        let Some((token, joining, slot)) = self.wait_for(key) else {
-            let answer = if self.lock().registrations.contains_key(&key) {
-                RelayFrame::NoAnswer
-            } else {
-                RelayFrame::Offline
-            };
-            self.send(&mut stream, answer).await;
-            return;
+        let (token, joining, slot) = match self.wait_for(key) {
+            Ok(waiting) => waiting,
+            Err(answer) => {
+                self.send(&mut stream, answer).await;
+                return;
+            }
         };
+        let _entered = Waited { relay: self, token };
         let deadline = self.timer.now() + JOIN_DEADLINE;
         let gateway = within(&*self.timer, deadline, joining).await;
-        let Ok(Ok(mut gateway)) = gateway else {
-            self.lock().waiting.remove(&token);
+        let Ok(Ok((mut gateway, _gateway_permit))) = gateway else {
             self.send(&mut stream, RelayFrame::NoAnswer).await;
             return;
         };
@@ -267,18 +269,33 @@ where
     }
 
     /// Enter a reader as waiting for `key` and send its token to `key`'s
-    /// serve loop. `None` when `key` has no registration, or a limit is
-    /// reached: nothing is left entered then.
+    /// serve loop. Else the answer for the reader, decided under the same
+    /// lock: `Offline` when `key` has no registration, `NoAnswer` when a
+    /// limit is reached. Nothing is left entered then.
+    #[allow(clippy::type_complexity)]
     fn wait_for(
         &self,
         key: GatewayKey,
-    ) -> Option<(JoinToken, oneshot::Receiver<S>, OwnedSemaphorePermit)> {
-        let slot = self.joined.clone().try_acquire_owned().ok()?;
+    ) -> Result<
+        (
+            JoinToken,
+            oneshot::Receiver<(S, OwnedSemaphorePermit)>,
+            OwnedSemaphorePermit,
+        ),
+        RelayFrame,
+    > {
+        let slot = self.joined.clone().try_acquire_owned().ok();
         let mut table = self.lock();
-        let incoming = table.registrations.get(&key)?.incoming.clone();
+        let incoming = table
+            .registrations
+            .get(&key)
+            .ok_or(RelayFrame::Offline)?
+            .incoming
+            .clone();
+        let slot = slot.ok_or(RelayFrame::NoAnswer)?;
         let waiting = table.waiting.values().filter(|w| w.key == key).count();
         if waiting >= self.limits.waiting_per_gateway {
-            return None;
+            return Err(RelayFrame::NoAnswer);
         }
         let token = loop {
             let mut token = [0; 16];
@@ -288,15 +305,15 @@ where
             }
         };
         let (deliver, joining) = oneshot::channel();
-        incoming.try_send(token).ok()?;
+        incoming.try_send(token).map_err(|_| RelayFrame::NoAnswer)?;
         table.waiting.insert(token, Waiting { key, deliver });
-        Some((token, joining, slot))
+        Ok((token, joining, slot))
     }
 
     /// Hand a gateway's new connection to the reader waiting under `token`
     /// (row RL5). A token the relay never sent, one already used, or one
     /// sent for another key is closed, and the waiting reader is untouched.
-    fn accept(&self, stream: S, key: GatewayKey, token: JoinToken) {
+    fn accept(&self, stream: S, key: GatewayKey, token: JoinToken, permit: OwnedSemaphorePermit) {
         let mut table = self.lock();
         if !table.waiting.get(&token).is_some_and(|w| w.key == key) {
             tracing::debug!("relay accept for no waiting reader");
@@ -304,7 +321,7 @@ where
         }
         if let Some(waiting) = table.waiting.remove(&token) {
             // A reader whose deadline passed has gone; the stream is closed.
-            let _ = waiting.deliver.send(stream);
+            let _ = waiting.deliver.send((stream, permit));
         }
     }
 
@@ -327,13 +344,52 @@ where
         };
         matches!(within(&*self.timer, deadline, write).await, Ok(Ok(())))
     }
+}
 
+impl<S> Relay<S> {
     fn lock(&self) -> MutexGuard<'_, Table<S>> {
         self.table.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
-/// Copy both ways until either side ends, then close both (row RL6).
+/// A serve connection's registration, removed when the connection's task
+/// ends however it ends, unless a newer one has taken the key.
+struct Registered<'a, S> {
+    relay: &'a Relay<S>,
+    key: GatewayKey,
+    id: u64,
+}
+
+impl<S> Drop for Registered<'_, S> {
+    fn drop(&mut self) {
+        let mut table = self.relay.lock();
+        if table
+            .registrations
+            .get(&self.key)
+            .is_some_and(|registration| registration.id == self.id)
+        {
+            table.registrations.remove(&self.key);
+        }
+    }
+}
+
+/// A reader's waiting entry, removed when its task ends however it ends.
+/// After a join the entry is already gone and this does nothing.
+struct Waited<'a, S> {
+    relay: &'a Relay<S>,
+    token: JoinToken,
+}
+
+impl<S> Drop for Waited<'_, S> {
+    fn drop(&mut self) {
+        self.relay.lock().waiting.remove(&self.token);
+    }
+}
+
+/// Copy both ways until either side ends, then close both (row RL6). There
+/// is no half-close: what one side still sends after the other stopped
+/// sending is dropped with the pair. The two ends speak TLS, whose own
+/// close needs nothing more.
 async fn join<S>(reader: S, gateway: S)
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
