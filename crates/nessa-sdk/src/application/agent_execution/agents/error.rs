@@ -323,11 +323,12 @@ pub enum AgentError {
         /// Additional cleanup failure, when teardown could not confirm cleanup.
         cleanup_error: Option<Box<AgentError>>,
     },
-    /// A hook rejected a guarded action before it was admitted.
+    /// A before-invocation hook rejected the attempt before the provider was called.
     ///
-    /// This is the before-invocation gate and the permission-gated pre-tool gate.
-    /// The index is the registration that rejected the action. The tool review
-    /// is not retained, and the turn stops. Both gates share this saved shape.
+    /// The index is the registration that rejected the attempt. No provider work
+    /// was dispatched. A permission-review hook does not use this error. Its
+    /// refusal is a tool verdict: the review is kept, and the turn continues
+    /// unless that verdict says otherwise.
     BeforeInvocationHook(HookFailure),
     /// The backend already settled. Do not retry blindly: it may have succeeded.
     AfterInvocationHooks {

@@ -1,17 +1,24 @@
 #![deny(missing_docs)]
 
-use super::observations::{
-    EvaluationSuffix, InvocationObservationWindow, ProposedToolCall, ThinkingDisclosure,
-};
+use super::observations::{EvaluationSuffix, InvocationObservationWindow, ProposedToolCall};
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::{
     ExecutionEvent, ExecutionRequest, ExecutionUpdate,
 };
-use crate::domain::agent_execution::{executions::ExecutionOutcome, sessions::ExecutionSessionId};
+use crate::domain::agent_execution::{
+    executions::ExecutionOutcome, permissions::RefusalOutcome, sessions::ExecutionSessionId,
+};
 use std::{
     panic::{catch_unwind, AssertUnwindSafe},
     sync::Arc,
+    time::Duration,
 };
+
+/// How long a permission-review hook may run before it counts as a failure.
+///
+/// The review is human-paced. Two seconds stays under an eight-second permission
+/// deadline, so a hook that does not return cannot consume that deadline.
+pub(crate) const PRE_TOOL_HOOK_DEADLINE: Duration = Duration::from_secs(2);
 
 /// The exact submitted input and the invocation's observation window.
 /// An invocation is an attempt, not proof of admission. `observations` borrows
@@ -24,8 +31,7 @@ pub struct InvocationContext<'a> {
     /// Read-only suffix of this invocation's retained observations.
     ///
     /// Empty before the provider emits anything. At settlement it is the same
-    /// window a pre-tool callback receives, built with this hook's thinking
-    /// disclosure.
+    /// window a permission-review callback receives. Every event kind is visible.
     pub observations: InvocationObservationWindow<'a>,
 }
 
@@ -47,19 +53,43 @@ pub struct HookFailure {
     pub error: HookError,
 }
 
+/// What a permission-review hook decides about the proposed call.
+///
+/// [`Allow`](Self::Allow) admits the review to the provider's ordinary answer
+/// path. [`Refuse`](Self::Refuse) keeps the review and answers it. A hook
+/// error, panic, or timeout is not a distinct outcome: it is a refusal that
+/// continues the turn with the reason `"hook failed"`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ToolVerdict {
+    /// The review proceeds. The hook does not answer it.
+    Allow,
+    /// The review is refused. `outcome` says whether the turn continues.
+    Refuse {
+        /// Why the hook refused the call.
+        reason: String,
+        /// What the refusal does to the turn.
+        outcome: RefusalOutcome,
+    },
+}
+
+impl ToolVerdict {
+    /// Refuse `outcome` for `reason`.
+    pub fn refuse(reason: impl Into<String>, outcome: RefusalOutcome) -> Self {
+        Self::Refuse {
+            reason: reason.into(),
+            outcome,
+        }
+    }
+
+    pub(crate) fn hook_failed() -> Self {
+        Self::refuse("hook failed", RefusalOutcome::Continue)
+    }
+}
+
 /// Synchronous callbacks must return promptly and must not block on session work.
 /// They may notify scheduling observers, but are not an audit sink or an authority
 /// to mutate domain state. Cloned clients can invoke a shared hook concurrently.
 pub trait InvocationHook: Send + Sync {
-    /// Whether this hook may read provider reasoning in its observation window.
-    ///
-    /// The default withholds thinking. Opt in from the registration
-    /// (`disclose_thinking`) or by overriding this method. The choice is the
-    /// disclosure decision for this hook; it is not inferred from the model.
-    fn thinking_disclosure(&self) -> ThinkingDisclosure {
-        ThinkingDisclosure::Withheld
-    }
-
     /// Runs after capability validation, before calling the backend. Failure
     /// rejects this attempt without dispatching it; no after hook then runs.
     /// `context.observations` borrows the invocation's retained events and is
@@ -68,18 +98,22 @@ pub trait InvocationHook: Send + Sync {
         Ok(())
     }
 
-    /// Runs when a permission-gated tool call is about to be admitted, before
-    /// that review is retained. `call` borrows the proposed name and arguments.
-    /// `observations` is the invocation prefix already retained, not including
-    /// this review. Failure rejects the review and stops the turn; the tool is
-    /// not admitted. The borrows last only for this call. The hook must return
-    /// promptly and must not re-enter the session.
-    fn before_tool_call(
+    /// Runs when a permission-gated tool review is about to be retained.
+    ///
+    /// `call` borrows the proposed name and arguments. `observations` is the
+    /// invocation prefix already retained, not including this review, and it
+    /// includes thinking. Tools the harness runs without asking are not offered
+    /// here. [`Ok`]`(Allow)` admits the review. [`Ok`]`(Refuse)` keeps the
+    /// review and answers it according to [`RefusalOutcome`]. [`Err`] is a hook
+    /// failure: the review is kept and answered as deny-and-continue with the
+    /// reason `"hook failed"`. The borrows last only for this call. The hook
+    /// must return promptly and must not re-enter the session.
+    fn before_permission_review(
         &self,
         _call: &ProposedToolCall<'_>,
         _observations: &InvocationObservationWindow<'_>,
-    ) -> Result<(), HookError> {
-        Ok(())
+    ) -> Result<ToolVerdict, HookError> {
+        Ok(ToolVerdict::Allow)
     }
 
     /// Runs after provider preparation/execution and observation persistence,
@@ -123,7 +157,7 @@ impl InvocationHooks {
         evaluation: &EvaluationSuffix,
     ) -> Result<(), AgentError> {
         for (index, handler) in self.handlers.iter().enumerate() {
-            let observations = evaluation.window(handler.thinking_disclosure());
+            let observations = evaluation.window();
             let context = InvocationContext {
                 session_id,
                 request,
@@ -138,30 +172,27 @@ impl InvocationHooks {
         Ok(())
     }
 
-    /// Evaluate the permission-gated call in `event` against the retained prefix.
+    /// Decide the permission-gated call in `event` against the retained prefix.
     ///
-    /// `events` is the invocation prefix before this review is retained. A hook
-    /// error is the same saved rejection as a before-invocation failure: the
-    /// review is not admitted and the turn stops.
-    pub(crate) fn before_tool(
+    /// The first refusal wins. A hook error or panic is deny-and-continue.
+    pub(crate) fn before_permission_review(
         &self,
         event: &ExecutionEvent,
-        events: &[ExecutionEvent],
-    ) -> Result<(), AgentError> {
+        evaluation: &EvaluationSuffix,
+    ) -> ToolVerdict {
         let ExecutionUpdate::PermissionRequested { tool_id, input, .. } = event.update() else {
-            return Ok(());
+            return ToolVerdict::Allow;
         };
         let call = ProposedToolCall::new(tool_id, input);
-        let mut windows = PreparedWindows::new();
-        for (index, handler) in self.handlers.iter().enumerate() {
-            let observations = windows.get(handler.thinking_disclosure(), events);
-            if let Err(error) = invoke(|| handler.before_tool_call(&call, &observations)) {
-                return Err(
-                    AgentError::BeforeInvocationHook(HookFailure { index, error }).bounded(),
-                );
+        let observations = evaluation.window();
+        for handler in self.handlers.iter() {
+            match invoke_verdict(|| handler.before_permission_review(&call, &observations)) {
+                Ok(ToolVerdict::Allow) => {}
+                Ok(refusal) => return refusal,
+                Err(_) => return ToolVerdict::hook_failed(),
             }
         }
-        Ok(())
+        ToolVerdict::Allow
     }
 
     pub(crate) fn after(
@@ -177,7 +208,7 @@ impl InvocationHooks {
             .iter()
             .enumerate()
             .filter_map(|(index, handler)| {
-                let observations = evaluation.window(handler.thinking_disclosure());
+                let observations = evaluation.window();
                 let context = InvocationContext {
                     session_id,
                     request,
@@ -200,32 +231,12 @@ impl InvocationHooks {
     }
 }
 
-struct PreparedWindows<'a> {
-    withheld: Option<InvocationObservationWindow<'a>>,
-    disclosed: Option<InvocationObservationWindow<'a>>,
-}
-
-impl<'a> PreparedWindows<'a> {
-    fn new() -> Self {
-        Self {
-            withheld: None,
-            disclosed: None,
-        }
-    }
-
-    fn get(
-        &mut self,
-        disclosure: ThinkingDisclosure,
-        events: &'a [ExecutionEvent],
-    ) -> InvocationObservationWindow<'a> {
-        let slot = match disclosure {
-            ThinkingDisclosure::Withheld => &mut self.withheld,
-            ThinkingDisclosure::Disclosed => &mut self.disclosed,
-        };
-        *slot.get_or_insert_with(|| InvocationObservationWindow::view(events, disclosure))
-    }
-}
-
 fn invoke(callback: impl FnOnce() -> Result<(), HookError>) -> Result<(), HookError> {
+    catch_unwind(AssertUnwindSafe(callback)).unwrap_or(Err(HookError::Panicked))
+}
+
+fn invoke_verdict(
+    callback: impl FnOnce() -> Result<ToolVerdict, HookError>,
+) -> Result<ToolVerdict, HookError> {
     catch_unwind(AssertUnwindSafe(callback)).unwrap_or(Err(HookError::Panicked))
 }

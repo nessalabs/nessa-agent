@@ -1,32 +1,38 @@
 //! Typed extension points around a session invocation, independent of providers.
 //!
 //! ```text
-//! retained events --borrow--> pre-tool InvocationObservationWindow
-//! retained events --bounded suffix copy--> before / after window
-//! PermissionRequested --borrow--> ProposedToolCall --> pre-tool hook
+//! retained events --bounded copy--> InvocationObservationWindow --> hook callback
+//! PermissionRequested --> ProposedToolCall --> permission-review hook
+//! ToolVerdict::Allow --> retain the review
+//! ToolVerdict::Refuse { Continue } --> retain, answer the provider's deny option
+//! ToolVerdict::Refuse { EndTurn } --> retain, cancel the turn when the binding can
+//! ToolVerdict::Refuse { CloseSession } --> retain, close with PolicyRefusal
 //! Agent dispatch -> before hooks -> ProviderSessionBackend -> after hooks -> caller
 //! ```
-//! The first two arrows are how a hook sees observations already retained for
-//! the invocation. The pre-tool arrow borrows the live record and allocates
-//! nothing. The turn-boundary arrow copies only the bounded suffix, then
-//! releases the evidence lock before the callback. `ProposedToolCall` borrows
-//! the review that is about to be admitted. The last arrow is call order.
-//! Thinking text is withheld unless the registration opts in. Domain
-//! transitions and mandatory audit delivery keep their existing owners.
+//!
+//! The copy is the evaluation suffix: at most 256 events and 64 KiB, including
+//! thinking. The evidence lock is released before the callback. A permission
+//! review is human-paced, so the hook runs on a blocking thread with a two-second
+//! limit and yields to stop. Every event kind is visible; [`ObservationKind`]
+//! tells them apart. Tools the harness runs without asking never reach the
+//! permission-review hook.
 
 mod observations;
 
 pub(crate) use observations::EvaluationSuffix;
 pub use observations::{
-    InvocationObservationWindow, PhrasePresence, ProposedToolCall, ThinkingDisclosure,
+    InvocationObservationWindow, ObservationKind, PhrasePresence, ProposedToolCall,
 };
 
 mod invocation;
 
-pub use invocation::{HookError, HookFailure, InvocationContext, InvocationHook, InvocationHooks};
+pub(crate) use invocation::PRE_TOOL_HOOK_DEADLINE;
+pub use invocation::{
+    HookError, HookFailure, InvocationContext, InvocationHook, InvocationHooks, ToolVerdict,
+};
 
 mod callbacks;
 pub use callbacks::{
-    AfterInvocation, AfterInvocationEvent, BeforeInvocation, BeforeToolCall, DiscloseThinking,
+    AfterInvocation, AfterInvocationEvent, BeforeInvocation, BeforePermissionReview,
     HookRegistration,
 };

@@ -1371,9 +1371,8 @@ impl SessionManager {
 
     /// Borrow one invocation's retained events while `body` runs.
     ///
-    /// The evidence mutex is held for the call. `body` must not re-enter this
-    /// manager: the hook that reads the borrow is synchronous and returns before
-    /// the guard drops. This does not copy the event payloads.
+    /// The evidence mutex is held for the call. `body` copies what it needs and
+    /// returns before any hook callback. This method does not itself copy payloads.
     pub(crate) async fn with_invocation_events<R>(
         &self,
         index: usize,
@@ -1386,28 +1385,6 @@ impl SessionManager {
             .ok_or_else(|| StorageError::Corrupt("invocation observations have no session".into()))?
             .invocations
             .get(index)
-            .ok_or_else(|| {
-                StorageError::Corrupt("invocation observations have no submitted invocation".into())
-            })?;
-        Ok(body(&record.events))
-    }
-
-    /// Borrow the retained events of the invocation whose execution is `id`.
-    ///
-    /// Same lock and borrow rules as [`Self::with_invocation_events`].
-    pub(crate) async fn with_execution_events<R>(
-        &self,
-        id: &ExecutionId,
-        body: impl FnOnce(&[ExecutionEvent]) -> R + Send,
-    ) -> Result<R, StorageError> {
-        let evidence = self.evidence.lock().await;
-        let record = evidence
-            .observed
-            .as_ref()
-            .ok_or_else(|| StorageError::Corrupt("invocation observations have no session".into()))?
-            .invocations
-            .iter()
-            .find(|record| &record.request.execution_id == id)
             .ok_or_else(|| {
                 StorageError::Corrupt("invocation observations have no submitted invocation".into())
             })?;

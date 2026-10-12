@@ -2,76 +2,32 @@
 
 use super::{
     HookError, InvocationContext, InvocationHook, InvocationObservationWindow, ProposedToolCall,
-    ThinkingDisclosure,
+    ToolVerdict,
 };
 use crate::application::agent_execution::agents::AgentError;
 use crate::domain::agent_execution::executions::ExecutionOutcome;
 use std::sync::Arc;
 
 /// Selects the callback before provider invocation.
-///
-/// Thinking stays withheld. Use [`Self::disclose_thinking`] to opt this
-/// registration into provider reasoning on the observation window.
+#[derive(Clone, Copy, Debug, Default)]
 pub struct BeforeInvocation;
 
 /// Selects the callback after provider invocation and session persistence settle.
-///
-/// Thinking stays withheld. Use [`Self::disclose_thinking`] to opt this
-/// registration into provider reasoning on the observation window.
+#[derive(Clone, Copy, Debug, Default)]
 pub struct AfterInvocation;
 
-/// Selects the callback before a permission-gated tool call is admitted.
+/// Selects the callback before a permission-gated tool review is answered.
 ///
-/// The default withholds thinking. [`Self::disclose_thinking`] opts this
-/// registration into provider reasoning for the window passed beside the call.
-#[derive(Clone, Copy, Debug)]
-pub struct BeforeToolCall {
-    disclosure: ThinkingDisclosure,
-}
+/// The window includes every event kind. [`ObservationKind`](super::ObservationKind)
+/// tells them apart. A tool the harness runs without asking never reaches this
+/// callback.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct BeforePermissionReview;
 
-impl BeforeToolCall {
-    /// Register a pre-tool callback that does not receive thinking text.
+impl BeforePermissionReview {
+    /// Register a permission-review callback.
     pub const fn new() -> Self {
-        Self {
-            disclosure: ThinkingDisclosure::Withheld,
-        }
-    }
-
-    /// Opt this pre-tool callback into provider reasoning.
-    ///
-    /// The returned registration is the explicit disclosure decision. The
-    /// default constructor does not disclose thinking.
-    pub const fn disclose_thinking(self) -> Self {
-        Self {
-            disclosure: ThinkingDisclosure::Disclosed,
-        }
-    }
-}
-
-impl Default for BeforeToolCall {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// A phase selector whose callback receives thinking text in its window.
-///
-/// Wrapping [`BeforeInvocation`] or [`AfterInvocation`] is the explicit opt-in.
-/// The unwrapped selectors withhold thinking.
-#[derive(Clone, Copy, Debug)]
-pub struct DiscloseThinking<E>(E);
-
-impl BeforeInvocation {
-    /// Opt this before-invocation callback into provider reasoning.
-    pub const fn disclose_thinking(self) -> DiscloseThinking<Self> {
-        DiscloseThinking(self)
-    }
-}
-
-impl AfterInvocation {
-    /// Opt this after-invocation callback into provider reasoning.
-    pub const fn disclose_thinking(self) -> DiscloseThinking<Self> {
-        DiscloseThinking(self)
+        Self
     }
 }
 
@@ -92,17 +48,12 @@ pub trait HookRegistration<F> {
 
 struct BeforeCallback<F> {
     callback: F,
-    disclosure: ThinkingDisclosure,
 }
 
 impl<F> InvocationHook for BeforeCallback<F>
 where
     F: for<'a> Fn(&InvocationContext<'a>) -> Result<(), HookError> + Send + Sync,
 {
-    fn thinking_disclosure(&self) -> ThinkingDisclosure {
-        self.disclosure
-    }
-
     fn before_invocation(&self, context: &InvocationContext<'_>) -> Result<(), HookError> {
         (self.callback)(context)
     }
@@ -113,38 +64,18 @@ where
     F: for<'a> Fn(&InvocationContext<'a>) -> Result<(), HookError> + Send + Sync + 'static,
 {
     fn register(self, callback: F) -> Arc<dyn InvocationHook> {
-        Arc::new(BeforeCallback {
-            callback,
-            disclosure: ThinkingDisclosure::Withheld,
-        })
-    }
-}
-
-impl<F> HookRegistration<F> for DiscloseThinking<BeforeInvocation>
-where
-    F: for<'a> Fn(&InvocationContext<'a>) -> Result<(), HookError> + Send + Sync + 'static,
-{
-    fn register(self, callback: F) -> Arc<dyn InvocationHook> {
-        Arc::new(BeforeCallback {
-            callback,
-            disclosure: ThinkingDisclosure::Disclosed,
-        })
+        Arc::new(BeforeCallback { callback })
     }
 }
 
 struct AfterCallback<F> {
     callback: F,
-    disclosure: ThinkingDisclosure,
 }
 
 impl<F> InvocationHook for AfterCallback<F>
 where
     F: for<'a> Fn(&AfterInvocationEvent<'a>) -> Result<(), HookError> + Send + Sync,
 {
-    fn thinking_disclosure(&self) -> ThinkingDisclosure {
-        self.disclosure
-    }
-
     fn after_invocation(
         &self,
         context: &InvocationContext<'_>,
@@ -159,60 +90,43 @@ where
     F: for<'a> Fn(&AfterInvocationEvent<'a>) -> Result<(), HookError> + Send + Sync + 'static,
 {
     fn register(self, callback: F) -> Arc<dyn InvocationHook> {
-        Arc::new(AfterCallback {
-            callback,
-            disclosure: ThinkingDisclosure::Withheld,
-        })
+        Arc::new(AfterCallback { callback })
     }
 }
 
-impl<F> HookRegistration<F> for DiscloseThinking<AfterInvocation>
-where
-    F: for<'a> Fn(&AfterInvocationEvent<'a>) -> Result<(), HookError> + Send + Sync + 'static,
-{
-    fn register(self, callback: F) -> Arc<dyn InvocationHook> {
-        Arc::new(AfterCallback {
-            callback,
-            disclosure: ThinkingDisclosure::Disclosed,
-        })
-    }
-}
-
-struct BeforeToolCallback<F> {
+struct BeforePermissionCallback<F> {
     callback: F,
-    disclosure: ThinkingDisclosure,
 }
 
-impl<F> InvocationHook for BeforeToolCallback<F>
+impl<F> InvocationHook for BeforePermissionCallback<F>
 where
-    F: for<'a> Fn(&ProposedToolCall<'a>, &InvocationObservationWindow<'a>) -> Result<(), HookError>
+    F: for<'a> Fn(
+            &ProposedToolCall<'a>,
+            &InvocationObservationWindow<'a>,
+        ) -> Result<ToolVerdict, HookError>
         + Send
         + Sync,
 {
-    fn thinking_disclosure(&self) -> ThinkingDisclosure {
-        self.disclosure
-    }
-
-    fn before_tool_call(
+    fn before_permission_review(
         &self,
         call: &ProposedToolCall<'_>,
         observations: &InvocationObservationWindow<'_>,
-    ) -> Result<(), HookError> {
+    ) -> Result<ToolVerdict, HookError> {
         (self.callback)(call, observations)
     }
 }
 
-impl<F> HookRegistration<F> for BeforeToolCall
+impl<F> HookRegistration<F> for BeforePermissionReview
 where
-    F: for<'a> Fn(&ProposedToolCall<'a>, &InvocationObservationWindow<'a>) -> Result<(), HookError>
+    F: for<'a> Fn(
+            &ProposedToolCall<'a>,
+            &InvocationObservationWindow<'a>,
+        ) -> Result<ToolVerdict, HookError>
         + Send
         + Sync
         + 'static,
 {
     fn register(self, callback: F) -> Arc<dyn InvocationHook> {
-        Arc::new(BeforeToolCallback {
-            callback,
-            disclosure: self.disclosure,
-        })
+        Arc::new(BeforePermissionCallback { callback })
     }
 }

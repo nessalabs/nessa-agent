@@ -5,35 +5,79 @@
 //! PermissionRequested -----> ProposedToolCall -------------> same callback
 //! ```
 //!
-//! Arrows are borrows. The window stores a start index into the existing slice.
-//! It does not copy payloads, append history, or allocate on construction.
+//! The window borrows a suffix of the existing slice. It does not copy payloads
+//! on construction. The turn-boundary copy is a separate owned suffix, bounded
+//! by the same caps, and it does not clone an oversized body.
 #![deny(missing_docs)]
 
 use crate::application::agent_execution::executions::{ExecutionEvent, ExecutionUpdate};
 use crate::application::agent_execution::tools::ToolReviewInput;
-use crate::domain::agent_execution::{executions::MessageKind, tools::ToolCallId};
+use crate::domain::agent_execution::{
+    executions::{ExecutionId, MessageKind},
+    tools::{ToolCallId, ToolCallUpdate, ToolStatus},
+};
+use std::fmt;
 
-/// Whether a hook may read provider reasoning.
+/// What one retained observation is.
 ///
-/// Handing thinking text to a hook discloses model output that the user-visible
-/// transcript does not. The withheld variant is the default. A hook sees thoughts
-/// only when its registration opts in.
-///
-/// ```
-/// use nessa_sdk::application::agent_execution::hooks::ThinkingDisclosure;
-/// assert_eq!(ThinkingDisclosure::default(), ThinkingDisclosure::Withheld);
-/// ```
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum ThinkingDisclosure {
-    /// Thoughts stay out of the window. They still separate adjacent text chunks.
-    #[default]
-    Withheld,
-    /// Thoughts are visible and searchable, as their own channel.
-    Disclosed,
+/// A hook tells thinking, model text, a tool call, and a tool result apart by
+/// this kind. The window yields the original [`ExecutionEvent`](ExecutionEvent);
+/// [`ObservationKind::of`] reads the same event without a second representation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ObservationKind {
+    /// Provider reasoning. It is its own phrase channel and never joins model text.
+    Thinking,
+    /// Model text the transcript shows.
+    ModelText,
+    /// A tool call the provider has not finished.
+    ToolCall,
+    /// A tool call the provider reported as finished, succeeded or failed.
+    ToolResult,
+    /// A permission review the harness is asking about.
+    PermissionReview,
+    /// A permission review that was cancelled.
+    PermissionCancelled,
+    /// A review the provider declined before it became a choice.
+    ReviewDeclined,
+    /// A question the provider asked.
+    Question,
+    /// A question that is no longer waiting.
+    QuestionClosed,
+    /// The invocation finished.
+    Finished,
 }
 
-/// The proposed permission-gated call, borrowed from the review that is about to
-/// be admitted. This is not a copy of the arguments and not authority to run them.
+impl ObservationKind {
+    /// Kind of `event`.
+    ///
+    /// A tool update with no status, or with [`ToolStatus::Pending`] or
+    /// [`ToolStatus::Running`], is a call. [`ToolStatus::Completed`] and
+    /// [`ToolStatus::Failed`] are results.
+    pub fn of(event: &ExecutionEvent) -> Self {
+        match event.update() {
+            ExecutionUpdate::Message(chunk) => match chunk.kind() {
+                MessageKind::Thought => Self::Thinking,
+                MessageKind::Text => Self::ModelText,
+            },
+            ExecutionUpdate::Tool(tool) => match tool.status() {
+                Some(ToolStatus::Completed | ToolStatus::Failed) => Self::ToolResult,
+                _ => Self::ToolCall,
+            },
+            ExecutionUpdate::PermissionRequested { .. } => Self::PermissionReview,
+            ExecutionUpdate::PermissionCancelled(_) => Self::PermissionCancelled,
+            ExecutionUpdate::ReviewDeclined(_) => Self::ReviewDeclined,
+            ExecutionUpdate::QuestionAsked { .. } => Self::Question,
+            ExecutionUpdate::QuestionClosed { .. } => Self::QuestionClosed,
+            ExecutionUpdate::Finished(_) => Self::Finished,
+        }
+    }
+}
+
+/// The proposed permission-gated call, borrowed from the review under judgement.
+///
+/// This is the review the harness is asking about. A tool the harness runs
+/// without asking does not appear here. The arguments are borrowed, not copied,
+/// and this value is not authority to run them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ProposedToolCall<'a> {
     tool_id: &'a ToolCallId,
@@ -42,11 +86,7 @@ pub struct ProposedToolCall<'a> {
 }
 
 impl<'a> ProposedToolCall<'a> {
-    /// Borrow the tool identity and the exact review input.
-    ///
-    /// `tool_id` is the call the review names. `input` is the name and arguments
-    /// the adapter captured. Neither value is copied.
-    pub fn new(tool_id: &'a ToolCallId, input: &'a ToolReviewInput) -> Self {
+    pub(crate) fn new(tool_id: &'a ToolCallId, input: &'a ToolReviewInput) -> Self {
         Self {
             tool_id,
             name: input.name.as_str(),
@@ -70,16 +110,20 @@ impl<'a> ProposedToolCall<'a> {
     }
 }
 
-/// Where a phrase sits relative to the visible text sequences.
+/// Where a phrase sits relative to the included text sequences.
+///
+/// A hook that needs the whole turn treats [`Inconclusive`](Self::Inconclusive)
+/// as a no. [`InvocationObservationWindow::is_complete`] is the same rule for
+/// the window as a whole: an incomplete window is not proof the phrase is absent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PhrasePresence {
     /// The phrase occurs inside one included logical text sequence.
     Present,
-    /// Every visible text sequence is fully included, and none contains the phrase.
+    /// Every included text sequence is complete, and none contains the phrase.
     Absent,
-    /// A visible text sequence was left outside the window, and the phrase was
-    /// not found in the included part. That absence does not prove the turn
-    /// lacks the phrase.
+    /// Text was left outside the window, and the phrase was not found in the
+    /// included part. That miss does not prove the turn lacks the phrase.
+    /// Treat this as a no when the decision needs the whole turn.
     Inconclusive,
 }
 
@@ -94,10 +138,27 @@ impl PhrasePresence {
         matches!(self, Self::Absent)
     }
 
-    /// The window cut or omitted visible text, and the phrase was not found.
+    /// Text was omitted and the phrase was not found. Treat this as a no when
+    /// the decision needs the whole turn.
     pub fn is_inconclusive(self) -> bool {
         matches!(self, Self::Inconclusive)
     }
+}
+
+/// Counts and omission flags for one evaluation.
+///
+/// The window embeds this so a copied suffix can keep the same facts without
+/// walking the copy again. Debug prints these fields and nothing from the
+/// events themselves.
+#[derive(Clone, Copy)]
+struct WindowFacts {
+    start: usize,
+    included_events: usize,
+    included_payload_bytes: usize,
+    omitted_prefix: bool,
+    omitted_text: bool,
+    incomplete_text: bool,
+    excluded_oversized: bool,
 }
 
 /// Read-only suffix of one invocation's retained observations.
@@ -108,189 +169,182 @@ impl PhrasePresence {
 /// is the callback itself. A hook must not store the window or call back into
 /// the session while the callback runs.
 ///
-/// Adjacent message chunks of the same kind and message identity are one logical
-/// sequence. [`Self::contains_phrase`] searches across those chunk boundaries.
-/// A tool event, a question, or a withheld thought separates sequences. A chunk
-/// cut by the suffix is not treated as proof that the phrase is absent.
-#[derive(Clone, Copy, Debug)]
+/// Every event kind is visible, including provider reasoning, and every kind
+/// spends the same event and byte budget. Adjacent message chunks of the same
+/// [`ObservationKind`] and message identity are one logical sequence.
+/// [`Self::contains_phrase`] searches across those chunk boundaries. Two
+/// messages that both lack an id share one identity, so they join; that can
+/// only add a match, which fails closed for a hook that denies on a phrase.
+/// A tool event, a question, a different kind, or an oversized event separates
+/// sequences. An oversized event is omitted whole and does not end the walk.
+#[derive(Clone, Copy)]
 pub struct InvocationObservationWindow<'a> {
     events: &'a [ExecutionEvent],
-    start: usize,
-    disclosure: ThinkingDisclosure,
-    included_events: usize,
-    included_payload_bytes: usize,
-    omitted_prefix: bool,
-    omitted_text: bool,
-    incomplete_text: bool,
-    excluded_oversized: bool,
+    facts: WindowFacts,
+}
+
+impl fmt::Debug for InvocationObservationWindow<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("InvocationObservationWindow")
+            .field("included_events", &self.facts.included_events)
+            .field("included_payload_bytes", &self.facts.included_payload_bytes)
+            .field("omitted_prefix", &self.facts.omitted_prefix)
+            .field("omitted_text", &self.facts.omitted_text)
+            .field("incomplete_text", &self.facts.incomplete_text)
+            .field("excluded_oversized", &self.facts.excluded_oversized)
+            .finish()
+    }
 }
 
 impl<'a> InvocationObservationWindow<'a> {
-    /// Maximum visible observations in one evaluation.
+    /// Maximum observations in one evaluation.
     ///
     /// ADR 0014 fixed this so a hook walks a turn suffix rather than the
     /// retained history. The history bound stays 262_144 events; this cap does
-    /// not retain anything new.
+    /// not retain anything new. Thinking spends this budget like any other event.
     pub const MAX_EVENTS: usize = 256;
 
-    /// Maximum payload bytes of the visible suffix.
+    /// Maximum payload bytes of the included suffix.
     ///
     /// ADR 0014 fixed this evaluation budget at 64 KiB. An observation larger
-    /// than the budget is omitted whole. Its text is not sliced into the window.
+    /// than the budget is omitted whole and does not end the walk. Its text is
+    /// not sliced into the window. Thinking spends this budget like any other event.
     pub const MAX_PAYLOAD_BYTES: usize = 64 * 1024;
 
-    /// Borrow `events` and select the longest visible suffix that fits.
+    /// Borrow `events` and select the longest suffix that fits.
     ///
-    /// `disclosure` withholds thoughts unless the hook opted in. Withheld
-    /// thoughts do not consume the event or byte budget. The walk is a single
-    /// reverse pass and allocates nothing. Payload bytes are the text or tool
-    /// content a hook can read, not allocator spare capacity of a message chunk.
-    pub fn view(events: &'a [ExecutionEvent], disclosure: ThinkingDisclosure) -> Self {
+    /// The walk counts every event, including thoughts. An event whose own
+    /// payload exceeds [`Self::MAX_PAYLOAD_BYTES`] is omitted whole, recorded
+    /// as oversized, and left as a separator while the walk continues. The
+    /// walk records the omission flags as it goes. It allocates nothing.
+    /// Payload bytes are the text or tool content a hook can read, not spare
+    /// capacity of a message chunk.
+    pub fn view(events: &'a [ExecutionEvent]) -> Self {
         let mut start = events.len();
         let mut included_events = 0usize;
         let mut included_payload_bytes = 0usize;
+        let mut omitted_text = false;
         let mut excluded_oversized = false;
         for (index, event) in events.iter().enumerate().rev() {
-            if !event_visible(event, disclosure) {
-                continue;
-            }
             let payload = payload_bytes(event);
             if payload > Self::MAX_PAYLOAD_BYTES {
                 excluded_oversized = true;
-                break;
+                if is_message(event) {
+                    omitted_text = true;
+                }
+                continue;
             }
             let next_bytes = included_payload_bytes.saturating_add(payload);
             if included_events == Self::MAX_EVENTS || next_bytes > Self::MAX_PAYLOAD_BYTES {
+                if is_message(event) || events[..index].iter().any(is_message) {
+                    omitted_text = true;
+                }
                 break;
             }
             included_events += 1;
             included_payload_bytes = next_bytes;
             start = index;
         }
-        let omitted_prefix = events[..start]
-            .iter()
-            .any(|event| event_visible(event, disclosure));
-        let omitted_text = events[..start]
-            .iter()
-            .any(|event| text_key(event, disclosure).is_some());
-        let incomplete_text = sequence_was_cut(events, start, disclosure);
-        Self {
-            events,
+        let omitted_prefix = start > 0;
+        if omitted_prefix && events[..start].iter().any(is_message) {
+            omitted_text = true;
+        }
+        let facts = WindowFacts {
             start,
-            disclosure,
             included_events,
             included_payload_bytes,
             omitted_prefix,
             omitted_text,
-            incomplete_text,
+            incomplete_text: sequence_was_cut(events, start),
             excluded_oversized,
-        }
+        };
+        Self { events, facts }
     }
 
-    /// Disclosure this window was built with.
-    pub fn disclosure(&self) -> ThinkingDisclosure {
-        self.disclosure
-    }
-
-    /// Visible observations that fit in the suffix.
+    /// Observations that fit in the suffix.
     pub fn included_events(&self) -> usize {
-        self.included_events
+        self.facts.included_events
     }
 
     /// Payload bytes of the included observations.
     pub fn included_payload_bytes(&self) -> usize {
-        self.included_payload_bytes
+        self.facts.included_payload_bytes
     }
 
-    /// A visible observation older than the suffix was left out.
+    /// An observation older than the suffix was left out.
     pub fn omitted_prefix(&self) -> bool {
-        self.omitted_prefix
+        self.facts.omitted_prefix
     }
 
-    /// Visible message or disclosed thought text was left outside the suffix.
+    /// Message text, including thinking, was left outside the included suffix.
     pub fn omitted_text(&self) -> bool {
-        self.omitted_text
+        self.facts.omitted_text
     }
 
     /// The oldest included text chunk continues a sequence that starts outside
     /// the suffix.
     pub fn incomplete_text(&self) -> bool {
-        self.incomplete_text
+        self.facts.incomplete_text
     }
 
     /// An observation was left out because its own payload exceeds
     /// [`Self::MAX_PAYLOAD_BYTES`]. The window does not contain a prefix of that
-    /// observation.
+    /// observation. The walk continued past it.
     pub fn excluded_oversized(&self) -> bool {
-        self.excluded_oversized
+        self.facts.excluded_oversized
     }
 
-    /// The suffix includes every visible observation, with no cut text sequence
-    /// and no oversized omission.
-    pub fn is_complete(&self) -> bool {
-        !self.omitted_prefix && !self.incomplete_text && !self.excluded_oversized
-    }
-
-    /// Visible observations in retained order.
+    /// The suffix includes every observation, with no cut text sequence and no
+    /// oversized omission.
     ///
-    /// The iterator yields the same event references the invocation already
-    /// holds. Withheld thoughts are skipped.
+    /// A hook that needs the whole turn treats `false` as a no.
+    pub fn is_complete(&self) -> bool {
+        !self.facts.omitted_prefix && !self.facts.incomplete_text && !self.facts.excluded_oversized
+    }
+
+    /// Included observations in retained order.
+    ///
+    /// Oversized events and the internal separator used by a copied suffix are
+    /// not yielded. Use [`ObservationKind::of`] on each item to tell thinking,
+    /// model text, a tool call, and a tool result apart.
     pub fn iter(&self) -> impl Iterator<Item = &'a ExecutionEvent> + 'a {
-        let disclosure = self.disclosure;
-        self.events[self.start..]
+        self.events[self.facts.start..]
             .iter()
-            .filter(move |event| event_visible(event, disclosure))
+            .filter(|event| event_included(event))
     }
 
     /// Search included logical text sequences for `phrase`.
     ///
     /// Adjacent chunks of the same kind and message identity are one sequence,
-    /// so a phrase split across those chunks matches. An empty phrase is
-    /// [`PhrasePresence::Absent`]. Finding the phrase is [`PhrasePresence::Present`]
-    /// even when the suffix is otherwise incomplete. A miss is
-    /// [`PhrasePresence::Absent`] only when every visible text sequence is fully
-    /// included. Otherwise a miss is [`PhrasePresence::Inconclusive`].
+    /// so a phrase split across those chunks matches. Messages with no id share
+    /// that identity and join. An empty phrase is [`PhrasePresence::Present`].
+    /// Finding the phrase is [`PhrasePresence::Present`] even when the suffix is
+    /// otherwise incomplete. A miss is [`PhrasePresence::Absent`] only when no
+    /// text was left out. Otherwise a miss is [`PhrasePresence::Inconclusive`],
+    /// which a hook treats as a no when it needs the whole turn.
     ///
-    /// The search does not copy observation text. It allocates the needle's
-    /// failure table only.
+    /// A needle longer than the included payload cannot match, and the search
+    /// returns before allocating the needle's failure table. Otherwise the
+    /// search allocates only that table.
     pub fn contains_phrase(&self, phrase: &str) -> PhrasePresence {
         if phrase.is_empty() {
-            return PhrasePresence::Absent;
+            return PhrasePresence::Present;
+        }
+        if phrase.len() > self.facts.included_payload_bytes {
+            return if self.facts.omitted_text {
+                PhrasePresence::Inconclusive
+            } else {
+                PhrasePresence::Absent
+            };
         }
         if self.phrase_in_sequences(phrase) {
             return PhrasePresence::Present;
         }
-        if self.omitted_text || self.incomplete_text {
+        if self.facts.omitted_text {
             PhrasePresence::Inconclusive
         } else {
             PhrasePresence::Absent
-        }
-    }
-
-    fn metrics_from(&self, origin: usize) -> WindowMetrics {
-        WindowMetrics {
-            start: self.start - origin,
-            disclosure: self.disclosure,
-            included_events: self.included_events,
-            included_payload_bytes: self.included_payload_bytes,
-            omitted_prefix: self.omitted_prefix,
-            omitted_text: self.omitted_text,
-            incomplete_text: self.incomplete_text,
-            excluded_oversized: self.excluded_oversized,
-        }
-    }
-
-    fn from_metrics(events: &'a [ExecutionEvent], metrics: WindowMetrics) -> Self {
-        Self {
-            events,
-            start: metrics.start,
-            disclosure: metrics.disclosure,
-            included_events: metrics.included_events,
-            included_payload_bytes: metrics.included_payload_bytes,
-            omitted_prefix: metrics.omitted_prefix,
-            omitted_text: metrics.omitted_text,
-            incomplete_text: metrics.incomplete_text,
-            excluded_oversized: metrics.excluded_oversized,
         }
     }
 
@@ -299,19 +353,14 @@ impl<'a> InvocationObservationWindow<'a> {
         let fail = failure_table(needle);
         let mut matched = 0usize;
         let mut previous: Option<usize> = None;
-        for (index, event) in self.events.iter().enumerate().skip(self.start) {
-            let Some(text) = visible_text(event, self.disclosure) else {
+        for (index, event) in self.events.iter().enumerate().skip(self.facts.start) {
+            let Some(text) = searchable_text(event) else {
                 previous = None;
                 matched = 0;
                 continue;
             };
-            if let Some(prior) = previous {
-                let adjacent = index == prior + 1
-                    && text_key(&self.events[prior], self.disclosure)
-                        == text_key(event, self.disclosure);
-                if !adjacent {
-                    matched = 0;
-                }
+            if previous.is_some_and(|prior| text_key(&self.events[prior]) != text_key(event)) {
+                matched = 0;
             }
             previous = Some(index);
             for &byte in text.as_bytes() {
@@ -330,64 +379,54 @@ impl<'a> InvocationObservationWindow<'a> {
     }
 }
 
-fn event_visible(event: &ExecutionEvent, disclosure: ThinkingDisclosure) -> bool {
-    match event.update() {
-        ExecutionUpdate::Message(chunk) => {
-            disclosure == ThinkingDisclosure::Disclosed || chunk.kind() == MessageKind::Text
-        }
-        _ => true,
-    }
+fn event_included(event: &ExecutionEvent) -> bool {
+    !is_separator_marker(event)
+        && payload_bytes(event) <= InvocationObservationWindow::MAX_PAYLOAD_BYTES
 }
 
-fn visible_text(event: &ExecutionEvent, disclosure: ThinkingDisclosure) -> Option<&str> {
+fn is_message(event: &ExecutionEvent) -> bool {
+    matches!(event.update(), ExecutionUpdate::Message(_))
+}
+
+fn searchable_text(event: &ExecutionEvent) -> Option<&str> {
+    if !event_included(event) {
+        return None;
+    }
     match event.update() {
-        ExecutionUpdate::Message(chunk)
-            if disclosure == ThinkingDisclosure::Disclosed || chunk.kind() == MessageKind::Text =>
-        {
-            Some(chunk.as_str())
-        }
+        ExecutionUpdate::Message(chunk) => Some(chunk.as_str()),
         _ => None,
     }
 }
 
-fn text_key(
-    event: &ExecutionEvent,
-    disclosure: ThinkingDisclosure,
-) -> Option<(MessageKind, Option<&str>)> {
+fn text_key(event: &ExecutionEvent) -> Option<(MessageKind, Option<&str>)> {
     match event.update() {
-        ExecutionUpdate::Message(chunk)
-            if disclosure == ThinkingDisclosure::Disclosed || chunk.kind() == MessageKind::Text =>
-        {
+        ExecutionUpdate::Message(chunk) if event_included(event) => {
             Some((chunk.kind(), chunk.message_id()))
         }
         _ => None,
     }
 }
 
-fn sequence_was_cut(
-    events: &[ExecutionEvent],
-    start: usize,
-    disclosure: ThinkingDisclosure,
-) -> bool {
+fn sequence_was_cut(events: &[ExecutionEvent], start: usize) -> bool {
     let Some(index) = events
         .iter()
         .enumerate()
         .skip(start)
-        .find_map(|(index, event)| text_key(event, disclosure).map(|_| index))
+        .find_map(|(index, event)| text_key(event).map(|_| index))
     else {
         return false;
     };
-    if index == 0 {
+    if index != start || index == 0 {
         return false;
     }
-    text_key(&events[index - 1], disclosure) == text_key(&events[index], disclosure)
-        && index - 1 < start
+    let previous = &events[index - 1];
+    event_included(previous) && text_key(previous) == text_key(&events[index])
 }
 
 fn payload_bytes(event: &ExecutionEvent) -> usize {
     match event.update() {
         ExecutionUpdate::Finished(_) | ExecutionUpdate::QuestionClosed { .. } => 0,
-        ExecutionUpdate::Message(chunk) => chunk.as_str().len(),
+        ExecutionUpdate::Message(chunk) => chunk.payload_bytes(),
         ExecutionUpdate::Tool(tool) => tool.payload_bytes(),
         ExecutionUpdate::PermissionRequested {
             input,
@@ -413,53 +452,25 @@ fn payload_bytes(event: &ExecutionEvent) -> usize {
     }
 }
 
-#[derive(Clone, Copy)]
-struct WindowMetrics {
-    start: usize,
-    disclosure: ThinkingDisclosure,
-    included_events: usize,
-    included_payload_bytes: usize,
-    omitted_prefix: bool,
-    omitted_text: bool,
-    incomplete_text: bool,
-    excluded_oversized: bool,
+fn is_separator_marker(event: &ExecutionEvent) -> bool {
+    matches!(
+        event.update(),
+        ExecutionUpdate::Tool(tool) if tool.id().as_str().starts_with('\u{0}')
+    )
 }
 
-/// Owned suffix of one invocation, used at the turn boundary.
-///
-/// The pre-tool hook borrows the live record. Before and after hooks run
-/// outside that borrow: copying the bounded suffix drops the evidence lock
-/// before any callback, so a hook cannot stall session admission. The copy
-/// starts at the older of the withheld and disclosed windows and keeps their
-/// omission facts. It does not copy the omitted prefix and does not allocate
-/// on the pre-tool path.
-pub(crate) struct EvaluationSuffix {
-    events: Vec<ExecutionEvent>,
-    withheld: WindowMetrics,
-    disclosed: WindowMetrics,
-}
-
-impl EvaluationSuffix {
-    /// Copy the suffix `view` would expose for either disclosure.
-    pub(crate) fn capture(events: &[ExecutionEvent]) -> Self {
-        let withheld = InvocationObservationWindow::view(events, ThinkingDisclosure::Withheld);
-        let disclosed = InvocationObservationWindow::view(events, ThinkingDisclosure::Disclosed);
-        let origin = withheld.start.min(disclosed.start);
-        Self {
-            events: events[origin..].to_vec(),
-            withheld: withheld.metrics_from(origin),
-            disclosed: disclosed.metrics_from(origin),
-        }
-    }
-
-    /// Window for `disclosure`, borrowing this suffix.
-    pub(crate) fn window(&self, disclosure: ThinkingDisclosure) -> InvocationObservationWindow<'_> {
-        let metrics = match disclosure {
-            ThinkingDisclosure::Withheld => self.withheld,
-            ThinkingDisclosure::Disclosed => self.disclosed,
-        };
-        InvocationObservationWindow::from_metrics(&self.events, metrics)
-    }
+fn separator_marker(id: &ExecutionId) -> ExecutionEvent {
+    ExecutionEvent::new(
+        id.clone(),
+        ExecutionUpdate::Tool(ToolCallUpdate::new(
+            ToolCallId::new("\u{0}omitted").expect("separator id is not empty"),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )),
+    )
 }
 
 fn failure_table(needle: &[u8]) -> Vec<usize> {
@@ -478,6 +489,68 @@ fn failure_table(needle: &[u8]) -> Vec<usize> {
         }
     }
     fail
+}
+
+/// Owned suffix of one invocation, used when a hook must not hold the evidence lock.
+///
+/// The copy includes only events that fit, plus a marker where an oversized
+/// event sat inside the span so adjacent text does not join. It does not copy
+/// the omitted prefix and does not clone an oversized body. The markers are not
+/// part of [`InvocationObservationWindow::iter`].
+pub(crate) struct EvaluationSuffix {
+    events: Vec<ExecutionEvent>,
+    facts: WindowFacts,
+}
+
+impl EvaluationSuffix {
+    /// Copy the suffix [`InvocationObservationWindow::view`] would expose.
+    pub(crate) fn capture(events: &[ExecutionEvent]) -> Self {
+        let view = InvocationObservationWindow::view(events);
+        let mut copied = Vec::new();
+        if let Some(id) = events
+            .get(view.facts.start)
+            .map(ExecutionEvent::execution_id)
+        {
+            for event in events.iter().skip(view.facts.start) {
+                if payload_bytes(event) > InvocationObservationWindow::MAX_PAYLOAD_BYTES {
+                    copied.push(separator_marker(id));
+                } else {
+                    copied.push(event.clone());
+                }
+            }
+        }
+        Self {
+            events: copied,
+            facts: WindowFacts {
+                start: 0,
+                ..view.facts
+            },
+        }
+    }
+
+    /// Window over this suffix. The omission facts are the ones capture recorded.
+    pub(crate) fn window(&self) -> InvocationObservationWindow<'_> {
+        InvocationObservationWindow {
+            events: &self.events,
+            facts: self.facts,
+        }
+    }
+
+    /// No events, and the omission flags say the turn was not captured.
+    pub(crate) fn incomplete() -> Self {
+        Self {
+            events: Vec::new(),
+            facts: WindowFacts {
+                start: 0,
+                included_events: 0,
+                included_payload_bytes: 0,
+                omitted_prefix: true,
+                omitted_text: true,
+                incomplete_text: true,
+                excluded_oversized: false,
+            },
+        }
+    }
 }
 
 #[cfg(test)]

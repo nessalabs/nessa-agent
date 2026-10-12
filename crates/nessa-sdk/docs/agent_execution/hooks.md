@@ -12,20 +12,17 @@ agent.add_hook(AfterInvocation, |event: &AfterInvocationEvent<'_>| {
     // event.context.observations is the turn's bounded window.
     Ok(())
 });
-agent.add_hook(BeforeToolCall::new(), |call: &ProposedToolCall<'_>, observations: &InvocationObservationWindow<'_>| {
-    // `call` borrows the review that is about to be admitted.
-    // `observations` borrows the invocation prefix already retained.
+agent.add_hook(BeforePermissionReview::new(), |call: &ProposedToolCall<'_>, observations: &InvocationObservationWindow<'_>| {
+    // `call` borrows the review under judgement.
+    // `observations` is the invocation prefix already retained, every kind included.
     let _ = (call.name(), observations.contains_phrase("do not run"));
-    Ok(())
+    Ok(ToolVerdict::Allow)
 });
 ```
 
-`BeforeToolCall::new` withholds provider reasoning. `BeforeToolCall::new().disclose_thinking()`,
-and `BeforeInvocation::disclose_thinking()` / `AfterInvocation::disclose_thinking()`,
-are the explicit opt-in. A custom `InvocationHook` overrides
-`thinking_disclosure` for the same choice. Withheld thoughts are absent from
-the window's iterator and from phrase search, and they still separate
-neighboring text chunks.
+`ObservationKind::of` tells thinking, model text, a tool call, and a tool result
+apart on each event the window yields. Thinking is visible and spends the same
+budget as any other event. A thought does not join neighboring model text.
 
 For a cohesive extension that implements both callbacks, implement
 `InvocationHook` and register it with `agent.add_invocation_hook(Arc::new(hook))`.
@@ -36,33 +33,40 @@ to subsequent invocations. No mutable global registry or untyped event bus exist
 ```text
 Agent::invoke -> capability validation -> save submitted input
     -> before hooks -> provider preparation/execution
-    -> permission-gated review -> pre-tool hooks -> retain that review
-    -> save settlement -> after hooks -> result
+    -> permission-gated review -> permission-review hooks -> retain that review
+    -> verdict -> save settlement -> after hooks -> result
 ```
 
 Arrows show call order. The hooks are application extension points around an
 invocation attempt. They are not domain events or provider model/tool-step hooks.
-Claude Code and Codex reach the pre-tool gate through the permission exchange
-this application already observes.
+Claude Code and Codex reach the permission-review gate through the permission
+exchange this application already observes. A tool the harness runs without
+asking is not offered to that hook.
 
-`InvocationContext::observations` and the pre-tool `observations` argument are
-the same `InvocationObservationWindow`. It is a read-only suffix of
+`InvocationContext::observations` and the permission-review `observations`
+argument are the same `InvocationObservationWindow`. It is a read-only suffix of
 `InvocationRecord.events`, capped at 256 events and 64 KiB of payload per
 evaluation ([ADR 0014](../../../../docs/adr/todo/0014-nessa-owned-policy-hooks.md),
 [ADR 133](../../../../docs/adr/todo/133-hook-invocation-context.md)). Those caps
-do not change how much history the session retains. An event larger than 64 KiB
-is omitted whole. The window reports an omitted prefix, omitted text, a cut
-text sequence, and an oversized omission. `contains_phrase` treats adjacent
-chunks of the same kind and message identity as one sequence, so a phrase split
-across chunk boundaries still matches. A miss is `Absent` only when every
-visible sequence is fully included; otherwise it is `Inconclusive`.
+do not change how much history the session retains. Thinking spends the budget.
+An event larger than 64 KiB is omitted whole, and the walk continues past it.
+The window reports an omitted prefix, omitted text, a cut text sequence, and an
+oversized omission. `contains_phrase` treats adjacent chunks of the same kind
+and message identity as one sequence, so a phrase split across chunk boundaries
+still matches. Messages that both lack an id share that identity. A miss is
+`Absent` only when no text was left out; otherwise it is `Inconclusive`. A hook
+that needs the whole turn treats `Inconclusive`, and `!is_complete()`, as a no.
 
-The pre-tool callback borrows the live record and runs before that review is
-saved. It must return promptly and must not re-enter the session. Before and
-after callbacks receive a copy of the bounded suffix, so they do not hold the
-session evidence lock. A pre-tool `Err` is `AgentError::BeforeInvocationHook`:
-the review is not retained and the turn stops. An incomplete window is reported
-to the hook. It does not by itself reject the tool.
+The suffix is copied and the evidence lock is released before the callback. A
+permission-review hook runs on a blocking thread for at most two seconds and
+yields when stop arrives. `ToolVerdict::Allow` leaves the review for the
+provider's ordinary answer. `Refuse { Continue }` keeps the review and answers
+the provider's deny option, so the agent continues. A continue with no deny
+option is an end-turn. `Refuse { EndTurn }` cancels the turn when the binding
+can, and does not close the session. `Refuse { CloseSession }` closes with
+`SessionCloseRequest::PolicyRefusal`. A hook error, panic, or timeout is
+deny-and-continue with the reason `"hook failed"`. An incomplete window is
+reported to the hook. It does not by itself reject the tool.
 
 - Capability rejection runs no callbacks. A before failure stops the remaining
   before callbacks and prevents provider dispatch. No after callbacks then run;
@@ -77,14 +81,16 @@ to the hook. It does not by itself reject the tool.
   final hook error is not automatically saved as the invocation result. Queued
   invocation receipts retain the final hook outcome through scheduling persistence.
   Recovery follows the [submission retry contract](scheduling.md#idempotent-submission-retries).
-- Unwinding callback panics become `HookError::Panicked`. An aborting process cannot
-  be recovered. Callbacks must return promptly: no blocking I/O, waiting for agent
-  work, or synchronously starting another invocation. Notify an independently
-  owned coordinator through a nonblocking port when asynchronous work is needed.
+- Unwinding callback panics on the permission-review gate become deny-and-continue.
+  A before-invocation panic is `HookError::Panicked` and rejects the attempt.
+  An aborting process cannot be recovered. Callbacks must return promptly: no
+  blocking I/O, waiting for agent work, or synchronously starting another
+  invocation. Notify an independently owned coordinator through a nonblocking
+  port when asynchronous work is needed.
 - Hooks receive borrowed input/results. They cannot mutate domain aggregates,
   replace validated input, grant permission, or convert failure into success through
   the hook interface. Composition must register trusted callbacks because they can
-  inspect sensitive input.
+  inspect sensitive input, including thinking.
 - Dropping an unpolled direct `invoke` runs nothing. Once its first poll acquires
   the invocation slot, Agent supervises admission, provider execution, observation
   persistence, and after callbacks independently of the waiting caller. Dropping

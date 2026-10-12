@@ -14,7 +14,7 @@ unrelated future systems.
 | [Dependency injection](../dependency-injection.md) | Current composition rules shared across repository contexts |
 | [Streaming message commit](../streaming-message-commit.md) | Implemented local message cadence, timer seam, and write orderings for #294 |
 | [Nessa-owned policy hooks](../../adr/todo/0014-nessa-owned-policy-hooks.md) | Proposed decision for hook boundaries, disclosure, failure and attribution; implementation remains tracked by #130 |
-| [Invocation-window disclosure](../../adr/todo/133-hook-invocation-context.md) | Proposed slice of 0014 for #133: thinking reaches a hook only by an explicit opt-in |
+| [Invocation window](../../adr/todo/133-hook-invocation-context.md) | Proposed slice of 0014 for #133: a permission-review hook sees every event kind, thinking included, inside the same evaluation budget |
 | [Hook capability survey](hook-capabilities.md) | Pinned Claude/Codex/Opencode source evidence, unpinned Kiro observations, and explicit limits on Nessa enforcement |
 | [Telemetry](telemetry.md) | Proposed research behind [ADR 195](../../adr/todo/195-tracing-is-the-telemetry-port.md): what exists, the `tracing`-as-port design, its growth costs, and the slices tracked under #195 |
 

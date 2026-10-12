@@ -12,7 +12,7 @@ separate proposed work. Local snapshots and submission retry recovery are implem
 | [Agent](agent.md) | Entry point, identity, model/operation capabilities, automatic storage, and UI flow |
 | [Lifecycle](lifecycle.md) | Live sessions, execution boundaries, cleanup, and provider-context restoration |
 | [Scheduling](scheduling.md) | FIFO follow-ups, boundary/native steering, withdrawal, idempotent retries, and retained evidence |
-| [Hooks](hooks.md) | Typed before, pre-tool, and after invocation callbacks, the bounded observation window, and failure semantics |
+| [Hooks](hooks.md) | Typed before, permission-review, and after invocation callbacks, the bounded observation window, and failure semantics |
 | [Permissions](permissions.md) | Offered choices, attribution, cancellation causes, and audit evidence |
 | [Prompts](prompts.md) | Immutable system instructions, contribution provenance, and new user input |
 | [Tools](tools.md) | Immutable sparse updates, observed snapshots, and review input |

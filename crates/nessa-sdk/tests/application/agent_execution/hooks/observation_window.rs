@@ -1,10 +1,11 @@
 use super::super::agents::MemoryStorage;
 use super::super::support::*;
 use nessa_sdk::application::agent_execution::hooks::{
-    HookError, HookFailure, InvocationContext, InvocationHook, InvocationObservationWindow,
-    PhrasePresence, ProposedToolCall, ThinkingDisclosure,
+    BeforePermissionReview, HookError, InvocationContext, InvocationHook,
+    InvocationObservationWindow, ObservationKind, PhrasePresence, ProposedToolCall, ToolVerdict,
 };
-use std::sync::atomic::{AtomicBool, Ordering};
+use nessa_sdk::domain::agent_execution::permissions::RefusalOutcome;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 struct ScriptedEvents {
     events: Vec<ExecutionEvent>,
@@ -30,6 +31,8 @@ impl ExecutionEventStream for ScriptedEvents {
 
 struct ScriptedBackend {
     started: Arc<AtomicBool>,
+    answered: Arc<AtomicUsize>,
+    closes: Arc<Mutex<Vec<SessionCloseRequest>>>,
 }
 
 impl ProviderSessionBackend for ScriptedBackend {
@@ -58,7 +61,9 @@ impl ProviderSessionBackend for ScriptedBackend {
         &self,
         _: PermissionAnswer,
     ) -> ProviderOperationFuture<'_, PermissionResolution> {
-        Box::pin(async {
+        let answered = self.answered.clone();
+        Box::pin(async move {
+            answered.fetch_add(1, Ordering::SeqCst);
             Err(ProviderOperationFailure::permission_answer(
                 AgentError::StalePermission,
                 ProviderSessionState::Usable,
@@ -77,7 +82,8 @@ impl ProviderSessionBackend for ScriptedBackend {
             ))
         })
     }
-    fn close(&self, _: SessionCloseRequest) -> CleanupFuture<'_> {
+    fn close(&self, request: SessionCloseRequest) -> CleanupFuture<'_> {
+        self.closes.lock().unwrap().push(request);
         Box::pin(async { CleanupReport::confirmed(CloseOutcome { forced: false }) })
     }
 }
@@ -85,6 +91,8 @@ impl ProviderSessionBackend for ScriptedBackend {
 struct ScriptedProvider {
     events: Mutex<Option<Vec<ExecutionEvent>>>,
     started: Arc<AtomicBool>,
+    answered: Arc<AtomicUsize>,
+    closes: Arc<Mutex<Vec<SessionCloseRequest>>>,
 }
 
 impl AgentProvider for ScriptedProvider {
@@ -101,6 +109,8 @@ impl AgentProvider for ScriptedProvider {
                     ExecutionSessionId::new("context").unwrap(),
                     Arc::new(ScriptedBackend {
                         started: self.started.clone(),
+                        answered: self.answered.clone(),
+                        closes: self.closes.clone(),
                     }),
                     capabilities(),
                 ),
@@ -163,22 +173,30 @@ fn script() -> Vec<ExecutionEvent> {
 
 struct Seen {
     phase: &'static str,
-    disclosure: ThinkingDisclosure,
     call: Option<String>,
+    kinds: Vec<ObservationKind>,
     split: PhrasePresence,
     secret: PhrasePresence,
     included: usize,
 }
 
-async fn agent_with(
-    events: Vec<ExecutionEvent>,
-    hooks: Vec<Arc<dyn InvocationHook>>,
-) -> (Agent, MemoryStorage) {
+struct Fixture {
+    agent: Agent,
+    storage: MemoryStorage,
+    answered: Arc<AtomicUsize>,
+    closes: Arc<Mutex<Vec<SessionCloseRequest>>>,
+}
+
+async fn agent_with(events: Vec<ExecutionEvent>, hooks: Vec<Arc<dyn InvocationHook>>) -> Fixture {
     let storage = MemoryStorage::default();
+    let answered = Arc::new(AtomicUsize::new(0));
+    let closes = Arc::new(Mutex::new(Vec::new()));
     let agent = attached_agent(
         Arc::new(ScriptedProvider {
             events: Mutex::new(Some(events)),
             started: Arc::new(AtomicBool::new(false)),
+            answered: answered.clone(),
+            closes: closes.clone(),
         }),
         storage.manager().await,
     )
@@ -187,7 +205,12 @@ async fn agent_with(
     for hook in hooks {
         agent.add_invocation_hook(hook);
     }
-    (agent, storage)
+    Fixture {
+        agent,
+        storage,
+        answered,
+        closes,
+    }
 }
 
 fn request() -> ExecutionRequest {
@@ -199,92 +222,113 @@ fn request() -> ExecutionRequest {
     }
 }
 
+fn second_request() -> ExecutionRequest {
+    ExecutionRequest {
+        execution_id: ExecutionId::new("turn-2").unwrap(),
+        user_message: UserMessage::text_only(PromptText::new("again").unwrap()),
+        estimated_input_tokens: 1,
+        reserved_output_tokens: 100,
+    }
+}
+
 #[tokio::test]
-async fn pre_tool_and_turn_boundary_share_the_window_and_the_thinking_opt_in() {
+async fn pre_tool_and_turn_boundary_share_kinds_and_thinking() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let tool_seen = seen.clone();
     let after_seen = seen.clone();
-    let disclosed_seen = seen.clone();
-    let (agent, _) = agent_with(
+    let fixture = agent_with(
         script(),
         vec![
-            Arc::new(BeforeToolHook {
+            Arc::new(ReviewHook {
                 seen: tool_seen,
-                reject: false,
+                verdict: ToolVerdict::Allow,
             }),
-            Arc::new(AfterHook {
-                seen: after_seen,
-                disclose: false,
-            }),
-            Arc::new(AfterHook {
-                seen: disclosed_seen,
-                disclose: true,
-            }),
+            Arc::new(AfterHook { seen: after_seen }),
         ],
     )
     .await;
-    agent
+    fixture
+        .agent
         .invoke(request(), close_action())
         .await
         .expect("hook admitted the review");
     let seen = seen.lock().unwrap();
-    assert_eq!(seen.len(), 3);
+    assert_eq!(seen.len(), 2);
     assert_eq!(seen[0].phase, "tool");
     assert_eq!(seen[0].call.as_deref(), Some("Bash"));
-    assert_eq!(seen[0].disclosure, ThinkingDisclosure::Withheld);
+    assert_eq!(
+        seen[0].kinds,
+        vec![
+            ObservationKind::Thinking,
+            ObservationKind::ModelText,
+            ObservationKind::ModelText,
+        ]
+    );
     assert!(seen[0].split.is_present());
-    assert!(seen[0].secret.is_absent());
-    assert_eq!(seen[0].included, 2);
+    assert!(seen[0].secret.is_present());
+    assert_eq!(seen[0].included, 3);
     assert_eq!(seen[1].phase, "after");
-    assert_eq!(seen[1].disclosure, ThinkingDisclosure::Withheld);
+    assert!(seen[1].secret.is_present());
     assert!(seen[1].split.is_present());
-    assert!(seen[1].secret.is_absent());
-    assert_eq!(seen[2].disclosure, ThinkingDisclosure::Disclosed);
-    assert!(seen[2].secret.is_present());
-    assert!(seen[2].split.is_present());
+    assert!(seen[1].kinds.contains(&ObservationKind::PermissionReview));
 }
 
-struct BeforeToolHook {
+#[tokio::test]
+async fn add_hook_reports_each_event_kind() {
+    let kinds = Arc::new(Mutex::new(Vec::new()));
+    let recorded = kinds.clone();
+    let fixture = agent_with(script(), Vec::new()).await;
+    fixture.agent.add_hook(
+        BeforePermissionReview::new(),
+        move |call: &ProposedToolCall<'_>, observations: &InvocationObservationWindow<'_>| {
+            assert_eq!(call.name(), "Bash");
+            *recorded.lock().unwrap() = observations.iter().map(ObservationKind::of).collect();
+            Ok(ToolVerdict::Allow)
+        },
+    );
+    fixture
+        .agent
+        .invoke(request(), close_action())
+        .await
+        .expect("registered hook admitted the review");
+    assert_eq!(
+        *kinds.lock().unwrap(),
+        vec![
+            ObservationKind::Thinking,
+            ObservationKind::ModelText,
+            ObservationKind::ModelText,
+        ]
+    );
+}
+
+struct ReviewHook {
     seen: Arc<Mutex<Vec<Seen>>>,
-    reject: bool,
+    verdict: ToolVerdict,
 }
 
-impl InvocationHook for BeforeToolHook {
-    fn before_tool_call(
+impl InvocationHook for ReviewHook {
+    fn before_permission_review(
         &self,
         call: &ProposedToolCall<'_>,
         observations: &InvocationObservationWindow<'_>,
-    ) -> Result<(), HookError> {
+    ) -> Result<ToolVerdict, HookError> {
         self.seen.lock().unwrap().push(Seen {
             phase: "tool",
-            disclosure: observations.disclosure(),
             call: Some(call.name().to_owned()),
+            kinds: observations.iter().map(ObservationKind::of).collect(),
             split: observations.contains_phrase("do not run"),
             secret: observations.contains_phrase("SECRET_REASON"),
             included: observations.included_events(),
         });
-        if self.reject {
-            Err(HookError::Failed("stop this call".into()))
-        } else {
-            Ok(())
-        }
+        Ok(self.verdict.clone())
     }
 }
 
 struct AfterHook {
     seen: Arc<Mutex<Vec<Seen>>>,
-    disclose: bool,
 }
 
 impl InvocationHook for AfterHook {
-    fn thinking_disclosure(&self) -> ThinkingDisclosure {
-        if self.disclose {
-            ThinkingDisclosure::Disclosed
-        } else {
-            ThinkingDisclosure::Withheld
-        }
-    }
-
     fn after_invocation(
         &self,
         context: &InvocationContext<'_>,
@@ -293,8 +337,8 @@ impl InvocationHook for AfterHook {
         let window = &context.observations;
         self.seen.lock().unwrap().push(Seen {
             phase: "after",
-            disclosure: window.disclosure(),
             call: None,
+            kinds: window.iter().map(ObservationKind::of).collect(),
             split: window.contains_phrase("do not run"),
             secret: window.contains_phrase("SECRET_REASON"),
             included: window.included_events(),
@@ -304,49 +348,259 @@ impl InvocationHook for AfterHook {
 }
 
 #[tokio::test]
-async fn a_pre_tool_rejection_stops_the_turn_without_admitting_the_review() {
+async fn a_continue_refusal_keeps_the_review_and_the_session() {
     let seen = Arc::new(Mutex::new(Vec::new()));
-    let (agent, storage) = agent_with(
+    let fixture = agent_with(
         script(),
-        vec![Arc::new(BeforeToolHook {
+        vec![Arc::new(ReviewHook {
             seen: seen.clone(),
-            reject: true,
+            verdict: ToolVerdict::refuse("stop this call", RefusalOutcome::Continue),
         })],
     )
     .await;
-    let error = agent.invoke(request(), close_action()).await.unwrap_err();
-    assert_eq!(
-        rejection(&error),
-        Some(HookFailure {
-            index: 0,
-            error: HookError::Failed("stop this call".into()),
-        })
-    );
-    assert_eq!(seen.lock().unwrap().len(), 1);
-    let saved = storage.snapshot();
+    fixture
+        .agent
+        .invoke(request(), close_action())
+        .await
+        .expect("deny-and-continue finishes the turn");
+    assert_eq!(fixture.answered.load(Ordering::SeqCst), 1);
+    assert!(fixture.closes.lock().unwrap().is_empty());
+    let saved = fixture.storage.snapshot();
     let events = &saved.invocations[0].events;
-    assert!(events.iter().any(|event| matches!(
-        event.update(),
-        ExecutionUpdate::Message(chunk) if chunk.as_str() == "do not "
-    )));
     assert!(events
         .iter()
-        .all(|event| !matches!(event.update(), ExecutionUpdate::PermissionRequested { .. })));
+        .any(|event| matches!(event.update(), ExecutionUpdate::PermissionRequested { .. })));
+    fixture
+        .agent
+        .invoke(second_request(), close_action())
+        .await
+        .expect("the session stays usable");
 }
 
-fn rejection(error: &AgentError) -> Option<HookFailure> {
-    match error {
-        AgentError::BeforeInvocationHook(failure) => Some(failure.clone()),
-        AgentError::ExecutionObservation { error, .. } => rejection(error),
-        AgentError::OperationAndCleanupFailure {
-            operation_error, ..
-        } => rejection(operation_error),
-        AgentError::StorageAfterExecution {
-            execution_result, ..
-        } => match execution_result.as_ref() {
-            Err(error) => rejection(error),
-            Ok(_) => None,
-        },
-        _ => None,
+#[tokio::test]
+async fn a_continue_without_a_deny_option_does_not_invent_one() {
+    let mut events = script();
+    events.pop();
+    events.push(allow_only_review());
+    let fixture = agent_with(
+        events,
+        vec![Arc::new(ReviewHook {
+            seen: Arc::new(Mutex::new(Vec::new())),
+            verdict: ToolVerdict::refuse("no", RefusalOutcome::Continue),
+        })],
+    )
+    .await;
+    fixture
+        .agent
+        .invoke(request(), close_action())
+        .await
+        .expect("a continue with no deny option ends the turn without closing");
+    assert_eq!(fixture.answered.load(Ordering::SeqCst), 0);
+    assert!(fixture.closes.lock().unwrap().is_empty());
+    fixture
+        .agent
+        .invoke(second_request(), close_action())
+        .await
+        .expect("the session stays usable");
+}
+
+#[tokio::test]
+async fn an_end_turn_refusal_does_not_close_the_session() {
+    let fixture = agent_with(
+        script(),
+        vec![Arc::new(ReviewHook {
+            seen: Arc::new(Mutex::new(Vec::new())),
+            verdict: ToolVerdict::refuse("stop the turn", RefusalOutcome::EndTurn),
+        })],
+    )
+    .await;
+    fixture
+        .agent
+        .invoke(request(), close_action())
+        .await
+        .expect("ending the turn leaves the session open");
+    assert!(fixture.closes.lock().unwrap().is_empty());
+    fixture
+        .agent
+        .invoke(second_request(), close_action())
+        .await
+        .expect("the session stays usable");
+}
+
+#[tokio::test]
+async fn a_hook_error_denies_and_continues() {
+    let fixture = agent_with(script(), vec![Arc::new(FailingHook)]).await;
+    fixture
+        .agent
+        .invoke(request(), close_action())
+        .await
+        .expect("a hook error does not close the session");
+    assert_eq!(fixture.answered.load(Ordering::SeqCst), 1);
+    let saved = fixture.storage.snapshot();
+    assert!(saved.invocations[0]
+        .events
+        .iter()
+        .any(|event| matches!(event.update(), ExecutionUpdate::PermissionRequested { .. })));
+    fixture
+        .agent
+        .invoke(second_request(), close_action())
+        .await
+        .expect("the session stays usable");
+}
+
+struct FailingHook;
+
+impl InvocationHook for FailingHook {
+    fn before_permission_review(
+        &self,
+        _: &ProposedToolCall<'_>,
+        _: &InvocationObservationWindow<'_>,
+    ) -> Result<ToolVerdict, HookError> {
+        Err(HookError::Failed("stop this call".into()))
     }
+}
+
+fn allow_only_review() -> ExecutionEvent {
+    let options = PermissionOptions::new(
+        vec![PermissionOption::new(
+            PermissionOptionId::new("allow").unwrap(),
+            "Allow",
+            PermissionDecision::new(PermissionEffect::Allow, PermissionScope::request()),
+        )
+        .unwrap()],
+        &PermissionOfferPolicy::once_only(),
+    )
+    .unwrap();
+    ExecutionEvent::new(
+        ExecutionId::new("turn").unwrap(),
+        ExecutionUpdate::PermissionRequested {
+            id: PermissionId::new("review").unwrap(),
+            tool_id: ToolCallId::new("bash-1").unwrap(),
+            observation: ToolObservation::default(),
+            input: ToolReviewInput {
+                name: "Bash".into(),
+                arguments_json: "{\"command\":\"rm\"}".into(),
+            },
+            options,
+        },
+    )
+}
+
+#[tokio::test]
+async fn a_panicked_review_hook_denies_and_continues() {
+    let fixture = agent_with(script(), vec![Arc::new(PanicHook)]).await;
+    fixture
+        .agent
+        .invoke(request(), close_action())
+        .await
+        .expect("a panicked hook does not close the session");
+    assert_eq!(fixture.answered.load(Ordering::SeqCst), 1);
+    fixture
+        .agent
+        .invoke(second_request(), close_action())
+        .await
+        .expect("the session stays usable after a panicked hook");
+}
+
+struct PanicHook;
+
+impl InvocationHook for PanicHook {
+    fn before_permission_review(
+        &self,
+        _: &ProposedToolCall<'_>,
+        _: &InvocationObservationWindow<'_>,
+    ) -> Result<ToolVerdict, HookError> {
+        panic!("hook bug");
+    }
+}
+
+#[tokio::test]
+async fn close_session_is_a_policy_refusal() {
+    let fixture = agent_with(
+        script(),
+        vec![Arc::new(ReviewHook {
+            seen: Arc::new(Mutex::new(Vec::new())),
+            verdict: ToolVerdict::refuse("stop the session", RefusalOutcome::CloseSession),
+        })],
+    )
+    .await;
+    let _ = fixture.agent.invoke(request(), close_action()).await;
+    assert_eq!(
+        fixture.closes.lock().unwrap().as_slice(),
+        [SessionCloseRequest::PolicyRefusal]
+    );
+    let second = fixture.agent.invoke(second_request(), close_action()).await;
+    assert!(
+        matches!(second, Err(AgentError::AttachmentUnavailable(_))),
+        "closing the session left it usable: {second:?}"
+    );
+}
+
+struct SlowToolHook {
+    entered: Arc<AtomicBool>,
+    hold: std::time::Duration,
+}
+
+impl InvocationHook for SlowToolHook {
+    fn before_permission_review(
+        &self,
+        _: &ProposedToolCall<'_>,
+        _: &InvocationObservationWindow<'_>,
+    ) -> Result<ToolVerdict, HookError> {
+        self.entered.store(true, Ordering::SeqCst);
+        std::thread::sleep(self.hold);
+        Ok(ToolVerdict::Allow)
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn review_slow_pre_tool_hook_delays_close() {
+    let entered = Arc::new(AtomicBool::new(false));
+    let fixture = agent_with(
+        script(),
+        vec![Arc::new(SlowToolHook {
+            entered: entered.clone(),
+            hold: std::time::Duration::from_secs(3),
+        })],
+    )
+    .await;
+    let runner = fixture.agent.clone();
+    let turn = tokio::spawn(async move { runner.invoke(request(), close_action()).await });
+    while !entered.load(Ordering::SeqCst) {
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    let started = std::time::Instant::now();
+    let closed = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        fixture.agent.close(close_action()),
+    )
+    .await;
+    let close_elapsed = started.elapsed();
+    let turn_result = turn.await.unwrap();
+    assert!(
+        close_elapsed < std::time::Duration::from_secs(1),
+        "close waited {close_elapsed:?} behind a permission-review hook ({closed:?}); turn {turn_result:?}"
+    );
+}
+
+#[tokio::test]
+async fn review_pre_tool_rejection_leaves_the_session_usable() {
+    let fixture = agent_with(
+        script(),
+        vec![Arc::new(ReviewHook {
+            seen: Arc::new(Mutex::new(Vec::new())),
+            verdict: ToolVerdict::refuse("stop this call", RefusalOutcome::Continue),
+        })],
+    )
+    .await;
+    fixture
+        .agent
+        .invoke(request(), close_action())
+        .await
+        .expect("the refused call does not fail the turn");
+    fixture
+        .agent
+        .invoke(second_request(), close_action())
+        .await
+        .expect("a hook refusal of one tool left the session unusable");
 }
