@@ -7,7 +7,7 @@ export function normalizedPath(path) {
 
 /** Replace Rust comments and string contents with spaces while preserving lines. */
 export function maskRustNonCode(source) {
-  const masked = [...source]
+  const masked = source.split("")
   const blank = (index) => {
     if (masked[index] !== "\n" && masked[index] !== "\r") masked[index] = " "
   }
@@ -30,6 +30,13 @@ export function maskRustNonCode(source) {
           if (depth === 0) break
         } else blank(index++)
       }
+      continue
+    }
+    const character = source
+      .slice(index)
+      .match(/^(?:b)?'(?:\\(?:u\{[0-9a-fA-F_]+\}|x[0-9a-fA-F]{2}|[\s\S])|[^'\\\r\n])'/u)
+    if (character) {
+      for (let count = 0; count < character[0].length; count += 1) blank(index++)
       continue
     }
     const raw = source.slice(index).match(/^(?:br|rb|r)(#*)"/)
@@ -65,7 +72,8 @@ function findTauriRoots(root) {
   const found = []
   const visit = (directory) => {
     for (const name of readdirSync(directory)) {
-      if ([".git", "node_modules", "target"].includes(name)) continue
+      // Local agent worktrees are other checkouts, not this workspace's source.
+      if ([".git", ".claude", "node_modules", "target"].includes(name)) continue
       const path = join(directory, name)
       const entry = lstatSync(path)
       if (entry.isSymbolicLink() || !entry.isDirectory()) continue
@@ -88,12 +96,15 @@ export function workspaceRustSourceRoots(root, metadata) {
 }
 
 // These std values represent addresses; none can open or operate a socket.
-function pureNetValueImport(item) {
-  const match = /^\s*std::net::(?:([A-Za-z0-9_]+)|\{([\s\S]*)\})\s*$/.exec(item)
+function pureNetValueReference(item) {
+  const match =
+    /^std::net::(?:([A-Za-z0-9_]+)(?:::[A-Za-z0-9_]+)*|\{([\s\S]*)\})(?:\s+as\s+[A-Za-z0-9_]+)?$/.exec(
+      item,
+    )
   if (!match) return false
   const names = (match[1] ?? match[2])
     .split(",")
-    .map((name) => name.trim())
+    .map((name) => name.trim().split(/\s+as\s+/)[0])
     .filter(Boolean)
   const values = new Set([
     "IpAddr",
@@ -111,37 +122,65 @@ export function rustBoundaryViolations(path, source) {
   const domain = /(?:\/domain\/|\/domain\.rs$)/.test(path)
   const application = /(?:\/application\/|\/application\.rs$)/.test(path)
   if (!domain && !application) return []
-  const imports = [...maskRustNonCode(source).matchAll(/\buse\s+([^;]+);/g)].map(
-    (match) => match[1],
+  const code = maskRustNonCode(source)
+  const imports = [...code.matchAll(/\buse\s+([^;]+);/g)].map((match) => match[1])
+  // Imports retain their grouped tree for the existing policy. Outside them,
+  // explicit paths name dependencies in expressions, types and attributes.
+  // This reads written paths, not names resolved through re-exports or macros.
+  const qualified = [
+    ...code
+      .replace(/\buse\s+[^;]+;/g, " ")
+      .matchAll(
+        /(?<![\p{ID_Continue}])(?:r#)?[\p{ID_Start}_][\p{ID_Continue}]*(?:\s*::\s*(?:r#)?[\p{ID_Start}_][\p{ID_Continue}]*)+/gu,
+      ),
+  ].map((match) => match[0])
+  const references = [...imports, ...qualified].map((item) =>
+    item
+      .trim()
+      .replace(/\s*::\s*/g, "::")
+      .replace(/\br#/g, "")
+      .replace(/^::/, ""),
   )
   const failures = new Set()
-  for (const item of imports) {
-    if (/\b(infrastructure|composition|product|adapters|presentation)\b/.test(item))
-      failures.add(
-        "domain/application imports must point inward, through application-owned ports",
+  for (const item of references) {
+    const names = new Set(item.match(/[\p{ID_Start}_][\p{ID_Continue}]*/gu))
+    if (
+      ["infrastructure", "composition", "product", "adapters", "presentation"].some(
+        (name) => names.has(name),
       )
-    if (domain && /\bapplication\b/.test(item))
-      failures.add("domain must not import application DTOs or orchestration")
-    if (domain && /\b(tokio|tauri|serde|serde_json|reqwest|axum|shepherd)\b/.test(item))
+    )
       failures.add(
-        "domain must not import runtime, transport, or serialization libraries",
+        "domain/application references must point inward, through application-owned ports",
+      )
+    if (domain && names.has("application"))
+      failures.add("domain must not reference application DTOs or orchestration")
+    if (
+      domain &&
+      ["tokio", "tauri", "serde", "serde_json", "reqwest", "axum", "shepherd"].some(
+        (name) => names.has(name),
+      )
+    )
+      failures.add(
+        "domain must not reference runtime, transport, or serialization libraries",
       )
     // The sync engine's own `replication::domain` values (`Id`, `Scope`) are
     // pure; its catalogue, transport and source modules are not.
     if (
       domain &&
-      /\bnessa_sync\b/.test(item) &&
-      !/^\s*nessa_sync::replication::domain\b/.test(item)
+      names.has("nessa_sync") &&
+      item !== "nessa_sync::replication::domain" &&
+      !item.startsWith("nessa_sync::replication::domain::")
     )
       failures.add(
-        "domain must not import the sync engine beyond its replication::domain values",
+        "domain must not reference the sync engine beyond its replication::domain values",
       )
     if (
       domain &&
-      /\bstd\b[\s\S]*\b(fs|net|process)\b/.test(item) &&
-      !pureNetValueImport(item)
+      names.has("std") &&
+      ["fs", "net", "process"].some((name) => names.has(name)) &&
+      !pureNetValueReference(item)
     )
-      failures.add("domain must not import filesystem, network, or process effects")
+      failures.add("domain must not reference filesystem, network, or process effects")
   }
   return [...failures]
 }
