@@ -431,6 +431,7 @@ while True:
         elif mode in (
             "permission-deadline",
             "permission-read-deadline",
+            "permission-read-sparse",
             "permission-read-outside",
             "permission-read-symlink",
             "permission-read-no-path",
@@ -438,7 +439,7 @@ while True:
             "permission-deadline-close-hold",
         ):
             call = tool("Read" if mode.startswith("permission-read") else "Write")
-            if mode == "permission-read-deadline":
+            if mode in ("permission-read-deadline", "permission-read-sparse"):
                 (root / "fixture.txt").write_text("fixture")
                 call["kind"] = "read"
                 call["title"] = "Read fixture.txt"
@@ -461,9 +462,14 @@ while True:
                 call["kind"] = "read"
                 call["title"] = "Read nothing"
             update({"sessionUpdate": "tool_call", **call})
+            # `permission-read-sparse` names only the tool on the permission, as
+            # ACP allows: its kind and path came in the tool_call above.
+            asked = {key: value for key, value in call.items() if key != "title"}
+            if mode == "permission-read-sparse":
+                asked = {"toolCallId": call["toolCallId"], "status": "pending"}
             send({"id": permission_id, "method": "session/request_permission", "params": {
                 "sessionId": session,
-                "toolCall": {key: value for key, value in call.items() if key != "title"},
+                "toolCall": asked,
                 "options": [
                     {"optionId": "approve-one", "kind": "allow_once", "name": "Allow once"},
                     {"optionId": "deny-one", "kind": "reject_once", "name": "Deny once"},
@@ -965,6 +971,7 @@ while True:
     elif mode in (
         "permission-deadline",
         "permission-read-deadline",
+        "permission-read-sparse",
         "permission-read-outside",
         "permission-read-symlink",
         "permission-read-no-path",

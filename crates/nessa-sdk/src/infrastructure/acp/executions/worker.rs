@@ -2590,11 +2590,12 @@ impl<P: AcpProfile> Worker<P> {
             .as_ref()
             .expect("validated active prompt")
             .execution_id;
+        let observed = execution.observation_after(&tool);
         let class = bounded_review_class(
             &*self.config.clock,
             &self.path_classification,
-            *tool.kind(),
-            tool.locations().clone(),
+            *observed.kind(),
+            observed.locations().clone(),
             self.config.workspace.clone(),
             Arc::clone(&self.config.workspace_paths),
         )

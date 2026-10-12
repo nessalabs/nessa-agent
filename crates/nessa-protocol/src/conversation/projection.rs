@@ -30,7 +30,7 @@ use nessa_sdk::domain::agent_execution::{
     executions::{ExecutionId, ExecutionOutcome, InvocationStage, MessageKind},
     permissions::{
         PermissionEffect, PermissionReviewDeadline, PermissionScope, RefusalOutcome, ReviewDecline,
-        ReviewDeclineReason, ReviewDeclineStage,
+        ReviewDeclineId, ReviewDeclineReason, ReviewDeclineStage,
     },
     questions::{AnswerShape, MAX_OPEN_QUESTIONS},
     tools::{ToolContentView, ToolKind, ToolStatus},
@@ -1122,17 +1122,23 @@ impl Projection {
         // Decided once, before this event changes anything: a notice is shown
         // for the deadline that settled its review, and only the first time.
         // The notice part is that record, so a replayed record shows it again.
+        // The review's id becomes the notice's, and a notice id is the decimal
+        // a review decline has; a saved history may hold any permission id, so
+        // one that is not a notice id shows no notice rather than a view the
+        // client refuses whole.
         let deadline_notice_shown = match event.update() {
             ExecutionUpdate::DeadlineAnswered {
                 id: permission,
                 effect,
                 reason,
             } => {
-                self.deadline_settled(id, permission.as_str(), |published| {
-                    published.effect() == *effect && published.reason() == reason.as_str()
-                }) && !self.view.messages[index].parts.iter().any(|part| {
-                    part.kind == "local_notice" && part.notice_id == permission.as_str()
-                })
+                ReviewDeclineId::new(permission.as_str()).is_ok()
+                    && self.deadline_settled(id, permission.as_str(), |published| {
+                        published.effect() == *effect && published.reason() == reason.as_str()
+                    })
+                    && !self.view.messages[index].parts.iter().any(|part| {
+                        part.kind == "local_notice" && part.notice_id == permission.as_str()
+                    })
             }
             _ => false,
         };

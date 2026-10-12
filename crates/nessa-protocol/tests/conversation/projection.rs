@@ -234,7 +234,7 @@ fn lifecycle_diagnostics_are_clipped_at_a_utf8_boundary() {
 
 fn review(arguments: String) -> ExecutionEvent {
     event(ExecutionUpdate::PermissionRequested {
-        id: PermissionId::new("permission").unwrap(),
+        id: PermissionId::new("7").unwrap(),
         tool_id: ToolCallId::new("tool").unwrap(),
         observation: ToolObservation::default(),
         input: ToolReviewInput {
@@ -2696,7 +2696,7 @@ fn a_saved_deadline_counts_down_while_this_process_holds_the_review() {
         other.permissions[0].deadline.is_none(),
         "holding a different review does not show this deadline"
     );
-    let pending = show(HashSet::from([("execution".into(), "permission".into())]));
+    let pending = show(HashSet::from([("execution".into(), "7".into())]));
     let deadline = pending.permissions[0]
         .deadline
         .as_ref()
@@ -2711,7 +2711,7 @@ fn a_saved_deadline_counts_down_while_this_process_holds_the_review() {
         &committed("incarnation", 1, 1, 1, Some(&snapshot)),
         &[],
         None,
-        &HashSet::from([("execution".into(), "permission".into())]),
+        &HashSet::from([("execution".into(), "7".into())]),
     );
     assert!(
         idle.read().permissions.is_empty(),
@@ -2727,7 +2727,7 @@ fn an_automatic_decision_is_named_allowed_or_denied_in_the_notice() {
         let snapshot = review_snapshot(vec![
             review_with_deadline(effect, sentence),
             event(ExecutionUpdate::DeadlineAnswered {
-                id: PermissionId::new("permission").unwrap(),
+                id: PermissionId::new("7").unwrap(),
                 effect,
                 reason,
             }),
@@ -2787,7 +2787,7 @@ fn a_deadline_notice_without_an_earlier_request_in_that_execution_is_omitted() {
             .collect::<Vec<_>>()
     };
     assert!(
-        texts(vec![notice("permission")]).is_empty(),
+        texts(vec![notice("7")]).is_empty(),
         "a notice with no earlier request is omitted"
     );
     let published = || review_with_deadline(PermissionEffect::Deny, STANDARD_DENY_REASON);
@@ -2796,8 +2796,31 @@ fn a_deadline_notice_without_an_earlier_request_in_that_execution_is_omitted() {
         "a notice whose id is not the request's is omitted"
     );
     assert_eq!(
-        texts(vec![published(), notice("permission")]),
+        texts(vec![published(), notice("7")]),
         vec![format!("Denied automatically: {STANDARD_DENY_REASON}")]
+    );
+    let ExecutionUpdate::PermissionRequested {
+        tool_id,
+        observation,
+        input,
+        options,
+        deadline,
+        ..
+    } = published().update().clone()
+    else {
+        unreachable!()
+    };
+    let opaque = event(ExecutionUpdate::PermissionRequested {
+        id: PermissionId::new("review-a").unwrap(),
+        tool_id,
+        observation,
+        input,
+        options,
+        deadline,
+    });
+    assert!(
+        texts(vec![opaque, notice("review-a")]).is_empty(),
+        "a review whose id is not a notice id shows no notice the client would refuse"
     );
 }
 
@@ -2806,7 +2829,7 @@ fn a_deadline_notice_is_shown_only_as_the_one_settlement_its_review_published() 
     use nessa_sdk::domain::agent_execution::permissions::{DeadlineReason, STANDARD_ALLOW_REASON};
     let notice = |effect, reason: &str| {
         event(ExecutionUpdate::DeadlineAnswered {
-            id: PermissionId::new("permission").unwrap(),
+            id: PermissionId::new("7").unwrap(),
             effect,
             reason: DeadlineReason::new(reason).unwrap(),
         })

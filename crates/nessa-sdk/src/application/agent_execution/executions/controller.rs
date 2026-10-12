@@ -261,6 +261,19 @@ impl ExecutionController {
         )
     }
 
+    /// What the session will know about `update`'s tool once it is applied:
+    /// the observation already held for that tool, or none, with the update's
+    /// fields over it. A permission frame may carry only the tool's id, the
+    /// kind and paths having come in an earlier update, so a review is judged
+    /// on this and not on the frame alone. Reads only; nothing is admitted.
+    pub(crate) fn observation_after(&self, update: &ToolCallUpdate) -> ToolObservation {
+        self.session
+            .tool(update.id())
+            .map(|tool| tool.observation().clone())
+            .unwrap_or_default()
+            .with_update(update.clone())
+    }
+
     /// The lasting observation that `id`'s own deadline settled it.
     ///
     /// Does not answer the review. The caller first settles it here, with an

@@ -188,8 +188,20 @@ async fn an_unanswered_review_is_denied_at_its_deadline_and_the_turn_continues()
 #[tokio::test]
 async fn an_unanswered_read_is_allowed_when_its_shorter_deadline_passes() {
     let _slot = process_test_slot().await;
-    let mut review = pending("permission-read-deadline").await;
-    assert_eq!(review.deadline.class(), PermissionToolClass::ReadOnly);
+    for mode in ["permission-read-deadline", "permission-read-sparse"] {
+        a_read_is_allowed_at_its_deadline(mode).await;
+    }
+}
+
+// `permission-read-sparse` names only the tool on the permission frame; the
+// read is judged on what the earlier tool_call said about it.
+async fn a_read_is_allowed_at_its_deadline(mode: &str) {
+    let mut review = pending(mode).await;
+    assert_eq!(
+        review.deadline.class(),
+        PermissionToolClass::ReadOnly,
+        "{mode}"
+    );
     assert_eq!(review.deadline.wait(), Duration::from_secs(8));
     assert_eq!(review.deadline.effect(), PermissionEffect::Allow);
     assert_eq!(review.deadline.reason(), ALLOW_REASON);
