@@ -42,6 +42,22 @@ returns, built by the same fold:
   the last view frame written or, when none was, the `after` it was opened
   with (absent when neither exists), so a lagging subscriber resumes from it.
 
+The agent catalog is followed the same way (issue 706, part I-3; row I10 in
+[peer gateways](auth/peer-gateways.md#the-agent-catalogue-follows-the-connected-environments-row-i10)):
+
+- `agents.subscribe {}` sends `agents.listed` frames: `{subscriptionId,
+  catalog}`, where `catalog` is exactly what `agents.list` returns, read
+  again each time a paired environment connects, disconnects or is revoked.
+  Its one wake source is `PeerEnvironments::connections`; it reads no
+  conversation and registers no conversation source.
+- `agents.unsubscribe {subscriptionId}` stops it. It asks `server.read`, the
+  grant `agents.subscribe` and `agents.list` ask, where
+  `conversation.unsubscribe` asks `conversation.write`; so each stops only
+  what the subscribe beside it made, and answers `unknown_subscription` for
+  the other's.
+- It ends with the same `conversation.subscriptionEnded`, with no
+  `lastDelivered`.
+
 Why views and not record batches: the desktop is TypeScript and must not keep
 a second fold (rule "one fold" in the transcript-fold design). Devices that do
 fold records themselves already have a replay-to-live path on records: verified
@@ -243,6 +259,14 @@ otherwise.
 | L3 | A list larger than one frame | Cut newest first, `complete: false` | `a_list_too_large_for_one_frame_is_cut_and_marked_incomplete` (unit) |
 | L4 | A stream of commits under a list subscription | List frames no closer than `LIST_REREAD_FLOOR` | `list_frames_come_no_closer_than_the_reread_floor` |
 | L5 | An incomplete list; a row the frame left out changes: by the catalogue (archived, deleted), or by a commit alone (its `running`, within the service's bound), so the rows it carries are the same | A frame all the same, so the client walks the catalogue (D18); a commit that changes no row the service read sends none; notices already waiting when a list reads are taken by that read | `a_change_the_incomplete_list_leaves_out_is_still_sent`; `a_commit_to_a_row_the_frame_cut_is_still_a_change`, `a_list_takes_every_waiting_notice_before_it_reads` (unit, `product/subscription/target.rs`) |
+| AC1 | Subscribe to the agent catalog; on a gateway that pairs no environments, too | The reply, then one `agents.listed` frame, the generated shape, carrying what `agents.list` answers; with no environments paired nothing changes it, and no other frame comes | `the_agent_catalog_is_sent_again_as_paired_environments_come_and_go`; `a_gateway_pairing_no_environments_sends_its_catalog_once`; `an_agent_catalog_frame_is_the_generated_shape` |
+| AC2 | A paired environment connects, disconnects or is revoked; or the count moves with the catalog unchanged (a connection taking another's place) | A frame with the catalog as `agents.list` answers it then; none when it is the same | `the_agent_catalog_is_sent_again_as_paired_environments_come_and_go` |
+| AC3 | Many changes while a catalog frame waits for the writer | At most one more frame, with the latest catalog | `changes_while_a_catalog_frame_waits_collapse_into_one_frame` |
+| AC4 | Paired environments come and go under a list subscription and the agent catalog's | The conversation catalogue's head does not move; the list sends nothing | `paired_environments_coming_and_going_never_move_the_conversation_catalogue` |
+| AC5 | A second `agents.subscribe` on one connection; the socket closes | Refused `subscription_duplicate`; everything the subscription held goes with its socket | `a_second_agent_catalog_subscription_is_a_duplicate` |
+| AC6 | A session without `server.read` subscribes, a paired reader's credential among them; the grant is lost while it follows | Refused `forbidden`, as `agents.list` is; ended `refused` with `forbidden` before the next read | `following_the_agent_catalog_is_admitted_as_reading_it_is` |
+| AC7 | `conversation.unsubscribe` of the catalog's subscription, `agents.unsubscribe` of a list's; `agents.unsubscribe` by a session holding only `server.read` | `unknown_subscription` for the other's; its own is stopped, and nothing of it follows the reply | `each_unsubscribe_stops_only_its_own_kind` |
+| AC8 | The paired environments' change source closes | Ended `source_closed` | `the_environments_source_closing_ends_the_catalog_subscription` |
 
 Desktop rows (`src/desktop/workspace/adapters/gateway/gateway-source.test.ts`;
 the test names begin with the row id). The adapter subscribes only: it sends

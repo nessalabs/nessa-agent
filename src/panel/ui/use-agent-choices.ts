@@ -1,15 +1,20 @@
-import type { AgentsListResult } from "@nessa/client"
 import type { ConversationSelection } from "../../conversation"
+import type {
+  ConversationChoices,
+  FollowConversationChoices,
+} from "../adapters/agent-choices"
 import * as React from "react"
 
-export type ConversationChoices = {
-  catalog: AgentsListResult
-  chosenAgent: string | undefined
-}
-
+/**
+ * The choices the pickers offer, held while the gateway is available: the
+ * catalog is followed, not read once, so a paired environment that connects
+ * or goes while the panel is open is offered, or no longer, as it happens.
+ * Nothing is offered until the first catalog arrives; the follow is stopped
+ * when the gateway goes or the panel unmounts.
+ */
 export function useConversationChoices(
   available: boolean,
-  load: () => Promise<ConversationChoices>,
+  follow: FollowConversationChoices,
 ): ConversationChoices | null {
   const [choices, setChoices] = React.useState<ConversationChoices | null>(null)
   React.useEffect(() => {
@@ -17,18 +22,8 @@ export function useConversationChoices(
       setChoices(null)
       return
     }
-    let current = true
-    void load()
-      .then((value) => {
-        if (current) setChoices(value)
-      })
-      .catch(() => {
-        if (current) setChoices(null)
-      })
-    return () => {
-      current = false
-    }
-  }, [available, load])
+    return follow(setChoices)
+  }, [available, follow])
   return choices
 }
 

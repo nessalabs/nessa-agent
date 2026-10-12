@@ -3,7 +3,10 @@
 //! subscription (`connection.rs`); each runs in its own task (`target.rs`),
 //! which admits every batch in `authorize_batch` and reads through the same
 //! fold a one-shot read uses; its frames reach the connection's one writer
-//! through `delivery.rs`.
+//! through `delivery.rs`. The agent catalog (`agents.subscribe`) is one more
+//! target of the same machinery, woken by the paired environments'
+//! connection changes rather than by records (`docs/design/auth/peer-gateways.md`,
+//! row I10).
 
 mod connection;
 mod delivery;

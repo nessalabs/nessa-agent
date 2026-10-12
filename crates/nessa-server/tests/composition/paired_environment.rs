@@ -1425,3 +1425,71 @@ async fn a_paired_environment_publishes_a_file_and_the_gateway_reads_it_back() {
     let dropped = Gateway::environment_records(&a_root, "frame_dropped");
     assert!(dropped.is_empty(), "{dropped:?}");
 }
+
+/// Row I10: the paired environments' count of connection changes moves
+/// where each change is made: once when E's connection is admitted, once
+/// when it ends, and, revoked, once when it is revoked and once more when
+/// the revoked connection ends. Each wake finds the connected list already
+/// changed, so whoever reads it on the wake (the agent catalog's
+/// subscriptions) reads the list as it is after the change.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn connection_changes_are_said_as_a_paired_environment_connects_ends_and_is_revoked() {
+    let directory = tempfile::tempdir().unwrap();
+    let a = Gateway::start_with(
+        &directory.path().join("a"),
+        SshTimings {
+            keepalive: RECHECK,
+            ..SshTimings::default()
+        },
+    )
+    .await;
+    let e = a
+        .pair(
+            &directory.path().join("e-state"),
+            ConsentClass::PeerEnvironment,
+        )
+        .await;
+    let mut changes = a.peers.connections();
+    let start = *changes.borrow();
+    // Woken until the count reaches `count`, the list then saying
+    // `connected`.
+    async fn until(
+        peers: &PeerEnvironments,
+        changes: &mut watch::Receiver<u64>,
+        peer: PeerEnvironment,
+        count: u64,
+        connected: bool,
+    ) {
+        tokio::time::timeout(WAIT, async {
+            while *changes.borrow_and_update() != count {
+                changes.changed().await.expect("the source stays open");
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("the count never reached {count}"));
+        assert_eq!(peers.connected().contains(&peer), connected, "{count}");
+    }
+
+    let stream = dial(a.native, e.identity.clone(), e.pin, clock())
+        .await
+        .unwrap();
+    let served = serving(&directory.path().join("e"), e.pin, stream);
+    until(&a.peers, &mut changes, e.peer, start + 1, true).await;
+
+    // E goes: its connection ends from its side.
+    served.abort();
+    until(&a.peers, &mut changes, e.peer, start + 2, false).await;
+
+    let stream = dial(a.native, e.identity.clone(), e.pin, clock())
+        .await
+        .unwrap();
+    let served = serving(&directory.path().join("e2"), e.pin, stream);
+    until(&a.peers, &mut changes, e.peer, start + 3, true).await;
+
+    a.revoke(&e);
+    until(&a.peers, &mut changes, e.peer, start + 5, false).await;
+    tokio::time::timeout(WAIT, served)
+        .await
+        .expect("the revoked environment's serving ends")
+        .unwrap();
+}
