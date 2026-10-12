@@ -947,9 +947,13 @@ async fn a_gateway_asked_publish_after_the_lease_ended_or_was_lost_is_answered_s
     let lost = leased(&host, &fixture).await;
     host.file("a.png", &pattern(100, 1));
     host.cut();
-    tokio::time::timeout(Duration::from_secs(10), lost.held.hold.lost().unwrap())
+    let cause = tokio::time::timeout(Duration::from_secs(10), lost.held.hold.ends().unwrap())
         .await
         .expect("the loss is seen");
+    assert_eq!(
+        cause,
+        nessa_sdk::domain::agent_execution::leases::LeaseEndCause::Lost
+    );
     assert_eq!(
         lost.held
             .hold

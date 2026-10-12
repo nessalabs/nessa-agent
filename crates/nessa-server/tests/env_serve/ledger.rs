@@ -1,5 +1,6 @@
 //! The host's lease audit on disk: what accounting answers from it.
 use super::*;
+use crate::env_serve::application::EndCause;
 use nessa_protocol::lease::Sandbox;
 
 fn granted(lease: &str) -> LedgerEntry {
@@ -8,6 +9,7 @@ fn granted(lease: &str) -> LedgerEntry {
         peer: crate::env_serve::domain::Peer::Ssh,
         agent: "claude".into(),
         sandbox: Sandbox::HarnessDefault,
+        lease_ms: None,
     }
 }
 
@@ -15,7 +17,7 @@ fn ended(lease: &str, forced: bool) -> LedgerEntry {
     LedgerEntry::Ended {
         lease: lease.into(),
         cleanup: Cleanup::Confirmed { forced },
-        lost: false,
+        cause: EndCause::Asked,
     }
 }
 
