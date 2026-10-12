@@ -87,11 +87,12 @@ an earlier hook thread is still running, or while the process already holds
 its 32 hook threads, a later review is refused immediately, without another
 blocking thread.
 
-A public permission answer records a hook basis only for continue. End-turn
-and close-session are the runner's transitions: answering a deny does not
-itself cancel the turn or close the session. The runner's own answer path
-records end-turn and then cancels the turn. A public answer with either of
-those outcomes is rejected and the review stays pending.
+A hook refusal built outside the runner records only continue. End-turn and
+close-session are the runner's transitions: answering a deny does not itself
+cancel the turn or close the session. So the public `HookRefusal::new` takes no
+outcome, and only the runner, which then cancels the turn, builds an end-turn
+refusal. No public answer, through the agent or the execution controller
+directly, can claim an outcome nothing applied.
 
 The review is human-paced. The suffix is copied, the evidence lock is released,
 and the hook runs on a blocking thread until the session's injected

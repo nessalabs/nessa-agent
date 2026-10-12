@@ -433,11 +433,9 @@ fn audit_maps_a_hook_refusal_as_the_hook_and_not_the_person() {
             deny_options(),
         )
         .unwrap();
-    let attribution = ApprovalAttribution::hook(
-        &permission,
-        HookRefusal::new(Some(2), "UNIQUE_HOOK_REASON", RefusalOutcome::EndTurn),
-    )
-    .unwrap();
+    let attribution =
+        ApprovalAttribution::hook(&permission, HookRefusal::new(Some(2), "UNIQUE_HOOK_REASON"))
+            .unwrap();
     let answer = controller
         .answer_permission(PermissionAnswer {
             execution_id: id,
@@ -452,7 +450,7 @@ fn audit_maps_a_hook_refusal_as_the_hook_and_not_the_person() {
     assert_eq!(value["basis"]["kind"], "hook");
     assert_eq!(value["basis"]["index"], 2);
     assert_eq!(value["basis"]["reason"], "UNIQUE_HOOK_REASON");
-    assert_eq!(value["basis"]["outcome"], "end_turn");
+    assert_eq!(value["basis"]["outcome"], "continue");
     assert_eq!(value["actor"]["principalId"], "permission-review-hook");
     assert_eq!(value["actor"]["surfaceId"], "2");
     assert_ne!(value["actor"]["principalId"], actor().principal_id());
@@ -485,11 +483,9 @@ fn audit_maps_a_runtime_hook_refusal_with_no_hook_index() {
             deny_options(),
         )
         .unwrap();
-    let attribution = ApprovalAttribution::hook(
-        &permission,
-        HookRefusal::new(None, "hook failed: timeout", RefusalOutcome::Continue),
-    )
-    .unwrap();
+    let attribution =
+        ApprovalAttribution::hook(&permission, HookRefusal::new(None, "hook failed: timeout"))
+            .unwrap();
     let answer = controller
         .answer_permission(PermissionAnswer {
             execution_id: id,

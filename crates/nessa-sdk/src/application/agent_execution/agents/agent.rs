@@ -25,9 +25,9 @@ use crate::application::agent_execution::hooks::{
     PermissionHookThreadGuard, PermissionReviewDecision, ToolVerdict, PRE_TOOL_HOOK_DEADLINE,
 };
 use crate::application::agent_execution::permissions::{
-    ActionContext, ApprovalAttribution, ApprovalBasis, HookRefusal, PermissionAnswer,
-    PermissionAnswerFailure, PermissionAnswerFuture, PermissionCancellation,
-    PermissionCancellationRequest, PermissionSelectionState, QuestionAnswer,
+    ActionContext, ApprovalAttribution, HookRefusal, PermissionAnswer, PermissionAnswerFailure,
+    PermissionAnswerFuture, PermissionCancellation, PermissionCancellationRequest,
+    PermissionSelectionState, QuestionAnswer,
 };
 use crate::application::agent_execution::providers::{
     validate_configured_input, AgentProvider, ApprovalMode, CleanupReport, CloseOutcome,
@@ -220,7 +220,7 @@ fn hook_attribution(
             "permission-review hook refusal has no review".into(),
         ));
     };
-    let refusal = HookRefusal::new(index, reason, outcome);
+    let refusal = HookRefusal::applied(index, reason, outcome);
     let explanation = refusal.reason().to_owned();
     let attribution = ApprovalAttribution::hook(id, refusal)?;
     Ok((id.clone(), attribution, explanation))
@@ -1953,18 +1953,12 @@ impl Agent {
     ) -> Result<(), AgentError> {
         let (id, attribution, explanation) = hook_attribution(event, index, reason, outcome)?;
         if let Some(option_id) = deny_option(event) {
-            // The runner applies end-turn after this answer. A public answer
-            // cannot record that outcome, because answering a deny does not
-            // itself cancel the turn.
-            self.answer_permission_with_outcome(
-                PermissionAnswer {
-                    attribution,
-                    execution_id: event.execution_id().clone(),
-                    id,
-                    option_id,
-                },
-                true,
-            )
+            self.answer_permission(PermissionAnswer {
+                attribution,
+                execution_id: event.execution_id().clone(),
+                id,
+                option_id,
+            })
             .await
             .map(|_| ())
             .map_err(|failure| failure.into_parts().0)
@@ -2100,37 +2094,16 @@ impl Agent {
     /// whose selection state distinguishes a still-pending review from a consumed
     /// decision and from an interrupted outcome that must be reloaded.
     ///
-    /// A hook basis on this path records continue. End-turn and close-session
-    /// are the runner's transitions: answering a deny does not itself cancel
-    /// the turn or close the session. A public answer with either of those
-    /// outcomes is rejected as invalid input and the review stays pending.
+    /// A caller's hook basis always records continue: only the runner, which
+    /// cancels the turn or closes the session itself, can record end-turn or
+    /// close-session (see [`HookRefusal::new`]).
     ///
     /// The caller's `Waker` is woken when the operation's own task finishes;
     /// a panic from it is logged and does not affect the operation. See
     /// "Caller wakers" in docs/agent_execution/lifecycle.md.
     pub fn answer_permission(&self, answer: PermissionAnswer) -> PermissionAnswerFuture<'_> {
-        self.answer_permission_with_outcome(answer, false)
-    }
-
-    fn answer_permission_with_outcome(
-        &self,
-        answer: PermissionAnswer,
-        runner_applies_outcome: bool,
-    ) -> PermissionAnswerFuture<'_> {
         let agent = self.clone();
         Box::pin(async move {
-            if !runner_applies_outcome {
-                if let ApprovalBasis::Hook(refusal) = answer.attribution.basis() {
-                    if refusal.outcome() != &RefusalOutcome::Continue {
-                        return Err(PermissionAnswerFailure::new(
-                            AgentError::InvalidInput(
-                                "a hook answer records continue; the runner applies end-turn and close-session".into(),
-                            ),
-                            PermissionSelectionState::Pending,
-                        ));
-                    }
-                }
-            }
             let admission = agent.accept_control().map_err(|error| {
                 PermissionAnswerFailure::new(error, PermissionSelectionState::Pending)
             })?;

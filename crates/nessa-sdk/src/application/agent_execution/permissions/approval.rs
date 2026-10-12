@@ -173,13 +173,39 @@ impl HookRefusal {
     /// Maximum UTF-8 byte length of the retained hook reason.
     pub const MAX_REASON_BYTES: usize = 1024;
 
-    /// Retain `index`, a capped `reason`, and the outcome that was applied.
+    /// Retain `index` and a capped `reason` for a refusal whose outcome is
+    /// continue.
     ///
     /// `index` is the hook's zero-based registration position. `None` means the
     /// runtime refused before a registered hook returned. A blank reason becomes
     /// `"hook refused"`. A reason longer than [`Self::MAX_REASON_BYTES`] is cut
     /// on a character boundary. This does not answer a review.
-    pub fn new(index: Option<usize>, reason: impl Into<String>, outcome: RefusalOutcome) -> Self {
+    ///
+    /// End-turn and close-session are recorded only by the runner that cancels
+    /// the turn or closes the session, so a caller cannot build a refusal that
+    /// claims either outcome:
+    ///
+    /// ```
+    /// use nessa_sdk::application::agent_execution::permissions::HookRefusal;
+    /// use nessa_sdk::domain::agent_execution::permissions::RefusalOutcome;
+    /// assert_eq!(HookRefusal::new(Some(0), "no").outcome(), &RefusalOutcome::Continue);
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use nessa_sdk::application::agent_execution::permissions::HookRefusal;
+    /// use nessa_sdk::domain::agent_execution::permissions::RefusalOutcome;
+    /// let _ = HookRefusal::new(Some(0), "no", RefusalOutcome::EndTurn);
+    /// ```
+    pub fn new(index: Option<usize>, reason: impl Into<String>) -> Self {
+        Self::applied(index, reason, RefusalOutcome::Continue)
+    }
+
+    /// The runner's refusal, carrying the outcome it applies after recording it.
+    pub(crate) fn applied(
+        index: Option<usize>,
+        reason: impl Into<String>,
+        outcome: RefusalOutcome,
+    ) -> Self {
         Self {
             index,
             reason: cap_hook_reason(reason.into()).into_boxed_str(),
