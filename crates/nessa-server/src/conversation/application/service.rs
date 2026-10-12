@@ -35,13 +35,14 @@ use nessa_protocol::conversation::{
     projection::{bound_view, clipped, CommittedCursor, Projection, MAX_TEXT},
     tool_uis::{McpToolUis, NoMcpToolUis},
     view::{
-        ConversationApprovalModeChangeStatus, ConversationApprovalModeChangeView,
-        ConversationAttachmentEvidenceFailure, ConversationAttachmentEvidenceFailureCode,
-        ConversationCapabilities, ConversationDisposition, ConversationLifecycle,
-        ConversationLifecyclePhase, ConversationList, ConversationListEntry,
-        ConversationObservation, ConversationObservationCursor, ConversationReorderOutcome,
-        ConversationRuntime, ConversationSelectionView, ConversationStartupFailure,
-        ConversationStartupFailureCode, ConversationView, SubmissionReceipt,
+        ConversationAgentFeatures, ConversationApprovalModeChangeStatus,
+        ConversationApprovalModeChangeView, ConversationAttachmentEvidenceFailure,
+        ConversationAttachmentEvidenceFailureCode, ConversationCapabilities,
+        ConversationDisposition, ConversationLifecycle, ConversationLifecyclePhase,
+        ConversationList, ConversationListEntry, ConversationObservation,
+        ConversationObservationCursor, ConversationReorderOutcome, ConversationRuntime,
+        ConversationSelectionView, ConversationStartupFailure, ConversationStartupFailureCode,
+        ConversationView, SubmissionReceipt,
     },
 };
 use nessa_protocol::product_contract::generated::MAX_MCP_MESSAGE_BYTES;
@@ -2181,24 +2182,28 @@ impl ConversationService {
         let operation_capabilities = live.agent.operation_capabilities();
         // The last known answer stands while the agent is being restored, so the
         // view never says no to what a send at the same moment would admit.
-        // Capabilities land before the transcript is rebuilt, so a tool this
-        // start is inserting for the first time takes this start's hooks
-        // choice. A tool already on the view keeps the choice it was given.
+        // A tool this start is inserting takes the choice that start published.
+        // One already on the view keeps the choice it was given. The capability
+        // snapshot is applied after the transcript state, because applying it
+        // earlier clears queue, steer, and permissions while the transcript is
+        // still the previous one.
         let image_input = self
             .takes_images(&live.agent, operation_capabilities)
             .unwrap_or(projection.view().capabilities.image_input);
+        let agent_features: ConversationAgentFeatures = operation_capabilities.into();
+        projection.hooks_for_tools_being_inserted(agent_features.native_hooks);
+        let accepted = projection.replace_committed(&committed, &order, active.as_ref());
+        if accepted {
+            projection.transcript_state(committed.state().into());
+        }
         projection.capabilities(ConversationCapabilities {
             queue: true,
             steer: true,
             resume: operation_capabilities.session_resume(),
             permissions: live.agent.capabilities().features().tool_use(),
             image_input,
-            agent_features: operation_capabilities.into(),
+            agent_features,
         });
-        let accepted = projection.replace_committed(&committed, &order, active.as_ref());
-        if accepted {
-            projection.transcript_state(committed.state().into());
-        }
         projection.lifecycle(lifecycle_view(&live.agent));
         let mut view = projection.read();
         let cursor = projection.committed_cursor();

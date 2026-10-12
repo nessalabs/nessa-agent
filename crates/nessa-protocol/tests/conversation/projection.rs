@@ -661,6 +661,63 @@ fn a_later_read_keeps_a_tool_mark_from_the_start_that_inserted_it() {
 }
 
 #[test]
+fn a_tool_inserted_by_a_later_read_takes_the_noted_choice_without_clearing_capabilities() {
+    let first = completed_snapshot(
+        "execution",
+        vec![event(ExecutionUpdate::Tool(ToolCallUpdate::new(
+            ToolCallId::new("read").unwrap(),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )))],
+    );
+    let capabilities = ConversationCapabilities {
+        queue: true,
+        steer: true,
+        resume: false,
+        permissions: true,
+        image_input: false,
+        agent_features: OperationCapabilities::default().into(),
+    };
+    let mut projection = Projection::new("conversation".into(), capabilities.clone(), Some(&first));
+    projection.hooks_for_tools_being_inserted(NativeHooksChoice::On);
+    let second = completed_snapshot(
+        "execution",
+        vec![
+            event(ExecutionUpdate::Tool(ToolCallUpdate::new(
+                ToolCallId::new("read").unwrap(),
+                None,
+                None,
+                None,
+                None,
+                None,
+            ))),
+            event(ExecutionUpdate::Tool(ToolCallUpdate::new(
+                ToolCallId::new("edit").unwrap(),
+                None,
+                None,
+                None,
+                None,
+                None,
+            ))),
+        ],
+    );
+    assert!(projection.replace_committed(
+        &committed("incarnation", 2, 2, 2, Some(&second)),
+        &[],
+        None,
+    ));
+    let tools = &projection.view().tools;
+    let read = tools.iter().find(|tool| tool.tool_id == "read").unwrap();
+    let edit = tools.iter().find(|tool| tool.tool_id == "edit").unwrap();
+    assert_eq!(read.native_hooks, NativeHooksChoice::Off);
+    assert_eq!(edit.native_hooks, NativeHooksChoice::On);
+    assert_eq!(projection.view().capabilities, capabilities);
+}
+
+#[test]
 fn a_view_past_its_budget_gives_up_call_arguments_after_its_history_and_before_the_tool() {
     let mut view = committed_tool_view(&[event(ExecutionUpdate::Tool(
         ToolCallUpdate::new(

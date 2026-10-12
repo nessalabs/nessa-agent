@@ -15,6 +15,11 @@ struct AnswerAudit {
 impl ExecutionAudit for AnswerAudit {
     fn record(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
         Box::pin(async move {
+            // The process-start record is not one of the answer calls these
+            // tests number. Counting it shifts every reject and stall.
+            if matches!(record, ExecutionAuditRecord::NativeHooksLaunch(_)) {
+                return Ok(());
+            }
             let call = {
                 let mut records = self.records.lock().unwrap();
                 records.push(record);

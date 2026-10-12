@@ -90,6 +90,12 @@ pub(super) struct RecordingAudit {
 impl ExecutionAudit for RecordingAudit {
     fn record(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
         Box::pin(async move {
+            // Recorded at process start, before the audit this fixture is
+            // aimed at. Rejecting or stalling it fails or hangs startup on a
+            // clock the test has not started moving.
+            if matches!(record, ExecutionAuditRecord::NativeHooksLaunch(_)) {
+                return Ok(());
+            }
             if self.stall {
                 return std::future::pending().await;
             }

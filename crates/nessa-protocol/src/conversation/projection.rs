@@ -254,6 +254,10 @@ pub struct Projection {
     history_accepted: bool,
     /// Where an MCP call's UI is looked up when the view is read.
     tool_uis: Arc<dyn McpToolUis>,
+    /// The hooks choice for a tool this replacement is inserting for the first
+    /// time. A tool already on the view keeps the choice it was given. Empty
+    /// until a read notes the choice this process start published.
+    hooks_for_inserted_tools: Option<NativeHooksChoice>,
 }
 pub fn clipped(value: &str, bytes: usize) -> String {
     let mut end = value.len().min(bytes);
@@ -447,6 +451,7 @@ impl Projection {
             unfinished_at_fold,
             history_accepted,
             tool_uis: Arc::new(NoMcpToolUis),
+            hooks_for_inserted_tools: None,
             view: ConversationView {
                 selection: None,
                 approval_mode_change: None,
@@ -510,6 +515,15 @@ impl Projection {
         projection
     }
 
+    /// Tools this replacement inserts for the first time take `choice`, the
+    /// one this process start published. Tools already on the view keep the
+    /// choice they were given. The capability snapshot itself is unchanged
+    /// here: a read applies it after the transcript state, so an incomplete
+    /// transcript cannot clear queue, steer, or permissions.
+    pub fn hooks_for_tools_being_inserted(&mut self, choice: NativeHooksChoice) {
+        self.hooks_for_inserted_tools = Some(choice);
+    }
+
     /// Replace transcript fields from the SDK's committed snapshot. Live
     /// broadcast callbacks may prompt this read, but their provisional text or
     /// terminal status cannot become a replacement view. The SDK owns the
@@ -525,6 +539,7 @@ impl Projection {
         order: &[ExecutionId],
         active: Option<&ExecutionId>,
     ) -> bool {
+        let inserted = self.hooks_for_inserted_tools.take();
         let incarnation = committed.incarnation();
         let position = committed.position();
         let downloaded = committed.downloaded();
@@ -635,6 +650,8 @@ impl Projection {
             let key = (tool.execution_id.clone(), tool.tool_id.clone());
             if let Some(stamp) = earlier_hooks.get(&key) {
                 tool.native_hooks = *stamp;
+            } else if let Some(stamp) = inserted {
+                tool.native_hooks = stamp;
             }
         }
         let changed = serde_json::to_vec(&next.view).ok() != serde_json::to_vec(&self.view).ok();
