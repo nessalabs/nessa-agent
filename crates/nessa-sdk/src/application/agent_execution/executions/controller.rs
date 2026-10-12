@@ -8,8 +8,8 @@ use super::{
 };
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::permissions::{
-    ApprovalBasis, CancellationOrigin, PermissionAnswer, PermissionCancellation,
-    PermissionCancellationRequest, PermissionResolution,
+    ApprovalAttribution, ApprovalBasis, CancellationOrigin, PermissionAnswer,
+    PermissionCancellation, PermissionCancellationRequest, PermissionResolution,
 };
 use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::domain::agent_execution::questions::{AgentQuestion, QuestionId};
@@ -388,15 +388,21 @@ impl ExecutionController {
     }
     /// Resolves `answer` once against its execution, review, and offered option.
     /// Returns StalePermission if it cannot match a pending review. A hook basis
-    /// paired with anything other than the request-scoped deny option returns
-    /// InvalidInput and leaves the review pending. The resolution
+    /// paired with anything other than the request-scoped deny option, or
+    /// with an actor other than [`ApprovalAttribution::hook`] for this review,
+    /// returns InvalidInput and leaves the review pending. The resolution
     /// retains this controller’s session, original input and attribution; the adapter must audit selection
     /// before attempting delivery and audit that delivery independently of waiters.
     pub fn answer_permission(
         &mut self,
         answer: PermissionAnswer,
     ) -> Result<PermissionResolution, AgentError> {
-        if matches!(answer.attribution.basis(), ApprovalBasis::Hook(_)) {
+        if let ApprovalBasis::Hook(refusal) = answer.attribution.basis() {
+            if answer.attribution != ApprovalAttribution::hook(&answer.id, refusal.clone())? {
+                return Err(AgentError::InvalidInput(
+                    "a hook refusal is attributed to the permission-review hook".into(),
+                ));
+            }
             let decision = self
                 .session
                 .pending_option_decision(&answer.execution_id, &answer.id, &answer.option_id)

@@ -1,8 +1,9 @@
 use super::super::agents::MemoryStorage;
 use super::super::support::*;
 use nessa_sdk::application::agent_execution::hooks::{
-    BeforePermissionReview, HookError, InvocationContext, InvocationHook,
-    InvocationObservationWindow, ObservationKind, PhrasePresence, ProposedToolCall, ToolVerdict,
+    AfterInvocation, AfterInvocationEvent, BeforeInvocation, BeforePermissionReview, HookError,
+    HookRegistration, InvocationContext, InvocationHook, InvocationObservationWindow,
+    ObservationKind, PhrasePresence, ProposedToolCall, ToolVerdict,
 };
 use nessa_sdk::domain::agent_execution::permissions::RefusalOutcome;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -1136,6 +1137,96 @@ async fn a_substituted_message_clock_times_out_a_slow_hook() {
         assert_eq!(refusal.index(), None);
         assert_eq!(answers[0].attribution.actor().surface_id(), "runtime");
     }
+}
+
+/// Refuses every review, but says it does not review permissions.
+struct OptedOutRefuser;
+
+impl InvocationHook for OptedOutRefuser {
+    fn before_permission_review(
+        &self,
+        _: &ProposedToolCall<'_>,
+        _: &InvocationObservationWindow<'_>,
+    ) -> Result<ToolVerdict, HookError> {
+        Ok(ToolVerdict::refuse(
+            "not mine to refuse",
+            RefusalOutcome::Continue,
+        ))
+    }
+
+    fn reviews_permissions(&self) -> bool {
+        false
+    }
+}
+
+#[tokio::test]
+async fn hooks_that_do_not_review_leave_the_review_to_the_person() {
+    let fixture = open_on_clock(
+        script(),
+        vec![
+            BeforeInvocation.register(|_context: &InvocationContext<'_>| Ok(())),
+            AfterInvocation.register(|_event: &AfterInvocationEvent<'_>| Ok(())),
+            Arc::new(OptedOutRefuser),
+        ],
+        FixtureKnobs {
+            turn_cancel: true,
+            fail_delivery: false,
+        },
+        None,
+    )
+    .await;
+    fixture
+        .agent
+        .invoke(request(), close_action())
+        .await
+        .expect("the turn runs as it would with no hooks");
+    assert_eq!(
+        fixture.answered.load(Ordering::SeqCst),
+        0,
+        "the runtime refused a review that no hook reviews"
+    );
+    assert!(fixture.withdrawals.lock().unwrap().is_empty());
+    assert!(review_still_pending(&fixture, "review"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn output_before_a_review_is_saved_while_its_hook_runs() {
+    let clock = Arc::new(ManualMessageClock::new());
+    let entered = Arc::new(AtomicBool::new(false));
+    let release = Arc::new(AtomicBool::new(false));
+    let _release = ReleaseOnDrop(release.clone());
+    let fixture = open_on_clock(
+        vec![message(false, "SAVED_BEFORE_REVIEW"), review()],
+        vec![Arc::new(ReleasableHook {
+            entered: entered.clone(),
+            release: release.clone(),
+        })],
+        FixtureKnobs {
+            turn_cancel: true,
+            fail_delivery: false,
+        },
+        Some(clock),
+    )
+    .await;
+    let runner = fixture.agent.clone();
+    let turn = tokio::spawn(async move { runner.invoke(request(), close_action()).await });
+    let wait_started = std::time::Instant::now();
+    while !entered.load(Ordering::SeqCst) {
+        assert!(
+            wait_started.elapsed() < std::time::Duration::from_secs(2),
+            "the hook never started"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    let saved = format!("{:?}", fixture.storage.snapshot()).contains("SAVED_BEFORE_REVIEW");
+    release.store(true, Ordering::SeqCst);
+    turn.await
+        .unwrap()
+        .expect("the allowed review finishes the turn");
+    assert!(
+        saved,
+        "output before the review waited behind the hook for its commit deadline"
+    );
 }
 
 #[tokio::test]

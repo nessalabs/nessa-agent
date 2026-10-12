@@ -66,9 +66,16 @@ verdict is discarded, and it must not re-enter the session. One process runs
 at most 32 of those threads. A review that arrives while that budget is held,
 or while this agent's earlier hook thread has not returned, is refused
 immediately as `"hook failed: busy"`, without another blocking thread.
+A hook reviews permissions unless its `reviews_permissions` returns `false`,
+as the typed `BeforeInvocation` and `AfterInvocation` registrations do. When
+no hook in the invocation reviews permissions, a review goes to the person
+exactly as it would with no hooks: no hook thread runs, so no busy or timeout
+refusal can deny it. Message text that is still waiting for its commit
+deadline is saved before a review hook runs, so the hook's wait does not
+delay that save.
 `ToolVerdict::Allow` leaves the review for the provider's ordinary answer.
 `ToolVerdict::Stopped` means the turn is already stopping: the review is
-retained, not published, and not answered. `Refuse { Continue }` keeps the
+retained, not published, and not answered. `ToolVerdict::refuse(_, Continue)` keeps the
 review and answers the provider's deny option as the hook
 (`permission-review-hook`, `ApprovalBasis::Hook`), so the agent continues. The
 basis keeps the registration index when a hook returned, the reason capped
@@ -76,7 +83,7 @@ at 1024 bytes, and the outcome that was applied. A timeout or a busy refusal
 has no index. A continue with no deny option is an end-turn when
 the binding can cancel one turn, and continue when it cannot. The review is
 withdrawn as the hook either way, so the provider is not left waiting.
-`Refuse { EndTurn }` answers the deny option when one is offered, and withdraws
+`ToolVerdict::refuse(_, EndTurn)` answers the deny option when one is offered, and withdraws
 the pending review when none is. It then cancels the turn when the binding can.
 An end-turn the binding cannot perform is recorded as continue and does not
 cancel the turn. It does not close the session. The answer, the withdrawal,
@@ -85,7 +92,7 @@ withdrawal fails, the answer or withdrawal still records the outcome that was
 intended, and the turn is cancelled; if that fails too, the session stops
 on the observation-failure path. A withdrawal's cancellation code names that
 outcome: `hook-refusal.continue`, `hook-refusal.end_turn`, or
-`hook-refusal.close_session`. `Refuse { CloseSession }` withdraws the review as the hook, recording
+`hook-refusal.close_session`. `ToolVerdict::refuse(_, CloseSession)` withdraws the review as the hook, recording
 `hook-refusal.close_session` and the hook's reason, then closes with
 `SessionCloseRequest::PolicyRefusal`. It does not select an offered option.
 A hook that returns `Stopped` is deny-and-continue; only the runner uses

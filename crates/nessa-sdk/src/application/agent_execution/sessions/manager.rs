@@ -349,6 +349,15 @@ impl SessionManager {
         }
         Ok(())
     }
+    /// Saves a streaming message that is waiting for its commit deadline now,
+    /// so a wait that cannot poll that deadline does not hold it back.
+    pub(crate) async fn flush_pending_messages(&self) -> Result<(), StorageError> {
+        let mut evidence = self.evidence.lock().await;
+        if evidence.message_commit.is_some() {
+            self.save_observed(&mut evidence).await?;
+        }
+        Ok(())
+    }
     /// Joins admission writes after the Agent has excluded new invocations.
     pub(crate) async fn await_admission_writes(&self) {
         drop(self.evidence.lock().await);

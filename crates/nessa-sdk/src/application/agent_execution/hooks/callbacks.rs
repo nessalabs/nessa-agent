@@ -57,6 +57,10 @@ where
     fn before_invocation(&self, context: &InvocationContext<'_>) -> Result<(), HookError> {
         (self.callback)(context)
     }
+
+    fn reviews_permissions(&self) -> bool {
+        false
+    }
 }
 
 impl<F> HookRegistration<F> for BeforeInvocation
@@ -82,6 +86,10 @@ where
         result: &Result<ExecutionOutcome, AgentError>,
     ) -> Result<(), HookError> {
         (self.callback)(&AfterInvocationEvent { context, result })
+    }
+
+    fn reviews_permissions(&self) -> bool {
+        false
     }
 }
 

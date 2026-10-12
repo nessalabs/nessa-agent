@@ -1707,10 +1707,26 @@ impl Agent {
                             };
                             if event.execution_id() == &input.execution_id
                                 && matches!(event.update(), ExecutionUpdate::PermissionRequested { .. })
-                                && !hooks.is_empty()
+                                && hooks.reviews_permissions()
                             {
                                 let review = event.clone();
                                 drop(events);
+                                // The hook wait cannot poll the message-commit
+                                // deadline, so earlier output is saved first.
+                                if let Err(error) = await_supervised_save(
+                                    self.inner.manager.flush_pending_messages(),
+                                    execution.as_mut(),
+                                    &mut stop_notice,
+                                    &mut stop_observed,
+                                    &mut pending_provider_outcome,
+                                    result.is_some(),
+                                ).await {
+                                    // Like any failed save, it ends the turn at
+                                    // the top of the loop; no hook runs for it.
+                                    pending_save_failure.get_or_insert(error);
+                                    events = attached.events.lock().await;
+                                    continue;
+                                }
                                 let suffix = self
                                     .inner
                                     .manager
@@ -1747,7 +1763,7 @@ impl Agent {
                                 result.is_some(),
                             ).await {
                                 Ok(()) => {
-                                    if let ToolVerdict::Refuse { .. } = &decision.verdict {
+                                    if let ToolVerdict::Refuse(_) = &decision.verdict {
                                         drop(events);
                                         if let Some((confirmed, failure)) = self
                                             .apply_permission_verdict(
@@ -1895,12 +1911,13 @@ impl Agent {
         index: Option<usize>,
         verdict: ToolVerdict,
     ) -> Option<(bool, Option<AgentError>)> {
-        let ToolVerdict::Refuse { reason, outcome } = verdict else {
+        let ToolVerdict::Refuse(refusal) = verdict else {
             return None;
         };
+        let (reason, outcome) = (refusal.reason(), refusal.outcome());
         if outcome == RefusalOutcome::CloseSession {
             let recorded = self
-                .withdraw_hook_refusal(event, index, &reason, RefusalOutcome::CloseSession)
+                .withdraw_hook_refusal(event, index, reason, RefusalOutcome::CloseSession)
                 .await;
             let cleanup = self
                 .shutdown_after_failure(SessionCloseRequest::PolicyRefusal)
@@ -1924,7 +1941,7 @@ impl Agent {
             self.supports_turn_cancel(),
         );
         let delivered = self
-            .deliver_hook_refusal(event, index, &reason, effective)
+            .deliver_hook_refusal(event, index, reason, effective)
             .await;
         if delivered.is_err() || effective == RefusalOutcome::EndTurn {
             match self.cancel_turn(event.execution_id().clone()).await {

@@ -86,6 +86,29 @@ fn a_hook_refusal_cannot_select_an_allow_option() {
         })
         .unwrap_err();
     assert!(matches!(rejected, AgentError::InvalidInput(_)));
+    let person = ActionContext::new("human", "nessa.panel", "grant-request").unwrap();
+    let other_review = PermissionId::new("other").unwrap();
+    for attribution in [
+        ApprovalAttribution::new(person, ApprovalBasis::Hook(HookRefusal::new(Some(0), "no"))),
+        ApprovalAttribution::hook(&other_review, HookRefusal::new(Some(0), "no")).unwrap(),
+        ApprovalAttribution::new(
+            hook.actor().clone(),
+            ApprovalBasis::Hook(HookRefusal::new(Some(1), "no")),
+        ),
+    ] {
+        let mismatched = controller
+            .answer_permission(PermissionAnswer {
+                execution_id: execution.clone(),
+                id: permission.clone(),
+                option_id: PermissionOptionId::new("deny").unwrap(),
+                attribution,
+            })
+            .unwrap_err();
+        assert!(
+            matches!(mismatched, AgentError::InvalidInput(_)),
+            "a hook basis was accepted with an actor that is not this review's hook"
+        );
+    }
     controller
         .answer_permission(PermissionAnswer {
             execution_id: execution,
@@ -93,7 +116,7 @@ fn a_hook_refusal_cannot_select_an_allow_option() {
             option_id: PermissionOptionId::new("deny").unwrap(),
             attribution: hook,
         })
-        .expect("the rejected allow left the review pending for its deny option");
+        .expect("the rejected answers left the review pending for its deny option");
 }
 
 #[tokio::test]

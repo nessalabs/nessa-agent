@@ -107,15 +107,48 @@ pub struct HookFailure {
 pub enum ToolVerdict {
     /// The review proceeds. The hook does not answer it.
     Allow,
-    /// The review is refused. `outcome` says whether the turn continues.
-    Refuse {
-        /// Why the hook refused the call.
-        reason: String,
-        /// What the refusal does to the turn.
-        outcome: RefusalOutcome,
-    },
+    /// The review is refused. Build it with [`ToolVerdict::refuse`].
+    Refuse(ToolRefusal),
     /// The turn is stopping. The review is not published for a person to answer.
     Stopped,
+}
+
+/// A refusal's reason and what it does to the turn. Read-only once built:
+/// a caller replaces a verdict rather than editing one.
+///
+/// ```
+/// use nessa_sdk::application::agent_execution::hooks::ToolVerdict;
+/// use nessa_sdk::domain::agent_execution::permissions::RefusalOutcome;
+/// let ToolVerdict::Refuse(refusal) = ToolVerdict::refuse("no", RefusalOutcome::EndTurn) else {
+///     unreachable!()
+/// };
+/// assert_eq!((refusal.reason(), refusal.outcome()), ("no", RefusalOutcome::EndTurn));
+/// ```
+///
+/// ```compile_fail
+/// use nessa_sdk::application::agent_execution::hooks::ToolVerdict;
+/// use nessa_sdk::domain::agent_execution::permissions::RefusalOutcome;
+/// let mut verdict = ToolVerdict::refuse("no", RefusalOutcome::Continue);
+/// if let ToolVerdict::Refuse(refusal) = &mut verdict {
+///     refusal.outcome = RefusalOutcome::CloseSession;
+/// }
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ToolRefusal {
+    reason: Box<str>,
+    outcome: RefusalOutcome,
+}
+
+impl ToolRefusal {
+    /// Why the hook refused the call.
+    pub fn reason(&self) -> &str {
+        &self.reason
+    }
+
+    /// What the refusal does to the turn.
+    pub fn outcome(&self) -> RefusalOutcome {
+        self.outcome
+    }
 }
 
 /// Why a permission-review hook did not return a verdict of its own.
@@ -147,10 +180,10 @@ pub(crate) struct PermissionReviewDecision {
 impl ToolVerdict {
     /// Refuse `outcome` for `reason`.
     pub fn refuse(reason: impl Into<String>, outcome: RefusalOutcome) -> Self {
-        Self::Refuse {
-            reason: reason.into(),
+        Self::Refuse(ToolRefusal {
+            reason: reason.into().into_boxed_str(),
             outcome,
-        }
+        })
     }
 
     pub(crate) fn hook_failed(kind: HookFailureKind) -> Self {
@@ -204,6 +237,19 @@ pub trait InvocationHook: Send + Sync {
         Ok(ToolVerdict::Allow)
     }
 
+    /// Whether [`Self::before_permission_review`] decides anything for this hook.
+    ///
+    /// When no hook in an invocation reviews permissions, a review goes to the
+    /// person exactly as it would with no hooks: no hook thread is started and
+    /// no runtime refusal (busy or timeout) can deny it. The default is `true`,
+    /// so an implementation that reviews is never skipped. Return `false` from
+    /// a hook that only runs before or after the invocation. The typed
+    /// [`BeforeInvocation`](super::BeforeInvocation) and
+    /// [`AfterInvocation`](super::AfterInvocation) registrations return `false`.
+    fn reviews_permissions(&self) -> bool {
+        true
+    }
+
     /// Runs after provider preparation/execution and observation persistence,
     /// including provider admission rejection. Input validation, initial save,
     /// and before-hook failures run no after callback.
@@ -223,19 +269,31 @@ pub trait InvocationHook: Send + Sync {
 #[derive(Clone, Default)]
 pub struct InvocationHooks {
     handlers: Arc<[Arc<dyn InvocationHook>]>,
+    reviews_permissions: bool,
 }
 
 impl InvocationHooks {
     /// Freeze `handlers` in registration order for one invocation; clones share
     /// callbacks. An empty list performs no extension work.
     pub fn new(handlers: Vec<Arc<dyn InvocationHook>>) -> Self {
+        // A panic here counts as reviewing, so a broken hook is never skipped.
+        let reviews_permissions = handlers.iter().any(|hook| {
+            catch_unwind(AssertUnwindSafe(|| hook.reviews_permissions())).unwrap_or(true)
+        });
         Self {
             handlers: handlers.into(),
+            reviews_permissions,
         }
     }
 
     pub(crate) fn is_empty(&self) -> bool {
         self.handlers.is_empty()
+    }
+
+    /// Whether any hook here reviews permissions. When none does, a review
+    /// runs no hook thread and cannot be refused by the runtime.
+    pub(crate) fn reviews_permissions(&self) -> bool {
+        self.reviews_permissions
     }
 
     pub(crate) fn before(

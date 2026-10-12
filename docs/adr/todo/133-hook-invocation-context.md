@@ -94,6 +94,13 @@ outcome, and only the runner, which then cancels the turn, builds an end-turn
 refusal. No public answer, through the agent or the execution controller
 directly, can claim an outcome nothing applied.
 
+Only hooks that review permissions take part. A hook opts out by returning
+`false` from `reviews_permissions`; the typed before- and after-invocation
+registrations do. With no reviewing hook, a review is handled exactly as with
+no hooks at all, so the runtime can never refuse it as busy or timed out.
+Message text still waiting for its commit deadline is saved before the hook
+runs, because the hook's wait cannot poll that deadline.
+
 The review is human-paced. The suffix is copied, the evidence lock is released,
 and the hook runs on a blocking thread until the session's injected
 message-commit clock advances two seconds, selected against stop. A stop that
