@@ -233,19 +233,22 @@ impl HookRefusal {
     }
 }
 
-fn cap_hook_reason(reason: String) -> String {
-    let reason = reason.trim();
-    if reason.is_empty() {
+/// Trim `reason`, name a blank one, and cut it to
+/// [`HookRefusal::MAX_REASON_BYTES`] on a character boundary. A reason that
+/// already fits is returned without a copy.
+pub(crate) fn cap_hook_reason(reason: String) -> String {
+    let trimmed = reason.trim();
+    if trimmed.is_empty() {
         return "hook refused".to_owned();
     }
-    if reason.len() <= HookRefusal::MAX_REASON_BYTES {
-        return reason.to_owned();
+    if trimmed.len() == reason.len() && reason.len() <= HookRefusal::MAX_REASON_BYTES {
+        return reason;
     }
-    let mut end = HookRefusal::MAX_REASON_BYTES;
-    while !reason.is_char_boundary(end) {
+    let mut end = trimmed.len().min(HookRefusal::MAX_REASON_BYTES);
+    while !trimmed.is_char_boundary(end) {
         end -= 1;
     }
-    reason[..end].to_owned()
+    trimmed[..end].to_owned()
 }
 
 /// Who answered and why, required for allowances and denials alike.

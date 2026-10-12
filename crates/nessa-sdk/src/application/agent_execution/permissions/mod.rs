@@ -26,6 +26,7 @@ pub use answer::{
     PermissionAnswer, PermissionAnswerFailure, PermissionAnswerFuture, PermissionAnswerResult,
     PermissionSelectionState, QuestionAnswer,
 };
+pub(crate) use approval::cap_hook_reason;
 pub use approval::{
     ActionContext, ApprovalAttribution, ApprovalBasis, ApprovalModeSnapshot, ApprovalRuleReference,
     HookRefusal, PermissionResolution,

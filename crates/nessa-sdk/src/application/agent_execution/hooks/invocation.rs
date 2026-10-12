@@ -5,6 +5,7 @@ use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::{
     ExecutionEvent, ExecutionRequest, ExecutionUpdate,
 };
+use crate::application::agent_execution::permissions::cap_hook_reason;
 use crate::domain::agent_execution::{
     executions::ExecutionOutcome, permissions::RefusalOutcome, sessions::ExecutionSessionId,
 };
@@ -179,9 +180,14 @@ pub(crate) struct PermissionReviewDecision {
 
 impl ToolVerdict {
     /// Refuse `outcome` for `reason`.
+    ///
+    /// The reason is trimmed and cut to
+    /// [`HookRefusal::MAX_REASON_BYTES`](crate::application::agent_execution::permissions::HookRefusal::MAX_REASON_BYTES)
+    /// here, so no copy of the verdict carries more than the audit keeps. A
+    /// blank reason becomes `"hook refused"`.
     pub fn refuse(reason: impl Into<String>, outcome: RefusalOutcome) -> Self {
         Self::Refuse(ToolRefusal {
-            reason: reason.into().into_boxed_str(),
+            reason: cap_hook_reason(reason.into()).into_boxed_str(),
             outcome,
         })
     }

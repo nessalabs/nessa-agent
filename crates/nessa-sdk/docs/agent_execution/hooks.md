@@ -87,8 +87,9 @@ nothing left for a person to answer. `ToolVerdict::refuse(_, Continue)` keeps th
 review and answers the provider's deny option as the hook
 (`permission-review-hook`, `ApprovalBasis::Hook`), so the agent continues. The
 basis keeps the registration index when a hook returned, the reason capped
-at 1024 bytes, and the outcome that was applied. A timeout or a busy refusal
-has no index. A continue with no deny option is an end-turn when
+at 1024 bytes, and the outcome that was applied. `ToolVerdict::refuse` applies
+that cap when the verdict is built, so no copy of a refusal holds more. A
+timeout or a busy refusal has no index. A continue with no deny option is an end-turn when
 the binding can cancel one turn, and continue when it cannot. The review is
 withdrawn as the hook either way, so the provider is not left waiting.
 `ToolVerdict::refuse(_, EndTurn)` withdraws the pending review as the hook,

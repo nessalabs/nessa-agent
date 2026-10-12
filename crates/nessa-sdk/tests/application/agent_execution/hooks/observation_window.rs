@@ -1658,3 +1658,20 @@ async fn a_second_review_does_not_start_another_hook_thread() {
     assert_eq!(hook_refusal(&answers[1]).index(), None);
     assert_eq!(answers[1].attribution.actor().surface_id(), "runtime");
 }
+
+#[test]
+fn a_refusal_reason_is_capped_when_the_verdict_is_built() {
+    let max = nessa_sdk::application::agent_execution::permissions::HookRefusal::MAX_REASON_BYTES;
+    let ToolVerdict::Refuse(refusal) =
+        ToolVerdict::refuse("é".repeat(max * 64), RefusalOutcome::Continue)
+    else {
+        panic!("refuse builds a refusal");
+    };
+    assert!(refusal.reason().len() <= max);
+    assert!(refusal.reason().len() > max - 2);
+    assert!(refusal.reason().chars().all(|c| c == 'é'));
+    let ToolVerdict::Refuse(blank) = ToolVerdict::refuse("  ", RefusalOutcome::Continue) else {
+        panic!("refuse builds a refusal");
+    };
+    assert_eq!(blank.reason(), "hook refused");
+}

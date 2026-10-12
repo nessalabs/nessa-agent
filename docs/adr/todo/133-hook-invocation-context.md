@@ -57,10 +57,13 @@ payloads. That is a log-size bound, not a secrecy switch.
 The permission-review hook runs when the harness asks about a tool. A tool the
 harness runs without asking is not offered to this hook. The hook returns
 `ToolVerdict`: allow, or refuse with a [`RefusalOutcome`]. The runner can also
-record that the turn is already stopping. A refusal is attributed to the hook,
+record that the turn is already stopping. A hook must not return that itself:
+the runner treats it as `"hook failed: error"`, denies the call, and continues
+the turn. A refusal is attributed to the hook,
 principal `permission-review-hook`, not the person who submitted the turn.
 `ApprovalBasis::Hook` keeps the registration index when a hook returned, the
-reason capped at 1024 bytes, and the outcome that was applied. A timeout or a
+reason capped at 1024 bytes, and the outcome that was applied. The cap applies
+when the verdict is built, so no copy of a refusal holds more. A timeout or a
 busy refusal has no index: the runtime refused before a hook returned. That
 shape matches the deadline basis
 from the open permission-deadline work: a variant on the approval basis and a
