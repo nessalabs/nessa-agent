@@ -573,8 +573,58 @@ impl ExecutionController {
         reason: PermissionCancellationReason,
         origin: CancellationOrigin,
     ) -> Result<Option<PermissionCancellation>, AgentError> {
+        not_a_deadline(&origin)?;
+        self.cancel_one(execution, id, reason, origin, false)
+    }
+    /// The deadline the worker armed for review `id` cancels it, because the
+    /// agent offered no refusal to select.
+    ///
+    /// `deadline` must be the one this review published; anything else is
+    /// InvalidInput and changes nothing. Returns None if the review is absent.
+    #[must_use = "record cancellation evidence before discarding it"]
+    pub(crate) fn cancel_deadline(
+        &mut self,
+        execution: &ExecutionId,
+        id: &PermissionId,
+        deadline: PermissionReviewDeadline,
+    ) -> Result<Option<PermissionCancellation>, AgentError> {
+        if !self
+            .published_deadlines
+            .get(id)
+            .is_some_and(|published| published.decides_as(&deadline))
+        {
+            return Err(AgentError::InvalidInput(
+                "a deadline cancellation must be the deadline this review published".into(),
+            ));
+        }
+        self.cancel_one(
+            execution,
+            id,
+            PermissionCancellationReason::deadline_exceeded(),
+            CancellationOrigin::Deadline(deadline),
+            true,
+        )
+    }
+    /// [`Self::cancel_deadline`] for another crate's tests, which have no
+    /// worker to arm a deadline. Production builds do not have it.
+    #[cfg(feature = "test-support")]
+    pub fn cancel_deadline_for_test(
+        &mut self,
+        execution: &ExecutionId,
+        id: &PermissionId,
+        deadline: PermissionReviewDeadline,
+    ) -> Result<Option<PermissionCancellation>, AgentError> {
+        self.cancel_deadline(execution, id, deadline)
+    }
+    fn cancel_one(
+        &mut self,
+        execution: &ExecutionId,
+        id: &PermissionId,
+        reason: PermissionCancellationReason,
+        origin: CancellationOrigin,
+        by_deadline: bool,
+    ) -> Result<Option<PermissionCancellation>, AgentError> {
         origin.validate_reason(&reason)?;
-        let by_deadline = matches!(origin, CancellationOrigin::Deadline(_));
         let request = self
             .session
             .cancel_permission(execution, id, reason)
@@ -610,6 +660,7 @@ impl ExecutionController {
         reason: PermissionCancellationReason,
         origin: CancellationOrigin,
     ) -> Result<Vec<PermissionCancellation>, AgentError> {
+        not_a_deadline(&origin)?;
         origin.validate_reason(&reason)?;
         Ok(self
             .session
@@ -656,6 +707,7 @@ impl ExecutionController {
         reason: PermissionCancellationReason,
         origin: CancellationOrigin,
     ) -> Result<Vec<ExecutionAuditRecord>, AgentError> {
+        not_a_deadline(&origin)?;
         origin.validate_reason(&reason)?;
         let result = match execution {
             Some(execution) => self.session.close_execution(execution, reason),
@@ -775,6 +827,16 @@ fn domain_error(error: ExecutionError) -> AgentError {
     }
 }
 
+/// Only the worker that armed a review's deadline cancels as it, one review at
+/// a time, through [`ExecutionController::cancel_deadline`].
+fn not_a_deadline(origin: &CancellationOrigin) -> Result<(), AgentError> {
+    if matches!(origin, CancellationOrigin::Deadline(_)) {
+        return Err(AgentError::InvalidInput(
+            "only the review's own deadline can cancel it as a deadline".into(),
+        ));
+    }
+    Ok(())
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1121,24 +1183,46 @@ mod tests {
             stale(&mut timed_out),
             "an execution timeout is not the review's deadline"
         );
+        // A caller cannot cancel as the deadline, even with its reason and
+        // the published deadline; the review stays pending.
+        let mut claimed = pending(Some(deny.clone()));
         assert!(matches!(
-            pending(Some(deny.clone())).cancel_permission(
-                &execution,
-                &permission,
-                PermissionCancellationReason::execution_finished(),
-                CancellationOrigin::Deadline(deny.clone()),
-            ),
-            Err(AgentError::InvalidInput(_))
-        ));
-
-        let mut cancelled = pending(Some(deny.clone()));
-        let record = cancelled
-            .cancel_permission(
+            claimed.cancel_permission(
                 &execution,
                 &permission,
                 PermissionCancellationReason::deadline_exceeded(),
                 CancellationOrigin::Deadline(deny.clone()),
-            )
+            ),
+            Err(AgentError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            claimed.cancel_permissions(
+                &execution,
+                PermissionCancellationReason::deadline_exceeded(),
+                CancellationOrigin::Deadline(deny.clone()),
+            ),
+            Err(AgentError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            claimed.close(
+                PermissionCancellationReason::session_closed(),
+                CancellationOrigin::Deadline(deny.clone()),
+            ),
+            Err(AgentError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            claimed.cancel_deadline(&execution, &permission, allow.clone()),
+            Err(AgentError::InvalidInput(_))
+        ));
+        assert!(claimed.answer_permission(answer("permission")).is_ok());
+        assert!(
+            stale(&mut claimed),
+            "a refused deadline cancel makes no notice"
+        );
+
+        let mut cancelled = pending(Some(deny.clone()));
+        let record = cancelled
+            .cancel_deadline(&execution, &permission, deny.clone())
             .unwrap()
             .unwrap();
         assert_eq!(record.origin(), &CancellationOrigin::Deadline(deny.clone()));

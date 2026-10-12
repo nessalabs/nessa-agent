@@ -1003,12 +1003,7 @@ fn audit_names_the_deadline_that_cancelled_a_review_it_could_not_refuse() {
         )
         .unwrap();
     let cancellation = controller
-        .cancel_permission(
-            &id,
-            &permission,
-            PermissionCancellationReason::deadline_exceeded(),
-            CancellationOrigin::Deadline(deadline),
-        )
+        .cancel_deadline_for_test(&id, &permission, deadline)
         .unwrap()
         .unwrap();
     let value = record_value(&ExecutionAuditRecord::Cancelled(cancellation));

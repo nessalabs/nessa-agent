@@ -4022,12 +4022,7 @@ impl<P: AcpProfile> Worker<P> {
                 .remove(&id)
                 .expect("pending wire permission");
             if let Some(record) = execution
-                .cancel_permission(
-                    &execution_id,
-                    &id,
-                    PermissionCancellationReason::deadline_exceeded(),
-                    CancellationOrigin::Deadline(deadline),
-                )
+                .cancel_deadline(&execution_id, &id, deadline)
                 .map_err(|error| self.record_failure(OperationEffectPhase::Worker, error))?
             {
                 if let Err(failure) = self.record_cancellations(vec![record]).await {

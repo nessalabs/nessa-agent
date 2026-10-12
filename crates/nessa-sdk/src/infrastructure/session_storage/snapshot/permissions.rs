@@ -313,12 +313,7 @@ mod tests {
             )
             .unwrap();
         let cancelled = controller
-            .cancel_permission(
-                &execution,
-                &permission,
-                PermissionCancellationReason::deadline_exceeded(),
-                CancellationOrigin::Deadline(deadline.clone()),
-            )
+            .cancel_deadline(&execution, &permission, deadline.clone())
             .unwrap()
             .unwrap();
 
