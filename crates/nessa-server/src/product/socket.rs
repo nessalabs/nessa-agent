@@ -48,7 +48,7 @@ use nessa_protocol::protocol::{
     health_check_message, unique_envelope, EventFrame, OutgoingMessage, RequestFrame,
     ResponseFrame, MAX_PAYLOAD_BYTES,
 };
-use serde_json::{json, Value};
+use serde_json::json;
 use std::collections::{HashMap, VecDeque};
 use std::future::{poll_fn, Future};
 use std::pin::Pin;
@@ -1543,21 +1543,9 @@ async fn dispatch_authorized(
             if frame.params != json!({}) {
                 return failure(&frame.id, "invalid_request");
             }
-            match (
-                state.agents_catalog.as_ref(),
-                state.connected_environments.as_ref(),
-            ) {
-                (Some(catalog), None) => success(&frame.id, catalog.as_ref()),
-                // The SSH hosts are fixed at startup; a paired environment is
-                // a place only while it is connected, so it is added as asked.
-                (Some(catalog), Some(connected)) => {
-                    let mut catalog = json!(catalog.as_ref());
-                    if let Some(places) = catalog["environments"].as_array_mut() {
-                        places.extend(connected().into_iter().map(Value::String));
-                    }
-                    success(&frame.id, &catalog)
-                }
-                (None, _) => failure(&frame.id, "conversations_not_configured"),
+            match state.agents_catalog_now() {
+                Some(catalog) => success(&frame.id, &catalog),
+                None => failure(&frame.id, "conversations_not_configured"),
             }
         }
         "agents.installOptions" | "agents.install" => {

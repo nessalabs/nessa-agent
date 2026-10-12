@@ -20,6 +20,7 @@ use nessa_protocol::product::generated::{
 };
 use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
+use serde_json::json;
 use std::sync::Arc;
 use tokio::{sync::OwnedSemaphorePermit, task::AbortHandle, time::Instant};
 
@@ -39,8 +40,9 @@ impl ConnectionSubscriptions {
     /// Events continue `sequence`, the socket's one numbering.
     pub fn new(sequence: Arc<EventSequence>) -> Self {
         Self {
+            // One more for the agent catalog.
             entries: Vec::with_capacity(
-                MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS + MAX_CONNECTION_LIST_SUBSCRIPTIONS,
+                MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS + MAX_CONNECTION_LIST_SUBSCRIPTIONS + 1,
             ),
             minted: 0,
             deliveries: Arc::new(SubscriptionDeliveries::new(sequence)),
@@ -54,6 +56,8 @@ impl ConnectionSubscriptions {
             product_method::CONVERSATION_SUBSCRIBE
                 | product_method::CONVERSATION_SUBSCRIBE_LIST
                 | product_method::CONVERSATION_UNSUBSCRIBE
+                | product_method::AGENTS_SUBSCRIBE
+                | product_method::AGENTS_UNSUBSCRIBE
         )
     }
 
@@ -68,7 +72,10 @@ impl ConnectionSubscriptions {
     /// Whether `method` stops a subscription: the socket admits it before
     /// [`Self::begin`] is asked (row S29).
     pub fn stops(method: &str) -> bool {
-        method == product_method::CONVERSATION_UNSUBSCRIBE
+        matches!(
+            method,
+            product_method::CONVERSATION_UNSUBSCRIBE | product_method::AGENTS_UNSUBSCRIBE
+        )
     }
 
     /// Begin, or stop, one subscription. The answer for the ordinary lane, or
@@ -90,17 +97,17 @@ impl ConnectionSubscriptions {
             return Some(invalid());
         }
         self.collect();
-        if frame.method == product_method::CONVERSATION_UNSUBSCRIBE {
+        if Self::stops(&frame.method) {
             let Ok(params) =
                 serde_json::from_value::<ConversationUnsubscribeParams>(frame.params.clone())
             else {
                 return Some(invalid());
             };
-            let Some(position) = self
-                .entries
-                .iter()
-                .position(|entry| entry.id == params.subscription_id)
-            else {
+            // Each unsubscribe stops only what the subscribe beside it made,
+            // whose grant it asks (row AC7).
+            let Some(position) = self.entries.iter().position(|entry| {
+                entry.id == params.subscription_id && entry.target.stopped_by() == frame.method
+            }) else {
                 return Some(failure(
                     &frame.id,
                     ConversationSubscriptionErrorCode::UnknownSubscription.as_str(),
@@ -118,7 +125,13 @@ impl ConnectionSubscriptions {
                 },
             ));
         }
-        let target = if frame.method == product_method::CONVERSATION_SUBSCRIBE {
+        let target = if frame.method == product_method::AGENTS_SUBSCRIBE {
+            // Asked as `agents.list` is: no parameters.
+            if frame.params != json!({}) {
+                return Some(invalid());
+            }
+            Target::Agents
+        } else if frame.method == product_method::CONVERSATION_SUBSCRIBE {
             let Ok(params) =
                 serde_json::from_value::<ConversationSubscribeParams>(frame.params.clone())
             else {
@@ -146,45 +159,60 @@ impl ConnectionSubscriptions {
                 archived: params.archived.unwrap_or(false),
             }
         };
-        let Some(service) = state.conversations.clone() else {
-            return Some(failure(
+        let not_configured = || {
+            Some(failure(
                 &frame.id,
                 ConversationErrorCode::ConversationsNotConfigured.as_str(),
-            ));
+            ))
         };
+        // The agent catalog reads no conversation, and is composed where
+        // conversations are, as `agents.list` answers.
+        let service = state.conversations.clone();
+        match target {
+            Target::Agents if state.agents_catalog.is_none() => return not_configured(),
+            Target::View { .. } | Target::List { .. } if service.is_none() => {
+                return not_configured()
+            }
+            _ => {}
+        }
         if self.entries.iter().any(|entry| entry.target.same(&target)) {
             return Some(failure(
                 &frame.id,
                 ConversationSubscriptionErrorCode::SubscriptionDuplicate.as_str(),
             ));
         }
-        let (limit, of_kind, named) = match target {
-            Target::View { .. } => (
-                MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS,
-                self.entries
-                    .iter()
-                    .filter(|entry| matches!(entry.target, Target::View { .. }))
-                    .count(),
-                "socket.conversation_subscriptions",
-            ),
-            Target::List { .. } => (
-                MAX_CONNECTION_LIST_SUBSCRIPTIONS,
-                self.entries
-                    .iter()
-                    .filter(|entry| matches!(entry.target, Target::List { .. }))
-                    .count(),
-                "socket.list_subscriptions",
-            ),
-        };
         let capacity = || {
             failure(
                 &frame.id,
                 ConversationSubscriptionErrorCode::SubscriptionCapacity.as_str(),
             )
         };
-        if of_kind >= limit {
-            note_limit(named);
-            return Some(capacity());
+        // The agent catalog is one target, so the duplicate refusal above is
+        // its bound: one per connection.
+        let bound = match target {
+            Target::View { .. } => Some((
+                MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS,
+                self.entries
+                    .iter()
+                    .filter(|entry| matches!(entry.target, Target::View { .. }))
+                    .count(),
+                "socket.conversation_subscriptions",
+            )),
+            Target::List { .. } => Some((
+                MAX_CONNECTION_LIST_SUBSCRIPTIONS,
+                self.entries
+                    .iter()
+                    .filter(|entry| matches!(entry.target, Target::List { .. }))
+                    .count(),
+                "socket.list_subscriptions",
+            )),
+            Target::Agents => None,
+        };
+        if let Some((limit, of_kind, named)) = bound {
+            if of_kind >= limit {
+                note_limit(named);
+                return Some(capacity());
+            }
         }
         let Some(minted) = self.minted.checked_add(1) else {
             return Some(capacity());

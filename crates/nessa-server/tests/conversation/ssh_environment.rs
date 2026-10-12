@@ -2759,8 +2759,11 @@ async fn a_revoked_link_ends_each_lease_as_revoked_and_closes_once_they_are_ende
     let mut harness = link.start(id.as_str(), BTreeMap::new()).unwrap();
     harness.input.write_all(b"ping").await.unwrap();
     assert_eq!(read_some(&mut harness.output).await, b"ping");
-    link.revoke(Duration::from_secs(30));
-    link.revoke(Duration::from_secs(30));
+    assert!(link.revoke(Duration::from_secs(30)), "this call revoked it");
+    assert!(
+        !link.revoke(Duration::from_secs(30)),
+        "asked again, nothing more"
+    );
     // From the moment it is revoked, nothing more is started or published
     // on it: the host is ending every lease.
     assert_eq!(
