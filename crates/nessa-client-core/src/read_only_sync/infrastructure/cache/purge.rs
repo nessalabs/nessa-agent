@@ -70,6 +70,17 @@ impl CachePurges for ReadOnlyCache {
     }
 }
 
+impl ReadOnlyCache {
+    /// Read original durable purge evidence without requiring an enrollment
+    /// record or contacting the gateway; this does not perform another purge.
+    pub(crate) fn purge_receipt(
+        &mut self,
+        receiver: &Id,
+    ) -> Result<Option<PurgeReceipt>, CacheError> {
+        receipt(&self.connection, receiver)
+    }
+}
+
 fn receipt(connection: &Connection, receiver: &Id) -> Result<Option<PurgeReceipt>, CacheError> {
     connection
         .query_row(

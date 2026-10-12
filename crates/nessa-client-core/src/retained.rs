@@ -71,7 +71,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
+mod device;
 mod saved;
+pub use device::{RetainedEnrollmentClient, RetainedEnrollmentStatus, RetainedPurge};
 pub use saved::{
     RetainedCatalogueEntry, RetainedCataloguePage, RetainedProgress, RetainedTranscript,
     RetainedTranscriptSnapshot,
@@ -357,14 +359,7 @@ impl RetainedCache {
         wall: Arc<dyn WallClock>,
         clock: Arc<dyn MonotonicClock>,
     ) -> Result<Self, ReadFailure> {
-        let limits = Limits::new(
-            MAX_RECORD_PAGE_RECORDS,
-            MAX_RECORD_PAGE_PAYLOAD_BYTES,
-            MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
-        )
-        .map_err(|_| ReadFailure::Cache)?;
-        let policy = CachePolicy::new(CACHE_BYTES, CHECKPOINT_BYTES, limits)
-            .map_err(|_| ReadFailure::Cache)?;
+        let policy = retained_policy().map_err(|error| cache_failure(&error))?;
         let cache = ReadOnlyCache::open(path, policy, wall.clone())
             .map_err(|error| cache_failure(&error))?;
         Ok(Self {
@@ -901,6 +896,17 @@ fn unread(error: GatewayError) -> Result<Conversation, ReadFailure> {
         }),
         other => Err(other),
     }
+}
+
+/// One policy publication for both retained reads and enrollment purges.
+fn retained_policy() -> Result<CachePolicy, CacheError> {
+    let limits = Limits::new(
+        MAX_RECORD_PAGE_RECORDS,
+        MAX_RECORD_PAGE_PAYLOAD_BYTES,
+        MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+    )
+    .map_err(|_| CacheError::InvalidPolicy)?;
+    CachePolicy::new(CACHE_BYTES, CHECKPOINT_BYTES, limits)
 }
 
 /// A cache failure as the caller acts on it: a cache that cannot be read as

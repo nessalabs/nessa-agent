@@ -28,7 +28,7 @@ use nessa_auth::application::ports::Clock;
 use nessa_auth::application::session::{AuthenticateSession, AuthenticatedSession};
 use nessa_auth::domain::pairing::ConsentClass;
 use nessa_auth::domain::{AudienceId, OrganizationId, PrincipalId, Resource, ResourceId};
-use nessa_client_core::pairing::NativeEnrollmentClient;
+use nessa_client_core::retained::RetainedEnrollmentClient;
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{
     ConversationApprovalMode, ConversationId, ConversationModelId,
@@ -605,7 +605,13 @@ async fn pair_device(
     let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
     nessa_local_storage::create_directory_beneath(root, Path::new(directory)).unwrap();
     let device = Arc::new(FilePairingState::open(root, Path::new(directory)).unwrap());
-    let client = NativeEnrollmentClient::new(device.clone(), RuntimeDependencies::default().clock);
+    let client = RetainedEnrollmentClient::new(
+        device.clone(),
+        root.join(directory).join("retained.sqlite3"),
+        Arc::new(SystemClock),
+        RuntimeDependencies::default().clock,
+    )
+    .unwrap();
     let claimed = client
         .enroll(TcpStream::connect(native).unwrap(), code, OsEntropy)
         .await
@@ -621,7 +627,11 @@ async fn pair_device(
         .status(TcpStream::connect(native).unwrap(), None)
         .await
         .unwrap();
-    assert!(matches!(active, NativePairingStatus::Active { .. }));
+    assert!(matches!(
+        active.enrollment(),
+        Ok(NativePairingStatus::Active { .. })
+    ));
+    assert!(active.purge().is_none());
     client.shutdown().await;
     (receiver.as_str().to_owned(), epoch, credential)
 }

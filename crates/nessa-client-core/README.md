@@ -31,6 +31,13 @@ original typed cause privately. Debug/Display remain unchanged; JSON owns
 machine-readable outcomes. `NativeRetryOutcome` exposes borrowed receipt
 accessors. Retained driver/cache mutation, policy and reset ports remain internal;
 saved values expose actual progress without claiming current source authority.
+`RetainedEnrollmentClient` composes the existing physical enrollment worker with
+the purge-before-end policy. Its immutable status result captures that operation's
+purge inside physical admission; an outer worker/admission error does not prove
+cleanup absent. `RetainedCache::purge_receipt` reads original durable evidence
+without a credential or another status RPC. Credential-removal acknowledgement
+is distinct from a successful purge, including uncertain unlink and worker faults.
+The private store/cache scope remains stable until shutdown drains the owner.
 `ReaderRole` chooses the existing owner or granted-peer scope authorizer; it does
 not grant permission. `saved_catalogue_scope` discovers a saved target, and
 `catalogue_page` selects an explicit receiver/origin/stream in one SQLite snapshot.
@@ -45,6 +52,7 @@ borrowed accessors; its compile-fail example checks that the view cannot be muta
 | Path | Responsibility |
 | --- | --- |
 | `src/pairing/client.rs` | Native enrollment, strict pinned status and retry, pending-state publication and one retained physical worker. Shared framing and enrollment socket policy come from `nessa-protocol::pairing`. |
+| `src/retained/device.rs` | Library composition of that physical worker and the existing purge policy; immutable admission-scoped status/purge results and durable purge receipt lookup. No CLI or second worker. |
 | `src/retained.rs`, `src/retained/saved.rs` | Public bounded owner/granted read over the existing driver, plus typed saved scope/page/transcript/progress projections delegating to the same SQLite and passive-view owners. No CLI or additional receiver. |
 | `src/read_only_sync/domain/` | Immutable attributed cache reset requests; a held file named as the view names it, and its ranges. |
 | `src/read_only_sync/application/` | Cache policy and typed evidence, finite records/catalogue drivers, saved-read/reset/purge ports, protected connection policy, bounded watch loop, and the held-file fetch (ranges, at least one asked every time, busy retries, size and digest before keeping). |
@@ -56,6 +64,7 @@ borrowed accessors; its compile-fail example checks that the view cannot be muta
 | `examples/read_only_sync.rs` | Standalone executable using `composition::run_read_only_example`. |
 | `tests/read_only_sync/` | Matching domain, application, gateway and private-cache boundary evidence, included by the library with `#[path]`. |
 | `tests/composition/` | Private profile, code-input, command diagnostic, and composed `fetch` (scripted native peer, real files) evidence. Real authenticated online process tests remain in `nessa-server/tests/composition/read_only_online.rs`. |
+| `tests/pairing/completion.rs` | Physical admission through effect capture, rejected Busy admission, caller/shutdown cancellation and last-handle-drop ownership. |
 
 The deterministic five-mode saved-output race is
 `tests/read_only_sync/infrastructure/saved_output.rs`. It uses the existing

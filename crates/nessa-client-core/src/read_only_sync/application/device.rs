@@ -67,16 +67,15 @@ pub(crate) type OpenPurges =
 /// the enrollment client may remove its record (`purge_precedes_record_removal`).
 pub(crate) struct PurgeBeforeEnd {
     store: Arc<dyn ClientPendingStore>,
-    receiver: Id,
     open: OpenPurges,
     purged: Mutex<Option<Result<PurgeReceipt, CacheError>>>,
 }
 impl PurgeBeforeEnd {
-    /// `receiver` is the one the device's own credential record names.
-    pub(crate) fn new(store: Arc<dyn ClientPendingStore>, receiver: Id, open: OpenPurges) -> Self {
+    /// Retain one private-state owner; derive the purge receiver from the
+    /// issued credential matching the authenticated end's expected intent.
+    pub(crate) fn new(store: Arc<dyn ClientPendingStore>, open: OpenPurges) -> Self {
         Self {
             store,
-            receiver,
             open,
             purged: Mutex::new(None),
         }
@@ -88,6 +87,17 @@ impl PurgeBeforeEnd {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
+    }
+    /// Called only inside an admitted physical status operation.
+    pub(crate) fn begin_status(&self) {
+        *self.purged.lock().unwrap_or_else(PoisonError::into_inner) = None;
+    }
+    /// Transfer this operation's effect before its physical permit releases.
+    pub(crate) fn finish_status(&self) -> Option<Result<PurgeReceipt, CacheError>> {
+        self.purged
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
     }
 }
 impl ClientPendingStore for PurgeBeforeEnd {
@@ -115,10 +125,15 @@ impl ClientPendingStore for PurgeBeforeEnd {
     /// record purges (`only_ending_an_issued_credential_purges`). A purge that
     /// fails keeps the record, so the next Terminal status purges again.
     fn end_enrollment(&self, expected: PublicIntent) -> Result<(), PrivateStateError> {
-        if self.store.load_credential()?.is_none() {
+        let Some(saved) = self.store.load_credential()? else {
             return self.store.end_enrollment(expected);
+        };
+        if saved.intent() != expected {
+            return Err(PrivateStateError::Conflict);
         }
-        let purged = (self.open)().and_then(|mut cache| cache.purge_receiver(&self.receiver));
+        let receiver =
+            Id::new(saved.receiver().as_str()).map_err(|_| PrivateStateError::Corrupt)?;
+        let purged = (self.open)().and_then(|mut cache| cache.purge_receiver(&receiver));
         let refused = purged.is_err();
         *self.purged.lock().unwrap_or_else(PoisonError::into_inner) = Some(purged);
         if refused {
