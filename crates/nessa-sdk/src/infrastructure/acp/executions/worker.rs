@@ -2598,22 +2598,32 @@ impl<P: AcpProfile> Worker<P> {
             &options,
             &self.profile.deadline_deny_preference(),
         );
-        let promised = settlement.deadline().clone().promise(unix_deadline_ms(
-            &*self.config.clock,
-            settlement.deadline().wait(),
-        ));
+        // A wall clock past what a client can read gives no moment a card
+        // could show, so the review waits for a person as it would with no
+        // deadline, rather than be decided at a time nobody was told.
+        let promised = settlement
+            .deadline()
+            .clone()
+            .promise(unix_deadline_ms(
+                &*self.config.clock,
+                settlement.deadline().wait(),
+            ))
+            .ok();
+        let armed = promised.is_some();
         let event = execution.request_permission(
             target,
             permission_id.clone(),
             tool,
             input,
             options,
-            Some(promised),
+            promised,
         )?;
-        let at = self.config.clock.now() + settlement.deadline().wait();
         self.permissions.insert(permission_id.clone(), wire_id);
-        self.armed_permissions
-            .insert(permission_id, ArmedPermission { at, settlement });
+        if armed {
+            let at = self.config.clock.now() + settlement.deadline().wait();
+            self.armed_permissions
+                .insert(permission_id, ArmedPermission { at, settlement });
+        }
         self.emit(event).map_err(Into::into)
     }
     /// Answer one review "no" without offering it, and leave the turn running.

@@ -978,7 +978,7 @@ mod tests {
                     tool(None),
                     input(),
                     options("Allow".into()),
-                    published.map(|deadline| deadline.promise(1_000)),
+                    published.map(|deadline| deadline.promise(1_000).unwrap()),
                 )
                 .unwrap();
             controller

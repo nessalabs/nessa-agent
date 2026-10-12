@@ -43,6 +43,13 @@ impl Default for ManualClock {
     }
 }
 impl ManualClock {
+    /// A clock whose wall time starts at `unix_origin_ms`.
+    pub fn at_unix_ms(unix_origin_ms: u64) -> Self {
+        Self {
+            unix_origin_ms,
+            ..Self::default()
+        }
+    }
     /// Move the clock `by` forward, ending every wait whose deadline that
     /// reaches.
     pub fn advance(&self, by: Duration) {

@@ -819,7 +819,8 @@ mod borrowed_event_tests {
 
         let deadline =
             PermissionReviewDeadline::stopping(PermissionToolClass::Other, Duration::from_secs(30))
-                .promise(1_700_000_030_000);
+                .promise(1_700_000_030_000)
+                .unwrap();
         let options = PermissionOptions::new(
             vec![PermissionOption::new(
                 PermissionOptionId::new("cancel").unwrap(),

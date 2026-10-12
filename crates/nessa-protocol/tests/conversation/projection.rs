@@ -281,7 +281,8 @@ fn review_with_deadline(effect: PermissionEffect, reason: &str) -> ExecutionEven
                 reason,
             )
             .unwrap()
-            .promise(1_700_000_030_000),
+            .promise(1_700_000_030_000)
+            .unwrap(),
         ),
     })
 }
@@ -2549,7 +2550,8 @@ fn a_pending_review_shows_an_armed_deadline_and_a_restored_one_does_not() {
         STANDARD_DENY_REASON,
     )
     .unwrap()
-    .promise(1_700_000_030_000);
+    .promise(1_700_000_030_000)
+    .unwrap();
     let show = |deadline| {
         let snapshot = review_snapshot(vec![event(ExecutionUpdate::PermissionRequested {
             id: id.clone(),
@@ -2587,6 +2589,7 @@ fn a_pending_review_shows_an_armed_deadline_and_a_restored_one_does_not() {
     )
     .unwrap()
     .promise(due)
+    .unwrap()
     .restored(false, Some(due))
     .expect("a continuing deny deadline restores");
     assert!(!restored.armed());
@@ -2618,6 +2621,7 @@ fn a_saved_deadline_counts_down_while_this_process_holds_the_review() {
     let restored =
         PermissionReviewDeadline::stopping(PermissionToolClass::Other, Duration::from_secs(30))
             .promise(due)
+            .unwrap()
             .restored(true, Some(due))
             .expect("a stopping deny deadline restores");
     assert!(!restored.armed());

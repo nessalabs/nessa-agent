@@ -228,6 +228,61 @@ async fn an_unanswered_read_is_allowed_when_its_shorter_deadline_passes() {
 }
 
 #[tokio::test]
+async fn a_wall_clock_no_client_can_read_leaves_the_review_to_a_person() {
+    let _slot = process_test_slot().await;
+    let audit = Arc::new(RecordingAudit::default());
+    let (root, mut config, model) = test_acp_configuration("permission", 16);
+    let clock = Arc::new(ManualClock::at_unix_ms(MAX_DEADLINE_DUE_MS));
+    config.clock = clock.clone();
+    let binding = ClaudeAcpProvider::new(
+        config,
+        &model,
+        TokenLimits::new(900, 100).unwrap(),
+        audit.clone(),
+    )
+    .unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
+    let active = start(&opened, "write").await;
+    assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
+    let ExecutionUpdate::PermissionRequested { id, deadline, .. } = next(&mut opened).await else {
+        panic!("expected permission");
+    };
+    assert_eq!(
+        deadline, None,
+        "no card may promise a moment it cannot show"
+    );
+
+    clock.advance(Duration::from_secs(60));
+    let late = timeout(Duration::from_millis(400), opened.events.next()).await;
+    assert!(
+        late.is_err(),
+        "an unpublished deadline must not decide the review"
+    );
+    opened
+        .session
+        .answer_permission(human_allow(id))
+        .await
+        .unwrap();
+    let updates = until_finished(&mut opened).await;
+    assert!(updates
+        .iter()
+        .all(|update| !matches!(update, ExecutionUpdate::DeadlineAnswered { .. })));
+    assert_eq!(
+        promptly(active).await.unwrap(),
+        Ok(ExecutionOutcome::Completed)
+    );
+    assert!(answered(&audit).iter().all(|record| matches!(
+        record.resolution().attribution().basis(),
+        ApprovalBasis::Explicit
+    )));
+    close(&clock, &opened).await;
+    assert_gone(&root, "pid");
+}
+
+#[tokio::test]
 async fn a_human_answer_before_the_deadline_is_the_one_that_stands() {
     let _slot = process_test_slot().await;
     let mut review = pending("permission").await;

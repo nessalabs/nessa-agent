@@ -434,7 +434,7 @@ fn deadline_answer_value(
             ToolCallUpdate::new(tool, Some("Write file".into()), None, None, None, None),
             input.clone(),
             choices,
-            Some(deadline.clone().promise(1_700_000_030_000)),
+            Some(deadline.clone().promise(1_700_000_030_000).unwrap()),
         )
         .unwrap();
     let answer = controller

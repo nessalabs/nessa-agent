@@ -9,6 +9,11 @@ use std::time::Duration;
 /// leave the review waiting, which is the stall a deadline exists to end.
 pub const MAX_PERMISSION_DEADLINE: Duration = Duration::from_secs(24 * 60 * 60);
 
+/// The latest due time a deadline may name, in Unix milliseconds: the largest
+/// whole number a JavaScript client reads exactly. A later moment would be
+/// rounded on the card, so it is not a time a review can promise.
+pub const MAX_DEADLINE_DUE_MS: u64 = 9_007_199_254_740_991;
+
 /// The longest reason a deadline may record, in UTF-8 bytes.
 pub const MAX_DEADLINE_REASON_BYTES: usize = 512;
 
@@ -151,14 +156,16 @@ impl PermissionReviewDeadline {
 
     /// This deadline as the one a live worker will decide at `due_at_ms`.
     ///
-    /// `due_at_ms` is Unix milliseconds. The returned value is the one a card
-    /// may promise; a deadline that was only restored is not this.
-    pub fn promise(self, due_at_ms: u64) -> Self {
-        Self {
-            due_at_ms: Some(due_at_ms),
+    /// `due_at_ms` is Unix milliseconds, from 1 to [`MAX_DEADLINE_DUE_MS`];
+    /// any other moment is [`ExecutionError::UnrepresentablePermissionDeadlineDue`].
+    /// The returned value is the one a card may promise; a deadline that was
+    /// only restored is not this.
+    pub fn promise(self, due_at_ms: u64) -> Result<Self, ExecutionError> {
+        Ok(Self {
+            due_at_ms: Some(checked_due(due_at_ms)?),
             armed: true,
             ..self
-        }
+        })
     }
 
     /// A denial of `class` after `wait` whose only offered refusal stops the turn.
@@ -213,7 +220,8 @@ impl PermissionReviewDeadline {
     /// The facts saved with a review, not a promise that this process will decide it.
     ///
     /// An allow deadline cannot record that it stops the turn. That combination
-    /// is [`ExecutionError::AllowDeadlineStopsTurn`].
+    /// is [`ExecutionError::AllowDeadlineStopsTurn`]. A due time is held to the
+    /// same range [`Self::promise`] accepts.
     pub fn restored(
         self,
         stops_turn: bool,
@@ -224,10 +232,19 @@ impl PermissionReviewDeadline {
         }
         Ok(Self {
             stops_turn,
-            due_at_ms,
+            due_at_ms: due_at_ms.map(checked_due).transpose()?,
             armed: false,
             ..self
         })
+    }
+}
+
+/// A due time a client can read exactly, or why it cannot be one.
+fn checked_due(due_at_ms: u64) -> Result<u64, ExecutionError> {
+    if (1..=MAX_DEADLINE_DUE_MS).contains(&due_at_ms) {
+        Ok(due_at_ms)
+    } else {
+        Err(ExecutionError::UnrepresentablePermissionDeadlineDue)
     }
 }
 
@@ -667,7 +684,7 @@ mod tests {
         );
         let stopping =
             PermissionReviewDeadline::stopping(PermissionToolClass::Other, Duration::from_secs(1));
-        let promised = other.clone().promise(1_000);
+        let promised = other.clone().promise(1_000).unwrap();
         let restored = other.clone().restored(false, Some(1_000)).unwrap();
         for settled in [stopping, promised, restored] {
             assert_eq!(
@@ -676,10 +693,10 @@ mod tests {
             );
         }
         assert_eq!(
-            PermissionDeadlinePolicy::new(read_only.clone().promise(1_000), other.clone()),
+            PermissionDeadlinePolicy::new(read_only.clone().promise(1_000).unwrap(), other.clone()),
             Err(ExecutionError::SettledPermissionDeadlineTemplate)
         );
-        assert!(other.decides_as(&other.clone().promise(1_000)));
+        assert!(other.decides_as(&other.clone().promise(1_000).unwrap()));
         assert!(other.decides_as(&other.clone().restored(false, None).unwrap()));
         assert!(!other.decides_as(&read_only));
         assert!(!other.decides_as(
@@ -891,7 +908,8 @@ mod tests {
         assert_eq!(wait_ms(Duration::MAX), u64::MAX);
         let promised =
             PermissionReviewDeadline::stopping(PermissionToolClass::Other, Duration::from_secs(30))
-                .promise(1_700_000_030_000);
+                .promise(1_700_000_030_000)
+                .unwrap();
         assert!(promised.armed());
         assert_eq!(promised.due_at_ms(), Some(1_700_000_030_000));
         assert_eq!(promised.recorded_reason().as_str(), STANDARD_STOP_REASON);
@@ -916,7 +934,8 @@ mod tests {
         assert_ne!(promised, different_class);
         let different_wait =
             PermissionReviewDeadline::stopping(PermissionToolClass::Other, Duration::from_secs(8))
-                .promise(due);
+                .promise(due)
+                .unwrap();
         assert_ne!(promised, different_wait);
         let allow = PermissionReviewDeadline::new(
             PermissionToolClass::Other,
@@ -953,5 +972,24 @@ mod tests {
         assert_ne!(promised, different_stop);
         let different_due = promised.clone().restored(true, None).unwrap();
         assert_ne!(promised, different_due);
+        let unreadable = Err(ExecutionError::UnrepresentablePermissionDeadlineDue);
+        assert_eq!(promised.clone().promise(0), unreadable);
+        assert_eq!(
+            promised.clone().promise(MAX_DEADLINE_DUE_MS + 1),
+            unreadable
+        );
+        assert_eq!(
+            promised
+                .clone()
+                .promise(MAX_DEADLINE_DUE_MS)
+                .unwrap()
+                .due_at_ms(),
+            Some(MAX_DEADLINE_DUE_MS)
+        );
+        assert_eq!(promised.clone().restored(true, Some(0)), unreadable);
+        assert_eq!(
+            promised.restored(true, Some(MAX_DEADLINE_DUE_MS + 1)),
+            unreadable
+        );
     }
 }
