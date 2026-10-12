@@ -3,10 +3,11 @@
 //! the bounded private profile: the device's private state directory and gateway
 //! address. `device` pairs and reads the pinned enrollment status. `online` admits each run by that status, then
 //! consumes the protected session, its facades and finite drivers before JSON
-//! presentation.
+//! presentation. `fetch` keeps one held file beside its output.
 mod clock;
 mod device;
 pub(crate) mod error;
+mod fetch;
 mod online;
 mod profile;
 use crate::composition::clock::SystemClock;

@@ -108,9 +108,12 @@ function pastedDocument(content: MessageContent) {
 /** Preserve surrounding Markdown while pasted payloads remain independently viewable. */
 export function MessageContentView({
   content,
+  conversationId,
   onOpenPaste,
 }: {
   content: MessageContent
+  /** The gateway's identity for the conversation, to read referenced images from. */
+  conversationId?: string
   onOpenPaste: (text: string) => void
 }) {
   const document = React.useMemo(() => pastedDocument(content), [content])
@@ -156,7 +159,7 @@ export function MessageContentView({
           {document.source}
         </MessageMarkdown>
       ) : null}
-      <MessageImages content={content} />
+      <MessageImages content={content} conversationId={conversationId} />
     </>
   )
 }

@@ -47,6 +47,7 @@ function view(
   return {
     questions: [],
     conversationId,
+    artifacts: [],
     approvalMode: "ask",
     approvalModes: [
       { id: "ask", name: "Provider asks", description: "Provider asks where required." },

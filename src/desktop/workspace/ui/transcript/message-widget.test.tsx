@@ -7,6 +7,7 @@ import { act, useState } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { Provider } from "react-redux"
 import { afterEach, beforeEach, expect, it } from "vitest"
+import { HeldFilesProvider, type HeldFileReader } from "../../../../conversation"
 import {
   createWidgetRegistry,
   WidgetRegistryProvider,
@@ -117,4 +118,64 @@ it("keeps repeated widget references as distinct mounted siblings across text ch
   })
   expect([...host.querySelectorAll("button")]).toEqual(held)
   expect(held.map((button) => button.textContent)).toEqual(["same pressed", "same"])
+})
+
+it("draws the files the agent published one after another as one list of cards, read from the session's conversation", async () => {
+  URL.createObjectURL = (() => "blob:test/1") as typeof URL.createObjectURL
+  URL.revokeObjectURL = (() => {}) as typeof URL.revokeObjectURL
+  const asked: [string, string][] = []
+  const read: HeldFileReader = async (conversationId, file) => {
+    asked.push([conversationId, file.digest])
+    return new Blob(["png"], { type: file.mimeType })
+  }
+  const digest = `sha256:${"a".repeat(64)}`
+  const store = testStore()
+  await act(async () =>
+    root.render(
+      <Provider store={store}>
+        <HeldFilesProvider read={read} save={async () => "saved"}>
+          <Message
+            sessionId="a"
+            isNew={false}
+            message={{
+              id: "m",
+              role: "agent",
+              at: 1,
+              parts: [
+                { kind: "text", text: "Charted." },
+                {
+                  kind: "file",
+                  name: "chart.png",
+                  digest,
+                  mimeType: "image/png",
+                  size: 3,
+                },
+                {
+                  kind: "file",
+                  name: "data.csv",
+                  digest,
+                  mimeType: "text/csv",
+                  size: 3,
+                },
+              ],
+            }}
+          />
+        </HeldFilesProvider>
+      </Provider>,
+    ),
+  )
+  await act(async () => {})
+  expect(asked).toEqual([["a", digest]])
+  expect(
+    host.querySelector("[data-published-file='chart.png'] img")?.getAttribute("src"),
+  ).toBe("blob:test/1")
+  expect(host.querySelector("button[aria-label='Save chart.png']")).not.toBeNull()
+  // Both in one list, not a list each.
+  const lists = host.querySelectorAll("[data-published-files]")
+  expect(lists).toHaveLength(1)
+  expect(
+    [...(lists[0]?.querySelectorAll("[data-published-file]") ?? [])].map((card) =>
+      card.getAttribute("data-published-file"),
+    ),
+  ).toEqual(["chart.png", "data.csv"])
 })

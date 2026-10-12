@@ -66,3 +66,11 @@ export {
   validDraftAttachments,
   validImageReference,
 } from "./attachments"
+
+export {
+  placePublished,
+  type HeldFile,
+  type HeldFileFailure,
+  type PublishedFile,
+  type PublishedPlacement,
+} from "./held-files"

@@ -1391,3 +1391,47 @@ it.each([
     expect(deletedAnyway(reason)).toBe(false)
   },
 )
+
+it("tells the follower the files its agent published, by what they are held as and not their lease", async () => {
+  const gateway = subscribing()
+  const effects = effectsOf(() => gateway.client)
+  const { said, follower } = told()
+  const stop = effects.follow("server", follower)
+  await settle()
+  const held = { digest: `sha256:${"a".repeat(64)}`, mimeType: "image/png", size: 3 }
+  gateway.opens[0]!.handlers.view({
+    cursor: cursor("1"),
+    view: {
+      ...gatewayView(),
+      artifacts: [
+        { executionId: "run", lease: "lease-1", name: "chart.png", ...held },
+        { lease: "lease-1", name: "loose.png", ...held },
+      ],
+    },
+  })
+  expect(said).toEqual([
+    {
+      view: expect.objectContaining({
+        artifacts: [
+          { executionId: "run", name: "chart.png", ...held },
+          { name: "loose.png", ...held },
+        ],
+      }),
+    },
+  ])
+  stop()
+})
+
+it("reads a held file back through the client's verified fetch", async () => {
+  const bytes = new Blob(["png"])
+  const fetch = vi.fn(async () => bytes)
+  const effects = effectsOf(() => ({ attachments: { fetch } }) as unknown as NessaClient)
+  const file = { digest: `sha256:${"a".repeat(64)}`, mimeType: "image/png", size: 3 }
+  const signal = new AbortController().signal
+  expect(await effects.readHeldFile("server", file, signal)).toBe(bytes)
+  expect(fetch).toHaveBeenCalledExactlyOnceWith("server", file, { signal })
+  // No gateway to ask: not now, and said in the panel's words.
+  await expect(
+    effectsOf(() => null).readHeldFile("server", file, signal),
+  ).rejects.toMatchObject({ reason: "unavailable" })
+})

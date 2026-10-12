@@ -1,4 +1,5 @@
 import { bounds, type ImageAttachment, type LinkedFile } from "../generated/product.js"
+import { canonicalBase64 } from "./passive-read-validate.js"
 
 /**
  * Bounds the protocol schema puts on these values, named here for what they
@@ -264,4 +265,32 @@ export function attachmentBegin(value: unknown, requestId: string): AttachmentBe
     }
   }
   throw new Error("Invalid attachment state")
+}
+
+/**
+ * The bytes of one `artifact.read` answer, checked as far as one range can
+ * be: exactly `offset` and `data`, at the offset asked, and `data` canonical
+ * standard base64 of exactly `length` bytes — what the gateway answers for a
+ * range of the held file that starts there. Whether they are the file's bytes
+ * is a question only the whole can answer (its size and SHA-256), and the
+ * caller asks it.
+ */
+export function artifactReadRange(
+  value: unknown,
+  offset: number,
+  length: number,
+): Uint8Array {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new Error("Invalid artifact read response")
+  const item = value as Record<string, unknown>
+  if (Object.keys(item).some((key) => key !== "offset" && key !== "data"))
+    throw new Error("Artifact read response has unknown fields")
+  if (item.offset !== offset)
+    throw new Error("Artifact read response is for another range")
+  // Canonical base64 of at most `length` bytes; the exact count is checked
+  // after, so a short range is told from a malformed one.
+  const bytes = canonicalBase64(item.data, length)
+  if (bytes.byteLength !== length)
+    throw new Error("Artifact read response is not the range asked for")
+  return bytes
 }

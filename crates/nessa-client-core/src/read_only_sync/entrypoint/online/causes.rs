@@ -1,6 +1,6 @@
 //! Stable sanitized JSON values preserve each typed refusal owner.
-use crate::read_only_sync::application::{CacheError, GatewayError};
-use nessa_protocol::product_contract::generated::ChangeWatchEndReason;
+use crate::read_only_sync::application::{CacheError, GatewayError, HeldFileRefusal};
+use nessa_protocol::product_contract::generated::{ChangeWatchEndReason, ConversationErrorCode};
 use nessa_sdk::application::agent_execution::sessions::StorageError;
 use nessa_sync::replication::{
     application::{SourceError, StoreError, SyncError},
@@ -34,6 +34,15 @@ pub(crate) fn gateway_failure(error: GatewayError) -> Value {
         GatewayError::Record(reason) => ("record", Some(reason.as_str())),
         GatewayError::Catalogue(reason) => ("catalogue", Some(reason.as_str())),
         GatewayError::Watch(reason) => ("watch", Some(reason.as_str())),
+        GatewayError::HeldFile(refusal) => (
+            "heldFile",
+            Some(match refusal {
+                HeldFileRefusal::UnknownMethod => ConversationErrorCode::UnknownMethod.as_str(),
+                HeldFileRefusal::Conversation(code) => code.as_str(),
+                HeldFileRefusal::Forbidden => "forbidden",
+                HeldFileRefusal::Unauthorized => "unauthorized",
+            }),
+        ),
     };
     json!({"code":code,"productCode":product})
 }

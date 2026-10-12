@@ -7,6 +7,7 @@ import { beginSend, failSend } from "./send-draft"
 
 const view: ConversationView = {
   conversationId: "server",
+  artifacts: [],
   approvalMode: "ask",
   approvalModes: [
     { id: "ask", name: "Provider asks", description: "Provider asks where required." },
@@ -579,4 +580,18 @@ it("keeps the observed input boundary through pending acknowledgement and an inc
     observedInput: "B",
     receipt: "queued",
   })
+})
+
+it("carries the files its agent published as the view lists them, and replaces them with the next", () => {
+  const published = {
+    executionId: "run",
+    name: "chart.png",
+    digest: `sha256:${"a".repeat(64)}`,
+    mimeType: "image/png",
+    size: 3,
+  }
+  const first = applyView(conversation("tab"), { ...view, artifacts: [published] })
+  expect(first.remote?.artifacts).toEqual([published])
+  // The list is the view's whole account: an older entry it gave up is gone here too.
+  expect(applyView(first, { ...view, artifacts: [] }).remote?.artifacts).toEqual([])
 })

@@ -1227,6 +1227,106 @@ sequenceDiagram
 - **Not audited.** A read changes nothing and is admitted exactly as
   `conversation.read` is, which is not audited either.
 
+On the client, `attachments.fetch` in `@nessa/client` is the one reader:
+it asks for 32 KiB ranges from offset 0, one after another, holds each answer
+to the range asked (its offset, canonical base64, and exactly the bytes left,
+fewer only at the end), asks a busy range again after each of
+`HELD_FILE_BUSY_RETRY_DELAYS_MS`, and returns a `Blob` only once the whole
+has the named size and SHA-256 (`NessaHeldFileError` otherwise, `integrity`
+for bytes that are not the file). The panel and the desktop window read
+through the conversation vertical's `heldFileReader`, the one place the
+client's codes become the panel's `HeldFileFailure`. Its `HeldFilesProvider`
+reads a file when something first shows it, keeps one object URL per
+conversation and file while anything shows it, and revokes it after; a newer
+view of the conversation reads nothing again. Every read a window makes, for
+showing or saving, waits in one queue two at a time: the panel and the
+desktop window each take two of the gateway's four read slots. That is not a
+guarantee — a read abandoned mid-range can hold its slot until the gateway
+finishes that range, and other devices read too — so a read refused busy
+recovers through the retries below rather than failing. A file that is not held, a deleted conversation and bytes that did not
+verify are kept while shown; a file that could not be read now is asked for
+again after a growing wait, or at once from its Retry. The transcript places
+each file with `placePublished`, the one rule the panel and the desktop share:
+under the turn that published it, before the first turn when that turn is one
+the bounded view left out, and after the last when no turn ran. A picture up
+to the gateway's image bound is shown once verified; a larger one, and any
+other file, is read only to save it. Saving goes through the host's own port
+(`saveFile`). A plain browser downloads from an object URL it revokes after.
+The desktop app's webviews have no download handler and its link policy
+refuses `blob:`, so there the host writes the file (`src-tauri/src/saving/`)
+in bounded steps:
+
+- `save_file_begin` shows the save dialog. It answers cancelled, or a token
+  for a temporary file created new beside the chosen path.
+- `save_file_part` carries one raw part of at most 1 MiB under that token.
+  A JSON body is accepted only within the same bound.
+- `save_file_finish` syncs the file and renames it over the chosen path.
+- `save_file_abort` removes the temporary file. The page calls it on any
+  failure.
+
+A file past 64 MiB is refused and its temporary file removed. A part after
+finish or abort is refused. A save left idle for about 60 s is let go and its
+temporary file removed. So the chosen path holds either the whole file or
+what was there before. Images a turn names by reference are painted from the
+same reader, saying why when they cannot be. `published-files.mjs` checks
+this surface in the browser
+([checklist](../../verification/desktop/CHECKLIST.md#published-files-701)).
+
+```mermaid
+sequenceDiagram
+    participant T as Transcript card (panel or desktop)
+    participant C as HeldFilesProvider (queue, 2 at a time; object URL per file shown)
+    participant R as heldFileReader (conversation vertical)
+    participant A as attachments.fetch (@nessa/client)
+    participant P as Product socket
+    participant H as Host (src-tauri saving, desktop only)
+    T->>C: show {conversation, digest, type, size}
+    C->>R: read, once while it is shown, when its turn in the queue comes
+    R->>A: fetch(conversation, file, signal)
+    loop each 32 KiB range from 0
+        A->>P: artifact.read{offset, maxBytes 32768}
+        P-->>A: {offset, data} or temporarily_unavailable (asked again, bounded)
+        A->>A: offset, base64 and length are the range asked
+    end
+    A->>A: size and SHA-256 of the whole
+    A-->>R: Blob, or NessaHeldFileError
+    R-->>C: Blob, or HeldFileReadError(not-held, deleted, damaged, unavailable)
+    C-->>T: object URL, or the reason; revoked when nothing shows it
+    Note over C: unavailable: asked again after a growing wait, or on Retry
+    T->>C: Save
+    C-->>T: the bytes shown, the read going, or a queued read
+    alt browser
+        T->>T: saveFile: object URL download, revoked after
+    else desktop app
+        T->>H: save_file_begin{name}
+        H-->>T: cancelled, or token (temporary file created beside the chosen path)
+        loop each part of at most 1 MiB
+            T->>H: save_file_part (raw body, token header)
+            H-->>T: written, or refused (past 64 MiB, not open)
+        end
+        T->>H: save_file_finish{token}
+        H->>H: sync, rename over the chosen path
+        Note over T,H: any failure: save_file_abort removes the temporary file; idle 60 s: let go
+    end
+```
+
+A paired device reads the same way over its protected channel:
+`nessa-client-core`'s `fetch PROFILE CONVERSATION DIGEST MIMETYPE SIZE OUT`
+(`fetch_held_file`) asks one 32 KiB range per operation, holds each answer to
+the range asked, and retries a busy range after each of
+`BUSY_RETRY_DELAYS_MS`. It asks at least one range every time, the last one
+again when a part is already complete, so a part never stands in for the
+gateway's answer. It assembles into `OUT.<key>.part`, keyed on the
+conversation, digest, media type and size, held with an exclusive lock and
+resumed from its length after a failure, and hard-links
+it at `OUT` only once the part as it is on disk has the named size and SHA-256
+and is synced; the link itself refuses anything at `OUT`, so nothing there is
+ever replaced. A part that is not the file is removed or emptied, so `OUT`
+holds only verified bytes. `show` lists the artifacts that
+name what to fetch. A Terminal enrollment's purge empties the device's cache
+and leaves files it fetched untouched; the order is in
+[the example's fetch rows](read-only-sync-example.md#fetching-a-held-file).
+
 ## Previews: a port, not a file
 
 A dev server the agent started on an environment should open in the

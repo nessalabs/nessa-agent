@@ -1482,3 +1482,38 @@ second authenticated connection under the same panel principal.
 The [panel-list ordering table](../../docs/design/record-subscriptions.md#panel-messages-list--issue-722)
 owns initial-half, stale-read, command, cleanup, incomplete and retry cases; the
 source-level regression tests cover those cases independently.
+
+## Published files (#701)
+
+`published-files.mjs` loads `fixtures/published-files/`, a dev-server page
+that mounts the production transcript in the desktop window and in two
+420 px panels over a fake gateway. Pictures are read back through the real
+attachment client, at 30 ms for each range. The script runs in Chromium and
+WebKit and is dev-only in run-all.
+
+- [ ] **Every published file's card stays inside its transcript's column, and
+  a picture is painted at its own size, verified.** _Check:_
+  `published-files.mjs --only layout --shots <dir>`. In both surfaces, each
+  card's left and right edges are within 0.5 px of its column. `noise.png` is
+  decoded from a `blob:` URL at 160 × 120 and painted at 160 × 120 CSS px.
+- [ ] **A window reads at most two held files at once, and every picture still
+  arrives.** _Check:_ `--only queue`. Each surface's peak count of reads at
+  the gateway is between 1 and 2, and all eleven pictures end up shown.
+- [ ] **A file the conversation no longer keeps says so, with no Retry. A file
+  it could not read now offers Retry, and the retry paints it.** _Check:_
+  `--only states` (screenshots of both cards).
+- [ ] **Save writes the published bytes exactly, under the published name, and
+  never through a link in the page.**
+  _Check:_ `--only save,save-host`.
+  - In a browser, Save `notes.txt` and Save `noise.png` each produce a
+    download that is byte-for-byte the published file, with no `a[download]`
+    left in the page. Saving a file no longer kept says "Couldn’t save".
+  - With the desktop host stood in for, Save begins one host save. Every part
+    it sends is at most 1 MiB, the finished file is the published bytes, and
+    nothing is given up.
+  - The page never inserts an `a[download]` and no download starts.
+  - The host's own bounds (1 MiB a part, 64 MiB a file, a save let go after
+    60 s idle, the temporary file renamed into place only once whole) are
+    asserted on real files by `cargo test -p nessa-app -- saving`.
+- [ ] **A conversation with no turn, only a file published while none ran,
+  shows that file and not the empty welcome.** _Check:_ `--only empty`.

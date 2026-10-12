@@ -25,11 +25,23 @@ import {
   type ConversationEffects,
 } from "../../application/ports"
 import type { CommandFailure, ConversationSelection, ReadFailure } from "../../model"
+import { heldFileReader } from "./held-files"
 
 function conversationView(value: GatewayConversationView): ConversationView {
   const features = value.capabilities.agentFeatures
   return {
     ...value,
+    // What a person is shown of each, and what reads its bytes back; the
+    // lease it was published under is the gateway's record, not the panel's.
+    artifacts: value.artifacts.map((artifact) => ({
+      name: artifact.name,
+      digest: artifact.digest,
+      mimeType: artifact.mimeType,
+      size: artifact.size,
+      ...(artifact.executionId === undefined
+        ? {}
+        : { executionId: artifact.executionId }),
+    })),
     capabilities: {
       queue: value.capabilities.queue,
       steer: value.capabilities.steer,
@@ -711,6 +723,7 @@ export function gatewayEffects(
         throw error instanceof AttachmentStagingError ? error : stagingFailure(error)
       }
     },
+    readHeldFile: heldFileReader(() => connected().attachments),
     async reorder(conversationId, executionIds) {
       try {
         return (await api().reorder(conversationId, executionIds)).outcome

@@ -54,12 +54,12 @@ impl Cancellation for Never {
     }
 }
 // One test owner joins even when the caller assertion unwinds.
-struct Peer(Option<JoinHandle<()>>);
+pub(crate) struct Peer(Option<JoinHandle<()>>);
 impl Peer {
     fn spawn(execute: impl FnOnce() + Send + 'static) -> Self {
         Self(Some(thread::spawn(execute)))
     }
-    fn join(mut self) -> ThreadResult<()> {
+    pub(crate) fn join(mut self) -> ThreadResult<()> {
         self.0.take().unwrap().join()
     }
 }
@@ -112,7 +112,7 @@ fn ready() -> ProductSessionReady {
     }
 }
 /// The gateway side of one protected connection, after `openProduct`.
-struct PeerSocket {
+pub(crate) struct PeerSocket {
     transport: NativeTransport<TcpStream>,
     frames: FrameReader,
 }
@@ -139,17 +139,17 @@ impl PeerSocket {
         self.read_text().is_none()
     }
 }
-fn send(socket: &mut PeerSocket, message: OutgoingMessage) {
+pub(crate) fn send(socket: &mut PeerSocket, message: OutgoingMessage) {
     let text = message.to_wire_text().unwrap();
     let frame = encode_frame(MAX_RECORD_RESPONSE_BYTES, text.as_bytes()).unwrap();
     socket.write_raw(&frame);
 }
-fn request(socket: &mut PeerSocket) -> RequestFrame {
+pub(crate) fn request(socket: &mut PeerSocket) -> RequestFrame {
     RequestFrame::decode(&socket.read_text().expect("text request")).unwrap()
 }
 /// Where and how a test client dials its peer: the address, the gateway key
 /// it pins, and its own device key.
-struct Endpoint {
+pub(crate) struct Endpoint {
     address: SocketAddr,
     pin: [u8; 44],
     device: NativeIdentity,
@@ -225,7 +225,7 @@ fn native_peer_answering(
     )
 }
 /// A native peer that authenticates the client, then runs `script`.
-fn peer(script: impl FnOnce(&mut PeerSocket) + Send + 'static) -> (Endpoint, Peer) {
+pub(crate) fn peer(script: impl FnOnce(&mut PeerSocket) + Send + 'static) -> (Endpoint, Peer) {
     native_peer(move |socket| {
         challenge(socket);
         let authentication = request(socket);
@@ -247,7 +247,7 @@ fn peer(script: impl FnOnce(&mut PeerSocket) + Send + 'static) -> (Endpoint, Pee
 fn policy() -> GatewayPolicy {
     GatewayPolicy::new(2000, 1000, 2).unwrap()
 }
-fn connect(endpoint: &Endpoint) -> Session {
+pub(crate) fn connect(endpoint: &Endpoint) -> Session {
     Session::connect(
         endpoint.address,
         endpoint.evidence("credential"),
@@ -1093,5 +1093,7 @@ fn a_catalogue_scope_is_checked_as_its_reader_can() {
     }
 }
 
+#[path = "session/held_files.rs"]
+mod held_files;
 #[path = "session/watch.rs"]
 mod watch;

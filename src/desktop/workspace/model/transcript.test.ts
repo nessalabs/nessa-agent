@@ -146,4 +146,25 @@ describe("messages the person sent", () => {
     }
     expect(unconfirmed(outbox, held).map((message) => message.id)).toEqual(["m2"])
   })
+
+  it("gathers files published one after another into one list, and ends it at anything else", () => {
+    const file = (name: string): Part => ({
+      kind: "file",
+      name,
+      digest: `sha256:${"a".repeat(64)}`,
+      mimeType: "text/plain",
+      size: 1,
+    })
+    const parts: Part[] = [
+      file("one.txt"),
+      file("two.txt"),
+      { kind: "step", step: "run", label: "Ran" },
+      file("three.txt"),
+    ]
+    expect(groupSteps(parts)).toEqual([
+      { kind: "files", files: [parts[0], parts[1]] },
+      [parts[2]],
+      { kind: "files", files: [parts[3]] },
+    ])
+  })
 })

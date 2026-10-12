@@ -8,11 +8,15 @@
 //! ```
 //! `watch` holds the same session for its bounded loop: registration, then
 //! one finite records pass per operation, each from the durable checkpoint.
+//! `fetch` holds it for one held file, one `artifact.read` range per
+//! operation, into the part beside its output; it opens no cache, and an
+//! output already there is answered before the profile is opened (`fetch`).
 //! Arrows are calls in order (design rows PC1–PC6). No read happens without a
 //! fresh Active status, and nothing is purged without a Terminal one.
 use super::device::{self, client_failure, pinned, status_json, Device};
+use super::fetch;
 use super::profile::{Profile, ProfileError};
-use crate::composition::clock::{MonotonicClock, SystemClock};
+use crate::composition::clock::{MonotonicClock, SystemClock, ThreadPause};
 use crate::read_only_sync::application::device::{
     asks_status, CachePurges, PinnedStatus, PurgeBeforeEnd, PurgeReceipt,
 };
@@ -23,6 +27,7 @@ use crate::read_only_sync::application::watch::{
 use crate::read_only_sync::application::{
     CacheError, CachePolicy, Cancellation, GatewayError, GatewayPolicy,
 };
+use crate::read_only_sync::domain::HeldFile;
 use crate::read_only_sync::entrypoint::watch::WatchLines;
 use crate::read_only_sync::entrypoint::{online, Command, CommandError};
 use crate::read_only_sync::infrastructure::cache::ReadOnlyCache;
@@ -138,12 +143,21 @@ pub(super) fn execute(
     let profile_path = match command {
         Command::Records { profile, .. }
         | Command::Catalogue { profile, .. }
-        | Command::Watch { profile, .. } => profile,
+        | Command::Watch { profile, .. }
+        | Command::Fetch { profile, .. } => profile,
         _ => return Err(CommandError::Arguments),
     };
+    // The output, when it is there already, answers before anything is opened
+    // or dialled.
+    if let Command::Fetch { file, out, .. } = command {
+        if let Some(answer) = fetch::kept(file, out, output) {
+            return answer;
+        }
+    }
     let operation = match command {
         Command::Records { .. } => "records",
         Command::Watch { .. } => "watch",
+        Command::Fetch { .. } => "fetch",
         _ => "catalogue",
     };
     let paired = match open_paired(profile_path, policy) {
@@ -240,6 +254,7 @@ pub(super) fn execute(
             max_passes,
             ..
         } => run.watch(conversation.clone(), *pages, *max_passes, output),
+        Command::Fetch { file, out, .. } => run.fetch(file, out, output),
         _ => Err(CommandError::Arguments),
     }
 }
@@ -464,6 +479,24 @@ impl Run<'_> {
             (cause, _) => cause.map_or(Value::Null, |cause| recheck(self.paired, cause)),
         };
         lines.end(end, recheck)
+    }
+    /// One held file into the part beside `out`, kept as `out` once verified.
+    fn fetch(
+        mut self,
+        file: &HeldFile,
+        out: &Path,
+        output: &mut dyn Write,
+    ) -> Result<(), CommandError> {
+        let paired = self.paired;
+        fetch::fetch(
+            &mut self.connection,
+            &ThreadPause,
+            file,
+            out,
+            &|failure| recheck(paired, failure),
+            self.enrollment,
+            output,
+        )
     }
     fn catalogue(self, pages: usize, output: &mut dyn Write) -> Result<(), CommandError> {
         let mut source = self.connection.catalogue(

@@ -2,7 +2,7 @@
 //! that record the order of effects.
 use super::*;
 use nessa_auth::domain::pairing::{AttemptId, ConsentClass, ConsentIntentId, InvitationId};
-use nessa_protocol::product_contract::generated::SessionCloseReason;
+use nessa_protocol::product_contract::generated::{ConversationErrorCode, SessionCloseReason};
 
 #[derive(Default)]
 struct Effects(Mutex<Vec<&'static str>>);
@@ -184,6 +184,8 @@ fn only_authority_refusals_ask_status_again() {
         GatewayError::Watch(ChangeWatchErrorCode::Forbidden),
         GatewayError::Watch(ChangeWatchErrorCode::WrongReceiver),
         GatewayError::Watch(ChangeWatchErrorCode::StaleEpoch),
+        GatewayError::HeldFile(HeldFileRefusal::Unauthorized),
+        GatewayError::HeldFile(HeldFileRefusal::Forbidden),
     ] {
         assert!(asks_status(asks), "{asks:?}");
     }
@@ -202,6 +204,12 @@ fn only_authority_refusals_ask_status_again() {
         GatewayError::Watch(ChangeWatchErrorCode::WatchCapacity),
         GatewayError::Watch(ChangeWatchErrorCode::WatchDuplicate),
         GatewayError::Watch(ChangeWatchErrorCode::TemporarilyUnavailable),
+        GatewayError::HeldFile(HeldFileRefusal::Conversation(
+            ConversationErrorCode::ConversationNotFound,
+        )),
+        GatewayError::HeldFile(HeldFileRefusal::Conversation(
+            ConversationErrorCode::TemporarilyUnavailable,
+        )),
     ] {
         assert!(!asks_status(keeps), "{keeps:?}");
     }

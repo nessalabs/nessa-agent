@@ -1,4 +1,6 @@
-import { expect, it, vi } from "vitest"
+import { createHash } from "node:crypto"
+import { readFileSync } from "node:fs"
+import { describe, expect, it, vi } from "vitest"
 
 import {
   NessaAttachmentError,
@@ -7,6 +9,11 @@ import {
   type AttachmentUploadTransport,
 } from "../application/attachment-upload.js"
 import { type RequestTimer } from "../application/gateway-http.js"
+import {
+  HELD_FILE_BUSY_RETRY_DELAYS_MS,
+  HELD_FILE_RANGE_BYTES,
+  NessaHeldFileError,
+} from "../application/held-file-read.js"
 import { NessaRpcError } from "../application/rpc-error.js"
 import { asImageAttachment } from "../protocol/attachment-validate.js"
 import { createAttachmentApi } from "./attachment-api.js"
@@ -365,4 +372,258 @@ it("refuses a malformed ticket or an empty body before any request", async () =>
     api.upload(ticket, { mimeType: "image/png", bytes: new Blob([]) }),
   ).rejects.toBeInstanceOf(TypeError)
   expect(put).not.toHaveBeenCalled()
+})
+
+describe("fetch", () => {
+  /** `count` bytes that differ from range to range, so a misplaced range is caught. */
+  const content = (count: number) =>
+    Uint8Array.from({ length: count }, (_, index) => (index * 7 + 3) % 251)
+  const sha256 = (bytes: Uint8Array) =>
+    `sha256:${createHash("sha256").update(bytes).digest("hex")}`
+  const base64 = (bytes: Uint8Array) => Buffer.from(bytes).toString("base64")
+  const named = (bytes: Uint8Array, mimeType = "text/plain") => ({
+    digest: sha256(bytes),
+    mimeType,
+    size: bytes.byteLength,
+  })
+  /** A gateway holding exactly `bytes`, answering each range as the server does. */
+  const holding = (bytes: Uint8Array) =>
+    vi.fn(async (_method: string, params: unknown) => {
+      const { offset, maxBytes } = params as { offset: number; maxBytes: number }
+      return { offset, data: base64(bytes.subarray(offset, offset + maxBytes)) }
+    })
+  /** A timer that elapses on the next microtask and remembers how long it was asked to wait. */
+  function instantTimer() {
+    const waited: number[] = []
+    const timer: RequestTimer = (ms, elapsed) => {
+      waited.push(ms)
+      let cancelled = false
+      void Promise.resolve().then(() => {
+        if (!cancelled) elapsed()
+      })
+      return () => {
+        cancelled = true
+      }
+    }
+    return { timer, waited }
+  }
+  function reads(
+    request: (method: string, params: unknown) => Promise<unknown>,
+    timer: RequestTimer = instantTimer().timer,
+  ) {
+    return createAttachmentApi({ request }, unused, () => "id", timer)
+  }
+  const failure = (promise: Promise<unknown>) => promise.catch((error: unknown) => error)
+  const busy = () => new NessaRpcError("temporarily_unavailable", "busy")
+
+  it("asks for the schema's largest range", () => {
+    const schema = JSON.parse(
+      readFileSync(
+        new URL("../../../../protocol/product/v1.json", import.meta.url),
+        "utf8",
+      ),
+    )
+    expect(schema.$defs.ArtifactReadParams.properties.maxBytes.maximum).toBe(
+      HELD_FILE_RANGE_BYTES,
+    )
+  })
+
+  it("assembles the ranges in order and hands back the verified file", async () => {
+    const bytes = content(2 * HELD_FILE_RANGE_BYTES + 1000)
+    const request = holding(bytes)
+    const file = named(bytes, "application/pdf")
+    const blob = await reads(request).fetch(conversationId, file)
+    expect(blob.type).toBe("application/pdf")
+    expect(new Uint8Array(await blob.arrayBuffer())).toEqual(bytes)
+    expect(request.mock.calls.map(([method, params]) => [method, params])).toEqual(
+      [0, HELD_FILE_RANGE_BYTES, 2 * HELD_FILE_RANGE_BYTES].map((offset) => [
+        "artifact.read",
+        { conversationId, ...file, offset, maxBytes: HELD_FILE_RANGE_BYTES },
+      ]),
+    )
+  })
+
+  it("hands back nothing when the assembled bytes are not the ones named", async () => {
+    const bytes = content(100)
+    const error = await failure(
+      reads(holding(bytes)).fetch(conversationId, {
+        ...named(bytes),
+        digest: `sha256:${"0".repeat(64)}`,
+      }),
+    )
+    expect(error).toBeInstanceOf(NessaHeldFileError)
+    expect(error).toMatchObject({ code: "integrity" })
+  })
+
+  it.each([
+    [
+      "short of a whole range before the end",
+      (offset: number, data: Uint8Array) => ({
+        offset,
+        data: base64(data.subarray(0, data.byteLength - 1)),
+      }),
+    ],
+    [
+      "longer than the range asked",
+      (offset: number, data: Uint8Array) => ({
+        offset,
+        data: base64(new Uint8Array([...data, 1])),
+      }),
+    ],
+    [
+      "at another offset",
+      (offset: number, data: Uint8Array) => ({ offset: offset + 1, data: base64(data) }),
+    ],
+    ["empty", (offset: number) => ({ offset, data: "" })],
+    [
+      "not canonical base64",
+      (offset: number, data: Uint8Array) => ({
+        offset,
+        data: base64(data).replace(/=+$/, ""),
+      }),
+    ],
+    [
+      "carrying an unknown field",
+      (offset: number, data: Uint8Array) => ({ offset, data: base64(data), more: 1 }),
+    ],
+  ])("refuses a range that is %s", async (_name, answer) => {
+    const bytes = content(HELD_FILE_RANGE_BYTES + 10)
+    const request = vi.fn(async (_method: string, params: unknown) => {
+      const { offset } = params as { offset: number }
+      return answer(offset, bytes.subarray(offset, offset + HELD_FILE_RANGE_BYTES))
+    })
+    const error = await failure(reads(request).fetch(conversationId, named(bytes)))
+    expect(error).toBeInstanceOf(NessaHeldFileError)
+    expect(error).toMatchObject({ code: "unexpected_response" })
+    // The first bad range ends it: nothing is asked after.
+    expect(request).toHaveBeenCalledOnce()
+  })
+
+  it("refuses a last range that runs past the file's end", async () => {
+    const bytes = content(10)
+    const request = vi.fn(async () => ({ offset: 0, data: base64(content(11)) }))
+    await expect(
+      reads(request).fetch(conversationId, named(bytes)),
+    ).rejects.toMatchObject({ code: "unexpected_response" })
+  })
+
+  it("asks a busy range again after a short wait, and reads on", async () => {
+    const bytes = content(HELD_FILE_RANGE_BYTES + 5)
+    const held = holding(bytes)
+    let refusals = 2
+    const request = vi.fn(async (method: string, params: unknown) => {
+      if ((params as { offset: number }).offset > 0 && refusals-- > 0) throw busy()
+      return held(method, params)
+    })
+    const clock = instantTimer()
+    const blob = await reads(request, clock.timer).fetch(conversationId, named(bytes))
+    expect(new Uint8Array(await blob.arrayBuffer())).toEqual(bytes)
+    expect(clock.waited).toEqual(HELD_FILE_BUSY_RETRY_DELAYS_MS.slice(0, 2))
+    expect(
+      request.mock.calls.map(([, params]) => (params as { offset: number }).offset),
+    ).toEqual([0, HELD_FILE_RANGE_BYTES, HELD_FILE_RANGE_BYTES, HELD_FILE_RANGE_BYTES])
+  })
+
+  it("gives up on a range still busy after every wait", async () => {
+    const request = vi.fn(async () => {
+      throw busy()
+    })
+    const clock = instantTimer()
+    const bytes = content(10)
+    const error = await failure(
+      reads(request, clock.timer).fetch(conversationId, named(bytes)),
+    )
+    expect(error).toMatchObject({ code: "temporarily_unavailable" })
+    expect((error as Error).cause).toBeInstanceOf(NessaRpcError)
+    expect(clock.waited).toEqual([...HELD_FILE_BUSY_RETRY_DELAYS_MS])
+    expect(request).toHaveBeenCalledTimes(HELD_FILE_BUSY_RETRY_DELAYS_MS.length + 1)
+  })
+
+  it.each([
+    ["attachment_not_found", "not_held"],
+    ["conversation_not_found", "conversation_not_found"],
+    ["conversation_deleted", "conversation_deleted"],
+    ["attachment_unavailable", "unavailable"],
+    ["invalid_request", "invalid_request"],
+    ["forbidden", "forbidden"],
+    ["conversations_not_configured", "conversations_not_configured"],
+    // Codes this client was not taught for this method are not passed on as known.
+    ["turn_running", "unexpected_response"],
+    ["something_new", "unexpected_response"],
+    ["constructor", "unexpected_response"],
+  ])("fails at once when the gateway answers %s", async (wire, code) => {
+    const request = vi.fn(async () => {
+      throw new NessaRpcError(wire, wire)
+    })
+    const clock = instantTimer()
+    const error = await failure(
+      reads(request, clock.timer).fetch(conversationId, named(content(3))),
+    )
+    expect(error).toBeInstanceOf(NessaHeldFileError)
+    expect(error).toMatchObject({ code })
+    expect(request).toHaveBeenCalledOnce()
+    expect(clock.waited).toEqual([])
+  })
+
+  it("says unreachable when nothing answered", async () => {
+    const request = vi.fn(async () => {
+      throw new Error("request timeout: artifact.read")
+    })
+    await expect(
+      reads(request).fetch(conversationId, named(content(3))),
+    ).rejects.toMatchObject({ code: "unreachable" })
+  })
+
+  it("stops when its signal aborts, during a range or a busy wait", async () => {
+    const bytes = content(3)
+    // During a range: the answer, whenever it comes, is not waited for.
+    const caller = new AbortController()
+    const never = vi.fn(() => new Promise<unknown>(() => {}))
+    const pending = failure(
+      reads(never).fetch(conversationId, named(bytes), { signal: caller.signal }),
+    )
+    await Promise.resolve()
+    caller.abort()
+    expect(await pending).toMatchObject({ code: "aborted" })
+
+    // During a busy wait: the timer is stopped and nothing more is asked.
+    const waiting = new AbortController()
+    const clock = manualTimer()
+    const request = vi.fn(async () => {
+      throw busy()
+    })
+    const waited = failure(
+      reads(request, clock.timer).fetch(conversationId, named(bytes), {
+        signal: waiting.signal,
+      }),
+    )
+    await vi.waitFor(() => expect(clock.pending).toHaveLength(1))
+    waiting.abort()
+    expect(await waited).toMatchObject({ code: "aborted" })
+    expect(clock.pending[0]!.cancelled).toBe(true)
+    expect(request).toHaveBeenCalledOnce()
+
+    // Already aborted: nothing is asked at all.
+    const unsent = vi.fn()
+    await expect(
+      reads(unsent).fetch(conversationId, named(bytes), { signal: caller.signal }),
+    ).rejects.toMatchObject({ code: "aborted" })
+    expect(unsent).not.toHaveBeenCalled()
+  })
+
+  it("refuses arguments the gateway would refuse before asking anything", async () => {
+    const request = vi.fn()
+    const api = reads(request)
+    const file = named(content(3))
+    for (const [id, given] of [
+      ["not-a-uuid", file],
+      [conversationId, { ...file, digest: file.digest.toUpperCase() }],
+      [conversationId, { ...file, mimeType: "text/plain; charset=utf-8" }],
+      [conversationId, { ...file, size: 0 }],
+      [conversationId, { ...file, size: 64 * 1024 * 1024 + 1 }],
+      [conversationId, { ...file, size: 1.5 }],
+    ] as const)
+      await expect(api.fetch(id, given)).rejects.toBeInstanceOf(TypeError)
+    expect(request).not.toHaveBeenCalled()
+  })
 })

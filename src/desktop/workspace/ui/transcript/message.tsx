@@ -1,4 +1,5 @@
 import { memo } from "react"
+import { PublishedFiles } from "../../../../conversation"
 import { discardUnsent, resendMessage } from "../../adapters/store/commands"
 import { useWorkspaceDispatch } from "../../adapters/store/hooks"
 import { useInlineWidgetHost } from "../../adapters/store/widget-hosts"
@@ -26,8 +27,10 @@ export function messageAuthor(app: MessageApp): Said {
 /**
  * One message. The person's is a bubble, saying so when it has not reached
  * the agent, and saying above it which MCP App wrote it when one did
- * (`messageAuthor`, #390); the agent's is prose, steps, code, lists and
- * widgets, each a card its plugin draws (`InlineWidget`). Memoised on the
+ * (`messageAuthor`, #390); the agent's is prose, steps, code, lists,
+ * widgets, each a card its plugin draws (`InlineWidget`), and the files it
+ * published, each a card the conversation vertical draws and reads back
+ * (`PublishedFiles`). Memoised on the
  * message itself, so a reply streaming in renders only the message it grows.
  */
 export const Message = memo(function Message({
@@ -109,6 +112,14 @@ export const Message = memo(function Message({
               />
             )
           }
+          if (group.kind === "files")
+            return (
+              <PublishedFiles
+                key={index}
+                conversationId={sessionId}
+                files={group.files}
+              />
+            )
           if (group.kind === "list")
             return (
               <ul key={index} className="workspace-list-items">
