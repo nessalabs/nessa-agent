@@ -8,7 +8,7 @@ use crate::application::{
     agent_execution::{
         executions::{
             AttachmentAuditStage, ExecutionAudit, ExecutionAuditRecord, ExecutionRequest,
-            SubmissionMode,
+            SubmissionMode, Submitter,
         },
         permissions::{
             ActionContext, PermissionAnswer, PermissionCancellation, PermissionCancellationRequest,
@@ -429,7 +429,7 @@ async fn uncertain_control_result_closes_admission_before_returning_to_its_calle
     agent.close(actor()).await.unwrap();
     reattach(&agent).await;
     assert_eq!(
-        agent.invoke(input(), actor()).await,
+        agent.invoke(input(), Submitter::owner(actor())).await,
         Ok(ExecutionOutcome::Completed)
     );
     agent.close(actor()).await.unwrap();
@@ -448,7 +448,7 @@ async fn old_control_supervisor_failure_cannot_close_a_recovered_attachment() {
     assert!(!agent.inner.lifecycle.is_closed());
     reattach(&agent).await;
     assert_eq!(
-        agent.invoke(input(), actor()).await,
+        agent.invoke(input(), Submitter::owner(actor())).await,
         Ok(ExecutionOutcome::Completed)
     );
     let current = agent.accept_control().unwrap();
@@ -493,7 +493,10 @@ async fn automatic_recovery_open_failure_settles_and_restores_the_queue_receipt(
         Err(AgentError::Protocol("provider requested restart".into()))
     );
 
-    let receipt = agent.enqueue(input(), actor()).await.unwrap();
+    let receipt = agent
+        .enqueue(input(), Submitter::owner(actor()))
+        .await
+        .unwrap();
     assert_eq!(
         timeout(Duration::from_secs(1), receipt.wait())
             .await
@@ -527,7 +530,10 @@ async fn automatic_recovery_open_failure_settles_and_restores_the_queue_receipt(
     )
     .await
     .unwrap();
-    let retry = restored.enqueue(input(), actor()).await.unwrap();
+    let retry = restored
+        .enqueue(input(), Submitter::owner(actor()))
+        .await
+        .unwrap();
     assert_eq!(retry.wait().await, Err(AgentError::Closed));
     assert_eq!(provider.opens.load(Ordering::SeqCst), 2);
 }
@@ -554,7 +560,10 @@ async fn assert_shutdown_queue_attribution(first: SessionCloseRequest, uncertain
     backend.fail_cleanup_once.store(uncertain, Ordering::SeqCst);
     // Keep the admitted input queued without relying on a provider or timing.
     let invocation = agent.inner.invocation.lock().await;
-    let queued = agent.enqueue(input(), actor()).await.unwrap();
+    let queued = agent
+        .enqueue(input(), Submitter::owner(actor()))
+        .await
+        .unwrap();
     // Suspend the first shutdown caller immediately after shutdown admission,
     // before queue cancellation. A different explicit caller will therefore
     // own queue cancellation even though it did not choose the shutdown cause.
@@ -627,7 +636,10 @@ async fn new_close_after_completed_cleanup_owns_newly_queued_cancellation() {
     // WorkStatus can resume before a queued worker restores the provider. Hold
     // that boundary so the second Stop cancels saved input without reopening it.
     let invocation = agent.inner.invocation.lock().await;
-    let queued = agent.enqueue(input(), actor()).await.unwrap();
+    let queued = agent
+        .enqueue(input(), Submitter::owner(actor()))
+        .await
+        .unwrap();
     let current_actor = ActionContext::new("new-caller", "surface", "new-stop").unwrap();
     let mut notice = agent.inner.lifecycle.close_notice();
     let closer = agent.clone();
@@ -679,7 +691,7 @@ async fn close_after_work_admission_preserves_input_and_closer_before_handoff() 
         *backend.cleanup_started.lock().unwrap() = Some(started);
         let invocation = tokio::spawn({
             let agent = agent.clone();
-            async move { agent.invoke(input(), actor()).await }
+            async move { agent.invoke(input(), Submitter::owner(actor())).await }
         });
         timeout(Duration::from_secs(2), accepted)
             .await
@@ -828,7 +840,7 @@ async fn automatic_cleanup_after_provider_fence_preserves_concurrent_close() {
         assert!(!agent.inner.lifecycle.is_closed());
         reattach(&agent).await;
         assert_eq!(
-            agent.invoke(input(), actor()).await,
+            agent.invoke(input(), Submitter::owner(actor())).await,
             Ok(ExecutionOutcome::Completed)
         );
         agent.close(actor()).await.unwrap();
@@ -850,13 +862,13 @@ async fn local_failure_during_automatic_cleanup_requires_explicit_recovery() {
     drop(work);
     assert!(agent.inner.lifecycle.is_closed());
     assert!(matches!(
-        agent.enqueue(input(), actor()).await,
+        agent.enqueue(input(), Submitter::owner(actor())).await,
         Err(AgentError::Closed)
     ));
     agent.close(actor()).await.unwrap();
     reattach(&agent).await;
     assert_eq!(
-        agent.invoke(input(), actor()).await,
+        agent.invoke(input(), Submitter::owner(actor())).await,
         Ok(ExecutionOutcome::Completed)
     );
     agent.close(actor()).await.unwrap();

@@ -32,12 +32,18 @@ async fn active_input_keeps_automatic_cause_when_later_close_overtakes_dispatch(
                             match delivery {
                                 Delivery::Immediate => {
                                     agent
-                                        .invoke(input("stopped-before-dispatch"), actor())
+                                        .invoke(
+                                            input("stopped-before-dispatch"),
+                                            Submitter::owner(actor()),
+                                        )
                                         .await
                                 }
                                 Delivery::Queued => {
                                     agent
-                                        .enqueue(input("stopped-before-dispatch"), actor())
+                                        .enqueue(
+                                            input("stopped-before-dispatch"),
+                                            Submitter::owner(actor()),
+                                        )
                                         .await
                                         .unwrap()
                                         .wait()
@@ -45,7 +51,10 @@ async fn active_input_keeps_automatic_cause_when_later_close_overtakes_dispatch(
                                 }
                                 Delivery::BoundarySteering => {
                                     agent
-                                        .enqueue_steering(input("stopped-before-dispatch"), actor())
+                                        .enqueue_steering(
+                                            input("stopped-before-dispatch"),
+                                            Submitter::owner(actor()),
+                                        )
                                         .await
                                         .unwrap()
                                         .wait()
@@ -56,7 +65,7 @@ async fn active_input_keeps_automatic_cause_when_later_close_overtakes_dispatch(
                     });
                     waiting.await.unwrap();
                     let waiting_input = agent
-                        .enqueue(input("still-waiting"), actor())
+                        .enqueue(input("still-waiting"), Submitter::owner(actor()))
                         .await
                         .unwrap();
                     *backend.control_attachment.lock().unwrap() =

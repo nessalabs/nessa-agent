@@ -11,8 +11,8 @@ use crate::application::agent_execution::providers::{ExecutionReport, ProviderId
 pub use crate::domain::agent_execution::sessions::ProviderContext;
 use crate::domain::agent_execution::{
     executions::{
-        ExecutionId, ExecutionOutcome, InvocationCancellation, InvocationKind, InvocationStage,
-        QueueMutation, SchedulingCause, SchedulingInitiator, SchedulingTransition,
+        ExecutionId, ExecutionOutcome, Initiation, InvocationCancellation, InvocationKind,
+        InvocationStage, QueueMutation, SchedulingCause, SchedulingInitiator, SchedulingTransition,
         SchedulingTransitionError,
     },
     sessions::SessionId,
@@ -443,6 +443,9 @@ pub struct InvocationRecord {
     pub request: ExecutionRequest,
     /// Caller attribution verified by the host before submission.
     pub actor: ActionContext,
+    /// Whether the conversation's owner or a share grant started this turn, and
+    /// whether its tools were checked. Retries must preserve it.
+    pub initiation: Initiation,
     /// Independent audit and durable-write acknowledgement for admission or
     /// confirmed native injection. This fact is retained even when delivery or
     /// execution has no terminal result.
@@ -794,14 +797,15 @@ impl StorageError {
     pub(crate) const DIAGNOSTIC_BYTES: usize = 4096;
     /// `schemaVersion` written on every session-record batch and transcript checkpoint.
     ///
-    /// This build reads only [`Self::SCHEMA_VERSION`]. A record stamped 1, a
-    /// finished object with no marker, or any other unsigned integer is
-    /// [`Self::AnotherVersion`] and is not decoded. A marker that is not an
+    /// This build reads only [`Self::SCHEMA_VERSION`]. A record stamped 1 or 2
+    /// (before turns saved who started them), a finished object with no
+    /// marker, or any other unsigned integer is [`Self::AnotherVersion`] and is
+    /// not decoded. A marker that is not an
     /// unsigned integer is [`Self::Corrupt`]. A missing marker together with a
     /// body the walk refuses is also [`Self::Corrupt`]: the broken body is
     /// reported, not another version. Old files are deleted by hand. Nothing
     /// is migrated.
-    pub const SCHEMA_VERSION: u64 = 2;
+    pub const SCHEMA_VERSION: u64 = 3;
     fn measure(
         mut pending: Vec<(&StorageError, usize)>,
         mut usage: StorageErrorUsage,
@@ -904,6 +908,7 @@ mod committed_tests {
     use crate::application::agent_execution::sessions::{
         CommittedCompleteness, CommittedFreshness,
     };
+    use crate::domain::agent_execution::executions::{GrantInitiator, GrantRole};
     use crate::domain::agent_execution::prompts::{PromptText, UserMessage};
     #[test]
     fn typed_shutdown_tree_limits_and_iterative_rejection() {
@@ -1008,6 +1013,7 @@ mod committed_tests {
                 submission: SubmissionMode::Immediate,
                 target_event_offset: None,
                 actor: ActionContext::new("user", "surface", "request").unwrap(),
+                initiation: Initiation::owner(),
                 acknowledgement: SubmissionAcknowledgement::Pending,
                 events: Vec::new(),
                 scheduling: Vec::new(),
@@ -1029,6 +1035,15 @@ mod committed_tests {
         assert_eq!(
             super::super::retained::snapshot(&snapshot) - before,
             allocated
+        );
+        // A share grant's identity text is retained with the turn; an owner
+        // holds none.
+        let before = super::super::retained::snapshot(&snapshot);
+        snapshot.invocations[0].initiation =
+            Initiation::grant(GrantInitiator::new("share-grant", GrantRole::Drive, 3).unwrap());
+        assert_eq!(
+            super::super::retained::snapshot(&snapshot) - before,
+            "share-grant".len()
         );
         let mut diagnostic = String::with_capacity(8192);
         diagnostic.push('x');

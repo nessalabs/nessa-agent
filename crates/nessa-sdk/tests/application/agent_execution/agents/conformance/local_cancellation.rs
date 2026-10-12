@@ -156,7 +156,7 @@ async fn unowned_local_cancellation_never_hides_cleanup_or_audit_failure() {
                 );
                 if !confirmed {
                     assert_eq!(
-                        bounded(agent.invoke(request("blocked"), actor())).await,
+                        bounded(agent.invoke(request("blocked"), Submitter::owner(actor()))).await,
                         Err(AgentError::Closed)
                     );
                     assert_eq!(backend.executions.lock().unwrap().len(), 1);

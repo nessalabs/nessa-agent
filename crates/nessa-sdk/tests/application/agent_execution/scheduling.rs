@@ -296,21 +296,32 @@ fn assert_lifecycle(record: &InvocationRecord, kind: InvocationKind) {
 #[tokio::test]
 async fn scheduling_fifo_across_clones_and_steering_priority_keep_saved_admission_order() {
     let (agent, storage, _, mut calls) = fixture(Ok(SteeringOutcome::Injected)).await;
-    let first = agent.enqueue(request("first"), actor()).await.unwrap();
+    let first = agent
+        .enqueue(request("first"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     let running = started(&mut calls, "first").await;
     assert_eq!(
-        agent.invoke(request("busy"), actor()).await,
+        agent
+            .invoke(request("busy"), Submitter::owner(actor()))
+            .await,
         Err(AgentError::Busy)
     );
     let clone = agent.clone();
-    let ordinary_one = clone.enqueue(request("ordinary-1"), actor()).await.unwrap();
-    let steering_one = agent
-        .enqueue_steering(request("steering-1"), actor())
+    let ordinary_one = clone
+        .enqueue(request("ordinary-1"), Submitter::owner(actor()))
         .await
         .unwrap();
-    let ordinary_two = agent.enqueue(request("ordinary-2"), actor()).await.unwrap();
+    let steering_one = agent
+        .enqueue_steering(request("steering-1"), Submitter::owner(actor()))
+        .await
+        .unwrap();
+    let ordinary_two = agent
+        .enqueue(request("ordinary-2"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     let steering_two = clone
-        .enqueue_steering(request("steering-2"), actor())
+        .enqueue_steering(request("steering-2"), Submitter::owner(actor()))
         .await
         .unwrap();
     assert_eq!(ordinary_one.id().as_str(), "ordinary-1");
@@ -351,9 +362,15 @@ async fn scheduling_fifo_across_clones_and_steering_priority_keep_saved_admissio
 #[tokio::test]
 async fn scheduling_native_injection_saves_input_and_correlates_with_active_execution() {
     let (agent, storage, provider, mut calls) = fixture(Ok(SteeringOutcome::Injected)).await;
-    let first = agent.enqueue(request("active"), actor()).await.unwrap();
+    let first = agent
+        .enqueue(request("active"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     let running = started(&mut calls, "active").await;
-    let injected = agent.steer(request("correction"), actor()).await.unwrap();
+    let injected = agent
+        .steer(request("correction"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     assert!(
         matches!(injected, SteeringDelivery::Injected { target, .. } if target.as_str() == "active")
     );
@@ -394,11 +411,17 @@ async fn scheduling_unsupported_and_ambiguous_steering_are_never_replayed() {
         AgentError::Transport("uncertain reply".into()),
     ] {
         let (agent, storage, provider, mut calls) = fixture(Err(error.clone())).await;
-        let first = agent.enqueue(request("active"), actor()).await.unwrap();
+        let first = agent
+            .enqueue(request("active"), Submitter::owner(actor()))
+            .await
+            .unwrap();
         let running = started(&mut calls, "active").await;
-        let pending = agent.enqueue(request("pending"), actor()).await.unwrap();
+        let pending = agent
+            .enqueue(request("pending"), Submitter::owner(actor()))
+            .await
+            .unwrap();
         assert!(
-            matches!(agent.steer(request("correction"), actor()).await, Err(actual) if actual == error)
+            matches!(agent.steer(request("correction"), Submitter::owner(actor())).await, Err(actual) if actual == error)
         );
         assert_eq!(provider.steered.lock().unwrap().len(), 1);
         assert_eq!(
@@ -412,7 +435,10 @@ async fn scheduling_unsupported_and_ambiguous_steering_are_never_replayed() {
         complete(started(&mut calls, "pending").await);
         within(pending.wait()).await.unwrap();
         // A later explicit receipt proves no ambiguous input was replayed.
-        let next = agent.enqueue(request("explicit"), actor()).await.unwrap();
+        let next = agent
+            .enqueue(request("explicit"), Submitter::owner(actor()))
+            .await
+            .unwrap();
         complete(started(&mut calls, "explicit").await);
         within(next.wait()).await.unwrap();
         assert!(calls.try_recv().is_err());
@@ -423,15 +449,23 @@ async fn scheduling_unsupported_and_ambiguous_steering_are_never_replayed() {
 #[tokio::test]
 async fn scheduling_idle_and_prompt_required_steering_run_at_next_boundary() {
     let (agent, storage, provider, mut calls) = fixture(Ok(SteeringOutcome::PromptRequired)).await;
-    let SteeringDelivery::Queued(first) = agent.steer(request("idle"), actor()).await.unwrap()
+    let SteeringDelivery::Queued(first) = agent
+        .steer(request("idle"), Submitter::owner(actor()))
+        .await
+        .unwrap()
     else {
         panic!("idle input must queue")
     };
     let running = started(&mut calls, "idle").await;
     assert!(provider.steered.lock().unwrap().is_empty());
-    let ordinary = agent.enqueue(request("ordinary"), actor()).await.unwrap();
-    let SteeringDelivery::Queued(correction) =
-        agent.steer(request("correction"), actor()).await.unwrap()
+    let ordinary = agent
+        .enqueue(request("ordinary"), Submitter::owner(actor()))
+        .await
+        .unwrap();
+    let SteeringDelivery::Queued(correction) = agent
+        .steer(request("correction"), Submitter::owner(actor()))
+        .await
+        .unwrap()
     else {
         panic!("unconsumed input must queue")
     };
@@ -452,11 +486,17 @@ async fn scheduling_idle_and_prompt_required_steering_run_at_next_boundary() {
 #[tokio::test]
 async fn scheduling_close_cancels_pending_with_attribution_without_dispatching_it() {
     let (agent, storage, provider, mut calls) = fixture(Ok(SteeringOutcome::Injected)).await;
-    let active = agent.enqueue(request("active"), actor()).await.unwrap();
+    let active = agent
+        .enqueue(request("active"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     let _running = started(&mut calls, "active").await;
-    let ordinary = agent.enqueue(request("ordinary"), actor()).await.unwrap();
+    let ordinary = agent
+        .enqueue(request("ordinary"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     let steering = agent
-        .enqueue_steering(request("steering"), actor())
+        .enqueue_steering(request("steering"), Submitter::owner(actor()))
         .await
         .unwrap();
     within(agent.clone().close(close_action())).await.unwrap();
@@ -480,11 +520,17 @@ async fn scheduling_close_cancels_pending_with_attribution_without_dispatching_i
 async fn scheduling_dropped_receipt_and_agent_clone_do_not_abandon_execution_or_evidence() {
     let (agent, storage, _, mut calls) = fixture(Ok(SteeringOutcome::Injected)).await;
     let clone = agent.clone();
-    let dropped = clone.enqueue(request("dropped"), actor()).await.unwrap();
+    let dropped = clone
+        .enqueue(request("dropped"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     let running = started(&mut calls, "dropped").await;
     drop(dropped);
     drop(clone);
-    let barrier = agent.enqueue(request("barrier"), actor()).await.unwrap();
+    let barrier = agent
+        .enqueue(request("barrier"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     complete(running);
     complete(started(&mut calls, "barrier").await);
     within(barrier.wait()).await.unwrap();
@@ -497,16 +543,23 @@ async fn scheduling_failed_admission_save_allows_retry_without_losing_identity()
     let (agent, storage, provider, mut calls) = fixture(Ok(SteeringOutcome::Injected)).await;
     storage.fail_next();
     assert!(matches!(
-        agent.enqueue(request("retry"), actor()).await,
+        agent
+            .enqueue(request("retry"), Submitter::owner(actor()))
+            .await,
         Err(AgentError::Storage(StorageError::Io(_)))
     ));
     assert!(storage.snapshot().invocations.is_empty());
     assert!(calls.try_recv().is_err());
-    let retry = agent.enqueue(request("retry"), actor()).await.unwrap();
+    let retry = agent
+        .enqueue(request("retry"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     let running = started(&mut calls, "retry").await;
     storage.fail_next();
     assert!(matches!(
-        agent.steer(request("unsaved-steering"), actor()).await,
+        agent
+            .steer(request("unsaved-steering"), Submitter::owner(actor()))
+            .await,
         Err(AgentError::Storage(StorageError::Io(_)))
     ));
     assert!(provider.steered.lock().unwrap().is_empty());
@@ -519,9 +572,15 @@ async fn scheduling_failed_admission_save_allows_retry_without_losing_identity()
 #[tokio::test]
 async fn scheduling_provider_failure_cancels_remainder_with_automatic_cause() {
     let (agent, storage, _, mut calls) = fixture(Ok(SteeringOutcome::Injected)).await;
-    let active = agent.enqueue(request("active"), actor()).await.unwrap();
+    let active = agent
+        .enqueue(request("active"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     let running = started(&mut calls, "active").await;
-    let pending = agent.enqueue(request("pending"), actor()).await.unwrap();
+    let pending = agent
+        .enqueue(request("pending"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     running
         .release
         .send(Err(AgentError::Transport("broken".into())))
@@ -543,22 +602,33 @@ async fn scheduling_provider_failure_cancels_remainder_with_automatic_cause() {
 #[tokio::test]
 async fn scheduling_capacity_counts_only_pending_and_retry_preserves_evidence() {
     let (agent, storage, _, mut calls) = fixture(Ok(SteeringOutcome::Injected)).await;
-    let active = agent.enqueue(request("active"), actor()).await.unwrap();
+    let active = agent
+        .enqueue(request("active"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     let _running = started(&mut calls, "active").await;
     let mut pending = Vec::new();
     for index in 0..64 {
         pending.push(
             agent
-                .enqueue(request(&format!("pending-{index}")), actor())
+                .enqueue(
+                    request(&format!("pending-{index}")),
+                    Submitter::owner(actor()),
+                )
                 .await
                 .unwrap(),
         );
     }
     assert!(matches!(
-        agent.enqueue(request("overflow"), actor()).await,
+        agent
+            .enqueue(request("overflow"), Submitter::owner(actor()))
+            .await,
         Err(AgentError::Scheduling(SchedulingError::Full))
     ));
-    let retried = agent.enqueue(request("pending-0"), actor()).await.unwrap();
+    let retried = agent
+        .enqueue(request("pending-0"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     assert_eq!(retried.id().as_str(), "pending-0");
     assert_eq!(storage.snapshot().invocations.len(), 65);
     within(agent.close(close_action())).await.unwrap();
@@ -572,10 +642,19 @@ async fn scheduling_capacity_counts_only_pending_and_retry_preserves_evidence() 
 #[tokio::test]
 async fn scheduling_failed_dispatch_save_retains_attempt_and_stops_remaining_work() {
     let (agent, storage, _, mut calls) = fixture(Ok(SteeringOutcome::Injected)).await;
-    let active = agent.enqueue(request("active"), actor()).await.unwrap();
+    let active = agent
+        .enqueue(request("active"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     let running = started(&mut calls, "active").await;
-    let failed = agent.enqueue(request("failed"), actor()).await.unwrap();
-    let pending = agent.enqueue(request("pending"), actor()).await.unwrap();
+    let failed = agent
+        .enqueue(request("failed"), Submitter::owner(actor()))
+        .await
+        .unwrap();
+    let pending = agent
+        .enqueue(request("pending"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     storage.fail_scheduling("failed", InvocationStage::Running);
     complete(running);
     within(active.wait()).await.unwrap();
@@ -603,10 +682,19 @@ async fn scheduling_failed_dispatch_save_retains_attempt_and_stops_remaining_wor
 #[tokio::test]
 async fn scheduling_failed_close_audit_reports_failure_and_still_cleans_every_pending_item() {
     let (agent, storage, provider, mut calls) = fixture(Ok(SteeringOutcome::Injected)).await;
-    let active = agent.enqueue(request("active"), actor()).await.unwrap();
+    let active = agent
+        .enqueue(request("active"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     let _running = started(&mut calls, "active").await;
-    let first = agent.enqueue(request("first"), actor()).await.unwrap();
-    let second = agent.enqueue(request("second"), actor()).await.unwrap();
+    let first = agent
+        .enqueue(request("first"), Submitter::owner(actor()))
+        .await
+        .unwrap();
+    let second = agent
+        .enqueue(request("second"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     storage.fail_scheduling("first", InvocationStage::Cancelled);
     assert!(
         matches!(within(agent.close(close_action())).await, Err(AgentError::StorageDuringClose { error: StorageError::Io(_), cleanup_result }) if cleanup_result.is_ok())
@@ -635,10 +723,19 @@ async fn scheduling_failed_close_audit_reports_failure_and_still_cleans_every_pe
 #[tokio::test]
 async fn scheduling_runner_cleanup_audit_failure_is_visible_without_losing_other_cancellations() {
     let (agent, storage, _, mut calls) = fixture(Ok(SteeringOutcome::Injected)).await;
-    let active = agent.enqueue(request("active"), actor()).await.unwrap();
+    let active = agent
+        .enqueue(request("active"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     let running = started(&mut calls, "active").await;
-    let first = agent.enqueue(request("first"), actor()).await.unwrap();
-    let second = agent.enqueue(request("second"), actor()).await.unwrap();
+    let first = agent
+        .enqueue(request("first"), Submitter::owner(actor()))
+        .await
+        .unwrap();
+    let second = agent
+        .enqueue(request("second"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     storage.fail_scheduling("first", InvocationStage::Cancelled);
     running
         .release
@@ -684,7 +781,10 @@ async fn scheduling_close_retains_provider_settlement_and_calls_after_hook_once(
     let (agent, storage, _, mut calls) = fixture(Ok(SteeringOutcome::Injected)).await;
     let hook = Arc::new(ObservedAfter(Mutex::new(Vec::new())));
     agent.add_invocation_hook(hook.clone());
-    let active = agent.enqueue(request("active"), actor()).await.unwrap();
+    let active = agent
+        .enqueue(request("active"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     let _running = started(&mut calls, "active").await;
     within(agent.close(close_action())).await.unwrap();
     assert_eq!(within(active.wait()).await, Ok(ExecutionOutcome::Cancelled));
@@ -698,13 +798,19 @@ async fn scheduling_close_retains_provider_settlement_and_calls_after_hook_once(
 #[tokio::test]
 async fn scheduling_close_interrupts_stalled_native_steering_and_retains_caller_cause() {
     let (agent, storage, provider, mut calls) = fixture(Ok(SteeringOutcome::Injected)).await;
-    let active = agent.enqueue(request("active"), actor()).await.unwrap();
+    let active = agent
+        .enqueue(request("active"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     let _running = started(&mut calls, "active").await;
     let (held, wait) = oneshot::channel();
     *provider.steering_wait.lock().unwrap() = Some(wait);
     let steering_agent = agent.clone();
-    let steering =
-        tokio::spawn(async move { steering_agent.steer(request("stalled"), actor()).await });
+    let steering = tokio::spawn(async move {
+        steering_agent
+            .steer(request("stalled"), Submitter::owner(actor()))
+            .await
+    });
     within(provider.steering_started.notified()).await;
     let pending = record(&storage, "stalled");
     assert_eq!(pending.scheduling.len(), 1);
@@ -729,13 +835,19 @@ async fn scheduling_close_interrupts_stalled_native_steering_and_retains_caller_
 #[tokio::test]
 async fn scheduling_close_wins_when_stalled_native_steering_returns_prompt_required() {
     let (agent, storage, provider, mut calls) = fixture(Ok(SteeringOutcome::PromptRequired)).await;
-    let active = agent.enqueue(request("active"), actor()).await.unwrap();
+    let active = agent
+        .enqueue(request("active"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     let _running = started(&mut calls, "active").await;
     let (release, wait) = oneshot::channel();
     *provider.steering_wait.lock().unwrap() = Some(wait);
     let steering_agent = agent.clone();
-    let steering =
-        tokio::spawn(async move { steering_agent.steer(request("stalled"), actor()).await });
+    let steering = tokio::spawn(async move {
+        steering_agent
+            .steer(request("stalled"), Submitter::owner(actor()))
+            .await
+    });
     within(provider.steering_started.notified()).await;
     let closing_agent = agent.clone();
     let closing = tokio::spawn(async move { closing_agent.close(close_action()).await });
@@ -764,14 +876,23 @@ async fn scheduling_close_wins_when_stalled_native_steering_returns_prompt_requi
 #[tokio::test]
 async fn scheduling_withdraws_ordinary_and_priority_work_once_with_verified_attribution() {
     let (agent, storage, _, mut calls) = fixture(Ok(SteeringOutcome::Injected)).await;
-    let active = agent.enqueue(request("active"), actor()).await.unwrap();
-    let running = started(&mut calls, "active").await;
-    let ordinary = agent.enqueue(request("ordinary"), actor()).await.unwrap();
-    let steering = agent
-        .enqueue_steering(request("steering"), actor())
+    let active = agent
+        .enqueue(request("active"), Submitter::owner(actor()))
         .await
         .unwrap();
-    let retained = agent.enqueue(request("retained"), actor()).await.unwrap();
+    let running = started(&mut calls, "active").await;
+    let ordinary = agent
+        .enqueue(request("ordinary"), Submitter::owner(actor()))
+        .await
+        .unwrap();
+    let steering = agent
+        .enqueue_steering(request("steering"), Submitter::owner(actor()))
+        .await
+        .unwrap();
+    let retained = agent
+        .enqueue(request("retained"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     let withdraw = ActionContext::new("owner", "surface", "withdraw-command").unwrap();
     assert_eq!(
         agent
@@ -809,8 +930,12 @@ async fn scheduling_withdraws_ordinary_and_priority_work_once_with_verified_attr
         assert_eq!(removed.cause, SchedulingCause::Withdrawn);
         assert_eq!(removed.actor, Some(withdraw.clone()));
         let retry = match kind {
-            InvocationKind::Queued => agent.enqueue(request(id), actor()).await,
-            InvocationKind::Steering => agent.enqueue_steering(request(id), actor()).await,
+            InvocationKind::Queued => agent.enqueue(request(id), Submitter::owner(actor())).await,
+            InvocationKind::Steering => {
+                agent
+                    .enqueue_steering(request(id), Submitter::owner(actor()))
+                    .await
+            }
         }
         .unwrap();
         assert_eq!(within(retry.wait()).await, Err(AgentError::Closed));
@@ -826,10 +951,16 @@ async fn scheduling_withdraws_ordinary_and_priority_work_once_with_verified_attr
 #[tokio::test]
 async fn scheduling_injected_and_unknown_inputs_cannot_be_unsent() {
     let (agent, storage, _, mut calls) = fixture(Ok(SteeringOutcome::Injected)).await;
-    let active = agent.enqueue(request("active"), actor()).await.unwrap();
+    let active = agent
+        .enqueue(request("active"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     let running = started(&mut calls, "active").await;
     assert!(matches!(
-        agent.steer(request("injected"), actor()).await.unwrap(),
+        agent
+            .steer(request("injected"), Submitter::owner(actor()))
+            .await
+            .unwrap(),
         SteeringDelivery::Injected { .. }
     ));
     for id in ["injected", "unknown"] {
@@ -858,9 +989,15 @@ async fn scheduling_injected_and_unknown_inputs_cannot_be_unsent() {
 #[tokio::test]
 async fn scheduling_withdrawal_audit_failure_is_visible_but_removed_work_stays_removed() {
     let (agent, storage, _, mut calls) = fixture(Ok(SteeringOutcome::Injected)).await;
-    let active = agent.enqueue(request("active"), actor()).await.unwrap();
+    let active = agent
+        .enqueue(request("active"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     let running = started(&mut calls, "active").await;
-    let removed = agent.enqueue(request("removed"), actor()).await.unwrap();
+    let removed = agent
+        .enqueue(request("removed"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     storage.fail_scheduling("removed", InvocationStage::Cancelled);
     assert!(matches!(
         agent
@@ -879,7 +1016,10 @@ async fn scheduling_withdrawal_audit_failure_is_visible_but_removed_work_stays_r
             .unwrap(),
         QueueRemoval::NotPending
     );
-    let retry = agent.enqueue(request("removed"), actor()).await.unwrap();
+    let retry = agent
+        .enqueue(request("removed"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     assert!(matches!(
         within(retry.wait()).await,
         Err(AgentError::Storage(StorageError::Io(_)))
@@ -911,7 +1051,10 @@ async fn scheduling_close_cause_survives_after_hook_failure_without_relabelling_
     let (agent, storage, _, mut calls) = fixture(Ok(SteeringOutcome::Injected)).await;
     let hook = Arc::new(FailingAfter(AtomicUsize::new(0)));
     agent.add_invocation_hook(hook.clone());
-    let active = agent.enqueue(request("active"), actor()).await.unwrap();
+    let active = agent
+        .enqueue(request("active"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     let _running = started(&mut calls, "active").await;
     within(agent.close(close_action())).await.unwrap();
     assert!(
@@ -939,7 +1082,10 @@ async fn a_forged_app_is_refused_while_a_turn_runs_at_every_steering_entry() {
         tools::{McpTool, ToolCallId},
     };
     let (agent, storage, provider, mut calls) = fixture(Ok(SteeringOutcome::Injected)).await;
-    let active = agent.enqueue(request("active"), actor()).await.unwrap();
+    let active = agent
+        .enqueue(request("active"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     let running = started(&mut calls, "active").await;
     let saved = storage.snapshot();
     let forged = ExecutionRequest {
@@ -955,22 +1101,31 @@ async fn a_forged_app_is_refused_while_a_turn_runs_at_every_steering_entry() {
     };
     let refused = Err(AgentError::UnknownApp(UnknownApp::NoMcpToolCall));
     assert_eq!(
-        agent.steer(forged.clone(), actor()).await.map(drop),
-        refused
-    );
-    assert_eq!(
         agent
-            .enqueue_steering(forged.clone(), actor())
+            .steer(forged.clone(), Submitter::owner(actor()))
             .await
             .map(drop),
         refused
     );
-    assert_eq!(agent.enqueue(forged, actor()).await.map(drop), refused);
+    assert_eq!(
+        agent
+            .enqueue_steering(forged.clone(), Submitter::owner(actor()))
+            .await
+            .map(drop),
+        refused
+    );
+    assert_eq!(
+        agent
+            .enqueue(forged, Submitter::owner(actor()))
+            .await
+            .map(drop),
+        refused
+    );
     assert!(provider.steered.lock().unwrap().is_empty());
     assert_eq!(storage.snapshot(), saved);
 
     assert!(matches!(
-        agent.steer(request("correction"), actor()).await,
+        agent.steer(request("correction"), Submitter::owner(actor())).await,
         Ok(SteeringDelivery::Injected { target, .. }) if target.as_str() == "active"
     ));
     assert_eq!(
@@ -1012,7 +1167,10 @@ async fn an_app_a_running_turn_drew_is_injected_into_that_turn() {
         tools::{McpTool, ToolCallId, ToolCallUpdate},
     };
     let (agent, storage, provider, mut calls) = fixture(Ok(SteeringOutcome::Injected)).await;
-    let active = agent.enqueue(request("active"), actor()).await.unwrap();
+    let active = agent
+        .enqueue(request("active"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     let running = started(&mut calls, "active").await;
     let call = ToolCallId::new("call-1").unwrap();
     running
@@ -1048,7 +1206,10 @@ async fn an_app_a_running_turn_drew_is_injected_into_that_turn() {
 
     let saved = storage.snapshot();
     assert_eq!(
-        agent.steer(from("hidden", "hide"), actor()).await.map(drop),
+        agent
+            .steer(from("hidden", "hide"), Submitter::owner(actor()))
+            .await
+            .map(drop),
         Err(AgentError::UnknownApp(UnknownApp::DifferentMcpTool))
     );
     assert!(provider.steered.lock().unwrap().is_empty());
@@ -1056,7 +1217,7 @@ async fn an_app_a_running_turn_drew_is_injected_into_that_turn() {
 
     let shown = from("shown", "show");
     assert!(matches!(
-        agent.steer(shown.clone(), actor()).await,
+        agent.steer(shown.clone(), Submitter::owner(actor())).await,
         Ok(SteeringDelivery::Injected { target, .. }) if target.as_str() == "active"
     ));
     assert_eq!(

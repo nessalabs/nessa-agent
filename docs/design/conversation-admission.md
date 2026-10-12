@@ -43,7 +43,7 @@ Replace the one-stage construction contract with these responsibilities:
 
 ```rust,ignore
 let agent = Agent::prepare(provider, manager, execution_audit).await?;
-let admission = agent.enqueue(request, actor).await?;
+let admission = agent.enqueue(request, Submitter::owner(actor)).await?;
 
 // Capture authority now; use it after the gateway's runtime-readiness gate.
 let authorization = agent.authorize_attachment(attachment_request)?;
@@ -154,7 +154,8 @@ because attachment later succeeds.
 Early admission means that the SDK owns an attributed input. It does not mean
 that a model, provider process, or connected agent has accepted that input.
 Before storage, the prepared Agent validates only facts for which it is already
-the authority: execution identity and retry equality, verified actor, submission
+the authority: execution identity and retry equality, verified actor and
+initiation (owner or share grant, and whether tools were checked), submission
 mode, actual retained message bytes, image-reference shape, queue capacity, and
 the lifecycle fence. The byte bound is measured from the value retained in the
 snapshot; it is not a token estimate.
@@ -162,8 +163,8 @@ snapshot; it is not a token estimate.
 Two limits prevent failed or cancelled submissions from bypassing the live
 64-item queue bound: a snapshot may retain at most 1,024 invocation records and
 at most 128 MiB of cumulative attributed input data. The input budget counts
-UTF-8 message text, image reference fields, linked paths, identities, and actor
-fields from their validated values; image blobs remain in their separate
+UTF-8 message text, image reference fields, linked paths, identities, actor
+fields, and a share grant's identity text from their validated values; image blobs remain in their separate
 attachment store. Settled, refused, and cancelled records consume both limits
 because they remain durable evidence. Reaching either limit returns a typed
 history-capacity refusal before a new identity is saved. There is no implicit

@@ -293,7 +293,7 @@ async fn robustness_failed_stream_closes_backend_before_waiting_for_settlement()
     let invoking_agent = agent.clone();
     let mut invocation = tokio::spawn(async move {
         invoking_agent
-            .invoke(request("stream-failure"), actor())
+            .invoke(request("stream-failure"), Submitter::owner(actor()))
             .await
     });
     let result = tokio::time::timeout(Duration::from_secs(2), &mut invocation).await;

@@ -96,7 +96,7 @@ async fn selected_claude_preset_survives_a_real_agent_close_and_restore() {
         agent
             .invoke(
                 prompt("Reply with OK only. Do not use tools."),
-                close_action()
+                Submitter::owner(close_action())
             )
             .await,
         Ok(ExecutionOutcome::Completed)
@@ -133,7 +133,7 @@ async fn selected_claude_preset_survives_a_real_agent_close_and_restore() {
         restored
             .invoke(
                 prompt("Reply with READY only. Do not use tools."),
-                close_action()
+                Submitter::owner(close_action())
             )
             .await,
         Ok(ExecutionOutcome::Completed)
@@ -196,7 +196,7 @@ async fn selected_codex_preset_survives_a_real_agent_close_and_restore() {
         agent
             .invoke(
                 prompt("Reply with OK only. Do not use tools."),
-                close_action()
+                Submitter::owner(close_action())
             )
             .await,
         Ok(ExecutionOutcome::Completed)
@@ -237,7 +237,7 @@ async fn selected_codex_preset_survives_a_real_agent_close_and_restore() {
         restored
             .invoke(
                 prompt("Reply with READY only. Do not use tools."),
-                close_action()
+                Submitter::owner(close_action())
             )
             .await,
         Ok(ExecutionOutcome::Completed)
@@ -383,7 +383,7 @@ async fn claude_project_and_user_hooks_stay_quiet_across_prompt_and_restore() {
         agent
             .invoke(
                 prompt("Reply with OK only. Do not use tools."),
-                close_action()
+                Submitter::owner(close_action())
             )
             .await,
         Ok(ExecutionOutcome::Completed)
@@ -408,7 +408,7 @@ async fn claude_project_and_user_hooks_stay_quiet_across_prompt_and_restore() {
         restored
             .invoke(
                 prompt("Reply with READY only. Do not use tools."),
-                close_action()
+                Submitter::owner(close_action())
             )
             .await,
         Ok(ExecutionOutcome::Completed)

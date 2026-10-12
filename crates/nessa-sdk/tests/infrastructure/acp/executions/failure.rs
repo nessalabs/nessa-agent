@@ -13,7 +13,7 @@ use crate::application::agent_execution::{
     },
 };
 use crate::domain::agent_execution::{
-    executions::{ExecutionId, ExecutionOutcome, SchedulingCause},
+    executions::{ExecutionId, ExecutionOutcome, Initiation, SchedulingCause},
     prompts::{PromptText, UserMessage},
     sessions::{ExecutionSessionId, SessionId},
 };
@@ -330,6 +330,7 @@ async fn finalized_provider_and_local_recipes_survive_storage_reload_exactly() {
                     reserved_output_tokens: 1,
                 },
                 actor: actor.clone(),
+                initiation: Initiation::owner(),
                 acknowledgement: SubmissionAcknowledgement::Acknowledged,
                 events: Vec::new(),
                 scheduling: Vec::new(),

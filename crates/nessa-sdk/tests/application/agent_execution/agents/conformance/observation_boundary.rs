@@ -142,7 +142,7 @@ async fn settled_observation_boundary_keeps_only_correlated_trailing_cancellatio
         )))
         .unwrap();
     assert_eq!(
-        bounded(agent.invoke(request("second"), actor())).await,
+        bounded(agent.invoke(request("second"), Submitter::owner(actor()))).await,
         Ok(ExecutionOutcome::Completed)
     );
     let saved = storage.snapshot();

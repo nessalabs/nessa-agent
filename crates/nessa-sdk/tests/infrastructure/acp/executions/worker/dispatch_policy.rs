@@ -14,6 +14,7 @@ use crate::application::agent_execution::{
     tools::ToolReviewInput,
 };
 use crate::domain::agent_execution::{
+    executions::Initiation,
     prompts::{PromptText, UserMessage},
     sessions::SessionId,
     tools::ToolCallUpdate,
@@ -55,6 +56,7 @@ async fn worker_projection_after_reload(
             submission: SubmissionMode::Immediate,
             request: request(),
             actor: ActionContext::new("user", "test", "invoke").unwrap(),
+            initiation: Initiation::owner(),
             acknowledgement: SubmissionAcknowledgement::Acknowledged,
             events: Vec::new(),
             scheduling: Vec::new(),

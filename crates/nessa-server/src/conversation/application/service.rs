@@ -53,7 +53,7 @@ use nessa_sdk::application::agent_execution::{
         QueueReorder, SteeringDelivery, SteeringEvidence,
     },
     commands::{CreationStorage, CreationTaskFault},
-    executions::{ExecutionAudit, ExecutionRequest, ExecutionUpdate},
+    executions::{ExecutionAudit, ExecutionRequest, ExecutionUpdate, Submitter},
     permissions::{
         ActionContext, ApprovalAttribution, ApprovalBasis, PermissionAnswer,
         PermissionCancellationRequest, QuestionAnswer,
@@ -2801,21 +2801,25 @@ impl ConversationService {
                 took.asking();
             }
             asking.store(true, Ordering::SeqCst);
+            // Saved as the owner's turn, its tools unchecked. A turn a Drive
+            // grant admitted is not yet saved as the grant's: that is the
+            // next part of slice J2b of #707.
+            let submitter = Submitter::owner(actor);
             let delivery = match mode {
                 SubmissionMode::Queue => live
                     .agent
-                    .enqueue(request, actor)
+                    .enqueue(request, submitter)
                     .await
                     .map(SubmissionDelivery::Queued),
                 SubmissionMode::Steer if !live.agent.operation_capabilities().native_steering() => {
                     live.agent
-                        .enqueue_steering(request, actor)
+                        .enqueue_steering(request, submitter)
                         .await
                         .map(SubmissionDelivery::Queued)
                 }
                 SubmissionMode::Steer => {
                     live.agent
-                        .steer(request, actor)
+                        .steer(request, submitter)
                         .await
                         .map(|delivery| match delivery {
                             SteeringDelivery::Queued(receipt) => {

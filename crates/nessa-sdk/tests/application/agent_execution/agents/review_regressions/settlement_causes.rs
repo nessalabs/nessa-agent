@@ -17,7 +17,7 @@ async fn queued_preparation_and_rejection_failures_do_not_claim_a_known_outcome(
                 Some(AgentError::InvalidInput("rejected input".into()));
         }
         assert!(agent
-            .enqueue(input("failed"), actor())
+            .enqueue(input("failed"), Submitter::owner(actor()))
             .await
             .unwrap()
             .wait()
@@ -72,7 +72,7 @@ async fn queued_failure_cause_uses_provider_facts_instead_of_local_error_shape()
             agent.add_invocation_hook(Arc::new(FailAfterOutcome));
         }
         assert!(agent
-            .enqueue(input("failed"), actor())
+            .enqueue(input("failed"), Submitter::owner(actor()))
             .await
             .unwrap()
             .wait()

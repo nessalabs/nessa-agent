@@ -285,10 +285,10 @@ and the desktop's
   when none), both required. Each part is rebuilt through the domain on
   read, so a value the domain refuses is `Corrupt`, not a message the agent
   is handed.
-- **Records saved before this (#437).** A record with `schemaVersion` but
-  missing either app field is `Corrupt` when its conversation is restored,
-  and a record with no `schemaVersion`, including one saved before #390, is
-  `AnotherVersion`. The version marker and a typed "another version" refusal for
+- **Records saved before this (#437).** A record with the current
+  `schemaVersion` but missing either app field is `Corrupt` when its
+  conversation is restored, and a record with no `schemaVersion`, including
+  one saved before #390, or an earlier one is `AnotherVersion`. The version marker and a typed "another version" refusal for
   session record streams (ADR 202 rule 1) are #437's, not this slice's.
 - **When a context is done with.** The SDK gives its caller one fact:
   admission returns only once the turn's `InputAccepted` is saved. The rule
@@ -379,7 +379,7 @@ was.
 | P2 | a saved part the domain refuses (a name, an identity, structure, a bound) | `Corrupt` |
 | P3 | a saved context with an empty text, or with either part's key missing | `Corrupt`, not read as none |
 | P4 | more than 4 saved contexts | `Corrupt`, before a fifth is built |
-| P5 | a saved message without `user_app` or `user_app_model_context` | a current record, which has `schemaVersion`, is `Corrupt`, for that conversation only; another opens. A record with no `schemaVersion`, including one saved before #390, is `AnotherVersion` |
+| P5 | a saved message without `user_app` or `user_app_model_context` | a current record, which has the current `schemaVersion`, is `Corrupt`, for that conversation only; another opens. A record with no `schemaVersion`, including one saved before #390, or an earlier one, is `AnotherVersion` |
 | P6 | an `UnknownApp` failure saved and read back | the same variant |
 | P7 | a message's writer and contexts | counted in the session's retained bytes, every byte |
 | B1 | a message carrying contexts, sent | one leading text block: the preamble, then the JSON array in order; then the message |

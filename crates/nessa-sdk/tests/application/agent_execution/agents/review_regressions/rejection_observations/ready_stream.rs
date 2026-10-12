@@ -101,10 +101,14 @@ async fn rejected_foreign_ready_output_stops_after_its_first_cleanup() {
     .await
     .unwrap();
     assert!(matches!(
-        agent.invoke(input("foreign"), actor()).await,
+        agent
+            .invoke(input("foreign"), Submitter::owner(actor()))
+            .await,
         Err(AgentError::InvalidInput(_))
     ));
-    let result = agent.invoke(input("rejected"), actor()).await;
+    let result = agent
+        .invoke(input("rejected"), Submitter::owner(actor()))
+        .await;
     assert!(
         matches!(&result, Err(AgentError::ExecutionObservation { error, execution_result: Some(execution_result) })
         if matches!(error.as_ref(), AgentError::Protocol(_)) && matches!(execution_result.as_ref(), Err(AgentError::InvalidInput(_)))),

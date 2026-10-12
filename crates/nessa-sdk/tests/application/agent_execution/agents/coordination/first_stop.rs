@@ -20,7 +20,10 @@ async fn explicit_close_owns_waiters_first_stopped_during_automatic_cleanup() {
             .await
             .unwrap();
         let invocation = agent.inner.invocation.lock().await;
-        let queued = agent.enqueue(input(), actor()).await.unwrap();
+        let queued = agent
+            .enqueue(input(), Submitter::owner(actor()))
+            .await
+            .unwrap();
         let waiting = agent.inner.lifecycle.accept_waiting_work().unwrap();
         let native = agent.inner.lifecycle.accept_control().unwrap();
         let report = CleanupReport::confirmed(CloseOutcome { forced: false });
@@ -83,7 +86,7 @@ async fn explicit_close_owns_waiters_first_stopped_during_automatic_cleanup() {
         assert_eq!(restored.invocations[0].result, saved.invocations[0].result);
         assert_eq!(
             restored_agent
-                .enqueue(input(), actor())
+                .enqueue(input(), Submitter::owner(actor()))
                 .await
                 .unwrap()
                 .wait()

@@ -8,7 +8,11 @@ async fn native_delivery_failure_without_prior_stop_keeps_dispatch_failure() {
     *backend.execution_gate.lock().unwrap() = Some(gate);
     let running = tokio::spawn({
         let agent = agent.clone();
-        async move { agent.invoke(input("target"), actor()).await }
+        async move {
+            agent
+                .invoke(input("target"), Submitter::owner(actor()))
+                .await
+        }
     });
     timeout(Duration::from_secs(2), backend.executing.notified())
         .await
@@ -20,7 +24,11 @@ async fn native_delivery_failure_without_prior_stop_keeps_dispatch_failure() {
     *backend.control_error.lock().unwrap() = Some(error.clone());
     let steering = tokio::spawn({
         let agent = agent.clone();
-        async move { agent.steer(input("failed-delivery"), actor()).await }
+        async move {
+            agent
+                .steer(input("failed-delivery"), Submitter::owner(actor()))
+                .await
+        }
     });
     // The provider rejects this delivery while the target remains usable.
     // Absence of a preceding stop must retain a delivery failure.
@@ -44,7 +52,10 @@ async fn native_delivery_failure_without_prior_stop_keeps_dispatch_failure() {
     assert_eq!(stop.target, Some(ExecutionId::new("target").unwrap()));
     assert_eq!(record.result, Some(Err(error.clone())));
     assert_eq!(
-        agent.steer(input("failed-delivery"), actor()).await.err(),
+        agent
+            .steer(input("failed-delivery"), Submitter::owner(actor()))
+            .await
+            .err(),
         Some(error)
     );
     assert_eq!(backend.steers.load(Ordering::SeqCst), 1);
