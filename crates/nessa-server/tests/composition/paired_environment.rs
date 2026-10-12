@@ -1996,8 +1996,27 @@ async fn k3_two_organizations_share_no_lease_workspace_artifact_tool_or_audit() 
         );
     }
 
-    // Audit: each worker's ledger records the leases its own gateway asked,
-    // granted and ended, and none of the other's.
+    // Audit: each worker's ledger records the command its own gateway ran,
+    // and not the other's.
+    for (host, mine, theirs) in [(&w_host, "a", "b"), (&x_host, "b", "a")] {
+        let commands: Vec<serde_json::Value> = std::fs::read_to_string(&host.ledger_path)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .filter(|entry| entry["kind"] == "command_granted")
+            .map(|entry| entry["argv"].clone())
+            .collect();
+        assert!(
+            commands.contains(&serde_json::json!(["echo", mine])),
+            "{commands:?}"
+        );
+        assert!(
+            !commands.contains(&serde_json::json!(["echo", theirs])),
+            "{commands:?}"
+        );
+    }
+    // And the agent leases its own gateway asked, granted and ended, and
+    // none of the other's.
     for (host, mine, theirs) in [
         (&w_host, &leases[0].0, &leases[1].0),
         (&x_host, &leases[1].0, &leases[0].0),
