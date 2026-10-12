@@ -4,7 +4,6 @@
 //! alone, and released through the host's control.
 use super::support::*;
 use crate::infrastructure::harness_process::SupervisedHarness;
-use crate::infrastructure::workspace_paths::WorkspacePaths;
 use std::{
     ffi::OsString,
     path::Path,
