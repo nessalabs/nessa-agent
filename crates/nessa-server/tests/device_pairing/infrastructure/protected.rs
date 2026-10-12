@@ -781,13 +781,11 @@ async fn k3_a_worker_reads_nothing_on_the_gateway_it_serves() {
     let (ready, by_worker) = calls(&worker).await;
     assert_eq!(ready["ok"], true, "{ready}");
     assert_eq!(
-        ready["payload"]["grants"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|grant| grant["action"].as_str().unwrap())
-            .collect::<Vec<_>>(),
-        ["environment.serve"]
+        ready["payload"]["grants"],
+        json!([{
+            "action": "environment.serve",
+            "resource": {"organizationId": "org", "id": "gateway"},
+        }])
     );
     for (method, answer) in &by_worker {
         assert_eq!(code(answer), "forbidden", "worker {method}: {answer}");

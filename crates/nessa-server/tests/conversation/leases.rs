@@ -5022,18 +5022,16 @@ async fn a_fetch_timed_out_while_its_asking_is_saved_ends_undelivered_and_never_
     go.send(()).unwrap();
 }
 
-/// Row K3 through the agent's tools: on a gateway whose own worker W is
-/// connected, the tools reach W and nothing of another organization's
-/// worker X. `environments_list` lists W alone; `run` runs on W and is
-/// refused `environmentUnreachable` on X's name by the gateway's own
-/// paired environments, though this gateway's policy names both; and
-/// `artifacts_publish` and `artifacts_fetch` on X's name are refused
-/// before anything is asked of anyone. The paired environments are the
-/// production registry, which has never seen X's key, with W in place of
-/// a live connection. Paired environments are Unix-only, as the registry is.
+/// Row K3's gateway: its own worker W connected, as `w_host`; every other
+/// key, X's included, answered by the production paired-environment
+/// registry, which has never seen it. Paired environments are Unix-only,
+/// as the registry is.
 #[cfg(unix)]
-#[tokio::test]
-async fn k3_the_agents_tools_reach_only_this_gateways_own_worker() {
+fn k3_own_worker(
+    root: &Path,
+    w: nessa_sdk::domain::agent_execution::leases::PeerEnvironment,
+    w_host: Arc<dyn Environment>,
+) -> Arc<dyn crate::conversation::application::PairedEnvironments> {
     use crate::conversation::application::PairedEnvironments;
     use crate::conversation::infrastructure::ssh_environment::{
         DurableEnvironmentAudit, PeerEnvironments, ServingCredentials, SshTimings,
@@ -5053,11 +5051,9 @@ async fn k3_the_agents_tools_reach_only_this_gateways_own_worker() {
             Box::pin(async { Ok(true) })
         }
     }
-    /// This gateway's paired environments: W connected, as `host`; every
-    /// other key, as the production registry answers it.
     struct OwnWorker {
         w: PeerEnvironment,
-        host: Arc<CommandHost>,
+        host: Arc<dyn Environment>,
         registry: PeerEnvironments,
     }
     impl PairedEnvironments for OwnWorker {
@@ -5074,27 +5070,37 @@ async fn k3_the_agents_tools_reach_only_this_gateways_own_worker() {
             connected
         }
     }
+    Arc::new(OwnWorker {
+        w,
+        host: w_host,
+        registry: PeerEnvironments::new(
+            Arc::new(Serving),
+            DurableEnvironmentAudit::new(root.join("environments"), Arc::new(TestClock)).unwrap(),
+            SshTimings::default(),
+        ),
+    })
+}
+
+/// Row K3 through the agent's tools: on a gateway whose own worker W is
+/// connected, the tools reach W and nothing of another organization's
+/// worker X. `environments_list` lists W alone, and `run` runs on W and is
+/// refused `environmentUnreachable` on X's name by the gateway's own
+/// paired environments, though this gateway's policy names both.
+#[cfg(unix)]
+#[tokio::test]
+async fn k3_the_agents_tools_reach_only_this_gateways_own_worker() {
+    use nessa_sdk::domain::agent_execution::leases::PeerEnvironment;
 
     let root = tempfile::tempdir().unwrap();
     let (w, x) = (PeerEnvironment::new([1; 32]), PeerEnvironment::new([2; 32]));
     let host = CommandHost::new();
-    let registry = PeerEnvironments::new(
-        Arc::new(Serving),
-        DurableEnvironmentAudit::new(root.path().join("environments"), Arc::new(TestClock))
-            .unwrap(),
-        SshTimings::default(),
-    );
     let placements = Arc::new(
         FilePlacements::new(root.path().join("conversations").join("placements")).unwrap(),
     );
     let provider = Arc::new(ProviderFactory::default());
     let binding = Arc::new(Provider::new(provider.clone()));
     let environments = Environments::new(in_process_environment(), BTreeMap::new(), placements)
-        .with_peers(Arc::new(OwnWorker {
-            w,
-            host: host.clone(),
-            registry,
-        }))
+        .with_peers(k3_own_worker(root.path(), w, host.clone()))
         .with_commands(CommandPolicy::new([w.name(), x.name()], None, Vec::new()));
     let harness = harness_in(
         root.path(),
@@ -5154,17 +5160,72 @@ async fn k3_the_agents_tools_reach_only_this_gateways_own_worker() {
         "{theirs:?}"
     );
     assert_eq!(host.granted.load(Ordering::SeqCst), 1);
+    go.send(()).unwrap();
+}
+
+/// Row K3 for artifacts: with the agent leased on this gateway's own worker
+/// W, `artifacts_publish` keeps a file from W, and on another organization's
+/// worker X's name both `artifacts_publish` and `artifacts_fetch` are
+/// refused before anything is asked of anyone.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn k3_artifacts_move_only_on_this_gateways_own_worker() {
+    use nessa_sdk::domain::agent_execution::leases::PeerEnvironment;
+
+    let root = tempfile::tempdir().unwrap();
+    let (w, x) = (PeerEnvironment::new([1; 32]), PeerEnvironment::new([2; 32]));
+    let (host, _publisher) = Host::publishing();
+    host.asked
+        .settled_before_return
+        .store(true, Ordering::SeqCst);
+    let host = Arc::new(host);
+    let attachments = Arc::new(MemoryAttachments::default());
+    let placements = Arc::new(
+        FilePlacements::new(root.path().join("conversations").join("placements")).unwrap(),
+    );
+    let provider = Arc::new(ProviderFactory::default());
+    let binding = Arc::new(Provider::new(provider.clone()));
+    let harness = harness_working_in(
+        root.path(),
+        Environments::new(
+            Arc::new(Substitute::new(SandboxProfiles::HARNESS_DEFAULT)),
+            BTreeMap::new(),
+            placements,
+        )
+        .with_peers(k3_own_worker(root.path(), w, host.clone()))
+        .with_publish_wait(PUBLISH_CALL_WAIT)
+        .with_fetch_wait(PUBLISH_CALL_WAIT),
+        DELETION_BUDGETS.stop,
+        provider,
+        binding,
+        None,
+        Some(attachments),
+    );
+    harness.create_on(&w.name()).await.unwrap();
+    let go = harness.running_turn().await;
+
+    let mine = tokio::time::timeout(
+        Duration::from_secs(10),
+        harness.publish_file(publish_call(&w.name(), "out/report.txt", "call-1")),
+    )
+    .await
+    .expect("W's file is kept");
+    assert!(matches!(mine, PublishAnswer::Kept { .. }), "{mine:?}");
+    assert_eq!(host.asked.asks.lock().unwrap().len(), 1);
     assert_eq!(
         harness
-            .publish_file(publish_call(&x.name(), "report.txt", "call-3"))
+            .publish_file(publish_call(&x.name(), "out/report.txt", "call-2"))
             .await,
         PublishAnswer::Refused(PublishCallRefusal::EnvironmentNotLeased)
     );
     assert_eq!(
         harness
-            .fetch_file(fetch_call(&x.name(), b"bytes", "report.txt", "call-4"))
+            .fetch_file(fetch_call(&x.name(), b"bytes", "report.txt", "call-3"))
             .await,
         FetchAnswer::Refused(FetchCallRefusal::EnvironmentNotLeased)
     );
+    // X's refusals asked W for nothing more.
+    assert_eq!(host.asked.asks.lock().unwrap().len(), 1);
+    assert!(host.fetching.asks.lock().unwrap().is_empty());
     go.send(()).unwrap();
 }
