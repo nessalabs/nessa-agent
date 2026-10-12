@@ -460,7 +460,19 @@ impl ExecutionController {
             .remove(&answer.id)
             .expect("controller retains the accepted review input");
         self.retained_review_bytes -= charged_bytes;
-        let by_deadline = matches!(answer.attribution.basis(), ApprovalBasis::Deadline(_));
+        // Settlement evidence is an answer attributed to the very deadline
+        // this review published, not to any deadline a caller can build.
+        let by_deadline = match answer.attribution.basis() {
+            ApprovalBasis::Deadline(deadline) => self
+                .published_deadlines
+                .get(&answer.id)
+                .is_some_and(|published| {
+                    published.effect() == deadline.effect()
+                        && published.reason() == deadline.reason()
+                        && published.stops_turn() == deadline.stops_turn()
+                }),
+            _ => false,
+        };
         let resolution =
             PermissionResolution::new(self.id().clone(), request, input, answer.attribution);
         // The answer is accepted even when its attribution is rejected, so the
@@ -998,6 +1010,22 @@ mod tests {
         assert!(
             stale(&mut explicit),
             "a person's answer has no deadline notice"
+        );
+
+        let mut other_deadline = pending(Some(allow.clone()));
+        other_deadline
+            .answer_permission(PermissionAnswer {
+                attribution: ApprovalAttribution::deadline(
+                    &permission,
+                    deadline(PermissionEffect::Allow, "a different sentence"),
+                )
+                .unwrap(),
+                ..answer("permission")
+            })
+            .unwrap();
+        assert!(
+            stale(&mut other_deadline),
+            "an answer attributed to a deadline the review did not publish has no notice"
         );
 
         let mut unpublished = pending(None);

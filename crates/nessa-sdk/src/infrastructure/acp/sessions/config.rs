@@ -474,12 +474,15 @@ impl AcpConfig {
     /// there. What names this machine is left behind: its account's variables,
     /// its credentials and the MCP servers whose stand-ins reach this process.
     /// The host supplies its own executable, variables and credentials, so
-    /// `executable` and `arguments` are never launched from here.
+    /// `executable` and `arguments` are never launched from here. This
+    /// machine's filesystem says nothing about the host's paths, so none
+    /// resolves and every read review there is the deny class.
     pub(crate) fn on_host(&self, workspace: PathBuf) -> Self {
         Self {
             environment: BTreeMap::new(),
             credential_environment: BTreeMap::new(),
             workspace,
+            workspace_paths: Arc::new(crate::infrastructure::workspace_paths::UnresolvedPaths),
             mcp_servers: McpServerList::none(),
             stand_ins: StandInSessions::none(),
             ..self.clone()

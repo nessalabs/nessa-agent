@@ -34,8 +34,9 @@ pub(crate) fn review_class(
     locations: &Option<Vec<FileLocation>>,
     workspace: &Path,
 ) -> PermissionToolClass {
+    use crate::infrastructure::workspace_paths::{FilesystemPaths, WorkspacePaths};
     review_class_with(kind, locations, workspace, &mut |path| {
-        path.canonicalize().ok()
+        FilesystemPaths.resolve(path)
     })
 }
 
@@ -229,8 +230,9 @@ mod tests {
     #[tokio::test]
     async fn classification_reads_paths_only_through_the_injected_resolver() {
         // Neither path exists on disk; only the resolver says where they are.
-        let workspace = std::env::temp_dir().join("nessa-absent-workspace");
-        let elsewhere = std::env::temp_dir().join("nessa-elsewhere");
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("absent-workspace");
+        let elsewhere = root.path().join("elsewhere");
         let budget = Arc::new(Semaphore::new(1));
         let read = |name: &str| {
             let elsewhere = elsewhere.clone();

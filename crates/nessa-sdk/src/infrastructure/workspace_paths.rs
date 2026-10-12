@@ -30,6 +30,18 @@ where
     }
 }
 
+/// Resolves nothing. A workspace on another host cannot be resolved on this
+/// machine: a local file at the same path is not the host's file. Every read
+/// there is the deny class until a host supplies its own resolver.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UnresolvedPaths;
+
+impl WorkspacePaths for UnresolvedPaths {
+    fn resolve(&self, _path: &Path) -> Option<PathBuf> {
+        None
+    }
+}
+
 /// This machine's filesystem, through [`std::fs::canonicalize`].
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FilesystemPaths;
@@ -53,5 +65,6 @@ mod tests {
             Some(canonical_root)
         );
         assert_eq!(FilesystemPaths.resolve(&root.path().join("missing")), None);
+        assert_eq!(UnresolvedPaths.resolve(root.path()), None);
     }
 }

@@ -163,6 +163,13 @@ reason. An app review has no deadline. A restored review keeps the deadline
 on the saved record and the projection omits it, so the card never promises
 a decision that will not come.
 
+The notice is made once, and only for a review its own deadline settled: an
+answer attributed to the deadline that review published, or the deadline's
+cancellation when no refusal was offered. It repeats that published effect and
+reason. A review a person answered, or one cancelled for another reason, has
+no notice. Restored history follows the same rule, so a duplicate or
+contradictory notice in a saved record is skipped.
+
 A third-party harness that declares it cannot defer is reported as
 `unsupported` ("Not available"). A provider that can defer, or one that has
 not said, stays `unsupported_not_implemented` ("Not yet in Nessa"): this

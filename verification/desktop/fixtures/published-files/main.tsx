@@ -36,6 +36,7 @@ import { Provider } from "react-redux"
 import { createAttachmentApi } from "../../../../packages/nessa-client/src/presentation/attachment-api"
 import { conversationView } from "../../../../packages/nessa-client/src/protocol/conversation-validate"
 import {
+  ClockProvider as ConversationClockProvider,
   HeldFilesProvider,
   Transcript,
   heldFileReader,
@@ -383,18 +384,20 @@ function renderPanel(
   createRoot(element).render(
     <React.StrictMode>
       <Provider store={panelStore as never}>
-        <HeldFilesProvider read={read} save={saveFile}>
-          <Transcript
-            conversation={value}
-            ground="paper"
-            animateMount={false}
-            streamText={false}
-            emptyState={emptyState}
-            statusLabel="Nothing here yet"
-            gatewayAvailable
-            onOpenPaste={() => {}}
-          />
-        </HeldFilesProvider>
+        <ConversationClockProvider now={dependencies.now}>
+          <HeldFilesProvider read={read} save={saveFile}>
+            <Transcript
+              conversation={value}
+              ground="paper"
+              animateMount={false}
+              streamText={false}
+              emptyState={emptyState}
+              statusLabel="Nothing here yet"
+              gatewayAvailable
+              onOpenPaste={() => {}}
+            />
+          </HeldFilesProvider>
+        </ConversationClockProvider>
       </Provider>
     </React.StrictMode>,
   )
