@@ -34,14 +34,15 @@
 //! ahead of the audit across a restart. A retry of that command finishes it.
 
 use crate::agents::application::{
-    selection_from_stored, NativeHooksAgent, NativeHooksAudit, NativeHooksChange, NativeHooksError,
-    NativeHooksEvidence, NativeHooksPhase, NativeHooksSelection,
+    NativeHooksAgent, NativeHooksAudit, NativeHooksChange, NativeHooksError, NativeHooksEvidence,
+    NativeHooksPhase, NativeHooksSelection,
 };
 use nessa_auth::application::ports::Clock;
 use nessa_local_storage::{create_directory, open, sync_directory, OpenMode, PrivateTempFile};
 use nessa_sdk::application::agent_execution::providers::NativeHooksSwitch;
+use serde::de::{self, Deserializer as _, IgnoredAny, MapAccess, Visitor};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
     io::{ErrorKind, Read, Write},
@@ -360,6 +361,56 @@ fn read_choice(path: &Path) -> NativeHooksSelection {
         return NativeHooksSelection::off();
     }
     selection_from_stored(&bytes)
+}
+
+/// Read a stored document. Anything that is not a boolean under `claude` or
+/// `codex` is off. Unknown keys are ignored. A document that is not an object,
+/// is not JSON, or names `claude` or `codex` twice is off: a repeated key has
+/// no single answer, and a parser that keeps the last one could turn hooks on.
+fn selection_from_stored(bytes: &[u8]) -> NativeHooksSelection {
+    let mut reader = serde_json::Deserializer::from_slice(bytes);
+    match reader
+        .deserialize_map(StoredChoice)
+        .and_then(|selection| reader.end().map(|()| selection))
+    {
+        Ok(selection) => selection,
+        Err(_) => NativeHooksSelection::off(),
+    }
+}
+
+/// Reads the stored object one member at a time, so a repeated harness key
+/// is seen rather than overwritten.
+struct StoredChoice;
+
+impl<'de> Visitor<'de> for StoredChoice {
+    type Value = NativeHooksSelection;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("an object of native hooks choices")
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut members: A) -> Result<Self::Value, A::Error> {
+        let mut claude = None;
+        let mut codex = None;
+        while let Some(key) = members.next_key::<String>()? {
+            let slot = if key == NativeHooksAgent::Claude.name() {
+                &mut claude
+            } else if key == NativeHooksAgent::Codex.name() {
+                &mut codex
+            } else {
+                members.next_value::<IgnoredAny>()?;
+                continue;
+            };
+            if slot.is_some() {
+                return Err(de::Error::custom(format_args!("duplicate `{key}`")));
+            }
+            *slot = Some(members.next_value::<Value>()?.as_bool().unwrap_or(false));
+        }
+        Ok(NativeHooksSelection::new(
+            claude.unwrap_or(false),
+            codex.unwrap_or(false),
+        ))
+    }
 }
 
 fn write_choice(
@@ -834,6 +885,37 @@ mod tests {
         fn unix_milliseconds(&self) -> u64 {
             1_700_000_000_000
         }
+    }
+
+    #[test]
+    fn invalid_stored_choices_are_off() {
+        assert_eq!(selection_from_stored(b""), NativeHooksSelection::off());
+        assert_eq!(selection_from_stored(b"[]"), NativeHooksSelection::off());
+        assert_eq!(
+            selection_from_stored(br#"{"claude":"yes","codex":1,"opencode":true,"other":false}"#),
+            NativeHooksSelection::off()
+        );
+        assert_eq!(
+            selection_from_stored(br#"{"claude":true,"codex":false}"#),
+            NativeHooksSelection::new(true, false)
+        );
+    }
+
+    #[test]
+    fn a_harness_named_twice_is_off_whichever_value_comes_last() {
+        assert_eq!(
+            selection_from_stored(br#"{"claude":false,"claude":true,"codex":true}"#),
+            NativeHooksSelection::off()
+        );
+        assert_eq!(
+            selection_from_stored(br#"{"codex":true,"codex":true}"#),
+            NativeHooksSelection::off()
+        );
+        // A repeated key that is not a harness changes nothing.
+        assert_eq!(
+            selection_from_stored(br#"{"other":1,"other":2,"codex":true}"#),
+            NativeHooksSelection::new(false, true)
+        );
     }
 
     fn change(agent: NativeHooksAgent, enabled: bool, request_id: &str) -> NativeHooksChange {

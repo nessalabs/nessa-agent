@@ -7,7 +7,6 @@
 //! one probe runs and they share it, and nobody waits for it past a deadline.
 //!
 //! ```text
-//! stored bytes -> native_hooks::selection_from_stored
 //! agents.list -> the live choice, filled on the typed catalog
 //! ```
 //!
@@ -15,8 +14,8 @@
 mod native_hooks;
 mod ports;
 pub use native_hooks::{
-    selection_from_stored, CallerKindSource, NativeHooksAgent, NativeHooksAudit, NativeHooksChange,
-    NativeHooksError, NativeHooksEvidence, NativeHooksPhase, NativeHooksSelection,
+    CallerKindSource, NativeHooksAgent, NativeHooksAudit, NativeHooksChange, NativeHooksError,
+    NativeHooksEvidence, NativeHooksPhase, NativeHooksSelection,
 };
 pub use ports::{
     AgentCredential, AgentCredentialFailure, AgentCredentialKind, AgentCredentialSource,
