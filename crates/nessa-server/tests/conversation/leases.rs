@@ -4401,17 +4401,20 @@ async fn a_fetch_whose_placement_read_stalls_is_timed_out_or_cancelled() {
         FetchAnswer::Refused(FetchCallRefusal::Cancelled { delivered: false })
     );
     assert!(host.fetching.asks.lock().unwrap().is_empty());
-    // Let the stalled reads go, so nothing is left waiting: a writer
-    // opening and closing the pipe ends their wait. Then put the placement
-    // back.
-    drop(
-        std::fs::OpenOptions::new()
-            .write(true)
-            .open(&placement)
-            .unwrap(),
-    );
+    // Let the stalled reads go, so nothing is left waiting: a writer on the
+    // pipe ends their wait. It opens for reading too, so it does not itself
+    // wait for a reader: on a slow machine a call can time out before its
+    // read ever opens the pipe, and then no reader comes. It stays open
+    // until the placement is back, so a read that reaches the pipe after it
+    // opened finds a writer too.
+    let writer = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&placement)
+        .unwrap();
     std::fs::remove_file(&placement).unwrap();
     std::fs::write(&placement, &kept).unwrap();
+    drop(writer);
     go.send(()).unwrap();
 }
 
