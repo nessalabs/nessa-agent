@@ -8,17 +8,44 @@ use crate::domain::agent_execution::{
     permissions::PermissionToolClass,
     tools::{FileLocation, ToolKind},
 };
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
+
+/// How long path classification may wait on the filesystem. A canonicalize
+/// that has not returned by then is the deny class, so a stuck mount cannot
+/// hold the worker that also polls close and deadlines
+/// (`a_stuck_filesystem_is_the_deny_class_and_does_not_hold_classification`).
+pub(crate) const PATH_RESOLUTION_BOUND: Duration = Duration::from_millis(250);
 
 /// The deadline class for a review of `kind` touching `locations` in `workspace`.
 ///
 /// Read and search are read-only only when every target path canonicalizes to
 /// a path inside `workspace`. No path, a missing file, a symlink that leaves,
-/// or any other kind is [`PermissionToolClass::Other`].
+/// or any other kind is [`PermissionToolClass::Other`]. The worker classifies
+/// through [`bounded_review_class`]; this wrapper is what the tests call.
+#[cfg(test)]
 pub(crate) fn review_class(
     kind: Option<ToolKind>,
     locations: &Option<Vec<FileLocation>>,
     workspace: &Path,
+) -> PermissionToolClass {
+    review_class_with(kind, locations, workspace, &mut |path| {
+        path.canonicalize().ok()
+    })
+}
+
+/// Classify `kind` and `locations` by resolving paths through `canonicalize`.
+///
+/// `canonicalize` is the filesystem read. The worker passes one that runs off
+/// its task and gives up at [`PATH_RESOLUTION_BOUND`]. A path that does not
+/// resolve is outside the read-only class.
+pub(crate) fn review_class_with(
+    kind: Option<ToolKind>,
+    locations: &Option<Vec<FileLocation>>,
+    workspace: &Path,
+    canonicalize: &mut dyn FnMut(&Path) -> Option<PathBuf>,
 ) -> PermissionToolClass {
     if !matches!(kind, Some(ToolKind::Read | ToolKind::Search)) {
         return PermissionToolClass::Other;
@@ -26,12 +53,12 @@ pub(crate) fn review_class(
     let Some(locations) = locations.as_ref().filter(|paths| !paths.is_empty()) else {
         return PermissionToolClass::Other;
     };
-    let Ok(workspace) = workspace.canonicalize() else {
+    let Some(workspace) = canonicalize(workspace) else {
         return PermissionToolClass::Other;
     };
     if locations
         .iter()
-        .all(|location| path_inside(location.path().as_str(), &workspace))
+        .all(|location| path_inside(location.path().as_str(), &workspace, canonicalize))
     {
         PermissionToolClass::ReadOnly
     } else {
@@ -39,14 +66,34 @@ pub(crate) fn review_class(
     }
 }
 
-fn path_inside(raw: &str, workspace: &Path) -> bool {
+/// Classify off the worker task. A filesystem read that outlasts
+/// [`PATH_RESOLUTION_BOUND`] is the deny class.
+pub(crate) async fn bounded_review_class(
+    kind: Option<ToolKind>,
+    locations: Option<Vec<FileLocation>>,
+    workspace: PathBuf,
+    canonicalize: impl Fn(&Path) -> Option<PathBuf> + Send + 'static,
+) -> PermissionToolClass {
+    let work =
+        move || review_class_with(kind, &locations, &workspace, &mut |path| canonicalize(path));
+    match tokio::time::timeout(PATH_RESOLUTION_BOUND, tokio::task::spawn_blocking(work)).await {
+        Ok(Ok(class)) => class,
+        _ => PermissionToolClass::Other,
+    }
+}
+
+fn path_inside(
+    raw: &str,
+    workspace: &Path,
+    canonicalize: &mut dyn FnMut(&Path) -> Option<PathBuf>,
+) -> bool {
     let path = Path::new(raw);
     let joined = if path.is_absolute() {
         PathBuf::from(path)
     } else {
         workspace.join(path)
     };
-    let Ok(canonical) = joined.canonicalize() else {
+    let Some(canonical) = canonicalize(&joined) else {
         return false;
     };
     canonical.starts_with(workspace)
@@ -155,6 +202,27 @@ mod tests {
         assert_eq!(
             review_class(Some(ToolKind::Read), &missing, &workspace),
             PermissionToolClass::Other
+        );
+    }
+
+    #[tokio::test]
+    async fn a_stuck_filesystem_is_the_deny_class_and_does_not_hold_classification() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("workspace");
+        fs::create_dir(&workspace).unwrap();
+        let inside = at(&workspace, "notes.txt");
+        let locations = Some(vec![location(&inside)]);
+        let started = std::time::Instant::now();
+        let class = super::bounded_review_class(Some(ToolKind::Read), locations, workspace, |_| {
+            std::thread::sleep(Duration::from_secs(5));
+            None
+        })
+        .await;
+        assert_eq!(class, PermissionToolClass::Other);
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "classification waited on the filesystem for {:?}",
+            started.elapsed()
         );
     }
 }

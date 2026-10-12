@@ -1,6 +1,6 @@
 use super::super::{
     fields,
-    permissions::{wire as permission_wire, workspace::review_class},
+    permissions::{wire as permission_wire, workspace::bounded_review_class},
     profile::AcpProfile,
     questions::wire as question_wire,
     sessions::{
@@ -2543,7 +2543,13 @@ impl<P: AcpProfile> Worker<P> {
             .as_ref()
             .expect("validated active prompt")
             .execution_id;
-        let class = review_class(*tool.kind(), tool.locations(), &self.config.workspace);
+        let class = bounded_review_class(
+            *tool.kind(),
+            tool.locations().clone(),
+            self.config.workspace.clone(),
+            |path| path.canonicalize().ok(),
+        )
+        .await;
         let settlement = self.config.permission_deadlines.settlement(
             class,
             &options,
