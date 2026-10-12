@@ -15,6 +15,7 @@ it.each([
     list: vi.fn(),
     installOptions: vi.fn(),
     install: vi.fn().mockRejectedValue(new NessaRpcError(code, "same diagnostic")),
+    setNativeHooks: vi.fn(),
   }
   const source = gatewayAgentInstallations(
     () => api,
@@ -30,6 +31,7 @@ it("does not mistake a transport failure or another agent's answer for confirmed
     list: vi.fn(),
     installOptions: vi.fn(),
     install: vi.fn().mockRejectedValue(new Error("lost connection")),
+    setNativeHooks: vi.fn(),
   }
   const source = gatewayAgentInstallations(
     () => api,

@@ -76,7 +76,11 @@ export const settingsCategories = [
     id: "privacy",
     label: "Privacy & Permissions",
     tabs: [
-      { id: "access", label: "Access", keywords: "permissions approval ask shield" },
+      {
+        id: "access",
+        label: "Access",
+        keywords: "permissions approval ask shield hooks",
+      },
       { id: "data", label: "Data", keywords: "history crash reports storage" },
     ],
   },
@@ -374,6 +378,22 @@ export const settingsEntries = [
     label: "Remember approvals for a session",
     detail: "A command you allow once is allowed again in the same session.",
     keywords: "allow",
+  },
+  {
+    id: "claude-native-hooks",
+    tab: "access",
+    label: "Claude Code hooks",
+    detail:
+      "Hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts. Applies the next time each conversation's agent starts. This also applies the repo's .claude settings, including its allow rules and startup hooks, so turn it on only for projects you trust.",
+    keywords: "native hooks claude",
+  },
+  {
+    id: "codex-native-hooks",
+    tab: "access",
+    label: "Codex hooks",
+    detail:
+      "Hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts. Applies the next time each conversation's agent starts.",
+    keywords: "native hooks codex",
   },
   // Privacy & Permissions › Data
   {

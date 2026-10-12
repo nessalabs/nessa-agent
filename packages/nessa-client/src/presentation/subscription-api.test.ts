@@ -33,6 +33,7 @@ const view: ConversationView = {
     agentFeatures: {
       permissionDenial: "unknown",
       nativeHookSuppression: "unknown",
+      nativeHooks: "off",
       compactionReporting: "unsupported_not_implemented",
       modelSwitchReporting: "unsupported_not_implemented",
       permissionDeferral: "unsupported_not_implemented",
@@ -238,6 +239,7 @@ describe("subscription API", () => {
     const catalog = {
       agents: [],
       environments: ["build.example", `peer:${"ab".repeat(32)}`],
+      nativeHooks: { claude: "off", codex: "on" },
     }
     wire.emit(ProductEvent.AgentsListed, { subscriptionId: "1", catalog })
     expect(handlers.catalog).toHaveBeenCalledExactlyOnceWith(catalog)
@@ -255,7 +257,11 @@ describe("subscription API", () => {
     await createSubscriptionApi(wire.session).agents(handlers)
     wire.emit(ProductEvent.AgentsListed, {
       subscriptionId: "1",
-      catalog: { agents: [], environments: ["same", "same"] },
+      catalog: {
+        agents: [],
+        environments: ["same", "same"],
+        nativeHooks: { claude: "off", codex: "off" },
+      },
     })
     expect(handlers.catalog).not.toHaveBeenCalled()
     expect(handlers.ended).toHaveBeenCalledExactlyOnceWith({ reason: "invalid_frame" })

@@ -114,6 +114,10 @@
       "params": null,
       "grant": "server.read"
     },
+    "agents.setNativeHooks": {
+      "params": "AgentsSetNativeHooksParams",
+      "grant": "credential.manage"
+    },
     "agents.subscribe": {
       "params": null,
       "grant": "server.read"

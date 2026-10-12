@@ -198,6 +198,14 @@ export function App({
   const detailsConversation = chat.conversations.find(
     (item) => item.id === tabDetails?.id,
   )
+  const nativeHooksAgent = detailsConversation?.remote?.runtime?.agent
+  // The followed catalog is sent again whenever the switch moves, so this
+  // read changes with it and the details read again.
+  const nativeHooksNow =
+    nativeHooksAgent === "claude" || nativeHooksAgent === "codex"
+      ? choices?.catalog.nativeHooks[nativeHooksAgent]
+      : undefined
+  const readNativeHooks = React.useCallback(async () => nativeHooksNow, [nativeHooksNow])
   const attachments = useFileAttachments(chat, attachmentResources)
   const uploads = useAttachmentUploads(chat, attachmentResources, digest)
   const folderDrop = useFolderDrop(
@@ -633,6 +641,7 @@ export function App({
               rename={tabDetails.rename}
               onClose={() => setTabDetails(null)}
               onRename={(title) => chat.rename(tabDetails.id, title)}
+              readNativeHooks={readNativeHooks}
             />
           )}
           {/* Hidden rather than unmounted while the update or Messages tab is
