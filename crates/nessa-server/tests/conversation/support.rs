@@ -953,8 +953,86 @@ pub(crate) struct MemoryAttachments {
     /// the bytes are read and waits for this before it asks for the record.
     pub(crate) hold_record: Mutex<Option<oneshot::Receiver<()>>>,
     pub(crate) record_entered: Notify,
+    /// The files a fetch reads back, by their SHA-256 in lowercase hex, and
+    /// whose conversation each is.
+    pub(crate) files: Mutex<Vec<(ConversationId, String, Vec<u8>)>>,
+    /// Answers the next ranges give before any is read, in order.
+    pub(crate) range_errors: Mutex<VecDeque<crate::conversation::application::HeldRangeError>>,
+    /// Every range read: whose, and from where.
+    pub(crate) ranges: Mutex<Vec<(String, u64)>>,
+    /// When set, every file is let go once this many ranges were read.
+    pub(crate) let_go_after: Mutex<Option<usize>>,
+    /// When set, every range takes this long to read.
+    pub(crate) range_delay: Mutex<Option<std::time::Duration>>,
+    /// Ranges being read now, and the most ever read at once.
+    pub(crate) reading: AtomicUsize,
+    pub(crate) most_reading: AtomicUsize,
+}
+impl MemoryAttachments {
+    fn read_range(
+        &self,
+        range: crate::conversation::application::HeldRange,
+    ) -> Result<Vec<u8>, crate::conversation::application::HeldRangeError> {
+        use crate::conversation::application::HeldRangeError;
+        {
+            if let Some(error) = self.range_errors.lock().unwrap().pop_front() {
+                return Err(error);
+            }
+            {
+                let mut ranges = self.ranges.lock().unwrap();
+                if self
+                    .let_go_after
+                    .lock()
+                    .unwrap()
+                    .is_some_and(|after| ranges.len() >= after)
+                {
+                    self.files.lock().unwrap().clear();
+                }
+                ranges.push((range.principal_id.clone(), range.offset));
+            }
+            let digest = range.file.digest().to_hex();
+            let files = self.files.lock().unwrap();
+            let (_, _, bytes) = files
+                .iter()
+                .find(|(conversation, held, bytes)| {
+                    *conversation == range.conversation_id
+                        && *held == digest
+                        && bytes.len() as u64 == range.file.size()
+                })
+                .ok_or(HeldRangeError::NotHeld)?;
+            let start = usize::try_from(range.offset).map_err(|_| HeldRangeError::Unavailable)?;
+            if start >= bytes.len() || range.max_bytes == 0 {
+                return Err(HeldRangeError::Unavailable);
+            }
+            let end = bytes.len().min(start + range.max_bytes.min(32 * 1024));
+            Ok(bytes[start..end].to_vec())
+        }
+    }
 }
 impl ConversationAttachments for MemoryAttachments {
+    fn read_held(
+        &self,
+        range: crate::conversation::application::HeldRange,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<Vec<u8>, crate::conversation::application::HeldRangeError>,
+                > + Send
+                + '_,
+        >,
+    > {
+        Box::pin(async move {
+            let now = self.reading.fetch_add(1, Ordering::SeqCst) + 1;
+            self.most_reading.fetch_max(now, Ordering::SeqCst);
+            let delay = *self.range_delay.lock().unwrap();
+            if let Some(delay) = delay {
+                tokio::time::sleep(delay).await;
+            }
+            let read = self.read_range(range);
+            self.reading.fetch_sub(1, Ordering::SeqCst);
+            read
+        })
+    }
     fn holds<'a>(
         &'a self,
         organization_id: &'a OrganizationId,

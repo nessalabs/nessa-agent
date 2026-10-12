@@ -9,6 +9,11 @@
 //! (row S7).
 //!
 //! Every batch is admitted by [`authorize_batch`] and nothing else.
+//!
+//! The agent catalog (`agents.subscribe`) is followed the same way, with one
+//! wake source: the paired environments' count of connection changes
+//! (`PeerEnvironments::connections`). Its batch is the catalog `agents.list`
+//! answers, read again; nothing of a conversation is read or watched for it.
 
 use super::delivery::{Deadline, Outgoing, SubscriptionDeliveries};
 use crate::conversation::application::{
@@ -49,7 +54,7 @@ pub(super) const DELIVERY_TIMEOUT: Duration =
     Duration::from_millis(SUBSCRIPTION_DELIVERY_TIMEOUT_MS);
 
 /// Room an event's envelope takes beside its payload, measured on the
-/// largest the writer frames: the longer of the two frame names, and the
+/// largest the writer frames: the longest of the frame names, and the
 /// largest sequence and state version. The frame bound the writer checks
 /// (`ordinary_text` in `socket.rs`) is on the whole text, so a payload
 /// `fits` admits is never refused there (row S22).
@@ -59,6 +64,7 @@ fn envelope_bytes() -> usize {
         [
             product_event::CONVERSATION_VIEW,
             product_event::CONVERSATION_LISTED,
+            product_event::AGENTS_LISTED,
         ]
         .into_iter()
         .map(|name| {
@@ -71,7 +77,7 @@ fn envelope_bytes() -> usize {
                 - "null".len()
         })
         .max()
-        .expect("two names")
+        .expect("three names")
     })
 }
 
@@ -128,6 +134,9 @@ pub(super) enum Target {
     List {
         archived: bool,
     },
+    /// The agent catalog, read again each time a paired environment
+    /// connects, disconnects or is revoked.
+    Agents,
 }
 
 impl Target {
@@ -143,6 +152,9 @@ impl Target {
                 },
             ) => conversation == other,
             (Self::List { archived }, Self::List { archived: other }) => archived == other,
+            // One catalog, so one subscription to it on a connection: this is
+            // its per-connection bound (`a_second_agent_catalog_subscription_is_a_duplicate`).
+            (Self::Agents, Self::Agents) => true,
             _ => false,
         }
     }
@@ -151,15 +163,28 @@ impl Target {
         match self {
             Self::View { .. } => product_method::CONVERSATION_SUBSCRIBE,
             Self::List { .. } => product_method::CONVERSATION_SUBSCRIBE_LIST,
+            Self::Agents => product_method::AGENTS_SUBSCRIBE,
+        }
+    }
+
+    /// The method that stops a subscription to this: the one beside the
+    /// method that made it, which asks the same grant.
+    pub fn stopped_by(&self) -> &'static str {
+        match self {
+            Self::View { .. } | Self::List { .. } => product_method::CONVERSATION_UNSUBSCRIBE,
+            Self::Agents => product_method::AGENTS_UNSUBSCRIBE,
         }
     }
 }
 
 /// Everything a change can come from, registered before the first read.
+/// A source a target does not follow is `None`, and never wakes it.
 struct Sources {
-    records: CommittedChangeWatch,
+    records: Option<CommittedChangeWatch>,
     catalogue: Option<CatalogueChangeWatch>,
     live: Option<watch::Receiver<u64>>,
+    /// The paired environments' connection changes, for the agent catalog.
+    environments: Option<watch::Receiver<u64>>,
 }
 
 enum Wake {
@@ -173,34 +198,36 @@ enum Wake {
 impl Sources {
     fn register(
         state: &ProductRouteState,
-        service: &ConversationService,
+        service: Option<&ConversationService>,
         session: &AuthenticatedSession,
         target: &Target,
     ) -> Result<Self, String> {
-        let unavailable = || ConversationError::Unavailable;
-        let records = state
-            .record_watches
-            .as_ref()
-            .ok_or_else(|| code_of(&unavailable()))?;
+        let unavailable = || code_of(&ConversationError::Unavailable);
+        let records = || state.record_watches.as_ref().ok_or_else(unavailable);
         let capacity = |error: ChangeWatchError| match error {
             ChangeWatchError::Capacity => ConversationSubscriptionErrorCode::SubscriptionCapacity
                 .as_str()
                 .to_owned(),
-            ChangeWatchError::Closed => code_of(&unavailable()),
+            ChangeWatchError::Closed => unavailable(),
         };
         Ok(match target {
             Target::View { conversation, .. } => Self {
-                records: records.watch(conversation).map_err(capacity)?,
+                records: Some(records()?.watch(conversation).map_err(capacity)?),
                 catalogue: None,
                 // A view also shows what is live and not a record.
-                live: Some(service.live_changes(conversation)),
+                live: Some(
+                    service
+                        .ok_or_else(not_configured)?
+                        .live_changes(conversation),
+                ),
+                environments: None,
             },
             Target::List { .. } => {
                 let owner = caller(session, String::new());
                 let catalogue = state
                     .catalogue_watches
                     .as_ref()
-                    .ok_or_else(|| code_of(&unavailable()))?
+                    .ok_or_else(unavailable)?
                     .watch(&owner.organization_id, &owner.principal_id)
                     .map_err(|CatalogueWatchError::Capacity| {
                         ConversationSubscriptionErrorCode::SubscriptionCapacity
@@ -210,11 +237,21 @@ impl Sources {
                 Self {
                     // A list row's `running` follows a turn's commits, which
                     // change no summary (row L2).
-                    records: records.watch_any().map_err(capacity)?,
+                    records: Some(records()?.watch_any().map_err(capacity)?),
                     catalogue: Some(catalogue),
                     live: None,
+                    environments: None,
                 }
             }
+            // Only the paired environments change the catalog after
+            // startup; a gateway that pairs none has no source, and the
+            // catalog's first frame is its last (row AC1).
+            Target::Agents => Self {
+                records: None,
+                catalogue: None,
+                live: None,
+                environments: state.agents_catalog_changes(),
+            },
         })
     }
 
@@ -236,6 +273,12 @@ impl Sources {
     }
 
     async fn changed(&mut self) -> Wake {
+        let records = async {
+            match self.records.as_mut() {
+                Some(records) => records.changed().await,
+                None => std::future::pending().await,
+            }
+        };
         let catalogue = async {
             match self.catalogue.as_mut() {
                 Some(catalogue) => catalogue.changed().await,
@@ -248,8 +291,14 @@ impl Sources {
                 None => std::future::pending().await,
             }
         };
+        let environments = async {
+            match self.environments.as_mut() {
+                Some(environments) => environments.changed().await,
+                None => std::future::pending().await,
+            }
+        };
         tokio::select! {
-            state = self.records.changed() => match state {
+            state = records => match state {
                 ChangeWatchState::Dirty => Wake::Changed,
                 ChangeWatchState::Closed => Wake::Closed,
             },
@@ -258,6 +307,10 @@ impl Sources {
                 CatalogueWatchState::Closed | CatalogueWatchState::NotificationFailed => Wake::Closed,
             },
             changed = live => match changed {
+                Ok(()) => Wake::Changed,
+                Err(_) => Wake::Closed,
+            },
+            changed = environments => match changed {
                 Ok(()) => Wake::Changed,
                 Err(_) => Wake::Closed,
             },
@@ -272,7 +325,8 @@ impl Sources {
 /// asks the read grant for its conversation here, and a list is refused to a
 /// paired device here (`read_access`, rows G12 and G13), so a device's
 /// subscribe that may not read takes no watch and a revoke ends the
-/// subscription before its next read.
+/// subscription before its next read. The agent catalog asks only what
+/// `agents.list` asks, its method's grant (row AC6).
 pub(super) async fn authorize_batch(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
@@ -284,6 +338,7 @@ pub(super) async fn authorize_batch(
             read_access::admit_conversation(state, &current, conversation).await?
         }
         Target::List { .. } => read_access::admit_list(state, &current).await?,
+        Target::Agents => {}
     }
     Ok(current)
 }
@@ -298,10 +353,20 @@ enum Batch {
         head: u64,
     },
     List(ConversationListResult),
+    /// The catalog as `agents.list` answers it.
+    Agents(Value),
 }
 
 fn code_of(error: &ConversationError) -> String {
     error_code(error).as_str().to_owned()
+}
+
+/// What a subscription is refused when what it follows is not composed on
+/// this gateway, as the one-shot read is refused.
+fn not_configured() -> String {
+    ConversationErrorCode::ConversationsNotConfigured
+        .as_str()
+        .to_owned()
 }
 
 /// How long to wait before reading again after `error` on attempt `attempt`
@@ -339,7 +404,7 @@ async fn by_reply<T>(
 
 async fn read_batch(
     state: &ProductRouteState,
-    service: &ConversationService,
+    service: Option<&ConversationService>,
     session: &AuthenticatedSession,
     target: &Target,
     request_id: &str,
@@ -369,8 +434,19 @@ async fn read_batch(
                 None => return Err(code.to_owned()),
             },
         };
-        let read = match target {
-            Target::View { conversation, .. } => {
+        let read = match (target, service) {
+            (Target::Agents, _) => {
+                // Read under the permit, as `agents.list` is: one change
+                // wakes every follower at once.
+                let catalog = state.agents_catalog_now();
+                drop(permit);
+                return catalog.map(Batch::Agents).ok_or_else(not_configured);
+            }
+            (_, None) => {
+                drop(permit);
+                return Err(not_configured());
+            }
+            (Target::View { conversation, .. }, Some(service)) => {
                 // A follower opens nothing (row S26).
                 let read = read_view(
                     state,
@@ -390,9 +466,11 @@ async fn read_batch(
                     Err(error) => Err(error),
                 }
             }
-            Target::List { archived } => read_list(service, &current, *archived, request_id)
-                .await
-                .map(Batch::List),
+            (Target::List { archived }, Some(service)) => {
+                read_list(service, &current, *archived, request_id)
+                    .await
+                    .map(Batch::List)
+            }
         };
         drop(permit);
         match read {
@@ -418,7 +496,8 @@ fn cursor_of(cursor: CommittedCursor) -> Cursor {
 /// Everything one subscription task needs, handed over when it is spawned.
 pub(super) struct Run {
     pub state: ProductRouteState,
-    pub service: Arc<ConversationService>,
+    /// `None` for the agent catalog, which reads no conversation.
+    pub service: Option<Arc<ConversationService>>,
     pub session: AuthenticatedSession,
     pub id: String,
     pub request: String,
@@ -439,7 +518,7 @@ impl Run {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         state: ProductRouteState,
-        service: Arc<ConversationService>,
+        service: Option<Arc<ConversationService>>,
         session: AuthenticatedSession,
         id: String,
         request: String,
@@ -481,16 +560,16 @@ struct Sent {
 impl Sent {
     /// Offer a frame and wait until it is written. False when it never will
     /// be: the subscription was ended as lagging (row S10), or the socket went.
-    async fn offer(&mut self, payload: Value, cursor: Option<Cursor>, key: Value) -> bool {
+    async fn offer(
+        &mut self,
+        name: &'static str,
+        payload: Value,
+        cursor: Option<Cursor>,
+        key: Value,
+    ) -> bool {
         let written = self.deliveries.offer(
             &self.id,
-            Outgoing::Event {
-                name: match cursor {
-                    Some(_) => product_event::CONVERSATION_VIEW,
-                    None => product_event::CONVERSATION_LISTED,
-                },
-                payload,
-            },
+            Outgoing::Event { name, payload },
             Deadline::None,
             None,
         );
@@ -573,6 +652,7 @@ impl Sent {
                 .expect("generated payload serializes");
                 let key = view_key(&payload["view"]);
                 Framed::Frame(Frame {
+                    name: product_event::CONVERSATION_VIEW,
                     payload,
                     cursor: Some(cursor),
                     key,
@@ -597,9 +677,28 @@ impl Sent {
                     serde_json::json!([read, self.catalogue])
                 };
                 Framed::Frame(Frame {
+                    name: product_event::CONVERSATION_LISTED,
                     payload,
                     cursor: None,
                     key,
+                    more: false,
+                })
+            }
+            Batch::Agents(catalog) => {
+                // `AgentsListed`, whose catalog is the value `agents.list`
+                // answers; built from that value rather than parsed back
+                // into the generated type, and held to the schema by
+                // `an_agent_catalog_frame_is_the_generated_shape`.
+                let payload = serde_json::json!({
+                    "subscriptionId": self.id,
+                    "catalog": catalog,
+                });
+                Framed::Frame(Frame {
+                    name: product_event::AGENTS_LISTED,
+                    payload,
+                    cursor: None,
+                    // The same catalog read again sends nothing (row AC2).
+                    key: catalog,
                     more: false,
                 })
             }
@@ -608,6 +707,7 @@ impl Sent {
 
     async fn deliver_frame(&mut self, frame: Frame) -> Option<bool> {
         let Frame {
+            name,
             payload,
             cursor,
             key,
@@ -625,7 +725,7 @@ impl Sent {
             self.end(ConversationSubscriptionEndReason::TooLarge, None);
             return None;
         }
-        self.offer(payload, cursor, key).await.then_some(more)
+        self.offer(name, payload, cursor, key).await.then_some(more)
     }
 }
 
@@ -636,6 +736,8 @@ enum Framed {
 }
 
 struct Frame {
+    /// The event it is sent as.
+    name: &'static str,
     payload: Value,
     cursor: Option<Cursor>,
     // What the client would see: the view or the list, without the
@@ -727,13 +829,13 @@ pub(super) async fn run(run: Run) {
     if let Err(code) = authorize_batch(&state, &session, &target).await {
         return refuse(code, slot);
     }
-    let mut sources = match Sources::register(&state, &service, &session, &target) {
+    let mut sources = match Sources::register(&state, service.as_deref(), &session, &target) {
         Ok(sources) => sources,
         Err(code) => return refuse(&code, slot),
     };
     let after = match &target {
         Target::View { after, .. } => after.clone(),
-        Target::List { .. } => None,
+        Target::List { .. } | Target::Agents => None,
     };
     let mut sent = Sent {
         deliveries: deliveries.clone(),
@@ -748,11 +850,11 @@ pub(super) async fn run(run: Run) {
         let batch = if reply.is_some() {
             by_reply(
                 read_by,
-                read_batch(&state, &service, &session, &target, &request),
+                read_batch(&state, service.as_deref(), &session, &target, &request),
             )
             .await
         } else {
-            read_batch(&state, &service, &session, &target, &request).await
+            read_batch(&state, service.as_deref(), &session, &target, &request).await
         };
         let batch = match (batch, reply.take()) {
             (Ok(batch), None) => batch,
@@ -926,6 +1028,7 @@ mod tests {
         let mut sent = sent(&deliveries);
         let view = Value::from("x".repeat(MAX_PAYLOAD_BYTES as usize));
         let frame = Frame {
+            name: product_event::CONVERSATION_VIEW,
             payload: serde_json::json!({ "subscriptionId": "1", "view": view.clone() }),
             cursor: Some(Cursor {
                 incarnation: "i".into(),
@@ -949,6 +1052,7 @@ mod tests {
         for name in [
             product_event::CONVERSATION_VIEW,
             product_event::CONVERSATION_LISTED,
+            product_event::AGENTS_LISTED,
         ] {
             let frame = EventFrame::push(name, &largest, u64::MAX, u64::MAX).unwrap();
             let text = OutgoingMessage::Event(frame).to_wire_text().unwrap();
@@ -970,6 +1074,7 @@ mod tests {
             position: 7,
         });
         let offered = sent.offer(
+            product_event::CONVERSATION_VIEW,
             Value::from(1),
             Some(Cursor {
                 incarnation: "i".into(),
@@ -994,6 +1099,7 @@ mod tests {
         let mut sent = sent(&deliveries);
         {
             let offered = sent.offer(
+                product_event::CONVERSATION_VIEW,
                 Value::from(1),
                 Some(Cursor {
                     incarnation: "i".into(),
@@ -1084,12 +1190,13 @@ mod tests {
         let signal = Arc::new(CatalogueChangeSignal::default());
         let (live, receiver) = watch::channel(0u64);
         let mut sources = Sources {
-            records: changes.watch_any_committed().unwrap(),
+            records: Some(changes.watch_any_committed().unwrap()),
             catalogue: Some(CatalogueChangeWatch::new(
                 signal.clone(),
                 Box::new(Unregistered),
             )),
             live: Some(receiver),
+            environments: None,
         };
         assert!(!sources.drain().await, "nothing waiting");
         live.send(1).unwrap();
@@ -1115,9 +1222,10 @@ mod tests {
         .unwrap();
         let records = changes.watch_any_committed().unwrap();
         let mut sources = Sources {
-            records,
+            records: Some(records),
             catalogue: None,
             live: None,
+            environments: None,
         };
         drop(changes);
         assert!(matches!(sources.changed().await, Wake::Closed));

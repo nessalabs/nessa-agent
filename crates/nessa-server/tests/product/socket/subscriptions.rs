@@ -16,7 +16,8 @@ use conversation_support::{
     TestClock, DELETION_BUDGETS,
 };
 use nessa_protocol::product::generated::{
-    MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS, SUBSCRIPTION_DELIVERY_TIMEOUT_MS,
+    AgentsListResult, AgentsListed, MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS,
+    SUBSCRIPTION_DELIVERY_TIMEOUT_MS,
 };
 use nessa_sdk::application::agent_execution::sessions::ChangeWatchError;
 use nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId;
@@ -341,6 +342,35 @@ fn grants(authority: &Authority, actions: &[&str]) {
     .unwrap();
 }
 
+/// The agents and SSH hosts a test gateway composes at startup: one agent,
+/// one host.
+fn composed_catalog() -> AgentsListResult {
+    serde_json::from_value(json!({
+        "environments": ["build.example"],
+        "agents": [{
+            "agent": "claude",
+            "defaultModel": "test",
+            "models": [{
+                "modelId": "test",
+                "displayName": "Test model",
+                "maxContextWindowTokens": 100000,
+                "reasoning": false,
+                "imageInput": false,
+                "approvalModes": [{
+                    "id": "ask",
+                    "name": "Provider asks",
+                    "description": "The provider requests approval where required."
+                }, {
+                    "id": "auto",
+                    "name": "Automatic",
+                    "description": "The provider decides."
+                }]
+            }]
+        }]
+    }))
+    .unwrap()
+}
+
 impl SubscriptionFixture {
     async fn new() -> Self {
         let directory = tempfile::tempdir().unwrap();
@@ -369,32 +399,7 @@ impl SubscriptionFixture {
                 Arc::new(NessaRecordWatches::new(storage.clone())),
                 metadata.clone(),
             )
-            .with_agents_catalog(
-                serde_json::from_value(json!({
-                    "environments": [],
-                    "agents": [{
-                        "agent": "claude",
-                        "defaultModel": "test",
-                        "models": [{
-                            "modelId": "test",
-                            "displayName": "Test model",
-                            "maxContextWindowTokens": 100000,
-                            "reasoning": false,
-                            "imageInput": false,
-                            "approvalModes": [{
-                                "id": "ask",
-                                "name": "Provider asks",
-                                "description": "The provider requests approval where required."
-                            }, {
-                                "id": "auto",
-                                "name": "Automatic",
-                                "description": "The provider decides."
-                            }]
-                        }]
-                    }]
-                }))
-                .unwrap(),
-            );
+            .with_agents_catalog(composed_catalog());
         let session = authenticate(&state).await;
         let mut fixture = Self {
             state,
@@ -2296,4 +2301,336 @@ async fn retained_stopping_publication_refuses_wire_and_subscription_until_clean
         client.close().await;
         fixture.service.shutdown().await.unwrap();
     }
+}
+
+/// A gateway whose paired environments the test connects and disconnects,
+/// standing in for `PeerEnvironments`: the names it says are connected, and
+/// its count of changes, moved after each change as a connection admitted,
+/// ended or revoked moves it. Composed beside a conversation service, so
+/// the conversation catalogue's head and list can be watched not to move.
+struct CatalogFixture {
+    inner: SubscriptionFixture,
+    connected: Arc<Mutex<Vec<String>>>,
+    changes: tokio::sync::watch::Sender<u64>,
+}
+
+impl CatalogFixture {
+    async fn new() -> Self {
+        let mut inner = SubscriptionFixture::new().await;
+        let connected = Arc::new(Mutex::new(Vec::new()));
+        let changes = tokio::sync::watch::Sender::new(0);
+        let names = connected.clone();
+        inner.state = inner
+            .state
+            .with_connected_environments(crate::product::ConnectedEnvironments {
+                names: Arc::new(move || names.lock().unwrap().clone()),
+                changes: changes.subscribe(),
+            });
+        Self {
+            inner,
+            connected,
+            changes,
+        }
+    }
+
+    /// `peer` connects: the list says so, then the count moves.
+    fn connects(&self, peer: &str) {
+        self.connected.lock().unwrap().push(peer.to_owned());
+        self.moved();
+    }
+
+    /// `peer`'s connection ends, or is revoked: the list no longer names
+    /// it, then the count moves.
+    fn goes(&self, peer: &str) {
+        self.connected.lock().unwrap().retain(|name| name != peer);
+        self.moved();
+    }
+
+    fn moved(&self) {
+        self.changes.send_modify(|count| *count += 1);
+    }
+
+    fn connect(&self) -> Client {
+        self.inner.connect()
+    }
+
+    /// Subscribe to the agent catalog; its id and its first frame.
+    async fn subscribe(&self, client: &mut Client, request: &str) -> (String, Value) {
+        client.send(request, "agents.subscribe", json!({}));
+        let (reply, before) = client.reply(request).await;
+        assert_eq!(reply["ok"], true, "{reply}");
+        let id = reply["payload"]["subscriptionId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(
+            before
+                .iter()
+                .all(|frame| frame["payload"]["subscriptionId"] != id.as_str()),
+            "nothing of it before the reply: {before:?}"
+        );
+        let first = client.until(&id, |_| true).await.remove(0);
+        (id, first)
+    }
+}
+
+/// The places a catalog frame names.
+fn places(frame: &Value) -> Vec<String> {
+    assert_eq!(frame["event"], "agents.listed", "{frame}");
+    serde_json::from_value(frame["payload"]["catalog"]["environments"].clone()).unwrap()
+}
+
+fn peer(byte: &str) -> String {
+    format!("peer:{}", byte.repeat(32))
+}
+
+/// Rows AC1 and AC2 (`docs/design/record-subscriptions.md`), I10
+/// (`docs/design/auth/peer-gateways.md`): the catalog is sent after the
+/// reply, then again each time a paired environment connects, disconnects
+/// or is revoked, the same catalog `agents.list` answers then; a change that
+/// leaves it as it was sends nothing.
+#[tokio::test]
+async fn the_agent_catalog_is_sent_again_as_paired_environments_come_and_go() {
+    let fixture = CatalogFixture::new().await;
+    let mut client = fixture.connect();
+    let (id, first) = fixture.subscribe(&mut client, "agents").await;
+    assert_eq!(places(&first), ["build.example"]);
+    let read = fixture.inner.call("agents.list", json!({})).await;
+    assert_eq!(read["payload"], first["payload"]["catalog"]);
+
+    let (e, f) = (peer("ab"), peer("cd"));
+    fixture.connects(&e);
+    let connected = client.until(&id, |_| true).await.remove(0);
+    assert_eq!(places(&connected), ["build.example", e.as_str()]);
+    fixture.connects(&f);
+    let both = client.until(&id, |_| true).await.remove(0);
+    assert_eq!(places(&both), ["build.example", e.as_str(), f.as_str()]);
+    let read = fixture.inner.call("agents.list", json!({})).await;
+    assert_eq!(read["payload"], both["payload"]["catalog"]);
+
+    // A connection that takes the place of another moves the count with
+    // the list as it was.
+    fixture.moved();
+    client.quiet(&id).await;
+
+    fixture.goes(&e);
+    let disconnected = client.until(&id, |_| true).await.remove(0);
+    assert_eq!(places(&disconnected), ["build.example", f.as_str()]);
+    fixture.goes(&f);
+    let revoked = client.until(&id, |_| true).await.remove(0);
+    assert_eq!(places(&revoked), ["build.example"]);
+    client.close().await;
+}
+
+/// Row AC1 on a gateway that pairs no environments: nothing changes its
+/// catalog after startup, so the first frame is the only one, and the
+/// subscription stays open until stopped.
+#[tokio::test]
+async fn a_gateway_pairing_no_environments_sends_its_catalog_once() {
+    let fixture = SubscriptionFixture::new().await;
+    let mut client = fixture.connect();
+    client.send("agents", "agents.subscribe", json!({}));
+    let (reply, _) = client.reply("agents").await;
+    let id = reply["payload"]["subscriptionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(places(&client.until(&id, |_| true).await[0]), ["build.example"]);
+    client.quiet(&id).await;
+    client.send(
+        "stop",
+        "agents.unsubscribe",
+        json!({"subscriptionId": id}),
+    );
+    assert_eq!(client.reply("stop").await.0["ok"], true);
+    client.close().await;
+}
+
+/// Row AC3: changes while a frame waits for the writer are read once, after
+/// it is written, as the catalog stands then: at most one more frame, never
+/// one per change.
+#[tokio::test]
+async fn changes_while_a_catalog_frame_waits_collapse_into_one_frame() {
+    let fixture = CatalogFixture::new().await;
+    let mut client = fixture.connect();
+    let (id, _) = fixture.subscribe(&mut client, "agents").await;
+    fixture.inner.stall(&mut client).await;
+    let names: Vec<String> = ["01", "02", "03", "04", "05", "06"]
+        .into_iter()
+        .map(peer)
+        .collect();
+    for name in &names {
+        fixture.connects(name);
+    }
+    client.gate.open();
+    let mut expected = vec!["build.example".to_owned()];
+    expected.extend(names.iter().cloned());
+    let frames = client.until(&id, |frame| places(frame) == expected).await;
+    assert!(frames.len() <= 2, "{frames:?}");
+    client.quiet(&id).await;
+    client.close().await;
+}
+
+/// Row AC4 (row H9's fact kept apart): an environment connecting and going
+/// moves neither the conversation catalogue's head nor its list.
+#[tokio::test]
+async fn paired_environments_coming_and_going_never_move_the_conversation_catalogue() {
+    let fixture = CatalogFixture::new().await;
+    let owner = caller(&fixture.inner.session, String::new());
+    let head = || async {
+        use crate::conversation::application::ConversationCatalogue;
+        fixture
+            .inner
+            .metadata
+            .head(
+                &owner.organization_id,
+                &owner.principal_id,
+                &crate::conversation::application::Reader::Owner,
+            )
+            .await
+            .unwrap()
+            .revision
+    };
+    let before = head().await;
+    let mut client = fixture.connect();
+    client.send("list", "conversation.subscribeList", json!({}));
+    let (reply, _) = client.reply("list").await;
+    let list = reply["payload"]["subscriptionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    client.until(&list, |_| true).await;
+    let (agents, _) = fixture.subscribe(&mut client, "agents").await;
+    let e = peer("ab");
+    fixture.connects(&e);
+    client.until(&agents, |frame| places(frame).contains(&e)).await;
+    fixture.goes(&e);
+    client.until(&agents, |frame| !places(frame).contains(&e)).await;
+    client.quiet(&list).await;
+    assert_eq!(head().await, before);
+    client.close().await;
+}
+
+/// Row AC5: the agent catalog is one target, so a connection follows it
+/// once; what the subscription held goes with its socket.
+#[tokio::test]
+async fn a_second_agent_catalog_subscription_is_a_duplicate() {
+    let fixture = CatalogFixture::new().await;
+    // What the gateway's own state holds; the socket's copies of that state
+    // and the subscription's wake source are counted on top while it is open.
+    let held = fixture.changes.receiver_count();
+    let mut client = fixture.connect();
+    fixture.subscribe(&mut client, "agents").await;
+    client.send("again", "agents.subscribe", json!({}));
+    let (reply, _) = client.reply("again").await;
+    assert_eq!(reply["error"]["code"], "subscription_duplicate", "{reply}");
+    client.close().await;
+    timeout(EXPECTED, async {
+        while fixture.changes.receiver_count() != held {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the subscription's wake source goes with its socket");
+}
+
+/// Row AC6: following the agent catalog asks what `agents.list` asks, the
+/// gateway's read grant, and nothing a paired reader's credential holds; a
+/// grant lost while it is followed ends it before its next read.
+#[tokio::test]
+async fn following_the_agent_catalog_is_admitted_as_reading_it_is() {
+    let fixture = CatalogFixture::new().await;
+    for (actions, allowed) in [
+        (&["server.read"][..], true),
+        (&["conversation.write"][..], false),
+        // What a paired reader's credential holds.
+        (&["conversation.read"][..], false),
+    ] {
+        grants(&fixture.inner.authority, actions);
+        let read = fixture.inner.call("agents.list", json!({})).await;
+        let mut client = fixture.connect();
+        client.send("agents", "agents.subscribe", json!({}));
+        let (reply, _) = client.reply("agents").await;
+        assert_eq!(read["ok"], allowed, "{actions:?} {read}");
+        assert_eq!(reply["ok"], allowed, "{actions:?} {reply}");
+        if !allowed {
+            assert_eq!(read["error"]["code"], "forbidden");
+            assert_eq!(reply["error"]["code"], "forbidden");
+        }
+        client.close().await;
+    }
+    grants(&fixture.inner.authority, &["server.read"]);
+    let mut client = fixture.connect();
+    let (id, _) = fixture.subscribe(&mut client, "agents").await;
+    grants(&fixture.inner.authority, &["conversation.write"]);
+    fixture.connects(&peer("ab"));
+    let ended = client.until(&id, |_| true).await.remove(0);
+    assert_eq!(ended["event"], "conversation.subscriptionEnded", "{ended}");
+    assert_eq!(ended["payload"]["reason"], "refused");
+    assert_eq!(ended["payload"]["code"], "forbidden");
+    client.close().await;
+}
+
+/// Row AC7: `agents.unsubscribe` stops the catalog's subscription, asking
+/// the same grant, and nothing of it follows the reply; each unsubscribe
+/// stops only what the subscribe beside it made.
+#[tokio::test]
+async fn each_unsubscribe_stops_only_its_own_kind() {
+    let fixture = CatalogFixture::new().await;
+    let mut client = fixture.connect();
+    let (agents, _) = fixture.subscribe(&mut client, "agents").await;
+    client.send("list", "conversation.subscribeList", json!({}));
+    let (reply, _) = client.reply("list").await;
+    let list = reply["payload"]["subscriptionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    for (method, id) in [
+        ("conversation.unsubscribe", &agents),
+        ("agents.unsubscribe", &list),
+    ] {
+        client.send("wrong", method, json!({"subscriptionId": id}));
+        let (reply, _) = client.reply("wrong").await;
+        assert_eq!(reply["error"]["code"], "unknown_subscription", "{method}");
+    }
+    // A credential that may read the catalog and write nothing stops it.
+    grants(&fixture.inner.authority, &["server.read"]);
+    client.send(
+        "stop",
+        "agents.unsubscribe",
+        json!({"subscriptionId": agents}),
+    );
+    let (reply, _) = client.reply("stop").await;
+    assert_eq!(reply["payload"]["subscriptionId"], agents.as_str(), "{reply}");
+    fixture.connects(&peer("ab"));
+    client.quiet(&agents).await;
+    client.close().await;
+}
+
+/// Row AC8: the paired environments' change source closing ends the
+/// subscription `source_closed`.
+#[tokio::test]
+async fn the_environments_source_closing_ends_the_catalog_subscription() {
+    let fixture = CatalogFixture::new().await;
+    let mut client = fixture.connect();
+    let (id, _) = fixture.subscribe(&mut client, "agents").await;
+    let CatalogFixture { inner, changes, .. } = fixture;
+    drop(changes);
+    let ended = client.until(&id, |_| true).await.remove(0);
+    assert_eq!(ended["event"], "conversation.subscriptionEnded", "{ended}");
+    assert_eq!(ended["payload"]["reason"], "source_closed");
+    client.close().await;
+    drop(inner);
+}
+
+/// Row AC1: a catalog frame is the generated `AgentsListed`.
+#[tokio::test]
+async fn an_agent_catalog_frame_is_the_generated_shape() {
+    let fixture = CatalogFixture::new().await;
+    let mut client = fixture.connect();
+    let (id, first) = fixture.subscribe(&mut client, "agents").await;
+    let frame: AgentsListed = serde_json::from_value(first["payload"].clone()).unwrap();
+    assert_eq!(frame.subscription_id, id);
+    assert_eq!(frame.catalog.environments, ["build.example"]);
+    client.close().await;
 }

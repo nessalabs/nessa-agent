@@ -166,18 +166,86 @@ pub const ARTIFACT_READ_RESUMES: u32 = 3;
 
 /// Most one lease may publish and have kept: past either, a file is
 /// refused unread. Rows `artifact.environment_files` and `artifact.environment_bytes`
-/// in `docs/limits.md`.
+/// in `docs/limits.md`. And most one lease's agent may fetch into its
+/// environment: past it, a fetch is refused before the environment is
+/// asked. Row `artifact.fetch_bytes`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ArtifactBudget {
     pub(crate) files: u32,
     pub(crate) bytes: u64,
+    pub(crate) fetch_bytes: u64,
 }
 
 impl ArtifactBudget {
     pub(crate) const LEASE: Self = Self {
         files: 64,
         bytes: 1024 * 1024 * 1024,
+        fetch_bytes: 1024 * 1024 * 1024,
     };
+}
+
+/// The fetches a live conversation's agent asked for under its lease
+/// (`artifacts_fetch`, slice D3b): which tool calls are under way, and how
+/// many bytes each lease's fetches were given. A fetch's size is reserved
+/// before the environment is asked, and given back only once its answer
+/// says it placed nothing; one whose answer never came stays counted.
+#[derive(Default)]
+pub(crate) struct FetchRequests {
+    leases: Mutex<HashMap<LeaseId, Fetched>>,
+}
+
+#[derive(Default)]
+struct Fetched {
+    bytes: u64,
+    calls: std::collections::HashSet<String>,
+}
+
+/// Why a fetch was not taken.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FetchTaken {
+    /// A fetch for the same tool call is under way.
+    Duplicate,
+    /// It would take the lease past its budget.
+    OverBudget,
+}
+
+impl FetchRequests {
+    fn leases(&self) -> std::sync::MutexGuard<'_, HashMap<LeaseId, Fetched>> {
+        self.leases.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Take `call` under `lease`, reserving `size` of `budget` bytes.
+    pub(crate) fn take(
+        &self,
+        lease: &LeaseId,
+        call: &str,
+        size: u64,
+        budget: u64,
+    ) -> Result<(), FetchTaken> {
+        let mut leases = self.leases();
+        let fetched = leases.entry(lease.clone()).or_default();
+        if fetched.calls.contains(call) {
+            return Err(FetchTaken::Duplicate);
+        }
+        let bytes = fetched.bytes.saturating_add(size);
+        if bytes > budget {
+            return Err(FetchTaken::OverBudget);
+        }
+        fetched.bytes = bytes;
+        fetched.calls.insert(call.to_owned());
+        Ok(())
+    }
+
+    /// `call` is over; `placed_nothing` gives its `size` back.
+    pub(crate) fn finish(&self, lease: &LeaseId, call: &str, size: u64, placed_nothing: bool) {
+        let mut leases = self.leases();
+        if let Some(fetched) = leases.get_mut(lease) {
+            fetched.calls.remove(call);
+            if placed_nothing {
+                fetched.bytes = fetched.bytes.saturating_sub(size);
+            }
+        }
+    }
 }
 
 /// What a file the agent asked for came to, once the conversation answered

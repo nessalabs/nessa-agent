@@ -29,6 +29,14 @@
 //!   staged as the lease's publish point stages ──▶ Published{lease, artifact, request, file}
 //!   ──▶ (read, kept, as above) ──▶ Collected{lease, artifact, outcome}
 //!   not staged ──▶ NotPublished{lease, request, reason}
+//! gateway ── Fetch{lease, request, destination, digest, mediaType, size} ──▶ environment
+//!   already exactly there ──▶ Fetched{lease, request, outcome: alreadyPlaced}
+//!   not taken ──▶ FetchRefused{lease, request, reason}
+//!   taken ──▶ FetchAccepted{lease, request, path} (an empty part in its inbox)
+//!     gateway ── sftp write of the part, resumed by its length ──▶ environment
+//!     gateway ── Delivered{lease, request} ──▶ verified, linked in place
+//!       ──▶ Fetched{lease, request, outcome: placed | alreadyPlaced | refused}
+//!     gateway gives up ── Undelivered{lease, request} ──▶ the part let go, unanswered
 //!
 //! a command lease (one bounded command, no harness):
 //! gateway ── GrantCommand{lease, argv, cwd, timeoutMs} ──▶ environment ── Granted{terms} | Refused ──▶ gateway
@@ -94,6 +102,15 @@
 //! gateway knows whose call the file answers. A gateway's ask that is not
 //! staged is answered [`FromEnvironment::NotPublished`] instead.
 //!
+//! A file goes the other way, into the workspace, only when the gateway
+//! asks with [`ToEnvironment::Fetch`], for the agent's own tool call. The
+//! environment answers where in its inbox the bytes are to be written
+//! ([`FromEnvironment::FetchAccepted`]); the gateway writes them there over
+//! the same artifact channel, says [`ToEnvironment::Delivered`], and the
+//! environment checks the part as it is on disk against the size and digest
+//! asked before it links it at the destination, never over anything there.
+//! These frames carry no bytes of it either.
+//!
 //! The hello is read by [`read_hello`], which looks only at its `type`,
 //! `build` and `protocol`: an environment speaking another protocol is
 //! recognised as such whatever else its frames carry, and is refused before
@@ -152,8 +169,15 @@ pub const MAX_OPEN_PUBLISHERS: usize = 16;
 /// Longest artifact name, in bytes: a file name, for people only.
 pub const MAX_ARTIFACT_NAME_BYTES: usize =
     nessa_sdk::application::agent_execution::sessions::ArtifactName::MAX_BYTES;
-/// Longest path of a staged artifact on the environment, in bytes.
-pub const MAX_ARTIFACT_PATH_BYTES: usize = 1024;
+/// Longest path of a staged artifact or a fetch's destination on the
+/// environment, in bytes: the longest a conversation records.
+pub const MAX_ARTIFACT_PATH_BYTES: usize =
+    nessa_sdk::application::agent_execution::sessions::EnvironmentPath::MAX_BYTES;
+/// Most fetches one lease may have taken and not yet answered on an
+/// environment; the environment refuses another `busy` until one is. The
+/// most a conversation records under way under one lease.
+pub const MAX_FETCHES_IN_FLIGHT: usize =
+    nessa_sdk::application::agent_execution::sessions::CurrentLease::MAX_ASKED_FETCHES;
 /// Most [`ToEnvironment::ReadArtifact`]s of one artifact an environment
 /// holds at once, each from its arrival until its answer is handed to the
 /// environment's writer; one more is refused `busy`. So a gateway that
@@ -422,6 +446,60 @@ pub enum PublishRefusal {
     LeaseEnded,
 }
 
+/// Why an environment did not place a file the gateway asked it to fetch:
+/// nothing is at the destination that was not there before.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FetchRefusal {
+    /// This environment takes no files from the gateway: its host's
+    /// `envServe.artifactsIn` is off.
+    Unavailable,
+    /// The destination is not a name inside the workspace once every link
+    /// in its directory is followed, or its last part is a link.
+    OutsideWorkspace,
+    /// The destination's directory does not exist.
+    NoDirectory,
+    /// Something other than exactly this file is at the destination.
+    Occupied,
+    /// Empty, or larger than [`MAX_ARTIFACT_BYTES`].
+    Size,
+    /// A digest, media type or destination that cannot be read.
+    Invalid,
+    /// This lease already has as many fetches in flight as it may
+    /// ([`MAX_FETCHES_IN_FLIGHT`]).
+    Busy,
+    /// The bytes delivered are not the file asked for: another size or
+    /// another digest.
+    Mismatch,
+    /// Its part could not be made, read or linked in place.
+    PlacingFailed,
+    /// The fetch could not be recorded in the environment's audit.
+    AuditUnavailable,
+    /// The lease ended, or is not held there, before the file was placed.
+    LeaseEnded,
+}
+
+/// What became of a file the gateway asked an environment to fetch.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "outcome", rename_all = "camelCase", deny_unknown_fields)]
+pub enum FetchOutcome {
+    /// Verified and linked at the destination, which held nothing before.
+    Placed {
+        /// The destination, absolute, as the environment resolved it.
+        path: String,
+    },
+    /// The destination already was exactly this file: nothing changed.
+    AlreadyPlaced {
+        /// The destination, absolute, as the environment resolved it.
+        path: String,
+    },
+    /// Not placed.
+    Refused {
+        /// Why.
+        reason: FetchRefusal,
+    },
+}
+
 /// Why an environment did not answer a [`ToEnvironment::ReadArtifact`] with
 /// the file's bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -572,6 +650,41 @@ pub enum ToEnvironment {
         /// the file's extension.
         media_type: Option<String>,
     },
+    /// Fetch a file the conversation holds into the workspace at
+    /// `destination`, for the agent's own tool call: answered
+    /// [`FromEnvironment::FetchAccepted`] with where to write it,
+    /// [`FromEnvironment::FetchRefused`], or, when the destination already
+    /// is exactly this file, [`FromEnvironment::Fetched`] at once.
+    Fetch {
+        /// The lease's id.
+        lease: String,
+        /// The gateway's name for this ask: the agent's tool call.
+        request: String,
+        /// Where it goes: absolute, or relative to the workspace.
+        destination: String,
+        /// Its SHA-256, lowercase hex.
+        digest: String,
+        /// Its media type, lowercase `type/subtype`.
+        media_type: String,
+        /// Its length in bytes.
+        size: u64,
+    },
+    /// Every byte of a fetch the environment took is written to the part
+    /// it named: check it and place it.
+    Delivered {
+        /// The lease's id.
+        lease: String,
+        /// The fetch's request.
+        request: String,
+    },
+    /// The gateway gives up on a fetch the environment took: nothing more
+    /// is written, and nothing is placed. Not answered.
+    Undelivered {
+        /// The lease's id.
+        lease: String,
+        /// The fetch's request.
+        request: String,
+    },
     /// Send at most `length` bytes, at most [`MAX_DATA_BYTES`], of the
     /// lease's published `artifact`'s staged copy from `offset`: answered
     /// [`FromEnvironment::ArtifactRead`] or
@@ -710,6 +823,34 @@ pub enum FromEnvironment {
         /// Why.
         reason: PublishRefusal,
     },
+    /// A fetch is taken: its bytes are to be written to `path`, an empty
+    /// part in the environment's inbox, then [`ToEnvironment::Delivered`].
+    FetchAccepted {
+        /// The lease's id.
+        lease: String,
+        /// The fetch's request.
+        request: String,
+        /// Where its bytes go, absolute, on the environment.
+        path: String,
+    },
+    /// A fetch is not taken: nothing is to be written.
+    FetchRefused {
+        /// The lease's id.
+        lease: String,
+        /// The fetch's request.
+        request: String,
+        /// Why.
+        reason: FetchRefusal,
+    },
+    /// What became of a fetch: the last word on it.
+    Fetched {
+        /// The lease's id.
+        lease: String,
+        /// The fetch's request.
+        request: String,
+        /// Placed, already placed, or why not.
+        outcome: FetchOutcome,
+    },
     /// A command lease's command ended, and the lease with it.
     Ran {
         /// The command lease's id.
@@ -767,6 +908,9 @@ impl FromEnvironment {
             | Self::Accounted { lease, .. }
             | Self::Published { lease, .. }
             | Self::NotPublished { lease, .. }
+            | Self::FetchAccepted { lease, .. }
+            | Self::FetchRefused { lease, .. }
+            | Self::Fetched { lease, .. }
             | Self::ArtifactRead { lease, .. }
             | Self::ArtifactNotRead { lease, .. }
             | Self::Ran { lease, .. } => Some(lease),
@@ -788,6 +932,9 @@ impl ToEnvironment {
             | Self::Account { lease }
             | Self::Collected { lease, .. }
             | Self::Publish { lease, .. }
+            | Self::Fetch { lease, .. }
+            | Self::Delivered { lease, .. }
+            | Self::Undelivered { lease, .. }
             | Self::ReadArtifact { lease, .. }
             | Self::GrantCommand { lease, .. }
             | Self::Run { lease } => Some(lease),

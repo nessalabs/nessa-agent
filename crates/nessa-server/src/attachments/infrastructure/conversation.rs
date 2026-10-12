@@ -1,12 +1,15 @@
 //! The two places this context meets the conversation context, each through
-//! the other side's own port: conversations ask what they hold and let go on
-//! close, and an upload asks who owns a conversation without opening an agent.
+//! the other side's own port: conversations ask what they hold, keep what
+//! an environment published, read back a held file for a fetch, and let go
+//! on close; and an upload asks who owns a conversation without opening an
+//! agent.
 use crate::{
     attachments::{
         application::{
-            AttachmentService, ConversationOwnership, Ownership, OwnershipUnavailable, PortFuture,
-            PublishKept, PublishedFile, ReleaseCause, ReleaseError, ReleaseRequest, UploadBody,
-            UploadError, UploadInterrupted, UploadRejection,
+            AttachmentService, ConversationOwnership, HeldReadError, HeldReads, Ownership,
+            OwnershipUnavailable, PortFuture, PublishKept, PublishedFile, ReleaseCause,
+            ReleaseError, ReleaseRequest, UploadBody, UploadError, UploadInterrupted,
+            UploadRejection,
         },
         domain::{Attachment, Caller, MediaType},
     },
@@ -14,7 +17,7 @@ use crate::{
         application::{
             ArtifactBytes, ArtifactKept, ArtifactReadFailure, AttachmentRelease,
             AttachmentReleaseCause, ConversationAttachments, ConversationError, ConversationFuture,
-            ConversationRepository, PublishedArtifact,
+            ConversationRepository, HeldRange, HeldRangeError, PublishedArtifact,
         },
         domain::ConversationRefusal,
     },
@@ -31,13 +34,15 @@ use std::{
     sync::{Arc, Mutex, PoisonError},
 };
 
-/// What a conversation holds, answered by the attachment service.
+/// What a conversation holds, answered by the attachment service, and its
+/// held files read back by range as a surface reads them.
 pub struct ConversationHolds {
     service: AttachmentService,
+    reads: HeldReads,
 }
 impl ConversationHolds {
-    pub fn new(service: AttachmentService) -> Self {
-        Self { service }
+    pub fn new(service: AttachmentService, reads: HeldReads) -> Self {
+        Self { service, reads }
     }
 }
 impl ConversationAttachments for ConversationHolds {
@@ -141,6 +146,47 @@ impl ConversationAttachments for ConversationHolds {
                     Err(refusal(error, read))
                 }
             }
+        })
+    }
+    fn read_held(
+        &self,
+        range: HeldRange,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, HeldRangeError>> + Send + '_>> {
+        Box::pin(async move {
+            // The file a fetch names is the one its record names: one
+            // attachment, the three facts together.
+            let file = MediaType::parse(range.file.media_type().as_str())
+                .ok()
+                .and_then(|media_type| {
+                    Attachment::new(*range.file.digest(), media_type, range.file.size()).ok()
+                })
+                .ok_or(HeldRangeError::NotHeld)?;
+            // Someone no record could name owns nothing here.
+            let principal =
+                PrincipalId::new(range.principal_id).map_err(|_| HeldRangeError::NotHeld)?;
+            let max_bytes = range.max_bytes.min(HeldReads::MAX_RANGE_BYTES);
+            self.reads
+                .read(
+                    &range.organization_id,
+                    &principal,
+                    &range.conversation_id,
+                    &file,
+                    range.offset,
+                    max_bytes,
+                )
+                .await
+                .map(|bytes| bytes.as_bytes().to_vec())
+                .map_err(|error| match error {
+                    // Not the person's conversation, or not there: it holds
+                    // nothing for them.
+                    HeldReadError::NotHeld
+                    | HeldReadError::ConversationNotFound
+                    | HeldReadError::ConversationDeleted => HeldRangeError::NotHeld,
+                    HeldReadError::Busy => HeldRangeError::Busy,
+                    HeldReadError::InvalidRequest
+                    | HeldReadError::Unavailable
+                    | HeldReadError::OwnershipUnavailable => HeldRangeError::Unavailable,
+                })
         })
     }
 }

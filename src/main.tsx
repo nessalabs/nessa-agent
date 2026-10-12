@@ -59,7 +59,7 @@ const panel = (
           attachmentResources={dependencies.attachments}
           canChoosePaths={dependencies.canChoosePaths}
           digest={dependencies.digest}
-          loadConversationChoices={dependencies.loadConversationChoices}
+          followConversationChoices={dependencies.followConversationChoices}
           agentInstallations={dependencies.agentInstallations}
         />
       </ClockProvider>

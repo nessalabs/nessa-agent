@@ -28,6 +28,7 @@ export {
   type AgentsApi,
   type RecordReadApi,
   type ChangeWatchApi,
+  type AgentsSubscriptionHandlers,
   type ListSubscriptionHandlers,
   type Subscription,
   type SubscriptionApi,

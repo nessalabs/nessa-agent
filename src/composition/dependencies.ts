@@ -1,17 +1,13 @@
 import { gatewayAgentInstallations } from "../onboarding/adapters/agent-installations"
-import { gatewayEffects } from "../conversation/adapters/gateway/effects"
+import { FOLLOW_RETRY_MS, gatewayEffects } from "../conversation/adapters/gateway/effects"
+import { followAgentChoices } from "../panel/adapters/agent-choices"
 import { createAttachmentResources } from "../panel/adapters/attachment-resources"
 import { sha256Digest } from "../panel/adapters/sha256"
 import {
   nativeCredentialSource,
   nativeGatewayEndpointSource,
 } from "../session/adapters/client/credential-source"
-import type {
-  AgentsListResult,
-  CredentialSource,
-  GatewayEndpointSource,
-  NessaClient,
-} from "@nessa/client"
+import type { CredentialSource, GatewayEndpointSource, NessaClient } from "@nessa/client"
 import { loadEnvironment, type Environment } from "../env/environment"
 import { scenarioEffects } from "../conversation/adapters/scenario/effects"
 import { createSessionHandle } from "../session/adapters/client/handle"
@@ -102,15 +98,14 @@ export function createDependencies(
       () => globalThis.crypto.randomUUID(),
       session.subscribe,
     ),
-    loadConversationChoices: async (): Promise<{
-      catalog: AgentsListResult
-      chosenAgent: string | undefined
-    }> => {
-      const current = session.get()
-      if (!current) throw new Error("Gateway is not connected")
-      const [catalog, agent] = await Promise.all([current.agents.list(), chosenAgent()])
-      return { catalog, chosenAgent: agent }
-    },
+    // The pickers' catalog, followed so "Run on" changes as paired
+    // environments come and go; after a failure it is asked again at the
+    // pace the conversation follows keep.
+    followConversationChoices: followAgentChoices(
+      () => session.get(),
+      () => new Promise((resolve) => setTimeout(resolve, FOLLOW_RETRY_MS)),
+      chosenAgent,
+    ),
     session,
     attachments: createAttachmentResources(),
     /**

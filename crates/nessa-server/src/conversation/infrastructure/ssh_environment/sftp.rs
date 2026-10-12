@@ -1,5 +1,6 @@
 //! The least of SFTP version 3 the gateway needs: pulling one published file
-//! off a host, over the `sftp` subsystem of the lease's own `ssh` connection.
+//! off a host, and writing one fetched file's part onto it, over the `sftp`
+//! subsystem of the lease's own `ssh` connection.
 //!
 //! ```text
 //! start: INIT v3 ──▶ VERSION ≥ 3 (its extensions read past) ──▶ a session
@@ -11,6 +12,14 @@
 //!   EOF before `size` ──▶ SizeChanged
 //!   CLOSE ──▶ STATUS                (best effort once the read failed)
 //!   ──▶ the offset reached, whether it finished or not
+//! write_file(path, size, known, source):
+//!   OPEN(path, WRITE) ──▶ HANDLE     NO_SUCH_FILE / PERMISSION_DENIED ──▶ NoSuchFile
+//!   FSTAT ──▶ its length; past `size` ──▶ SizeChanged
+//!   from the lesser of its length and `known` (what earlier writes had
+//!   acknowledged): the source's next bytes ──▶ WRITE at their offset,
+//!   at most 16 unanswered ──▶ STATUS OK each
+//!   CLOSE ──▶ STATUS                (best effort once the write failed)
+//!   ──▶ the offset every byte before which was acknowledged
 //! ```
 //!
 //! Arrows are packets and what follows from them. Every packet's length is
@@ -42,6 +51,7 @@ const FXP_VERSION: u8 = 2;
 const FXP_OPEN: u8 = 3;
 const FXP_CLOSE: u8 = 4;
 const FXP_READ: u8 = 5;
+const FXP_WRITE: u8 = 6;
 const FXP_FSTAT: u8 = 8;
 const FXP_STATUS: u8 = 101;
 const FXP_HANDLE: u8 = 102;
@@ -49,6 +59,7 @@ const FXP_DATA: u8 = 103;
 const FXP_ATTRS: u8 = 105;
 
 const FXF_READ: u32 = 0x0000_0001;
+const FXF_WRITE: u32 = 0x0000_0002;
 const ATTR_SIZE: u32 = 0x0000_0001;
 
 const FX_OK: u32 = 0;
@@ -69,6 +80,9 @@ pub(crate) enum SftpError {
     SizeChanged,
     /// The sink refused bytes: a failure on this side, not the host's.
     Sink(io::ErrorKind),
+    /// The source gave no bytes to write, or not the ones asked for: a
+    /// failure on this side, not the host's.
+    Source,
     /// The host answered something this client cannot accept.
     Protocol(String),
 }
@@ -80,6 +94,7 @@ impl fmt::Display for SftpError {
             Self::NoSuchFile => f.write_str("the host has no such file to read"),
             Self::SizeChanged => f.write_str("the file is not the size it was published at"),
             Self::Sink(kind) => write!(f, "the file's bytes could not be kept: {kind}"),
+            Self::Source => f.write_str("the file's bytes could not be had to write"),
             Self::Protocol(why) => write!(f, "the host broke the sftp protocol: {why}"),
         }
     }
@@ -104,6 +119,25 @@ pub(crate) struct ReadFailure {
     pub(crate) error: SftpError,
     /// Every byte before this offset was given to the sink, in order.
     pub(crate) reached: u64,
+}
+
+/// A write that stopped: why, and how far into the file the host had
+/// acknowledged every byte.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WriteFailure {
+    pub(crate) error: SftpError,
+    /// Every byte before this offset was written and acknowledged.
+    pub(crate) reached: u64,
+}
+
+/// The future one [`ByteSource::read`] answers with.
+pub(crate) type SourceRead<'a> = Pin<Box<dyn Future<Output = io::Result<Vec<u8>>> + Send + 'a>>;
+
+/// Where a file's bytes to write come from, by offset.
+pub(crate) trait ByteSource: Send {
+    /// The bytes from `offset`: at least one and at most `max`, which never
+    /// reaches past the file's end.
+    fn read(&mut self, offset: u64, max: u32) -> SourceRead<'_>;
 }
 
 /// The future one [`ByteSink::write`] answers with.
@@ -194,7 +228,7 @@ where
             return Err(fail(protocol("the resume offset is past the file's size")));
         }
         let handle = self
-            .open(path)
+            .open(path, FXF_READ)
             .await
             .map_err(|error| fail(self.note(error)))?;
         let mut reached = offset;
@@ -211,23 +245,130 @@ where
         }
     }
 
+    /// Write `path`, `size` long, from `source`, resuming where it left
+    /// off: from the lesser of the file's length on the host and `known`,
+    /// the offset an earlier write had every byte before acknowledged. The
+    /// file must be there already: it is never created, nor truncated.
+    ///
+    /// Returns `size`. The file is closed after, and closed best effort
+    /// when the write fails.
+    ///
+    /// # Errors
+    /// A [`WriteFailure`] naming the error and the offset acknowledged.
+    /// After [`SftpError::Unavailable`] a new session may resume from it.
+    pub(crate) async fn write_file(
+        &mut self,
+        path: &str,
+        size: u64,
+        known: u64,
+        source: &mut dyn ByteSource,
+    ) -> Result<u64, WriteFailure> {
+        let fail = |error| WriteFailure {
+            error,
+            reached: known,
+        };
+        if self.broken {
+            return Err(fail(SftpError::Unavailable(io::ErrorKind::BrokenPipe)));
+        }
+        let handle = self
+            // Never created here: a part the host let go is not made again,
+            // and its absence answers `NoSuchFile`.
+            .open(path, FXF_WRITE)
+            .await
+            .map_err(|error| fail(self.note(error)))?;
+        let mut reached = known;
+        let written = self.write_open(&handle, size, &mut reached, source).await;
+        let closed = self.close(&handle, written.is_ok()).await;
+        match (written, closed) {
+            (Err(error), _) | (Ok(()), Err(error)) => Err(WriteFailure {
+                error: self.note(error),
+                reached,
+            }),
+            (Ok(()), Ok(())) => Ok(reached),
+        }
+    }
+
+    async fn write_open(
+        &mut self,
+        handle: &[u8],
+        size: u64,
+        reached: &mut u64,
+        source: &mut dyn ByteSource,
+    ) -> Result<(), SftpError> {
+        let length = self.size(handle).await?;
+        if length > size {
+            return Err(SftpError::SizeChanged);
+        }
+        // What is on the host past what was acknowledged may be any of the
+        // writes that were in flight: it is written again, never trusted.
+        *reached = (*reached).min(length);
+        // Each WRITE asked and not yet answered, by id: its offset.
+        let mut asked: BTreeMap<u32, u64> = BTreeMap::new();
+        let mut frontier = *reached;
+        loop {
+            while asked.len() < MAX_OUTSTANDING && frontier < size {
+                let max = (size - frontier).min(u64::from(READ_CHUNK));
+                let max = u32::try_from(max).unwrap_or(READ_CHUNK);
+                let chunk = source
+                    .read(frontier, max)
+                    .await
+                    .map_err(|_| SftpError::Source)?;
+                let len = chunk.len() as u64;
+                if len == 0 || len > u64::from(max) {
+                    return Err(SftpError::Source);
+                }
+                let id = self.id();
+                let mut write = Packet::new(FXP_WRITE);
+                write.u32(id);
+                write.bytes(handle);
+                write.u64(frontier);
+                write.bytes(&chunk);
+                self.send(write).await?;
+                asked.insert(id, frontier);
+                frontier += len;
+            }
+            if asked.is_empty() {
+                return Ok(());
+            }
+            let (kind, body) = self.receive().await?;
+            let mut fields = Fields::new(&body);
+            let id = fields.u32()?;
+            if asked.remove(&id).is_none() {
+                return Err(protocol(format!("an answer to unknown request {id}")));
+            }
+            match (kind, fields.u32()?) {
+                (FXP_STATUS, FX_OK) => {}
+                (FXP_STATUS, code) => {
+                    return Err(protocol(format!("WRITE answered status {code}")))
+                }
+                (other, _) => return Err(protocol(format!("WRITE answered packet type {other}"))),
+            }
+            // Every byte before the lowest write still unanswered is on
+            // the host.
+            *reached = asked.values().copied().min().unwrap_or(frontier);
+        }
+    }
+
     /// Mark the stream unusable after an error that leaves it unsettled.
     fn note(&mut self, error: SftpError) -> SftpError {
         if matches!(
             error,
-            SftpError::Unavailable(_) | SftpError::Protocol(_) | SftpError::Sink(_)
+            SftpError::Unavailable(_)
+                | SftpError::Protocol(_)
+                | SftpError::Sink(_)
+                | SftpError::Source
         ) {
             self.broken = true;
         }
         error
     }
 
-    async fn open(&mut self, path: &str) -> Result<Vec<u8>, SftpError> {
+    async fn open(&mut self, path: &str, flags: u32) -> Result<Vec<u8>, SftpError> {
         let id = self.id();
         let mut open = Packet::new(FXP_OPEN);
         open.u32(id);
         open.bytes(path.as_bytes());
-        open.u32(FXF_READ);
+        open.u32(flags);
         open.u32(0); // no attributes
         self.send(open).await?;
         let (kind, body) = self.receive().await?;
@@ -359,9 +500,9 @@ where
         Ok(())
     }
 
-    /// Close `handle`. After a clean read its answer must be OK; after a
-    /// failed one it is best effort: skipped when the stream is gone or
-    /// unreadable, and any READs still unanswered are read past.
+    /// Close `handle`. After a clean read or write its answer must be OK;
+    /// after a failed one it is best effort: skipped when the stream is gone
+    /// or unreadable, and any READs or WRITEs still unanswered are read past.
     async fn close(&mut self, handle: &[u8], clean: bool) -> Result<(), SftpError> {
         if self.broken {
             return Ok(());
@@ -372,8 +513,8 @@ where
         close.bytes(handle);
         let answer = async {
             self.send(close).await?;
-            // Each READ asked is answered once, and at most MAX_OUTSTANDING
-            // are; anything more is the host misbehaving.
+            // Each READ or WRITE asked is answered once, and at most
+            // MAX_OUTSTANDING are; anything more is the host misbehaving.
             for _ in 0..=MAX_OUTSTANDING {
                 let (kind, body) = self.receive().await?;
                 let mut fields = Fields::new(&body);

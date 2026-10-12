@@ -91,10 +91,10 @@ createRoot(root).render(
         attachmentResources={resources}
         canChoosePaths
         digest={async () => `sha256:${"ab".repeat(32)}`}
-        loadConversationChoices={async () => ({
-          catalog: { agents: [], environments: [] },
-          chosenAgent: undefined,
-        })}
+        followConversationChoices={(show) => {
+          show({ catalog: { agents: [], environments: [] }, chosenAgent: undefined })
+          return () => undefined
+        }}
       />
     </ClockProvider>
   </Provider>,
