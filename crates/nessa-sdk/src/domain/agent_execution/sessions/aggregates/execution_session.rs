@@ -4,8 +4,8 @@ use crate::domain::agent_execution::{
     executions::{ExecutionId, ExecutionOutcome},
     permissions::{
         PendingPermissions, PermissionAuthority, PermissionCancellationReason,
-        PermissionCancellationReasonView, PermissionId, PermissionOptionId, PermissionRequest,
-        PermissionStateView,
+        PermissionCancellationReasonView, PermissionDecision, PermissionId, PermissionOptionId,
+        PermissionRequest, PermissionStateView,
     },
     sessions::{ExecutionFinish, ExecutionSessionId, SessionClosure},
     tools::{ToolCall, ToolCallId, ToolCallUpdate, ToolObservationUndo},
@@ -498,6 +498,36 @@ impl ExecutionSession {
             .insert(request.id().clone(), request);
         Ok(())
     }
+    /// Decision of a still-pending offered option.
+    ///
+    /// Rejects a closed session, a mismatched execution, an unknown review, or
+    /// an option that was not offered. Does not answer or cancel the review.
+    pub fn pending_option_decision(
+        &self,
+        execution: &ExecutionId,
+        id: &PermissionId,
+        option: &PermissionOptionId,
+    ) -> Result<PermissionDecision, ExecutionError> {
+        if self.is_closed() {
+            return Err(ExecutionError::SessionClosed);
+        }
+        self.check_execution(execution)?;
+        let active = self
+            .active_execution
+            .as_ref()
+            .expect("checked active execution");
+        let pending = active
+            .pending_permissions
+            .lock()
+            .expect("pending permissions");
+        let request = pending.get(id).ok_or(ExecutionError::UnknownPermission)?;
+        request
+            .options()
+            .find(option)
+            .map(|choice| choice.decision().clone())
+            .ok_or(ExecutionError::UnknownPermissionOption)
+    }
+
     /// Resolve the exact execution, review ID, and offered option. Rejects closed or mismatched contexts and stale/unknown choices; returns the answered entity as evidence and retains its ID against replay.
     pub fn answer_permission(
         &mut self,

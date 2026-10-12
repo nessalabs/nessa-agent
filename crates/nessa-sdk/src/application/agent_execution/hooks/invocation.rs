@@ -59,9 +59,10 @@ pub struct HookFailure {
 /// path. [`Refuse`](Self::Refuse) keeps the review and answers it as the hook,
 /// not as the person who submitted the turn. [`Stopped`](Self::Stopped) means
 /// the turn is already stopping, so the review is not published. A hook error,
-/// panic, or timeout is a refusal that continues the turn. Its reason names
-/// the kind: `"hook failed: error"`, `"hook failed: panic"`, or
-/// `"hook failed: timeout"`.
+/// panic, timeout, or a still-running earlier hook is a refusal that continues
+/// the turn. Its reason names the kind: `"hook failed: error"`,
+/// `"hook failed: panic"`, `"hook failed: timeout"`, or `"hook failed: busy"`.
+/// A timeout or a busy refusal has no registration index.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ToolVerdict {
     /// The review proceeds. The hook does not answer it.
@@ -80,19 +81,25 @@ pub enum ToolVerdict {
 /// Why a permission-review hook did not return a verdict of its own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum HookFailureKind {
-    /// The hook returned [`HookError`], or another hook thread was still running.
+    /// The hook returned [`HookError`].
     Error,
     /// The hook panicked.
     Panic,
     /// The hook was still running when [`PRE_TOOL_HOOK_DEADLINE`] elapsed.
     Timeout,
+    /// Another permission-review hook thread for this agent has not returned.
+    Busy,
 }
 
 /// The registration index that produced `verdict`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PermissionReviewDecision {
     /// Zero-based position in this invocation's frozen registration list.
-    pub index: usize,
+    ///
+    /// `None` means the runtime decided before a registered hook returned:
+    /// the deadline elapsed, another hook thread was still running, the
+    /// blocking task failed, or the turn was already stopping.
+    pub index: Option<usize>,
     /// What that hook decided, or a failure standing in for it.
     pub verdict: ToolVerdict,
 }
@@ -111,6 +118,7 @@ impl ToolVerdict {
             HookFailureKind::Error => "error",
             HookFailureKind::Panic => "panic",
             HookFailureKind::Timeout => "timeout",
+            HookFailureKind::Busy => "busy",
         };
         Self::refuse(format!("hook failed: {kind}"), RefusalOutcome::Continue)
     }
@@ -137,10 +145,13 @@ pub trait InvocationHook: Send + Sync {
     /// review and answers it according to [`RefusalOutcome`], attributed to the
     /// hook rather than the person who submitted the turn. [`Err`] is a hook
     /// failure: the review is kept and answered as deny-and-continue with the
-    /// reason `"hook failed: error"`. The borrows last only for this call. The
-    /// hook must return promptly and must not re-enter the session. Do not
-    /// return [`ToolVerdict::Stopped`]; the runner does that when the turn is
-    /// already stopping, and it does not answer the review.
+    /// reason `"hook failed: error"`. A deadline is `"hook failed: timeout"`.
+    /// A review that arrives while an earlier hook thread is still running is
+    /// `"hook failed: busy"` and does not start another thread. The borrows last
+    /// only for this call. The hook must return promptly and must not re-enter
+    /// the session. Do not return [`ToolVerdict::Stopped`]. The runner uses
+    /// that verdict when the turn is already stopping. A hook that returns it
+    /// is deny-and-continue with the reason `"hook failed: error"`.
     fn before_permission_review(
         &self,
         _call: &ProposedToolCall<'_>,
@@ -217,7 +228,7 @@ impl InvocationHooks {
     ) -> PermissionReviewDecision {
         let ExecutionUpdate::PermissionRequested { tool_id, input, .. } = event.update() else {
             return PermissionReviewDecision {
-                index: 0,
+                index: None,
                 verdict: ToolVerdict::Allow,
             };
         };
@@ -226,25 +237,34 @@ impl InvocationHooks {
         for (index, handler) in self.handlers.iter().enumerate() {
             match invoke_verdict(|| handler.before_permission_review(&call, &observations)) {
                 Ok(ToolVerdict::Allow) => {}
+                Ok(ToolVerdict::Stopped) => {
+                    return PermissionReviewDecision {
+                        index: Some(index),
+                        verdict: ToolVerdict::hook_failed(HookFailureKind::Error),
+                    };
+                }
                 Ok(verdict) => {
-                    return PermissionReviewDecision { index, verdict };
+                    return PermissionReviewDecision {
+                        index: Some(index),
+                        verdict,
+                    };
                 }
                 Err(HookError::Panicked) => {
                     return PermissionReviewDecision {
-                        index,
+                        index: Some(index),
                         verdict: ToolVerdict::hook_failed(HookFailureKind::Panic),
                     };
                 }
                 Err(HookError::Failed(_)) => {
                     return PermissionReviewDecision {
-                        index,
+                        index: Some(index),
                         verdict: ToolVerdict::hook_failed(HookFailureKind::Error),
                     };
                 }
             }
         }
         PermissionReviewDecision {
-            index: 0,
+            index: None,
             verdict: ToolVerdict::Allow,
         }
     }

@@ -138,8 +138,9 @@ Every answer requires an immutable application `ApprovalAttribution`:
 - `ApprovalBasis::Explicit` records a direct answer. `Mode` records the effective
   mode name and immutable configuration revision. `Rule` identifies the exact rule
   revision and its original granting actor/action. `Hook` records a
-  permission-review hook: registration index, reason capped at 1024 bytes, and
-  the outcome that was applied. Its actor is `permission-review-hook`, not the
+  permission-review hook: registration index when a hook returned (`null` when
+  the runtime refused), reason capped at 1024 bytes, and the outcome that was
+  applied. Its actor is `permission-review-hook`, not the
   person who submitted the turn. An end-turn the binding cannot perform is
   recorded as continue. Automatic answers use their own
   host actor, preserving the human grantor separately. Hosts retain referenced

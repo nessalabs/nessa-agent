@@ -292,6 +292,18 @@ async fn missing_audit_directory_fails_acknowledgement() {
 fn actor() -> ActionContext {
     ActionContext::new("verified-principal", "verified-credential", "action").unwrap()
 }
+fn deny_options() -> PermissionOptions {
+    PermissionOptions::new(
+        vec![PermissionOption::new(
+            PermissionOptionId::new("deny-once").unwrap(),
+            "Deny",
+            PermissionDecision::new(PermissionEffect::Deny, PermissionScope::request()),
+        )
+        .unwrap()],
+        &PermissionOfferPolicy::once_only(),
+    )
+    .unwrap()
+}
 fn options() -> PermissionOptions {
     PermissionOptions::new(
         vec![PermissionOption::new(
@@ -418,19 +430,19 @@ fn audit_maps_a_hook_refusal_as_the_hook_and_not_the_person() {
                 None,
             ),
             input,
-            options(),
+            deny_options(),
         )
         .unwrap();
     let attribution = ApprovalAttribution::hook(
         &permission,
-        HookRefusal::new(2, "UNIQUE_HOOK_REASON", RefusalOutcome::EndTurn),
+        HookRefusal::new(Some(2), "UNIQUE_HOOK_REASON", RefusalOutcome::EndTurn),
     )
     .unwrap();
     let answer = controller
         .answer_permission(PermissionAnswer {
             execution_id: id,
             id: permission,
-            option_id: PermissionOptionId::new("allow-once").unwrap(),
+            option_id: PermissionOptionId::new("deny-once").unwrap(),
             attribution,
         })
         .unwrap();
@@ -444,6 +456,57 @@ fn audit_maps_a_hook_refusal_as_the_hook_and_not_the_person() {
     assert_eq!(value["actor"]["principalId"], "permission-review-hook");
     assert_eq!(value["actor"]["surfaceId"], "2");
     assert_ne!(value["actor"]["principalId"], actor().principal_id());
+}
+
+#[test]
+fn audit_maps_a_runtime_hook_refusal_with_no_hook_index() {
+    let id = ExecutionId::new("execution").unwrap();
+    let permission = PermissionId::new("permission").unwrap();
+    let session = ExecutionSessionId::new("session").unwrap();
+    let input = ToolReviewInput {
+        name: "Bash".into(),
+        arguments_json: "{}".into(),
+    };
+    let mut controller = ExecutionController::new(session);
+    controller.begin_execution(id.clone()).unwrap();
+    controller
+        .request_permission(
+            &id,
+            permission.clone(),
+            ToolCallUpdate::new(
+                ToolCallId::new("tool").unwrap(),
+                None,
+                None,
+                None,
+                None,
+                None,
+            ),
+            input,
+            deny_options(),
+        )
+        .unwrap();
+    let attribution = ApprovalAttribution::hook(
+        &permission,
+        HookRefusal::new(None, "hook failed: timeout", RefusalOutcome::Continue),
+    )
+    .unwrap();
+    let answer = controller
+        .answer_permission(PermissionAnswer {
+            execution_id: id,
+            id: permission,
+            option_id: PermissionOptionId::new("deny-once").unwrap(),
+            attribution,
+        })
+        .unwrap();
+    let value = record_value(&ExecutionAuditRecord::Answered(
+        PermissionAnswerRecord::new(answer, PermissionAnswerDelivery::Selected),
+    ));
+    assert_eq!(value["basis"]["kind"], "hook");
+    assert!(value["basis"]["index"].is_null());
+    assert_eq!(value["basis"]["reason"], "hook failed: timeout");
+    assert_eq!(value["basis"]["outcome"], "continue");
+    assert_eq!(value["actor"]["principalId"], "permission-review-hook");
+    assert_eq!(value["actor"]["surfaceId"], "runtime");
 }
 
 #[test]

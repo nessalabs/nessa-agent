@@ -459,10 +459,8 @@ fn review_pathological_needle_is_linear() {
     assert!(started.elapsed() < std::time::Duration::from_secs(2));
 }
 
-// ---- reviewer round-2 probes (local only) ----
-
 #[test]
-fn r2_small_thoughts_between_texts_keep_the_copy_bounded() {
+fn small_thoughts_between_texts_keep_the_copy_bounded() {
     let mut events = vec![text("a")];
     for _ in 0..1000 {
         events.push(thought(&"t".repeat(1024)));
@@ -476,7 +474,7 @@ fn r2_small_thoughts_between_texts_keep_the_copy_bounded() {
 }
 
 #[test]
-fn r2_a_provider_tool_id_cannot_hide_an_event_from_the_hook() {
+fn a_provider_tool_id_cannot_hide_an_event_from_the_hook() {
     let spoof = ExecutionEvent::new(
         execution(),
         ExecutionUpdate::Tool(ToolCallUpdate::new(

@@ -38,6 +38,68 @@ fn attribution_requires_actor_and_immutable_decision_evidence() {
     assert_eq!(resolution.attribution().basis(), &ApprovalBasis::Rule(rule));
 }
 
+#[test]
+fn a_hook_refusal_cannot_select_an_allow_option() {
+    let allow = PermissionOption::new(
+        PermissionOptionId::new("allow").unwrap(),
+        "Allow",
+        PermissionDecision::new(PermissionEffect::Allow, PermissionScope::request()),
+    )
+    .unwrap();
+    let deny = PermissionOption::new(
+        PermissionOptionId::new("deny").unwrap(),
+        "Deny",
+        PermissionDecision::new(PermissionEffect::Deny, PermissionScope::request()),
+    )
+    .unwrap();
+    let options =
+        PermissionOptions::new(vec![allow, deny], &PermissionOfferPolicy::once_only()).unwrap();
+    let execution = ExecutionId::new("execution").unwrap();
+    let permission = PermissionId::new("permission").unwrap();
+    let mut controller = ExecutionController::new(ExecutionSessionId::new("fixture").unwrap());
+    controller.begin_execution(execution.clone()).unwrap();
+    let tool = ToolCallUpdate::new(
+        ToolCallId::new("tool").unwrap(),
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
+    controller.tool_event(&execution, tool.clone()).unwrap();
+    controller
+        .request_permission(
+            &execution,
+            permission.clone(),
+            tool,
+            review_input(),
+            options,
+        )
+        .unwrap();
+    let hook = ApprovalAttribution::hook(
+        &permission,
+        HookRefusal::new(Some(0), "no", RefusalOutcome::Continue),
+    )
+    .unwrap();
+    let rejected = controller
+        .answer_permission(PermissionAnswer {
+            execution_id: execution.clone(),
+            id: permission.clone(),
+            option_id: PermissionOptionId::new("allow").unwrap(),
+            attribution: hook.clone(),
+        })
+        .unwrap_err();
+    assert!(matches!(rejected, AgentError::InvalidInput(_)));
+    controller
+        .answer_permission(PermissionAnswer {
+            execution_id: execution,
+            id: permission,
+            option_id: PermissionOptionId::new("deny").unwrap(),
+            attribution: hook,
+        })
+        .expect("the rejected allow left the review pending for its deny option");
+}
+
 #[tokio::test]
 async fn substituted_binding_preserves_each_actors_explicit_mode_or_rule_basis() {
     let human = ActionContext::new("human", "nessa.panel", "grant-request").unwrap();

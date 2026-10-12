@@ -608,7 +608,7 @@ async fn a_continue_refusal_keeps_the_review_and_the_session() {
     {
         let answers = fixture.answers.lock().unwrap();
         let refusal = hook_refusal(&answers[0]);
-        assert_eq!(refusal.index(), 1);
+        assert_eq!(refusal.index(), Some(1));
         assert_eq!(refusal.reason(), "stop this call");
         assert_eq!(refusal.outcome(), &RefusalOutcome::Continue);
         assert_eq!(
@@ -665,7 +665,7 @@ async fn a_continue_without_a_deny_option_does_not_invent_one() {
         assert_eq!(withdrawals[0].actor.request_id(), "review");
         match withdrawals[0].reason.view() {
             PermissionCancellationReasonView::Custom(reason) => {
-                assert_eq!(reason.code(), "hook-refusal");
+                assert_eq!(reason.code(), "hook-refusal.end_turn");
                 assert_eq!(reason.explanation(), "no");
             }
             other => panic!("withdrawal reason was {other:?}"),
@@ -816,6 +816,38 @@ impl InvocationHook for PanicHook {
 }
 
 #[tokio::test]
+async fn a_hook_that_returns_stopped_is_deny_and_continue() {
+    let fixture = agent_with(
+        script(),
+        vec![Arc::new(ReviewHook {
+            seen: Arc::new(Mutex::new(Vec::new())),
+            verdict: ToolVerdict::Stopped,
+        })],
+    )
+    .await;
+    fixture
+        .agent
+        .invoke(request(), close_action())
+        .await
+        .expect("a hook-supplied stop is a deny");
+    assert_eq!(fixture.answered.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.turn_cancels.load(Ordering::SeqCst), 0);
+    {
+        let answers = fixture.answers.lock().unwrap();
+        let refusal = hook_refusal(&answers[0]);
+        assert_eq!(refusal.reason(), "hook failed: error");
+        assert_eq!(refusal.index(), Some(0));
+        assert_eq!(refusal.outcome(), &RefusalOutcome::Continue);
+    }
+    assert!(fixture.closes.lock().unwrap().is_empty());
+    fixture
+        .agent
+        .invoke(second_request(), close_action())
+        .await
+        .expect("the session stays usable");
+}
+
+#[tokio::test]
 async fn close_session_is_a_policy_refusal() {
     let fixture = agent_with(
         script(),
@@ -826,6 +858,23 @@ async fn close_session_is_a_policy_refusal() {
     )
     .await;
     let _ = fixture.agent.invoke(request(), close_action()).await;
+    assert_eq!(fixture.answered.load(Ordering::SeqCst), 0);
+    assert_eq!(fixture.cancelled.load(Ordering::SeqCst), 1);
+    {
+        let withdrawals = fixture.withdrawals.lock().unwrap();
+        assert_eq!(
+            withdrawals[0].actor.principal_id(),
+            "permission-review-hook"
+        );
+        assert_eq!(withdrawals[0].actor.surface_id(), "0");
+        match withdrawals[0].reason.view() {
+            PermissionCancellationReasonView::Custom(reason) => {
+                assert_eq!(reason.code(), "hook-refusal.close_session");
+                assert_eq!(reason.explanation(), "stop the session");
+            }
+            other => panic!("withdrawal reason was {other:?}"),
+        }
+    }
     assert_eq!(
         fixture.closes.lock().unwrap().as_slice(),
         [SessionCloseRequest::PolicyRefusal]
@@ -928,10 +977,8 @@ async fn review_pre_tool_rejection_leaves_the_session_usable() {
         .expect("a hook refusal of one tool left the session unusable");
 }
 
-// ---- reviewer round-2 probes (local only) ----
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn r2_a_hook_past_the_deadline_is_deny_and_continue() {
+async fn a_hook_past_the_deadline_is_deny_and_continue() {
     let entered = Arc::new(AtomicBool::new(false));
     let fixture = agent_with(
         script(),
@@ -957,10 +1004,13 @@ async fn r2_a_hook_past_the_deadline_is_deny_and_continue() {
         elapsed < std::time::Duration::from_millis(3500),
         "turn waited {elapsed:?}"
     );
-    assert_eq!(
-        hook_refusal(&fixture.answers.lock().unwrap()[0]).reason(),
-        "hook failed: timeout"
-    );
+    {
+        let answers = fixture.answers.lock().unwrap();
+        let refusal = hook_refusal(&answers[0]);
+        assert_eq!(refusal.reason(), "hook failed: timeout");
+        assert_eq!(refusal.index(), None);
+        assert_eq!(answers[0].attribution.actor().surface_id(), "runtime");
+    }
     fixture
         .agent
         .invoke(second_request(), close_action())
@@ -969,7 +1019,7 @@ async fn r2_a_hook_past_the_deadline_is_deny_and_continue() {
 }
 
 #[tokio::test]
-async fn r2_a_hook_refusal_leaves_evidence_of_who_refused_and_why() {
+async fn a_hook_refusal_leaves_evidence_of_who_refused_and_why() {
     let fixture = agent_with(
         script(),
         vec![Arc::new(ReviewHook {
@@ -988,7 +1038,7 @@ async fn r2_a_hook_refusal_leaves_evidence_of_who_refused_and_why() {
     let answers = fixture.answers.lock().unwrap();
     let refusal = hook_refusal(&answers[0]);
     assert_eq!(refusal.reason(), "UNIQUE_HOOK_REASON");
-    assert_eq!(refusal.index(), 0);
+    assert_eq!(refusal.index(), Some(0));
     assert_eq!(refusal.outcome(), &RefusalOutcome::Continue);
     assert_eq!(
         answers[0].attribution.actor().principal_id(),
@@ -1083,10 +1133,19 @@ async fn a_continue_without_a_deny_option_stays_open_when_the_binding_cannot_can
     assert_eq!(fixture.answered.load(Ordering::SeqCst), 0);
     assert_eq!(fixture.cancelled.load(Ordering::SeqCst), 1);
     assert_eq!(fixture.turn_cancels.load(Ordering::SeqCst), 0);
-    assert_eq!(
-        fixture.withdrawals.lock().unwrap()[0].actor.principal_id(),
-        "permission-review-hook"
-    );
+    {
+        let withdrawals = fixture.withdrawals.lock().unwrap();
+        assert_eq!(
+            withdrawals[0].actor.principal_id(),
+            "permission-review-hook"
+        );
+        match withdrawals[0].reason.view() {
+            PermissionCancellationReasonView::Custom(reason) => {
+                assert_eq!(reason.code(), "hook-refusal.continue");
+            }
+            other => panic!("withdrawal reason was {other:?}"),
+        }
+    }
     assert!(!review_still_pending(&fixture, "review"));
     assert!(fixture.closes.lock().unwrap().is_empty());
 }
@@ -1112,6 +1171,11 @@ async fn a_failed_hook_denial_ends_the_turn_and_leaves_no_review_pending() {
         .expect("a failed denial ends the turn without closing");
     assert_eq!(fixture.answered.load(Ordering::SeqCst), 1);
     assert_eq!(fixture.turn_cancels.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        hook_refusal(&fixture.answers.lock().unwrap()[0]).outcome(),
+        &RefusalOutcome::Continue,
+        "a failed delivery still records the outcome that was intended"
+    );
     assert!(fixture.closes.lock().unwrap().is_empty());
     assert_eq!(
         fixture.agent.pending_permission(
@@ -1159,6 +1223,8 @@ async fn a_second_review_does_not_start_another_hook_thread() {
     assert_eq!(fixture.answered.load(Ordering::SeqCst), 2);
     let answers = fixture.answers.lock().unwrap();
     assert_eq!(hook_refusal(&answers[0]).reason(), "hook failed: timeout");
-    assert_eq!(hook_refusal(&answers[1]).reason(), "hook failed: error");
-    assert_eq!(hook_refusal(&answers[1]).index(), 0);
+    assert_eq!(hook_refusal(&answers[0]).index(), None);
+    assert_eq!(hook_refusal(&answers[1]).reason(), "hook failed: busy");
+    assert_eq!(hook_refusal(&answers[1]).index(), None);
+    assert_eq!(answers[1].attribution.actor().surface_id(), "runtime");
 }

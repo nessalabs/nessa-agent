@@ -115,7 +115,8 @@ impl Drop for ClearHookGuard {
 /// Stop wins when it is already signaled and returns [`ToolVerdict::Stopped`].
 /// A timeout or a panicked task is a hook failure, which denies the call and
 /// lets the turn continue. A previous hook thread that is still running is
-/// refused immediately, without another blocking thread.
+/// refused immediately as busy, without another blocking thread. A runtime
+/// refusal records no hook index.
 async fn run_pre_tool_hook<Execution>(
     hooks: InvocationHooks,
     event: ExecutionEvent,
@@ -126,13 +127,19 @@ async fn run_pre_tool_hook<Execution>(
 where
     Execution: Future<Output = (ProviderExecutionReply, Option<InvocationCancellationEvent>)>,
 {
+    if *wait.stop_observed {
+        return PermissionReviewDecision {
+            index: None,
+            verdict: ToolVerdict::Stopped,
+        };
+    }
     if running
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
     {
         return PermissionReviewDecision {
-            index: 0,
-            verdict: ToolVerdict::hook_failed(HookFailureKind::Error),
+            index: None,
+            verdict: ToolVerdict::hook_failed(HookFailureKind::Busy),
         };
     }
     let guard = ClearHookGuard(Arc::clone(running));
@@ -149,7 +156,7 @@ where
             biased;
             _ = wait.stop_notice.changed(), if !*wait.stop_observed => {
                 *wait.stop_observed = true;
-                return PermissionReviewDecision { index: 0, verdict: ToolVerdict::Stopped };
+                return PermissionReviewDecision { index: None, verdict: ToolVerdict::Stopped };
             }
             outcome = &mut wait.execution, if !wait.result_known && wait.pending_provider_outcome.is_none() => {
                 *wait.pending_provider_outcome = Some(outcome);
@@ -158,14 +165,14 @@ where
                 return match finished {
                     Ok(decision) => decision,
                     Err(_) => PermissionReviewDecision {
-                        index: 0,
+                        index: None,
                         verdict: ToolVerdict::hook_failed(HookFailureKind::Panic),
                     },
                 };
             }
             _ = &mut deadline => {
                 return PermissionReviewDecision {
-                    index: 0,
+                    index: None,
                     verdict: ToolVerdict::hook_failed(HookFailureKind::Timeout),
                 };
             }
@@ -183,6 +190,31 @@ fn effective_hook_outcome(
         RefusalOutcome::EndTurn if !can_end_turn => RefusalOutcome::Continue,
         RefusalOutcome::Continue if !has_deny && can_end_turn => RefusalOutcome::EndTurn,
         other => other,
+    }
+}
+
+fn hook_attribution(
+    event: &ExecutionEvent,
+    index: Option<usize>,
+    reason: &str,
+    outcome: RefusalOutcome,
+) -> Result<(PermissionId, ApprovalAttribution, String), AgentError> {
+    let ExecutionUpdate::PermissionRequested { id, .. } = event.update() else {
+        return Err(AgentError::Protocol(
+            "permission-review hook refusal has no review".into(),
+        ));
+    };
+    let refusal = HookRefusal::new(index, reason, outcome);
+    let explanation = refusal.reason().to_owned();
+    let attribution = ApprovalAttribution::hook(id, refusal)?;
+    Ok((id.clone(), attribution, explanation))
+}
+
+fn hook_withdrawal_code(outcome: RefusalOutcome) -> &'static str {
+    match outcome {
+        RefusalOutcome::Continue => "hook-refusal.continue",
+        RefusalOutcome::EndTurn => "hook-refusal.end_turn",
+        RefusalOutcome::CloseSession => "hook-refusal.close_session",
     }
 }
 
@@ -221,7 +253,7 @@ pub(super) struct Inner {
     pub(super) invocation: Arc<Mutex<()>>,
     hooks: RwLock<Vec<Arc<dyn InvocationHook>>>,
     /// True while a permission-review hook thread has not returned. A later
-    /// review is refused immediately so blocking threads stay bounded.
+    /// review is refused immediately as busy, so blocking threads stay bounded.
     permission_hook_running: Arc<AtomicBool>,
     updates: broadcast::Sender<ExecutionEvent>,
     pub(super) reorder: Mutex<()>,
@@ -1654,7 +1686,7 @@ impl Agent {
                                 continue;
                             }
                             let mut decision = PermissionReviewDecision {
-                                index: 0,
+                                index: None,
                                 verdict: ToolVerdict::Allow,
                             };
                             if event.execution_id() == &input.execution_id
@@ -1839,18 +1871,31 @@ impl Agent {
     async fn apply_permission_verdict(
         &self,
         event: &ExecutionEvent,
-        index: usize,
+        index: Option<usize>,
         verdict: ToolVerdict,
     ) -> Option<(bool, Option<AgentError>)> {
         let ToolVerdict::Refuse { reason, outcome } = verdict else {
             return None;
         };
         if outcome == RefusalOutcome::CloseSession {
+            let recorded = self
+                .withdraw_hook_refusal(event, index, &reason, RefusalOutcome::CloseSession)
+                .await;
             let cleanup = self
                 .shutdown_after_failure(SessionCloseRequest::PolicyRefusal)
                 .await;
             let confirmed = cleanup.is_confirmed();
-            return Some((confirmed, cleanup.into_result().err()));
+            let failure = match (recorded.err(), cleanup.into_result().err()) {
+                (Some(operation_error), Some(cleanup_error)) => {
+                    Some(AgentError::OperationAndCleanupFailure {
+                        operation_error: Box::new(operation_error),
+                        cleanup_error: Box::new(cleanup_error),
+                    })
+                }
+                (Some(operation_error), None) => Some(operation_error),
+                (None, cleanup_error) => cleanup_error,
+            };
+            return Some((confirmed, failure));
         }
         let effective = effective_hook_outcome(
             outcome,
@@ -1881,40 +1926,58 @@ impl Agent {
     async fn deliver_hook_refusal(
         &self,
         event: &ExecutionEvent,
-        index: usize,
+        index: Option<usize>,
         reason: &str,
         outcome: RefusalOutcome,
     ) -> Result<(), AgentError> {
-        let ExecutionUpdate::PermissionRequested { id, .. } = event.update() else {
-            return Err(AgentError::Protocol(
-                "permission-review hook refusal has no review".into(),
-            ));
-        };
-        let refusal = HookRefusal::new(index, reason, outcome);
-        let explanation = refusal.reason().to_owned();
-        let attribution = ApprovalAttribution::hook(id, refusal)?;
+        let (id, attribution, explanation) = hook_attribution(event, index, reason, outcome)?;
         if let Some(option_id) = deny_option(event) {
             self.answer_permission(PermissionAnswer {
                 attribution,
                 execution_id: event.execution_id().clone(),
-                id: id.clone(),
+                id,
                 option_id,
             })
             .await
             .map(|_| ())
             .map_err(|failure| failure.into_parts().0)
         } else {
-            let custom = CustomPermissionCancellationReason::new("hook-refusal", explanation)
-                .map_err(|error| AgentError::InvalidInput(error.to_string()))?;
-            self.cancel_permission(PermissionCancellationRequest {
-                execution_id: event.execution_id().clone(),
-                id: id.clone(),
-                reason: PermissionCancellationReason::custom(custom),
-                actor: attribution.actor().clone(),
-            })
-            .await
-            .map(|_| ())
+            self.withdraw_attributed(event, id, attribution, explanation, outcome)
+                .await
         }
+    }
+
+    async fn withdraw_hook_refusal(
+        &self,
+        event: &ExecutionEvent,
+        index: Option<usize>,
+        reason: &str,
+        outcome: RefusalOutcome,
+    ) -> Result<(), AgentError> {
+        let (id, attribution, explanation) = hook_attribution(event, index, reason, outcome)?;
+        self.withdraw_attributed(event, id, attribution, explanation, outcome)
+            .await
+    }
+
+    async fn withdraw_attributed(
+        &self,
+        event: &ExecutionEvent,
+        id: PermissionId,
+        attribution: ApprovalAttribution,
+        explanation: String,
+        outcome: RefusalOutcome,
+    ) -> Result<(), AgentError> {
+        let custom =
+            CustomPermissionCancellationReason::new(hook_withdrawal_code(outcome), explanation)
+                .map_err(|error| AgentError::InvalidInput(error.to_string()))?;
+        self.cancel_permission(PermissionCancellationRequest {
+            execution_id: event.execution_id().clone(),
+            id,
+            reason: PermissionCancellationReason::custom(custom),
+            actor: attribution.actor().clone(),
+        })
+        .await
+        .map(|_| ())
     }
     // Confirmed teardown must settle admitted execution work, including audit-only
     // cleanup errors. Uncertain teardown cannot promise settlement: the caller

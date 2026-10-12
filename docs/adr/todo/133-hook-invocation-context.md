@@ -55,8 +55,10 @@ harness runs without asking is not offered to this hook. The hook returns
 `ToolVerdict`: allow, or refuse with a [`RefusalOutcome`]. The runner can also
 record that the turn is already stopping. A refusal is attributed to the hook,
 principal `permission-review-hook`, not the person who submitted the turn.
-`ApprovalBasis::Hook` keeps the registration index, the reason capped at 1024
-bytes, and the outcome that was applied. That shape matches the deadline basis
+`ApprovalBasis::Hook` keeps the registration index when a hook returned, the
+reason capped at 1024 bytes, and the outcome that was applied. A timeout or a
+busy refusal has no index: the runtime refused before a hook returned. That
+shape matches the deadline basis
 from the open permission-deadline work: a variant on the approval basis and a
 non-person actor. This branch does not depend on that work's types.
 
@@ -68,14 +70,19 @@ cancel one turn, that refusal is recorded as continue and the review is still
 withdrawn, so the provider is not left waiting. End-turn answers the deny
 option when one is offered, then cancels the turn. An end-turn the binding
 cannot perform is recorded as continue and does not cancel the turn. It does
-not close the session. Close-session closes with
-`SessionCloseRequest::PolicyRefusal` and does not answer the review. The deny,
-the withdrawal, and the turn cancel go through the agent's control path. If
-the deny or the withdrawal fails, the turn is cancelled; if that fails too,
-the session stops on the observation-failure path. A hook error, panic, or
-timeout is deny-and-continue with the reason `"hook failed: error"`,
-`"hook failed: panic"`, or `"hook failed: timeout"`. A stop that arrives while
-the hook is running does not publish the review and does not answer it. While
+not close the session. Close-session withdraws the review as the hook,
+recording the applied outcome, then closes with
+`SessionCloseRequest::PolicyRefusal`. It does not select an offered option.
+The deny, the withdrawal, and the turn cancel go through the agent's control
+path. If
+the deny or the withdrawal fails, that refusal still records the outcome that
+was intended, and the turn is cancelled; if that fails too, the session stops
+on the observation-failure path. A withdrawal names the applied outcome in its
+cancellation code. A hook error, panic, timeout, or busy guard is
+deny-and-continue with the reason `"hook failed: error"`,
+`"hook failed: panic"`, `"hook failed: timeout"`, or `"hook failed: busy"`.
+A stop that arrives while the hook is running, or that was already observed
+before the review, does not publish the review and does not answer it. While
 an earlier hook thread is still running, a later review is refused immediately,
 without another blocking thread.
 

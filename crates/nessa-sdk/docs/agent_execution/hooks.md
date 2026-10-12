@@ -66,8 +66,9 @@ later review is refused immediately, without another blocking thread.
 retained, not published, and not answered. `Refuse { Continue }` keeps the
 review and answers the provider's deny option as the hook
 (`permission-review-hook`, `ApprovalBasis::Hook`), so the agent continues. The
-basis keeps the registration index, the reason capped at 1024 bytes, and the
-outcome that was applied. A continue with no deny option is an end-turn when
+basis keeps the registration index when a hook returned, the reason capped
+at 1024 bytes, and the outcome that was applied. A timeout or a busy refusal
+has no index. A continue with no deny option is an end-turn when
 the binding can cancel one turn, and continue when it cannot. The review is
 withdrawn as the hook either way, so the provider is not left waiting.
 `Refuse { EndTurn }` answers the deny option when one is offered, and withdraws
@@ -75,11 +76,18 @@ the pending review when none is. It then cancels the turn when the binding can.
 An end-turn the binding cannot perform is recorded as continue and does not
 cancel the turn. It does not close the session. The answer, the withdrawal,
 and the turn cancel use the agent's control path. If the answer or the
-withdrawal fails, the turn is cancelled; if that fails too, the session stops
-on the observation-failure path. `Refuse { CloseSession }` closes with
-`SessionCloseRequest::PolicyRefusal` and does not answer the review. A hook
-error, panic, or timeout is deny-and-continue with the reason
-`"hook failed: error"`, `"hook failed: panic"`, or `"hook failed: timeout"`.
+withdrawal fails, the answer or withdrawal still records the outcome that was
+intended, and the turn is cancelled; if that fails too, the session stops
+on the observation-failure path. A withdrawal's cancellation code names that
+outcome: `hook-refusal.continue`, `hook-refusal.end_turn`, or
+`hook-refusal.close_session`. `Refuse { CloseSession }` withdraws the review as the hook, recording
+`hook-refusal.close_session` and the hook's reason, then closes with
+`SessionCloseRequest::PolicyRefusal`. It does not select an offered option.
+A hook that returns `Stopped` is deny-and-continue; only the runner uses
+`Stopped`, when the turn is already stopping. A hook error, panic, timeout,
+or busy guard is deny-and-continue with the reason
+`"hook failed: error"`, `"hook failed: panic"`, `"hook failed: timeout"`, or
+`"hook failed: busy"`.
 An incomplete window is reported to the hook. It does not by itself reject the tool.
 
 - Capability rejection runs no callbacks. A before failure stops the remaining

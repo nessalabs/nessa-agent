@@ -152,8 +152,9 @@ pub enum ApprovalBasis {
     /// A permission-review hook selected the option.
     ///
     /// The actor is the hook (`permission-review-hook`), not the person who
-    /// submitted the turn. The value keeps the registration index, the capped
-    /// reason, and the outcome that was actually applied.
+    /// submitted the turn. The value keeps the registration index when a hook
+    /// returned, the capped reason, and the outcome that was actually applied.
+    /// A runtime refusal has no index.
     Hook(HookRefusal),
 }
 
@@ -163,7 +164,7 @@ pub enum ApprovalBasis {
 /// audit record. Construction does not answer a review.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HookRefusal {
-    index: usize,
+    index: Option<usize>,
     reason: Box<str>,
     outcome: RefusalOutcome,
 }
@@ -174,10 +175,11 @@ impl HookRefusal {
 
     /// Retain `index`, a capped `reason`, and the outcome that was applied.
     ///
-    /// A blank reason becomes `"hook refused"`. A reason longer than
-    /// [`Self::MAX_REASON_BYTES`] is cut on a character boundary. This does
-    /// not answer a review.
-    pub fn new(index: usize, reason: impl Into<String>, outcome: RefusalOutcome) -> Self {
+    /// `index` is the hook's zero-based registration position. `None` means the
+    /// runtime refused before a registered hook returned. A blank reason becomes
+    /// `"hook refused"`. A reason longer than [`Self::MAX_REASON_BYTES`] is cut
+    /// on a character boundary. This does not answer a review.
+    pub fn new(index: Option<usize>, reason: impl Into<String>, outcome: RefusalOutcome) -> Self {
         Self {
             index,
             reason: cap_hook_reason(reason.into()).into_boxed_str(),
@@ -186,8 +188,10 @@ impl HookRefusal {
     }
 
     /// Zero-based position of the hook in the invocation's registration list.
-    /// A timeout that did not finish a hook records index 0.
-    pub fn index(&self) -> usize {
+    ///
+    /// `None` means the runtime refused: the deadline elapsed, another hook
+    /// thread was still running, or the blocking task failed. It is not hook 0.
+    pub fn index(&self) -> Option<usize> {
         self.index
     }
 
@@ -241,16 +245,16 @@ impl ApprovalAttribution {
 
     /// The permission-review hook answering `permission` with `refusal`.
     ///
-    /// The principal is `permission-review-hook` and the surface is the hook's
-    /// registration index. Neither is the person who submitted the turn.
-    /// Construction does not answer the review.
+    /// The principal is `permission-review-hook`. The surface is the hook's
+    /// registration index, or `runtime` when no hook returned. Neither is the
+    /// person who submitted the turn. Construction does not answer the review.
     pub fn hook(permission: &PermissionId, refusal: HookRefusal) -> Result<Self, AgentError> {
+        let surface = match refusal.index() {
+            Some(index) => index.to_string(),
+            None => "runtime".to_owned(),
+        };
         Ok(Self::new(
-            ActionContext::new(
-                "permission-review-hook",
-                refusal.index().to_string(),
-                permission.as_str(),
-            )?,
+            ActionContext::new("permission-review-hook", surface, permission.as_str())?,
             ApprovalBasis::Hook(refusal),
         ))
     }

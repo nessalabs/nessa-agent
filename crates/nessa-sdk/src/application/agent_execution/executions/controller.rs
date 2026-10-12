@@ -8,8 +8,8 @@ use super::{
 };
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::permissions::{
-    CancellationOrigin, PermissionAnswer, PermissionCancellation, PermissionCancellationRequest,
-    PermissionResolution,
+    ApprovalBasis, CancellationOrigin, PermissionAnswer, PermissionCancellation,
+    PermissionCancellationRequest, PermissionResolution,
 };
 use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::domain::agent_execution::questions::{AgentQuestion, QuestionId};
@@ -387,13 +387,28 @@ impl ExecutionController {
         Ok(())
     }
     /// Resolves `answer` once against its execution, review, and offered option.
-    /// Returns StalePermission if it cannot match a pending review. The resolution
+    /// Returns StalePermission if it cannot match a pending review. A hook basis
+    /// paired with anything other than the request-scoped deny option returns
+    /// InvalidInput and leaves the review pending. The resolution
     /// retains this controller’s session, original input and attribution; the adapter must audit selection
     /// before attempting delivery and audit that delivery independently of waiters.
     pub fn answer_permission(
         &mut self,
         answer: PermissionAnswer,
     ) -> Result<PermissionResolution, AgentError> {
+        if matches!(answer.attribution.basis(), ApprovalBasis::Hook(_)) {
+            let decision = self
+                .session
+                .pending_option_decision(&answer.execution_id, &answer.id, &answer.option_id)
+                .map_err(|_| AgentError::StalePermission)?;
+            if decision.effect() != PermissionEffect::Deny
+                || decision.scope() != &PermissionScope::request()
+            {
+                return Err(AgentError::InvalidInput(
+                    "a hook refusal selects the request-scoped deny option".into(),
+                ));
+            }
+        }
         let request = self
             .session
             .answer_permission(&answer.execution_id, &answer.id, &answer.option_id)
