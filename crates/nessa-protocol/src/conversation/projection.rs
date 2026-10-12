@@ -10,7 +10,7 @@ use super::view::{
     ConversationPermission, ConversationPermissionAsk, ConversationPermissionOption,
     ConversationPermissionOptionEffect, ConversationPermissionOrigin, ConversationQuestion,
     ConversationRuntime, ConversationSelectionView, ConversationTool, ConversationTranscriptState,
-    ConversationView, MAX_STRUCTURED_CONTENT_BYTES,
+    ConversationView, NativeHooksChoice, MAX_STRUCTURED_CONTENT_BYTES,
 };
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
@@ -546,6 +546,19 @@ impl Projection {
             .into_iter()
             .collect();
         let carried = self.continued_unfinished(active);
+        // A tool keeps the hooks choice of the start that first inserted it.
+        // Rebuilding the transcript must not stamp it with a later start.
+        let earlier_hooks: HashMap<(String, String), NativeHooksChoice> = self
+            .view
+            .tools
+            .iter()
+            .map(|tool| {
+                (
+                    (tool.execution_id.clone(), tool.tool_id.clone()),
+                    tool.native_hooks,
+                )
+            })
+            .collect();
         let mut next = Self::from_snapshot(
             self.view.conversation_id.clone(),
             self.view.capabilities.clone(),
@@ -616,6 +629,12 @@ impl Projection {
                 {
                     message.status = ConversationMessageStatus::Queued;
                 }
+            }
+        }
+        for tool in &mut next.view.tools {
+            let key = (tool.execution_id.clone(), tool.tool_id.clone());
+            if let Some(stamp) = earlier_hooks.get(&key) {
+                tool.native_hooks = *stamp;
             }
         }
         let changed = serde_json::to_vec(&next.view).ok() != serde_json::to_vec(&self.view).ok();

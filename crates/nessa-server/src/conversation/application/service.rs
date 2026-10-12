@@ -2178,13 +2178,12 @@ impl ConversationService {
             .unwrap_or_default();
         let active = live.agent.active_execution_id();
         let mut projection = live.projection.lock().await;
-        let accepted = projection.replace_committed(&committed, &order, active.as_ref());
-        if accepted {
-            projection.transcript_state(committed.state().into());
-        }
         let operation_capabilities = live.agent.operation_capabilities();
         // The last known answer stands while the agent is being restored, so the
         // view never says no to what a send at the same moment would admit.
+        // Capabilities land before the transcript is rebuilt, so a tool this
+        // start is inserting for the first time takes this start's hooks
+        // choice. A tool already on the view keeps the choice it was given.
         let image_input = self
             .takes_images(&live.agent, operation_capabilities)
             .unwrap_or(projection.view().capabilities.image_input);
@@ -2196,6 +2195,10 @@ impl ConversationService {
             image_input,
             agent_features: operation_capabilities.into(),
         });
+        let accepted = projection.replace_committed(&committed, &order, active.as_ref());
+        if accepted {
+            projection.transcript_state(committed.state().into());
+        }
         projection.lifecycle(lifecycle_view(&live.agent));
         let mut view = projection.read();
         let cursor = projection.committed_cursor();

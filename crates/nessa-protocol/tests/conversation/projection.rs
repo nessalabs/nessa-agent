@@ -15,7 +15,7 @@ use crate::conversation::{
     view::{
         ConversationAgentFeatures, ConversationAttachmentEvidenceFailure,
         ConversationAttachmentEvidenceFailureCode, ConversationCapabilities, ConversationLifecycle,
-        ConversationLifecyclePhase, ConversationMessageStatus, ConversationView,
+        ConversationLifecyclePhase, ConversationMessageStatus, ConversationView, NativeHooksChoice,
         PermissionDenialSupport, MAX_STRUCTURED_CONTENT_BYTES,
     },
 };
@@ -597,6 +597,67 @@ fn arguments_on_a_later_update_join_the_identity_that_update_does_not_repeat() {
         .with_mcp_arguments(McpCallArguments::new("{}").unwrap()),
     ))]);
     assert!(bare.tools[0].mcp.is_none());
+}
+
+#[test]
+fn a_later_read_keeps_a_tool_mark_from_the_start_that_inserted_it() {
+    let first = completed_snapshot(
+        "execution",
+        vec![event(ExecutionUpdate::Tool(ToolCallUpdate::new(
+            ToolCallId::new("read").unwrap(),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )))],
+    );
+    let mut capabilities = ConversationCapabilities {
+        queue: true,
+        steer: true,
+        resume: false,
+        permissions: true,
+        image_input: false,
+        agent_features: OperationCapabilities::default().into(),
+    };
+    let mut projection = Projection::new("conversation".into(), capabilities.clone(), Some(&first));
+    assert_eq!(
+        projection.view().tools[0].native_hooks,
+        NativeHooksChoice::Off
+    );
+    capabilities.agent_features.native_hooks = NativeHooksChoice::On;
+    projection.capabilities(capabilities);
+    let second = completed_snapshot(
+        "execution",
+        vec![
+            event(ExecutionUpdate::Tool(ToolCallUpdate::new(
+                ToolCallId::new("read").unwrap(),
+                None,
+                None,
+                None,
+                None,
+                None,
+            ))),
+            event(ExecutionUpdate::Tool(ToolCallUpdate::new(
+                ToolCallId::new("edit").unwrap(),
+                None,
+                None,
+                None,
+                None,
+                None,
+            ))),
+        ],
+    );
+    assert!(projection.replace_committed(
+        &committed("incarnation", 2, 2, 2, Some(&second)),
+        &[],
+        None,
+    ));
+    let tools = &projection.view().tools;
+    let read = tools.iter().find(|tool| tool.tool_id == "read").unwrap();
+    let edit = tools.iter().find(|tool| tool.tool_id == "edit").unwrap();
+    assert_eq!(read.native_hooks, NativeHooksChoice::Off);
+    assert_eq!(edit.native_hooks, NativeHooksChoice::On);
 }
 
 #[test]
