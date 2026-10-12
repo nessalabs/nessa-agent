@@ -740,3 +740,141 @@ fn blocking_panic_log_does_not_hold_the_session_claim() {
         );
     });
 }
+
+/// On a current-thread runtime the marker still runs on that one worker, but
+/// only after cleanup has joined the reader, issued DELETE, and released the
+/// claim. `shutdown_and_end` queues that cleanup before the log task, and the
+/// reader watch has already returned, so the join does not yield into the log.
+#[tokio::test(flavor = "current_thread")]
+async fn current_thread_shutdown_finishes_before_the_panic_log() {
+    let runtime_thread = std::thread::current().id();
+    let url =
+        RemoteMcpUrl::parse("https://mcp.example:8443/secret-path?access_token=bearer-secret")
+            .expect("url");
+    let url_owned = url.as_str().to_owned();
+    let claims = Arc::new(SessionClaims::default());
+    let exchange = Arc::new(ReplyExchange {
+        seen: Seen(Mutex::new(vec![])),
+    });
+    let (session, incoming) = HttpSession::open(
+        Uuid::from_u128(3),
+        url,
+        exchange.clone(),
+        Arc::new(NoAuthorization),
+        Arc::clone(&claims),
+    );
+    let connection = Arc::new(Connection::open_http(
+        session.clone(),
+        incoming,
+        Arc::new(RuntimeClock::new()),
+    ));
+    bounded(connection.call("initialize", None))
+        .await
+        .expect("initialize")
+        .expect("initialize result");
+
+    let released_before_log = Arc::new(AtomicBool::new(false));
+    let event_thread = Arc::new(Mutex::new(None));
+    let text = Arc::new(Mutex::new(String::new()));
+    let subscriber = ShutdownBeforeLog {
+        marker: "custom HTTP reply reader panicked",
+        exchange: exchange.clone(),
+        claims: Arc::clone(&claims),
+        url: url_owned,
+        connection: Arc::clone(&connection),
+        released_before_log: Arc::clone(&released_before_log),
+        event_thread: Arc::clone(&event_thread),
+        text: Arc::clone(&text),
+    };
+    let _guard = tracing::subscriber::set_default(subscriber);
+    tracing::callsite::rebuild_interest_cache();
+
+    let mut finished = session.finished();
+    let error = bounded(connection.call("tools/list", None))
+        .await
+        .expect_err("reply reader panic");
+    bounded(finished.wait_for(|done| *done))
+        .await
+        .expect("finished");
+    assert_eq!(error, McpError::ServerGone);
+    assert!(
+        released_before_log.load(Ordering::SeqCst),
+        "the panic log ran before DELETE and claim release"
+    );
+    assert_eq!(
+        event_thread.lock().expect("thread").as_ref(),
+        Some(&runtime_thread),
+        "the current-thread runtime did not run the marker itself"
+    );
+    assert_eq!(
+        exchange
+            .seen
+            .count(|request| request.method == HttpMethod::Delete),
+        1
+    );
+    let logged = text.lock().expect("log").clone();
+    assert!(
+        logged.contains("custom HTTP reply reader panicked")
+            && !logged.contains(SECRET)
+            && !logged.contains("bearer-secret"),
+        "request contents leaked into the log: {logged}"
+    );
+}
+
+/// Records whether shutdown had already released the claim when the marker
+/// was delivered. Used on a current-thread runtime, where the marker and the
+/// cleanup share one thread.
+struct ShutdownBeforeLog {
+    marker: &'static str,
+    exchange: Arc<ReplyExchange>,
+    claims: Arc<SessionClaims>,
+    url: String,
+    connection: Arc<Connection>,
+    released_before_log: Arc<AtomicBool>,
+    event_thread: Arc<Mutex<Option<std::thread::ThreadId>>>,
+    text: Arc<Mutex<String>>,
+}
+
+impl tracing::Subscriber for ShutdownBeforeLog {
+    fn register_callsite(
+        &self,
+        _metadata: &'static tracing::Metadata<'static>,
+    ) -> tracing::subscriber::Interest {
+        tracing::subscriber::Interest::sometimes()
+    }
+
+    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+        *metadata.level() == tracing::Level::ERROR
+    }
+
+    fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+
+    fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+
+    fn event(&self, event: &tracing::Event<'_>) {
+        let mut message = String::new();
+        event.record(&mut Capture(&mut message));
+        if !message.contains(self.marker) {
+            return;
+        }
+        let deleted = self
+            .exchange
+            .seen
+            .count(|request| request.method == HttpMethod::Delete)
+            == 1;
+        let released = self.claims.claim(&self.url, "held", u64::MAX);
+        let ended = self.connection.end_cause() == Some(McpError::ServerGone);
+        self.released_before_log
+            .store(deleted && released && ended, Ordering::SeqCst);
+        *self.event_thread.lock().expect("thread") = Some(std::thread::current().id());
+        self.text.lock().expect("log").push_str(&message);
+    }
+
+    fn enter(&self, _span: &tracing::span::Id) {}
+
+    fn exit(&self, _span: &tracing::span::Id) {}
+}

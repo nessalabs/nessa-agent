@@ -322,8 +322,10 @@ impl HttpSession {
             end.end(self);
         }
         let server = self.server();
-        // Detach. Joining this log would put a blocking subscriber back on the
-        // shutdown path this function just started.
+        // Detach, and only after shutdown has queued cleanup. A current-thread
+        // runtime is FIFO, and the reader watch has already returned, so that
+        // cleanup joins, DELETEs, and releases the claim before this log is
+        // polled. Queuing the log first lets a blocking subscriber stall it.
         drop(self.runtime.spawn(async move {
             log_task_panic(server, task);
         }));
