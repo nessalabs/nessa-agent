@@ -2068,11 +2068,12 @@ async fn b_gate2_a_lost_connection_stops_the_conversation_and_ends_its_lease_as_
     }
 }
 
-/// Row I7: a duration the environment grants a lease of an agent is
-/// accepted, narrower than none, and recorded as the lease's deadline: the
-/// gateway's clock when the grant arrived, plus the duration.
+/// Row I7 through the service: a duration the environment grants is
+/// recorded on the issued lease as its deadline, from the service's clock
+/// (`a_granted_duration_is_recorded_as_the_deadline` shows that clock is
+/// read before the lease is asked for).
 #[tokio::test]
-async fn a_granted_duration_is_recorded_as_the_deadline() {
+async fn a_granted_duration_is_recorded_on_the_issued_lease() {
     let root = tempfile::tempdir().unwrap();
     let here = Arc::new(Substitute::new(SandboxProfiles::HARNESS_DEFAULT));
     let host = Arc::new(Host::new());

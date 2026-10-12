@@ -90,7 +90,7 @@ use nessa_sdk::application::agent_execution::{
 use nessa_sdk::domain::agent_execution::leases::{CommandWork, LeaseId, SandboxProfiles};
 use serde::Serialize;
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
     future::Future,
     io,
     pin::Pin,
@@ -426,6 +426,7 @@ pub(crate) async fn serve<R, W>(
         timings,
         timer: timer.clone(),
         drops: 0,
+        outgoing: VecDeque::new(),
     };
     let mut stream = FrameStream::new(input);
     // Nothing read for `silence` is the gateway gone, whether this side is
@@ -438,7 +439,7 @@ pub(crate) async fn serve<R, W>(
         // read: the read wins `within`'s race, so a gateway that sends
         // without pause would otherwise put an expiry off for good. Saying
         // a lease is ending is bounded as any answer is.
-        if within(&*timer, silent, served.expire_passed())
+        if within(&*timer, silent, served.expire_and_flush())
             .await
             .is_err()
             || timer.now() >= silent
@@ -466,13 +467,19 @@ pub(crate) async fn serve<R, W>(
         heard = timer.now();
         // A frame read as a deadline passed acts on what is left after it:
         // a Start under a lease that has expired starts nothing.
-        if within(&*timer, heard + timings.silence, served.expire_passed())
+        if within(&*timer, heard + timings.silence, served.expire_and_flush())
             .await
             .is_err()
         {
             served.silent(timings.silence);
             break;
         }
+        // Handling is bounded by the silence bound and by the earliest
+        // lease deadline, whichever comes first (see below).
+        let bound = heard + timings.silence;
+        let wake = served
+            .next_deadline()
+            .map_or(bound, |deadline| deadline.min(bound));
         let handled = async {
             match decode::<ToEnvironment>(&body) {
                 Ok(frame) => served.handle(frame).await,
@@ -482,12 +489,13 @@ pub(crate) async fn serve<R, W>(
                 }
             }
         };
-        // Every state change a frame makes comes before the answer it waits
-        // to send, so one given up on here leaves nothing half-applied.
-        if within(&*timer, heard + timings.silence, handled)
-            .await
-            .is_err()
-        {
+        // A frame's handling waits only to send its answers, after every
+        // state change it makes, and an answer leaves `outgoing` only once
+        // the writer has room for it. So handling given up on, at the
+        // silence bound or at a lease's deadline, leaves nothing half-done
+        // and loses no answer: the next pass ends the expired lease, and
+        // its `Ending` goes after the answers still waiting.
+        if within(&*timer, wake, handled).await.is_err() && timer.now() >= bound {
             served.silent(timings.silence);
             break;
         }
@@ -625,6 +633,10 @@ struct Served {
     /// What every wait, the stops' own included, is measured on.
     timer: Arc<dyn Timer>,
     drops: u32,
+    /// Answers not yet taken by the writer, in order. One leaves only once
+    /// there is room for it, so a wait for room given up on loses nothing,
+    /// and what is said after it goes behind it.
+    outgoing: VecDeque<FromEnvironment>,
 }
 
 impl Served {
@@ -783,7 +795,30 @@ impl Served {
     }
 
     async fn send(&mut self, frame: FromEnvironment) {
-        let _ = self.frames.send(frame).await;
+        self.outgoing.push_back(frame);
+        self.flush().await;
+    }
+
+    /// Hand the writer every answer still waiting, in order. Cancellable at
+    /// any await: a frame is taken off only with a place to put it.
+    async fn flush(&mut self) {
+        while !self.outgoing.is_empty() {
+            // The writer is gone: nothing more reaches the gateway.
+            let Ok(permit) = self.frames.reserve().await else {
+                self.outgoing.clear();
+                return;
+            };
+            if let Some(frame) = self.outgoing.pop_front() {
+                permit.send(frame);
+            }
+        }
+    }
+
+    /// End every lease whose deadline has passed, then hand the writer what
+    /// is still waiting.
+    async fn expire_and_flush(&mut self) {
+        self.expire_passed().await;
+        self.flush().await;
     }
 
     fn accounted(&self, lease: &str) -> Cleanup {

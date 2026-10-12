@@ -343,7 +343,20 @@ impl Gateway {
         runs_commands: bool,
         timer: Arc<dyn Timer>,
     ) -> Self {
-        let (gateway, environment) = duplex(1 << 20);
+        Self::through(1 << 20, peer, grants, ledger, outbox, runs_commands, timer)
+    }
+    /// [`Self::for_peer`], over a connection holding at most `buffer` bytes
+    /// each way that are not yet read.
+    fn through(
+        buffer: usize,
+        peer: Peer,
+        grants: Arc<MemoryGrants>,
+        ledger: Arc<MemoryLedger>,
+        outbox: Arc<dyn ArtifactOutbox>,
+        runs_commands: bool,
+        timer: Arc<dyn Timer>,
+    ) -> Self {
+        let (gateway, environment) = duplex(buffer);
         let (environment_in, environment_out) = split(environment);
         let stopped = Arc::new(AtomicUsize::new(0));
         let launcher = Arc::new(EchoLauncher {
@@ -2688,6 +2701,17 @@ fn expiring_over(
     ledger: Arc<MemoryLedger>,
     outbox: Arc<dyn ArtifactOutbox>,
 ) -> Gateway {
+    expiring_through(1 << 20, timer, ledger, outbox)
+}
+
+/// As [`expiring_over`], over a connection holding at most `buffer` bytes
+/// each way that are not yet read.
+fn expiring_through(
+    buffer: usize,
+    timer: Arc<ManualTimer>,
+    ledger: Arc<MemoryLedger>,
+    outbox: Arc<dyn ArtifactOutbox>,
+) -> Gateway {
     let grants = MemoryGrants::none();
     grants.set(
         Peer::Ssh,
@@ -2696,7 +2720,7 @@ fn expiring_over(
                 .with_max_lease(MaxLease::new(MAX_LEASE.as_millis() as u64).unwrap()),
         ),
     );
-    Gateway::for_peer(Peer::Ssh, grants, ledger, outbox, true, timer)
+    Gateway::through(buffer, Peer::Ssh, grants, ledger, outbox, true, timer)
 }
 
 impl Gateway {
@@ -3162,4 +3186,78 @@ async fn a_file_in_flight_when_its_lease_expires_is_left_unanswered() {
             .any(|entry| matches!(entry, LedgerEntry::Collected { .. })),
         "{entries:?}"
     );
+}
+
+/// A reply that cannot be sent, the gateway reading nothing, does not hold
+/// an expiry back: at the deadline the lease is ended, its harness stopped
+/// and both recorded, long before the silence bound.
+#[tokio::test]
+async fn a_reply_blocked_on_a_full_output_queue_does_not_hold_back_an_expiry() {
+    let timer = Arc::new(ManualTimer::default());
+    let mut gateway = expiring_through(
+        512,
+        timer.clone(),
+        Arc::new(MemoryLedger::default()),
+        Arc::new(NoOutbox),
+    );
+    gateway.started_expiring(LEASE).await;
+    // The gateway asks far more than the connection and the output queue
+    // hold, and reads none of it: the host is soon held up answering.
+    let (spare, _) = duplex(1);
+    let mut writer = std::mem::replace(&mut gateway.writer, split(spare).1);
+    let asking = tokio::spawn(async move {
+        for _ in 0..2_000 {
+            let ask = ToEnvironment::Account {
+                lease: "settled".into(),
+            };
+            if write_frame(&mut writer, &ask).await.is_err() {
+                break;
+            }
+        }
+        writer
+    });
+    // Once the host is held up, it starts no more waits: every frame it
+    // reads and answers starts one.
+    let mut seen = timer.waits().len();
+    loop {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let now = timer.waits().len();
+        if now == seen {
+            break;
+        }
+        seen = now;
+    }
+    assert!(!asking.is_finished(), "the host is held up answering");
+    timer.advance(MAX_LEASE);
+    // Moved on only by the stops' own short bounds, never near silence.
+    let ended = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if ended_entries(&gateway.ledger, LEASE) == 1 {
+                break;
+            }
+            if timer.elapsed() < MAX_LEASE + Duration::from_secs(1) {
+                timer.advance(Duration::from_millis(10));
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await;
+    assert!(ended.is_ok(), "{:?}", gateway.ledger.entries());
+    assert!(timer.elapsed() < SILENCE_LIMIT);
+    let entries = gateway.ledger.entries();
+    assert!(entries.contains(&LedgerEntry::Expiring {
+        lease: LEASE.into(),
+        lease_ms: 30_000,
+    }));
+    assert!(entries.iter().any(|entry| matches!(
+        entry,
+        LedgerEntry::Ended {
+            lease,
+            cause: EndCause::Expired,
+            ..
+        } if lease == LEASE
+    )));
+    assert_eq!(gateway.stopped.load(Ordering::SeqCst), 1);
+    asking.abort();
+    gateway.served.abort();
 }
