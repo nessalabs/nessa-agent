@@ -17,8 +17,13 @@
 //! HTTP writer catches that panic on every await it performs, discards the
 //! payload, and settles the writer as panicked. It then asks the same owner
 //! for [`McpError::ServerGone`] and, after that record, logs a fixed marker
-//! and the server id. A recovery completion the writer drops waits for that
-//! settlement outside the recovery deadline: panic resolves
+//! and the server id on a thread the session runtime does not run. The other
+//! HTTP session tasks that run a custom adapter use that same end through
+//! [`PanicEnd`]. Their marker is logged after that end, on that same kind of
+//! thread, so a subscriber that blocks cannot hold the upstream session claim.
+//! A recovery completion the writer drops
+//! waits for that settlement outside the recovery deadline:
+//! panic resolves
 //! [`McpError::ServerGone`], and a clean finish or cancellation resolves
 //! [`McpError::Unconfirmed`]. An already-due deadline does not replace that
 //! settlement with a timeout. The watch still joins a panic that escapes the
@@ -314,6 +319,9 @@ impl Connection {
             next_id: AtomicU64::new(1),
         });
         let (outgoing, mut frames) = OutgoingQueue::new(OUTGOING_FRAMES, HTTP_CONTROL_RESERVE);
+        session.install_panic_end(Arc::new(PanicEnd {
+            shared: Arc::clone(&shared),
+        }));
         session.set_writer(outgoing.clone(), clock.clone());
         let writing = tokio::spawn({
             let shared = shared.clone();
@@ -321,11 +329,11 @@ impl Connection {
             async move {
                 // A caught panic settles itself before this drops. The first
                 // settlement sticks, so this drop does not overwrite it.
-                let _settle = SettleWriter(&session);
+                let _settle = session.writer_settle_guard();
                 // Every await the writer performs is inside this catch:
                 // the queue recv, dispatch, dispatch_reply, and
                 // finish_recovery (including the initialized POST).
-                let panicked = catch_writer_panic(async {
+                let panicked = catch_task_panic(async {
                     while let Some(frame) = frames.recv().await {
                         let outcome = match frame {
                             Outgoing::Frame(frame) => session.dispatch(&frame).await,
@@ -360,9 +368,10 @@ impl Connection {
                 // A completion still sitting in the queue stays in this task
                 // until it returns, which is after ServerGone is recorded.
                 // Recovery waits for the settlement instead of deciding.
-                // The log follows the record, so a subscriber cannot hold the fence.
+                // The log follows the record, off this runtime, so a subscriber
+                // cannot hold the fence or the cleanup this shutdown queued.
                 session.settle_writer(true);
-                record_writer_panic(&session, &shared);
+                record_session_panic(&session, &shared, HttpTask::Writer);
             }
         });
         let http_writer = writing.abort_handle();
@@ -561,10 +570,96 @@ fn shutdown_and_end(session: &HttpSession, shared: &Shared, cause: McpError) {
     shared.end(cause);
 }
 
+/// Which HTTP task caught a custom-adapter panic. The record is one function:
+/// fence, [`Shared::end`] with [`McpError::ServerGone`], then the task's marker.
+#[derive(Clone, Copy)]
+pub(super) enum HttpTask {
+    /// The connection's HTTP writer.
+    Writer,
+    /// A streamed POST body, including a call's reply.
+    ReplyReader,
+    /// The legacy SSE reader started from the opening GET.
+    LegacyStream,
+    /// The modern GET that carries server-initiated messages.
+    ServerStream,
+    /// The fresh `initialize` started after a session-bound 404.
+    Recovery,
+}
+
+/// Installed by [`Connection::open_http`] so a session task can ask the
+/// connection's end owner to record a panic. Holds [`Shared`], not the session,
+/// so the session does not own itself.
+pub(super) struct PanicEnd {
+    shared: Arc<Shared>,
+}
+
+impl PanicEnd {
+    /// [`shutdown_and_end`] with [`McpError::ServerGone`]. Does not log. The
+    /// session task logs after this returns, on a thread the runtime does not run.
+    pub(super) fn end(&self, session: &HttpSession) {
+        shutdown_and_end(session, &self.shared, McpError::ServerGone);
+    }
+}
+
+fn record_session_panic(session: &HttpSession, shared: &Shared, task: HttpTask) {
+    shutdown_and_end(session, shared, McpError::ServerGone);
+    // The fence and the end are recorded before the log thread starts, so a
+    // subscriber that blocks on the event cannot leave the session unfenced
+    // or hold the runtime that still has to DELETE.
+    log_task_panic_off_runtime(session.server(), task);
+}
+
+/// Log `task`'s marker on a thread that does not belong to the session
+/// runtime. The caller's dispatcher and current span are re-entered there,
+/// so the marker still reaches the subscriber that was current when the
+/// panic was recorded. The caller records the end before this starts. A
+/// spawn failure drops the marker; the end is already stored.
+pub(super) fn log_task_panic_off_runtime(
+    server: impl std::fmt::Display + Send + 'static,
+    task: HttpTask,
+) {
+    let dispatch = tracing::dispatcher::get_default(|dispatch| dispatch.clone());
+    let span = tracing::Span::current();
+    let _ = std::thread::Builder::new()
+        .name("mcp-panic-log".into())
+        .spawn(move || {
+            tracing::dispatcher::with_default(&dispatch, || {
+                let _entered = span.enter();
+                log_task_panic(server, task);
+            });
+        });
+}
+
+/// The task's fixed marker and the server id. The tracing record does not
+/// include the panic message. The default panic hook can still print that
+/// message. An adapter's own panic string is the host app's responsibility.
+fn log_task_panic(server: impl std::fmt::Display, task: HttpTask) {
+    match task {
+        HttpTask::Writer => {
+            tracing::error!(server = %server, "custom HTTP writer panicked");
+        }
+        HttpTask::ReplyReader => {
+            tracing::error!(server = %server, "custom HTTP reply reader panicked");
+        }
+        HttpTask::LegacyStream => {
+            tracing::error!(server = %server, "custom HTTP legacy stream panicked");
+        }
+        HttpTask::ServerStream => {
+            tracing::error!(server = %server, "custom HTTP server stream panicked");
+        }
+        HttpTask::Recovery => {
+            tracing::error!(server = %server, "custom HTTP recovery panicked");
+        }
+    }
+}
+
 /// Poll `future` and discard a panic payload. The future is not resumed after
-/// that panic. The caller settles the writer after this await returns, which
-/// drops `future` and any sender it still owns.
-fn catch_writer_panic<F: Future>(future: F) -> impl Future<Output = Result<F::Output, ()>> {
+/// that panic. This await drops `future`, and any sender it still owns, before
+/// the caller settles. A waiter on one of those senders waits for that
+/// settlement instead of deciding from the drop.
+pub(super) fn catch_task_panic<F: Future>(
+    future: F,
+) -> impl Future<Output = Result<F::Output, ()>> {
     let mut future = Box::pin(future);
     std::future::poll_fn(move |context| {
         match std::panic::catch_unwind(AssertUnwindSafe(|| future.as_mut().poll(context))) {
@@ -575,29 +670,8 @@ fn catch_writer_panic<F: Future>(future: F) -> impl Future<Output = Result<F::Ou
     })
 }
 
-/// [`shutdown_and_end`] with [`McpError::ServerGone`], then log a fixed marker
-/// and the server id. The fence and the end are recorded before the log, so a
-/// subscriber that blocks or panics on the event cannot leave the session
-/// unfenced. The tracing record does not include the panic message. The
-/// default panic hook can still print that message. An adapter's own panic
-/// string is the host app's responsibility.
-fn record_writer_panic(session: &HttpSession, shared: &Shared) {
-    shutdown_and_end(session, shared, McpError::ServerGone);
-    tracing::error!(server = %session.server(), "custom HTTP writer panicked");
-}
-
-/// First settlement wins. A caught panic settles itself as panicked before
-/// this drop. Cancellation and a clean exit settle as not panicked.
-struct SettleWriter<'a>(&'a HttpSession);
-
-impl Drop for SettleWriter<'_> {
-    fn drop(&mut self) {
-        self.0.settle_writer(std::thread::panicking());
-    }
-}
-
 /// Join the HTTP writer. A panic that still fails the task is not a second
-/// end owner: settle, then [`record_writer_panic`]. An exchange panic is
+/// end owner: settle, then [`record_session_panic`]. An exchange panic is
 /// caught in the writer, which settles that outcome and records
 /// [`McpError::ServerGone`] before its log. A cause already recorded stays.
 /// A cancellation records nothing.
@@ -607,7 +681,7 @@ async fn watch_http_writer(writer: JoinHandle<()>, shared: Arc<Shared>, session:
     };
     if error.is_panic() {
         session.settle_writer(true);
-        record_writer_panic(&session, &shared);
+        record_session_panic(&session, &shared, HttpTask::Writer);
     }
 }
 
