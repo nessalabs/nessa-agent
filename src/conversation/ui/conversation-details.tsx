@@ -46,8 +46,8 @@ function nativeHooksCopy(
   const next =
     current === "on"
       ? agent === "claude"
-        ? `The next time this agent starts, its own hooks will run. ${TRUST}`
-        : "The next time this agent starts, its own hooks will run."
+        ? `The next time this agent starts, Nessa no longer asks it to leave its own hooks off, so they can run. ${TRUST}`
+        : "The next time this agent starts, Nessa no longer asks it to leave its own hooks off, so they can run."
       : "The next time this agent starts, Nessa asks it to leave its own hooks off."
   return `${start} ${next}`
 }

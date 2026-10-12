@@ -159,7 +159,7 @@ it("says the current switch applies at the next start when this run differs", as
   expect(group("Approvals")).toContain(
     "The next time this agent starts, Nessa asks it to leave its own hooks off.",
   )
-  expect(group("Approvals")).not.toContain("its own hooks will run")
+  expect(group("Approvals")).not.toContain("so they can run")
 })
 
 it("names hooks on, and warns about the repo's settings, when Claude's next start turns them on", async () => {
@@ -186,7 +186,7 @@ it("names hooks on, and warns about the repo's settings, when Claude's next star
     )
   })
   expect(group("Approvals")).toContain(
-    "For this run, Nessa asks this agent to leave its own hooks off. The next time this agent starts, its own hooks will run.",
+    "For this run, Nessa asks this agent to leave its own hooks off. The next time this agent starts, Nessa no longer asks it to leave its own hooks off, so they can run.",
   )
   expect(group("Approvals")).toContain("only for projects you trust")
 })
@@ -206,7 +206,7 @@ it("reads the switch again when the window is focused", async () => {
     )
   })
   expect(group("Approvals")).toContain(
-    "The next time this agent starts, its own hooks will run.",
+    "The next time this agent starts, Nessa no longer asks it to leave its own hooks off, so they can run.",
   )
   choice = "off"
   await act(async () => {
