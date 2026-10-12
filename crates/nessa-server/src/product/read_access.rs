@@ -1,9 +1,11 @@
-//! Read grants on the socket (issue 704): the reader a session is, the one
-//! question every socket read asks before it reads a conversation or a list,
-//! and the owner's `conversation.share`, `.unshare` and `.shares` commands.
+//! Share grants on the socket (issues 704, 707): the reader a session is, the
+//! one question every socket read asks before it reads a conversation or a
+//! list, and the owner's `conversation.share`, `.unshare` and `.shares`
+//! commands. Every role reads alike, so nothing here asks a grant's role.
 //!
-//! The rule is `conversation::application::read_grants`; this module only
-//! asks it. `conversation.read` and every subscription batch
+//! The rule is `conversation::application::share_grants`; this module only
+//! asks it, and maps a share's role and policy between the wire and the
+//! domain. `conversation.read` and every subscription batch
 //! (`subscription::authorize_batch`) ask [`admit_conversation`];
 //! `conversation.list`, `conversation.observe` and every list batch ask
 //! [`admit_list`]. A gateway that pairs no device has no receiver binding, so
@@ -14,14 +16,16 @@ use super::{
     state::ProductRouteState,
 };
 use crate::conversation::application::{
-    admit_read, error_code, reader_of, ConversationError, Reader, ShareConversation,
+    admit_read, error_code, reader_of, ConversationError, Reader, ShareConversation, ShareGrant,
 };
+use crate::conversation::domain::{ShareRole, ToolPolicy, ToolPreset, ToolRules};
 use nessa_auth::{application::session::AuthenticatedSession, domain::CredentialId};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::conversation::read_scope::ReadRefusal;
 use nessa_protocol::product::generated::{
-    ConversationMutationResult, ConversationShare, ConversationShareParams,
-    ConversationSharesParams, ConversationSharesResult,
+    ConversationMutationResult, ConversationShare, ConversationShareParams, ConversationShareRole,
+    ConversationSharesParams, ConversationSharesResult, ConversationToolPolicy,
+    ConversationToolPreset, ConversationUnshareParams,
 };
 use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
@@ -115,18 +119,33 @@ pub(super) async fn dispatch_share(
     let now = state.clock.unix_milliseconds();
     let result: Result<OutgoingMessage, ConversationError> = async {
         match frame.method.as_str() {
-            "conversation.share" | "conversation.unshare" => {
+            "conversation.share" => {
                 let params: ConversationShareParams = serde_json::from_value(frame.params)
                     .map_err(|_| ConversationError::InvalidInput)?;
                 let id = conversation_id(&params.conversation_id)?;
                 let credential = CredentialId::new(params.credential_id)
                     .map_err(|_| ConversationError::InvalidInput)?;
+                let policy = params.policy.map(tool_policy).transpose()?;
                 let caller = caller(session, params.request_id.clone());
-                let applied = if frame.method == "conversation.share" {
-                    shares.share(caller, id, credential, now).await?
-                } else {
-                    shares.unshare(caller, id, credential, now).await?
-                };
+                let applied = shares
+                    .share(caller, id, credential, role(params.role), policy, now)
+                    .await?;
+                Ok(success(
+                    &frame.id,
+                    &ConversationMutationResult {
+                        request_id: params.request_id,
+                        applied,
+                    },
+                ))
+            }
+            "conversation.unshare" => {
+                let params: ConversationUnshareParams = serde_json::from_value(frame.params)
+                    .map_err(|_| ConversationError::InvalidInput)?;
+                let id = conversation_id(&params.conversation_id)?;
+                let credential = CredentialId::new(params.credential_id)
+                    .map_err(|_| ConversationError::InvalidInput)?;
+                let caller = caller(session, params.request_id.clone());
+                let applied = shares.unshare(caller, id, credential, now).await?;
                 Ok(success(
                     &frame.id,
                     &ConversationMutationResult {
@@ -142,12 +161,8 @@ pub(super) async fn dispatch_share(
                 let items = shares
                     .shares(&caller(session, frame.id.clone()), &id)
                     .await?
-                    .into_iter()
-                    .map(|grant| ConversationShare {
-                        credential_id: grant.credential_id.as_str().to_owned(),
-                        role: "read".to_owned(),
-                        granted_at_ms: grant.granted_at_ms,
-                    })
+                    .iter()
+                    .map(listed)
                     .collect();
                 Ok(success(&frame.id, &ConversationSharesResult { items }))
             }
@@ -157,3 +172,80 @@ pub(super) async fn dispatch_share(
     .await;
     result.unwrap_or_else(|error| failure(&frame.id, error_code(&error).as_str()))
 }
+
+fn role(role: ConversationShareRole) -> ShareRole {
+    match role {
+        ConversationShareRole::Read => ShareRole::Read,
+        ConversationShareRole::Comment => ShareRole::Comment,
+        ConversationShareRole::Drive => ShareRole::Drive,
+    }
+}
+
+fn wire_role(role: ShareRole) -> ConversationShareRole {
+    match role {
+        ShareRole::Read => ConversationShareRole::Read,
+        ShareRole::Comment => ConversationShareRole::Comment,
+        ShareRole::Drive => ConversationShareRole::Drive,
+    }
+}
+
+fn preset(preset: ConversationToolPreset) -> ToolPreset {
+    match preset {
+        ConversationToolPreset::ReadOnlyTools => ToolPreset::ReadOnlyTools,
+        ConversationToolPreset::NoShell => ToolPreset::NoShell,
+        ConversationToolPreset::AskEverything => ToolPreset::AskEverything,
+        ConversationToolPreset::All => ToolPreset::All,
+    }
+}
+
+fn wire_preset(preset: ToolPreset) -> ConversationToolPreset {
+    match preset {
+        ToolPreset::ReadOnlyTools => ConversationToolPreset::ReadOnlyTools,
+        ToolPreset::NoShell => ConversationToolPreset::NoShell,
+        ToolPreset::AskEverything => ConversationToolPreset::AskEverything,
+        ToolPreset::All => ConversationToolPreset::All,
+    }
+}
+
+/// A wire policy as the domain's: `preset` alone, or `allow` and `deny`
+/// together, each checked by `ToolRules::new`. Any other shape is
+/// `InvalidInput` (row J3).
+fn tool_policy(policy: ConversationToolPolicy) -> Result<ToolPolicy, ConversationError> {
+    match (policy.preset, policy.allow, policy.deny) {
+        (Some(named), None, None) => Ok(ToolPolicy::Preset(preset(named))),
+        (None, Some(allow), Some(deny)) => ToolRules::new(allow, deny)
+            .map(ToolPolicy::Rules)
+            .map_err(|_| ConversationError::InvalidInput),
+        _ => Err(ConversationError::InvalidInput),
+    }
+}
+
+fn wire_policy(policy: &ToolPolicy) -> ConversationToolPolicy {
+    match policy {
+        ToolPolicy::Preset(named) => ConversationToolPolicy {
+            preset: Some(wire_preset(*named)),
+            allow: None,
+            deny: None,
+        },
+        ToolPolicy::Rules(rules) => ConversationToolPolicy {
+            preset: None,
+            allow: Some(rules.allow().to_vec()),
+            deny: Some(rules.deny().to_vec()),
+        },
+    }
+}
+
+/// One grant as `conversation.shares` lists it (row J7).
+fn listed(grant: &ShareGrant) -> ConversationShare {
+    ConversationShare {
+        credential_id: grant.credential_id.as_str().to_owned(),
+        role: wire_role(grant.access.role()),
+        policy: grant.access.policy().map(wire_policy),
+        policy_revision: grant.policy_revision,
+        granted_at_ms: grant.granted_at_ms,
+    }
+}
+
+#[cfg(test)]
+#[path = "../../tests/product/read_access.rs"]
+mod tests;

@@ -11,6 +11,9 @@
 //!   ──▶ compose, as env serve does (lock, ledger, launcher)
 //!   ──▶ redial(dial, Composed::serve as the gateway the pin names) until
 //!   SIGINT or SIGTERM ──▶ finish
+//! with --enroll-code-file, before all of it: enroll_once(the file) ──▶
+//!   enrolled with its code when nothing is paired here, nothing sent when
+//!   paired with the gateway at ADDRESS, refused when paired with another
 //! with --drain-deadline, the first SIGINT or SIGTERM drains instead: the
 //!   connection being served ends every lease with its cleanup and closes,
 //!   nothing is dialed again ──▶ finish; stop_past_deadline closes it at the
@@ -26,9 +29,12 @@ use crate::{
     core::RunError,
     device_pairing::infrastructure::TlsStream,
     env_serve::{
-        application::{self, redial, stop_past_deadline, Backoff, NotApproved},
+        application::{
+            self, enroll_once, redial, stop_past_deadline, Backoff, EnrolledOnce, NotApproved,
+            NotEnrolled,
+        },
         domain::Peer,
-        infrastructure::{dial, Approved, FilePairingEnvironment, TokioTimer},
+        infrastructure::{dial, Approved, FileEnrollmentCode, FilePairingEnvironment, TokioTimer},
     },
 };
 use nessa_auth::adapters::pairing::{ManualCode, NativeIdentity};
@@ -36,6 +42,7 @@ use nessa_protocol::clock::Clock;
 use std::{
     future::Future,
     io::{self, Write},
+    path::Path,
     sync::Arc,
     time::Duration,
 };
@@ -57,7 +64,7 @@ pub(super) async fn enroll(address: &str, code: &str) -> Result<(), RunError> {
         .map_err(|_| RunError::Agent("that is not a pairing code".into()))?;
     check_address(address)?;
     let pairing = open(address)?;
-    let enrolled = pairing.enroll(code).await;
+    let enrolled = application::enroll(&pairing, code).await;
     pairing.shutdown().await;
     enrolled.map_err(RunError::Agent)?;
     writeln!(
@@ -67,7 +74,9 @@ pub(super) async fn enroll(address: &str, code: &str) -> Result<(), RunError> {
     Ok(())
 }
 
-/// `nessa env dial ADDRESS [--drain-deadline DURATION]`: once the owner has
+/// `nessa env dial ADDRESS [--drain-deadline DURATION] [--enroll-code-file
+/// PATH]`: with `enroll_code_file`, enrolled first when nothing is paired
+/// here ([`enroll_once`]); then, once the owner has
 /// approved this machine, serve the gateway at `address` over connections
 /// this machine dials, until SIGINT or SIGTERM. With `drain_deadline`, that
 /// signal drains: every lease ends with its cleanup on both sides before
@@ -78,13 +87,42 @@ pub(super) async fn enroll(address: &str, code: &str) -> Result<(), RunError> {
 /// before names resolve, it keeps trying.
 ///
 /// # Errors
-/// The address is not `HOST:PORT`, this machine is not paired, this host
-/// cannot serve, or its pairing cannot dial.
+/// The address is not `HOST:PORT`, this machine is not paired (or, with a
+/// code file, is paired with another gateway, or could not enroll), this
+/// host cannot serve, or its pairing cannot dial.
 pub(super) async fn dial_in(
     address: &str,
     drain_deadline: Option<Duration>,
+    enroll_code_file: Option<&Path>,
 ) -> Result<(), RunError> {
     check_address(address)?;
+    // Before any signal is taken: a stop while enrolling has nothing to
+    // drain, and the process's default ends it.
+    if let Some(code_file) = enroll_code_file {
+        let pairing = open(address)?;
+        let enrolled = enroll_once(&pairing, &FileEnrollmentCode(code_file.into())).await;
+        pairing.shutdown().await;
+        let enrolled = enrolled.map_err(|refused| {
+            RunError::Agent(match refused {
+                NotEnrolled::PairedElsewhere(recorded) => format!(
+                    "this machine is already paired with {}: run nessa env dial without \
+                     --enroll-code-file to serve it, or remove {} to pair it with {address}",
+                    recorded.map_or_else(
+                        || "a gateway it did not record".to_owned(),
+                        |recorded| format!("the gateway at {recorded}")
+                    ),
+                    pairing.directory().display(),
+                ),
+                NotEnrolled::Failed(reason) => reason,
+            })
+        })?;
+        match enrolled {
+            EnrolledOnce::Now => {
+                tracing::info!(%address, "enrolled; waiting for the owner's approval");
+            }
+            EnrolledOnce::Before => tracing::info!(%address, "already enrolled here"),
+        }
+    }
     let stop = Arc::new(watch::channel(false).0);
     let stopping = stop.subscribe();
     let (drain, draining) = watch::channel(false);
@@ -97,7 +135,7 @@ pub(super) async fn dial_in(
     // Without a deadline nothing drains: the signal stops, as before.
     let drain = drain_deadline.is_some().then_some(drain);
     let signals = tokio::spawn(on_signal(stop, drain));
-    let served = approved_then_served(address, stopping, draining).await;
+    let served = approved_then_served(address, enroll_code_file, stopping, draining).await;
     signals.abort();
     if let Some(deadline) = deadline {
         deadline.abort();
@@ -109,6 +147,7 @@ pub(super) async fn dial_in(
 /// `env serve` is not locked out while the owner decides.
 async fn approved_then_served(
     address: &str,
+    enroll_code_file: Option<&Path>,
     stopping: watch::Receiver<bool>,
     draining: watch::Receiver<bool>,
 ) -> Result<(), RunError> {
@@ -125,7 +164,7 @@ async fn approved_then_served(
         }
         let _ = asked.send(true);
     });
-    let approved = approval(address, &asking).await;
+    let approved = approval(address, enroll_code_file, &asking).await;
     let Some((identity, pin)) = approved? else {
         either.abort();
         return Ok(());
@@ -153,6 +192,7 @@ async fn approved_then_served(
 /// first. The pairing, and its directory's lock, is let go either way.
 async fn approval(
     address: &str,
+    enroll_code_file: Option<&Path>,
     stopping: &watch::Receiver<bool>,
 ) -> Result<Option<Approved>, RunError> {
     let pairing = open(address)?;
@@ -169,10 +209,16 @@ async fn approval(
             NotApproved::NotPaired => {
                 "this machine is not paired: run nessa env enroll first".into()
             }
-            NotApproved::Ended => "the gateway ended this pairing without approving it \
-                                   (denied, cancelled or expired): run nessa env enroll with \
-                                   a new code"
-                .into(),
+            // Its pending record is gone: the next start enrolls again, so
+            // a container needs a new code in its file, not a new command.
+            NotApproved::Ended => format!(
+                "the gateway ended this pairing without approving it (denied, cancelled or \
+                 expired): {}",
+                enroll_code_file.map_or_else(
+                    || "run nessa env enroll with a new code".to_owned(),
+                    |file| format!("put a new code in {}", file.display())
+                )
+            ),
             NotApproved::Unusable(reason) => reason,
         })
     })

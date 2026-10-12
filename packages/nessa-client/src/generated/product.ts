@@ -917,8 +917,47 @@ export interface ConversationDeleteParams {
   /** Stable action identifier retained for retries of one logical command. */
   requestId: string
 }
-/** Grant (conversation.share) or revoke (conversation.unshare) one paired device Read on one of the caller's conversations. Nothing is granted by default or by list: a paired device sees only the conversations granted to it, one grant per conversation, and an ungranted one is not listed, not readable and not watchable. A grant is refused share_target_not_paired unless the credential is an active paired device or peer gateway of the conversation's owner that holds conversation.read (an environment's credential never does), and conversation_deleted on a deleted conversation; a revoke needs only ownership. Revoking ends the device's next read; a read already admitted may finish. applied is false when nothing changed: granting a grant already held, or revoking one not held. A conversation holds at most 64 grants; one more is refused invalid_request. A retried requestId answers what it answered the first time, so a share retried after a later unshare grants nothing; the same requestId naming another device or the other change is refused invalid_request. A retried share is checked like a new one first, so once the conversation is deleted or the device unpaired it is refused conversation_deleted or share_target_not_paired and changes nothing. */
+/** What a share grant lets its holder do. read: list, read and watch the conversation's records. comment and drive name what later releases let the holder do (leave notes the agent sees on the owner's next turn; start, steer and stop turns under a tool policy); today both read exactly as read does, and every command that changes the conversation is still refused to a paired party whatever its role. */
+export const ConversationShareRole = {
+  Read: "read",
+  Comment: "comment",
+  Drive: "drive",
+} as const
+export type ConversationShareRole =
+  (typeof ConversationShareRole)[keyof typeof ConversationShareRole]
+/** A named tool policy. read_only_tools: only tools that read. no_shell: every tool except shell commands. ask_everything: every tool, each one asked for. all: every tool, asked as the conversation's approval mode asks. */
+export const ConversationToolPreset = {
+  ReadOnlyTools: "read_only_tools",
+  NoShell: "no_shell",
+  AskEverything: "ask_everything",
+  All: "all",
+} as const
+export type ConversationToolPreset =
+  (typeof ConversationToolPreset)[keyof typeof ConversationToolPreset]
+/** The tool policy a drive grant's turns run under: either preset alone, or allow and deny together. Allow and deny each hold at most 16 patterns, and at least one of the two holds one (both empty is refused); each pattern is 1 to 48 UTF-8 bytes with no surrounding whitespace and no control character; anything else is refused invalid_request. A pattern is kept as written; nothing evaluates it yet. */
+export interface ConversationToolPolicy {
+  /** A named policy. Present alone, without allow or deny. */
+  preset?: ConversationToolPreset
+  /** Tools the holder's turns may call. Present with deny, without preset. */
+  allow?: string[]
+  /** Tools the holder's turns may never call. Present with allow, without preset. */
+  deny?: string[]
+}
+/** Grant (conversation.share) one paired device or peer gateway a role on one of the caller's conversations, or change the role and policy it already holds there. Nothing is granted by default or by list: a paired party sees only the conversations granted to it, one grant per conversation, and an ungranted one is not listed, not readable and not watchable. Every role reads; drive needs a policy and read and comment take none, and either mistake is refused invalid_request. A grant is refused share_target_not_paired unless the credential is an active paired device or peer gateway of the conversation's owner that holds conversation.read (an environment's credential never does), and conversation_deleted on a deleted conversation. applied is false when nothing changed: granting the role and policy already held. A conversation holds at most 64 grants, and at most 8 drive grants; one more is refused invalid_request. A retried requestId answers what it answered the first time, so a share retried after a later unshare grants nothing; the same requestId naming another device, another role or policy, or the other change is refused invalid_request. A retried share is checked like a new one first, so once the conversation is deleted or the device unpaired it is refused conversation_deleted or share_target_not_paired and changes nothing. */
 export interface ConversationShareParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** The paired device's credential, as credential.list names it. */
+  credentialId: string
+  /** The role to grant. */
+  role: ConversationShareRole
+  /** The tool policy. Present exactly when role is drive. */
+  policy?: ConversationToolPolicy
+}
+/** Revoke (conversation.unshare) one paired party's grant on one of the caller's conversations, whatever its role. A revoke needs only ownership, so it works on a deleted conversation and for a party since unpaired. Revoking ends the party's next read; a read already admitted may finish. applied is false when no grant was held. A retried requestId answers what it answered the first time; the same requestId naming another device or the other change is refused invalid_request. */
+export interface ConversationUnshareParams {
   /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
   conversationId: string
   /** Stable action identifier retained for retries of one logical command. */
@@ -931,12 +970,16 @@ export interface ConversationSharesParams {
   /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
   conversationId: string
 }
-/** One Read grant on a conversation. */
+/** One grant on a conversation. */
 export interface ConversationShare {
   /** The paired device's credential, as credential.list names it. */
   credentialId: string
-  /** What the grant allows. Read: the device may list, read and watch the conversation's records. */
-  role: "read"
+  /** What the grant allows. */
+  role: ConversationShareRole
+  /** The tool policy. Present exactly when role is drive. */
+  policy?: ConversationToolPolicy
+  /** Moves each time the owner changes this grant's role or policy, and never otherwise. A later release stamps it on the turns a drive grant starts. */
+  policyRevision: number
   /** When the grant was made, Unix milliseconds. */
   grantedAtMs: number
 }

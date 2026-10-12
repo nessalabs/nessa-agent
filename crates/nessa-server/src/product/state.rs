@@ -8,8 +8,9 @@ use crate::attachments::{
     entrypoint::http::UploadRoute,
 };
 use crate::conversation::application::{
-    CatalogueReadSource, ConversationRepository, ConversationService, McpAppAudit, ReadGrants,
-    ReceiverAuthority, RecordReadSource, WatchCatalogue, WatchNamespaces, WatchRecords,
+    CatalogueReadSource, ConversationRepository, ConversationService, McpAppAudit,
+    ReceiverAuthority, RecordReadSource, ShareGrants, WatchCatalogue, WatchNamespaces,
+    WatchRecords,
 };
 use crate::conversation::infrastructure::UuidWatchNamespaces;
 pub(crate) use crate::core::limit_log::note_limit;
@@ -43,7 +44,7 @@ use tokio::sync::{watch, Semaphore};
 pub(crate) type PassiveReadAuthorities = (
     Arc<dyn ReceiverAuthority>,
     Arc<dyn ConversationRepository>,
-    Arc<dyn ReadGrants>,
+    Arc<dyn ShareGrants>,
 );
 
 /// The paired environments connected now, as `PeerEnvironments` answers
@@ -359,9 +360,9 @@ impl ProductRouteState {
         mut self,
         receivers: Arc<dyn ReceiverAuthority>,
         conversations: Arc<dyn ConversationRepository>,
-        read_grants: Arc<dyn ReadGrants>,
+        share_grants: Arc<dyn ShareGrants>,
     ) -> Self {
-        self.passive_read = Some((receivers, conversations, read_grants));
+        self.passive_read = Some((receivers, conversations, share_grants));
         self
     }
 

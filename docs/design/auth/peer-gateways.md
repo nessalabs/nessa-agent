@@ -98,7 +98,7 @@ peer's receiver, and every read the peer makes asks that receiver's grants:
   `AdmitPassiveRead::execute`, which asks `admit_read` for the receiver's
   grant on that conversation; an ungranted one is `wrong_owner`.
 - **Catalogue manifest and resolve** are narrowed in SQL to the receiver's
-  granted rows (`store::read_grants::granted`). A manifest pass may not reach
+  granted rows (`store::share_grants::granted`). A manifest pass may not reach
   past the receiver's own head, so probing boundaries finds that head and not
   the owner's; an ungranted id resolves as one that does not exist.
 - **Catalogue head** is the latest revision among the receiver's granted rows
@@ -523,6 +523,7 @@ cannot be reached.
 nessa env enroll ADDRESS CODE   pair as an environment, with an environment invitation's code
 nessa env dial ADDRESS          wait for the owner's approval, then serve, dialing again whenever a connection ends
                                 [--drain-deadline 20s] a signal drains every lease before it stops (row K1)
+                                [--enroll-code-file PATH] enroll first when nothing is paired here (row K2)
 ```
 
 ```mermaid
@@ -670,6 +671,64 @@ sequenceDiagram
   conversations were placed on, stays the same. The two must not overlap: a
   second connection from the same key takes the first one's place and its
   leases are lost, and only one process serves a data directory at a time.
+
+### Starting from a container (row K2)
+
+A container runs one command on every start, and a pairing code is good
+once. So `env dial` takes the code from a file, as a mounted secret, and
+enrolls with it only while nothing is paired on the volume:
+
+```text
+nessa env dial ADDRESS --enroll-code-file /run/secrets/nessa_enroll_code --drain-deadline 20s
+```
+
+```mermaid
+sequenceDiagram
+    participant K as Container runtime
+    participant D as env dial (E)
+    participant P as E's pairing (environment/pairing, paired-with)
+    participant G as Gateway at ADDRESS
+    K->>D: start
+    D->>P: what is paired here?
+    alt nothing
+        D->>D: read the code from the file
+        D->>P: record paired-with = ADDRESS
+        D->>G: enroll with it
+    else paired (approved or not yet) with ADDRESS
+        D->>D: send nothing, read no code
+    else paired with another address, or none recorded
+        D-->>K: refuse: run env dial without the flag, or remove environment/pairing
+    end
+    D->>G: wait for approval, then dial and serve (rows I1 to K1)
+```
+
+- **One organization per container.** A gateway is one organization and a
+  pairing names one gateway, so the organization a worker serves is the
+  gateway its pin names. Nothing on the worker copies an organization id.
+- **Decided in the application, read in adapters.** `enrollment.rs` decides
+  through two ports: `EnrollingPairing` (what is saved, the recorded
+  address, recording it, sending the code) and `EnrollmentCode` (the code
+  file). `FilePairingEnvironment` and `FileEnrollmentCode` are their real
+  adapters, and composition turns a refusal into what to do.
+- **The address enrolled with is recorded** beside the pairing, in
+  `environment/paired-with`, before the code is sent, and read only while a
+  pairing exists. A reply lost after the pending record is saved still
+  finds that address on the next start, which then waits for approval; a
+  code the gateway refuses leaves no pairing, so the file is read by
+  nothing. It is compared as written: the same gateway named another way is
+  refused, which fails safe. A volume
+  paired with gateway A that is given gateway B's address and code refuses
+  rather than dialing B with A's pin or taking B's code as its own; B is
+  sent nothing, so B's invitation stays unclaimed. A pairing that recorded
+  no address (made before this) refuses too, rather than guess, and is
+  still served by `env dial` without the flag.
+- **Starting cannot reach the gateway** to enroll: `env dial` exits with the
+  reason, and the container's restart policy tries again. Nothing was sent,
+  so the next start enrolls with the same code.
+- **The example** in `docs/guides/env-worker/` builds an image holding
+  `nessa` alone, with the volume at `NESSA_DATA_DIR`, the code as a secret,
+  the deadline below `stop_grace_period`, and a compose service per
+  organization.
 
 ### What the environment grants
 
@@ -892,6 +951,7 @@ Each row has at least one test.
 | I9 | A paired environment's harness publishes a file, or the gateway asks it to publish one for the agent; the gateway reads it over the connection; the connection is lost mid-read, or the staged copy is cut short; the gateway reads a range of an artifact not waiting for its answer, or more ranges than the bound | The file's bytes come over the lease frames, at most four 64 KiB ranges of one file unanswered, no artifact channel opened; verified by digest and held with the lease as cause; E records `published` then `collected` (held) and answers the harness `held`, and lets the copy go. A loss mid-read refuses the file `leaseEnded` with nothing held, E records it `unanswered`; a copy cut short is refused `mismatch`. E answers only a copy staged under that lease and still unanswered (else `notStaged`, and a lease not held is a recorded drop), clamps a range to 64 KiB, answers short or empty at the copy's end, refuses a fifth read of one artifact `busy` while four are read or wait for the writer (a gateway reading nothing holds no more), stops a lease's reads at its end so none answers after `Ended`, an unreadable copy `unreadable`, and one let go while it was read `notStaged`; after `Revoked`, a read of a file it had offered is `notStaged` | `a_paired_environment_publishes_a_file_and_the_gateway_reads_it_back`; `a_paired_connection_carries_a_published_file_on_its_lease_frames_and_it_verifies`; `a_paired_lease_lost_mid_read_fails_as_ended_and_leaves_no_partial_hold`; `a_staged_copy_cut_short_mid_read_on_a_paired_connection_is_a_mismatch`; `a_staged_copy_is_read_by_range_only_while_it_waits_for_its_answer`; `reads_past_the_bound_are_refused_busy_and_an_unreadable_copy_is_said`; `a_read_after_the_gateway_revoked_is_answered_not_staged`; `a_copy_let_go_while_it_is_read_is_answered_not_staged`; `no_read_answers_after_its_lease_ended`; `a_gateway_that_reads_nothing_holds_a_bounded_number_of_answers`; `an_artifact_read_names_its_range_and_its_answer_the_bytes_or_why_not`; `every_frame_round_trips_and_names_its_lease` |
 | I10 | A surface follows the agent catalogue (`agents.subscribe`) while a paired environment connects, its connection ends, it connects again and is revoked; a change leaves the catalogue as it was; the follower's grant is lost; it subscribes twice, or unsubscribes with the other kind's method | `PeerEnvironments::connections` moves once each time a connection is admitted and once each time one ends, and once more when one is revoked, each after the connected list has changed; the subscription sends the catalogue `agents.list` answers then, after its reply and again on each move, and nothing when it is the same; moves while a frame waits are one frame; the conversation catalogue's head and list do not move; it is admitted as `agents.list` is (`server.read`, which no peer's credential holds), and a lost grant ends it `refused`; a second is `subscription_duplicate`; each unsubscribe answers `unknown_subscription` for the other's; it ends with its socket, and `source_closed` with its source; the panel's choices replace the list on each frame and stop the subscription on unmount | `connection_changes_are_said_as_a_paired_environment_connects_ends_and_is_revoked`; `the_agent_catalog_is_sent_again_as_paired_environments_come_and_go`; `a_gateway_pairing_no_environments_sends_its_catalog_once`; `changes_while_a_catalog_frame_waits_collapse_into_one_frame`; `paired_environments_coming_and_going_never_move_the_conversation_catalogue`; `a_second_agent_catalog_subscription_is_a_duplicate`; `following_the_agent_catalog_is_admitted_as_reading_it_is`; `each_unsubscribe_stops_only_its_own_kind`; `the_environments_source_closing_ends_the_catalog_subscription`; `an_agent_catalog_frame_is_the_generated_shape`; `replaces the choices with each catalog the follow sends, and stops it on unmount` (`src/panel/ui/use-agent-choices.test.ts`) |
 | K1 | A worker started with `env dial --drain-deadline` is signalled while it holds a harness's lease, a running command and a command never run; a grant crosses the drain; the drain's record cannot be kept; the gateway revokes it while it drains; it holds nothing; the deadline passes | Each lease is recorded `draining` (with its gateway) then `ended` with cause `drained`; the harness is stopped, `Ending{drained}` is said and the gateway's `End` answered with that cleanup; the command is stopped and answers its `Ran` as drained, which the gateway takes as a system stop; the unrun one ends holding nothing, and serving waits for its `Run`, answered never started; a crossing grant is refused `draining`, recorded so; an unrecorded drain still stops and answers `uncertain`; a revocation after it ends nothing twice; serving ends once every drained lease's `End` is asked, at once when nothing is held; on the gateway the lease is recorded ending as `stopped` by `environment_drained`, then ended with E's cleanup, and E leaves the connected list; a drain asked between dials ends the wait and dials no more; past the deadline stop is asked | `k1_a_drain_ends_every_lease_recorded_then_serving_ends_once_answered`; `k1_an_idle_host_asked_to_drain_stops_serving_at_once`; `k1_a_drain_that_cannot_be_recorded_still_stops_and_answers_uncertain`; `k1_a_drain_waits_for_the_run_of_a_command_it_ended_unrun`; `k1_a_drain_asked_while_the_gateway_reads_nothing_ends_the_lease_at_once`; `k1_a_grant_waiting_as_the_drain_is_asked_is_refused`; `k1_a_command_its_host_drained_is_stopped_by_the_system_not_lost`; `k1_an_unrecorded_drain_of_an_unrun_command_answers_its_run_uncertain`; `k1_a_revocation_after_a_drain_ends_the_lease_once_as_drained`; `k1_a_paired_environment_drains_and_both_sides_record_its_cleanup`; `k1_an_environment_drain_is_recorded_stopped_by_the_system_then_ended`; `a_drain_lets_the_connection_end_by_itself_and_dials_no_more`; `a_drain_asked_while_waiting_ends_the_wait`; `a_drain_past_its_deadline_asks_stop` |
+| K2 | `env dial --enroll-code-file` starts on a volume paired with nothing, again before approval, and again after; a volume paired with A starts with B's address and code; a pairing that recorded no address; a file holding no code; a code the gateway never gave | It enrolls once, then each restart sends nothing and finds A's pin; the volume paired with A refuses naming A, and B's invitation stays unclaimed; no recorded address refuses; the file is refused as holding no code; the wrong code is refused and leaves no pairing, so the right one then enrolls | `k2_a_code_file_enrolls_once_then_dials`; `k2_a_volume_paired_to_one_gateway_refuses_enrolling_with_another`; `env_enroll_names_a_gateway_and_a_code_and_env_dial_a_gateway`; and, through the `EnrollingPairing` and `EnrollmentCode` ports, `nothing_paired_records_the_address_then_sends_the_code`, `a_pairing_with_this_gateway_reads_and_sends_nothing`, `a_pairing_with_another_gateway_or_none_recorded_is_refused_untouched`, `a_code_that_cannot_be_read_sends_and_records_nothing`, `an_address_that_cannot_be_recorded_sends_no_code`, `a_gateway_that_refuses_the_code_is_said`, `a_pairing_that_cannot_be_read_enrolls_nothing`, `enrolling_over_a_pairing_keeps_its_recorded_address` |
 | H10 | A registry whose owner membership is disabled or not an admin | Refused on open (`owner_membership`). The pairing initiator's membership is what keeps a grantor live; the owner's is the one the registry pins | `a_registry_whose_owner_is_not_an_active_admin_does_not_open` |
 
 ## The dialing side
@@ -1263,7 +1323,7 @@ sequenceDiagram
 H as a whole is larger than one change. Part 1 (#725) is the granting side;
 part 2a puts a peer's reads behind its grants; part 2b-1 lets the gateway link
 the client and gives the head an access path by receiver
-(`read_grant_changes_by_receiver`); part 2b-2 enrolls and part 2b-3 reads
+(`share_grant_changes_by_receiver`); part 2b-2 enrolls and part 2b-3 reads
 (above). The rest:
 
 - **The peer table's last addresses and local discovery.** The issue lists

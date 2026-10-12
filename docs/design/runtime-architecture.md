@@ -1016,6 +1016,14 @@ subscription batch, and recorded as a semantic record with the owner as
 initiator. Nothing is granted by conversation list, by folder or by
 default; a peer with no grant on an id cannot tell it exists.
 
+Where it stands: grants per conversation id are built (slice G,
+[read grants](read-grants.md)), and each grant now has its role and, for
+Drive, its tool policy and policy revision (slice J1 of #707). Those are
+stored, journaled and listed only: every role reads exactly as Read, and
+every command that changes a conversation is still refused to a paired
+party. Admitting Drive's commands, Comment's notes and enforcing the policy
+are the later slices of #707.
+
 - **Role** is Read, Comment or Drive, as in situation 7. Drive never
   includes delete, export, re-share or changing the model; those stay the
   owner's.
@@ -1691,7 +1699,7 @@ locally.
 | Agent tools for the mesh | `nessa-mcp` serves shell and other Nessa tools locally; no environment argument | `environments.list`, `thread.create` with an environment, `run` on an environment, `artifacts.publish`/`fetch`, all thin over product methods and validated by the gateway | `nessa-mcp`; gateway `environment.*` methods | 0012; C [#700](https://github.com/nessalabs/nessa-agent/issues/700), I [#706](https://github.com/nessalabs/nessa-agent/issues/706) |
 | Reaching the gateway from outside | Loopback `/session`; native listener with pairing to Approved when configured | Overlay or tunnel are the person's choice and need nothing new; the relay is #266; the native listener admits only minted credentials on both paths | Gateway `device_pairing`, composition | #263, #265, #266 |
 | Directional sync | The device client follows what its credential grants, all of it | Follow rules per peer (which granted conversations, how much to keep) beside grants per peer (which conversations, which role); two gateways never merge stores; environment policy per peer and per work kind | `nessa-client-core` follow table; gateway grants; sync engine scope | #257, #262; G [#704](https://github.com/nessalabs/nessa-agent/issues/704) |
-| Sharing | Grants are per principal across its organization's conversations; devices get `conversation.read` on all of the owner's | Grants per conversation id with a role (Read, Comment, Drive) and a per-principal tool policy revision carried on each accepted turn | Gateway `auth`, `conversation`; 0014 policy owner | 0011 phase B; #130 slices; G [#704](https://github.com/nessalabs/nessa-agent/issues/704), J [#707](https://github.com/nessalabs/nessa-agent/issues/707) |
+| Sharing | Grants per conversation id (G); each grant has a role, Read, Comment or Drive, and a Drive grant a tool policy and its revision (J1), but every role only reads and a paired party's writes are refused | Grants per conversation id with a role (Read, Comment, Drive) and a per-principal tool policy revision carried on each accepted turn | Gateway `auth`, `conversation`; 0014 policy owner | 0011 phase B; #130 slices; G [#704](https://github.com/nessalabs/nessa-agent/issues/704), J [#707](https://github.com/nessalabs/nessa-agent/issues/707) |
 | Previews | None | Lease-scoped loopback forwards over the SSH session or a paired stream, only for the lease's own ports, recorded and shown | Gateway environment adapters; `nessa-mcp` | B [#699](https://github.com/nessalabs/nessa-agent/issues/699), I [#706](https://github.com/nessalabs/nessa-agent/issues/706) |
 | Environment health and limits | None | Idle sleep with native resume, low-disk pause, health in `environments.list` | `nessa env serve`; environment adapters | B [#699](https://github.com/nessalabs/nessa-agent/issues/699) |
 | Backup and restore | None | Export cut with deletion inventory; quarantined restore | New gateway module | #270 |
