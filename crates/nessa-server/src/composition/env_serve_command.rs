@@ -23,14 +23,15 @@ use crate::{
     env_serve::{
         application::{
             refuse, serve, ArtifactInbox, CommandRunner, HarnessLauncher, Runners, ServeTimings,
-            Serving, Timer,
+            Serving,
         },
         domain::Peer,
         infrastructure::{
             ConfiguredLauncher, FileGrants, FileInbox, FileLedger, FileOutbox, LaunchSpec,
-            ServeLock, ServeLockError, ShepherdCommands, TokioTimer, COMMAND_VARIABLES,
+            ServeLock, ServeLockError, ShepherdCommands, COMMAND_VARIABLES,
         },
     },
+    timer::{Timer, TokioTimer},
 };
 use nessa_protocol::{
     agents::AgentId,

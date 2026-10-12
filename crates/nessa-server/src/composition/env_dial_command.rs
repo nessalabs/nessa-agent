@@ -24,8 +24,9 @@ use crate::{
     env_serve::{
         application::{self, redial, Backoff, NotApproved},
         domain::Peer,
-        infrastructure::{dial, Approved, FilePairingEnvironment, TokioTimer},
+        infrastructure::{dial, Approved, FilePairingEnvironment},
     },
+    timer::TokioTimer,
 };
 use nessa_auth::adapters::pairing::{ManualCode, NativeIdentity};
 use nessa_protocol::clock::Clock;

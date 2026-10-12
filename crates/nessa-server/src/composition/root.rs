@@ -189,6 +189,7 @@ impl CompositionRoot {
             Command::McpRelay { .. } => {
                 Err(RunError::Agent("MCP stand-ins require Unix sockets".into()))
             }
+            Command::RelayServe { listen } => super::relay_command::execute(&listen).await,
         }
     }
 

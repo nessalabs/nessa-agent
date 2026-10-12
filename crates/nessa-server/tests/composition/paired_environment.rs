@@ -21,13 +21,14 @@ use crate::conversation::infrastructure::LocalReceiverAuthority;
 use crate::device_pairing::infrastructure::PairingOwnerCommands;
 use crate::env::{LEASE_PROTOCOL, VERSION};
 use crate::env_serve::application::{
-    serve, CommandRan, CommandRunner, CommandStop, ManualTimer, Runners, ServeTimings, Serving,
+    serve, CommandRan, CommandRunner, CommandStop, Runners, ServeTimings, Serving,
 };
 use crate::env_serve::domain::{Agents, CommandGrant, MaxLease, Peer, PeerGrant};
 use crate::env_serve::infrastructure::{
-    dial, ConfiguredLauncher, FileGrants, FileLedger, FileOutbox, LaunchSpec, TokioTimer,
+    dial, ConfiguredLauncher, FileGrants, FileLedger, FileOutbox, LaunchSpec,
 };
 use crate::product::{ProductDependencies, ProductRouteState};
+use crate::timer::{manual::ManualTimer, TokioTimer};
 use nessa_auth::adapters::cedar::CedarPolicyEvaluator;
 use nessa_auth::adapters::local::LocalCredentialStore;
 use nessa_auth::adapters::pairing::{FilePairingState, ManualCode, NativeIdentity, OsEntropy};
@@ -300,7 +301,7 @@ struct Host {
     /// Where `ledger` is written.
     ledger_path: std::path::PathBuf,
     /// What its serving waits on.
-    timer: Arc<dyn crate::env_serve::application::Timer>,
+    timer: Arc<dyn crate::timer::Timer>,
 }
 
 impl Host {

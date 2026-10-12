@@ -1,16 +1,20 @@
-//! The timer the environment role waits on (issue #758): every deadline,
-//! interval and wait in `serve.rs`, `redial.rs` and `approval.rs` is
-//! measured on a [`Timer`] they are given, never on the runtime's clock.
+//! The timer waits are measured on (issues #758 and #266): every deadline,
+//! interval and wait in the environment role (`env_serve`'s `serve.rs`,
+//! `redial.rs` and `approval.rs`) and in the relay is measured on a
+//! [`Timer`] it is given, never on the runtime's clock.
 //!
 //! ```text
-//! composition ──▶ TokioTimer (infrastructure) ──▶ serve, redial, approval
-//! a test      ──▶ ManualTimer                 ──▶ the same, moved by the test
+//! composition ──▶ TokioTimer (runtime.rs) ──▶ env_serve, relay
+//! a test      ──▶ ManualTimer             ──▶ the same, moved by the test
 //! ```
 //!
 //! Arrows are what each is given. A test says exactly when a wait ends, so
 //! what a deadline passing means is tested without waiting for one, and a
 //! slow machine cannot cut a wait short. What the host's own ports take as
 //! a budget (a harness's cleanup, a command's timeout) is theirs to measure.
+mod runtime;
+
+pub(crate) use runtime::TokioTimer;
 use std::{future::Future, ops::Add, pin::Pin, time::Duration};
 
 /// A moment on one [`Timer`]'s timeline: how long after that timer's origin.
@@ -89,5 +93,5 @@ pub(crate) fn timeout<'a, T: 'a>(
 }
 
 #[cfg(test)]
-#[path = "../../../tests/env_serve/manual_timer.rs"]
+#[path = "../../tests/timer/manual.rs"]
 pub(crate) mod manual;

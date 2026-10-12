@@ -230,6 +230,27 @@ fn env_enroll_names_a_gateway_and_a_code_and_env_dial_a_gateway() {
 }
 
 #[test]
+fn relay_serve_names_the_address_it_listens_on() {
+    assert_eq!(
+        parse(&args(&["relay", "serve", "--listen", "0.0.0.0:7444"])).unwrap(),
+        Command::RelayServe {
+            listen: "0.0.0.0:7444".into(),
+        }
+    );
+    for refused in [
+        vec!["relay"],
+        vec!["relay", "serve"],
+        vec!["relay", "serve", "0.0.0.0:7444"],
+        vec!["relay", "serve", "--listen"],
+        vec!["relay", "serve", "--listen", "--help"],
+        vec!["relay", "serve", "--listen", "a:1", "extra"],
+    ] {
+        assert!(parse(&args(&refused)).is_err(), "{refused:?}");
+    }
+    assert!(crate::cli::entrypoint::HELP.contains("nessa relay serve --listen HOST:PORT"));
+}
+
+#[test]
 fn env_grant_names_agents_or_every_agent_and_commands_with_their_longest_run() {
     assert_eq!(
         parse(&args(&[
