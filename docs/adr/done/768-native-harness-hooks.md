@@ -36,6 +36,7 @@ Applies the next time each conversation's agent starts, including a
 conversation that is already open. A process already running keeps the choice
 it started with. The conversation view shows that start's value, and when it
 differs from the current switch says the new value applies at the next start.
+With no process started, it states no run's value.
 Hooks can approve, deny, or change a tool call and its result without Nessa
 asking, and can run commands when the agent starts. With hooks on, recorded
 input and output are what the model proposed or the tool returned, and a hook

@@ -180,14 +180,18 @@ function ConversationFacts({
             <>
               <Fact label="Deny a request" value={support(features.permissionDenial)} />
               <Fact label="Answer later" value={support(features.permissionDeferral)} />
-              <Fact
-                label="Native hooks"
-                value={nativeHooksCopy(
-                  features.nativeHooks,
-                  runtime?.agent,
-                  nativeHooksSwitch,
-                )}
-              />
+              {/* A run's hooks are a fact about its process. With none started,
+                  the default capabilities say off whatever the last run used. */}
+              {runtime ? (
+                <Fact
+                  label="Native hooks"
+                  value={nativeHooksCopy(
+                    features.nativeHooks,
+                    runtime.agent,
+                    nativeHooksSwitch,
+                  )}
+                />
+              ) : null}
             </>
           ) : (
             <Fact label="Deny a request" value="Not verified" />

@@ -79,6 +79,21 @@ function show(item: ReturnType<typeof conversation>) {
   })
 }
 
+/** A conversation whose agent process has started, as the gateway reports it. */
+function started() {
+  return attached({
+    runtime: {
+      model: "claude-sonnet-5",
+      provider: "claude-acp",
+      workspace: "/work/nessa",
+      agent: "claude",
+      modelName: "Sonnet 5",
+      contextWindowTokens: 200_000,
+      reasoning: true,
+    },
+  })
+}
+
 function group(title: string) {
   const section = [...document.body.querySelectorAll("section")].find(
     (item) =>
@@ -101,10 +116,22 @@ it("says in a word whether approvals work here, without the capability jargon", 
   show(attached())
 
   expect(group("Approvals")).toBe(
-    "ApprovalsTool callsProvider asksDeny a requestSupportedAnswer laterNot yet in NessaNative hooksFor this run, Nessa asks this agent to leave its own hooks off.",
+    "ApprovalsTool callsProvider asksDeny a requestSupportedAnswer laterNot yet in Nessa",
   )
   expect(group("Model")).toBe("ModelImagesNot supported")
   expect(document.body.textContent).not.toContain("turn correlation")
+})
+
+it("claims no run's hooks before an agent process has started", () => {
+  // A conversation followed after a restart has no process, and its default
+  // capabilities read off whatever its last run used.
+  show(attached())
+  expect(group("Approvals")).not.toContain("Native hooks")
+
+  show(started())
+  expect(group("Approvals")).toContain(
+    "Native hooksFor this run, Nessa asks this agent to leave its own hooks off.",
+  )
 })
 
 it("says a hook can change a tool call when native hooks are on", () => {
@@ -192,7 +219,7 @@ it("names hooks on, and warns about the repo's settings, when Claude's next star
 })
 
 it("reads the switch again when the window is focused", async () => {
-  const item = attached()
+  const item = started()
   let choice: "off" | "on" = "on"
   await act(async () => {
     root.render(
@@ -219,7 +246,7 @@ it("reads the switch again when the window is focused", async () => {
 })
 
 it("keeps the newest read when an older one settles last", async () => {
-  const item = attached()
+  const item = started()
   const pending: Array<(choice: "off" | "on") => void> = []
   await act(async () => {
     root.render(
@@ -247,7 +274,7 @@ it("keeps the newest read when an older one settles last", async () => {
 })
 
 it("keeps this run's sentence when the switch still matches", async () => {
-  const item = attached()
+  const item = started()
   await act(async () => {
     root.render(
       <ConversationDetails
