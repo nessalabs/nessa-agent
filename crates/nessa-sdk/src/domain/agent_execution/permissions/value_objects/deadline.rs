@@ -101,7 +101,7 @@ impl PartialEq<&str> for DeadlineReason {
 /// One class's wait, the outcome taken when it ends, and the reason recorded
 /// with that outcome. The reason is what the audit and the after-the-fact
 /// notice show. A pending card builds its own line from the outcome and the wait.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct PermissionReviewDeadline {
     class: PermissionToolClass,
     wait: Duration,
@@ -220,6 +220,23 @@ impl PermissionReviewDeadline {
         }
     }
 }
+
+impl PartialEq for PermissionReviewDeadline {
+    /// `armed` is whether this process will decide the review. A save folds
+    /// the live review back through restore, and restore does not arm it,
+    /// because a restarted process has no provider request to answer. The
+    /// recorded decision is the same either way.
+    fn eq(&self, other: &Self) -> bool {
+        self.class == other.class
+            && self.wait == other.wait
+            && self.effect == other.effect
+            && self.reason == other.reason
+            && self.stops_turn == other.stops_turn
+            && self.due_at_ms == other.due_at_ms
+    }
+}
+
+impl Eq for PermissionReviewDeadline {}
 
 /// The two class deadlines a host installs. [`Self::standard`] is what
 /// composition installs when a host does not replace it.
@@ -781,9 +798,53 @@ mod tests {
         assert!(promised.armed());
         assert_eq!(promised.due_at_ms(), Some(1_700_000_030_000));
         assert_eq!(promised.recorded_reason().as_str(), STANDARD_STOP_REASON);
-        let restored = promised.restored(true, Some(1_700_000_030_000));
+        let restored = promised.clone().restored(true, Some(1_700_000_030_000));
         assert!(!restored.armed());
         assert!(restored.stops_turn());
         assert_eq!(restored.due_at_ms(), Some(1_700_000_030_000));
+        assert_eq!(promised, restored);
+        let due = 1_700_000_030_000;
+        let different_class = PermissionReviewDeadline::new(
+            PermissionToolClass::ReadOnly,
+            Duration::from_secs(30),
+            PermissionEffect::Deny,
+            STANDARD_STOP_REASON,
+        )
+        .unwrap()
+        .restored(true, Some(due));
+        assert_ne!(promised, different_class);
+        let different_wait =
+            PermissionReviewDeadline::stopping(PermissionToolClass::Other, Duration::from_secs(8))
+                .promise(due);
+        assert_ne!(promised, different_wait);
+        let different_effect = PermissionReviewDeadline::new(
+            PermissionToolClass::Other,
+            Duration::from_secs(30),
+            PermissionEffect::Allow,
+            STANDARD_STOP_REASON,
+        )
+        .unwrap()
+        .restored(true, Some(due));
+        assert_ne!(promised, different_effect);
+        let different_reason = PermissionReviewDeadline::new(
+            PermissionToolClass::Other,
+            Duration::from_secs(30),
+            PermissionEffect::Deny,
+            STANDARD_DENY_REASON,
+        )
+        .unwrap()
+        .restored(true, Some(due));
+        assert_ne!(promised, different_reason);
+        let different_stop = PermissionReviewDeadline::new(
+            PermissionToolClass::Other,
+            Duration::from_secs(30),
+            PermissionEffect::Deny,
+            STANDARD_STOP_REASON,
+        )
+        .unwrap()
+        .restored(false, Some(due));
+        assert_ne!(promised, different_stop);
+        let different_due = promised.clone().restored(true, None);
+        assert_ne!(promised, different_due);
     }
 }

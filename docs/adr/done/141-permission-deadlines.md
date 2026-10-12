@@ -111,7 +111,7 @@ first row that matches is what happens.
 | The session closes, or the person stops the turn, while a review is pending | The deadline is disarmed before the shutdown wait. Stopping the turn holds the next prompt, as 132 does. |
 | The selected-answer audit fails | The provider is still answered. The audit failure is retained and does not stop the turn. |
 | A saved review has no deadline | No automatic decision. The review stays pending until a person answers. |
-| A saved deadline is restored | The deadline stays on the record, including whether it would have stopped the turn and when it was due. It is not armed. The card does not promise a decision the new process will not make. |
+| A saved deadline is restored | The deadline stays on the record, including whether it would have stopped the turn and when it was due. It is not armed. The card does not promise a decision the new process will not make. Whether this process will decide is not part of the recorded decision, so a live save of an armed review still matches. |
 | A saved deadline is not a deadline | The record is corrupt, as any other wrong-typed field is. A blank reason or a wait of zero is skipped, and the review waits for a person. |
 
 The permission wait is its own branch in the worker, after the command branch

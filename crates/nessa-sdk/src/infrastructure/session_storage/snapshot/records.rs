@@ -871,6 +871,10 @@ mod borrowed_event_tests {
         assert!(restored.stops_turn());
         assert_eq!(restored.due_at_ms(), Some(1_700_000_030_000));
         assert!(!restored.armed(), "a restored deadline is not a promise");
+        assert!(deadline.armed());
+        // The recorded decision matches, so a live save can fold this review.
+        // Armed stays out of that equality: restore must not promise a decision.
+        assert_eq!(decoded, event);
 
         let answered = ExecutionEvent::new(
             ExecutionId::new("output").unwrap(),
