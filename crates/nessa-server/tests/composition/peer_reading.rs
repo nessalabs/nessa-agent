@@ -14,9 +14,9 @@ use crate::composition::local_auth::SystemClock;
 use crate::composition::native_pairing::{bind, prepare, start, NativeInputs, RunningNative};
 use crate::composition::runtime_config::NativeConfig;
 use crate::conversation::application::{
-    ConversationCaller, ConversationRepository, ReadGrantChange, ReadGrantTransition, ReadGrants,
+    ConversationCaller, ConversationRepository, ShareGrantChange, ShareGrantTransition, ShareGrants,
 };
-use crate::conversation::domain::{Conversation, ConversationDeletion};
+use crate::conversation::domain::{Conversation, ConversationDeletion, ShareAccess};
 use crate::conversation::infrastructure::{
     LocalConversationStore, LocalReceiverAuthority, NessaCatalogueReadSource, NessaRecordReadSource,
 };
@@ -273,13 +273,13 @@ impl Peer {
     /// The owner shares, or unshares, `id` with the paired reader.
     async fn grant(
         &self,
-        transition: ReadGrantTransition,
+        transition: ShareGrantTransition,
         id: &ConversationId,
         reader: &(String, String),
     ) {
-        ReadGrants::change(
+        ShareGrants::change(
             self.metadata.as_ref(),
-            ReadGrantChange {
+            ShareGrantChange {
                 transition,
                 conversation_id: id.clone(),
                 receiver_id: Some(reader.0.clone()),
@@ -863,26 +863,46 @@ async fn reads(refuse: bool) {
     assert!(b.cached(&key, &reader.0).is_empty());
 
     // R2: A shares X and not Y; B's cache gets X only.
-    a.grant(ReadGrantTransition::Grant, &x, &reader).await;
+    a.grant(
+        ShareGrantTransition::Grant(ShareAccess::read()),
+        &x,
+        &reader,
+    )
+    .await;
     synced_with(&b, 1).await;
     assert_eq!(b.cached(&key, &reader.0), vec![x.to_string()]);
 
     // R3: A shares Y and unshares X; the next read takes both.
-    a.grant(ReadGrantTransition::Grant, &y, &reader).await;
-    a.grant(ReadGrantTransition::Revoke, &x, &reader).await;
+    a.grant(
+        ShareGrantTransition::Grant(ShareAccess::read()),
+        &y,
+        &reader,
+    )
+    .await;
+    a.grant(ShareGrantTransition::Revoke, &x, &reader).await;
     synced_with(&b, 1).await;
     assert_eq!(b.cached(&key, &reader.0), vec![y.to_string()]);
 
     // R4: A unshares Y and shares nothing else; B's cache empties. Shared
     // again, it comes back.
-    a.grant(ReadGrantTransition::Revoke, &y, &reader).await;
+    a.grant(ShareGrantTransition::Revoke, &y, &reader).await;
     synced_with(&b, 0).await;
     assert!(b.cached(&key, &reader.0).is_empty());
-    a.grant(ReadGrantTransition::Grant, &y, &reader).await;
+    a.grant(
+        ShareGrantTransition::Grant(ShareAccess::read()),
+        &y,
+        &reader,
+    )
+    .await;
     synced_with(&b, 1).await;
 
     // R5: A shares Z, then deletes it; B's cache drops it.
-    a.grant(ReadGrantTransition::Grant, &z, &reader).await;
+    a.grant(
+        ShareGrantTransition::Grant(ShareAccess::read()),
+        &z,
+        &reader,
+    )
+    .await;
     synced_with(&b, 2).await;
     a.metadata
         .record_deletion(
@@ -909,7 +929,7 @@ async fn reads(refuse: bool) {
     // At that unchanged head B walks again and withdraws Y; it is `synced`
     // only after that, holding nothing.
     let before = b.snapshot(&key);
-    a.grant(ReadGrantTransition::Revoke, &y, &reader).await;
+    a.grant(ShareGrantTransition::Revoke, &y, &reader).await;
     synced_with(&b, 0).await;
     let head = b.completed(&key);
     b.restore(&key, &before);
@@ -925,7 +945,12 @@ async fn reads(refuse: bool) {
         "withdrawn at the unchanged head"
     );
     assert_eq!(b.walks(&key), 1, "the finished walk is noted");
-    a.grant(ReadGrantTransition::Grant, &y, &reader).await;
+    a.grant(
+        ShareGrantTransition::Grant(ShareAccess::read()),
+        &y,
+        &reader,
+    )
+    .await;
     synced_with(&b, 1).await;
 
     // R6: B's cache records more of A's catalogue than A serves, as after A
@@ -1039,7 +1064,12 @@ async fn reads(refuse: bool) {
     // `peer_busy`: the record and the cache are gone.
     let (_, reader) = enroll(&a, &b, &relay, true).await;
     let reader = reader.unwrap();
-    a.grant(ReadGrantTransition::Grant, &y, &reader).await;
+    a.grant(
+        ShareGrantTransition::Grant(ShareAccess::read()),
+        &y,
+        &reader,
+    )
+    .await;
     synced_with(&b, 1).await;
     assert!(b.cache_path(&key).exists());
     relay.hold_after(1);

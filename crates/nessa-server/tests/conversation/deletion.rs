@@ -3052,7 +3052,7 @@ async fn deleting_a_conversation_that_never_opened_creates_no_history_lock() {
 #[tokio::test]
 async fn an_unmarked_chat_cannot_be_read_and_can_be_deleted() {
     use crate::conversation::application::error_code::error_code;
-    use crate::conversation::application::{ReadGrantChange, ReadGrantTransition, ReadGrants};
+    use crate::conversation::application::{ShareGrantChange, ShareGrantTransition, ShareGrants};
     use nessa_protocol::product_contract::generated::ConversationErrorCode;
     use nessa_sdk::application::agent_execution::sessions::{
         ChangeWatchState, CommittedChangeWatch, StorageError,
@@ -3157,8 +3157,10 @@ async fn an_unmarked_chat_cannot_be_read_and_can_be_deleted() {
         let action = action.to_owned();
         async move {
             assert!(metadata
-                .change(ReadGrantChange {
-                    transition: ReadGrantTransition::Grant,
+                .change(ShareGrantChange {
+                    transition: ShareGrantTransition::Grant(
+                        crate::conversation::domain::ShareAccess::read()
+                    ),
                     conversation_id: id,
                     receiver_id: Some("phone".into()),
                     credential_id: nessa_auth::domain::CredentialId::new("phone-credential")

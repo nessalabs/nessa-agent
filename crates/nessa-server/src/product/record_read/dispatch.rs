@@ -67,7 +67,7 @@ pub(crate) async fn dispatch(
     };
     let conversation =
         ConversationId::new(&conversation_id).map_err(|_| RecordReadErrorCode::InvalidRequest)?;
-    let (receivers, repository, read_grants) = state
+    let (receivers, repository, share_grants) = state
         .passive_read
         .as_ref()
         .ok_or(RecordReadErrorCode::TemporarilyUnavailable)?;
@@ -86,7 +86,7 @@ pub(crate) async fn dispatch(
             receivers: receivers.as_ref(),
             conversations: repository.as_ref(),
             grants: &PUBLISHED_PASSIVE_READ_GRANTS,
-            read_grants: read_grants.as_ref(),
+            share_grants: share_grants.as_ref(),
         },
         source: source.as_ref(),
     };
