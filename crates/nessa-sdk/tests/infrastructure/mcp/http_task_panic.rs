@@ -2,8 +2,9 @@
 use super::super::connection::{Connection, HttpTask};
 use super::super::http::{watch_http_task, HttpSession};
 use super::super::{
-    HttpBody, HttpChunks, HttpExchange, HttpFailure, HttpMethod, HttpRequest, HttpResponse,
-    McpError, NoAuthorization, RemoteMcpUrl, SessionClaims, INITIALIZE_TIMEOUT,
+    Bearer, HttpBody, HttpChunks, HttpExchange, HttpFailure, HttpMethod, HttpRequest, HttpResponse,
+    McpError, NoAuthorization, RemoteAuthorization, RemoteMcpUrl, SessionClaims,
+    INITIALIZE_TIMEOUT,
 };
 use crate::infrastructure::clock::manual::ManualClock;
 use crate::infrastructure::clock::RuntimeClock;
@@ -132,6 +133,54 @@ impl HttpExchange for ReplyExchange {
             },
         }
     }
+}
+
+/// DELETE yields once before it is recorded, which is the point where a log
+/// still scheduled on the session runtime can run ahead of claim release.
+struct YieldingDelete {
+    seen: Seen,
+}
+
+#[async_trait]
+impl HttpExchange for YieldingDelete {
+    async fn exchange(&self, request: HttpRequest) -> Result<HttpResponse, HttpFailure> {
+        let method = request_method(&request);
+        let http_method = request.method;
+        if http_method == HttpMethod::Delete {
+            tokio::task::yield_now().await;
+        }
+        self.seen.push(request);
+        match http_method {
+            HttpMethod::Get => Ok(empty(405)),
+            HttpMethod::Delete => Ok(empty(200)),
+            HttpMethod::Post => match method.as_deref() {
+                Some("initialize") => Ok(initialize_json(1)),
+                Some("tools/list") => Ok(event_stream(HttpBody::Stream(Box::new(PanicBody)))),
+                _ => Ok(empty(202)),
+            },
+        }
+    }
+}
+
+/// `bearer` yields once before returning. Cleanup awaits it before DELETE.
+struct YieldingAuthorization;
+
+#[async_trait]
+impl RemoteAuthorization for YieldingAuthorization {
+    async fn bearer(&self, _server: Uuid) -> Result<Option<Bearer>, McpError> {
+        tokio::task::yield_now().await;
+        Ok(None)
+    }
+
+    async fn rejected(
+        &self,
+        _server: Uuid,
+        _www_authenticate: &str,
+    ) -> Result<Option<Bearer>, McpError> {
+        Err(McpError::Unauthorized)
+    }
+
+    async fn insufficient_scope(&self, _server: Uuid, _www_authenticate: &str) {}
 }
 
 struct LegacyExchange {
@@ -339,8 +388,8 @@ fn watch_marker(marker: &'static str) -> Watching {
 
 impl Watching {
     async fn assert_secret_stays_out(&self) {
-        // The marker is logged on a detached task, after the end. Yield until
-        // that task runs. The bound is the hang guard, not a timer sync.
+        // The marker is logged on its own thread, after the end. Yield until
+        // that thread runs. The bound is the hang guard, not a timer sync.
         bounded(async {
             loop {
                 if self.text.lock().expect("log").contains(self.marker) {
@@ -741,26 +790,25 @@ fn blocking_panic_log_does_not_hold_the_session_claim() {
     });
 }
 
-/// On a current-thread runtime the marker still runs on that one worker, but
-/// only after cleanup has joined the reader, issued DELETE, and released the
-/// claim. `shutdown_and_end` queues that cleanup before the log task, and the
-/// reader watch has already returned, so the join does not yield into the log.
+/// On a current-thread runtime, bearer authorization and DELETE both yield.
+/// The marker runs on another thread and blocks there. DELETE, `ServerGone`,
+/// and claim release still finish before that subscriber returns.
 #[tokio::test(flavor = "current_thread")]
-async fn current_thread_shutdown_finishes_before_the_panic_log() {
+async fn current_thread_yielding_cleanup_finishes_while_the_panic_log_blocks() {
     let runtime_thread = std::thread::current().id();
     let url =
         RemoteMcpUrl::parse("https://mcp.example:8443/secret-path?access_token=bearer-secret")
             .expect("url");
     let url_owned = url.as_str().to_owned();
     let claims = Arc::new(SessionClaims::default());
-    let exchange = Arc::new(ReplyExchange {
+    let exchange = Arc::new(YieldingDelete {
         seen: Seen(Mutex::new(vec![])),
     });
     let (session, incoming) = HttpSession::open(
         Uuid::from_u128(3),
         url,
         exchange.clone(),
-        Arc::new(NoAuthorization),
+        Arc::new(YieldingAuthorization),
         Arc::clone(&claims),
     );
     let connection = Arc::new(Connection::open_http(
@@ -773,17 +821,18 @@ async fn current_thread_shutdown_finishes_before_the_panic_log() {
         .expect("initialize")
         .expect("initialize result");
 
-    let released_before_log = Arc::new(AtomicBool::new(false));
+    let release = Arc::new((Mutex::new(false), Condvar::new()));
+    let entered = Arc::new(AtomicBool::new(false));
+    let end_before_log = Arc::new(AtomicBool::new(false));
     let event_thread = Arc::new(Mutex::new(None));
     let text = Arc::new(Mutex::new(String::new()));
-    let subscriber = ShutdownBeforeLog {
+    let subscriber = BlockedPanicLog {
         marker: "custom HTTP reply reader panicked",
-        exchange: exchange.clone(),
-        claims: Arc::clone(&claims),
-        url: url_owned,
         connection: Arc::clone(&connection),
-        released_before_log: Arc::clone(&released_before_log),
+        entered: Arc::clone(&entered),
+        end_before_log: Arc::clone(&end_before_log),
         event_thread: Arc::clone(&event_thread),
+        release: Arc::clone(&release),
         text: Arc::clone(&text),
     };
     let _guard = tracing::subscriber::set_default(subscriber);
@@ -796,15 +845,28 @@ async fn current_thread_shutdown_finishes_before_the_panic_log() {
     bounded(finished.wait_for(|done| *done))
         .await
         .expect("finished");
+    bounded(async {
+        while !entered.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
     assert_eq!(error, McpError::ServerGone);
     assert!(
-        released_before_log.load(Ordering::SeqCst),
-        "the panic log ran before DELETE and claim release"
+        end_before_log.load(Ordering::SeqCst),
+        "panic log ran before ServerGone was recorded"
     );
-    assert_eq!(
+    assert_ne!(
         event_thread.lock().expect("thread").as_ref(),
         Some(&runtime_thread),
-        "the current-thread runtime did not run the marker itself"
+        "the marker ran on the current-thread runtime"
+    );
+    assert!(
+        !text
+            .lock()
+            .expect("log")
+            .contains("custom HTTP reply reader panicked"),
+        "the marker returned before shutdown finished"
     );
     assert_eq!(
         exchange
@@ -812,30 +874,48 @@ async fn current_thread_shutdown_finishes_before_the_panic_log() {
             .count(|request| request.method == HttpMethod::Delete),
         1
     );
+    assert!(
+        claims.claim(&url_owned, "held", u64::MAX),
+        "the session claim was still held when the subscriber was blocked"
+    );
+    {
+        let mut released = release.0.lock().expect("release");
+        *released = true;
+        release.1.notify_all();
+    }
+    bounded(async {
+        loop {
+            if text
+                .lock()
+                .expect("log")
+                .contains("custom HTTP reply reader panicked")
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
     let logged = text.lock().expect("log").clone();
     assert!(
-        logged.contains("custom HTTP reply reader panicked")
-            && !logged.contains(SECRET)
-            && !logged.contains("bearer-secret"),
+        !logged.contains(SECRET) && !logged.contains("bearer-secret"),
         "request contents leaked into the log: {logged}"
     );
 }
 
-/// Records whether shutdown had already released the claim when the marker
-/// was delivered. Used on a current-thread runtime, where the marker and the
-/// cleanup share one thread.
-struct ShutdownBeforeLog {
+/// Blocks inside the panic marker. The wait ends on its own if shutdown never
+/// releases it, so a log that still runs on the runtime cannot hang the test.
+struct BlockedPanicLog {
     marker: &'static str,
-    exchange: Arc<ReplyExchange>,
-    claims: Arc<SessionClaims>,
-    url: String,
     connection: Arc<Connection>,
-    released_before_log: Arc<AtomicBool>,
+    entered: Arc<AtomicBool>,
+    end_before_log: Arc<AtomicBool>,
     event_thread: Arc<Mutex<Option<std::thread::ThreadId>>>,
+    release: Arc<(Mutex<bool>, Condvar)>,
     text: Arc<Mutex<String>>,
 }
 
-impl tracing::Subscriber for ShutdownBeforeLog {
+impl tracing::Subscriber for BlockedPanicLog {
     fn register_callsite(
         &self,
         _metadata: &'static tracing::Metadata<'static>,
@@ -861,16 +941,26 @@ impl tracing::Subscriber for ShutdownBeforeLog {
         if !message.contains(self.marker) {
             return;
         }
-        let deleted = self
-            .exchange
-            .seen
-            .count(|request| request.method == HttpMethod::Delete)
-            == 1;
-        let released = self.claims.claim(&self.url, "held", u64::MAX);
-        let ended = self.connection.end_cause() == Some(McpError::ServerGone);
-        self.released_before_log
-            .store(deleted && released && ended, Ordering::SeqCst);
+        self.end_before_log.store(
+            self.connection.end_cause() == Some(McpError::ServerGone),
+            Ordering::SeqCst,
+        );
         *self.event_thread.lock().expect("thread") = Some(std::thread::current().id());
+        self.entered.store(true, Ordering::SeqCst);
+        let mut released = self.release.0.lock().expect("release");
+        let wait = Duration::from_secs(5);
+        while !*released {
+            let (guard, timed_out) = self
+                .release
+                .1
+                .wait_timeout(released, wait)
+                .expect("release");
+            released = guard;
+            if timed_out.timed_out() {
+                break;
+            }
+        }
+        drop(released);
         self.text.lock().expect("log").push_str(&message);
     }
 

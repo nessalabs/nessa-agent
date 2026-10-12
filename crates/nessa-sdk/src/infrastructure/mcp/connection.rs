@@ -17,10 +17,11 @@
 //! HTTP writer catches that panic on every await it performs, discards the
 //! payload, and settles the writer as panicked. It then asks the same owner
 //! for [`McpError::ServerGone`] and, after that record, logs a fixed marker
-//! and the server id. The other HTTP session tasks that run a custom adapter
-//! use that same end through [`PanicEnd`]. Their marker is logged after that
-//! end, from a task shutdown does not join, so a subscriber that blocks cannot
-//! hold the upstream session claim. A recovery completion the writer drops
+//! and the server id on a thread the session runtime does not run. The other
+//! HTTP session tasks that run a custom adapter use that same end through
+//! [`PanicEnd`]. Their marker is logged after that end, on that same kind of
+//! thread, so a subscriber that blocks cannot hold the upstream session claim.
+//! A recovery completion the writer drops
 //! waits for that settlement outside the recovery deadline:
 //! panic resolves
 //! [`McpError::ServerGone`], and a clean finish or cancellation resolves
@@ -367,7 +368,8 @@ impl Connection {
                 // A completion still sitting in the queue stays in this task
                 // until it returns, which is after ServerGone is recorded.
                 // Recovery waits for the settlement instead of deciding.
-                // The log follows the record, so a subscriber cannot hold the fence.
+                // The log follows the record, off this runtime, so a subscriber
+                // cannot hold the fence or the cleanup this shutdown queued.
                 session.settle_writer(true);
                 record_session_panic(&session, &shared, HttpTask::Writer);
             }
@@ -593,7 +595,7 @@ pub(super) struct PanicEnd {
 
 impl PanicEnd {
     /// [`shutdown_and_end`] with [`McpError::ServerGone`]. Does not log. The
-    /// session task logs after this returns, from a task shutdown does not join.
+    /// session task logs after this returns, on a thread the runtime does not run.
     pub(super) fn end(&self, session: &HttpSession) {
         shutdown_and_end(session, &self.shared, McpError::ServerGone);
     }
@@ -601,15 +603,37 @@ impl PanicEnd {
 
 fn record_session_panic(session: &HttpSession, shared: &Shared, task: HttpTask) {
     shutdown_and_end(session, shared, McpError::ServerGone);
-    // The fence and the end are recorded before the log, so a subscriber that
-    // blocks or panics on the event cannot leave the session unfenced.
-    log_task_panic(session.server(), task);
+    // The fence and the end are recorded before the log thread starts, so a
+    // subscriber that blocks on the event cannot leave the session unfenced
+    // or hold the runtime that still has to DELETE.
+    log_task_panic_off_runtime(session.server(), task);
+}
+
+/// Log `task`'s marker on a thread that does not belong to the session
+/// runtime. The caller's dispatcher and current span are re-entered there,
+/// so the marker still reaches the subscriber that was current when the
+/// panic was recorded. The caller records the end before this starts. A
+/// spawn failure drops the marker; the end is already stored.
+pub(super) fn log_task_panic_off_runtime(
+    server: impl std::fmt::Display + Send + 'static,
+    task: HttpTask,
+) {
+    let dispatch = tracing::dispatcher::get_default(|dispatch| dispatch.clone());
+    let span = tracing::Span::current();
+    let _ = std::thread::Builder::new()
+        .name("mcp-panic-log".into())
+        .spawn(move || {
+            tracing::dispatcher::with_default(&dispatch, || {
+                let _entered = span.enter();
+                log_task_panic(server, task);
+            });
+        });
 }
 
 /// The task's fixed marker and the server id. The tracing record does not
 /// include the panic message. The default panic hook can still print that
 /// message. An adapter's own panic string is the host app's responsibility.
-pub(super) fn log_task_panic(server: impl std::fmt::Display, task: HttpTask) {
+fn log_task_panic(server: impl std::fmt::Display, task: HttpTask) {
     match task {
         HttpTask::Writer => {
             tracing::error!(server = %server, "custom HTTP writer panicked");

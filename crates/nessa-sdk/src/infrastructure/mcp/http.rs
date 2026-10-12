@@ -34,14 +34,15 @@
 //! in that DELETE still releases the claimed id and signals [`HttpSession::finished`].
 //! A panic in a reply reader, the legacy stream, the server stream, or recovery
 //! settles that task and asks the connection end owner for [`McpError::ServerGone`].
-//! The fixed marker is logged only after that end, on a task shutdown does not
-//! join, so a blocking subscriber cannot hold the upstream session claim
-//! (ADR 392 J28).
+//! The fixed marker is logged only after that end, on a thread this runtime
+//! does not run, so a blocking subscriber cannot hold the upstream session
+//! claim. Cleanup yields while it reads a bearer and while DELETE is in
+//! flight (ADR 392 J28).
 #![deny(missing_docs)]
 
 use super::authorization::{Bearer, RemoteAuthorization};
 use super::connection::{
-    catch_task_panic, log_task_panic, HttpTask, Outgoing, OutgoingQueue, PanicEnd,
+    catch_task_panic, log_task_panic_off_runtime, HttpTask, Outgoing, OutgoingQueue, PanicEnd,
 };
 use super::framing::MAX_FRAME_BYTES;
 use super::http_exchange::{HttpExchange, HttpMethod, HttpRequest, HttpResponse};
@@ -310,25 +311,19 @@ impl HttpSession {
     }
 
     /// Settle is the caller's step, already done. Fence and record
-    /// [`McpError::ServerGone`]. The marker is logged after that, on a task
-    /// [`Self::shutdown`] does not join. The work and its watch are on that
-    /// join. A subscriber that blocks must not sit on that join: shutdown
-    /// would then never release the upstream session claim. A session
-    /// exercised without a connection has no end owner; the marker is still
-    /// logged from that same detached task.
+    /// [`McpError::ServerGone`]. The marker is logged after that, on a thread
+    /// this runtime does not run. Cleanup yields while it reads a bearer and
+    /// while DELETE is in flight, so a log scheduled here can run before the
+    /// claim is released. A subscriber that blocks must not sit on this
+    /// worker: shutdown would then never release the upstream session claim.
+    /// A session exercised without a connection has no end owner; the marker
+    /// is still logged from that same thread.
     fn record_task_panic(&self, task: HttpTask) {
         let end = self.panic_end.lock().expect("panic end").clone();
         if let Some(end) = end {
             end.end(self);
         }
-        let server = self.server();
-        // Detach, and only after shutdown has queued cleanup. A current-thread
-        // runtime is FIFO, and the reader watch has already returned, so that
-        // cleanup joins, DELETEs, and releases the claim before this log is
-        // polled. Queuing the log first lets a blocking subscriber stall it.
-        drop(self.runtime.spawn(async move {
-            log_task_panic(server, task);
-        }));
+        log_task_panic_off_runtime(self.server(), task);
     }
 
     /// Record the HTTP writer task's outcome once. Later calls keep the first.
@@ -1386,8 +1381,8 @@ async fn settled_as_panic(mut settled: watch::Receiver<Option<bool>>) -> bool {
 
 /// Run `work` on the session runtime. A caught panic settles and asks the
 /// connection end owner for [`McpError::ServerGone`] before this task returns.
-/// The marker is logged from a task shutdown does not join. The watch asks for
-/// that end only when a panic still fails the task, and it does not log on
+/// The marker is logged from a thread this runtime does not run. The watch asks
+/// for that end only when a panic still fails the task, and it does not log on
 /// the joined task either. The returned receiver is the task's settlement;
 /// only the legacy writer keeps it.
 ///

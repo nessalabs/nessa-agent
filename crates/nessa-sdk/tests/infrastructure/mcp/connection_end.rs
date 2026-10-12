@@ -209,6 +209,19 @@ async fn closed_cause_survives_a_panicked_writer() {
     let _guard = tracing::subscriber::set_default(subscriber);
     let mut finished = session.finished();
     watch_http_writer(writer, Arc::clone(&shared), Arc::clone(&session)).await;
+    let marker = b"custom HTTP writer panicked";
+    timeout(BOUND, async {
+        while !recorded
+            .lock()
+            .expect("log")
+            .windows(marker.len())
+            .any(|window| window == marker)
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("panic marker");
     let log = String::from_utf8(recorded.lock().expect("log").clone()).expect("utf8 log");
     assert!(
         log.contains("custom HTTP writer panicked"),
@@ -300,6 +313,13 @@ async fn writer_panic_log_follows_the_recorded_end() {
     tracing::callsite::rebuild_interest_cache();
     let mut finished = session.finished();
     record_session_panic(&session, &shared, HttpTask::Writer);
+    timeout(BOUND, async {
+        while !saw_recorded_end.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("panic marker");
     assert!(
         saw_recorded_end.load(Ordering::SeqCst),
         "panic log ran before ServerGone was recorded"
