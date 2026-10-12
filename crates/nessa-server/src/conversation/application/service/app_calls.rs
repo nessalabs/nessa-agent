@@ -40,7 +40,7 @@ use nessa_protocol::conversation::view::{
     ConversationPermission, ConversationTranscriptState, ConversationView,
 };
 use nessa_sdk::domain::agent_execution::{
-    executions::ExecutionId,
+    executions::{ExecutionId, Initiation},
     prompts::{AppModelContext, McpAppSource},
     sessions::SessionId,
     tools::{McpTool, ToolCallId},
@@ -632,6 +632,10 @@ impl ConversationService {
                     epoch: opening.epoch,
                     mount: message.app.clone(),
                 },
+                // An app's call asks for `conversation.write`, which no paired
+                // device is admitted for (`read_access::admit_request`), so
+                // its message is always from the owner's own surface.
+                Initiation::owner(),
             )
             .await;
         let sent = |code| McpAppAuditPhase::MessageSent {

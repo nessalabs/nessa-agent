@@ -154,9 +154,9 @@ because attachment later succeeds.
 Early admission means that the SDK owns an attributed input. It does not mean
 that a model, provider process, or connected agent has accepted that input.
 Before storage, the prepared Agent validates only facts for which it is already
-the authority: execution identity and retry equality, verified actor and
-initiation (owner or share grant, and whether tools were checked), submission
-mode, actual retained message bytes, image-reference shape, queue capacity, and
+the authority: execution identity, and retry equality of the verified actor and
+initiation (owner or share grant, and whether tools were checked, which the
+host checked and the Agent only stores), submission mode, actual retained message bytes, image-reference shape, queue capacity, and
 the lifecycle fence. The byte bound is measured from the value retained in the
 snapshot; it is not a token estimate.
 

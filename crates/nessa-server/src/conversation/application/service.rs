@@ -67,7 +67,7 @@ use nessa_sdk::application::agent_execution::{
     },
 };
 use nessa_sdk::domain::agent_execution::{
-    executions::{ExecutionId, ExecutionOutcome, InvocationStage, MessageKind},
+    executions::{ExecutionId, ExecutionOutcome, Initiation, InvocationStage, MessageKind},
     leases::{AgentWork, LeaseEndCause, SandboxProfile, SandboxProfiles},
     permissions::{
         CustomPermissionCancellationReason, PermissionCancellationReason, PermissionId,
@@ -2516,9 +2516,17 @@ impl ConversationService {
         message: SubmittedMessage,
         mode: SubmissionMode,
     ) -> Result<SubmissionReceipt, ConversationError> {
-        self.submit_as(id, caller, execution_id, message, mode, Writer::Person)
-            .await
-            .map_err(SubmitFailure::into_error)
+        self.submit_as(
+            id,
+            caller,
+            execution_id,
+            message,
+            mode,
+            Writer::Person,
+            Initiation::owner(),
+        )
+        .await
+        .map_err(SubmitFailure::into_error)
     }
     /// [`Self::submit`], written by `writer`. A message admitted while the
     /// conversation is idle — nothing runs, nothing waits — takes the
@@ -2561,9 +2569,10 @@ impl ConversationService {
         message: SubmittedMessage,
         mode: SubmissionMode,
         writer: Writer,
+        initiation: Initiation,
     ) -> Result<SubmissionReceipt, SubmitFailure> {
         let (asked, submission) =
-            self.submission_future(id, caller, execution_id, message, mode, writer);
+            self.submission_future(id, caller, execution_id, message, mode, writer, initiation);
         let outcome = tokio::spawn(submission).await;
         let asked = asked.load(Ordering::SeqCst);
         let failure = match outcome {
@@ -2586,6 +2595,7 @@ impl ConversationService {
         message: SubmittedMessage,
         mode: SubmissionMode,
         writer: Writer,
+        initiation: Initiation,
     ) -> (
         Arc<AtomicBool>,
         impl Future<Output = Result<SubmissionReceipt, Halt>> + Send + 'static,
@@ -2801,10 +2811,13 @@ impl ConversationService {
                 took.asking();
             }
             asking.store(true, Ordering::SeqCst);
-            // Saved as the owner's turn, its tools unchecked. A turn a Drive
-            // grant admitted is not yet saved as the grant's: that is the
-            // next part of slice J2b of #707.
-            let submitter = Submitter::owner(actor);
+            // Saved as started by whom it was admitted for: the owner, or
+            // the Drive grant as it stood at admission, its tools unchecked
+            // (row J15).
+            let submitter = Submitter {
+                context: actor,
+                initiation,
+            };
             let delivery = match mode {
                 SubmissionMode::Queue => live
                     .agent

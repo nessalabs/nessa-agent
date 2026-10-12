@@ -648,6 +648,24 @@ impl SubscriptionFixture {
             .unwrap();
     }
 
+    /// Who the saved turn `execution` says started it, as its record holds.
+    async fn initiation_of(
+        &self,
+        execution: &str,
+    ) -> nessa_sdk::domain::agent_execution::executions::Initiation {
+        let session = crate::conversation::application::conversation_session(&self.id);
+        let committed = self.storage.read_committed(session).await.unwrap().unwrap();
+        committed
+            .snapshot()
+            .unwrap()
+            .invocations
+            .iter()
+            .find(|record| record.request.execution_id.as_str() == execution)
+            .unwrap_or_else(|| panic!("a saved turn {execution}"))
+            .initiation
+            .clone()
+    }
+
     /// The fixture's conversation replayed in full by a second record store
     /// opened on the same files, folded by a fresh projection: nothing of the
     /// gateway's own fold or the first store's cached reads is shared. The
@@ -2455,6 +2473,64 @@ async fn a_driver_sends_text_and_names_nothing_of_the_owners() {
     params["operation"] = json!("create");
     let answer = fixture.call("conversation.receipt", params).await;
     assert_eq!(answer["error"]["code"], "forbidden", "{answer}");
+}
+
+/// Row J15: a turn is saved with who started it. The owner's turn says the
+/// owner, from its own surface and while devices are paired. A driver's
+/// says the Drive grant that admitted it, with the role and the policy
+/// revision read for that command, and each says its tools ran unchecked.
+/// The stamp is per turn: a policy changed later stamps the next turn and
+/// leaves the one already saved as it was.
+#[tokio::test]
+async fn a_turn_is_saved_with_who_started_it() {
+    use crate::conversation::application::{ShareGrantTransition, ShareGrants};
+    use crate::conversation::domain::{ShareAccess, ShareRole, ToolPolicy, ToolPreset};
+    use nessa_sdk::domain::agent_execution::executions::{
+        GrantInitiator, GrantRole, Initiation, ToolChecking,
+    };
+    let fixture = SubscriptionFixture::new().await;
+    fixture.turn("first").await;
+    let fixture = fixture.with_devices(this_device(true));
+    fixture
+        .grant_to(ShareGrantTransition::Grant(drive_access()))
+        .await;
+    let revision = || async {
+        let held = fixture.metadata.grants(&fixture.id).await.unwrap();
+        held[0].policy_revision
+    };
+    let granted = revision().await;
+    grants(&fixture.authority, &["conversation.read", "server.read"]);
+    fixture.turn("driven").await;
+    fixture
+        .grant_to(ShareGrantTransition::Grant(
+            ShareAccess::new(
+                ShareRole::Drive,
+                Some(ToolPolicy::Preset(ToolPreset::ReadOnlyTools)),
+            )
+            .unwrap(),
+        ))
+        .await;
+    let changed = revision().await;
+    assert!(changed > granted);
+    fixture.turn("again").await;
+    grants(
+        &fixture.authority,
+        &["conversation.write", "conversation.read", "server.read"],
+    );
+    fixture.owner_turn("owner").await;
+    let driver = |revision| {
+        Initiation::grant(GrantInitiator::new("receiver", GrantRole::Drive, revision).unwrap())
+    };
+    for (execution, expected) in [
+        ("first", Initiation::owner()),
+        ("driven", driver(granted)),
+        ("again", driver(changed)),
+        ("owner", Initiation::owner()),
+    ] {
+        let saved = fixture.initiation_of(execution).await;
+        assert_eq!(saved, expected, "{execution}");
+        assert_eq!(saved.tools(), ToolChecking::NotChecked, "{execution}");
+    }
 }
 
 /// The owner's share fixture: a paired device `phone` and `tablet`, and the

@@ -2,7 +2,7 @@
 use super::{
     conversation_session, load_conversation, ConversationCaller, ConversationDisposition,
     ConversationError, ConversationId, ConversationService, SubmissionMode, SubmissionReceipt,
-    SubmittedMessage,
+    SubmitFailure, SubmittedMessage, Writer,
 };
 use nessa_sdk::application::agent_execution::agents::{AgentError, QueueRemoval};
 use nessa_sdk::application::agent_execution::commands::{
@@ -11,7 +11,7 @@ use nessa_sdk::application::agent_execution::commands::{
     MutationPlan, MutationReceipt, MutationStage, MutationTarget,
 };
 use nessa_sdk::application::agent_execution::providers::ProviderSessionState;
-use nessa_sdk::domain::agent_execution::executions::{ExecutionId, InvocationStage};
+use nessa_sdk::domain::agent_execution::executions::{ExecutionId, Initiation, InvocationStage};
 use sha2::{Digest, Sha256};
 use std::sync::{Arc, Mutex};
 
@@ -34,11 +34,17 @@ impl ConversationService {
     /// `delivery` is the submission receipt from the call that actually
     /// enqueued. A settled retry leaves it empty; the socket then reads the
     /// saved turn without enqueueing again.
+    ///
+    /// `initiation` is who the turn is saved as started by: the owner, or the
+    /// share grant that admitted it. A retry is answered from the first
+    /// attempt's receipt and record, so the turn keeps the initiation it was
+    /// first admitted with.
     pub async fn submit_command(
         &self,
         storage: Arc<dyn CreationStorage>,
         id: ConversationId,
         caller: ConversationCaller,
+        initiation: Initiation,
         execution_id: String,
         message: SubmittedMessage,
         mode: SubmissionMode,
@@ -72,6 +78,7 @@ impl ConversationService {
                 service: service.clone(),
                 id,
                 caller,
+                initiation,
                 execution_id,
                 message: Mutex::new(Some(message)),
                 mode,
@@ -217,6 +224,7 @@ struct SubmitTarget {
     service: ConversationService,
     id: ConversationId,
     caller: ConversationCaller,
+    initiation: Initiation,
     execution_id: String,
     message: Mutex<Option<SubmittedMessage>>,
     mode: SubmissionMode,
@@ -249,19 +257,23 @@ impl MutationTarget for SubmitTarget {
         let service = self.service.clone();
         let id = self.id.clone();
         let caller = self.caller.clone();
+        let initiation = self.initiation.clone();
         let execution_id = self.execution_id.clone();
         let mode = self.mode;
         let delivery = self.delivery.clone();
         Box::pin(async move {
             let receipt = service
-                .submit(
+                .submit_as(
                     id,
                     caller,
                     execution_id,
                     message.map_err(CreationInitializationFailure::Target)?,
                     mode,
+                    Writer::Person,
+                    initiation,
                 )
                 .await
+                .map_err(SubmitFailure::into_error)
                 .map_err(CreationInitializationFailure::Target)?;
             delivery
                 .lock()

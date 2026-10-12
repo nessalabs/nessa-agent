@@ -150,8 +150,8 @@ and cache, on the follower's side; this gateway only stops serving it.
 
 Slice J1 of #707 gives a grant a role and, for Drive, a tool policy. A
 Comment or a Drive grant reads exactly as a Read grant does (row J1). Slice
-J2 lets a Drive grant drive the one conversation it names (below). Later
-slices build on this: J2b records who started each turn, J3 admits
+J2 lets a Drive grant drive the one conversation it names, and J2b saves
+each turn with who started it (below). Later slices build on this: J3 admits
 Comment's notes, J4 enforces the policy.
 
 - **The role** is `ShareRole` (`conversation/domain`), Read < Comment <
@@ -233,7 +233,27 @@ Slice J2 of #707 admits a Drive grant's commands: `conversation.send`,
 The turn runs as one of the owner's: the device signs in as its owner, so
 the command is the owner's command from the device's surface. Its tools run
 unchecked, per the 2026-10-12 decision on #707, until slice J4 enforces the
-grant's policy; slice J2b records that on the turn.
+grant's policy.
+
+### Who started a turn
+
+Slice J2b saves every turn with who started it, in the SDK's turn record
+(`InvocationRecord::initiation`, record schema version 3): the owner, or the
+share grant that admitted it, with the role and the policy revision read for
+that command, and that its tools ran unchecked (row J15). The admission is
+the one authority: `admit_request` answers with the initiation it admitted,
+the socket hands it to `submit_command`, and the turn is saved with it.
+
+- **The stamp is per turn, as admitted.** A policy changed after a turn
+  started stamps the next turn and leaves the saved one as it was. A retry
+  is answered from the first attempt's receipt and record, so a turn keeps
+  the initiation it was first admitted with.
+- **Only a turn is stamped.** Stop, answer, answer-question and cancel are
+  attributed by their action context alone (the device's surface and the
+  request id), as before.
+- **An app's message is the owner's.** An app's calls ask for
+  `conversation.write`, which no paired session is admitted for, so an app's
+  message always comes from the owner's own surface.
 
 ```mermaid
 sequenceDiagram
@@ -247,10 +267,11 @@ sequenceDiagram
     Socket->>Socket: binding owner is the session's principal, else forbidden
     Socket->>Cedar: conversation.read (pairing's grant)
     Cedar-->>Socket: allow
-    Socket->>Grants: held_role(conversation, receiver)
-    Grants-->>Socket: drive
+    Socket->>Grants: held_grant(conversation, receiver)
+    Grants-->>Socket: drive, policy revision
     Socket->>Socket: no image, no linked file
-    Socket->>Service: submit as the owner, surface = device credential
+    Socket->>Service: submit as the owner, surface = device credential,<br/>initiation = grant (receiver, Drive, revision), tools not checked
+    Service->>Service: turn record saved with that initiation
     Service-->>Device: receipt
     Device->>Socket: conversation.delete
     Socket-->>Device: forbidden (not a Drive command)
@@ -361,3 +382,4 @@ otherwise.
 | J12 | A paired session, holding `conversation.write` and a Drive grant, calls any other method whose grant is `conversation.write`; or, holding a Read or Comment grant, a Drive command; or a party signed in as a principal other than its grantor, as a peer is, holding Drive, a Drive command | `forbidden` | `a_paired_session_writes_only_what_a_drive_grant_admits` |
 | J13 | A Drive grant lowered to Read, then revoked; the device unpaired; or a device without pairing's `conversation.read` | The next command `forbidden`, `conversation_not_found`, `unauthorized`, and `forbidden` before its grant is read | `a_drive_grant_lowered_revoked_or_unpaired_drives_no_more` |
 | J14 | A driver's message, or receipt, naming an image or a linked file; a driver asking the receipt of a create | `forbidden` | `a_driver_sends_text_and_names_nothing_of_the_owners` |
+| J15 | The owner's turn, before and while devices are paired; a driver's turn; the driver's next turn after the owner changed the grant's policy | Saved as the owner's; as the Drive grant with the revision read for it; the next with the new revision, the first unchanged; each with tools not checked. A grant initiation survives a record checkpoint and its restore | `a_turn_is_saved_with_who_started_it`; `a_grant_initiation_survives_a_checkpoint_and_its_restore` (`nessa-sdk` `transcript.rs`) |

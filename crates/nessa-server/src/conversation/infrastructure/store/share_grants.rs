@@ -15,8 +15,9 @@ use super::{
     cells, failed, next_revision, read, stored_time, time, unreadable, LocalConversationStore,
 };
 use crate::conversation::application::{
-    ConversationError, ConversationFuture, ShareGrant, ShareGrantChange, ShareGrantTransition,
-    ShareGrants, MAX_DRIVE_GRANTS_PER_CONVERSATION, MAX_SHARE_GRANTS_PER_CONVERSATION,
+    ConversationError, ConversationFuture, HeldGrant, ShareGrant, ShareGrantChange,
+    ShareGrantTransition, ShareGrants, MAX_DRIVE_GRANTS_PER_CONVERSATION,
+    MAX_SHARE_GRANTS_PER_CONVERSATION,
 };
 use crate::conversation::domain::{ShareAccess, ShareRole, ToolPolicy, ToolPreset, ToolRules};
 use nessa_auth::domain::{CredentialId, MAX_IDENTIFIER_BYTES};
@@ -150,27 +151,34 @@ fn count(transaction: &Transaction<'_>, sql: &str, id: &str) -> Result<i64, Conv
 }
 
 impl ShareGrants for LocalConversationStore {
-    fn held_role<'a>(
+    fn held_grant<'a>(
         &'a self,
         id: &'a ConversationId,
         receiver_id: &'a str,
-    ) -> ConversationFuture<'a, Option<ShareRole>> {
+    ) -> ConversationFuture<'a, Option<HeldGrant>> {
         let (id, receiver_id) = (id.to_string(), receiver_id.to_owned());
         self.run(move |connection| {
-            let role = connection
+            let held = connection
                 .query_row(
                     &format!(
-                        "SELECT (SELECT g.role FROM {}) FROM conversations AS c WHERE c.id = ?1",
+                        "SELECT g.role, g.policy_revision FROM conversations AS c, {} AND c.id = ?1",
                         grant_row("c.id", "?2")
                     ),
                     params![id, receiver_id],
-                    |row| row.get::<_, Option<String>>(0),
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
                 )
                 .optional()
-                .map_err(failed)?
-                .flatten();
-            role.map(|name| role_named(&name).ok_or_else(|| unreadable("share_grants", &id)))
-                .transpose()
+                .map_err(failed)?;
+            held.map(|(name, revision)| {
+                role_named(&name)
+                    .zip(sequence(revision))
+                    .map(|(role, policy_revision)| HeldGrant {
+                        role,
+                        policy_revision,
+                    })
+                    .ok_or_else(|| unreadable("share_grants", &id))
+            })
+            .transpose()
         })
     }
 

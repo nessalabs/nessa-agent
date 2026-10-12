@@ -1646,6 +1646,32 @@ mod tests {
         ));
     }
 
+    /// A turn a share grant started keeps its grant, role and policy revision
+    /// through a checkpoint and the fold restored from it.
+    #[test]
+    fn a_grant_initiation_survives_a_checkpoint_and_its_restore() {
+        use crate::domain::agent_execution::executions::{GrantInitiator, GrantRole};
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
+            .unwrap();
+        let initiation =
+            Initiation::grant(GrantInitiator::new("receiver", GrantRole::Drive, 7).unwrap());
+        let mut input = accepted_input("driven");
+        if let SessionChange::InputAccepted(record) = &mut input {
+            record.initiation = initiation.clone();
+        }
+        fold.apply(&records(&scope, 3, &save_frames(input, 2, 1)))
+            .unwrap();
+        let checkpoint = fold.checkpoint().unwrap();
+        let restored = TranscriptFold::restore(scope, fold.applied(), &checkpoint).unwrap();
+        assert_eq!(restored.snapshot(), fold.snapshot());
+        assert_eq!(
+            restored.snapshot().unwrap().invocations[0].initiation,
+            initiation
+        );
+    }
+
     #[test]
     fn partial_and_abort_advance_physical_progress_without_semantic_change() {
         let scope = scope();

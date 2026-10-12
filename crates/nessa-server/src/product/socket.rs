@@ -48,6 +48,7 @@ use nessa_protocol::protocol::{
     health_check_message, unique_envelope, EventFrame, OutgoingMessage, RequestFrame,
     ResponseFrame, MAX_PAYLOAD_BYTES,
 };
+use nessa_sdk::domain::agent_execution::executions::Initiation;
 use serde_json::json;
 use std::collections::{HashMap, VecDeque};
 use std::future::{poll_fn, Future};
@@ -1467,7 +1468,7 @@ async fn dispatch(
         return success(&frame.id, &session_ready(state, &session, &snapshot));
     }
     match super::read_access::admit_request(state, &session, &frame).await {
-        Ok(()) => dispatch_authorized(state, &session, frame).await,
+        Ok(initiation) => dispatch_authorized(state, &session, frame, initiation).await,
         Err(code) => failure(&frame.id, code),
     }
 }
@@ -1548,6 +1549,7 @@ async fn dispatch_authorized(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
     frame: RequestFrame,
+    initiation: Initiation,
 ) -> OutgoingMessage {
     match frame.method.as_str() {
         "agents.list" => {
@@ -1566,7 +1568,7 @@ async fn dispatch_authorized(
             super::read_access::dispatch_share(state, session, frame).await
         }
         method if method.starts_with("conversation.") => {
-            super::conversation::dispatch(state, session, frame).await
+            super::conversation::dispatch(state, session, frame, initiation).await
         }
         method if method.starts_with("attachment.") => {
             super::attachment::dispatch(state, session, frame).await

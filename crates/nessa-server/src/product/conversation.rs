@@ -43,12 +43,16 @@ use nessa_sdk::application::agent_execution::{
     },
     permissions::PermissionSelectionState,
 };
+use nessa_sdk::domain::agent_execution::executions::Initiation;
 use serde_json::{json, Value};
 
+/// `initiation` is who a turn this request starts is saved as started by,
+/// as the request was admitted (`read_access::admit_request`).
 pub(super) async fn dispatch(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
     frame: RequestFrame,
+    initiation: Initiation,
 ) -> OutgoingMessage {
     // This build runs no conversations at all, which is not the same fact as a
     // caller naming an agent this one is not configured for. Sharing a code
@@ -173,6 +177,7 @@ pub(super) async fn dispatch(
                         store,
                         id.clone(),
                         caller.clone(),
+                        initiation,
                         execution_id.clone(),
                         submitted_message(&params),
                         mode,
