@@ -33,6 +33,7 @@ vi.mock("../../host", async (importOriginal) => ({
 }))
 
 import { App } from "./app"
+import { ClockProvider } from "../../conversation"
 import { createAttachmentResources } from "../adapters/attachment-resources"
 import { makeStore, type AppStore } from "../../store"
 import {
@@ -77,13 +78,16 @@ async function mount(text = "") {
         null,
         React.createElement(Provider, {
           store,
-          children: React.createElement(App, {
-            attachmentResources: resources,
-            canChoosePaths: true,
-            digest: async () => `sha256:${"ab".repeat(32)}`,
-            loadConversationChoices: async () => ({
-              catalog: { agents: [], environments: [] },
-              chosenAgent: undefined,
+          children: React.createElement(ClockProvider, {
+            now: () => 1_000,
+            children: React.createElement(App, {
+              attachmentResources: resources,
+              canChoosePaths: true,
+              digest: async () => `sha256:${"ab".repeat(32)}`,
+              loadConversationChoices: async () => ({
+                catalog: { agents: [], environments: [] },
+                chosenAgent: undefined,
+              }),
             }),
           }),
         }),

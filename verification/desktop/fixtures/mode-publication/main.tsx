@@ -13,6 +13,7 @@ import {
   followConversation,
 } from "../../../../src/conversation/testing"
 import { App } from "../../../../src/panel/ui/app"
+import { ClockProvider } from "../../../../src/conversation/ui/clock"
 import { createAttachmentResources } from "../../../../src/panel/adapters/attachment-resources"
 import { ConversationReadFailedError } from "../../../../src/conversation/testing"
 import { sendDraft } from "../../../../src/conversation/adapters/store/slice"
@@ -177,7 +178,10 @@ function Panel() {
 }
 createRoot(document.getElementById("root")!).render(
   <Provider store={store}>
-    <Panel />
+    {/* A fixture is its own composition root, so it chooses the clock. */}
+    <ClockProvider now={() => Date.now()}>
+      <Panel />
+    </ClockProvider>
   </Provider>,
 )
 declare global {

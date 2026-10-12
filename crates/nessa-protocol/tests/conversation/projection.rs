@@ -254,6 +254,74 @@ fn review(arguments: String) -> ExecutionEvent {
         deadline: None,
     })
 }
+/// The fixture review, published with a deadline that takes `effect` for `reason`.
+fn review_with_deadline(effect: PermissionEffect, reason: &str) -> ExecutionEvent {
+    let ExecutionUpdate::PermissionRequested {
+        id,
+        tool_id,
+        observation,
+        input,
+        options,
+        ..
+    } = review("{}".into()).update().clone()
+    else {
+        unreachable!()
+    };
+    event(ExecutionUpdate::PermissionRequested {
+        id,
+        tool_id,
+        observation,
+        input,
+        options,
+        deadline: Some(
+            PermissionReviewDeadline::new(
+                PermissionToolClass::Other,
+                std::time::Duration::from_secs(30),
+                effect,
+                reason,
+            )
+            .unwrap()
+            .promise(1_700_000_030_000),
+        ),
+    })
+}
+/// The fixture review cancelled with `reason`, as a live controller records it.
+fn cancelled_review(
+    reason: PermissionCancellationReason,
+    origin: CancellationOrigin,
+) -> ExecutionEvent {
+    let ExecutionUpdate::PermissionRequested {
+        id, input, options, ..
+    } = review("{}".into()).update().clone()
+    else {
+        unreachable!()
+    };
+    let execution = ExecutionId::new("execution").unwrap();
+    let mut owner = ExecutionController::new(ExecutionSessionId::new("provider-session").unwrap());
+    owner.begin_execution(execution.clone()).unwrap();
+    owner
+        .request_permission(
+            &execution,
+            id.clone(),
+            ToolCallUpdate::new(
+                ToolCallId::new("tool").unwrap(),
+                None,
+                None,
+                None,
+                None,
+                None,
+            ),
+            input,
+            options,
+            None,
+        )
+        .unwrap();
+    let cancelled = owner
+        .cancel_permission(&execution, &id, reason, origin)
+        .unwrap()
+        .unwrap();
+    event(ExecutionUpdate::PermissionCancelled(cancelled))
+}
 fn review_snapshot(events: Vec<ExecutionEvent>) -> SessionSnapshot {
     SessionSnapshot {
         id: SessionId::new("conversation").unwrap(),
@@ -2519,7 +2587,8 @@ fn a_pending_review_shows_an_armed_deadline_and_a_restored_one_does_not() {
     )
     .unwrap()
     .promise(due)
-    .restored(false, Some(due));
+    .restored(false, Some(due))
+    .expect("a continuing deny deadline restores");
     assert!(!restored.armed());
     assert_eq!(restored.due_at_ms(), Some(due));
     assert!(
@@ -2549,7 +2618,8 @@ fn a_saved_deadline_counts_down_while_this_process_holds_the_review() {
     let restored =
         PermissionReviewDeadline::stopping(PermissionToolClass::Other, Duration::from_secs(30))
             .promise(due)
-            .restored(true, Some(due));
+            .restored(true, Some(due))
+            .expect("a stopping deny deadline restores");
     assert!(!restored.armed());
     let snapshot = review_snapshot(vec![event(ExecutionUpdate::PermissionRequested {
         id,
@@ -2610,7 +2680,7 @@ fn an_automatic_decision_is_named_allowed_or_denied_in_the_notice() {
         let reason =
             nessa_sdk::domain::agent_execution::permissions::DeadlineReason::new(sentence).unwrap();
         let snapshot = review_snapshot(vec![
-            review("{}".into()),
+            review_with_deadline(effect, sentence),
             event(ExecutionUpdate::DeadlineAnswered {
                 id: PermissionId::new("permission").unwrap(),
                 effect,
@@ -2675,13 +2745,99 @@ fn a_deadline_notice_without_an_earlier_request_in_that_execution_is_omitted() {
         texts(vec![notice("permission")]).is_empty(),
         "a notice with no earlier request is omitted"
     );
+    let published = || review_with_deadline(PermissionEffect::Deny, STANDARD_DENY_REASON);
     assert!(
-        texts(vec![review("{}".into()), notice("other")]).is_empty(),
+        texts(vec![published(), notice("other")]).is_empty(),
         "a notice whose id is not the request's is omitted"
     );
     assert_eq!(
-        texts(vec![review("{}".into()), notice("permission")]),
+        texts(vec![published(), notice("permission")]),
         vec![format!("Denied automatically: {STANDARD_DENY_REASON}")]
+    );
+}
+
+#[test]
+fn a_deadline_notice_is_shown_only_as_the_one_settlement_its_review_published() {
+    use nessa_sdk::domain::agent_execution::permissions::{DeadlineReason, STANDARD_ALLOW_REASON};
+    let notice = |effect, reason: &str| {
+        event(ExecutionUpdate::DeadlineAnswered {
+            id: PermissionId::new("permission").unwrap(),
+            effect,
+            reason: DeadlineReason::new(reason).unwrap(),
+        })
+    };
+    let shown = |events| {
+        let snapshot = review_snapshot(events);
+        let mut projection = projection();
+        projection.replace_committed(
+            &committed("incarnation", 1, 1, 1, Some(&snapshot)),
+            &[],
+            Some(&ExecutionId::new("execution").unwrap()),
+        );
+        projection.transcript_state(ConversationTranscriptState::Complete);
+        let view = projection.read();
+        let notices = view
+            .messages
+            .iter()
+            .flat_map(|message| &message.parts)
+            .filter(|part| part.kind == "local_notice")
+            .map(|part| part.text.clone())
+            .collect::<Vec<_>>();
+        (notices, view.permissions.len())
+    };
+    let deny = || notice(PermissionEffect::Deny, STANDARD_DENY_REASON);
+    let denied = format!("Denied automatically: {STANDARD_DENY_REASON}");
+    let published = || review_with_deadline(PermissionEffect::Deny, STANDARD_DENY_REASON);
+
+    assert_eq!(
+        shown(vec![review("{}".into()), deny()]),
+        (vec![], 1),
+        "a review that published no deadline was not settled by one, and stays pending"
+    );
+    assert_eq!(
+        shown(vec![
+            published(),
+            notice(PermissionEffect::Allow, STANDARD_ALLOW_REASON)
+        ]),
+        (vec![], 1),
+        "a notice that contradicts the published effect is not shown and removes nothing"
+    );
+    assert_eq!(
+        shown(vec![
+            published(),
+            notice(PermissionEffect::Deny, STANDARD_STOP_REASON)
+        ]),
+        (vec![], 1),
+        "a notice whose reason is not the published one is not shown"
+    );
+    assert_eq!(
+        shown(vec![published(), deny(), deny()]),
+        (vec![denied.clone()], 0),
+        "a duplicate notice is shown once"
+    );
+    assert_eq!(
+        shown(vec![
+            published(),
+            cancelled_review(
+                PermissionCancellationReason::provider_withdrawal(),
+                CancellationOrigin::Provider,
+            ),
+            deny(),
+        ]),
+        (vec![], 0),
+        "a review cancelled for another reason was not settled by its deadline"
+    );
+    assert_eq!(
+        shown(vec![
+            published(),
+            cancelled_review(
+                PermissionCancellationReason::deadline_exceeded(),
+                CancellationOrigin::Runtime,
+            ),
+            deny(),
+        ]),
+        (vec![denied], 0),
+        "a review its deadline cancelled has that deadline's notice"
     );
 }
 

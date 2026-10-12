@@ -8,8 +8,8 @@ use super::{
 };
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::permissions::{
-    CancellationOrigin, PermissionAnswer, PermissionCancellation, PermissionCancellationRequest,
-    PermissionResolution,
+    ApprovalBasis, CancellationOrigin, PermissionAnswer, PermissionCancellation,
+    PermissionCancellationRequest, PermissionResolution,
 };
 use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::domain::agent_execution::questions::{AgentQuestion, QuestionId};
@@ -53,6 +53,12 @@ pub struct ExecutionController {
     authority: PermissionAuthoritySource,
     session: ExecutionSession,
     review_inputs: HashMap<PermissionId, (ToolReviewInput, usize)>,
+    /// The deadline each pending review published, by review.
+    published_deadlines: HashMap<PermissionId, PermissionReviewDeadline>,
+    /// Reviews their own deadline settled, with the deadline they published,
+    /// waiting for the one notice that says so. Taking an entry is what makes
+    /// the notice once-only.
+    deadline_settled: HashMap<PermissionId, PermissionReviewDeadline>,
     admitted_question_ids: HashSet<QuestionId>,
     retained_tool_bytes: usize,
     retained_review_bytes: usize,
@@ -75,6 +81,8 @@ impl ExecutionController {
             authority,
             session: ExecutionSession::new(id),
             review_inputs: HashMap::new(),
+            published_deadlines: HashMap::new(),
+            deadline_settled: HashMap::new(),
             admitted_question_ids: HashSet::new(),
             retained_tool_bytes: 0,
             retained_review_bytes: 0,
@@ -236,6 +244,10 @@ impl ExecutionController {
         self.review_inputs
             .insert(id.clone(), (input.clone(), charged_bytes));
         self.retained_review_bytes = review_bytes;
+        if let Some(deadline) = &deadline {
+            self.published_deadlines
+                .insert(id.clone(), deadline.clone());
+        }
         self.event(
             execution,
             ExecutionUpdate::PermissionRequested {
@@ -249,24 +261,46 @@ impl ExecutionController {
         )
     }
 
-    /// The lasting observation that `id`'s deadline selected `effect`.
+    /// The lasting observation that `id`'s own deadline settled it.
     ///
-    /// Does not answer the review. The caller answers or cancels first, and
-    /// emits this so a surface that was not watching the audit still sees who
-    /// decided. A stale execution returns the same error as any other event.
-    /// Only the ACP worker emits it: a permission id from that worker shares
-    /// the decimal sequence with a review decline, so it is a valid notice id.
+    /// Does not answer the review. The caller first settles it here, with an
+    /// answer attributed to the deadline or a cancellation for
+    /// `deadline_exceeded`, and then emits this so a surface that was not
+    /// watching the audit still sees who decided. The effect and reason are
+    /// the ones the review published, not the caller's. A review that was not
+    /// settled by its deadline, or whose notice was already made, returns
+    /// [`AgentError::StalePermission`]; a stale execution returns the same
+    /// error as any other event. Only the ACP worker emits it: a permission id
+    /// from that worker shares the decimal sequence with a review decline, so
+    /// it is a valid notice id.
     pub(crate) fn deadline_answered(
-        &self,
+        &mut self,
         execution: &ExecutionId,
-        id: PermissionId,
-        effect: PermissionEffect,
-        reason: crate::domain::agent_execution::permissions::DeadlineReason,
+        id: &PermissionId,
     ) -> Result<ExecutionEvent, AgentError> {
+        self.check_execution(execution)?;
+        let deadline = self
+            .deadline_settled
+            .remove(id)
+            .ok_or(AgentError::StalePermission)?;
         self.event(
             execution,
-            ExecutionUpdate::DeadlineAnswered { id, effect, reason },
+            ExecutionUpdate::DeadlineAnswered {
+                id: id.clone(),
+                effect: deadline.effect(),
+                reason: deadline.recorded_reason(),
+            },
         )
+    }
+
+    /// Keep `id`'s published deadline as settlement evidence when `by_deadline`,
+    /// and let it go otherwise. A review answered by anyone else has no notice.
+    fn settle_published_deadline(&mut self, id: &PermissionId, by_deadline: bool) {
+        if let Some(deadline) = self.published_deadlines.remove(id) {
+            if by_deadline {
+                self.deadline_settled.insert(id.clone(), deadline);
+            }
+        }
     }
 
     pub(crate) fn validate_review_retention(
@@ -426,7 +460,14 @@ impl ExecutionController {
             .remove(&answer.id)
             .expect("controller retains the accepted review input");
         self.retained_review_bytes -= charged_bytes;
-        PermissionResolution::new(self.id().clone(), request, input, answer.attribution)
+        let by_deadline = matches!(answer.attribution.basis(), ApprovalBasis::Deadline(_));
+        let resolution =
+            PermissionResolution::new(self.id().clone(), request, input, answer.attribution);
+        // The answer is accepted even when its attribution is rejected, so the
+        // published deadline is released either way. Only an accepted deadline
+        // attribution is settlement evidence.
+        self.settle_published_deadline(&answer.id, by_deadline && resolution.is_ok());
+        resolution
     }
     // Only the snapshot retention validator uses this on a disposable controller.
     // Answers are absent from observations: release the hypothetical pending
@@ -475,11 +516,19 @@ impl ExecutionController {
         origin: CancellationOrigin,
     ) -> Result<Option<PermissionCancellation>, AgentError> {
         origin.validate_reason(&reason)?;
+        let by_deadline = matches!(
+            reason.view(),
+            PermissionCancellationReasonView::DeadlineExceeded
+        ) && matches!(origin, CancellationOrigin::Runtime);
         let request = self
             .session
             .cancel_permission(execution, id, reason)
             .map_err(domain_error)?;
-        Ok(request.map(|request| self.cancellation(request, origin)))
+        Ok(request.map(|request| {
+            // A cancellation that is this review's own deadline settles it.
+            self.settle_published_deadline(id, by_deadline);
+            self.cancellation(request, origin)
+        }))
     }
     fn cancellation(
         &mut self,
@@ -491,6 +540,7 @@ impl ExecutionController {
             .remove(request.id())
             .expect("accepted review input");
         self.retained_review_bytes -= charged_bytes;
+        self.settle_published_deadline(request.id(), false);
         PermissionCancellation::new(self.id().clone(), request, input, origin)
     }
     /// Cancels pending reviews in `execution` with the lifecycle `reason` and `origin`.
@@ -590,6 +640,8 @@ impl ExecutionController {
         }));
         self.retained_tool_bytes = 0;
         self.admitted_question_ids.clear();
+        // A notice is about the execution that is ending; none can follow it.
+        self.deadline_settled.clear();
         Ok(records)
     }
     fn check_execution(&self, execution: &ExecutionId) -> Result<(), AgentError> {
@@ -880,6 +932,133 @@ mod tests {
             ),
         }
     }
+    #[test]
+    fn a_deadline_notice_is_made_once_and_only_for_a_review_its_deadline_settled() {
+        use crate::domain::agent_execution::permissions::{
+            PermissionToolClass, STANDARD_ALLOW_REASON, STANDARD_DENY_REASON,
+        };
+        use std::time::Duration;
+        let execution = ExecutionId::new("execution").unwrap();
+        let permission = PermissionId::new("permission").unwrap();
+        let deadline = |effect, reason| {
+            PermissionReviewDeadline::new(
+                PermissionToolClass::Other,
+                Duration::from_secs(30),
+                effect,
+                reason,
+            )
+            .unwrap()
+        };
+        let allow = deadline(PermissionEffect::Allow, STANDARD_ALLOW_REASON);
+        let deny = deadline(PermissionEffect::Deny, STANDARD_DENY_REASON);
+        let pending = |published: Option<PermissionReviewDeadline>| {
+            let mut controller = controller();
+            controller
+                .request_permission(
+                    &execution,
+                    permission.clone(),
+                    tool(None),
+                    input(),
+                    options("Allow".into()),
+                    published.map(|deadline| deadline.promise(1_000)),
+                )
+                .unwrap();
+            controller
+        };
+        let by_deadline = || PermissionAnswer {
+            attribution: ApprovalAttribution::deadline(&permission, allow.clone()).unwrap(),
+            ..answer("permission")
+        };
+        let stale = |controller: &mut ExecutionController| {
+            matches!(
+                controller.deadline_answered(&execution, &permission),
+                Err(AgentError::StalePermission)
+            )
+        };
+
+        let mut unsettled = pending(Some(allow.clone()));
+        assert!(stale(&mut unsettled), "a pending review has no notice");
+
+        let mut answered = pending(Some(allow.clone()));
+        answered.answer_permission(by_deadline()).unwrap();
+        let event = answered.deadline_answered(&execution, &permission).unwrap();
+        assert_eq!(
+            event.update(),
+            &ExecutionUpdate::DeadlineAnswered {
+                id: permission.clone(),
+                effect: PermissionEffect::Allow,
+                reason: allow.recorded_reason(),
+            },
+            "the notice repeats the published deadline"
+        );
+        assert!(stale(&mut answered), "the notice is made once");
+
+        let mut explicit = pending(Some(allow.clone()));
+        explicit.answer_permission(answer("permission")).unwrap();
+        assert!(
+            stale(&mut explicit),
+            "a person's answer has no deadline notice"
+        );
+
+        let mut unpublished = pending(None);
+        unpublished.answer_permission(by_deadline()).unwrap();
+        assert!(
+            stale(&mut unpublished),
+            "a review that published no deadline was not settled by one"
+        );
+
+        let mut cancelled = pending(Some(deny.clone()));
+        let _ = cancelled
+            .cancel_permission(
+                &execution,
+                &permission,
+                PermissionCancellationReason::deadline_exceeded(),
+                CancellationOrigin::Runtime,
+            )
+            .unwrap()
+            .unwrap();
+        let event = cancelled
+            .deadline_answered(&execution, &permission)
+            .unwrap();
+        assert_eq!(
+            event.update(),
+            &ExecutionUpdate::DeadlineAnswered {
+                id: permission.clone(),
+                effect: PermissionEffect::Deny,
+                reason: deny.recorded_reason(),
+            }
+        );
+
+        let mut withdrawn = pending(Some(deny.clone()));
+        let _ = withdrawn
+            .cancel_permission(
+                &execution,
+                &permission,
+                PermissionCancellationReason::provider_withdrawal(),
+                CancellationOrigin::Provider,
+            )
+            .unwrap()
+            .unwrap();
+        assert!(
+            stale(&mut withdrawn),
+            "a review cancelled for another reason was not settled by its deadline"
+        );
+
+        let mut finished = pending(Some(deny));
+        let _ = finished
+            .cancel_permission(
+                &execution,
+                &permission,
+                PermissionCancellationReason::deadline_exceeded(),
+                CancellationOrigin::Runtime,
+            )
+            .unwrap();
+        let _ = finished
+            .finish_execution(&execution, Ok(ExecutionOutcome::Completed))
+            .unwrap();
+        assert!(finished.deadline_settled.is_empty() && finished.published_deadlines.is_empty());
+    }
+
     #[test]
     fn permission_authority_is_scoped_and_weak() {
         let mut controller = controller();

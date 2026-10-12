@@ -231,6 +231,13 @@ impl PermissionReviewDeadline {
     }
 }
 
+impl PermissionReviewDeadline {
+    /// Holds none of the state a settlement or a live review adds.
+    fn is_template(&self) -> bool {
+        !self.stops_turn && self.due_at_ms.is_none() && !self.armed
+    }
+}
+
 impl PartialEq for PermissionReviewDeadline {
     /// `armed` is whether this process will decide the review. A save folds
     /// the live review back through restore, and restore does not arm it,
@@ -278,7 +285,11 @@ impl PermissionDeadlinePolicy {
         }
     }
 
-    /// Install the two class deadlines. Each must already name its class.
+    /// Install the two class deadlines. Each must already name its class, and
+    /// each must be a template as [`PermissionReviewDeadline::new`] returns
+    /// it: not stopping the turn, not promised, and not restored with a due
+    /// time. Otherwise every settlement would inherit that state, and a
+    /// continuing refusal would be recorded as one that stops the turn.
     pub fn new(
         read_only: PermissionReviewDeadline,
         other: PermissionReviewDeadline,
@@ -287,6 +298,9 @@ impl PermissionDeadlinePolicy {
             || other.class != PermissionToolClass::Other
         {
             return Err(ExecutionError::MismatchedPermissionDeadline);
+        }
+        if !read_only.is_template() || !other.is_template() {
+            return Err(ExecutionError::SettledPermissionDeadlineTemplate);
         }
         Ok(Self { read_only, other })
     }
@@ -633,19 +647,35 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            PermissionDeadlinePolicy::new(other.clone(), other),
+            PermissionDeadlinePolicy::new(other.clone(), other.clone()),
             Err(ExecutionError::MismatchedPermissionDeadline)
         );
         assert_eq!(
-            PermissionDeadlinePolicy::new(read_only.clone(), read_only),
+            PermissionDeadlinePolicy::new(read_only.clone(), read_only.clone()),
             Err(ExecutionError::MismatchedPermissionDeadline)
         );
+        let stopping =
+            PermissionReviewDeadline::stopping(PermissionToolClass::Other, Duration::from_secs(1));
+        let promised = other.clone().promise(1_000);
+        let restored = other.clone().restored(false, Some(1_000)).unwrap();
+        for settled in [stopping, promised, restored] {
+            assert_eq!(
+                PermissionDeadlinePolicy::new(read_only.clone(), settled),
+                Err(ExecutionError::SettledPermissionDeadlineTemplate)
+            );
+        }
+        assert_eq!(
+            PermissionDeadlinePolicy::new(read_only.clone().promise(1_000), other.clone()),
+            Err(ExecutionError::SettledPermissionDeadlineTemplate)
+        );
+        assert!(PermissionDeadlinePolicy::new(read_only, other).is_ok());
         for error in [
             ExecutionError::ZeroPermissionDeadline,
             ExecutionError::PermissionDeadlineTooLong,
             ExecutionError::ControlCharacterInPermissionReason,
             ExecutionError::MismatchedPermissionDeadline,
             ExecutionError::AllowDeadlineStopsTurn,
+            ExecutionError::SettledPermissionDeadlineTemplate,
         ] {
             assert!(error.to_string().starts_with("agent execution: "));
         }

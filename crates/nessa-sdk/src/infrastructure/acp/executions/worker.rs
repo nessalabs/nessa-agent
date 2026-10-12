@@ -2590,7 +2590,7 @@ impl<P: AcpProfile> Worker<P> {
             *tool.kind(),
             tool.locations().clone(),
             self.config.workspace.clone(),
-            |path| path.canonicalize().ok(),
+            Arc::clone(&self.config.workspace_paths),
         )
         .await;
         let settlement = self.config.permission_deadlines.settlement(
@@ -3956,7 +3956,6 @@ impl<P: AcpProfile> Worker<P> {
         let deadline = armed.settlement.deadline().clone();
         let stops_turn = deadline.stops_turn();
         let reason = deadline.recorded_reason();
-        let effect = deadline.effect();
         let mut delivery_correlation = None;
         let sent = if let Some(option_id) = armed.settlement.option().cloned() {
             let attribution = ApprovalAttribution::deadline(&id, deadline)
@@ -4033,7 +4032,7 @@ impl<P: AcpProfile> Worker<P> {
             self.send(permission_wire::permission_cancel(&wire_id))
                 .await
         };
-        if let Ok(event) = execution.deadline_answered(&execution_id, id, effect, reason) {
+        if let Ok(event) = execution.deadline_answered(&execution_id, &id) {
             self.emit(event)
                 .map_err(|error| self.record_failure(OperationEffectPhase::EventDelivery, error))?;
         }

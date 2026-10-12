@@ -8,7 +8,6 @@ import {
   MessageScrollerContent,
   MessageScrollerButton,
 } from "@nessa-ui/react/message-scroller"
-import { ClockProvider } from "./clock"
 import { ConversationControls } from "./conversation-controls"
 import { ConversationQuestions } from "./conversation-questions"
 import * as React from "react"
@@ -34,10 +33,6 @@ import {
 import { EmptyState } from "./empty-state"
 import { Starting, Thinking } from "./thinking"
 import { selectedWork } from "./work-selection"
-
-function wallNow(): number {
-  return Date.now()
-}
 
 export function Transcript({
   conversation,
@@ -251,12 +246,11 @@ export function Transcript({
               conversation={conversation}
               gatewayAvailable={gatewayAvailable}
             />
-            <ClockProvider now={wallNow}>
-              <ConversationControls
-                conversation={conversation}
-                gatewayAvailable={gatewayAvailable}
-              />
-            </ClockProvider>
+            {/* Its countdown reads the clock composition placed above this tree. */}
+            <ConversationControls
+              conversation={conversation}
+              gatewayAvailable={gatewayAvailable}
+            />
           </MessageScrollerContent>
         </MessageScrollerViewport>
         <MessageScrollerButton />

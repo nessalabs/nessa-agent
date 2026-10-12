@@ -96,7 +96,9 @@ open, as a refusal outcome is.
 
 The deadline is its own decider. The audit basis is `deadline`, the actor
 principal is `permission-deadline`, and the surface is the tool class. It is
-not a person and not a rule.
+not a person and not a rule. The basis keeps the class, the wait, the effect,
+the reason, and `stopsTurn`, so an audit reader can tell a refusal that let the
+turn continue from one that ended it without parsing the reason.
 
 ## Ordering
 

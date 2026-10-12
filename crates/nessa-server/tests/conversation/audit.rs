@@ -396,14 +396,9 @@ fn audit_maps_permission_selection_delivery_and_custom_cancellation_exactly() {
     );
 }
 
-#[test]
-fn audit_maps_a_deadline_answer_exactly() {
-    use nessa_sdk::domain::agent_execution::permissions::{
-        PermissionReviewDeadline, PermissionToolClass, STANDARD_DENY_REASON,
-    };
-    use serde_json::json;
-    use std::time::Duration;
-
+fn deadline_answer_value(
+    deadline: nessa_sdk::domain::agent_execution::permissions::PermissionReviewDeadline,
+) -> serde_json::Value {
     let id = ExecutionId::new("execution").unwrap();
     let permission = PermissionId::new("permission").unwrap();
     let tool = ToolCallId::new("tool").unwrap();
@@ -442,13 +437,6 @@ fn audit_maps_a_deadline_answer_exactly() {
             None,
         )
         .unwrap();
-    let deadline = PermissionReviewDeadline::new(
-        PermissionToolClass::Other,
-        Duration::from_secs(30),
-        PermissionEffect::Deny,
-        STANDARD_DENY_REASON,
-    )
-    .unwrap();
     let answer = controller
         .answer_permission(PermissionAnswer {
             execution_id: id,
@@ -461,9 +449,28 @@ fn audit_maps_a_deadline_answer_exactly() {
             .unwrap(),
         })
         .unwrap();
-    let value = record_value(&ExecutionAuditRecord::Answered(
+    record_value(&ExecutionAuditRecord::Answered(
         PermissionAnswerRecord::new(answer, PermissionAnswerDelivery::Selected),
-    ));
+    ))
+}
+
+#[test]
+fn audit_maps_a_deadline_answer_exactly() {
+    use nessa_sdk::domain::agent_execution::permissions::{
+        PermissionReviewDeadline, PermissionToolClass, STANDARD_DENY_REASON,
+    };
+    use serde_json::json;
+    use std::time::Duration;
+
+    let value = deadline_answer_value(
+        PermissionReviewDeadline::new(
+            PermissionToolClass::Other,
+            Duration::from_secs(30),
+            PermissionEffect::Deny,
+            STANDARD_DENY_REASON,
+        )
+        .unwrap(),
+    );
     assert_eq!(
         value,
         json!({
@@ -504,8 +511,34 @@ fn audit_maps_a_deadline_answer_exactly() {
                 "waitMs": 30000,
                 "effect": "deny",
                 "reason": STANDARD_DENY_REASON,
+                "stopsTurn": false,
             },
             "delivery": {"stage": "selected"},
+        })
+    );
+}
+
+#[test]
+fn audit_records_that_a_deadline_refusal_stopped_the_turn() {
+    use nessa_sdk::domain::agent_execution::permissions::{
+        PermissionReviewDeadline, PermissionToolClass, STANDARD_STOP_REASON,
+    };
+    use serde_json::json;
+    use std::time::Duration;
+
+    let value = deadline_answer_value(PermissionReviewDeadline::stopping(
+        PermissionToolClass::Other,
+        Duration::from_secs(30),
+    ));
+    assert_eq!(
+        value["basis"],
+        json!({
+            "kind": "deadline",
+            "class": "other",
+            "waitMs": 30000,
+            "effect": "deny",
+            "reason": STANDARD_STOP_REASON,
+            "stopsTurn": true,
         })
     );
 }

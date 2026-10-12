@@ -147,6 +147,10 @@ pub enum ExecutionError {
     /// An allow deadline records that it stops the turn. Only a refusal can
     /// stop the turn, so this combination is not a deadline.
     AllowDeadlineStopsTurn,
+    /// A deadline installed as a class policy carries state only a settled or
+    /// live review has: it stops the turn, has a due time, or is armed. A
+    /// policy is a template, so a settlement would inherit that state.
+    SettledPermissionDeadlineTemplate,
 }
 impl fmt::Display for ExecutionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

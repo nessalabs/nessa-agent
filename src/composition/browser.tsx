@@ -3,6 +3,7 @@ import { NessaRpcError } from "@nessa/client"
 import { isAuthenticationFailure } from "../session/adapters/client/authentication-failure"
 import { Provider } from "react-redux"
 import {
+  ClockProvider,
   conversationTabSnapshot,
   HeldFilesProvider,
   restoreConversations,
@@ -109,14 +110,16 @@ function BrowserSession({
         read={scope.dependencies.conversation.readHeldFile}
         save={saveFile}
       >
-        <App
-          attachmentResources={scope.dependencies.attachments}
-          canChoosePaths={scope.dependencies.canChoosePaths}
-          digest={scope.dependencies.digest}
-          loadConversationChoices={scope.dependencies.loadConversationChoices}
-          onSignOut={onDisconnect}
-          sessionError={error}
-        />
+        <ClockProvider now={scope.dependencies.now}>
+          <App
+            attachmentResources={scope.dependencies.attachments}
+            canChoosePaths={scope.dependencies.canChoosePaths}
+            digest={scope.dependencies.digest}
+            loadConversationChoices={scope.dependencies.loadConversationChoices}
+            onSignOut={onDisconnect}
+            sessionError={error}
+          />
+        </ClockProvider>
       </HeldFilesProvider>
     </BrowserSetupGate>
   )

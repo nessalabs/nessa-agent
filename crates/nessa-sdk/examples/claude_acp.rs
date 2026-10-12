@@ -232,6 +232,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
             max_incoming_frame_bytes: 1024 * 1024,
             images: None,
             clock: Arc::new(RuntimeClock::new()),
+            workspace_paths: Arc::new(nessa_sdk::infrastructure::workspace_paths::FilesystemPaths),
         },
         &model,
         limits,

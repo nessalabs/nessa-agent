@@ -295,6 +295,7 @@ mod tests {
             max_incoming_frame_bytes: 8192,
             images: None,
             clock: Arc::new(RuntimeClock::new()),
+            workspace_paths: Arc::new(nessa_sdk::infrastructure::workspace_paths::FilesystemPaths),
         };
         let prompt = SystemPrompt::new(vec![PromptContribution::new(
             PromptSource::new(PromptSourceKind::Core, "test").unwrap(),

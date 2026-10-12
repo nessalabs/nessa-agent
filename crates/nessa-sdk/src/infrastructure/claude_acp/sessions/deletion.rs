@@ -88,6 +88,7 @@ mod tests {
             max_incoming_frame_bytes: 1024,
             images: None,
             clock: Arc::new(crate::infrastructure::clock::RuntimeClock::new()),
+            workspace_paths: Arc::new(crate::infrastructure::workspace_paths::FilesystemPaths),
         };
         let cleanups = DeletionCleanups::default();
         let counted_at_launch = Arc::new(AtomicBool::new(false));

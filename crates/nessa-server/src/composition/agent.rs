@@ -1112,6 +1112,7 @@ pub(super) mod build {
             max_incoming_frame_bytes: MAX_INCOMING_FRAME_BYTES,
             images,
             clock: Arc::new(RuntimeClock::new()),
+            workspace_paths: Arc::new(nessa_sdk::infrastructure::workspace_paths::FilesystemPaths),
         }
     }
 

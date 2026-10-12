@@ -3,6 +3,7 @@ import * as React from "react"
 import { createRoot } from "react-dom/client"
 import { Provider } from "react-redux"
 import { App } from "../../../../src/panel/ui/app"
+import { ClockProvider } from "../../../../src/conversation/ui/clock"
 import { createAttachmentResources } from "../../../../src/panel/adapters/attachment-resources"
 import { makeStore } from "../../../../src/store"
 import { scenarioEffects, setDraft } from "../../../../src/conversation/testing"
@@ -84,14 +85,17 @@ const root = document.getElementById("root")
 if (!root) throw new Error("Missing attachment verification root")
 createRoot(root).render(
   <Provider store={store}>
-    <App
-      attachmentResources={resources}
-      canChoosePaths
-      digest={async () => `sha256:${"ab".repeat(32)}`}
-      loadConversationChoices={async () => ({
-        catalog: { agents: [], environments: [] },
-        chosenAgent: undefined,
-      })}
-    />
+    {/* A fixture is its own composition root, so it chooses the clock. */}
+    <ClockProvider now={() => Date.now()}>
+      <App
+        attachmentResources={resources}
+        canChoosePaths
+        digest={async () => `sha256:${"ab".repeat(32)}`}
+        loadConversationChoices={async () => ({
+          catalog: { agents: [], environments: [] },
+          chosenAgent: undefined,
+        })}
+      />
+    </ClockProvider>
   </Provider>,
 )

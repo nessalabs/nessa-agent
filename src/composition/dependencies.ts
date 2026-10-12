@@ -35,6 +35,7 @@ export function createDependencies(
     clientId?: string
     digest?: (bytes: Blob) => Promise<string>
     canChoosePaths?: boolean
+    now?: () => number
   } = {},
 ) {
   const config = options.environment ?? loadEnvironment({})
@@ -135,6 +136,9 @@ export function createDependencies(
     // cannot be sent, and is not allowed to ask the host itself — so it is
     // answered once here and injected, like every other outside fact.
     canChoosePaths: options.canChoosePaths ?? hasNativeHost(),
+    // The wall clock a permission's countdown is read against. Constructed
+    // here so the conversation UI never reads `Date.now()` itself.
+    now: options.now ?? (() => Date.now()),
     // Setup's one pre-session question. Constructed here so the surface takes
     // it as a dependency rather than importing the transport it happens to use.
     agents: options.agents ?? httpAgentReadiness({ baseUrl: config.gatewayBaseUrl }),

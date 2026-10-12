@@ -141,6 +141,7 @@ pub(super) fn record_value(record: &ExecutionAuditRecord) -> Value {
                     "waitMs": deadline.wait().as_millis(),
                     "effect": deadline.effect().as_str(),
                     "reason": deadline.reason(),
+                    "stopsTurn": deadline.stops_turn(),
                 }),
             };
             let delivery = delivery(record.delivery());

@@ -28,8 +28,9 @@ use nessa_sdk::domain::agent_execution::tools::McpTool;
 use nessa_sdk::domain::agent_execution::{
     executions::{ExecutionId, ExecutionOutcome, InvocationStage, MessageKind},
     permissions::{
-        PermissionEffect, PermissionReviewDeadline, PermissionScope, RefusalOutcome, ReviewDecline,
-        ReviewDeclineReason, ReviewDeclineStage,
+        PermissionCancellationReasonView, PermissionEffect, PermissionReviewDeadline,
+        PermissionScope, PermissionStateView, RefusalOutcome, ReviewDecline, ReviewDeclineReason,
+        ReviewDeclineStage,
     },
     questions::{AnswerShape, MAX_OPEN_QUESTIONS},
     tools::{ToolContentView, ToolKind, ToolStatus},
@@ -230,9 +231,14 @@ pub struct Projection {
     revision: u64,
     committed_position: Option<(String, u64, u64, u64)>,
     resolved_permissions: HashSet<(String, String)>,
-    /// Permission ids a request named in this execution. A deadline notice
-    /// whose id is absent here is ignored: nothing in this execution asked.
-    requested_permissions: HashSet<(String, String)>,
+    /// Permission ids a request named in this execution, with the effect and
+    /// reason of the deadline that request published. A deadline notice is
+    /// shown only when it repeats that deadline: one whose id is absent, whose
+    /// request published no deadline, or whose outcome differs is ignored.
+    requested_permissions: HashMap<(String, String), Option<(PermissionEffect, String)>>,
+    /// Reviews cancelled for a reason other than their own deadline. Their
+    /// deadline did not settle them, so a later notice is ignored.
+    cancelled_otherwise: HashSet<(String, String)>,
     /// Asks that have stopped waiting, so a replayed ask does not reopen one.
     answered_questions: HashSet<(String, String)>,
     terminal_executions: HashSet<String>,
@@ -487,7 +493,8 @@ impl Projection {
             revision: 0,
             committed_position: None,
             resolved_permissions: HashSet::new(),
-            requested_permissions: HashSet::new(),
+            requested_permissions: HashMap::new(),
+            cancelled_otherwise: HashSet::new(),
             answered_questions: HashSet::new(),
             terminal_executions: HashSet::new(),
             tool_parts: HashMap::new(),
@@ -938,8 +945,12 @@ impl Projection {
         let execution = event.execution_id().as_str();
         // Recorded before a card is skipped. A later notice still names a
         // request this execution saw, even when the card could not be shown.
-        self.requested_permissions
-            .insert((execution.to_owned(), permission.as_str().to_owned()));
+        self.requested_permissions.insert(
+            (execution.to_owned(), permission.as_str().to_owned()),
+            deadline
+                .as_ref()
+                .map(|deadline| (deadline.effect(), deadline.reason().to_owned())),
+        );
         if self
             .resolved_permissions
             .contains(&(execution.to_owned(), permission.as_str().to_owned()))
@@ -1047,10 +1058,23 @@ impl Projection {
             ExecutionUpdate::PermissionRequested { .. } => self.observe_permission(event),
             ExecutionUpdate::QuestionAsked { .. } => self.observe_question(event),
             ExecutionUpdate::PermissionCancelled(cancellation) => {
+                let by_deadline = matches!(
+                    cancellation.request().state(),
+                    PermissionStateView::Cancelled { reason }
+                        if matches!(reason.view(), PermissionCancellationReasonView::DeadlineExceeded)
+                );
+                if !by_deadline {
+                    self.cancelled_otherwise.insert((
+                        execution.to_owned(),
+                        cancellation.request().id().as_str().to_owned(),
+                    ));
+                }
                 self.resolved_permission(execution, cancellation.request().id().as_str());
             }
-            ExecutionUpdate::DeadlineAnswered { id, .. } => {
-                self.resolved_permission(execution, id.as_str());
+            ExecutionUpdate::DeadlineAnswered { id, effect, reason } => {
+                if self.deadline_settled(execution, id.as_str(), *effect, reason.as_str()) {
+                    self.resolved_permission(execution, id.as_str());
+                }
             }
             ExecutionUpdate::QuestionClosed { id } => {
                 self.answered_questions
@@ -1067,10 +1091,44 @@ impl Projection {
         }
     }
 
+    /// Whether `permission` published a deadline with this `effect` and
+    /// `reason`, and nothing but that deadline ended it. A stale, duplicate,
+    /// or contradictory notice in restored history is not one.
+    fn deadline_settled(
+        &self,
+        execution: &str,
+        permission: &str,
+        effect: PermissionEffect,
+        reason: &str,
+    ) -> bool {
+        let key = (execution.to_owned(), permission.to_owned());
+        matches!(
+            self.requested_permissions.get(&key),
+            Some(Some((published, published_reason)))
+                if *published == effect && published_reason == reason
+        ) && !self.cancelled_otherwise.contains(&key)
+    }
+
     /// Render one observation from a validated committed SDK record.
     fn observe(&mut self, event: &ExecutionEvent) {
         let id = event.execution_id().as_str();
         let index = self.ensure_message(id);
+        // Decided once, before this event changes anything: a notice is shown
+        // for the deadline that settled its review, and only the first time.
+        // The notice part is that record, so a replayed record shows it again.
+        let deadline_notice_shown = match event.update() {
+            ExecutionUpdate::DeadlineAnswered {
+                id: permission,
+                effect,
+                reason,
+            } => {
+                self.deadline_settled(id, permission.as_str(), *effect, reason.as_str())
+                    && !self.view.messages[index].parts.iter().any(|part| {
+                        part.kind == "local_notice" && part.notice_id == permission.as_str()
+                    })
+            }
+            _ => false,
+        };
         self.view
             .pending
             .retain(|pending| pending.execution_id != id);
@@ -1118,10 +1176,7 @@ impl Projection {
                 effect,
                 reason,
             } => {
-                if !self
-                    .requested_permissions
-                    .contains(&(id.to_owned(), permission.as_str().to_owned()))
-                {
+                if !deadline_notice_shown {
                     None
                 } else {
                     let text = deadline_notice(*effect, reason.as_str());
@@ -1203,11 +1258,8 @@ impl Projection {
                 self.view.messages[index].status = ConversationMessageStatus::Running;
             }
             ExecutionUpdate::PermissionCancelled(_) | ExecutionUpdate::QuestionClosed { .. } => {}
-            ExecutionUpdate::DeadlineAnswered { id: permission, .. } => {
-                if self
-                    .requested_permissions
-                    .contains(&(id.to_owned(), permission.as_str().to_owned()))
-                {
+            ExecutionUpdate::DeadlineAnswered { .. } => {
+                if deadline_notice_shown {
                     self.view.messages[index].status = ConversationMessageStatus::Running;
                 }
             }

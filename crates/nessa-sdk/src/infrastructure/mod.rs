@@ -51,6 +51,7 @@ pub mod mcp;
 pub mod model_metadata_json;
 pub mod opencode_acp;
 pub mod session_storage;
+pub mod workspace_paths;
 
 pub(crate) mod json_rpc;
 pub(crate) mod process;

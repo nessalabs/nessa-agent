@@ -247,6 +247,7 @@ pub(super) fn test_acp_configuration(
         max_incoming_frame_bytes: 8192,
         images: None,
         clock: Arc::new(crate::infrastructure::clock::RuntimeClock::new()),
+        workspace_paths: Arc::new(crate::infrastructure::workspace_paths::FilesystemPaths),
     };
     (root, config, model)
 }

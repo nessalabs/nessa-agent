@@ -12,6 +12,7 @@ use crate::domain::agent_execution::permissions::{
 };
 use crate::infrastructure::acp::executions::prompt_content;
 use crate::infrastructure::clock::Clock;
+use crate::infrastructure::workspace_paths::WorkspacePaths;
 use serde::Deserialize;
 use std::{
     collections::{BTreeMap, HashSet},
@@ -461,6 +462,12 @@ pub struct AcpConfig {
     /// tests. Waiting for the process itself to exit is not measured on it:
     /// see [`crate::infrastructure::clock`].
     pub clock: Arc<dyn Clock>,
+    /// Where a read or search review's target paths resolve, so its deadline
+    /// class can tell a path inside [`Self::workspace`] from one that leaves.
+    /// [`FilesystemPaths`](crate::infrastructure::workspace_paths::FilesystemPaths)
+    /// outside tests. It is called off the worker's task and given up on after
+    /// a short bound, so a stuck mount makes the review the deny class.
+    pub workspace_paths: Arc<dyn WorkspacePaths>,
 }
 impl AcpConfig {
     /// This configuration for a harness a host starts, working in `workspace`

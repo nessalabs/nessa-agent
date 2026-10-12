@@ -8,6 +8,7 @@ use crate::domain::agent_execution::{
     permissions::PermissionToolClass,
     tools::{FileLocation, ToolKind},
 };
+use crate::infrastructure::workspace_paths::WorkspacePaths;
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
@@ -68,8 +69,8 @@ pub(crate) fn review_class_with(
     }
 }
 
-/// Classify off the worker task. A filesystem read that outlasts
-/// [`PATH_RESOLUTION_BOUND`] is the deny class.
+/// Classify off the worker task through the injected `paths`. A filesystem
+/// read that outlasts [`PATH_RESOLUTION_BOUND`] is the deny class.
 ///
 /// `in_flight` is this worker's one classification. The permit stays with the
 /// read until the read returns, including after the wait has given up, so a
@@ -80,14 +81,16 @@ pub(crate) async fn bounded_review_class(
     kind: Option<ToolKind>,
     locations: Option<Vec<FileLocation>>,
     workspace: PathBuf,
-    canonicalize: impl Fn(&Path) -> Option<PathBuf> + Send + 'static,
+    paths: Arc<dyn WorkspacePaths>,
 ) -> PermissionToolClass {
     let Ok(permit) = Arc::clone(in_flight).try_acquire_owned() else {
         return PermissionToolClass::Other;
     };
     let work = move || {
         let _permit = permit;
-        review_class_with(kind, &locations, &workspace, &mut |path| canonicalize(path))
+        review_class_with(kind, &locations, &workspace, &mut |path| {
+            paths.resolve(path)
+        })
     };
     match tokio::time::timeout(PATH_RESOLUTION_BOUND, tokio::task::spawn_blocking(work)).await {
         Ok(Ok(class)) => class,
@@ -224,6 +227,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn classification_reads_paths_only_through_the_injected_resolver() {
+        // Neither path exists on disk; only the resolver says where they are.
+        let workspace = std::env::temp_dir().join("nessa-absent-workspace");
+        let elsewhere = std::env::temp_dir().join("nessa-elsewhere");
+        let budget = Arc::new(Semaphore::new(1));
+        let read = |name: &str| {
+            let elsewhere = elsewhere.clone();
+            super::bounded_review_class(
+                &budget,
+                Some(ToolKind::Read),
+                Some(vec![location(&workspace.join(name))]),
+                workspace.clone(),
+                Arc::new(move |path: &Path| {
+                    Some(if path.ends_with("link") {
+                        elsewhere.join("secret")
+                    } else {
+                        path.to_path_buf()
+                    })
+                }),
+            )
+        };
+        assert!(!workspace.exists());
+        assert_eq!(read("notes.txt").await, PermissionToolClass::ReadOnly);
+        assert_eq!(read("link").await, PermissionToolClass::Other);
+    }
+
+    #[tokio::test]
     async fn a_stuck_filesystem_is_the_deny_class_and_does_not_hold_classification() {
         let root = tempfile::tempdir().unwrap();
         let workspace = root.path().join("workspace");
@@ -239,7 +269,7 @@ mod tests {
             Some(ToolKind::Read),
             locations,
             workspace,
-            move |_| {
+            Arc::new(move |_: &Path| {
                 let began = std::time::Instant::now();
                 while began.elapsed() < Duration::from_secs(5) {
                     if stop_for_read.load(Ordering::Relaxed) {
@@ -248,7 +278,7 @@ mod tests {
                     std::thread::sleep(Duration::from_millis(20));
                 }
                 None
-            },
+            }),
         )
         .await;
         assert_eq!(class, PermissionToolClass::Other);
@@ -279,12 +309,12 @@ mod tests {
                     Some(ToolKind::Read),
                     locations,
                     workspace,
-                    move |_| {
+                    Arc::new(move |_: &Path| {
                         while !stop_for_read.load(Ordering::Relaxed) {
                             std::thread::sleep(Duration::from_millis(20));
                         }
                         None
-                    },
+                    }),
                 )
                 .await
             })
@@ -305,7 +335,7 @@ mod tests {
             Some(ToolKind::Read),
             Some(vec![location(&inside)]),
             workspace,
-            |_| Some(std::path::PathBuf::from("/")),
+            Arc::new(|_: &Path| Some(std::path::PathBuf::from("/"))),
         )
         .await;
         assert_eq!(second, PermissionToolClass::Other);

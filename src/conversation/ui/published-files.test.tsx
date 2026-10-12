@@ -15,6 +15,7 @@ import {
   type PublishedFile,
   type Turn,
 } from "../model"
+import { ClockProvider } from "./clock"
 import { HeldFilesProvider } from "./held-files"
 import { Transcript } from "./transcript"
 
@@ -147,16 +148,18 @@ async function render(
     root.render(
       <Provider store={store as never}>
         <HeldFilesProvider read={read} save={save}>
-          <Transcript
-            conversation={value}
-            ground="paper"
-            animateMount={false}
-            streamText={false}
-            emptyState={emptyState}
-            statusLabel="Ready to start"
-            gatewayAvailable
-            onOpenPaste={vi.fn()}
-          />
+          <ClockProvider now={() => 1_000}>
+            <Transcript
+              conversation={value}
+              ground="paper"
+              animateMount={false}
+              streamText={false}
+              emptyState={emptyState}
+              statusLabel="Ready to start"
+              gatewayAvailable
+              onOpenPaste={vi.fn()}
+            />
+          </ClockProvider>
         </HeldFilesProvider>
       </Provider>,
     )
@@ -374,16 +377,18 @@ it("reads nothing and offers no save with no reader to read through", async () =
   await React.act(async () => {
     root.render(
       <Provider store={store as never}>
-        <Transcript
-          conversation={conversation([report, chart])}
-          ground="paper"
-          animateMount={false}
-          streamText={false}
-          emptyState={false}
-          statusLabel="Ready"
-          gatewayAvailable
-          onOpenPaste={vi.fn()}
-        />
+        <ClockProvider now={() => 1_000}>
+          <Transcript
+            conversation={conversation([report, chart])}
+            ground="paper"
+            animateMount={false}
+            streamText={false}
+            emptyState={false}
+            statusLabel="Ready"
+            gatewayAvailable
+            onOpenPaste={vi.fn()}
+          />
+        </ClockProvider>
       </Provider>,
     )
   })
