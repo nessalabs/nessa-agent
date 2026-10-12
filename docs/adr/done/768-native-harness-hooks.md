@@ -65,8 +65,10 @@ different command. The rows are the orders the store implements.
 `a_failed_revert_keeps_the_recorded_flag_and_the_next_command_puts_the_file_back`,
 `an_unreadable_pending_change_loads_as_off`,
 `an_unreadable_outcome_keeps_the_change_pending_and_the_harness_off`,
-`an_outcome_that_cannot_be_read_back_keeps_the_change_pending_and_the_harness_off`, and
+`an_outcome_that_cannot_be_read_back_keeps_the_change_pending_and_the_harness_off`,
 `a_revert_that_does_not_sync_keeps_the_change_pending`,
+`a_marker_path_that_is_a_directory_is_moved_aside_and_loads_as_off`,
+`a_marker_that_names_a_requested_record_loads_as_off`,
 `a_recorded_change_whose_file_rename_was_lost_is_written_again`, and
 `hooks_turned_off_by_a_crashed_command_go_back_on_only_with_its_requested_record`
 are those rows.
@@ -90,6 +92,7 @@ and
 | File written, outcome absent or not the one pending, change pending | The gateway starts, or the next command arrives | The file goes back to the choice before the command. Hooks go back on only when that command's requested record says they were on. A retry of the command finishes it |
 | Outcome recorded, change pending | The gateway starts, or the next command arrives | The file is written again to the recorded choice and synced, even if a crash lost its first rename |
 | File written and settled, outcome record later lost | The gateway starts | The start loads the file |
+| The pending marker cannot be read, is not a file, or does not name an outcome record for the choice it asked for | The gateway starts, or the next command arrives | The file is written off and the marker is removed, or moved aside when it is not a file. The settlement fails, and the next command is refused, until the marker is gone |
 | The file is not one JSON object, names a harness twice, or is larger than any choice | The gateway starts | That file loads as off and the gateway keeps starting |
 | Both records written for this choice | The same caller, harness, and request id | The command succeeds. The records stay as first written, including the observation time |
 | Outcome written for a different choice | The same request id | The command fails. The file is unchanged |

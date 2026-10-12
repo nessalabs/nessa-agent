@@ -387,6 +387,9 @@ const CHOICE: &str = "native-hooks.json";
 /// or the file is put back.
 const PENDING: &str = "native-hooks.pending.json";
 
+/// Where a marker path that cannot be removed as a file is moved.
+const SET_ASIDE: &str = "native-hooks.pending.unreadable";
+
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PendingChoice {
@@ -451,7 +454,12 @@ fn settle_pending(
         }
         // The file's own rename may not have survived either. The record
         // decides: the file is written to say what it says, and synced.
-        let recorded = pending.outcome.transition.after.unwrap_or(pending.before);
+        // A marker that reads always names its outcome's choice.
+        let recorded = pending
+            .outcome
+            .transition
+            .after
+            .unwrap_or(pending.outcome.transition.requested);
         return put_back(directory, stored.with(agent, recorded), sync);
     }
     // Putting hooks back on needs the audit to say they were on: the same
@@ -495,18 +503,18 @@ fn requested_agrees(directory: &Path, agent: NativeHooksAgent, pending: &Pending
     agrees(&audit_record(directory, &expected.record_id), &expected).unwrap_or(false)
 }
 
-/// Write `selection` and then remove the marker. The marker stays when the
-/// file could not be written.
+/// Write `selection` and then remove the marker. The marker stays, and the
+/// settlement fails, when the file could not be written or the marker could
+/// not be removed.
 #[allow(clippy::type_complexity)]
 fn put_back(
     directory: &Path,
     selection: NativeHooksSelection,
     sync: DirectorySync,
 ) -> Result<Option<NativeHooksSelection>, (NativeHooksSelection, NativeHooksError)> {
-    if write_choice(directory, &selection, sync).is_err() {
+    if write_choice(directory, &selection, sync).is_err() || !clear_pending(directory, sync) {
         return Err((selection, NativeHooksError::Storage));
     }
-    clear_pending(directory, sync);
     Ok(Some(selection))
 }
 
@@ -524,29 +532,45 @@ fn read_pending(path: &Path) -> Result<Option<PendingChoice>, ()> {
         return Err(());
     }
     let pending: PendingChoice = serde_json::from_slice(&bytes).map_err(|_| ())?;
-    // The record name becomes a path, so it must be one this store makes.
-    let hex = pending
-        .outcome
-        .record_id
-        .strip_prefix("native-hooks-")
-        .ok_or(())?;
-    if hex.len() != 64
-        || !hex
-            .bytes()
-            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
-        || !matches!(pending.outcome.target.agent.as_str(), "claude" | "codex")
+    // The record name becomes a path, so it must be the one this store makes
+    // for the outcome the marker describes: an outcome phase that records
+    // the choice the command asked for.
+    let outcome = &pending.outcome;
+    let agent = match outcome.target.agent.as_str() {
+        "claude" => NativeHooksAgent::Claude,
+        "codex" => NativeHooksAgent::Codex,
+        _ => return Err(()),
+    };
+    let named = record_name(
+        agent,
+        &outcome.initiator.principal_id,
+        &outcome.correlation_id,
+        NativeHooksPhase::Outcome,
+    );
+    if outcome.record_id != named
+        || outcome.transition.phase != NativeHooksPhase::Outcome.name()
+        || outcome.transition.after != Some(outcome.transition.requested)
     {
         return Err(());
     }
     Ok(Some(pending))
 }
 
-/// Best effort: a marker left behind names a change that is settled or
-/// already put back, and the next start finds it so.
-fn clear_pending(directory: &Path, sync: DirectorySync) {
-    if std::fs::remove_file(directory.join(PENDING)).is_ok() {
+/// Remove the marker, and say whether none is left. A path that is not a
+/// file, such as a directory, is moved aside so the next change can publish
+/// its own marker. A marker left behind names a change that is settled or
+/// already put back, and the next settlement finds it so.
+fn clear_pending(directory: &Path, sync: DirectorySync) -> bool {
+    let path = directory.join(PENDING);
+    let gone = match std::fs::remove_file(&path) {
+        Ok(()) => true,
+        Err(error) if error.kind() == ErrorKind::NotFound => return true,
+        Err(_) => std::fs::rename(&path, directory.join(SET_ASIDE)).is_ok(),
+    };
+    if gone {
         let _ = sync(directory);
     }
+    gone
 }
 
 /// The file name of one phase. The same caller, harness, and request id
@@ -1571,6 +1595,68 @@ mod tests {
             .await
             .unwrap()
             .codex());
+    }
+
+    #[tokio::test]
+    async fn a_marker_path_that_is_a_directory_is_moved_aside_and_loads_as_off() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("data");
+        let preferences =
+            NativeHooksPreferences::open(directory.clone(), Arc::new(FixedClock)).unwrap();
+        preferences
+            .set(change(NativeHooksAgent::Claude, true, "request-before-dir"))
+            .await
+            .unwrap();
+        std::fs::create_dir(directory.join(PENDING)).unwrap();
+        std::fs::write(directory.join(PENDING).join("inside"), b"x").unwrap();
+        let restarted =
+            NativeHooksPreferences::open(directory.clone(), Arc::new(FixedClock)).unwrap();
+        assert_eq!(restarted.selection(), NativeHooksSelection::off());
+        assert!(!directory.join(PENDING).exists());
+        assert!(directory.join(SET_ASIDE).is_dir());
+        // The next change can publish its own marker.
+        assert!(restarted
+            .set(change(NativeHooksAgent::Codex, true, "request-after-dir"))
+            .await
+            .unwrap()
+            .codex());
+    }
+
+    #[tokio::test]
+    async fn a_marker_that_names_a_requested_record_loads_as_off() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("data");
+        let preferences =
+            NativeHooksPreferences::open(directory.clone(), Arc::new(FixedClock)).unwrap();
+        preferences
+            .set(change(NativeHooksAgent::Claude, true, "request-real"))
+            .await
+            .unwrap();
+        // The requested record of that change exists and reads back, but it
+        // is not an outcome, so it cannot settle anything.
+        let requested = StoredRecord::new(
+            &change(NativeHooksAgent::Claude, true, "request-real").evidence(
+                NativeHooksPhase::Requested,
+                false,
+                None,
+            ),
+            0,
+        );
+        assert!(audit_record(&directory, &requested.record_id).is_file());
+        publish(
+            &directory,
+            PENDING,
+            &PendingChoice {
+                outcome: requested,
+                before: true,
+            },
+            sync_directory,
+        )
+        .unwrap();
+        let restarted =
+            NativeHooksPreferences::open(directory.clone(), Arc::new(FixedClock)).unwrap();
+        assert_eq!(restarted.selection(), NativeHooksSelection::off());
+        assert!(!directory.join(PENDING).exists());
     }
 
     fn audit_unsynced(path: &Path) -> std::io::Result<()> {
