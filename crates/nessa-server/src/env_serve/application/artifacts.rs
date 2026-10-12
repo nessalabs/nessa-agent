@@ -19,10 +19,14 @@
 //! ReadArtifact{artifact, offset, length} (a connection with no artifact
 //!   channel beside it) ──▶ LeaseArtifacts::read
 //!   ──▶ waiting for its Collected? no ──▶ ArtifactNotRead{notStaged}
-//!   ──▶ fewer than MAX_ARTIFACT_READS_IN_FLIGHT of it unanswered? no ──▶ busy
+//!   ──▶ fewer than MAX_ARTIFACT_READS_IN_FLIGHT of it not yet handed to the
+//!       writer? no ──▶ busy
 //!   ──▶ ArtifactOutbox::read (the staged copy, on a thread that may block)
 //!   ──▶ ArtifactRead{offset, data} | ArtifactNotRead{unreadable}, or
 //!       {notStaged} when the copy went while it was read
+//!   (its place under the bound held until the writer has the answer, or the
+//!    gateway is gone; the lease's end stops every read under way and waits
+//!    for it before Ended)
 //! ```
 //!
 //! Arrows are calls and frames, in order. The bytes the gateway reads are
@@ -44,7 +48,7 @@ use std::{
     sync::{Arc, Mutex, PoisonError},
 };
 use tokio::{
-    sync::{mpsc, oneshot},
+    sync::{mpsc, oneshot, watch},
     task::JoinHandle,
 };
 
@@ -236,6 +240,32 @@ pub(crate) struct LeaseArtifacts {
     publisher: Publisher,
     outbox: Arc<dyn ArtifactOutbox>,
     ledger: Arc<dyn LeaseLedger>,
+    /// Turns true once the gateway is gone: an answer to a read still
+    /// waiting for room is given up on.
+    gone: watch::Receiver<bool>,
+    /// Each read's task not yet done: stopped, and waited for, when the
+    /// lease ends, so no answer of its follows the lease's end.
+    reads: Mutex<Vec<JoinHandle<()>>>,
+}
+
+/// One read's place under its artifact's bound: held until its answer is
+/// handed to the writer, or given up on, so a gateway that reads nothing
+/// holds at most the bound of answers per artifact.
+struct ReadSlot {
+    in_flight: Arc<Mutex<InFlight>>,
+    artifact: u32,
+}
+
+impl Drop for ReadSlot {
+    fn drop(&mut self) {
+        let mut in_flight = lock(&self.in_flight);
+        if let Some(reading) = in_flight.reading.get_mut(&self.artifact) {
+            *reading -= 1;
+            if *reading == 0 {
+                in_flight.reading.remove(&self.artifact);
+            }
+        }
+    }
 }
 
 impl LeaseArtifacts {
@@ -247,6 +277,7 @@ impl LeaseArtifacts {
         outbox: Arc<dyn ArtifactOutbox>,
         ledger: Arc<dyn LeaseLedger>,
         frames: mpsc::Sender<FromEnvironment>,
+        gone: watch::Receiver<bool>,
     ) -> Option<Self> {
         let point = match outbox.open(lease) {
             Ok(point) => point,
@@ -271,6 +302,8 @@ impl LeaseArtifacts {
             publisher,
             outbox,
             ledger,
+            gone,
+            reads: Mutex::new(Vec::new()),
         })
     }
 
@@ -296,10 +329,11 @@ impl LeaseArtifacts {
 
     /// Read what the gateway asked of `artifact`'s staged copy, on a task
     /// of its own, which answers `ArtifactRead`, or `ArtifactNotRead
-    /// {unreadable}` (`{notStaged}` when the copy was let go meanwhile). Refused at once, for the caller to answer, when no
-    /// such artifact waits for its answer (`notStaged`), or when the
-    /// gateway already has as many reads of it unanswered as it may
-    /// (`busy`).
+    /// {unreadable}` (`{notStaged}` when the copy was let go meanwhile).
+    /// Refused at once, for the caller to answer, when no such artifact
+    /// waits for its answer (`notStaged`), or when as many reads of it as
+    /// the bound are not yet answered: read, or waiting to be handed to the
+    /// writer (`busy`).
     pub(crate) fn read(
         &self,
         artifact: u32,
@@ -317,6 +351,10 @@ impl LeaseArtifacts {
             }
             *reading += 1;
         }
+        let slot = ReadSlot {
+            in_flight: self.in_flight.clone(),
+            artifact,
+        };
         let length = usize::try_from(length)
             .unwrap_or(MAX_DATA_BYTES)
             .min(MAX_DATA_BYTES);
@@ -324,24 +362,18 @@ impl LeaseArtifacts {
         let in_flight = self.in_flight.clone();
         let frames = self.publisher.frames.clone();
         let lease = self.lease.clone();
-        tokio::spawn(async move {
+        let mut gone = self.gone.clone();
+        let task = tokio::spawn(async move {
+            let _slot = slot;
             let reading_lease = lease.clone();
             let read = tokio::task::spawn_blocking(move || {
                 outbox.read(&reading_lease, artifact, offset, length)
             })
             .await;
-            // Read: the next may be asked, before this one is answered, as
-            // the gateway asks it only once this answer reaches it. A copy
-            // that went while it was read (answered, or its lease ended) is
-            // no longer staged, which is why it could not be read.
+            // A copy that went while it was read (answered, or its lease
+            // ended) is no longer staged, which is why it could not be read.
             let staged = {
-                let mut in_flight = lock(&in_flight);
-                if let Some(reading) = in_flight.reading.get_mut(&artifact) {
-                    *reading -= 1;
-                    if *reading == 0 {
-                        in_flight.reading.remove(&artifact);
-                    }
-                }
+                let in_flight = lock(&in_flight);
                 !in_flight.ended && in_flight.waiting.contains_key(&artifact)
             };
             let unread = match staged {
@@ -371,8 +403,16 @@ impl LeaseArtifacts {
                     reason: unread,
                 },
             };
-            let _ = frames.send(frame).await;
+            // Its slot is let go only once the writer has the answer, or
+            // the gateway is gone and nothing more reaches it.
+            tokio::select! {
+                _ = frames.send(frame) => {}
+                _ = gone.wait_for(|gone| *gone) => {}
+            }
         });
+        let mut reads = self.reads.lock().unwrap_or_else(PoisonError::into_inner);
+        reads.retain(|read| !read.is_finished());
+        reads.push(task);
         Ok(())
     }
 
@@ -406,8 +446,16 @@ impl LeaseArtifacts {
     /// gateway ended it, since the gateway answers each before its end; when
     /// the gateway did not end it (`unasked`: lost with the connection, or
     /// expired here), it is left unanswered, as the gateway may have kept it.
-    pub(crate) fn end(self, unasked: bool) {
+    ///
+    /// Every read still under way is stopped, its answer not sent: what it
+    /// returns is their tasks, for the end to wait for before it says the
+    /// lease ended, so no read's answer reaches the gateway after that.
+    pub(crate) fn end(self, unasked: bool) -> Vec<JoinHandle<()>> {
         self.dispatcher.abort();
+        let reads = std::mem::take(&mut *self.reads.lock().unwrap_or_else(PoisonError::into_inner));
+        for read in &reads {
+            read.abort();
+        }
         let waiting: Vec<_> = {
             let mut in_flight = lock(&self.in_flight);
             in_flight.ended = true;
@@ -427,6 +475,7 @@ impl LeaseArtifacts {
             );
         }
         self.outbox.close(&self.lease);
+        reads
     }
 }
 

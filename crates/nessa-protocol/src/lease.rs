@@ -77,9 +77,11 @@
 //! gateway reads that path over the artifact channel beside this stream
 //! (sftp on the same SSH connection). A paired connection has nothing beside
 //! it, so there the gateway reads the file over this stream itself, a range
-//! at a time ([`ToEnvironment::ReadArtifact`]), at most
-//! [`MAX_ARTIFACT_READS_IN_FLIGHT`] ranges of one artifact unanswered at
-//! once and each at most [`MAX_DATA_BYTES`]; the environment answers only
+//! at a time ([`ToEnvironment::ReadArtifact`]), each at most
+//! [`MAX_DATA_BYTES`]; the environment holds at most
+//! [`MAX_ARTIFACT_READS_IN_FLIGHT`] reads of one artifact whose answers
+//! are not yet handed to its writer, refusing more, and none answers after
+//! the lease's `Ended`; the environment answers only
 //! for a staged copy still waiting for its `Collected`, never a path the
 //! gateway names. Either way the gateway verifies what it read against the
 //! digest, then answers [`ToEnvironment::Collected`], after which the
@@ -152,8 +154,11 @@ pub const MAX_ARTIFACT_NAME_BYTES: usize =
     nessa_sdk::application::agent_execution::sessions::ArtifactName::MAX_BYTES;
 /// Longest path of a staged artifact on the environment, in bytes.
 pub const MAX_ARTIFACT_PATH_BYTES: usize = 1024;
-/// Most [`ToEnvironment::ReadArtifact`]s of one artifact a gateway leaves
-/// unanswered at once; the environment refuses one more `busy`.
+/// Most [`ToEnvironment::ReadArtifact`]s of one artifact an environment
+/// holds at once, each from its arrival until its answer is handed to the
+/// environment's writer; one more is refused `busy`. So a gateway that
+/// stops reading holds at most this many answers of one artifact there. A
+/// gateway keeps within it by leaving no more than this unanswered.
 pub const MAX_ARTIFACT_READS_IN_FLIGHT: usize = 4;
 
 /// A harness's bytes, base64 on the wire.

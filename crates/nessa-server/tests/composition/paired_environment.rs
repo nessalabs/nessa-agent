@@ -1418,4 +1418,9 @@ async fn a_paired_environment_publishes_a_file_and_the_gateway_reads_it_back() {
         .map(|entries| entries.count())
         .unwrap_or(0);
     assert_eq!(staged, 0);
+    // A recorded every frame E sent it to a lease it held: none dropped.
+    let a_root = directory.path().join("a");
+    assert!(!Gateway::environment_records(&a_root, "connected").is_empty());
+    let dropped = Gateway::environment_records(&a_root, "frame_dropped");
+    assert!(dropped.is_empty(), "{dropped:?}");
 }

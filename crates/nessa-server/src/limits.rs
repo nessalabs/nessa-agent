@@ -229,7 +229,7 @@ fn catalogue() -> &'static [Limit] {
             id: "artifact.paired_reads_in_flight",
             tier: "fixed",
             owner: "nessa_protocol::lease MAX_ARTIFACT_READS_IN_FLIGHT",
-            meaning: "the ranges of one published file a gateway leaves unanswered over a paired connection; one more is refused busy",
+            meaning: "the reads of one published file an environment holds over a paired connection until each answer is handed to its writer; one more is refused busy",
         },
         Limit {
             id: "artifact.host_open_publishers",

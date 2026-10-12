@@ -1034,6 +1034,7 @@ impl Served {
                     self.outbox.clone(),
                     self.ledger.clone(),
                     self.frames.clone(),
+                    self.gone.subscribe(),
                 );
                 self.leases.insert(
                     lease.clone(),
@@ -1356,9 +1357,11 @@ impl Served {
         // flight (it took none); once lost, expired or revoked, the gateway
         // may have kept it, so it is recorded unanswered rather than
         // refused.
-        if let Some(artifacts) = held.artifacts.take() {
-            artifacts.end(cause != EndCause::Asked);
-        }
+        let reads = held
+            .artifacts
+            .take()
+            .map(|artifacts| artifacts.end(cause != EndCause::Asked))
+            .unwrap_or_default();
         let (done, ended) = watch::channel(None);
         // Ends already recorded are the audit's to answer from.
         self.ends.retain(|_, ended| ended.borrow().is_none());
@@ -1380,6 +1383,10 @@ impl Served {
         let ledger = self.ledger.clone();
         let frames = self.frames.clone();
         tokio::spawn(async move {
+            // Its reads were stopped: none answers after its end is known.
+            for read in reads {
+                let _ = read.await;
+            }
             let mut cleanup = if recorded {
                 Cleanup::Confirmed { forced: false }
             } else {
