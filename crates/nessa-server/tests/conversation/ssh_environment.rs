@@ -286,6 +286,7 @@ impl LeaseConnector for Connector {
                     },
                     self.ledger.clone(),
                     Arc::new(NoOutbox),
+                    None,
                     ServeTimings {
                         grace: Duration::from_millis(10),
                         kill: Duration::from_millis(100),
@@ -369,11 +370,16 @@ impl LeaseConnector for Connector {
     }
 }
 
-/// A connection with no artifact channel to offer.
+/// An SSH connection whose artifact channels never open: these tests
+/// carry no file.
 struct NoChannels;
 impl super::connector::ArtifactChannels for NoChannels {
     fn open(&self) -> io::Result<super::connector::ArtifactChannel> {
         Err(io::Error::other("no artifact channels"))
+    }
+
+    fn carries_files(&self) -> bool {
+        true
     }
 }
 

@@ -2,8 +2,8 @@
 //! and the bounds on a frame and the bytes it carries.
 use super::{
     decode, encode, fingerprint, read_hello, Cleanup, Collection, CollectionRefusal, CommandEnd,
-    Data, FromEnvironment, GrantRefusal, GrantedTerms, Hello, PublishRefusal, Sandbox,
-    StagedArtifact, ToEnvironment, MAX_DATA_BYTES, MAX_FRAME_BYTES,
+    Data, FetchOutcome, FetchRefusal, FromEnvironment, GrantRefusal, GrantedTerms, Hello,
+    PublishRefusal, Sandbox, StagedArtifact, ToEnvironment, MAX_DATA_BYTES, MAX_FRAME_BYTES,
 };
 use crate::pairing::FrameReader;
 use std::collections::BTreeMap;
@@ -74,6 +74,22 @@ fn every_frame_round_trips_and_names_its_lease() {
             path: "build/Nessa.dmg".into(),
             media_type: Some("application/x-apple-diskimage".into()),
         },
+        ToEnvironment::Fetch {
+            lease: "l".into(),
+            request: "call-3".into(),
+            destination: "assets/logo.png".into(),
+            digest: "ab".repeat(32),
+            media_type: "image/png".into(),
+            size: 7,
+        },
+        ToEnvironment::Delivered {
+            lease: "l".into(),
+            request: "call-3".into(),
+        },
+        ToEnvironment::Undelivered {
+            lease: "l".into(),
+            request: "call-3".into(),
+        },
     ];
     for frame in to {
         let decoded: ToEnvironment = decode(&body(&encode(&frame).unwrap())).unwrap();
@@ -141,6 +157,30 @@ fn every_frame_round_trips_and_names_its_lease() {
             lease: "l".into(),
             request: "call-2".into(),
             reason: PublishRefusal::OutsideWorkspace,
+        },
+        FromEnvironment::FetchAccepted {
+            lease: "l".into(),
+            request: "call-3".into(),
+            path: "/home/me/.local/share/nessa/environment/inbox/l/1.part".into(),
+        },
+        FromEnvironment::FetchRefused {
+            lease: "l".into(),
+            request: "call-4".into(),
+            reason: FetchRefusal::Occupied,
+        },
+        FromEnvironment::Fetched {
+            lease: "l".into(),
+            request: "call-3".into(),
+            outcome: FetchOutcome::Placed {
+                path: "/work/assets/logo.png".into(),
+            },
+        },
+        FromEnvironment::Fetched {
+            lease: "l".into(),
+            request: "call-5".into(),
+            outcome: FetchOutcome::Refused {
+                reason: FetchRefusal::Mismatch,
+            },
         },
         FromEnvironment::Ran {
             lease: "l".into(),
@@ -283,6 +323,90 @@ fn a_gateway_asked_publish_names_its_request_and_its_refusal_answers_it() {
         text,
         r#"{"type":"notPublished","lease":"l","request":"call-1","reason":"busy"}"#
     );
+}
+
+/// Gate: a fetch names the file by digest, media type and size and where
+/// it goes; its answers name the request and carry no bytes of it, only
+/// where the bytes are to be written and what became of it.
+#[test]
+fn a_fetch_names_its_file_and_its_answers_carry_no_bytes() {
+    let text = |frame: &dyn erased::Frame| frame.text();
+    assert_eq!(
+        text(&ToEnvironment::Fetch {
+            lease: "l".into(),
+            request: "call-1".into(),
+            destination: "a.png".into(),
+            digest: "ab".repeat(32),
+            media_type: "image/png".into(),
+            size: 7,
+        }),
+        format!(
+            r#"{{"type":"fetch","lease":"l","request":"call-1","destination":"a.png","digest":"{}","mediaType":"image/png","size":7}}"#,
+            "ab".repeat(32)
+        )
+    );
+    assert_eq!(
+        text(&ToEnvironment::Delivered {
+            lease: "l".into(),
+            request: "call-1".into(),
+        }),
+        r#"{"type":"delivered","lease":"l","request":"call-1"}"#
+    );
+    assert_eq!(
+        text(&ToEnvironment::Undelivered {
+            lease: "l".into(),
+            request: "call-1".into(),
+        }),
+        r#"{"type":"undelivered","lease":"l","request":"call-1"}"#
+    );
+    assert_eq!(
+        text(&FromEnvironment::FetchAccepted {
+            lease: "l".into(),
+            request: "call-1".into(),
+            path: "/in/1.part".into(),
+        }),
+        r#"{"type":"fetchAccepted","lease":"l","request":"call-1","path":"/in/1.part"}"#
+    );
+    assert_eq!(
+        text(&FromEnvironment::FetchRefused {
+            lease: "l".into(),
+            request: "call-1".into(),
+            reason: FetchRefusal::NoDirectory,
+        }),
+        r#"{"type":"fetchRefused","lease":"l","request":"call-1","reason":"noDirectory"}"#
+    );
+    assert_eq!(
+        text(&FromEnvironment::Fetched {
+            lease: "l".into(),
+            request: "call-1".into(),
+            outcome: FetchOutcome::AlreadyPlaced {
+                path: "/work/a.png".into(),
+            },
+        }),
+        r#"{"type":"fetched","lease":"l","request":"call-1","outcome":{"outcome":"alreadyPlaced","path":"/work/a.png"}}"#
+    );
+    assert_eq!(
+        text(&FromEnvironment::Fetched {
+            lease: "l".into(),
+            request: "call-1".into(),
+            outcome: FetchOutcome::Refused {
+                reason: FetchRefusal::LeaseEnded,
+            },
+        }),
+        r#"{"type":"fetched","lease":"l","request":"call-1","outcome":{"outcome":"refused","reason":"leaseEnded"}}"#
+    );
+}
+
+/// Serialises any frame to its JSON text.
+mod erased {
+    pub(super) trait Frame {
+        fn text(&self) -> String;
+    }
+    impl<T: serde::Serialize> Frame for T {
+        fn text(&self) -> String {
+            String::from_utf8(serde_json::to_vec(self).unwrap()).unwrap()
+        }
+    }
 }
 
 #[test]

@@ -4,13 +4,16 @@
 //! `wire.rs` reads and writes lease frames on a byte stream, for this side
 //! and for the gateway's SSH adapter alike; `artifacts.rs` is a lease's
 //! published files, staged through an [`ArtifactOutbox`] for the gateway to
-//! collect; `redial.rs` keeps a paired environment dialed in to its
-//! gateway, serving each connection it gets, once `approval.rs` has seen
-//! its owner approve it through an [`EnvironmentPairing`]; `grants.rs` is
-//! where serving reads what this host's owner grants each gateway, through
-//! [`PeerGrants`]; `timer.rs` is the [`Timer`] all three wait on.
+//! collect; `fetches.rs` is a lease's files fetched into its workspace,
+//! arriving and placed through an [`ArtifactInbox`]; `redial.rs` keeps a
+//! paired environment dialed in to its gateway, serving each connection it
+//! gets, once `approval.rs` has seen its owner approve it through an
+//! [`EnvironmentPairing`]; `grants.rs` is where serving reads what this
+//! host's owner grants each gateway, through [`PeerGrants`]; `timer.rs` is
+//! the [`Timer`] all three wait on.
 mod approval;
 mod artifacts;
+mod fetches;
 mod grants;
 mod redial;
 mod serve;
@@ -21,6 +24,7 @@ pub(crate) use artifacts::{
     ArtifactOutbox, PublishAnswer, PublishCall, PublishPoint, PublishRequest,
     PUBLISH_POINT_VARIABLE,
 };
+pub(crate) use fetches::{ArtifactInbox, Destination, FetchedFile};
 pub(crate) use grants::{
     change_grant, Applied, ChangeFailed, GrantAudit, GrantChange, GrantOutcome, GrantStore,
     PeerGrants,

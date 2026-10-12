@@ -14,10 +14,17 @@
 //!                     no room, or nobody takes them ──▶ Collected refused
 //!                     naming a request ──▶ that publish's waiter: offered, or refused
 //!                   not published ──▶ that publish's waiter: the host's reason
+//!                   fetch accepted / refused / fetched ──▶ that fetch's waiter
 //!                   none ──▶ FrameDropped, never applied elsewhere (row L9)
 //! end of stream ──▶ every route dropped: waiters unanswered, outputs ended,
 //!                   each lease's `gone` closed ──▶ ConnectionLost
 //! publish(lease, request) ──▶ waiter by request ──▶ Publish ──▶ Published | NotPublished
+//! fetch(lease, ask) ──▶ waiter by request ──▶ Fetch
+//!   ──▶ FetchRefused | Fetched (already there)
+//!   ──▶ FetchAccepted{path} ──▶ write_part over an artifact channel
+//!         written ──▶ Delivered ──▶ Fetched{outcome}
+//!         not written ──▶ Undelivered (unanswered)
+//!   the call gone after Fetch, before the last word or Delivered ──▶ Undelivered
 //! a command lease: grant_command ──▶ GrantCommand ──▶ Granted{terms} | Refused
 //!                  run ──▶ Run ──▶ Ran (routed to its waiter; the lease is done
 //!                  there unless its End is asked, whose Ended follows)
@@ -51,14 +58,18 @@
 //! record failing is logged only: it records no transition of any lease.
 use super::audit::{EnvironmentAudit, EnvironmentEvent};
 use super::connector::{ArtifactChannels, LeaseConnection, LeaseConnector};
-use crate::conversation::application::{ArtifactAnswering, PublishFailure};
+use super::transfer::{write_part, WriteFailure};
+use crate::conversation::application::{
+    ArtifactAnswering, FetchAsk, FetchFailure, FetchPlaced, PublishFailure,
+};
 use crate::env::LEASE_PROTOCOL;
 use crate::env_serve::application::FrameStream;
 use futures_util::FutureExt;
 use nessa_protocol::lease::{
     decode, encode, read_hello, stop_steps, Cleanup, Collection, CollectionRefusal, CommandEnd,
-    Data, FromEnvironment, GrantRefusal, GrantedTerms, PublishRefusal, Sandbox, StagedArtifact,
-    ToEnvironment, Unavailability, MAX_ARTIFACTS_IN_FLIGHT, MAX_DATA_BYTES,
+    Data, FetchOutcome, FetchRefusal, FromEnvironment, GrantRefusal, GrantedTerms, PublishRefusal,
+    Sandbox, StagedArtifact, ToEnvironment, Unavailability, MAX_ARTIFACTS_IN_FLIGHT,
+    MAX_DATA_BYTES,
 };
 use nessa_sdk::domain::agent_execution::leases::{LeaseRefusal, SshDestination};
 use std::{
@@ -191,6 +202,9 @@ struct LeaseRoute {
     /// the host to offer the file or say why not. Dropped with the route,
     /// which answers each unanswered.
     publishes: HashMap<String, oneshot::Sender<Result<(), PublishFailure>>>,
+    /// Each fetch this gateway asked under it, by request, waiting for the
+    /// host's answers. Dropped with the route, which ends each wait.
+    fetches: HashMap<String, mpsc::Sender<FetchAnswer>>,
     /// Dropped with the route: the lease is no longer routed here.
     _gone: watch::Sender<()>,
 }
@@ -205,6 +219,17 @@ struct Routes {
     /// Leases a transition of which could not be recorded in the audit:
     /// none of their outcomes is settled as confirmed.
     unaudited: HashSet<String>,
+}
+
+/// What the host said of a fetch, as the demux hands it on.
+#[derive(Debug)]
+enum FetchAnswer {
+    /// Taken: its bytes go to this part.
+    Accepted(String),
+    /// Not taken.
+    Refused(FetchRefusal),
+    /// Its last word.
+    Fetched(FetchOutcome),
 }
 
 /// A file the host published under a lease, as the demux hands it on.
@@ -445,6 +470,11 @@ impl HostLink {
         self.artifacts.clone()
     }
 
+    /// Whether this connection's artifact channels can carry a file.
+    pub(crate) fn carries_files(&self) -> bool {
+        self.artifacts.carries_files()
+    }
+
     /// Whether the connection still serves leases.
     pub(crate) fn is_open(&self) -> bool {
         !self.routes().closed && !self.frames.is_closed()
@@ -574,6 +604,7 @@ impl HostLink {
                     next_channel: 1,
                     published,
                     publishes: HashMap::new(),
+                    fetches: HashMap::new(),
                     _gone: gone_sender,
                 },
             );
@@ -886,6 +917,130 @@ impl HostLink {
         answered.await.unwrap_or(Err(PublishFailure::Unanswered))
     }
 
+    /// Ask the host to place `ask`'s file under `lease`, write its bytes to
+    /// the part the host names over an artifact channel, and wait for what
+    /// became of it. A lease no longer held here, or one whose End is
+    /// asked, is answered as ended; the connection's loss, or the lease's
+    /// route ending, before the host's last word, as unanswered once any
+    /// byte may have been delivered, so the wait never outlives the route.
+    /// Dropped while its bytes are written, the host is told they will not
+    /// all come.
+    pub(crate) async fn fetch(
+        &self,
+        lease: &str,
+        ask: FetchAsk,
+        gone: watch::Receiver<()>,
+    ) -> Result<FetchPlaced, FetchFailure> {
+        let FetchAsk {
+            request,
+            destination,
+            file,
+            source,
+            delivered: said_delivered,
+        } = ask;
+        let frame = ToEnvironment::Fetch {
+            lease: lease.into(),
+            request: request.clone(),
+            destination,
+            digest: file.digest().to_hex(),
+            media_type: file.media_type().as_str().to_owned(),
+            size: file.size(),
+        };
+        // Larger than a frame carries: never queued, so never answered.
+        if encode(&frame).is_err() {
+            return Err(FetchFailure::Refused(FetchRefusal::Invalid));
+        }
+        let mut answers = {
+            let mut routes = self.routes();
+            if routes.closed {
+                return Err(FetchFailure::Unanswered);
+            }
+            let Some(route) = routes
+                .leases
+                .get_mut(lease)
+                .filter(|route| !route.ending && route.published.is_some())
+            else {
+                return Err(FetchFailure::Refused(FetchRefusal::LeaseEnded));
+            };
+            // One ask per request: the caller holds each until answered.
+            if route.fetches.contains_key(&request) {
+                return Err(FetchFailure::Refused(FetchRefusal::Invalid));
+            }
+            // The host says at most two things of one fetch.
+            let (answer, answers) = mpsc::channel(2);
+            route.fetches.insert(request.clone(), answer);
+            answers
+        };
+        // From here, however the call ends, its wait is let go; and from
+        // the moment its Fetch is queued until the host's last word on it,
+        // or every byte is delivered, it is told they will not come. So a
+        // call given up while an acceptance is on its way, or already
+        // waiting unread, still lets the host's part go.
+        let mut fetching = Fetching {
+            routes: self.routes.clone(),
+            frames: self.frames.clone(),
+            lease: lease.to_owned(),
+            request: request.clone(),
+            undelivered: false,
+        };
+        if self.frames.send(frame).await.is_err() {
+            return Err(FetchFailure::Unanswered);
+        }
+        fetching.undelivered = true;
+        let part = match answers.recv().await {
+            Some(FetchAnswer::Accepted(part)) => part,
+            last => {
+                fetching.undelivered = false;
+                return match last {
+                    Some(FetchAnswer::Refused(reason)) => Err(FetchFailure::Refused(reason)),
+                    Some(FetchAnswer::Fetched(outcome)) => fetched(outcome),
+                    // The route ended with the lease or the connection:
+                    // nothing of it is held there any more.
+                    _ => Err(FetchFailure::Unanswered),
+                };
+            }
+        };
+        let channels = self.artifacts.clone();
+        let written = tokio::select! {
+            written = write_part(channels.as_ref(), &part, file.size(), source, gone) => written,
+            // The host's last word while the bytes are written: the lease
+            // ended there, and nothing is placed.
+            answer = answers.recv() => {
+                fetching.undelivered = false;
+                return match answer {
+                    Some(FetchAnswer::Fetched(outcome)) => fetched(outcome),
+                    Some(FetchAnswer::Refused(reason)) => Err(FetchFailure::Refused(reason)),
+                    _ => Err(FetchFailure::Refused(FetchRefusal::LeaseEnded)),
+                };
+            }
+        };
+        if let Err(failure) = written {
+            // Told on the way out: nothing more is written.
+            return Err(match failure {
+                WriteFailure::NotHeld => FetchFailure::NotHeld,
+                WriteFailure::SourceUnavailable => FetchFailure::SourceUnavailable,
+                WriteFailure::ChannelUnavailable => FetchFailure::ChannelUnavailable,
+                WriteFailure::LeaseEnded => FetchFailure::Refused(FetchRefusal::LeaseEnded),
+            });
+        }
+        let delivered = ToEnvironment::Delivered {
+            lease: lease.into(),
+            request,
+        };
+        // Set before it is queued: from here the host may place it.
+        said_delivered.store(true, std::sync::atomic::Ordering::SeqCst);
+        if self.frames.send(delivered).await.is_err() {
+            return Err(FetchFailure::Unanswered);
+        }
+        fetching.undelivered = false;
+        match answers.recv().await {
+            Some(FetchAnswer::Fetched(outcome)) => fetched(outcome),
+            Some(FetchAnswer::Refused(reason)) => Err(FetchFailure::Refused(reason)),
+            // Delivered, and no word on it: placed or not, it is not known.
+            _ => Err(FetchFailure::Unanswered),
+        }
+    }
+
     /// Tell the host what became of a file it published under `lease`,
     /// unless the lease is no longer held here: done once the answer is
     /// queued. `unanswered` is let go only then, so the lease's End, which
@@ -1156,6 +1311,27 @@ fn route_frame(routes: &mut Routes, frame: FromEnvironment) -> Routed {
             }
             None => Routed::Dropped,
         },
+        FromEnvironment::FetchAccepted {
+            lease,
+            request,
+            path,
+        } => fetch_answer(routes, &lease, &request, FetchAnswer::Accepted(path), false),
+        FromEnvironment::FetchRefused {
+            lease,
+            request,
+            reason,
+        } => fetch_answer(routes, &lease, &request, FetchAnswer::Refused(reason), true),
+        FromEnvironment::Fetched {
+            lease,
+            request,
+            outcome,
+        } => fetch_answer(
+            routes,
+            &lease,
+            &request,
+            FetchAnswer::Fetched(outcome),
+            true,
+        ),
         FromEnvironment::Ended { lease, cleanup } => match routes.leases.remove(&lease) {
             Some(mut route) => {
                 if let Some(waiter) = route.ended.take() {
@@ -1324,6 +1500,78 @@ fn offer_published(
     }
 }
 
+/// Hand `answer` to the fetch `request` under `lease` that waits for it;
+/// a `last` word lets the wait go. Dropped when nothing waits for it: a
+/// call given up after its Fetch was queued already told the host
+/// `Undelivered` ([`Fetching`]), so a late acceptance needs no answer.
+fn fetch_answer(
+    routes: &mut Routes,
+    lease: &str,
+    request: &str,
+    answer: FetchAnswer,
+    last: bool,
+) -> Routed {
+    let Some(route) = routes.leases.get_mut(lease) else {
+        return Routed::Dropped;
+    };
+    let waiter = match last {
+        true => route.fetches.remove(request),
+        false => route.fetches.get(request).cloned(),
+    };
+    match waiter.map(|waiter| waiter.try_send(answer)) {
+        Some(Ok(())) => Routed::Done,
+        // Nobody waits for it, or the host said more than a fetch has.
+        _ => Routed::Dropped,
+    }
+}
+
+/// What the host's last word on a fetch says to its caller.
+fn fetched(outcome: FetchOutcome) -> Result<FetchPlaced, FetchFailure> {
+    match outcome {
+        FetchOutcome::Placed { path } => Ok(FetchPlaced::Placed { path }),
+        FetchOutcome::AlreadyPlaced { path } => Ok(FetchPlaced::AlreadyPlaced { path }),
+        FetchOutcome::Refused { reason } => Err(FetchFailure::Refused(reason)),
+    }
+}
+
+/// One fetch's wait on its route, let go however the fetch ends; while
+/// `undelivered`, its drop tells the host no more bytes will come.
+struct Fetching {
+    routes: Arc<Mutex<Routes>>,
+    frames: mpsc::Sender<ToEnvironment>,
+    lease: String,
+    request: String,
+    /// Its Fetch is queued, the host has said nothing final of it, and not
+    /// every byte is delivered: dropped now, the host is told `Undelivered`.
+    undelivered: bool,
+}
+
+impl Drop for Fetching {
+    fn drop(&mut self) {
+        let mut routes = self.routes.lock().unwrap_or_else(PoisonError::into_inner);
+        let held = match routes.leases.get_mut(&self.lease) {
+            Some(route) => {
+                route.fetches.remove(&self.request);
+                true
+            }
+            None => false,
+        };
+        drop(routes);
+        // A lease no longer held here has no part left to let go.
+        if self.undelivered && held {
+            deliver(
+                &self.frames,
+                None,
+                ToEnvironment::Undelivered {
+                    lease: self.lease.clone(),
+                    request: self.request.clone(),
+                },
+                None,
+            );
+        }
+    }
+}
+
 fn channel_route<'a>(
     routes: &'a mut Routes,
     lease: &str,
@@ -1347,6 +1595,9 @@ fn frame_name(frame: &FromEnvironment) -> &'static str {
         FromEnvironment::Accounted { .. } => "accounted",
         FromEnvironment::Published { .. } => "published",
         FromEnvironment::NotPublished { .. } => "not_published",
+        FromEnvironment::FetchAccepted { .. } => "fetch_accepted",
+        FromEnvironment::FetchRefused { .. } => "fetch_refused",
+        FromEnvironment::Fetched { .. } => "fetched",
         FromEnvironment::Ran { .. } => "ran",
     }
 }

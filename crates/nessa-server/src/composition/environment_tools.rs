@@ -1,6 +1,6 @@
 //! The agent's environment tools as a server the gateway serves itself
-//! (issues #700, #701): `environments_list`, `run` and `artifacts_publish`,
-//! over the conversation service, offered to a conversation's harness beside
+//! (issues #700, #701): `environments_list`, `run`, `artifacts_publish` and
+//! `artifacts_fetch`, over the conversation service, offered to a conversation's harness beside
 //! its configured MCP servers and reached through the same relay.
 //!
 //! ```text
@@ -9,6 +9,8 @@
 //!   run ──▶ its arguments read ──▶ ConversationService::run_command ──▶ its record
 //!   artifacts_publish ──▶ its arguments read ──▶ ConversationService::publish_artifact
 //!     ──▶ held | alreadyHeld, or refused by code
+//!   artifacts_fetch ──▶ its arguments read ──▶ ConversationService::fetch_artifact
+//!     ──▶ placed | alreadyPlaced, or refused by code
 //! ```
 //!
 //! Arrows are calls, in order. A tool's answer is MCP's `CallToolResult`:
@@ -17,12 +19,13 @@
 //! relay that needs this server; a call before then is answered as an error.
 use crate::conversation::application::{
     CommandAnswer, CommandCall, CommandCallError, CommandResult, ConversationService,
-    EnvironmentListing, PublishAnswer, PublishCall, PublishCallRefusal,
+    EnvironmentListing, FetchAnswer, FetchCall, FetchCallRefusal, PublishAnswer, PublishCall,
+    PublishCallRefusal,
 };
 use crate::conversation::domain::CommandPolicy;
 use crate::mcp_servers::application::{BuiltInFuture, BuiltInServer};
 use nessa_protocol::conversation::domain::ConversationId;
-use nessa_protocol::lease::{CollectionRefusal, PublishRefusal, MAX_ARTIFACT_BYTES};
+use nessa_protocol::lease::{CollectionRefusal, FetchRefusal, PublishRefusal, MAX_ARTIFACT_BYTES};
 use nessa_sdk::domain::agent_execution::leases::{
     CommandExit, CommandRefusal, CommandWork, LeaseCleanup, LeaseEndCause, LeaseRefusal,
     SandboxProfile,
@@ -36,10 +39,10 @@ use tokio::sync::watch;
 /// The server's name, as the harness sees it.
 pub(super) const SERVER_NAME: &str = "nessa-environments";
 /// What changes when the tools' names, arguments or meaning do.
-const TOOLS_REVISION: &str = "environment-tools/2";
+const TOOLS_REVISION: &str = "environment-tools/3";
 
-/// `environments_list`, `run` and `artifacts_publish`, served over a
-/// conversation service.
+/// `environments_list`, `run`, `artifacts_publish` and `artifacts_fetch`,
+/// served over a conversation service.
 pub(super) struct EnvironmentTools {
     policy: Vec<String>,
     service: OnceLock<ConversationService>,
@@ -136,6 +139,26 @@ impl BuiltInServer for EnvironmentTools {
                 },
                 "annotations": {"readOnlyHint": false, "destructiveHint": false, "openWorldHint": false},
             }),
+            json!({
+                "name": "artifacts_fetch",
+                "title": "Fetch a conversation file into the workspace",
+                "description": format!(
+                    "Place one file this conversation holds — one the person attached or one published to it — in the workspace where this conversation's agent runs. Name it exactly by its digest, media type and size. `environment` must be where the agent runs now: the environment environments_list marks current. The file is written to `destination`, checked by its digest, and placed only where nothing is: an existing file is never replaced. At most {MAX_ARTIFACT_BYTES} bytes. Answers where it is, or why it is not placed."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "environment": {"type": "string", "description": "Where the agent runs, as environments_list names it."},
+                        "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "The file's SHA-256, lowercase hex."},
+                        "mediaType": {"type": "string", "description": "Its media type, lowercase type/subtype."},
+                        "size": {"type": "integer", "minimum": 1, "maximum": MAX_ARTIFACT_BYTES, "description": "Its length in bytes."},
+                        "destination": {"type": "string", "description": "Where to place it: absolute, or relative to that environment's workspace. It must be inside the workspace, in a directory that exists, where nothing is yet."},
+                    },
+                    "required": ["environment", "digest", "mediaType", "size", "destination"],
+                    "additionalProperties": false,
+                },
+                "annotations": {"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
+            }),
         ]
     }
 
@@ -174,6 +197,13 @@ impl BuiltInServer for EnvironmentTools {
                         Err(problem) => return failed(&problem),
                     };
                     published(&service.publish_artifact(&conversation, call, stop).await)
+                }
+                "artifacts_fetch" => {
+                    let call = match fetch_call(arguments, call) {
+                        Ok(call) => call,
+                        Err(problem) => return failed(&problem),
+                    };
+                    fetched(&service.fetch_artifact(&conversation, call, stop).await)
                 }
                 _ => failed("no such tool"),
             }
@@ -332,6 +362,138 @@ fn publish_refusal_message(refusal: PublishCallRefusal) -> &'static str {
             CollectionRefusal::Mismatch => "the bytes read were not the file published",
             CollectionRefusal::NotKept => "the conversation could not keep the file",
             CollectionRefusal::LeaseEnded => "the agent's lease ended before the file was kept",
+        },
+    }
+}
+
+/// `artifacts_fetch`'s arguments, as its input schema says them.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct FetchArguments {
+    environment: String,
+    digest: String,
+    media_type: String,
+    size: u64,
+    destination: String,
+}
+
+fn fetch_call(arguments: Value, call: String) -> Result<FetchCall, String> {
+    let arguments: FetchArguments = serde_json::from_value(arguments)
+        .map_err(|error| format!("artifacts_fetch's arguments: {error}"))?;
+    Ok(FetchCall {
+        environment: arguments.environment,
+        digest: arguments.digest,
+        media_type: arguments.media_type,
+        size: arguments.size,
+        destination: arguments.destination,
+        call,
+    })
+}
+
+/// What an `artifacts_fetch` came to: an error unless the file is where
+/// the answer says.
+fn fetched(answer: &FetchAnswer) -> Value {
+    match answer {
+        FetchAnswer::Placed {
+            already_placed,
+            path,
+            digest,
+            size,
+        } => result(
+            json!({
+                "outcome": if *already_placed { "alreadyPlaced" } else { "placed" },
+                "path": path,
+                "digest": digest,
+                "size": size,
+            }),
+            false,
+        ),
+        FetchAnswer::Refused(refusal) => result(
+            json!({
+                "refused": fetch_refusal_code(*refusal),
+                "message": fetch_refusal_message(*refusal),
+            }),
+            true,
+        ),
+    }
+}
+
+fn fetch_refusal_code(refusal: FetchCallRefusal) -> &'static str {
+    match refusal {
+        FetchCallRefusal::NoTurn => "no_turn",
+        FetchCallRefusal::EnvironmentNotLeased => "environment_not_leased",
+        FetchCallRefusal::DuplicateRequest => "duplicate_request",
+        FetchCallRefusal::FetchUnavailable => "fetch_unavailable",
+        FetchCallRefusal::Invalid => "invalid",
+        FetchCallRefusal::NotHeld => "not_held",
+        FetchCallRefusal::BudgetExceeded => "budget_exceeded",
+        FetchCallRefusal::SourceUnavailable => "source_unavailable",
+        FetchCallRefusal::ChannelUnavailable => "channel_unavailable",
+        FetchCallRefusal::Unanswered => "unanswered",
+        FetchCallRefusal::TimedOut => "timed_out",
+        FetchCallRefusal::Cancelled => "cancelled",
+        FetchCallRefusal::NotPlaced(reason) => match reason {
+            FetchRefusal::Unavailable => "fetch_unavailable",
+            FetchRefusal::OutsideWorkspace => "outside_workspace",
+            FetchRefusal::NoDirectory => "no_directory",
+            FetchRefusal::Occupied => "occupied",
+            FetchRefusal::Size => "size",
+            FetchRefusal::Invalid => "invalid",
+            FetchRefusal::Busy => "busy",
+            FetchRefusal::Mismatch => "mismatch",
+            FetchRefusal::PlacingFailed => "placing_failed",
+            FetchRefusal::AuditUnavailable => "audit_unavailable",
+            FetchRefusal::LeaseEnded => "lease_ended",
+        },
+    }
+}
+
+fn fetch_refusal_message(refusal: FetchCallRefusal) -> &'static str {
+    match refusal {
+        FetchCallRefusal::NoTurn => "no turn of this conversation is running to fetch it for",
+        FetchCallRefusal::EnvironmentNotLeased => {
+            "the agent does not run there; fetch into the environment environments_list marks current"
+        }
+        FetchCallRefusal::DuplicateRequest => "this call is already fetching a file",
+        FetchCallRefusal::FetchUnavailable => "where the agent runs takes no files",
+        FetchCallRefusal::Invalid => {
+            "the digest, media type, size or destination cannot name a file"
+        }
+        FetchCallRefusal::NotHeld => {
+            "this conversation does not hold that file for the person asking, or let go of it; nothing was placed"
+        }
+        FetchCallRefusal::BudgetExceeded => {
+            "as many bytes as this lease may fetch were fetched"
+        }
+        FetchCallRefusal::SourceUnavailable => {
+            "the file could not be read here; nothing was placed"
+        }
+        FetchCallRefusal::ChannelUnavailable => {
+            "the file could not be written to the environment; nothing was placed"
+        }
+        FetchCallRefusal::Unanswered => {
+            "the environment was lost after the file was written; it may or may not be placed"
+        }
+        FetchCallRefusal::TimedOut => {
+            "the file was not placed in time; it may still be placed"
+        }
+        FetchCallRefusal::Cancelled => "the call was cancelled; the file may still be placed",
+        FetchCallRefusal::NotPlaced(reason) => match reason {
+            FetchRefusal::Unavailable => "the environment does not take files",
+            FetchRefusal::OutsideWorkspace => {
+                "the destination is not a place inside the workspace"
+            }
+            FetchRefusal::NoDirectory => "the destination's directory does not exist",
+            FetchRefusal::Occupied => {
+                "something other than this file is at the destination; it was not replaced"
+            }
+            FetchRefusal::Size => "the file is empty or larger than a file may be",
+            FetchRefusal::Invalid => "the environment could not read the request",
+            FetchRefusal::Busy => "as many files as may be in flight are being fetched",
+            FetchRefusal::Mismatch => "the bytes written were not the file asked for",
+            FetchRefusal::PlacingFailed => "the environment could not place the file",
+            FetchRefusal::AuditUnavailable => "the environment could not record the fetch",
+            FetchRefusal::LeaseEnded => "the agent's lease ended first",
         },
     }
 }

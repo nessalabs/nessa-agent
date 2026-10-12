@@ -188,6 +188,10 @@ impl ArtifactChannels for Channels {
             keep: Box::new(KeptChild(child)),
         })
     }
+
+    fn carries_files(&self) -> bool {
+        true
+    }
 }
 
 impl RemoteShell for OpenSshConnector {

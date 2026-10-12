@@ -343,6 +343,7 @@ impl Host {
             },
             self.ledger.clone(),
             self.outbox.clone(),
+            None,
             ServeTimings::default(),
             Arc::new(TokioTimer::new()),
         )

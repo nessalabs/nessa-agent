@@ -65,6 +65,11 @@ pub(crate) trait ArtifactChannels: Send + Sync {
     /// # Errors
     /// Nothing could be started at all.
     fn open(&self) -> io::Result<ArtifactChannel>;
+
+    /// Whether this connection has artifact channels at all: `false` for
+    /// one that has none to open, whose leases are then never asked to
+    /// fetch or publish a file, since its bytes could never be carried.
+    fn carries_files(&self) -> bool;
 }
 
 /// Opens connections to hosts' environments.

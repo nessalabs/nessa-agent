@@ -258,7 +258,8 @@ sequenceDiagram
   refused before it takes one.
 - **Known limits.** A file the environment publishes is not fetched over a
   paired connection yet: there is no artifact channel, so its collection is
-  refused. Revocation closes a connection only when a lease is next asked
+  refused, and the agent's own publish and fetch there are refused
+  unavailable before the environment is asked. Revocation closes a connection only when a lease is next asked
   of it: until then a revoked environment that stays idle keeps its
   connection, and one of the environment permits, though it is given
   nothing. Revocation that closes an idle connection is a later part of

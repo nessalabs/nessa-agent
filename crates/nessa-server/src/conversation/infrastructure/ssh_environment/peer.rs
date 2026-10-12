@@ -22,7 +22,8 @@
 //! from an SSH host's; the leases on it, their frames and their audit are
 //! the same [`SshEnvironment`]'s. A file the host publishes is not fetched
 //! over a paired connection yet: it has no artifact channel, so its
-//! collection is refused.
+//! collection is refused, and its leases are never asked to publish or
+//! fetch a file, which the agent is told is unavailable there.
 use super::{
     audit::EnvironmentAudit,
     connector::{ArtifactChannel, ArtifactChannels, LeaseConnection},
@@ -157,5 +158,9 @@ impl ArtifactChannels for NoArtifactChannels {
             io::ErrorKind::Unsupported,
             "a paired environment's files are not fetched yet",
         ))
+    }
+
+    fn carries_files(&self) -> bool {
+        false
     }
 }

@@ -59,9 +59,10 @@ pub(super) fn attachments(
         },
         AttachmentLimits::default(),
     );
+    let reads = HeldReads::new(store.clone(), ownership);
     Ok(Attachments {
-        reads: HeldReads::new(store.clone(), ownership),
-        conversations: Arc::new(ConversationHolds::new(service.clone())),
+        conversations: Arc::new(ConversationHolds::new(service.clone(), reads.clone())),
+        reads,
         images: Arc::new(StoredUserImages::new(store)),
         service,
     })

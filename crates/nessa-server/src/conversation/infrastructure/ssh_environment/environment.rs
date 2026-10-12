@@ -23,6 +23,12 @@
 //!   its answer ──▶ Collected{lease, artifact, outcome}
 //! LeaseHold::publish(ask) ──▶ Publish{lease, request, path} ──▶ offered on the
 //!   same offers as above, naming `request` | NotPublished{reason}
+//! LeaseHold::fetch(ask) ──▶ Fetch{lease, request, destination, file}
+//!   ──▶ FetchAccepted{part} ──▶ its bytes written to `part` over sftp, read
+//!   from the held file range by range ──▶ Delivered ──▶ Fetched{outcome}
+//!   | FetchRefused{reason}; given up before Delivered ──▶ Undelivered
+//! LeaseHold::publish / fetch on a connection that carries no files (a
+//!   paired one) ──▶ None, before any frame
 //! a command: grant ──▶ link.grant_command ──▶ SshCommand, the terms the host granted
 //!   SshCommand::run ──▶ Run ──▶ Ran{end, output, cleanup}
 //!   stop said ──▶ End (not waited for) ──▶ Ran{Stopped} ──▶ Ended
@@ -48,8 +54,8 @@ use super::{
 };
 use crate::conversation::application::{
     ArtifactAnswer, ArtifactOffer, CommandEnvironment, CommandHold, CommandResult, Environment,
-    EnvironmentDeclaration, EnvironmentFuture, EnvironmentLease, GrantedCommand, GrantedTerms,
-    LeaseHold, LeaseRelease, PublishAsk, PublishFailure,
+    EnvironmentDeclaration, EnvironmentFuture, EnvironmentLease, FetchAsk, FetchFailure,
+    FetchPlaced, GrantedCommand, GrantedTerms, LeaseHold, LeaseRelease, PublishAsk, PublishFailure,
 };
 use nessa_auth::application::pairing::DeviceConnectionProof;
 use nessa_protocol::lease::{
@@ -693,17 +699,39 @@ impl LeaseHold for SshHold {
     }
 
     /// Asked over the lease's own connection; its file is offered on the
-    /// receiver [`Self::artifacts`] handed out, with every other.
+    /// receiver [`Self::artifacts`] handed out, with every other. `None`
+    /// on a connection that carries no files, as a paired one.
     fn publish(
         &self,
         ask: PublishAsk,
     ) -> Option<EnvironmentFuture<'static, Result<(), PublishFailure>>> {
+        // A file that could never be collected is never staged.
+        if !self.link.carries_files() {
+            return None;
+        }
         let link = self.link.clone();
         let lease = self.lease.clone();
         Some(Box::pin(async move {
             link.publish(&lease, ask.request, ask.path, ask.media_type)
                 .await
         }))
+    }
+
+    /// Asked over the lease's own connection; its bytes go over an artifact
+    /// channel of that connection, never its control channel. `None` on a
+    /// connection that carries no files, as a paired one.
+    fn fetch(
+        &self,
+        ask: FetchAsk,
+    ) -> Option<EnvironmentFuture<'static, Result<FetchPlaced, FetchFailure>>> {
+        // Bytes that could never be written are never asked for.
+        if !self.link.carries_files() {
+            return None;
+        }
+        let link = self.link.clone();
+        let lease = self.lease.clone();
+        let gone = self.gone.clone();
+        Some(Box::pin(async move { link.fetch(&lease, ask, gone).await }))
     }
 
     fn end(&self, _cause: LeaseEndCause) -> EnvironmentFuture<'_, LeaseRelease> {

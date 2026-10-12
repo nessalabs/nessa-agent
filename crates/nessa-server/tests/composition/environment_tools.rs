@@ -15,7 +15,15 @@ fn the_tools_are_named_as_a_model_api_accepts_and_run_is_marked_destructive() {
         .iter()
         .map(|tool| tool["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["environments_list", "run", "artifacts_publish"]);
+    assert_eq!(
+        names,
+        [
+            "environments_list",
+            "run",
+            "artifacts_publish",
+            "artifacts_fetch"
+        ]
+    );
     for name in names.iter().chain([SERVER_NAME].iter()) {
         assert!(
             !name.is_empty()
@@ -37,6 +45,12 @@ fn the_tools_are_named_as_a_model_api_accepts_and_run_is_marked_destructive() {
         listed[2]["inputSchema"]["required"],
         json!(["environment", "path"])
     );
+    assert_eq!(listed[3]["annotations"]["destructiveHint"], false);
+    assert_eq!(
+        listed[3]["inputSchema"]["required"],
+        json!(["environment", "digest", "mediaType", "size", "destination"])
+    );
+    assert_eq!(listed[3]["inputSchema"]["additionalProperties"], false);
 }
 
 #[test]
@@ -115,6 +129,144 @@ fn a_publish_answer_mirrors_the_hosts_and_is_an_error_unless_held() {
         let answer = published(&PublishAnswer::Refused(refusal));
         assert_eq!(answer["isError"], true, "{code}");
         assert_eq!(answer["structuredContent"]["refused"], code);
+        assert!(answer["structuredContent"]["message"].is_string());
+    }
+}
+
+#[test]
+fn artifacts_fetch_reads_its_arguments_and_refuses_anything_else() {
+    let digest = "ab".repeat(32);
+    let call = fetch_call(
+        json!({
+            "environment": "devbox",
+            "digest": digest,
+            "mediaType": "image/png",
+            "size": 20,
+            "destination": "assets/cat.png",
+        }),
+        "c".into(),
+    )
+    .unwrap();
+    assert_eq!(call.environment, "devbox");
+    assert_eq!(call.digest, digest);
+    assert_eq!(call.media_type, "image/png");
+    assert_eq!(call.size, 20);
+    assert_eq!(call.destination, "assets/cat.png");
+    assert_eq!(call.call, "c");
+    let whole = json!({
+        "environment": "devbox",
+        "digest": digest,
+        "mediaType": "image/png",
+        "size": 20,
+        "destination": "a.png",
+    });
+    let mut refused = Vec::new();
+    for field in ["environment", "digest", "mediaType", "size", "destination"] {
+        let mut missing = whole.clone();
+        missing.as_object_mut().unwrap().remove(field);
+        refused.push(missing);
+    }
+    for (field, value) in [
+        ("size", json!(-1)),
+        ("size", json!("20")),
+        ("digest", json!(3)),
+        ("media_type", json!("image/png")),
+        ("bytes", json!("AAAA")),
+        ("replace", json!(true)),
+    ] {
+        let mut wrong = whole.clone();
+        wrong.as_object_mut().unwrap().insert(field.into(), value);
+        refused.push(wrong);
+    }
+    for refused in refused {
+        assert!(
+            fetch_call(refused.clone(), "c".into()).is_err(),
+            "{refused}"
+        );
+    }
+}
+
+#[test]
+fn a_fetch_answer_says_where_the_file_is_and_is_an_error_unless_placed() {
+    let placed = fetched(&FetchAnswer::Placed {
+        already_placed: false,
+        path: "/work/a.png".into(),
+        digest: "ab".repeat(32),
+        size: 20,
+    });
+    assert_eq!(placed["isError"], false);
+    assert_eq!(
+        placed["structuredContent"],
+        json!({"outcome": "placed", "path": "/work/a.png", "digest": "ab".repeat(32), "size": 20})
+    );
+    let again = fetched(&FetchAnswer::Placed {
+        already_placed: true,
+        path: "/work/a.png".into(),
+        digest: "ab".repeat(32),
+        size: 20,
+    });
+    assert_eq!(again["isError"], false);
+    assert_eq!(again["structuredContent"]["outcome"], "alreadyPlaced");
+    let refusals = [
+        (FetchCallRefusal::NoTurn, "no_turn"),
+        (
+            FetchCallRefusal::EnvironmentNotLeased,
+            "environment_not_leased",
+        ),
+        (FetchCallRefusal::DuplicateRequest, "duplicate_request"),
+        (FetchCallRefusal::FetchUnavailable, "fetch_unavailable"),
+        (FetchCallRefusal::Invalid, "invalid"),
+        (FetchCallRefusal::NotHeld, "not_held"),
+        (FetchCallRefusal::BudgetExceeded, "budget_exceeded"),
+        (FetchCallRefusal::SourceUnavailable, "source_unavailable"),
+        (FetchCallRefusal::ChannelUnavailable, "channel_unavailable"),
+        (FetchCallRefusal::Unanswered, "unanswered"),
+        (FetchCallRefusal::TimedOut, "timed_out"),
+        (FetchCallRefusal::Cancelled, "cancelled"),
+        (
+            FetchCallRefusal::NotPlaced(FetchRefusal::Unavailable),
+            "fetch_unavailable",
+        ),
+        (
+            FetchCallRefusal::NotPlaced(FetchRefusal::OutsideWorkspace),
+            "outside_workspace",
+        ),
+        (
+            FetchCallRefusal::NotPlaced(FetchRefusal::NoDirectory),
+            "no_directory",
+        ),
+        (
+            FetchCallRefusal::NotPlaced(FetchRefusal::Occupied),
+            "occupied",
+        ),
+        (FetchCallRefusal::NotPlaced(FetchRefusal::Size), "size"),
+        (
+            FetchCallRefusal::NotPlaced(FetchRefusal::Invalid),
+            "invalid",
+        ),
+        (FetchCallRefusal::NotPlaced(FetchRefusal::Busy), "busy"),
+        (
+            FetchCallRefusal::NotPlaced(FetchRefusal::Mismatch),
+            "mismatch",
+        ),
+        (
+            FetchCallRefusal::NotPlaced(FetchRefusal::PlacingFailed),
+            "placing_failed",
+        ),
+        (
+            FetchCallRefusal::NotPlaced(FetchRefusal::AuditUnavailable),
+            "audit_unavailable",
+        ),
+        (
+            FetchCallRefusal::NotPlaced(FetchRefusal::LeaseEnded),
+            "lease_ended",
+        ),
+    ];
+    for (refusal, code) in refusals {
+        let answer = fetched(&FetchAnswer::Refused(refusal));
+        assert_eq!(answer["isError"], true, "{code}");
+        assert_eq!(answer["structuredContent"]["refused"], code);
+        assert_eq!(fetch_refusal_code(refusal), code);
         assert!(answer["structuredContent"]["message"].is_string());
     }
 }
