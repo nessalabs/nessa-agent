@@ -38,7 +38,9 @@
 #![deny(missing_docs)]
 
 use super::authorization::{Bearer, RemoteAuthorization};
-use super::connection::{catch_task_panic, HttpTask, Outgoing, OutgoingQueue, PanicEnd};
+use super::connection::{
+    catch_task_panic, log_task_panic, HttpTask, Outgoing, OutgoingQueue, PanicEnd,
+};
 use super::framing::MAX_FRAME_BYTES;
 use super::http_exchange::{HttpExchange, HttpMethod, HttpRequest, HttpResponse};
 use super::remote::RemoteMcpUrl;
@@ -304,11 +306,14 @@ impl HttpSession {
     }
 
     /// Settle is the caller's step, already done. Fence, record
-    /// [`McpError::ServerGone`], then log `task`'s marker.
+    /// [`McpError::ServerGone`], then log `task`'s marker. A session exercised
+    /// without a connection has no end owner; the marker is still logged.
     fn record_task_panic(&self, task: HttpTask) {
         let end = self.panic_end.lock().expect("panic end").clone();
         if let Some(end) = end {
             end.record(self, task);
+        } else {
+            log_task_panic(self.server(), task);
         }
     }
 
@@ -317,13 +322,12 @@ impl HttpSession {
     /// resolves [`McpError::ServerGone`] from it, and a clean finish or
     /// cancellation resolves [`McpError::Unconfirmed`].
     pub(crate) fn settle_writer(&self, panicked: bool) {
-        self.writer_settled.send_if_modified(|current| {
-            if current.is_some() {
-                return false;
-            }
-            *current = Some(panicked);
-            true
-        });
+        settle_task(&self.writer_settled, panicked);
+    }
+
+    /// Drop settles the writer as not panicked, unless a panic already settled.
+    pub(super) fn writer_settle_guard(&self) -> SettleOnDrop {
+        SettleOnDrop(self.writer_settled.clone())
     }
 
     /// The end cause for a recovery completion the writer dropped without
@@ -332,16 +336,7 @@ impl HttpSession {
     /// A clean finish, a cancellation, or a closed watch is
     /// [`McpError::Unconfirmed`].
     async fn dropped_writer_sender(&self) -> McpError {
-        let mut settled = self.writer_settled.subscribe();
-        let panicked = loop {
-            if let Some(panicked) = *settled.borrow_and_update() {
-                break panicked;
-            }
-            if settled.changed().await.is_err() {
-                break false;
-            }
-        };
-        if panicked {
+        if settled_as_panic(self.writer_settled.subscribe()).await {
             McpError::ServerGone
         } else {
             McpError::Unconfirmed
@@ -601,12 +596,10 @@ impl HttpSession {
             let inbound = self.inbound.clone();
             let weak = self.weak.clone();
             let initialize = method == Some("initialize");
-            let (settled, _observed) = watch::channel(None);
-            let task = track(
+            let (task, _) = spawn_tracked(
                 &self.runtime,
                 self.weak.clone(),
                 HttpTask::ReplyReader,
-                settled,
                 async move {
                     match consume_body(
                         response,
@@ -776,18 +769,18 @@ impl HttpSession {
             ));
         }
         let (endpoint_tx, endpoint_rx) = tokio::sync::oneshot::channel();
-        let (settled_tx, settled_rx) = watch::channel(None);
         let inbound = self.inbound.clone();
+        let settled_rx;
         {
             let mut readers = self.readers.lock().expect("http readers");
             if self.closing.load(Ordering::SeqCst) {
                 return SendOutcome::End(McpError::Closed);
             }
-            let task = track(
+            let task;
+            (task, settled_rx) = spawn_tracked(
                 &self.runtime,
                 self.weak.clone(),
                 HttpTask::LegacyStream,
-                settled_tx,
                 read_legacy_stream(response, inbound, Some(endpoint_tx), None),
             );
             readers.stop_get();
@@ -799,7 +792,7 @@ impl HttpSession {
             // records. Wait for the settlement so a writer that observes that
             // drop still ends ServerGone rather than Handshake.
             Err(_) => {
-                return if reader_panicked(settled_rx).await {
+                return if settled_as_panic(settled_rx).await {
                     SendOutcome::End(McpError::ServerGone)
                 } else {
                     SendOutcome::End(McpError::Handshake("no endpoint event".into()))
@@ -1003,12 +996,10 @@ impl HttpSession {
         let inbound = self.inbound.clone();
         let authorization = self.authorization.clone();
         let server = self.server;
-        let (settled, _observed) = watch::channel(None);
-        let task = track(
+        let (task, _) = spawn_tracked(
             &self.runtime,
             self.weak.clone(),
             HttpTask::ServerStream,
-            settled,
             async move {
                 let mut headers = vec![("Accept".into(), "text/event-stream".into())];
                 headers.push(("Mcp-Session-Id".into(), session_id));
@@ -1084,12 +1075,10 @@ impl HttpSession {
         let inbound = self.inbound.clone();
         let deadline = clock.now() + super::servers::INITIALIZE_TIMEOUT;
         let (registered, registration) = oneshot::channel();
-        let (settled, _observed) = watch::channel(None);
-        let task = track(
+        let (task, _) = spawn_tracked(
             &self.runtime,
             self.weak.clone(),
             HttpTask::Recovery,
-            settled,
             async move {
                 if registration.await.is_err() {
                     return;
@@ -1360,17 +1349,17 @@ fn settle_task(settled: &watch::Sender<Option<bool>>, panicked: bool) {
 
 /// First settlement wins. A caught panic settles itself before this drop.
 /// Cancellation and a clean exit settle as not panicked.
-struct SettleTask(watch::Sender<Option<bool>>);
+pub(super) struct SettleOnDrop(watch::Sender<Option<bool>>);
 
-impl Drop for SettleTask {
+impl Drop for SettleOnDrop {
     fn drop(&mut self) {
         settle_task(&self.0, std::thread::panicking());
     }
 }
 
-/// `Some(true)` once `settled` says the reader panicked. A closed watch is
-/// not a panic: the caller keeps its existing cause.
-async fn reader_panicked(mut settled: watch::Receiver<Option<bool>>) -> bool {
+/// `Some(true)` once `settled` says the task panicked. A closed watch is not
+/// a panic: the caller keeps its existing cause.
+async fn settled_as_panic(mut settled: watch::Receiver<Option<bool>>) -> bool {
     loop {
         if let Some(panicked) = *settled.borrow_and_update() {
             return panicked;
@@ -1383,22 +1372,23 @@ async fn reader_panicked(mut settled: watch::Receiver<Option<bool>>) -> bool {
 
 /// Run `work` on the session runtime. A caught panic settles, asks the
 /// connection end owner for [`McpError::ServerGone`], then logs. The watch
-/// does that only when a panic still fails the task.
+/// does that only when a panic still fails the task. The returned receiver is
+/// the task's settlement; only the legacy writer keeps it.
 ///
 /// Callers hold the readers lock across this call and the push of the returned
 /// task. Shutdown takes that same lock, so the task is already visible to the
 /// cleanup a panic starts.
-fn track(
+fn spawn_tracked(
     runtime: &Handle,
     weak: Weak<HttpSession>,
     kind: HttpTask,
-    settled: watch::Sender<Option<bool>>,
     work: impl Future<Output = ()> + Send + 'static,
-) -> TrackedTask {
+) -> (TrackedTask, watch::Receiver<Option<bool>>) {
+    let (settled, observed) = watch::channel(None);
     let task_weak = weak.clone();
     let task_settled = settled.clone();
     let task = runtime.spawn(async move {
-        let settle = SettleTask(task_settled);
+        let settle = SettleOnDrop(task_settled);
         let panicked = catch_task_panic(work).await.is_err();
         if !panicked {
             return;
@@ -1410,7 +1400,7 @@ fn track(
     });
     let work = task.abort_handle();
     let watch = runtime.spawn(watch_http_task(task, weak, settled, kind));
-    TrackedTask { watch, work }
+    (TrackedTask { watch, work }, observed)
 }
 
 /// Join `task`. A panic that still fails it is not a second end owner:

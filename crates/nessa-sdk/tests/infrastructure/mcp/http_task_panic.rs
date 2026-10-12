@@ -243,7 +243,7 @@ impl tracing::field::Visit for Capture<'_> {
 }
 
 struct PanicLog {
-    connection: Arc<Connection>,
+    connection: Option<Arc<Connection>>,
     marker: &'static str,
     text: Arc<Mutex<String>>,
     end_before_log: Arc<AtomicBool>,
@@ -273,10 +273,12 @@ impl tracing::Subscriber for PanicLog {
         let mut message = String::new();
         event.record(&mut Capture(&mut message));
         if message.contains(self.marker) {
-            self.end_before_log.store(
-                self.connection.end_cause() == Some(McpError::ServerGone),
-                Ordering::SeqCst,
-            );
+            if let Some(connection) = &self.connection {
+                self.end_before_log.store(
+                    connection.end_cause() == Some(McpError::ServerGone),
+                    Ordering::SeqCst,
+                );
+            }
         }
         self.text.lock().expect("log").push_str(&message);
     }
@@ -290,6 +292,7 @@ struct Watching {
     marker: &'static str,
     text: Arc<Mutex<String>>,
     end_before_log: Arc<AtomicBool>,
+    check_order: bool,
     _guard: tracing::subscriber::DefaultGuard,
 }
 
@@ -297,7 +300,7 @@ fn watch_log(connection: Arc<Connection>, marker: &'static str) -> Watching {
     let text = Arc::new(Mutex::new(String::new()));
     let end_before_log = Arc::new(AtomicBool::new(false));
     let subscriber = PanicLog {
-        connection,
+        connection: Some(connection),
         marker,
         text: Arc::clone(&text),
         end_before_log: Arc::clone(&end_before_log),
@@ -308,6 +311,28 @@ fn watch_log(connection: Arc<Connection>, marker: &'static str) -> Watching {
         marker,
         text,
         end_before_log,
+        check_order: true,
+        _guard: guard,
+    }
+}
+
+/// The marker for a session that has no connection end owner.
+fn watch_marker(marker: &'static str) -> Watching {
+    let text = Arc::new(Mutex::new(String::new()));
+    let end_before_log = Arc::new(AtomicBool::new(false));
+    let subscriber = PanicLog {
+        connection: None,
+        marker,
+        text: Arc::clone(&text),
+        end_before_log: Arc::clone(&end_before_log),
+    };
+    let guard = tracing::subscriber::set_default(subscriber);
+    tracing::callsite::rebuild_interest_cache();
+    Watching {
+        marker,
+        text,
+        end_before_log,
+        check_order: false,
         _guard: guard,
     }
 }
@@ -319,10 +344,12 @@ impl Watching {
             text.contains(self.marker),
             "panic marker was not logged: {text}"
         );
-        assert!(
-            self.end_before_log.load(Ordering::SeqCst),
-            "panic log ran before ServerGone was recorded: {text}"
-        );
+        if self.check_order {
+            assert!(
+                self.end_before_log.load(Ordering::SeqCst),
+                "panic log ran before ServerGone was recorded: {text}"
+            );
+        }
         assert!(
             !text.contains(SECRET)
                 && !text.contains("secret-user")
@@ -374,7 +401,8 @@ async fn legacy_stream_panic_ends_server_gone() {
     let exchange = Arc::new(LegacyExchange {
         seen: Seen(Mutex::new(vec![])),
     });
-    let (connection, _session) = open(exchange.clone(), Arc::new(RuntimeClock::new()));
+    let (connection, session) = open(exchange.clone(), Arc::new(RuntimeClock::new()));
+    let mut finished = session.finished();
     let log = watch_log(
         Arc::clone(&connection),
         "custom HTTP legacy stream panicked",
@@ -385,6 +413,9 @@ async fn legacy_stream_panic_ends_server_gone() {
     assert_eq!(error, McpError::ServerGone);
     assert_eq!(connection.end_cause(), Some(McpError::ServerGone));
     log.assert_secret_stays_out();
+    bounded(finished.wait_for(|done| *done))
+        .await
+        .expect("finished");
     assert_eq!(
         exchange
             .seen
@@ -439,11 +470,12 @@ async fn recovery_panic_ends_server_gone() {
         clock: Arc::clone(&clock),
         expired: AtomicBool::new(false),
     });
-    let (connection, _session) = open(exchange, clock);
+    let (connection, session) = open(exchange.clone(), clock);
     bounded(connection.call("initialize", None))
         .await
         .expect("initialize")
         .expect("initialize result");
+    let mut finished = session.finished();
     let log = watch_log(Arc::clone(&connection), "custom HTTP recovery panicked");
     assert_eq!(
         bounded(connection.call("tools/list", None))
@@ -461,6 +493,15 @@ async fn recovery_panic_ends_server_gone() {
     assert_ne!(connection.end_cause(), Some(McpError::Timeout));
     assert_ne!(connection.end_cause(), Some(McpError::Unconfirmed));
     log.assert_secret_stays_out();
+    bounded(finished.wait_for(|done| *done))
+        .await
+        .expect("finished");
+    assert_eq!(
+        exchange
+            .seen
+            .count(|request| request.method == HttpMethod::Delete),
+        0
+    );
 }
 
 #[tokio::test]
@@ -491,5 +532,36 @@ async fn session_task_watch_records_escaped_panic() {
     )
     .await;
     assert_eq!(connection.end_cause(), Some(McpError::ServerGone));
+    log.assert_secret_stays_out();
+}
+
+#[tokio::test]
+async fn unset_owner_still_logs_the_panic_marker() {
+    let (session, _incoming) = HttpSession::open(
+        Uuid::from_u128(2),
+        RemoteMcpUrl::parse("https://mcp.example:8443/secret-path?access_token=bearer-secret")
+            .expect("url"),
+        Arc::new(ReplyExchange {
+            seen: Seen(Mutex::new(vec![])),
+        }),
+        Arc::new(NoAuthorization),
+        Arc::new(SessionClaims::default()),
+    );
+    let task = tokio::spawn(async { panic!("{SECRET}") });
+    bounded(async {
+        while !task.is_finished() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    let log = watch_marker("custom HTTP server stream panicked");
+    let (settled, _observed) = watch::channel(None);
+    watch_http_task(
+        task,
+        Arc::downgrade(&session),
+        settled,
+        HttpTask::ServerStream,
+    )
+    .await;
     log.assert_secret_stays_out();
 }
