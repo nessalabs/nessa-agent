@@ -477,6 +477,7 @@ pub(crate) async fn serve<R, W>(
         revoked: false,
         draining: false,
         unended: HashSet::new(),
+        unrun: HashMap::new(),
         finished: Arc::new(Notify::new()),
         gone: watch::channel(false).0,
         runner: commands,
@@ -694,10 +695,12 @@ struct Served {
     /// ends once nothing is left to answer.
     draining: bool,
     /// Leases this side ended unasked (drained, expired or revoked) whose
-    /// `End` the gateway has not yet asked, and commands a drain ended
-    /// unrun whose `Run` or `End` it has not yet sent: a drain waits for
-    /// each, so the gateway hears every end before the stream closes.
+    /// `End` the gateway has not yet asked: a drain waits for each.
     unended: HashSet<String>,
+    /// Commands a drain ended unrun, with what their end took, whose `Run`
+    /// or `End` the gateway has not yet sent: a drain waits for each, and
+    /// its `Run` is answered never started with that cleanup.
+    unrun: HashMap<String, Cleanup>,
     /// Told whenever a command's end is recorded, its `Ran` handed on: a
     /// drain waiting on it looks again.
     finished: Arc<Notify>,
@@ -831,6 +834,9 @@ impl Served {
                 // the audit, says of it.
                 None => {
                     self.unended.remove(&lease);
+                    if let Some(cleanup) = self.unrun.remove(&lease) {
+                        return self.send(FromEnvironment::Ended { lease, cleanup });
+                    }
                     self.answer_ended(lease, |lease, cleanup| FromEnvironment::Ended {
                         lease,
                         cleanup,
@@ -1574,7 +1580,14 @@ impl Served {
     /// which records how it ended and answers with its `Ran`. A lease not
     /// granted here, or run already, is answered as never started.
     fn run(&mut self, lease: String) {
-        self.unended.remove(&lease);
+        // Ended unrun by a drain: never started, with what its end took.
+        if let Some(cleanup) = self.unrun.remove(&lease) {
+            let not_started = CommandRan {
+                cleanup,
+                ..CommandRan::not_started()
+            };
+            return self.send(ran(lease, not_started));
+        }
         let work = match self.commands.remove(&lease) {
             Some(HeldCommand::Granted(work)) => work,
             // Still running: its own `Ran` will answer.
@@ -1855,11 +1868,11 @@ impl Served {
                     } else {
                         Cleanup::Uncertain
                     };
-                    self.end_unrun_with(&lease, EndCause::Drained, cleanup);
+                    let cleanup = self.end_unrun_with(&lease, EndCause::Drained, cleanup);
                     // The gateway takes no `Ending` for a command: its `Run`
                     // (answered never started) or `End` tells it, so the
                     // drain waits for one.
-                    self.unended.insert(lease);
+                    self.unrun.insert(lease, cleanup);
                 }
                 _ => {}
             }
@@ -1883,14 +1896,16 @@ impl Served {
     }
 
     /// Whether a drain has left nothing to serve: no lease held, no command
-    /// running, the `End` of every lease this side ended unasked asked, and
-    /// every answer queued here handed to the writer. Answers already handed
+    /// running, the `End` of every lease this side ended unasked asked, the
+    /// `Run` or `End` of every command it ended unrun sent, and every answer
+    /// queued here handed to the writer. Answers already handed
     /// on, or still awaiting an end's record, reach the gateway before the
     /// stream closes.
     fn drained(&self) -> bool {
         self.draining
             && self.leases.is_empty()
             && self.unended.is_empty()
+            && self.unrun.is_empty()
             && self.outgoing.is_empty()
             && !self.commands.values().any(HeldCommand::runs)
     }

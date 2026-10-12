@@ -4965,6 +4965,37 @@ async fn k1_a_drain_waits_for_the_run_of_a_command_it_ended_unrun() {
     assert_eq!(ended_entries(&gateway.ledger, UNRUN), 1);
 }
 
+/// A command ended unrun by a drain that could not be recorded is said
+/// uncertain at its `Run`, never confirmed-looking `not_held`.
+#[tokio::test]
+async fn k1_an_unrecorded_drain_of_an_unrun_command_answers_its_run_uncertain() {
+    let ledger = Arc::new(MemoryLedger::default());
+    ledger.failing_draining.store(true, Ordering::SeqCst);
+    let mut gateway = revocable(ledger.clone());
+    assert_eq!(gateway.next().await, hello());
+    gateway.send(grant_command(UNRUN, &["wait"], None)).await;
+    gateway.next().await;
+    gateway.settled().await;
+    gateway.drain.send_replace(true);
+    gateway
+        .send(ToEnvironment::Run {
+            lease: UNRUN.into(),
+        })
+        .await;
+    assert!(matches!(
+        gateway.said().await,
+        FromEnvironment::Ran {
+            end: CommandEnd::NotStarted,
+            cleanup: Cleanup::Uncertain,
+            ..
+        }
+    ));
+    tokio::time::timeout(Duration::from_secs(5), &mut gateway.served)
+        .await
+        .expect("serving ends once the unrun command's end is said")
+        .unwrap();
+}
+
 /// A lease that expired before the drain still waits for its `End`: the
 /// drain does not close the connection on an end the gateway has not heard.
 #[tokio::test]
