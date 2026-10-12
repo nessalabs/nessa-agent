@@ -20,6 +20,7 @@ use nessa_protocol::{conversation::domain::ConversationId, pairing::wire::Native
 use nessa_sync::replication::catalogue::EntryKey;
 use std::{net::SocketAddr, path::Path, sync::Arc};
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 /// A caller-owned stop latch. Creating/stopping this object performs no enrollment.
 #[derive(uniffi::Object)]
@@ -581,7 +582,7 @@ impl NativeDeviceSession {
     /// Pair using the existing code decoder and physical enrollment worker.
     pub fn enroll(&self, code: String) -> Result<Arc<NativeEnrollmentReceipt>, NativeCallError> {
         // Erase the Rust-owned argument copy. Swift may retain its own input.
-        let input = zeroize::Zeroizing::new(code);
+        let input = Zeroizing::new(code);
         let code = ManualCode::parse(input.as_bytes()).map_err(|value| {
             NativeCallError::from(SessionFailure::Enrollment(NativeClientError::Crypto(value)))
         })?;
@@ -592,7 +593,7 @@ impl NativeDeviceSession {
     }
     /// Existing exact-operation retry; errors do not claim an original receipt.
     pub fn retry(&self, code: String) -> Result<Arc<NativeRetry>, NativeCallError> {
-        let input = zeroize::Zeroizing::new(code);
+        let input = Zeroizing::new(code);
         let code = ManualCode::parse(input.as_bytes()).map_err(|value| {
             NativeCallError::from(SessionFailure::Enrollment(NativeClientError::Crypto(value)))
         })?;

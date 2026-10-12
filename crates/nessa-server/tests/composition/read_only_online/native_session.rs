@@ -1,10 +1,13 @@
 //! The native session uses the real paired gateway, physical cache and private scope.
 use super::fixtures::{Gateway, Setup};
-use nessa_client_core::retained::{ReadStop, RetainedTranscript};
+use nessa_client_core::{
+    pairing::NativeClientError,
+    retained::{ReadFailure, ReadStop, RetainedTranscript},
+};
 use nessa_device_client::{NativeSession, SessionFailure};
 use nessa_protocol::{conversation::domain::ConversationId, pairing::wire::NativePairingStatus};
 use serde_json::Value;
-use std::{net::SocketAddr, path::Path};
+use std::{ffi::OsStr, net::SocketAddr, path::Path, process::Command};
 use uuid::Uuid;
 
 /// Opt-in generated Swift executable, linked against the same shared library.
@@ -21,35 +24,106 @@ fn generated_swift_runs_paired_native_lifecycle() {
         serde_json::from_slice(&std::fs::read(root.join("setup.json")).unwrap()).unwrap();
     let profile: Value =
         serde_json::from_slice(&std::fs::read(root.join("profile.json")).unwrap()).unwrap();
-    let run = |mode: &str| {
-        let output = std::process::Command::new(&binary)
-            .args([
-                mode,
-                profile["stateRoot"].as_str().unwrap(),
-                profile["stateDirectory"].as_str().unwrap(),
-                profile["gatewayAddress"].as_str().unwrap(),
-                &setup.conversation,
-                &setup.receiver,
-                &setup.gateway,
-            ])
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "Swift {mode}: {} {}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        print!("{}", String::from_utf8_lossy(&output.stdout));
-    };
-    run("first");
+    run_swift(&binary, "first", &profile, &setup);
     drop(gateway);
-    run("offline");
+    run_swift(&binary, "offline", &profile, &setup);
     let restarted = Gateway::start(&root);
-    run("resumed");
+    run_swift(&binary, "resumed", &profile, &setup);
     drop(restarted);
     let _revoked = Gateway::start_mode(&root, "revoke");
-    run("terminal");
+    run_swift(&binary, "terminal", &profile, &setup);
+
+    // A separate paired scope changes its receiver epoch after a confirmed page.
+    // This exercises the native driver's refusal recheck, not the CLI's owner.
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("gateway");
+    let _epoch = Gateway::start_mode(&root, "epoch");
+    let setup: Setup =
+        serde_json::from_slice(&std::fs::read(root.join("setup.json")).unwrap()).unwrap();
+    let profile: Value =
+        serde_json::from_slice(&std::fs::read(root.join("profile.json")).unwrap()).unwrap();
+    run_swift(&binary, "epoch", &profile, &setup);
+}
+
+fn run_swift(binary: &OsStr, mode: &str, profile: &Value, setup: &Setup) {
+    let output = Command::new(binary)
+        .args([
+            mode,
+            profile["stateRoot"].as_str().unwrap(),
+            profile["stateDirectory"].as_str().unwrap(),
+            profile["gatewayAddress"].as_str().unwrap(),
+            &setup.conversation,
+            &setup.receiver,
+            &setup.gateway,
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "Swift {mode}: {} {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    print!("{}", String::from_utf8_lossy(&output.stdout));
+}
+
+#[test]
+fn native_refusal_rechecks_pinned_status_without_purging_confirmed_partial_history() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("gateway");
+    let gateway = Gateway::start_mode(&root, "epoch");
+    let setup: Setup =
+        serde_json::from_slice(&std::fs::read(root.join("setup.json")).unwrap()).unwrap();
+    let profile: Value =
+        serde_json::from_slice(&std::fs::read(root.join("profile.json")).unwrap()).unwrap();
+    let address: SocketAddr = profile["gatewayAddress"].as_str().unwrap().parse().unwrap();
+    let state_root = Path::new(profile["stateRoot"].as_str().unwrap());
+    let state_directory = Path::new(profile["stateDirectory"].as_str().unwrap());
+    let native = NativeSession::open(state_root, state_directory, address).unwrap();
+    let refresh = native.refresh(ReadStop::new()).unwrap();
+    let initial = refresh.initial().as_ref().unwrap();
+    assert!(matches!(
+        initial.enrollment(),
+        Ok(NativePairingStatus::Active { .. })
+    ));
+    assert!(initial.purge().is_none());
+    assert!(refresh.selection_failure().is_none());
+    assert_eq!(refresh.read().unwrap().result(), &Err(ReadFailure::Refused));
+    let recheck = refresh
+        .recheck()
+        .expect("read refusal must capture its own pinned status")
+        .as_ref()
+        .unwrap();
+    assert_eq!(recheck.enrollment(), &Err(NativeClientError::Refused));
+    assert!(recheck.purge().is_none());
+    assert!(native.purge_receipt(&setup.receiver).unwrap().is_none());
+    let page = native.catalogue_page(None, 16).unwrap().unwrap();
+    assert!(page.entries().len() >= 2);
+    let conversation = ConversationId::new(&setup.conversation).unwrap();
+    let RetainedTranscript::Retained(partial) =
+        native.transcript(&conversation, Uuid::nil()).unwrap()
+    else {
+        panic!("confirmed page must remain available after a generic refusal");
+    };
+    assert!(partial.progress().downloaded() > 0);
+    assert!(partial.progress().downloaded() > partial.progress().applied());
+    assert!(partial.progress().facts() <= partial.progress().applied());
+    native.close().unwrap();
+    drop(gateway);
+    let offline = NativeSession::open(state_root, state_directory, address).unwrap();
+    let RetainedTranscript::Retained(saved) =
+        offline.transcript(&conversation, Uuid::nil()).unwrap()
+    else {
+        panic!("offline reopen lost confirmed partial history");
+    };
+    assert_eq!(saved.progress(), partial.progress());
+    // Startup retires the previous read owner: retained facts stay unchanged,
+    // while the passive projection reports that it has not been refreshed.
+    let mut expected = serde_json::to_value(partial.view()).unwrap();
+    assert_eq!(expected["transcriptState"], "unknown");
+    expected["transcriptState"] = Value::from("stale");
+    assert_eq!(serde_json::to_value(saved.view()).unwrap(), expected);
+    offline.close().unwrap();
 }
 
 #[test]

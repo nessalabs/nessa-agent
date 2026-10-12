@@ -10,7 +10,11 @@ use nessa_auth::{
 };
 use nessa_client_core::{pairing::NativeClientError, retained::ReadFailure};
 use nessa_protocol::pairing::wire::NativeWireError;
-use std::{fmt, sync::Arc};
+use std::{
+    error::Error,
+    fmt::{Display, Formatter, Result as FormatResult},
+    sync::Arc,
+};
 
 macro_rules! copied_enum {
     ($name:ident, $source:path, [$($variant:ident),+ $(,)?]) => {
@@ -412,12 +416,12 @@ impl From<SessionFailure> for NativeCallError {
         }
     }
 }
-impl fmt::Display for NativeCallError {
-    fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl Display for NativeCallError {
+    fn fmt(&self, output: &mut Formatter<'_>) -> FormatResult {
         write!(output, "{self:?}")
     }
 }
-impl std::error::Error for NativeCallError {}
+impl Error for NativeCallError {}
 
 #[cfg(test)]
 #[path = "../tests/session/failures.rs"]

@@ -76,10 +76,7 @@ fn compose(root: &Path, connector: Arc<dyn EnrollmentConnector>) -> NativeSessio
         entropy: Arc::new(OsEntropyFactory),
         wall: Arc::new(Wall),
         clock: Arc::new(Monotonic::new()),
-        runtime: tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap(),
+        runtime: Builder::new_current_thread().enable_all().build().unwrap(),
     })
     .unwrap()
 }

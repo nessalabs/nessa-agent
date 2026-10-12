@@ -68,10 +68,21 @@ import Foundation
             precondition(status.receipt()?.phase() == .active && status.failure() == nil)
             precondition(status.receipt()?.receiver() == receiver)
             precondition(status.receipt()?.organization() != nil && status.receipt()?.resource() != nil)
-            precondition(refresh.selectionFailure() == nil && refresh.recheck() == nil)
+            precondition(refresh.selectionFailure() == nil)
             let read = refresh.read()!
-            precondition(read.failure() == nil && read.complete() == true)
-            precondition(read.conversations()! >= 2 && read.withdrawn().isEmpty)
+            if mode == "epoch" {
+                precondition(read.failure() == .refused)
+                let recheck = refresh.recheck()!
+                precondition(recheck.completionCaptured() && recheck.failure()?.kind() == .refused)
+                precondition(recheck.receipt() == nil && !recheck.purgeAttempted())
+                precondition(recheck.purge() == nil && recheck.purgeFailure() == nil)
+                let purge = try native.purgeReceipt(receiver: receiver)
+                precondition(purge == nil)
+            } else {
+                precondition(refresh.recheck() == nil)
+                precondition(read.failure() == nil && read.complete() == true)
+                precondition(read.conversations()! >= 2 && read.withdrawn().isEmpty)
+            }
             if mode == "resumed" { precondition(read.moved() == false) }
         }
         let page = try native.cataloguePage(after: nil, maximum: 16)!
@@ -87,8 +98,15 @@ import Foundation
         precondition(page.entries().contains { $0.key().id() == conversation && !$0.deleted() })
         let snapshot = try native.transcript(conversation: conversation, revision: revision)
         precondition(snapshot.state() == .retained)
-        precondition(snapshot.downloaded()! > 0 && snapshot.downloaded() == snapshot.applied())
-        precondition(snapshot.facts()! > 0 && snapshot.generation()! > 0)
+        precondition(snapshot.downloaded()! > 0 && snapshot.generation()! > 0)
+        if mode == "epoch" {
+            // The first page ends inside a semantic unit. Its confirmed physical
+            // prefix survives, without claiming that the incomplete unit applied.
+            precondition(snapshot.downloaded()! > snapshot.applied()!)
+            precondition(snapshot.facts()! <= snapshot.applied()!)
+        } else {
+            precondition(snapshot.downloaded() == snapshot.applied() && snapshot.facts()! > 0)
+        }
         precondition(snapshot.scope()?.origin() == origin && snapshot.scope()?.receiver() == receiver)
         let original = try snapshot.viewJson()!
         let encoded = try JSONSerialization.jsonObject(with: Data(original.utf8)) as! [String: Any]
@@ -108,7 +126,15 @@ import Foundation
         let next = try reopened.transcript(conversation: conversation, revision: revision)
         precondition(next.downloaded() == snapshot.downloaded() && next.applied() == snapshot.applied())
         let reopenedView = try next.viewJson()
-        precondition(reopenedView == original)
+        if mode == "epoch" {
+            var expected = encoded
+            precondition(expected["transcriptState"] as? String == "unknown")
+            expected["transcriptState"] = "stale"
+            let actual = try JSONSerialization.jsonObject(with: Data(reopenedView!.utf8)) as! [String: Any]
+            precondition(NSDictionary(dictionary: actual) == NSDictionary(dictionary: expected))
+        } else {
+            precondition(reopenedView == original)
+        }
         try reopened.close()
         print("PASS: Swift \(mode) actual paired cache, scope, UInt64 progress, owned snapshots and closed-session error")
     }

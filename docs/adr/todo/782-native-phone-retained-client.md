@@ -87,6 +87,7 @@ invented disclosure.
 | Swift close waiter cancels, another close joins | One retained drain task continues independently of waiters; new work is refused and replacement waits for actual drain |
 | Last Swift worker reference drops without close | Signal native close and retain the native handle in a queued off-UI drain; no blocking native deallocation on the UI caller |
 | Status, binding load, read, then refusal recheck | One driver admission; preserve separate original status/purge, read/withdrawals and recheck facts |
+| Active status, confirmed record page, receiver epoch changes, read Refused, pinned recheck Refused | Keep confirmed partial saved progress; neither generic refusal authorizes purge. Native Rust and generated Swift epoch regressions assert both original and recheck payloads, then reopen saved history offline |
 | Unknown status delivery after purge | Recover historical durable receipt separately; no claim of absent purge |
 | Offline saved page versus later page | Compare actual full scope/progress/generation; do not combine another snapshot silently |
 | Native buffer/handle lifetime and large progress | Generated ABI linked/executed under Swift 6; owned object/buffer release and UInt64 precision |

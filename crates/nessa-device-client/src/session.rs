@@ -2,7 +2,9 @@
 //! selection, read and refusal recheck; saved queries share that admission.
 use crate::infrastructure::{Monotonic, Wall};
 use nessa_auth::{
-    adapters::pairing::{rand, CryptoRng, FilePairingState, ManualCode, OsEntropy, RngCore},
+    adapters::pairing::{
+        rand::Error as EntropyError, CryptoRng, FilePairingState, ManualCode, OsEntropy, RngCore,
+    },
     application::{
         pairing::{ClientPendingStore, PrivateStateError},
         ports::Clock as WallClock,
@@ -20,15 +22,17 @@ use nessa_client_core::{
 use nessa_protocol::{
     clock::Clock, conversation::domain::ConversationId, pairing::wire::NativePairingStatus,
 };
-use nessa_sync::replication::catalogue::EntryKey;
+use nessa_sync::replication::{catalogue::EntryKey, domain::Scope};
 use std::{
-    fmt,
+    error::Error,
+    fmt::{Display, Formatter, Result as FormatResult},
     io::ErrorKind,
     net::{SocketAddr, TcpStream},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, MutexGuard, TryLockError, Weak},
     time::Duration,
 };
+use tokio::runtime::{Builder, Runtime};
 use uuid::Uuid;
 
 /// Session admission/configuration failure, independent of a completed status's
@@ -54,12 +58,12 @@ pub enum SessionFailure {
     /// A refresh was stopped before asking status.
     Stopped,
 }
-impl fmt::Display for SessionFailure {
-    fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl Display for SessionFailure {
+    fn fmt(&self, output: &mut Formatter<'_>) -> FormatResult {
         write!(output, "{self:?}")
     }
 }
-impl std::error::Error for SessionFailure {}
+impl Error for SessionFailure {}
 
 /// Caller-owned enrollment socket seam. The retained read continues to use the
 /// existing core transport owner, including its stop and deadline policy.
@@ -101,7 +105,7 @@ impl RngCore for Entropy {
     fn fill_bytes(&mut self, bytes: &mut [u8]) {
         self.0.fill_bytes(bytes);
     }
-    fn try_fill_bytes(&mut self, bytes: &mut [u8]) -> Result<(), rand::Error> {
+    fn try_fill_bytes(&mut self, bytes: &mut [u8]) -> Result<(), EntropyError> {
         self.0.try_fill_bytes(bytes)
     }
 }
@@ -157,7 +161,7 @@ struct Gate {
     enrollment: Weak<RetainedEnrollmentClient>,
 }
 struct Driver {
-    runtime: tokio::runtime::Runtime,
+    runtime: Runtime,
     enrollment: Arc<RetainedEnrollmentClient>,
     state: Arc<dyn ClientPendingStore>,
     connector: Arc<dyn EnrollmentConnector>,
@@ -177,7 +181,7 @@ struct Dependencies {
     address: SocketAddr,
     wall: Arc<dyn WallClock>,
     clock: Arc<dyn Clock>,
-    runtime: tokio::runtime::Runtime,
+    runtime: Runtime,
 }
 impl Driver {
     fn cache(&mut self) -> Result<&mut RetainedCache, ReadFailure> {
@@ -274,9 +278,7 @@ impl Driver {
         });
         outcome
     }
-    fn saved_scope(
-        &mut self,
-    ) -> Result<Option<nessa_sync::replication::domain::Scope>, SessionFailure> {
+    fn saved_scope(&mut self) -> Result<Option<Scope>, SessionFailure> {
         let issued = self
             .state
             .load_credential()
@@ -300,7 +302,7 @@ impl Drop for Driver {
 /// One private scope and one physical session operation. Methods block and belong
 /// on a dedicated native worker. Swift composition must reserve admission before
 /// enqueueing, signal close before queueing drain, and await close before reuse.
-/// The current Rust session is not yet exported through the generated Swift ABI.
+/// `NativeDeviceSession` exposes this owner through the generated Swift ABI.
 pub struct NativeSession {
     driver: Mutex<Option<Driver>>,
     gate: Mutex<Gate>,
@@ -334,7 +336,7 @@ impl NativeSession {
         );
         let wall = Arc::new(Wall);
         let clock = Arc::new(Monotonic::new());
-        let runtime = tokio::runtime::Builder::new_current_thread()
+        let runtime = Builder::new_current_thread()
             .enable_all()
             .build()
             .map_err(|error| SessionFailure::Runtime(error.kind()))?;

@@ -8,9 +8,11 @@ use nessa_protocol::{
     conversation::{domain::ConversationId, projection::MAX_VIEW_BYTES},
 };
 use nessa_sync::replication::domain::Scope;
+use serde::Serialize;
 use std::{
-    fmt,
-    io::{self, Write},
+    error::Error,
+    fmt::{Display, Formatter, Result as FormatResult},
+    io::{Error as IoError, Result as IoResult, Write},
     path::Path,
     sync::{Arc, Mutex, TryLockError},
 };
@@ -38,12 +40,12 @@ pub enum NativeViewError {
     /// Passive view serialization failed for another reason.
     Serialization,
 }
-impl fmt::Display for NativeViewError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl Display for NativeViewError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FormatResult {
         write!(f, "{self:?}")
     }
 }
-impl std::error::Error for NativeViewError {}
+impl Error for NativeViewError {}
 fn cache_error(error: ReadFailure) -> NativeViewError {
     match error {
         ReadFailure::CacheDamaged => NativeViewError::CacheDamaged,
@@ -222,7 +224,7 @@ struct ViewBytes {
     exceeded: bool,
 }
 impl Write for ViewBytes {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+    fn write(&mut self, bytes: &[u8]) -> IoResult<usize> {
         if self
             .bytes
             .len()
@@ -230,16 +232,16 @@ impl Write for ViewBytes {
             .is_none_or(|length| length > self.maximum)
         {
             self.exceeded = true;
-            return Err(io::Error::other("passive view bound"));
+            return Err(IoError::other("passive view bound"));
         }
         self.bytes.extend_from_slice(bytes);
         Ok(bytes.len())
     }
-    fn flush(&mut self) -> io::Result<()> {
+    fn flush(&mut self) -> IoResult<()> {
         Ok(())
     }
 }
-fn serialize_view<T: serde::Serialize>(value: &T) -> Result<String, NativeViewError> {
+fn serialize_view<T: Serialize>(value: &T) -> Result<String, NativeViewError> {
     let mut output = ViewBytes {
         bytes: Vec::new(),
         maximum: MAX_VIEW_BYTES,

@@ -14,7 +14,12 @@ or device execution.
 real paired-gateway fixture. It checks downloaded/applied/fact/generation values,
 actual scope and catalogue, saved projection after handle close/reopen, offline
 reads after gateway termination, an unchanged walk after gateway restart, and
-authenticated revocation with its independent durable purge receipt. Stopped
+authenticated revocation with its independent durable purge receipt. The epoch
+fixture also checks Active status followed by a refused read and a separate
+refused pinned recheck: confirmed partial physical records remain, incomplete
+semantic units do not advance applied progress, and neither refusal claims purge.
+Offline recreation preserves that progress while marking the projection stale.
+Stopped
 dispatch, invalid code, excessive page bounds and closed-session errors cross the
 generated error ABI. Counts are actual fixture records; this does not prove the
 phone repository or physical-device behavior.
@@ -31,7 +36,7 @@ Compile it beside generated Swift with Swift 6 complete concurrency checking,
 the generated modulemap and the same native dylib. Pass that executable as
 `NESSA_NATIVE_SWIFT_CHECK` and its dylib directory as `DYLD_LIBRARY_PATH`, then run
 `cargo test -p nessa-server generated_swift_runs_paired_native_lifecycle -- --ignored --nocapture`.
-The explicit ignored test starts disposable gateway processes and supplies public
+The explicit ignored test runs all five stages, starts disposable gateway processes and supplies public
 receiver/origin and private fixture paths; no credential is printed or passed as
 a command argument. It is not a substitute for running ordinary Rust tests.
 
