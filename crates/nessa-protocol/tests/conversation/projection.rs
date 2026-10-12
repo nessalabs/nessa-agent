@@ -2510,11 +2510,23 @@ fn a_pending_review_shows_an_armed_deadline_and_a_restored_one_does_not() {
     assert_eq!(deadline.effect, ConversationPermissionOptionEffect::Deny);
     assert_eq!(deadline.reason, STANDARD_DENY_REASON);
     assert!(!deadline.stops_turn);
-    let restored =
-        PermissionReviewDeadline::stopping(PermissionToolClass::Other, Duration::from_secs(30));
+    let due = 1_700_000_030_000;
+    let restored = PermissionReviewDeadline::new(
+        PermissionToolClass::Other,
+        Duration::from_secs(30),
+        PermissionEffect::Deny,
+        STANDARD_DENY_REASON,
+    )
+    .unwrap()
+    .promise(due)
+    .restored(false, Some(due));
+    assert!(!restored.armed());
+    assert_eq!(restored.due_at_ms(), Some(due));
     assert!(
-        show(Some(restored)).permissions[0].deadline.is_none(),
-        "a deadline nothing will decide is not promised"
+        show(Some(restored.clone())).permissions[0]
+            .deadline
+            .is_none(),
+        "a restored deadline is not on the card"
     );
 }
 

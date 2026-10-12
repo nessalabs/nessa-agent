@@ -253,6 +253,12 @@ for line in sys.stdin:
         else:
             outcome = msg["result"]["outcome"]
             (root / "permission-outcome").write_text(json.dumps(outcome))
+        if mode == "deadline-cancel-only":
+            # Real Codex stops the turn when cancel is selected. The edit
+            # does not complete and the prompt does not continue.
+            result(pending, {"stopReason": "cancelled"})
+            pending = None
+            continue
         update({"sessionUpdate": "tool_call_update", "toolCallId": "file-change-1", "status": "completed"})
         result(pending, {"stopReason": "end_turn"})
         pending = None

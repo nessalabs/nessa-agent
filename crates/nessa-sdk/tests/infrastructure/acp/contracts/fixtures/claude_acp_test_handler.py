@@ -435,6 +435,7 @@ while True:
             "permission-read-symlink",
             "permission-read-no-path",
             "permission-deadline-provider-cancel",
+            "permission-deadline-close-hold",
         ):
             call = tool("Read" if mode.startswith("permission-read") else "Write")
             if mode == "permission-read-deadline":
@@ -468,7 +469,12 @@ while True:
                     {"optionId": "deny-one", "kind": "reject_once", "name": "Deny once"},
                     {"optionId": "never-choose", "kind": "allow_always", "name": "Always"}]}})
             if mode == "permission-deadline-provider-cancel":
+                # The provider ends the prompt on its own. The process stays
+                # up, so the session is still open when the deadline would
+                # have fired.
+                stdin_lines.wait_for_file("release-provider-cancel", seconds=30)
                 result(pending, {"stopReason": "cancelled"})
+                record("provider-cancel-sent", "yes")
                 pending = None
         elif mode == "permission-deadline-stop":
             # A reviewable write stays pending, then a shell review is declined
@@ -524,6 +530,13 @@ while True:
                     "options": [
                         {"optionId": "approve-one", "kind": "allow_once", "name": "Allow once"},
                         {"optionId": "deny-one", "kind": "reject_once", "name": "Deny once"}]}})
+        elif mode == "permission-finished" and len(history) > 1:
+            # The next turn stays open and asks for nothing. A deadline the
+            # previous turn left armed can still come due while this one runs.
+            text("turn-2-open")
+            stdin_lines.wait_for_file("release-turn-2", seconds=30)
+            result(pending, {"stopReason": "end_turn"})
+            pending = None
         elif mode in ("permission", "permission-write-failure", "permission-stop", "permission-failure", "permission-finished", "permission-provider-error", "permission-byte-flood", "unknown-tool"):
             update({"sessionUpdate": "tool_call", **tool("Bash" if mode == "unknown-tool" else "Write")})
             if mode == "permission-write-failure":
@@ -804,6 +817,11 @@ while True:
             pending = None
     elif method == "session/cancel":
         (root / "cancel-observed").write_text("yes")
+        if mode == "permission-deadline-close-hold" and pending is not None:
+            # Stay alive through the grace. The deadline's remaining wait is
+            # shorter than that grace, and answering now would hide whether
+            # the deadline fired during it.
+            stdin_lines.wait_for_file("release-close", seconds=30)
         if mode == "ask-after-cancel":
             # Asked while the session is ending: nobody could answer it.
             send({"id": "late", "method": "elicitation/create", "params": {
@@ -939,15 +957,21 @@ while True:
         "permission-read-outside",
         "permission-read-symlink",
         "permission-read-no-path",
+        "permission-deadline-close-hold",
     ) and msg.get("id") == permission_id:
-        # Echo the deadline's own reason. A selected option with no reason is
-        # not that answer, and the turn still ends so the wait can be told
-        # from a stall.
-        record("permission-outcome", json.dumps(msg["result"]))
-        meta = msg["result"].get("_meta") or {}
-        text(meta.get("deadlineReason") or "no deadline reason")
-        result(pending, {"stopReason": "end_turn"})
-        pending = None
+        if mode == "permission-deadline-close-hold":
+            # Close cancels the review on the wire. The prompt stays open
+            # until session/cancel, which is what the grace is waiting on.
+            record("permission-outcome", json.dumps(msg["result"]))
+        else:
+            # Echo the deadline's own reason. A selected option with no reason is
+            # not that answer, and the turn still ends so the wait can be told
+            # from a stall.
+            record("permission-outcome", json.dumps(msg["result"]))
+            meta = msg["result"].get("_meta") or {}
+            text(meta.get("deadlineReason") or "no deadline reason")
+            result(pending, {"stopReason": "end_turn"})
+            pending = None
     elif msg.get("id") == permission_id:
         choice = msg["result"]["outcome"]
         if provider_cancel_mode:

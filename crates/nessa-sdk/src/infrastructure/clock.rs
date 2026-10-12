@@ -52,6 +52,13 @@ pub type ClockSleep = Pin<Box<dyn Future<Output = ()> + Send>>;
 pub trait Clock: Send + Sync {
     /// The current moment. Never earlier than one this clock returned before.
     fn now(&self) -> ClockInstant;
+    /// Unix milliseconds at [`Self::now`].
+    ///
+    /// A permission's `dueAtMs` is this plus the wait, so a client counts down
+    /// on the same clock that decides the review. [`RuntimeClock`] anchors it
+    /// once, when the clock is created, and then follows this clock's elapsed
+    /// time. A later read of the wall clock is not a second opinion.
+    fn unix_ms(&self) -> u64;
     /// Resolves once [`Self::now`] has reached `deadline`, at once if it
     /// already has. It is not polled again after it resolves.
     fn sleep_until(&self, deadline: ClockInstant) -> ClockSleep;
@@ -61,14 +68,23 @@ pub trait Clock: Send + Sync {
 #[derive(Clone, Copy, Debug)]
 pub struct RuntimeClock {
     origin: tokio::time::Instant,
+    /// Unix milliseconds at `origin`, sampled once.
+    unix_origin_ms: u64,
 }
 impl RuntimeClock {
     /// A clock whose origin is now.
     pub fn new() -> Self {
         Self {
             origin: tokio::time::Instant::now(),
+            unix_origin_ms: unix_epoch_ms(),
         }
     }
+}
+fn unix_epoch_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|now| u64::try_from(now.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or(0)
 }
 impl Default for RuntimeClock {
     fn default() -> Self {
@@ -78,6 +94,10 @@ impl Default for RuntimeClock {
 impl Clock for RuntimeClock {
     fn now(&self) -> ClockInstant {
         ClockInstant(self.origin.elapsed())
+    }
+    fn unix_ms(&self) -> u64 {
+        let elapsed = u64::try_from(self.origin.elapsed().as_millis()).unwrap_or(u64::MAX);
+        self.unix_origin_ms.saturating_add(elapsed)
     }
     fn sleep_until(&self, deadline: ClockInstant) -> ClockSleep {
         match self.origin.checked_add(deadline.0) {

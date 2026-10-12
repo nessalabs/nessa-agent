@@ -1,5 +1,6 @@
 //! An unanswered review settles when its deadline passes, and the turn goes on.
 use super::super::support::*;
+use crate::infrastructure::clock::Clock;
 use std::task::{Context, Waker};
 
 const DENY_REASON: &str = STANDARD_DENY_REASON;
@@ -32,6 +33,12 @@ async fn pending(mode: &str) -> PendingReview {
         panic!("expected permission");
     };
     let deadline = deadline.expect("a pending review names the deadline that will answer it");
+    let wait_ms = crate::domain::agent_execution::permissions::wait_ms(deadline.wait());
+    assert_eq!(
+        deadline.due_at_ms(),
+        Some(clock.unix_ms().saturating_add(wait_ms)),
+        "dueAtMs is the injected clock plus the wait"
+    );
     PendingReview {
         root,
         opened,
@@ -532,10 +539,74 @@ async fn quiet_after(clock: &ManualClock, opened: &mut OpenedProviderSession) {
     }
 }
 
+fn deadline_answers(audit: &RecordingAudit) -> Vec<PermissionAnswerRecord> {
+    answered(audit)
+        .into_iter()
+        .filter(|record| {
+            matches!(
+                record.resolution().attribution().basis(),
+                ApprovalBasis::Deadline(_)
+            )
+        })
+        .collect()
+}
+
+/// The next event, if one arrives while the session is still open.
+async fn next_while_open(opened: &mut OpenedProviderSession) -> Option<ExecutionEvent> {
+    match timeout(Duration::from_millis(400), opened.events.next()).await {
+        Err(_) => None,
+        Ok(Ok(None)) | Ok(Err(_)) => {
+            panic!("the session ended while a deadline could still answer")
+        }
+        Ok(Ok(Some(event))) => Some(event),
+    }
+}
+
+async fn appeared(path: &std::path::Path) {
+    let started = std::time::Instant::now();
+    while !path.exists() {
+        if started.elapsed() > Duration::from_secs(5) {
+            panic!("missing {}", path.display());
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+async fn assert_session_stays_quiet(opened: &mut OpenedProviderSession) {
+    if let Some(event) = next_while_open(opened).await {
+        assert!(
+            !matches!(event.update(), ExecutionUpdate::Finished(_)),
+            "an unrequested cancel published Finished: {event:?}"
+        );
+        assert!(
+            !matches!(event.update(), ExecutionUpdate::DeadlineAnswered { .. }),
+            "the deadline answered before its wait: {event:?}"
+        );
+        panic!("the open session published {event:?}");
+    }
+}
+
+async fn assert_no_deadline_for(id: &PermissionId, opened: &mut OpenedProviderSession) {
+    loop {
+        let Some(event) = next_while_open(opened).await else {
+            return;
+        };
+        if matches!(event.update(), ExecutionUpdate::PermissionCancelled(_)) {
+            continue;
+        }
+        assert!(
+            !matches!(event.update(), ExecutionUpdate::DeadlineAnswered { id: answered, .. } if answered == id),
+            "the deadline answered {id:?}: {event:?}"
+        );
+        panic!("unexpected event after the deadline: {event:?}");
+    }
+}
+
 #[tokio::test]
 async fn a_turn_that_ends_with_a_request_pending_does_not_answer_it_later() {
     let _slot = process_test_slot().await;
     let mut review = pending("permission-finished").await;
+    let first_id = review.id.clone();
     let updates = until_finished(&mut review.opened).await;
     assert!(
         updates
@@ -543,12 +614,44 @@ async fn a_turn_that_ends_with_a_request_pending_does_not_answer_it_later() {
             .any(|update| matches!(update, ExecutionUpdate::Finished(_))),
         "{updates:?}"
     );
-    assert!(updates
-        .iter()
-        .all(|update| !matches!(update, ExecutionUpdate::DeadlineAnswered { .. })));
-    quiet_after(&review.clock, &mut review.opened).await;
+    assert!(updates.iter().all(|update| !matches!(
+        update,
+        ExecutionUpdate::DeadlineAnswered { id, .. } if id == &first_id
+    )));
+    // Turn 2 starts at once, while turn 1's deadline is still in the future,
+    // and stays open. Advancing past that deadline must not answer turn 1.
+    let second = start(&review.opened, "second").await;
+    loop {
+        match next(&mut review.opened).await {
+            ExecutionUpdate::Message(chunk) if chunk.as_str() == "turn-2-open" => break,
+            ExecutionUpdate::DeadlineAnswered { id, .. } if id == first_id => {
+                panic!("turn 1's deadline answered before its wait")
+            }
+            update => panic!("expected turn 2 to be open, got {update:?}"),
+        }
+    }
+    review.clock.advance(Duration::from_secs(30));
+    assert_no_deadline_for(&first_id, &mut review.opened).await;
+    assert!(
+        deadline_answers(&review.audit).is_empty(),
+        "turn 1's deadline wrote an audit record"
+    );
+    std::fs::write(review.root.path().join("release-turn-2"), "yes").unwrap();
+    let second_updates = until_finished(&mut review.opened).await;
+    assert!(second_updates.iter().all(|update| !matches!(
+        update,
+        ExecutionUpdate::DeadlineAnswered { id, .. } if id == &first_id
+    )));
+    assert!(
+        deadline_answers(&review.audit).is_empty(),
+        "turn 1's deadline wrote an audit record"
+    );
     assert_eq!(
         promptly(review.active).await.unwrap(),
+        Ok(ExecutionOutcome::Completed)
+    );
+    assert_eq!(
+        promptly(second).await.unwrap(),
         Ok(ExecutionOutcome::Completed)
     );
     close(&review.clock, &review.opened).await;
@@ -559,36 +662,94 @@ async fn a_turn_that_ends_with_a_request_pending_does_not_answer_it_later() {
 async fn a_provider_cancelled_turn_forgets_the_armed_deadline() {
     let _slot = process_test_slot().await;
     let mut review = pending("permission-deadline-provider-cancel").await;
-    let updates = until_finished(&mut review.opened).await;
+    let id = review.id.clone();
+    std::fs::write(review.root.path().join("release-provider-cancel"), "yes").unwrap();
+    appeared(&review.root.path().join("provider-cancel-sent")).await;
+    // The provider returned cancelled without being asked. The session is
+    // still open: Finished is not how that cancel is published.
+    assert_session_stays_quiet(&mut review.opened).await;
+    review.clock.advance(Duration::from_secs(30));
+    assert_no_deadline_for(&id, &mut review.opened).await;
     assert!(
-        updates.iter().any(|update| matches!(
-            update,
-            ExecutionUpdate::Finished(ExecutionOutcome::Cancelled)
-        )),
-        "{updates:?}"
+        deadline_answers(&review.audit).is_empty(),
+        "a provider-cancelled turn wrote a deadline audit record"
     );
-    assert!(updates
-        .iter()
-        .all(|update| !matches!(update, ExecutionUpdate::DeadlineAnswered { .. })));
-    quiet_after(&review.clock, &mut review.opened).await;
     close(&review.clock, &review.opened).await;
+    assert_eq!(
+        promptly(review.active).await.unwrap(),
+        Ok(ExecutionOutcome::Cancelled)
+    );
     assert_gone(&review.root, "pid");
 }
 
 #[tokio::test]
 async fn close_during_a_pending_request_forgets_the_deadline() {
     let _slot = process_test_slot().await;
-    let mut review = pending("permission-deadline").await;
-    close(&review.clock, &review.opened).await;
-    // Forgetting the armed deadline is what lets close finish the turn. A
-    // worker that still holds it panics in that branch, and this result is
-    // the protocol error that panic becomes.
+    let audit = Arc::new(RecordingAudit::default());
+    let (root, mut config, model) = test_acp_configuration("permission-deadline-close-hold", 16);
+    config.execution_timeout = None;
+    // Longer than the review's 30 second wait, so the grace outlasts it and
+    // the provider is still alive when that wait runs out.
+    config.shutdown_grace = Duration::from_secs(60);
+    let clock = manual_clock(&mut config);
+    let binding = ClaudeAcpProvider::new(
+        config,
+        &model,
+        TokenLimits::new(900, 100).unwrap(),
+        audit.clone(),
+    )
+    .unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
+    let active = start(&opened, "write").await;
+    let id = loop {
+        match next(&mut opened).await {
+            ExecutionUpdate::Tool(_) => {}
+            ExecutionUpdate::PermissionRequested { id, deadline, .. } => {
+                let deadline = deadline.expect("the open review is armed");
+                assert!(deadline.armed());
+                assert_eq!(
+                    deadline.due_at_ms(),
+                    Some(clock.unix_ms().saturating_add(wait_ms(deadline.wait())))
+                );
+                break id;
+            }
+            update => panic!("expected permission, got {update:?}"),
+        }
+    };
+    let session = opened.session.clone();
+    let closing = session.shutdown(SessionCloseRequest::Explicit(close_action()));
+    tokio::pin!(closing);
+    let observed = root.path().join("cancel-observed");
+    promptly(async {
+        loop {
+            if observed.exists() {
+                break;
+            }
+            tokio::select! {
+                biased;
+                done = &mut closing => panic!("closed before the provider saw cancel: {done:?}"),
+                _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+            }
+        }
+    })
+    .await;
+    clock.advance(Duration::from_secs(30));
+    assert_no_deadline_for(&id, &mut opened).await;
+    assert!(
+        deadline_answers(&audit).is_empty(),
+        "close wrote a deadline audit record during the grace"
+    );
+    std::fs::write(root.path().join("release-close"), "yes").unwrap();
+    let closed = promptly(async { closing.await }).await;
+    closed.into_result().unwrap();
     assert_eq!(
-        promptly(review.active).await.unwrap(),
+        promptly(active).await.unwrap(),
         Ok(ExecutionOutcome::Cancelled)
     );
-    quiet_after(&review.clock, &mut review.opened).await;
-    assert_gone(&review.root, "pid");
+    assert_gone(&root, "pid");
 }
 
 #[tokio::test]
@@ -823,6 +984,11 @@ async fn codex_prefers_decline_and_says_when_only_cancel_is_offered() {
         assert_eq!(deadline.stops_turn(), stops, "{mode}");
         assert_eq!(deadline.reason(), sentence, "{mode}");
         assert!(deadline.armed(), "{mode}");
+        assert_eq!(
+            deadline.due_at_ms(),
+            Some(clock.unix_ms().saturating_add(wait_ms(deadline.wait()))),
+            "{mode}"
+        );
         clock
             .run_out(|wait| wait.limit() == Duration::from_secs(30))
             .await;
@@ -834,10 +1000,27 @@ async fn codex_prefers_decline_and_says_when_only_cancel_is_offered() {
             )),
             "{mode}: {updates:?}"
         );
-        assert_eq!(
-            promptly(active).await.unwrap(),
-            Ok(ExecutionOutcome::Completed)
-        );
+        let outcome = if stops {
+            ExecutionOutcome::Cancelled
+        } else {
+            ExecutionOutcome::Completed
+        };
+        if stops {
+            assert!(
+                updates
+                    .iter()
+                    .all(|update| !matches!(update, ExecutionUpdate::Message(_))),
+                "cancel stopped the turn, so it does not keep speaking: {updates:?}"
+            );
+            assert!(
+                matches!(
+                    updates.last(),
+                    Some(ExecutionUpdate::Finished(ExecutionOutcome::Cancelled))
+                ),
+                "cancel stops the turn: {updates:?}"
+            );
+        }
+        assert_eq!(promptly(active).await.unwrap(), Ok(outcome), "{mode}");
         let wire: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(root.path().join("permission-outcome")).unwrap(),
         )

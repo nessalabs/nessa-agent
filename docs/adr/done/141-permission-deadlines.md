@@ -56,6 +56,11 @@ class. The bytes of an allowed read are sent to the model provider. Staying
 inside the workspace is about what the tool changes, not about the content
 remaining on the machine.
 
+The path is checked when the request arrives. The tool reads those bytes
+later, as much as eight seconds later when the deadline allows the read. A
+path that was inside the workspace at the check can be replaced before that
+read.
+
 The standard policy, owned by `PermissionDeadlinePolicy::standard`:
 
 | Class | What lands here | Wait | Outcome | Reason the deadline records |
@@ -107,7 +112,9 @@ first row that matches is what happens.
 | The only refusal offered stops the turn | Deny that option. The reason and the notice say the agent stopped. Codex `cancel` is that option. Codex `decline` is not, and is preferred when both are offered. |
 | Two deadlines are due in one wait | The earlier deadline settles first. The same instant settles in permission-id order. |
 | The turn ends while a review is still pending | The deadline is disarmed and does not answer later. |
-| The provider cancels the turn | The deadline is disarmed when that cancel is deferred. It is not a permission answer. |
+| A turn-end frame and a due deadline are both ready | The deadline answers first. It is the earlier branch of the biased wait, and the turn-end frame is still in the socket. The turn end is read after that answer. |
+| The provider cancels the turn, and a review is still armed | The deadline is disarmed. The session stays open. Finished is not published from that frame, and the deadline is not a permission answer. |
+| The provider cancels the turn, and nothing is armed | That cancel is session teardown, as it was before deadlines. |
 | The session closes, or the person stops the turn, while a review is pending | The deadline is disarmed before the shutdown wait. Stopping the turn holds the next prompt, as 132 does. |
 | The selected-answer audit fails | The provider is still answered. The audit failure is retained and does not stop the turn. |
 | A saved review has no deadline | No automatic decision. The review stays pending until a person answers. |
@@ -116,12 +123,15 @@ first row that matches is what happens.
 
 The permission wait is its own branch in the worker, after the command branch
 and before the provider's next message. It is not folded into the wait that
-fails the worker.
+fails the worker. Because that branch is before the reader, a turn end and a
+due deadline that arrive together resolve deadline-first.
 
 ## What a person sees
 
 The pending review carries the wait, an absolute `dueAtMs`, the effect,
-whether the refusal stops the turn, and the past-tense reason. The card does
+whether the refusal stops the turn, and the past-tense reason. `dueAtMs` is
+the injected clock's unix time plus the wait. It is not a fresh read of the
+wall clock when the request arrives. The card does
 not show that reason. It says what will happen, from the effect and the time
 left until `dueAtMs`: "If nobody answers within 30 seconds, this is denied
 automatically." When the only refusal stops the turn, that line says the

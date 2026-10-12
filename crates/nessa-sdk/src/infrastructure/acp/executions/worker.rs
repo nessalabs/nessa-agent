@@ -462,7 +462,8 @@ struct Worker<P> {
     closing: bool,
     /// Set only after `session/cancel` for the active turn is written.
     /// A later `Cancelled` prompt result is that turn ending. Any other
-    /// cancelled result is still session teardown.
+    /// cancelled result tears the session down, unless a review is still
+    /// armed: that deadline is disarmed and the session stays open.
     turn_cancel_requested: Option<ExecutionId>,
     deferred_outcome: Option<ExecutionOutcome>,
     provider_result: Option<Result<ExecutionOutcome, AgentError>>,
@@ -1295,11 +1296,10 @@ impl<P: AcpProfile> Worker<P> {
             };
             match input {
                 Input::Close | Input::Command(None) => {
-                    self.armed_permissions.clear();
-                    assert!(
-                        self.armed_permissions.is_empty(),
-                        "close forgets armed permission deadlines before it waits"
-                    );
+                    // `cancel_wire_requests`, called from the cancellation
+                    // below, clears armed deadlines before this branch returns
+                    // to the wait. The shutdown grace can outlast a review, and
+                    // the deadline must not answer during it.
                     self.closing = true;
                     self.begin_shutdown_grace();
                     let request = self
@@ -2242,15 +2242,19 @@ impl<P: AcpProfile> Worker<P> {
                 let turn_cancel_requested =
                     self.turn_cancel_requested.take().as_ref() == Some(&active_turn);
                 if result == ExecutionOutcome::Cancelled && !turn_cancel_requested {
-                    // Keep pending reviews until correlated session teardown. Never publish
-                    // tool/process cancellation from protocol evidence alone. The deadline
-                    // is not that teardown: the turn is already over, so it must not answer.
+                    // The provider ended the prompt without a cancel we sent.
+                    // A review that is still armed is not a permission answer
+                    // and not Finished: the session stays open, and the
+                    // deadline is disarmed so it cannot decide a request the
+                    // provider has stopped waiting on. With nothing armed, the
+                    // cancelled result is still session teardown.
+                    let review_still_armed = !self.armed_permissions.is_empty();
                     self.armed_permissions.clear();
-                    assert!(
-                        self.armed_permissions.is_empty(),
-                        "a provider-cancelled turn forgets armed permission deadlines"
-                    );
-                    self.deferred_outcome = Some(result);
+                    if review_still_armed {
+                        self.provider_result = None;
+                    } else {
+                        self.deferred_outcome = Some(result);
+                    }
                 } else {
                     let target = &self
                         .active
@@ -2534,10 +2538,10 @@ impl<P: AcpProfile> Worker<P> {
             &options,
             &self.profile.deadline_deny_preference(),
         );
-        let promised = settlement
-            .deadline()
-            .clone()
-            .promise(unix_deadline_ms(settlement.deadline().wait()));
+        let promised = settlement.deadline().clone().promise(unix_deadline_ms(
+            &*self.config.clock,
+            settlement.deadline().wait(),
+        ));
         let event = execution.request_permission(
             target,
             permission_id.clone(),
@@ -3815,16 +3819,12 @@ fn rejection_option(
 }
 
 /// Unix milliseconds when a review armed now, waiting `wait`, comes due.
-fn unix_deadline_ms(wait: std::time::Duration) -> u64 {
+///
+/// `clock` is the binding's clock. The countdown a card shows and the moment
+/// this worker decides are the same timeline.
+fn unix_deadline_ms(clock: &dyn Clock, wait: std::time::Duration) -> u64 {
     let wait_ms = crate::domain::agent_execution::permissions::wait_ms(wait);
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|now| {
-            u64::try_from(now.as_millis())
-                .unwrap_or(u64::MAX)
-                .saturating_add(wait_ms)
-        })
-        .unwrap_or(wait_ms)
+    clock.unix_ms().saturating_add(wait_ms)
 }
 
 impl<P: AcpProfile> Worker<P> {
@@ -3894,6 +3894,19 @@ impl<P: AcpProfile> Worker<P> {
                 Ok(resolution) => resolution,
                 Err(error) => {
                     tracing::warn!(%error, permission_id = %id.as_str(), "permission deadline found the review already resolved");
+                    // The review was resolved without this deadline being
+                    // disarmed. Answering it again fails, and hiding that
+                    // leaves a timer that still comes due. The decision the
+                    // timer was armed to make is published, so a turn that
+                    // ended or a session that is closing cannot drop it.
+                    // Turn end and close clear the map before they wait.
+                    if let Ok(event) =
+                        execution.deadline_answered(&execution_id, id, effect, reason.clone())
+                    {
+                        self.emit(event).map_err(|error| {
+                            self.record_failure(OperationEffectPhase::EventDelivery, error)
+                        })?;
+                    }
                     return Ok(());
                 }
             };

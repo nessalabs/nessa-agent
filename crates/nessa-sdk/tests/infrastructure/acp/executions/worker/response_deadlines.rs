@@ -852,3 +852,86 @@ async fn a_held_prompt_waits_until_the_active_turn_is_gone() {
     assert_eq!(worker.held_prompts.len(), 1);
     assert!(reply_rx.try_recv().is_err());
 }
+
+fn armed_review(clock: &ManualClock) -> ArmedPermission {
+    use crate::domain::agent_execution::permissions::{
+        DeadlineDenyPreference, PermissionDeadlinePolicy, PermissionOption, PermissionOptions,
+        PermissionToolClass,
+    };
+    let option = PermissionOption::new(
+        PermissionOptionId::new("deny-one").unwrap(),
+        "Deny once",
+        PermissionDecision::new(PermissionEffect::Deny, PermissionScope::request()),
+    )
+    .unwrap();
+    let options =
+        PermissionOptions::new(vec![option], &PermissionOfferPolicy::once_only()).unwrap();
+    let settlement = PermissionDeadlinePolicy::standard().settlement(
+        PermissionToolClass::Other,
+        &options,
+        &DeadlineDenyPreference::continuing(),
+    );
+    ArmedPermission {
+        at: clock.now() + Duration::from_secs(30),
+        settlement,
+    }
+}
+
+async fn no_published_event(events: &mut EventReceiver) {
+    let late = tokio::time::timeout(Duration::from_millis(50), events.recv()).await;
+    assert!(
+        late.is_err(),
+        "a disarmed deadline published an event: {late:?}"
+    );
+}
+
+#[tokio::test]
+async fn armed_permissions_are_empty_after_the_turn_ends_and_after_provider_cancel() {
+    let (mut worker, mut execution, mut events, _recovery, clock) = blocked_worker("", false).await;
+    let id = PermissionId::new("review").unwrap();
+    worker
+        .armed_permissions
+        .insert(id.clone(), armed_review(&clock));
+    promptly(worker.finish_turn_wire())
+        .await
+        .unwrap_or_else(|failure| panic!("{:?}", failure.error()));
+    assert!(
+        worker.armed_permissions.is_empty(),
+        "finish_turn_wire left a deadline armed"
+    );
+    clock.advance(Duration::from_secs(30));
+    promptly(worker.settle_due_permissions(&mut execution))
+        .await
+        .unwrap_or_else(|failure| panic!("{:?}", failure.error()));
+    no_published_event(&mut events).await;
+    worker
+        .scope
+        .cleanup(Duration::ZERO, Duration::from_secs(2))
+        .await
+        .unwrap();
+
+    let (mut worker, mut execution, mut events, _recovery, clock) = blocked_worker("", false).await;
+    worker.armed_permissions.insert(id, armed_review(&clock));
+    let message =
+        serde_json::from_value(json!({"jsonrpc":"2.0","id":1,"result":{"stopReason":"cancelled"}}))
+            .unwrap();
+    promptly(worker.message(&mut execution, message, None))
+        .await
+        .unwrap_or_else(|failure| panic!("{:?}", failure.error()));
+    assert!(
+        worker.armed_permissions.is_empty(),
+        "a provider-cancelled turn left a deadline armed"
+    );
+    assert!(worker.deferred_outcome.is_none());
+    assert!(worker.provider_result.is_none());
+    clock.advance(Duration::from_secs(30));
+    promptly(worker.settle_due_permissions(&mut execution))
+        .await
+        .unwrap_or_else(|failure| panic!("{:?}", failure.error()));
+    no_published_event(&mut events).await;
+    worker
+        .scope
+        .cleanup(Duration::ZERO, Duration::from_secs(2))
+        .await
+        .unwrap();
+}
