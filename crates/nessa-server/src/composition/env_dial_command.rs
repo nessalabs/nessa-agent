@@ -126,12 +126,24 @@ async fn approved_then_served(
         let _ = asked.send(true);
     });
     let approved = approval(address, &asking).await;
-    either.abort();
     let Some((identity, pin)) = approved? else {
+        either.abort();
         return Ok(());
     };
     tracing::info!(%address, "approved; serving the gateway");
-    let composed = compose().await.map_err(|(_, failure)| failure)?;
+    // Composing can wait on the serve lock; a stop or drain asked then
+    // still has nothing to drain, so it ends the wait. The wait holds
+    // nothing until it returns, so dropping it leaves nothing behind.
+    let composed = tokio::select! {
+        biased;
+        () = stopped(asking) => None,
+        composed = compose() => Some(composed),
+    };
+    either.abort();
+    let Some(composed) = composed else {
+        return Ok(());
+    };
+    let composed = composed.map_err(|(_, failure)| failure)?;
     let served = serve_dialing(&composed, address, identity, pin, stopping, draining).await;
     composed.finish().await;
     served
