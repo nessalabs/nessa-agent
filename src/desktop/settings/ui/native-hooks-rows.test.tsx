@@ -132,3 +132,49 @@ it("keeps the stored choice when the agent is not in the catalog", async () => {
   expect(row("claude-native-hooks")?.textContent).toContain("This agent isn't set up.")
   expect(row("claude-native-hooks")?.textContent).toContain("only for projects you trust")
 })
+
+it("reads the choice again when the window regains focus or becomes visible", async () => {
+  let choice = { claude: false, codex: false }
+  const gateway: NativeHooksGateway = {
+    read: () => Promise.resolve({ ok: true, choice: { ...choice } }),
+    set: () => Promise.resolve({ ok: false }),
+  }
+  await act(async () =>
+    root.render(
+      <NativeHooksProvider gateway={gateway}>
+        <NativeHooksRows />
+      </NativeHooksProvider>,
+    ),
+  )
+  await act(async () => {})
+  expect(toggle("claude-native-hooks")?.getAttribute("aria-checked")).toBe("false")
+  // Another client turns Claude's hooks on while Access stays open.
+  choice = { claude: true, codex: false }
+  await act(async () => window.dispatchEvent(new Event("focus")))
+  expect(toggle("claude-native-hooks")?.getAttribute("aria-checked")).toBe("true")
+  choice = { claude: true, codex: true }
+  await act(async () => document.dispatchEvent(new Event("visibilitychange")))
+  expect(toggle("codex-native-hooks")?.getAttribute("aria-checked")).toBe("true")
+})
+
+it("lets only the latest of overlapping reads answer", async () => {
+  const pending: ((choice: { claude: boolean; codex: boolean }) => void)[] = []
+  const gateway: NativeHooksGateway = {
+    read: () =>
+      new Promise((resolve) => pending.push((choice) => resolve({ ok: true, choice }))),
+    set: () => Promise.resolve({ ok: false }),
+  }
+  await act(async () =>
+    root.render(
+      <NativeHooksProvider gateway={gateway}>
+        <NativeHooksRows />
+      </NativeHooksProvider>,
+    ),
+  )
+  await act(async () => pending[0]?.({ claude: false, codex: false }))
+  await act(async () => window.dispatchEvent(new Event("focus")))
+  await act(async () => window.dispatchEvent(new Event("focus")))
+  await act(async () => pending[2]?.({ claude: true, codex: false }))
+  await act(async () => pending[1]?.({ claude: false, codex: false }))
+  expect(toggle("claude-native-hooks")?.getAttribute("aria-checked")).toBe("true")
+})

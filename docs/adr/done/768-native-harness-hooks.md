@@ -96,6 +96,7 @@ and
 | The file is not one JSON object, names a harness twice, or is larger than any choice | The gateway starts | That file loads as off and the gateway keeps starting |
 | Both records written for this choice | The same caller, harness, and request id | The command succeeds. The records stay as first written, including the observation time |
 | Outcome written for a different choice | The same request id | The command fails. The file is unchanged |
+| Another client changes the choice | Settings › Access is open and the window regains focus or becomes visible | The rows read the choice again. Only the latest read answers, and a read never overrides a change in progress |
 | The choice is on | That harness's process starts | Claude sends setting sources user, project, and local and omits `disableAllHooks`. Codex omits `features.hooks` and `notify`. A process already running is not restarted |
 | The choice is on | A session is deleted | The deletion process keeps hooks suppressed. Deleting is Nessa's housekeeping, not a run of the agent |
 | Claude or Codex starts a process | Before any request reaches it | The launch record is written with the choice, the cause (an open for a session's attachment, a direct open with no session, or the runtime's restart), and whether saved context was resumed. No hook can run before it: the earliest hook, SessionStart, needs a session, and no session is requested until the record is durable |

@@ -1,4 +1,11 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react"
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react"
 import { setting, type SettingId } from "../model/settings-catalogue"
 import type {
   NativeHooksAgentName,
@@ -10,7 +17,9 @@ import { Group, ItemRow, Toggle } from "./settings-controls"
 /**
  * Settings › Privacy & Permissions › Access: whether the next process start
  * of Claude or Codex omits Nessa's request to leave that harness's own hooks
- * off. With no gateway the rows rest. OpenCode has no row.
+ * off. With no gateway the rows rest. OpenCode has no row. Another client
+ * can change the choice, so the rows read it again when the window regains
+ * focus or becomes visible.
  */
 const NativeHooksContext = createContext<NativeHooksGateway | undefined>(undefined)
 
@@ -48,26 +57,46 @@ type Phase =
 export function NativeHooksRows() {
   const gateway = useContext(NativeHooksContext)
   const [phase, setPhase] = useState<Phase>({ kind: "absent" })
+  // Focus, visibility and a change can start reads that overlap. Only the
+  // latest may answer, so an older one that settles last cannot undo it.
+  const latest = useRef(0)
+  const saving = useRef(false)
   useEffect(() => {
     if (!gateway) return
     let current = true
+    const read = () => {
+      if (saving.current) return
+      const generation = ++latest.current
+      void gateway.read().then((outcome) => {
+        if (!current || generation !== latest.current || saving.current) return
+        setPhase(
+          outcome.ok ? { kind: "ready", choice: outcome.choice } : { kind: "unread" },
+        )
+      })
+    }
     setPhase({ kind: "reading" })
-    void gateway.read().then((outcome) => {
-      if (!current) return
-      setPhase(
-        outcome.ok ? { kind: "ready", choice: outcome.choice } : { kind: "unread" },
-      )
-    })
+    read()
+    const onFocus = () => read()
+    const onVisible = () => {
+      if (document.visibilityState === "visible") read()
+    }
+    window.addEventListener("focus", onFocus)
+    document.addEventListener("visibilitychange", onVisible)
     return () => {
       current = false
+      window.removeEventListener("focus", onFocus)
+      document.removeEventListener("visibilitychange", onVisible)
     }
   }, [gateway])
   const set = (agent: NativeHooksAgentName, enabled: boolean) => {
     if (!gateway || phase.kind !== "ready" || phase.saving) return
     const previous = phase.choice
     setPhase({ kind: "ready", choice: { ...previous, [agent]: enabled }, saving: agent })
+    saving.current = true
+    ++latest.current
     void gateway.set(agent, enabled, crypto.randomUUID()).then(async (outcome) => {
       const again = await gateway.read()
+      saving.current = false
       if (outcome.ok && outcome.agent === agent) {
         setPhase(
           again.ok
