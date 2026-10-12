@@ -323,7 +323,11 @@ pub enum AgentError {
         /// Additional cleanup failure, when teardown could not confirm cleanup.
         cleanup_error: Option<Box<AgentError>>,
     },
-    /// A before callback failed or panicked, preventing provider dispatch.
+    /// A hook rejected a guarded action before it was admitted.
+    ///
+    /// This is the before-invocation gate and the permission-gated pre-tool gate.
+    /// The index is the registration that rejected the action. The tool review
+    /// is not retained, and the turn stops. Both gates share this saved shape.
     BeforeInvocationHook(HookFailure),
     /// The backend already settled. Do not retry blindly: it may have succeeded.
     AfterInvocationHooks {

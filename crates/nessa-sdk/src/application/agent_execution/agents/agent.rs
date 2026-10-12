@@ -21,7 +21,7 @@ use crate::application::agent_execution::executions::{
     ExecutionAudit, ExecutionAuditRecord, ExecutionEvent, ExecutionRequest, ExecutionUpdate,
 };
 use crate::application::agent_execution::hooks::{
-    HookRegistration, InvocationContext, InvocationHook, InvocationHooks,
+    EvaluationSuffix, HookRegistration, InvocationHook, InvocationHooks,
 };
 use crate::application::agent_execution::permissions::{
     ActionContext, PermissionAnswer, PermissionAnswerFailure, PermissionAnswerFuture,
@@ -1207,11 +1207,22 @@ impl Agent {
                 .await;
         }
         let hooks = InvocationHooks::new(self.inner.hooks.read().expect("hook registry").clone());
-        let context = InvocationContext {
-            session_id: attached.session.id(),
-            request: &input,
+        let session_id = attached.session.id().clone();
+        let before_gate = if hooks.is_empty() {
+            Ok(())
+        } else {
+            match self
+                .inner
+                .manager
+                .with_invocation_events(index, EvaluationSuffix::capture)
+                .await
+                .map(|evaluation| hooks.before(&session_id, &input, &evaluation))
+            {
+                Ok(result) => result,
+                Err(error) => Err(AgentError::Storage(error)),
+            }
         };
-        if let Err(mut error) = hooks.before(&context) {
+        if let Err(mut error) = before_gate {
             if let Err(storage) = self
                 .record_undispatched_stop(index, saved_index, work)
                 .await
@@ -1277,7 +1288,23 @@ impl Agent {
                     execution_result: Box::new(result),
                 }),
             };
-            return hooks.after(&context, settled);
+            return if hooks.is_empty() {
+                settled
+            } else {
+                match self
+                    .inner
+                    .manager
+                    .with_invocation_events(index, EvaluationSuffix::capture)
+                    .await
+                    .map(|evaluation| hooks.after(&session_id, &input, &evaluation, settled))
+                {
+                    Ok(hooked) => hooked,
+                    Err(error) => Err(AgentError::StorageAfterExecution {
+                        error: error.clone(),
+                        execution_result: Box::new(Err(AgentError::Storage(error))),
+                    }),
+                }
+            };
         }
         let mut events = attached.events.lock().await;
         let mut execution = Box::pin(async {
@@ -1519,6 +1546,28 @@ impl Agent {
                                 stop_after_ready_settlement = !confirmed;
                                 continue;
                             }
+                            if event.execution_id() == &input.execution_id
+                                && matches!(event.update(), ExecutionUpdate::PermissionRequested { .. })
+                                && !hooks.is_empty()
+                            {
+                                let gate = match self.inner.manager.with_execution_events(
+                                    event.execution_id(),
+                                    |retained| hooks.before_tool(&event, retained),
+                                ).await {
+                                    Ok(result) => result,
+                                    Err(error) => Err(AgentError::Storage(error)),
+                                };
+                                if let Err(error) = gate {
+                                    let (failure, confirmed) = self.stop_after_observation_failure(
+                                        error,
+                                        ObservationFailureCause::ExecutionFailed,
+                                    ).await;
+                                    observation_failure = Some(failure);
+                                    ended = true;
+                                    stop_after_ready_settlement = !confirmed;
+                                    continue;
+                                }
+                            }
                             match await_supervised_save(
                                 self.inner.manager.event(event.clone()),
                                 execution.as_mut(),
@@ -1609,10 +1658,26 @@ impl Agent {
         // Persist the final local receipt too: a successful provider result can
         // coexist with a later storage/hook failure. Direct invocation
         // has no queue runner to perform this final write on its behalf.
-        self.inner
-            .manager
-            .settle_submission(index, hooks.after(&context, result))
-            .await
+        // The after hook sees the same bounded window a pre-tool hook saw.
+        // The suffix is copied first so the evidence lock is not held across the callback.
+        let hooked = if hooks.is_empty() {
+            result
+        } else {
+            match self
+                .inner
+                .manager
+                .with_invocation_events(index, EvaluationSuffix::capture)
+                .await
+                .map(|evaluation| hooks.after(&session_id, &input, &evaluation, result))
+            {
+                Ok(hooked) => hooked,
+                Err(error) => Err(AgentError::StorageAfterExecution {
+                    error: error.clone(),
+                    execution_result: Box::new(Err(AgentError::Storage(error))),
+                }),
+            }
+        };
+        self.inner.manager.settle_submission(index, hooked).await
     }
     // Confirmed teardown must settle admitted execution work, including audit-only
     // cleanup errors. Uncertain teardown cannot promise settlement: the caller
