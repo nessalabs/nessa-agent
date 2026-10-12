@@ -279,9 +279,10 @@ fn set_blocking(
     store(&claude, &codex, change.agent, change.enabled);
     // A file whose directory did not sync could still lose its rename in a
     // crash, so the marker stays until a later settlement writes the
-    // recorded choice again and syncs it.
-    if written.is_ok() {
-        clear_pending(&directory, sync);
+    // recorded choice again and syncs it. A marker that cannot be removed
+    // fails the command too: the change is recorded, and a retry settles it.
+    if written.is_ok() && !clear_pending(&directory, sync) {
+        return Err(NativeHooksError::Storage);
     }
     written.map(|()| selection_of(&claude, &codex))
 }
@@ -1434,6 +1435,53 @@ mod tests {
         assert!(!preferences.selection().codex());
         // A crash could still undo the rename, so the marker that puts the
         // file back stays.
+        assert!(directory.join(PENDING).exists());
+    }
+
+    /// Records every phase, and once the outcome is recorded makes the
+    /// choice's directory read-only, so the marker cannot be removed.
+    #[cfg(unix)]
+    struct LockOnRecordedOutcome {
+        directory: PathBuf,
+    }
+    #[cfg(unix)]
+    impl NativeHooksAudit for LockOnRecordedOutcome {
+        fn record(&self, evidence: &NativeHooksEvidence) -> Result<(), NativeHooksError> {
+            if evidence.phase == NativeHooksPhase::Outcome {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&self.directory, std::fs::Permissions::from_mode(0o555))
+                    .unwrap();
+            }
+            Ok(())
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_recorded_change_whose_marker_cannot_be_removed_fails_the_command() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("data");
+        let preferences = NativeHooksPreferences::open_syncing(
+            directory.clone(),
+            Arc::new(LockOnRecordedOutcome {
+                directory: directory.clone(),
+            }),
+            sync_directory,
+        )
+        .unwrap();
+        let result = preferences
+            .set(change(
+                NativeHooksAgent::Claude,
+                true,
+                "request-stuck-marker",
+            ))
+            .await;
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(result.unwrap_err(), NativeHooksError::Storage);
+        // The outcome is recorded, so the flag follows it while the marker
+        // waits for the next settlement.
+        assert!(preferences.selection().claude());
         assert!(directory.join(PENDING).exists());
     }
 

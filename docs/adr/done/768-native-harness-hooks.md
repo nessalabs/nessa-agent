@@ -69,6 +69,7 @@ different command. The rows are the orders the store implements.
 `a_revert_that_does_not_sync_keeps_the_change_pending`,
 `a_marker_path_that_is_a_directory_is_moved_aside_and_loads_as_off`,
 `a_marker_that_names_a_requested_record_loads_as_off`,
+`a_recorded_change_whose_marker_cannot_be_removed_fails_the_command`,
 `a_recorded_change_whose_file_rename_was_lost_is_written_again`, and
 `hooks_turned_off_by_a_crashed_command_go_back_on_only_with_its_requested_record`
 are those rows.
@@ -90,6 +91,7 @@ and
 | Requested record written | The file is renamed into place and its directory sync fails | The outcome is recorded and the flag follows the file. The change stays pending. The command reports the storage failure. A retry succeeds once the directory syncs, and reports the storage failure until then |
 | File and flag on | The outcome record is readable but reports a failure | Nothing is reverted, because the record says the change took effect. The command fails, and the change stays pending. A retry or the next start syncs the record's directory before the change is settled, and reports the audit failure until then |
 | File written, outcome absent or not the one pending, change pending | The gateway starts, or the next command arrives | The file goes back to the choice before the command. Hooks go back on only when that command's requested record says they were on. A retry of the command finishes it |
+| Outcome recorded | The pending marker cannot be removed | The flag follows the recorded choice. The command reports the storage failure, and the marker stays for the next settlement |
 | Outcome recorded, change pending | The gateway starts, or the next command arrives | The file is written again to the recorded choice and synced, even if a crash lost its first rename |
 | File written and settled, outcome record later lost | The gateway starts | The start loads the file |
 | The pending marker cannot be read, is not a file, or does not name an outcome record for the choice it asked for | The gateway starts, or the next command arrives | The file is written off and the marker is removed, or moved aside when it is not a file. The settlement fails, and the next command is refused, until the marker is gone |
