@@ -13,8 +13,8 @@
 //! rows W6, W10, W15).
 use super::deadline_stream::{io_cause, DeadlineStream};
 use crate::read_only_sync::application::{
-    watch::Wait, Cancellation, GatewayConnector, GatewayError, GatewayOutcome, GatewayPolicy,
-    GatewayStream,
+    held_file::busy, watch::Wait, Cancellation, GatewayConnector, GatewayError, GatewayOutcome,
+    GatewayPolicy, GatewayStream, HeldFileRefusal,
 };
 use nessa_auth::adapters::pairing::{GatewayTrust, NativeIdentity, NativeTransport};
 use nessa_protocol::clock::Clock;
@@ -37,7 +37,8 @@ use nessa_protocol::product::generated::{
 use nessa_protocol::product::handshake::{authentication_close_reason, supports_product_version};
 use nessa_protocol::product::passive_read::{encode_request, ReadEncodeError};
 use nessa_protocol::product_contract::generated::{
-    CatalogueReadErrorCode, ChangeWatchEndReason, ChangeWatchErrorCode, RecordReadErrorCode,
+    CatalogueReadErrorCode, ChangeWatchEndReason, ChangeWatchErrorCode, ConversationErrorCode,
+    RecordReadErrorCode,
 };
 use nessa_protocol::protocol::{EventFrame, OutgoingMessage, ResponseFrame};
 use serde::de::DeserializeOwned;
@@ -143,6 +144,7 @@ pub(super) enum RpcKind {
     Record,
     Catalogue,
     Watch,
+    HeldFile,
 }
 
 /// What the session holds for its one registered watch: whether any hint
@@ -466,15 +468,16 @@ impl Session {
 /// preparation progress for the same read, so the connection stays usable for
 /// the next operation. `wrong_owner` is one too: the gateway answered that
 /// this reader holds no grant on that one conversation, which says nothing
-/// about the next read on another. Every other failure leaves the stream's
-/// state unknown.
+/// about the next read on another. A busy `artifact.read` range is one as
+/// well: the same range is asked again on this connection. Every other
+/// failure leaves the stream's state unknown.
 fn keeps_connection(error: GatewayError) -> bool {
     matches!(
         error,
         GatewayError::Record(
             RecordReadErrorCode::SourcePreparing | RecordReadErrorCode::WrongOwner
         )
-    )
+    ) || busy(error)
 }
 fn shape_decode<T: DeserializeOwned>(
     value: Value,
@@ -555,10 +558,28 @@ fn response_payload(response: ResponseFrame, kind: RpcKind) -> Result<Value, Gat
         RpcKind::Watch => serde_json::from_value::<ChangeWatchErrorCode>(Value::String(error.code))
             .map(GatewayError::Watch)
             .map_or_else(|_| Err(GatewayError::Protocol), Err),
+        RpcKind::HeldFile => Err(held_file_refusal(error.code)),
         RpcKind::Authentication => Err(GatewayError::Authentication(authentication_close_reason(
             &error.code,
         ))),
     }
+}
+/// An `artifact.read` refusal: a conversation code, or the socket's access
+/// refusals. A code this client was not taught is a protocol failure, never
+/// passed on as if known.
+fn held_file_refusal(code: String) -> GatewayError {
+    let refusal = match code.as_str() {
+        "forbidden" => HeldFileRefusal::Forbidden,
+        "unauthorized" => HeldFileRefusal::Unauthorized,
+        code if code == ConversationErrorCode::UnknownMethod.as_str() => {
+            HeldFileRefusal::UnknownMethod
+        }
+        _ => match serde_json::from_value::<ConversationErrorCode>(Value::String(code)) {
+            Ok(code) => HeldFileRefusal::Conversation(code),
+            Err(_) => return GatewayError::Protocol,
+        },
+    };
+    GatewayError::HeldFile(refusal)
 }
 
 /// Whether `id` is within the published change-watch identity contract: its

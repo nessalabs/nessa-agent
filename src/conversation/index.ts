@@ -8,7 +8,8 @@
  * adapters/gateway -> injected NessaClient operations, attachment staging,
  *                     conversation and catalogue follows
  * ui -> transcript with sent-image tiles, exact permission choices, queue/stop/retry controls;
- *       the Messages list of every conversation written in
+ *       the Messages list of every conversation written in; files the agent
+ *       published, and referenced images, read back verified (held-files.tsx)
  *
  * A message is text plus image references. Bytes are staged at attach time and
  * a draft file carries its own upload state; `sendDraft` is the one place that
@@ -23,6 +24,22 @@ export { ConversationQueue } from "./ui/conversation-queue"
 export { ConversationList } from "./ui/conversation-list"
 export { commandErrorCleared } from "./adapters/store/history"
 export { Transcript } from "./ui/transcript"
+// Files a conversation holds, read back verified and shown: the panel's
+// transcripts and the desktop window's alike.
+export { HeldFilesProvider } from "./ui/held-files"
+export { PublishedFiles } from "./ui/published-files"
+export { heldFileReader } from "./adapters/gateway/held-files"
+export {
+  HeldFileReadError,
+  type HeldFileReader,
+  type HeldFileSaver,
+} from "./application/ports"
+export {
+  placePublished,
+  type HeldFile,
+  type HeldFileFailure,
+  type PublishedFile,
+} from "./model"
 export { useConversation } from "./ui/use-conversation"
 
 export { fromEditor, toEditor, pastedTextLabel } from "./ui/composer-content"

@@ -6,11 +6,14 @@
 //! `device` turns the gateway's pinned enrollment status into a read, a purge
 //! with its receipt, or neither. `watch` runs the bounded loop of one record
 //! watch: registration, the recheck pass, then one pass per hint.
+//! `held_file` fetches one file a conversation holds, range by range, and
+//! keeps it only once its size and digest are the ones named.
 
 mod cache;
 mod catalogue;
 pub(crate) mod device;
 pub(crate) mod driver;
+pub(crate) mod held_file;
 pub(crate) mod offline;
 pub(crate) mod reset;
 pub(crate) mod watch;
@@ -22,5 +25,5 @@ pub(crate) use catalogue::{CachedCatalogueEntry, CachedCataloguePage};
 mod gateway;
 pub(crate) use gateway::{
     Cancellation, GatewayAttempt, GatewayConnector, GatewayError, GatewayOutcome, GatewayPolicy,
-    GatewayStream,
+    GatewayStream, HeldFileRefusal,
 };

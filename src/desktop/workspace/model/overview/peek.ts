@@ -10,7 +10,9 @@
  * so it draws a bounded part of the turn: its latest `peekParts` parts —
  * steps, paragraphs, code, lists — and says there is more above, which the
  * session shows in full. A widget is not one of them: a plugin's view is the
- * session's to draw, so it is dropped before the parts are counted.
+ * session's to draw, so it is dropped before the parts are counted. Nor is a
+ * file the agent published, whose card — and the bytes it reads back — is
+ * the session's too.
  */
 import type { Activity, Message, Transcript } from "../transcript"
 
@@ -40,8 +42,8 @@ export function peekOf(transcript: Transcript, limit = peekParts): Peek {
   let room = limit
   let total = 0
   for (let index = messages.length - 1; index > last; index--) {
-    const message = withoutWidgets(messages[index])
-    // A message of widgets alone tells the peek nothing: it is not drawn at all.
+    const message = withoutCards(messages[index])
+    // A message of widgets and files alone tells the peek nothing: it is not drawn at all.
     if (message.parts.length === 0 && messages[index].parts.length > 0) continue
     total += message.parts.length
     if (room === 0) continue
@@ -60,9 +62,13 @@ export function peekOf(transcript: Transcript, limit = peekParts): Peek {
   }
 }
 
-/** `message` without its widget parts; the same message when it has none. */
-function withoutWidgets(message: Message): Message {
-  return message.parts.some((part) => part.kind === "widget")
-    ? { ...message, parts: message.parts.filter((part) => part.kind !== "widget") }
+/** Whether a part is a card the session draws: a widget, or a published file. */
+const isCard = (part: Message["parts"][number]) =>
+  part.kind === "widget" || part.kind === "file"
+
+/** `message` without its cards; the same message when it has none. */
+function withoutCards(message: Message): Message {
+  return message.parts.some(isCard)
+    ? { ...message, parts: message.parts.filter((part) => !isCard(part)) }
     : message
 }

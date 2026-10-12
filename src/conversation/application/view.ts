@@ -7,6 +7,7 @@ import type {
   ConversationTranscriptState,
   ImageReference,
   LinkedFile,
+  PublishedFile,
 } from "../model"
 import type { AgentPart } from "../model/types"
 /** Authorized bounded gateway projection. It does not own execution scheduling. */
@@ -14,6 +15,11 @@ export type ConversationView = {
   runtime?: ConversationRuntime
   /** The latest lease, absent before any was recorded. */
   lease?: ConversationLease
+  /**
+   * Files its agent published, the newest 64 in the order they were recorded.
+   * A record is history: it stays after the bytes are let go of.
+   */
+  artifacts: PublishedFile[]
   approvalMode: ApprovalMode
   approvalModes: ApprovalModeChoice[]
   approvalModeChange?: {

@@ -1,6 +1,7 @@
 import { expect, it } from "vitest"
 import {
   ConversationReadFailedError,
+  HeldFileReadError,
   SubmissionRefusedError,
   type ConversationEffects,
 } from "../../application/ports"
@@ -132,4 +133,76 @@ it("still refuses a message the client would not put on the wire", async () => {
     .catch((error: unknown) => error)
   expect(error).toBeInstanceOf(SubmissionRefusedError)
   expect(error).toMatchObject({ reason: "invalid-request" })
+})
+
+it("echoes the images it was sent back as published files it holds, until it closes", async () => {
+  const effects = scenarioEffects("echo")
+  const conversationId = "00000000-0000-4000-8000-000000000002"
+  await effects.create(conversationId)
+  const bytes = new Blob(["png"], { type: "image/png" })
+  const file = { digest: `sha256:${"a".repeat(64)}`, mimeType: "image/png", size: 3 }
+  const image = await effects.stageAttachment(
+    conversationId,
+    file,
+    bytes,
+    new AbortController().signal,
+  )
+  await effects.send({
+    conversationId,
+    executionId: "execution-1",
+    actionId: "action-1",
+    text: "look",
+    attachments: [image],
+    files: [],
+  })
+  const told = await firstWord(effects, conversationId)
+  expect(told).toMatchObject({
+    view: {
+      artifacts: [{ executionId: "execution-1", name: "echo-1.png", ...file }],
+    },
+  })
+  const signal = new AbortController().signal
+  const read = await effects.readHeldFile(conversationId, file, signal)
+  expect(await read.text()).toBe("png")
+  expect(read.type).toBe("image/png")
+  // Held as another type, it is another file, which nothing holds.
+  await expect(
+    effects.readHeldFile(conversationId, { ...file, mimeType: "image/jpeg" }, signal),
+  ).rejects.toMatchObject({ reason: "not-held" })
+  // Closing lets go of the bytes, as the gateway does; the record stays.
+  await effects.close(conversationId)
+  await expect(effects.readHeldFile(conversationId, file, signal)).rejects.toBeInstanceOf(
+    HeldFileReadError,
+  )
+  await expect(effects.readHeldFile(conversationId, file, signal)).rejects.toMatchObject({
+    reason: "not-held",
+  })
+})
+
+it("lists the newest 64 files the echo agent published, as the gateway's view does", async () => {
+  const effects = scenarioEffects("echo")
+  const conversationId = "00000000-0000-4000-8000-000000000003"
+  await effects.create(conversationId)
+  const file = { digest: `sha256:${"b".repeat(64)}`, mimeType: "image/png", size: 3 }
+  const image = await effects.stageAttachment(
+    conversationId,
+    file,
+    new Blob(["png"], { type: "image/png" }),
+    new AbortController().signal,
+  )
+  for (let turn = 1; turn <= 65; turn++)
+    await effects.send({
+      conversationId,
+      executionId: `execution-${turn}`,
+      actionId: `action-${turn}`,
+      text: "again",
+      attachments: [image],
+      files: [],
+    })
+  const told = await firstWord(effects, conversationId)
+  const artifacts = (told as { view: { artifacts: { executionId?: string }[] } }).view
+    .artifacts
+  expect(artifacts).toHaveLength(64)
+  expect(artifacts[0]?.executionId).toBe("execution-2")
+  expect(artifacts.at(-1)?.executionId).toBe("execution-65")
 })

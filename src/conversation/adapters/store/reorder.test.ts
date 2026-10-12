@@ -16,6 +16,7 @@ function deferred<T>() {
 function view(ids: string[]): ConversationView {
   return {
     conversationId: "server",
+    artifacts: [],
     approvalMode: "ask",
     approvalModes: [
       { id: "ask", name: "Provider asks", description: "Provider asks where required." },

@@ -64,6 +64,9 @@
 //! proxy, and the transcript renders markdown with no raw HTML, so model
 //! output cannot author a `target`, a `download` or a script that calls
 //! `window.open`. A change to either of those re-opens a route past this file.
+//! Nor does the app's own page carry a `download`: a file the person saves
+//! from a conversation goes to the host's save dialog as bytes
+//! (`crate::saving`), never through a `blob:` link, which this refuses.
 //!
 //! The sandbox frame is that one route, opened on purpose: its document is
 //! the proxy, which holds no link of the model's, and the app inside it is

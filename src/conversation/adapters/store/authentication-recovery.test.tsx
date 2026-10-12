@@ -40,6 +40,7 @@ function wireView(
   return {
     conversationId,
     revision: "r1",
+    artifacts: [],
     title: null,
     messages: [],
     pending: [],

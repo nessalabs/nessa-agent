@@ -66,7 +66,7 @@ struct GatewaySource {
     descriptors: Option<(CataloguePass, Vec<ManifestEntry>)>,
 }
 /// Factory publishes paired facades, never a second connection/admission owner.
-pub(crate) struct GatewayConnection(Rc<RefCell<Session>>);
+pub(crate) struct GatewayConnection(pub(super) Rc<RefCell<Session>>);
 impl GatewayConnection {
     pub(crate) fn new(session: Session) -> Self {
         Self(Rc::new(RefCell::new(session)))
@@ -161,7 +161,9 @@ impl GatewayConnection {
     }
 }
 /// One operation's value, or the first failure the operation retained.
-fn settled<R>(attempt: GatewayAttempt<Result<R, GatewayError>>) -> Result<R, GatewayError> {
+pub(super) fn settled<R>(
+    attempt: GatewayAttempt<Result<R, GatewayError>>,
+) -> Result<R, GatewayError> {
     match (attempt.result, attempt.outcome.failure) {
         (_, Some(failure)) => Err(failure),
         (Some(result), None) => result,

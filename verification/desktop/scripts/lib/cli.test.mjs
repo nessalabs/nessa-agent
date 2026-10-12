@@ -229,6 +229,7 @@ describe("run-all's sum", () => {
       "lease-details",
       "app-review",
       "gateway-states",
+      "published-files",
       "mcp-apps",
     ])
     assert.deepEqual(checksUnder("prod", ["smoke", ...devServerOnlyChecks]), {

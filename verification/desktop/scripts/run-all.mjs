@@ -54,6 +54,7 @@ const functional = [
   "app-review",
   "message-sync",
   "command-order",
+  "published-files",
 ]
 
 const options = cli({

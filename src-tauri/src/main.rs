@@ -19,6 +19,7 @@ mod page_load;
 mod panel;
 mod platform;
 mod provider_authentication;
+mod saving;
 mod settings;
 mod shortcut;
 mod shortcuts;
@@ -111,6 +112,10 @@ fn main() {
             updater::install_update,
             attachments::choose_attachment_files,
             attachments::read_attachment_bytes,
+            saving::save_file_begin,
+            saving::save_file_part,
+            saving::save_file_finish,
+            saving::save_file_abort,
             startup::host_startup,
             startup::restart_nessa,
             startup::quit_nessa,

@@ -20,12 +20,17 @@
  * `widgets/app/adapters/gateway/`). The fixture app stays with the sample
  * workspace.
  *
+ * The files a conversation holds are read back on the same client
+ * (`client.attachments`, `heldFiles`), verified, through the conversation
+ * vertical's reader, which the panel reads them through too.
+ *
  * ```ts
  * const dependencies = createDesktopDependencies({ gateway: () => connect(), apps })
  * const store = makeDesktopStore(dependencies)
  * ```
  */
-import type { McpAppsApi } from "@nessa/client"
+import type { AttachmentApi, McpAppsApi } from "@nessa/client"
+import { heldFileReader, HeldFileReadError, type HeldFileReader } from "../conversation"
 import {
   linkedDevicesGateway,
   mcpServersGateway,
@@ -77,6 +82,13 @@ export interface DesktopDependencies extends WorkspaceDependencies {
   readonly mcpServers: McpServersGateway | undefined
   /** Pairing and linked devices, for Settings; absent without a gateway. Provided by `main.tsx`. */
   readonly linkedDevices: LinkedDevicesGateway | undefined
+  /**
+   * How the window reads back a file a conversation holds — one its agent
+   * published — verified, for the transcript to show and save. Through the
+   * gateway's own client where the workspace is the gateway's; a workspace
+   * that is not holds no files, and says so. Provided by `main.tsx`.
+   */
+  readonly heldFiles: HeldFileReader
   /**
    * Where a conversation's subagents are read. The sample source while the
    * sample workspace is in use; unread otherwise, so a window does not draw
@@ -157,13 +169,22 @@ export function createDesktopDependencies(
     overviewFilter: options.overviewFilter ?? rememberedFilter(),
     widgets,
     subagents,
+    heldFiles: source
+      ? heldFileReader(() => source.connected().then((client) => client.attachments))
+      : // The sample's and a given source's sessions name no file anybody holds.
+        async () => {
+          throw new HeldFileReadError("not-held")
+        },
   }
 }
 
-/** A gateway client the window can show conversations, draw apps, manage MCP servers, and pair devices through. */
+/** A gateway client the window can show conversations, draw apps, read held files, manage MCP servers, and pair devices through. */
 type WindowGatewayClient = GatewayClient &
   McpServersClient &
-  LinkedDevicesClient & { readonly mcpApps: McpAppsApi }
+  LinkedDevicesClient & {
+    readonly mcpApps: McpAppsApi
+    readonly attachments: AttachmentApi
+  }
 
 /**
  * The gateway's workspace, and — where apps are drawn — its servers' apps:

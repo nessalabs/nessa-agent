@@ -1,11 +1,15 @@
-import { File as FileIcon, Image as ImageIcon } from "lucide-react"
+import type * as React from "react"
+import { File as FileIcon, Image as ImageIcon, RotateCw } from "lucide-react"
+import { Button } from "@nessa-ui/react/button"
 import {
   imageReferenceLabel,
   isImageFile,
   linkedFile,
   previewableImage,
+  type ImageReference,
   type MessageContent,
 } from "../model"
+import { heldFileFailureText, useHeldFile, useRetryHeldFile } from "./held-files"
 
 // The composer's attachment tile, as a shape: square, rounded, on the accent wash.
 const tile = "flex h-16 items-center justify-center overflow-hidden rounded-xl bg-accent"
@@ -14,11 +18,13 @@ const tile = "flex h-16 items-center justify-center overflow-hidden rounded-xl b
  * The images a sent turn carried, as tiles under its text.
  *
  * A turn sent from this window still has its object URL, so its tile is the
- * picture as it was attached — the original, not the copy the gateway stored,
- * which this window never sees. A turn read back from the gateway — after a
- * reload, or sent from another surface — is known only by reference, and gets a
- * labelled placeholder saying what it was and how big. Reading the bytes back from the gateway to
- * paint that tile is deliberately not done here; nothing fetches by digest yet.
+ * picture as it was attached — the original, not the copy the gateway stored.
+ * A turn read back from the gateway — after a reload, or sent from another
+ * surface — is known only by reference: its tile is the stored copy, read back
+ * from `conversationId` by that reference and painted only once its size and
+ * digest are verified (`useHeldFile`). Until then, and for good if there is
+ * nothing to read it with, the tile is a labelled placeholder saying what it
+ * was and how big; one that could not be read says why instead.
  *
  * A file the turn pointed the agent at gets a tile too, labelled with its name.
  * Nobody ever held its bytes — the message carried where it is, not what is in
@@ -30,13 +36,22 @@ const tile = "flex h-16 items-center justify-center overflow-hidden rounded-xl b
  * unchanged. An attachment-only turn renders only this, which is why every tile
  * has a name a screen reader and a pointer can both reach, not only a picture.
  */
-export function MessageImages({ content }: { content: MessageContent }) {
+export function MessageImages({
+  content,
+  conversationId,
+}: {
+  content: MessageContent
+  /** The gateway's identity for the conversation, to read referenced images from. */
+  conversationId?: string
+}) {
   type Tile = {
     key: string
     label: string
     title: string
     src: string | undefined
     file?: true
+    /** Held by the conversation: painted from it once read back. */
+    held?: ImageReference
   }
   const tiles = content.flatMap((part, index): Tile[] => {
     if (part.type === "file" && isImageFile(part.mimeType))
@@ -68,6 +83,7 @@ export function MessageImages({ content }: { content: MessageContent }) {
           label: imageReferenceLabel(part.mimeType, part.size),
           title: imageReferenceLabel(part.mimeType, part.size),
           src: undefined,
+          held: { digest: part.digest, mimeType: part.mimeType, size: part.size },
         },
       ]
     // Read back from the gateway: the path is all there ever was.
@@ -91,27 +107,95 @@ export function MessageImages({ content }: { content: MessageContent }) {
     >
       {tiles.map((item) => (
         <li key={item.key} title={item.title} className="inline-flex">
-          {item.src ? (
-            <span className={`${tile} w-16`}>
-              <img src={item.src} alt={item.label} className="size-full object-cover" />
-            </span>
+          {item.held ? (
+            <HeldImageTile
+              conversationId={conversationId}
+              image={item.held}
+              label={item.label}
+            />
+          ) : item.src ? (
+            <Picture src={item.src} label={item.label} />
           ) : (
-            <span
-              className={`${tile} w-32 flex-col gap-1 px-1.5 text-accent-foreground`}
-              data-image-reference
-            >
-              {item.file ? (
-                <FileIcon aria-hidden="true" className="size-5 text-muted-foreground" />
-              ) : (
-                <ImageIcon aria-hidden="true" className="size-5 text-muted-foreground" />
-              )}
-              <span className="w-full truncate text-center font-sans nessa-text-1">
-                {item.label}
-              </span>
-            </span>
+            <Placeholder label={item.label} file={item.file} />
           )}
         </li>
       ))}
     </ul>
+  )
+}
+
+/**
+ * An image the conversation holds: its verified copy, or the placeholder until
+ * there is one. One that could not be read says why, in the words its card
+ * would use; one that could not be read now can be asked for again.
+ */
+function HeldImageTile({
+  conversationId,
+  image,
+  label,
+}: {
+  conversationId: string | undefined
+  image: ImageReference
+  label: string
+}) {
+  const shown = useHeldFile(conversationId, image)
+  const retry = useRetryHeldFile(conversationId, image)
+  if (shown?.state === "shown") return <Picture src={shown.url} label={label} />
+  if (shown?.state !== "failed") return <Placeholder label={label} />
+  const reason = heldFileFailureText(shown.reason)
+  return (
+    <Placeholder label={reason} failed>
+      {shown.reason === "unavailable" && retry ? (
+        <Button
+          type="button"
+          variant="plain"
+          size="22"
+          shape="pill"
+          aria-label={`${label}: ${reason}. Retry`}
+          onClick={retry}
+        >
+          <RotateCw aria-hidden="true" />
+          Retry
+        </Button>
+      ) : null}
+    </Placeholder>
+  )
+}
+
+function Picture({ src, label }: { src: string; label: string }) {
+  return (
+    <span className={`${tile} w-16`}>
+      <img src={src} alt={label} className="size-full object-cover" />
+    </span>
+  )
+}
+
+function Placeholder({
+  label,
+  file,
+  failed,
+  children,
+}: {
+  label: string
+  file?: true
+  /** Says why it could not be read, in `label`. */
+  failed?: true
+  /** An action in the tile, in place of its icon. */
+  children?: React.ReactNode
+}) {
+  return (
+    <span
+      className={`${tile} w-32 flex-col gap-1 px-1.5 text-accent-foreground`}
+      data-image-reference
+      data-held-file={failed ? "failed" : undefined}
+    >
+      {children ??
+        (file ? (
+          <FileIcon aria-hidden="true" className="size-5 text-muted-foreground" />
+        ) : (
+          <ImageIcon aria-hidden="true" className="size-5 text-muted-foreground" />
+        ))}
+      <span className="w-full truncate text-center font-sans nessa-text-1">{label}</span>
+    </span>
   )
 }

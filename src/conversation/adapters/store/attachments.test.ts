@@ -225,6 +225,7 @@ it("refuses a file part the draft does not hold rather than dropping it", async 
 function viewSaying(imageInput: boolean): Read {
   return async (conversationId): Promise<ConversationView> => ({
     conversationId,
+    artifacts: [],
     approvalMode: "ask",
     approvalModes: [
       { id: "ask", name: "Provider asks", description: "Provider asks where required." },

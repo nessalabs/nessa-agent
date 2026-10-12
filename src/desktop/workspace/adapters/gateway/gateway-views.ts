@@ -17,6 +17,7 @@ import type {
   ConversationTool,
   ConversationView,
 } from "@nessa/client"
+import { placePublished } from "../../../../conversation"
 import { composerModels } from "../../../model/composer-options"
 import { decodeId, encodeId } from "../../../model/id-encoding"
 import type {
@@ -194,6 +195,26 @@ export function reviewOf(
  */
 export const inputId = (executionId: string) => encodeId(executionId)
 export const replyId = (executionId: string) => `${executionId}/reply`
+/**
+ * The messages holding files the agent published outside any turn the view
+ * shows (`placePublished`): those of turns it left out, before the first turn,
+ * and those published while no turn ran, after the last. Each begins with `/`,
+ * which neither an input's id (encoded: no `/`) nor a reply's (an execution
+ * id, then `/reply`) can.
+ */
+export const publishedBeforeId = "/published/before"
+export const publishedAfterId = "/published"
+
+/** A file the agent published, as the part a message shows it by. */
+function publishedPart(artifact: ConversationView["artifacts"][number]): Part {
+  return {
+    kind: "file",
+    name: artifact.name,
+    digest: artifact.digest,
+    mimeType: artifact.mimeType,
+    size: artifact.size,
+  }
+}
 
 /** What a tool call did, in the window's four kinds; the provider's other kinds read as run. */
 function stepKind(kind: ConversationTool["kind"]): StepKind {
@@ -229,8 +250,13 @@ function writtenBy(app: ConversationMessageApp | undefined): { app?: MessageApp 
  * the agent's reply: its text fragments joined where the provider says they
  * belong together, a Nessa notice as text, each tool call a step and — for a
  * tool that declared an MCP App — the widget part its UI is drawn in
- * (`gatewayToolWidget`). Thoughts are not shown. Inputs still waiting follow,
- * so a message the window sent is found as soon as the gateway holds it.
+ * (`gatewayToolWidget`). Thoughts are not shown. A file the agent published
+ * ends the reply of the turn that was running when it was published; one
+ * published by a turn the bounded view left out is in a message of its own
+ * before the first turn, and one published while none ran in one after the
+ * last (`placePublished`). Inputs still
+ * waiting follow, so a message the window sent is found as soon as the
+ * gateway holds it.
  */
 export function transcriptFrom(
   view: ConversationView,
@@ -240,7 +266,16 @@ export function transcriptFrom(
   const tools = new Map(
     view.tools.map((tool) => [JSON.stringify([tool.executionId, tool.toolId]), tool]),
   )
+  const listed = new Set(view.messages.map((turn) => turn.executionId))
+  const published = placePublished(view.artifacts, listed)
   const messages: Message[] = []
+  if (published.before.length > 0)
+    messages.push({
+      id: publishedBeforeId,
+      role: "agent",
+      at: seen(publishedBeforeId),
+      parts: published.before.map(publishedPart),
+    })
   let activity: Transcript["activity"] = null
   for (const turn of view.messages) {
     const input = inputId(turn.executionId)
@@ -279,6 +314,7 @@ export function transcriptFrom(
         if (widget) parts.push(widget)
       }
     }
+    parts.push(...(published.byExecution.get(turn.executionId) ?? []).map(publishedPart))
     if (parts.length > 0) {
       const reply = replyId(turn.executionId)
       messages.push({ id: reply, role: "agent", at: seen(reply), parts })
@@ -290,8 +326,14 @@ export function transcriptFrom(
     )
       activity = { label: lastTool?.title || "Thinking", since: seen(input) }
   }
+  if (published.after.length > 0)
+    messages.push({
+      id: publishedAfterId,
+      role: "agent",
+      at: seen(publishedAfterId),
+      parts: published.after.map(publishedPart),
+    })
   let latestInputId = view.messages.at(-1)?.executionId
-  const listed = new Set(view.messages.map((turn) => turn.executionId))
   for (const waiting of view.pending) {
     if (listed.has(waiting.executionId)) continue
     latestInputId = waiting.executionId
