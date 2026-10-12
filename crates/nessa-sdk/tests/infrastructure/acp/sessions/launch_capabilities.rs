@@ -1,13 +1,16 @@
-//! A process restart publishes the launch's hooks choice before the process exists.
+//! A start that fails before its process exists keeps the hooks choice the
+//! last process ran with.
 //!
 //! ```text
-//! profile.native_hooks_allowed -> start() replaces the capability watch
-//!                              -> process() fails -> the watch still says that choice
+//! previous choice in the capability watch -> start() resets negotiated facts
+//!                                         -> process() fails -> the watch still says the previous choice
 //! ```
 //!
 //! The arrow is one failed start. Negotiated facts go back to unknown. The
-//! hooks choice does not: tool rows stamped while startup is still running
-//! keep the value they read, and this reset used to publish off.
+//! hooks choice is not replaced until a process exists to run with it, so a
+//! failed attempt is never described as the run's choice. A start that does
+//! launch publishes its choice before its worker runs, so tool rows stamped
+//! during startup read that launch's value.
 use super::*;
 use crate::application::agent_execution::agents::AgentFuture;
 use crate::application::agent_execution::executions::ExecutionAuditRecord;
@@ -186,13 +189,13 @@ fn published_when_start_fails(allowed: bool) -> ProviderOperationCapabilities {
 }
 
 #[test]
-fn a_restart_publishes_the_launch_hooks_choice_before_the_process_exists() {
+fn a_start_that_fails_before_its_process_exists_keeps_the_previous_hooks_choice() {
     for allowed in [true, false] {
         let published = published_when_start_fails(allowed);
-        assert_eq!(published.native_hooks_allowed, allowed);
+        assert_eq!(published.native_hooks_allowed, !allowed);
         assert_eq!(
             OperationCapabilities::resolve(published).native_hooks_allowed(),
-            allowed
+            !allowed
         );
         assert!(!published.negotiated);
         assert!(!published.native_steering);

@@ -199,11 +199,13 @@ impl<P: AcpProfile + Clone> WorkerFactory<P> {
         let started = self.config.clock.now();
         tracing::info!(target: "nessa_sdk::timing", phase = "process_start", "agent startup started");
         // Negotiated facts reset until this process answers. This start reads
-        // the switch once, onto the profile, before anything is published: a
-        // reader during startup stamps tool rows from that value, and those
-        // rows are not rewritten. The process factory reads the same bool.
-        // The worker gets the profile cloned under the same lock, so a start
-        // racing this one cannot hand it a different capture.
+        // the switch once, onto the profile. The process factory reads the
+        // same bool. The worker gets the profile cloned under the same lock,
+        // so a start racing this one cannot hand it a different capture.
+        // The hooks choice is published once the process exists and before
+        // its worker runs: a reader during startup stamps tool rows from that
+        // value, and those rows are not rewritten. A start that fails before
+        // then keeps the choice the last process ran with.
         let (native_hooks_allowed, launched_profile) = {
             let mut profile = self
                 .profile
@@ -212,11 +214,12 @@ impl<P: AcpProfile + Clone> WorkerFactory<P> {
             profile.capture_native_hooks();
             (profile.native_hooks_allowed(), profile.clone())
         };
-        self.operation_capabilities
-            .send_replace(ProviderOperationCapabilities {
-                native_hooks_allowed,
+        self.operation_capabilities.send_modify(|published| {
+            *published = ProviderOperationCapabilities {
+                native_hooks_allowed: published.native_hooks_allowed,
                 ..ProviderOperationCapabilities::default()
-            });
+            }
+        });
         let mut executable_use = match self.config.executable.admit() {
             Ok(guard) => guard,
             Err(failure) => {
@@ -270,6 +273,8 @@ impl<P: AcpProfile + Clone> WorkerFactory<P> {
         tracing::info!(target: "nessa_sdk::timing", phase = "process_start",
             elapsed_ms = self.config.clock.now().saturating_duration_since(started).as_secs_f64() * 1000.0,
             "agent process started");
+        self.operation_capabilities
+            .send_modify(|published| published.native_hooks_allowed = native_hooks_allowed);
         let (commands, receiver) = mpsc::channel(16);
         let (close_requested, close_receiver) = watch::channel(None);
         let (finished, completion) = watch::channel(None);
