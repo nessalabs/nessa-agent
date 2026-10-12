@@ -141,6 +141,7 @@ async function render(
   value: Conversation,
   read: HeldFileReader,
   save: HeldFileSaver = async () => "saved",
+  emptyState = false,
 ) {
   await React.act(async () => {
     root.render(
@@ -151,8 +152,8 @@ async function render(
             ground="paper"
             animateMount={false}
             streamText={false}
-            emptyState={false}
-            statusLabel="Ready"
+            emptyState={emptyState}
+            statusLabel="Ready to start"
             gatewayAvailable
             onOpenPaste={vi.fn()}
           />
@@ -403,4 +404,15 @@ it("reads afresh through a different reader, letting go of what the old one show
     first.mock.calls.map(([, file]) => file.digest).sort(),
   )
   expect(revoked.sort()).toEqual(shownBefore.sort())
+})
+
+it("shows a file published while no turn ran instead of the empty welcome", async () => {
+  const read = vi.fn<HeldFileReader>(async () => new Blob(["png"]))
+  const empty = { ...conversation([]), turns: [] }
+  await render(empty, read, undefined, true)
+  // Nothing in it: the welcome.
+  expect(container.textContent).toContain("Ready to start")
+  await render({ ...conversation([loose]), turns: [] }, read, undefined, true)
+  expect(order()).toEqual(["file:notes.txt"])
+  expect(container.textContent).not.toContain("Ready to start")
 })

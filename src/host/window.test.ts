@@ -458,47 +458,102 @@ describe("handing setup over to the panel", () => {
 })
 
 describe("saving a file", () => {
-  it("hands the host the bytes and the name, and downloads nothing in the page", async () => {
-    invoke.mockResolvedValueOnce("saved")
-    const { saveFile, SAVE_NAME_HEADER } = await import("./window")
-    const name = "résumé 1/2.pdf"
+  /**
+   * A host that keeps what it is sent the way `saving::sessions` does: parts
+   * appended under their token, the file there only once finished, nothing
+   * left once given up. `refusePart` refuses that part, numbered from 1.
+   */
+  function fakeHost({
+    begin = { state: "open", token: "t1" } as unknown,
+    refusePart = 0,
+  } = {}) {
+    const saved = new Map<string, Uint8Array>()
+    const open = new Map<string, Uint8Array[]>()
+    const names: string[] = []
+    const parts: number[] = []
+    const refusal = { reason: "not-written", detail: "read-only volume" }
+    invoke.mockImplementation(
+      async (
+        command: string,
+        args: unknown,
+        options?: { headers: Record<string, string> },
+      ) => {
+        if (command === "save_file_begin") {
+          names.push((args as { name: string }).name)
+          const begun = begin as { state: string; token?: string }
+          if (begun.state === "open") open.set(begun.token!, [])
+          return begun
+        }
+        if (command === "save_file_part") {
+          const body = args as Uint8Array
+          parts.push(body.byteLength)
+          const token = options!.headers["x-nessa-save-token"]!
+          if (parts.length === refusePart) throw refusal
+          open.get(token)!.push(body.slice())
+          return null
+        }
+        const { token } = args as { token: string }
+        const chunks = open.get(token)!
+        open.delete(token)
+        if (command === "save_file_finish") {
+          const whole = new Uint8Array(
+            chunks.reduce((sum, chunk) => sum + chunk.length, 0),
+          )
+          let at = 0
+          for (const chunk of chunks) {
+            whole.set(chunk, at)
+            at += chunk.length
+          }
+          saved.set(token, whole)
+        }
+        return null
+      },
+    )
+    return { saved, open, names, parts, refusal }
+  }
 
-    await expect(saveFile(new Blob(["%PDF-1"]), name)).resolves.toBe("saved")
+  it("hands the host the bytes in bounded parts, and the file is whole once finished", async () => {
+    const host = fakeHost()
+    const { saveFile, SAVE_PART_BYTES } = await import("./window")
+    const bytes = new Uint8Array(SAVE_PART_BYTES * 2 + 5).map((_, index) => index % 251)
 
-    expect(invoke).toHaveBeenCalledOnce()
-    const [command, body, options] = invoke.mock.calls[0] as [
-      string,
-      Uint8Array,
-      { headers: Record<string, string> },
-    ]
-    expect(command).toBe("save_file")
-    expect(new TextDecoder().decode(body)).toBe("%PDF-1")
-    // Headers carry ASCII only: the name goes percent-encoded and comes back whole.
-    const sent = options.headers[SAVE_NAME_HEADER]!
-    expect(sent).toMatch(/^[\x21-\x7e]+$/)
-    expect(decodeURIComponent(sent)).toBe(name)
+    await expect(saveFile(new Blob([bytes]), "résumé 1/2.pdf")).resolves.toBe("saved")
+
+    expect(host.names).toEqual(["résumé 1/2.pdf"])
+    expect(host.parts).toEqual([SAVE_PART_BYTES, SAVE_PART_BYTES, 5])
+    // Compared as buffers: element by element, two megabytes take seconds.
+    const whole = host.saved.get("t1")
+    expect(whole && Buffer.from(whole).equals(Buffer.from(bytes))).toBe(true)
+    expect(host.open.size).toBe(0)
   })
 
-  it("says a cancelled dialog is a cancellation, and a refusal is a rejection", async () => {
+  it("says a cancelled dialog is a cancellation, and sends nothing after it", async () => {
+    const host = fakeHost({ begin: { state: "cancelled" } })
     const { saveFile } = await import("./window")
-    invoke.mockResolvedValueOnce("cancelled")
     await expect(saveFile(new Blob(["x"]), "x.txt")).resolves.toBe("cancelled")
-    const refusal = { reason: "not-written", detail: "read-only volume" }
-    invoke.mockRejectedValueOnce(refusal)
-    await expect(saveFile(new Blob(["x"]), "x.txt")).rejects.toBe(refusal)
+    expect(host.parts).toEqual([])
+    expect(invoke).toHaveBeenCalledOnce()
+  })
+
+  it("gives the save up when a part is refused, and rejects with the refusal", async () => {
+    const host = fakeHost({ refusePart: 2 })
+    const { saveFile, SAVE_PART_BYTES } = await import("./window")
+    await expect(
+      saveFile(new Blob([new Uint8Array(SAVE_PART_BYTES * 3)]), "x.bin"),
+    ).rejects.toBe(host.refusal)
+    // Nothing more was sent, nothing was finished, and the save was given up.
+    expect(host.parts).toHaveLength(2)
+    expect(host.saved.size).toBe(0)
+    expect(host.open.size).toBe(0)
+    expect(invoke).toHaveBeenLastCalledWith("save_file_abort", { token: "t1" })
   })
 
   it("sends a name with a lone surrogate, the surrogate replaced", async () => {
-    invoke.mockResolvedValueOnce("saved")
-    const { saveFile, SAVE_NAME_HEADER } = await import("./window")
+    const host = fakeHost()
+    const { saveFile } = await import("./window")
     await expect(saveFile(new Blob(["x"]), "a\uD800b\uDC00.txt")).resolves.toBe("saved")
-    const [, , options] = invoke.mock.calls[0] as [
-      string,
-      Uint8Array,
-      { headers: Record<string, string> },
-    ]
-    expect(decodeURIComponent(options.headers[SAVE_NAME_HEADER]!)).toBe(
-      "a\uFFFDb\uFFFD.txt",
-    )
+    expect(host.names).toEqual(["a\uFFFDb\uFFFD.txt"])
+    // Nothing the host's JSON reader would refuse.
+    expect(() => JSON.parse(JSON.stringify(host.names[0]))).not.toThrow()
   })
 })

@@ -254,10 +254,14 @@ conversation holds with `artifact.read`, named as `show` lists it under the
 view's `artifacts`. Admission is the other online commands' (pinned Active
 status, then the protected session); it opens no cache, and a Terminal purge
 empties only the cache, never a file already fetched. Each 32 KiB range is its
-own connection operation. The file is assembled in `OUT.<sha256 hex>.part`
-beside `OUT` and hard-linked at `OUT` only after the part, read back from disk,
-has SIZE bytes and the digest. An `OUT` whose file name is longer than 185
-bytes has no room for its part's name and is refused `file` step `name` before
+own connection operation, and every fetch asks at least one, so a part on
+disk never stands in for the gateway saying the conversation holds the file
+now. The file is assembled in `OUT.<key>.part` beside `OUT`, the key being 32
+hex digits of a SHA-256 over the conversation, digest, media type and size,
+so a part is only ever resumed by a fetch of that same file in that same
+conversation. It is hard-linked at `OUT` only after the part, read back from
+disk, has SIZE bytes and the digest. An `OUT` whose file name is longer than
+217 bytes has no room for its part's name and is refused `file` step `name` before
 anything is dialled; a file system without hard links refuses at step `link`.
 One JSON line reports it, with the same keys whether or not anything was
 dialled; a failure on the local files exits as a local refusal, any other as
@@ -266,7 +270,7 @@ an online one.
 | Row | Fetch ordering | Owner / required evidence |
 | --- | --- | --- |
 | F1 | `OUT` already exists | Before the profile is opened or anything dialled, looked at without following links: a regular file of SIZE bytes and the digest answers success with zero ranges; anything else (another size, a directory, a link even to nothing) is refused `outputExists` without being opened, and left alone. Either way a part of this file no fetch holds is removed; a held one stays. `an_output_already_there_answers_before_anything_is_dialled`, `an_output_that_is_not_a_regular_file_of_the_size_is_not_opened`, `a_link_at_the_output_is_refused_and_never_followed`, `a_part_no_fetch_holds_is_removed_and_a_held_one_stays` |
-| F2 | A part another run left | Resumed from its length, held with an exclusive lock; a part another fetch holds, or creates first, stops this one `locked`. A part whose name moved to another file while it was held is held once more from the name, then refused `changed`. A part longer than SIZE is emptied. `two_fetches_never_hold_one_part`, `a_second_fetch_of_one_output_stops_on_the_lock_and_the_first_keeps_the_file`, `a_name_moved_to_another_file_no_longer_names_the_one_held` |
+| F2 | A part another run left | Only a part keyed on this conversation, digest, media type and size is found; one another conversation's fetch left is never resumed. A complete part still asks its last range again, and keeps nothing unless that range is answered. Otherwise resumed from its length, held with an exclusive lock; a part another fetch holds, or creates first, stops this one `locked`. A part whose name moved to another file while it was held is held once more from the name, then refused `changed`. A part longer than SIZE is emptied. `two_fetches_never_hold_one_part`, `a_second_fetch_of_one_output_stops_on_the_lock_and_the_first_keeps_the_file`, `a_name_moved_to_another_file_no_longer_names_the_one_held`, `a_part_assembled_for_one_conversation_is_never_used_for_another`, `a_complete_part_still_asks_the_gateway_for_its_last_range`, `a_complete_part_the_gateway_refuses_or_misanswers_keeps_nothing` |
 | F3 | A range answered `temporarily_unavailable` | The connection is kept and the same range asked again after 250, 500 and 1000 ms, then the fetch fails with that code; the part stays. No status recheck. `a_range_busy_past_the_bound_keeps_the_part_and_asks_nothing_more` |
 | F4 | An answer that is not the range asked, or not canonical base64 | Fails before anything is appended. `an_answer_that_is_not_the_range_asked_is_kept_nowhere`, `only_canonical_padded_base64_is_decoded` |
 | F5 | Any other refusal | Fails at once with its typed code, the part kept for a resume; `unknown_method` (an older gateway) is `unsupported`; an authority refusal asks the pinned status again. Nothing is created before the first range. `a_refused_fetch_leaves_no_output_and_no_empty_part`, `a_forbidden_range_asks_the_status_again`, `online_fetch_refusal_writes_nothing_beside_its_output` |

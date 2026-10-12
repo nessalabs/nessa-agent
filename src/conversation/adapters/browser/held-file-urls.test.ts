@@ -287,4 +287,18 @@ describe("heldFileUrls", () => {
     ).rejects.toMatchObject({ reason: "not-held" })
     expect(reads).toHaveLength(1)
   })
+
+  it("stops a save waiting on a shared read once the save is abandoned, and the read goes on", async () => {
+    const { read, reads } = manualReader()
+    const files = heldFileUrls(read, { urls: countedUrls().urls })
+    files.watch("c", image, () => {})
+    const saving = new AbortController()
+    const joined = files.bytes("c", image, saving.signal).catch((error: unknown) => error)
+    saving.abort()
+    expect(await joined).toMatchObject({ reason: "unavailable" })
+    // The picture's own read was not abandoned with it.
+    expect(reads[0]!.signal.aborted).toBe(false)
+    reads[0]!.resolve(new Blob(["abc"]))
+    await vi.waitFor(() => expect(files.current("c", image).state).toBe("shown"))
+  })
 })

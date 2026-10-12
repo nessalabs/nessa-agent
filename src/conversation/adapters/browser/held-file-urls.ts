@@ -52,6 +52,19 @@ export const HELD_FILE_RETRY_DELAYS_MS: readonly number[] = Object.freeze([
 
 const loading: HeldFileShown = Object.freeze({ state: "loading" })
 
+/** `waiting`, or a rejection as soon as `signal` aborts; `waiting` itself goes on. */
+function unlessAborted<T>(waiting: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted)
+    return Promise.reject(new HeldFileReadError("unavailable", signal.reason))
+  return new Promise((resolve, reject) => {
+    const abandon = () => reject(new HeldFileReadError("unavailable", signal.reason))
+    signal.addEventListener("abort", abandon, { once: true })
+    waiting
+      .then(resolve, reject)
+      .finally(() => signal.removeEventListener("abort", abandon))
+  })
+}
+
 /** The reasons that hold for good: asking again, now, would answer the same. */
 const settledFailures: ReadonlySet<HeldFileFailure> = new Set([
   "not-held",
@@ -262,7 +275,9 @@ export function heldFileUrls(
           throw new HeldFileReadError(entry.shown.reason)
         askAgain(key, entry, conversationId, file)
       }
-      if (entry?.arriving) return entry.arriving
+      // The shared read goes on for whatever shows the file; this caller
+      // stops waiting for it the moment its own signal says so.
+      if (entry?.arriving) return unlessAborted(entry.arriving, signal)
       return queued(conversationId, file, signal)
     },
   }

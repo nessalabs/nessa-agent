@@ -221,16 +221,60 @@ fn a_kept_part_is_resumed_from_its_length_and_hashed_with_the_rest() {
     assert_eq!(part.kept.as_deref(), Some(&bytes[..]));
 }
 
+/// Review P2 (PR #765): a complete part is never taken in place of the
+/// gateway's answer. Its last range is asked again, and kept only when
+/// answered as that range.
 #[test]
-fn a_complete_part_is_verified_and_kept_without_asking() {
-    let bytes = content(100);
+fn a_complete_part_still_asks_the_gateway_for_its_last_range() {
+    let bytes = content(2 * RANGE + 5);
     let mut source = Source::serving(&bytes);
     let mut part = Part::holding(&bytes);
     let progress =
         fetch_held_file(&mut source, &Pauses::default(), &mut part, &named(&bytes)).unwrap();
-    assert!(source.asked.is_empty());
-    assert_eq!((progress.resumed_from, progress.ranges), (100, 0));
+    assert_eq!(source.asked, [(2 * RANGE as u64, HELD_FILE_RANGE_BYTES)]);
+    assert_eq!(
+        (progress.resumed_from, progress.reached, progress.ranges),
+        (bytes.len() as u64, bytes.len() as u64, 1)
+    );
     assert_eq!(part.kept.as_deref(), Some(&bytes[..]));
+}
+
+#[test]
+fn a_complete_part_the_gateway_refuses_or_misanswers_keeps_nothing() {
+    let bytes = content(RANGE + 5);
+    for (answer, cause) in [
+        (
+            Err(GatewayError::HeldFile(HeldFileRefusal::Conversation(
+                ConversationErrorCode::AttachmentNotFound,
+            ))),
+            FetchCause::Gateway(GatewayError::HeldFile(HeldFileRefusal::Conversation(
+                ConversationErrorCode::AttachmentNotFound,
+            ))),
+        ),
+        (
+            Err(GatewayError::HeldFile(HeldFileRefusal::Forbidden)),
+            FetchCause::Gateway(GatewayError::HeldFile(HeldFileRefusal::Forbidden)),
+        ),
+        (
+            Ok(RangeAnswer {
+                offset: RANGE as u64,
+                bytes: vec![0; 4],
+            }),
+            FetchCause::WrongRange,
+        ),
+    ] {
+        let mut source = Source::serving(&bytes).then(answer);
+        let mut part = Part::holding(&bytes);
+        let failure = fetch_held_file(&mut source, &Pauses::default(), &mut part, &named(&bytes))
+            .unwrap_err();
+        assert_eq!(failure.cause, cause);
+        assert_eq!(source.asked.len(), 1);
+        assert_eq!(failure.progress.ranges, 0);
+        assert_eq!(part.kept, None);
+        // The part stays for a run the gateway answers.
+        assert!(!part.discarded);
+        assert_eq!(part.bytes, bytes);
+    }
 }
 
 #[test]

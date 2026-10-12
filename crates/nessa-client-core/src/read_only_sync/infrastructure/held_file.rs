@@ -1,6 +1,7 @@
 //! The output a fetched held file is kept as, and the part it is assembled
-//! in: `OUT.<sha256 hex>.part` beside `OUT`, named for the file it holds so
-//! a part another file left is never resumed.
+//! in: `OUT.<key>.part` beside `OUT`, keyed on the whole file it holds
+//! (conversation, digest, media type and size), so a part another file left,
+//! or the same bytes fetched for another conversation, is never resumed.
 //!
 //! A part is held with an exclusive lock from when it is opened or created
 //! until it is kept or discarded, and only its holder links or removes it.
@@ -19,13 +20,14 @@
 //! only when it is a regular file of the named size.
 //!
 //! The part's name is the output's file name and [`PART_SUFFIX_BYTES`] more,
-//! so an output whose file name is longer than 185 bytes is refused before
+//! so an output whose file name is longer than 217 bytes is refused before
 //! anything is dialled (on Windows counted in WTF-8 bytes, which refuses
 //! some names its 255 UTF-16 units would allow).
 use crate::read_only_sync::application::held_file::{
     FetchFiles, FileStep, KeepRefusal, OutputFound,
 };
 use crate::read_only_sync::domain::HeldFile;
+use sha2::{Digest, Sha256};
 use std::ffi::OsString;
 use std::fs::{self, File, Metadata, OpenOptions, TryLockError};
 use std::io::{ErrorKind, Read, Result as IoResult, Seek, SeekFrom, Write};
@@ -36,9 +38,10 @@ const READ_BYTES: usize = 64 * 1024;
 /// The most bytes one file name may have on the file systems a fetch writes
 /// to.
 const MAX_NAME_BYTES: usize = 255;
-/// What [`part_path`] adds to the output's file name: `.`, the 64 hex digits
-/// of the SHA-256, `.part`.
-const PART_SUFFIX_BYTES: usize = 1 + 64 + 5;
+/// How many hex digits of [`part_key`]'s SHA-256 name a part: 128 bits.
+const PART_KEY_HEX: usize = 32;
+/// What [`part_path`] adds to the output's file name: `.`, the key, `.part`.
+const PART_SUFFIX_BYTES: usize = 1 + PART_KEY_HEX + 5;
 
 pub(crate) struct DiskFiles {
     out: PathBuf,
@@ -104,15 +107,40 @@ impl DiskFiles {
     }
 }
 
-/// `OUT` with `.<sha256 hex>.part` added to its file name, so `a.png` is
-/// assembled in `a.png.<hex>.part` beside it: never a name another output or
-/// another file would choose.
+/// `OUT` with `.<key>.part` added to its file name, so `a.png` is assembled
+/// in `a.png.<key>.part` beside it: never a name another output, or another
+/// file, or the same file held by another conversation, would choose.
 fn part_path(out: &Path, file: &HeldFile) -> PathBuf {
     let mut name = OsString::from(out.file_name().unwrap_or_default());
     name.push(".");
-    name.push(file.digest().to_hex());
+    name.push(part_key(file));
     name.push(".part");
     out.with_file_name(name)
+}
+
+/// The first [`PART_KEY_HEX`] hex digits of a SHA-256 over every field that
+/// names the file, each preceded by its length so no two files run together
+/// into one key.
+fn part_key(file: &HeldFile) -> String {
+    let conversation = file.conversation().to_string();
+    let size = file.size().to_be_bytes();
+    let mut hash = Sha256::new();
+    hash.update(b"nessa held-file part v1");
+    for field in [
+        conversation.as_bytes(),
+        file.digest().as_bytes(),
+        file.media_type().as_str().as_bytes(),
+        &size,
+    ] {
+        hash.update((field.len() as u64).to_be_bytes());
+        hash.update(field);
+    }
+    let digest: [u8; 32] = hash.finalize().into();
+    let mut key = String::with_capacity(PART_KEY_HEX);
+    for byte in &digest[..PART_KEY_HEX / 2] {
+        key.push_str(&format!("{byte:02x}"));
+    }
+    key
 }
 
 fn part_options() -> OpenOptions {

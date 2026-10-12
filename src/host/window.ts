@@ -699,25 +699,36 @@ export async function readAttachmentBytes(ticket: string): Promise<ArrayBuffer |
 }
 
 /**
- * The request header that carries a saved file's suggested name, percent-
- * encoded. Matches `saving::NAME_HEADER`.
+ * The request header that names the save a part belongs to. Matches
+ * `saving::TOKEN_HEADER`.
  */
-export const SAVE_NAME_HEADER = "x-nessa-save-name"
+export const SAVE_TOKEN_HEADER = "x-nessa-save-token"
 
-/** Why the host saved nothing. Matches `saving::NotSavedReason`. */
-export type NotSavedReason = "too-large" | "malformed" | "no-dialog" | "not-written"
+/**
+ * The most one part of a save carries, in bytes. Matches
+ * `saving::rule::LARGEST_PART_BYTES`: the host refuses a larger one.
+ */
+export const SAVE_PART_BYTES = 1024 * 1024
 
-/** The host saved nothing, and why. Matches `saving::FileNotSaved`. */
+/** Why the host saved nothing. Matches `saving::rule::NotSavedReason`. */
+export type NotSavedReason =
+  "too-large" | "malformed" | "no-dialog" | "not-open" | "not-written"
+
+/** The host saved nothing, and why. Matches `saving::rule::FileNotSaved`. */
 export interface FileNotSaved {
   reason: NotSavedReason
   /** The host's own words, for the diagnostics rather than the screen. */
   detail: string
 }
 
+/** What beginning a save came to. Matches `saving::rule::Begun`. */
+type SaveBegun = { state: "open"; token: string } | { state: "cancelled" }
+
 /**
  * `text` with each lone surrogate replaced by U+FFFD, as
- * `String.prototype.toWellFormed` does — which `encodeURIComponent` needs, and
- * which neither this build's library target nor every webview it runs in has.
+ * `String.prototype.toWellFormed` does — which the host's JSON reader needs,
+ * and which neither this build's library target nor every webview it runs in
+ * has.
  */
 function wellFormed(text: string): string {
   return text.replace(
@@ -729,12 +740,16 @@ function wellFormed(text: string): string {
 /**
  * Save `bytes` as a file the person chooses, suggesting `name`.
  *
- * In the desktop app the host puts its own save dialog on screen and writes
- * the bytes where the person chose (`save_file`): the webview downloads
+ * In the desktop app the host puts its own save dialog on screen
+ * (`save_file_begin`), and the bytes follow in parts of at most
+ * {@link SAVE_PART_BYTES} (`save_file_part`), one after another, which the
+ * host writes beside the chosen place and moves into it once whole
+ * (`save_file_finish`). Any part that fails gives the save up
+ * (`save_file_abort`), so nothing half-written is left. The webview downloads
  * nothing, and no `<a download>` or `blob:` link is ever followed, which the
  * host's link policy refuses (`src-tauri/src/links.rs`). The host cleans the
- * name before suggesting it, and refuses more than it would ever hand the
- * page. In a plain browser the page downloads them itself (`saveInPage`).
+ * name before suggesting it. In a plain browser the page downloads them
+ * itself (`saveInPage`).
  *
  * Resolves `cancelled` when the person closed the dialog without choosing,
  * which is not a failure. Rejects with {@link FileNotSaved} when nothing was
@@ -746,11 +761,23 @@ export async function saveFile(
 ): Promise<"saved" | "cancelled"> {
   if (!inTauri) return saveInPage(bytes, name)
   const { invoke } = await import("@tauri-apps/api/core")
-  return invoke<"saved" | "cancelled">(
-    "save_file",
-    new Uint8Array(await bytes.arrayBuffer()),
-    { headers: { [SAVE_NAME_HEADER]: encodeURIComponent(wellFormed(name)) } },
-  )
+  const begun = await invoke<SaveBegun>("save_file_begin", { name: wellFormed(name) })
+  if (begun.state === "cancelled") return "cancelled"
+  const { token } = begun
+  try {
+    for (let offset = 0; offset < bytes.size; offset += SAVE_PART_BYTES) {
+      const part = bytes.slice(offset, offset + SAVE_PART_BYTES)
+      await invoke("save_file_part", new Uint8Array(await part.arrayBuffer()), {
+        headers: { [SAVE_TOKEN_HEADER]: token },
+      })
+    }
+    await invoke("save_file_finish", { token })
+    return "saved"
+  } catch (error) {
+    // What the host had written goes; the save's own refusal is the answer.
+    await invoke("save_file_abort", { token }).catch(() => {})
+    throw error
+  }
 }
 
 /** Why a clicked link did nothing. Matches `host::NotOpened`. */

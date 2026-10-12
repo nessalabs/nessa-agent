@@ -2,13 +2,14 @@
 //! native peer and real files: the one JSON line, the typed exit, the
 //! recheck only after an authority refusal, and no output unless verified.
 use super::{fetch, kept};
-use crate::read_only_sync::application::held_file::{Pause, BUSY_RETRY_DELAYS_MS};
+use crate::read_only_sync::application::held_file::{FetchFiles, Pause, BUSY_RETRY_DELAYS_MS};
 use crate::read_only_sync::domain::HeldFile;
 use crate::read_only_sync::entrypoint::CommandError;
 use crate::read_only_sync::infrastructure::gateway::tests::session::{
     connect, peer, request, send, PeerSocket,
 };
 use crate::read_only_sync::infrastructure::gateway::GatewayConnection;
+use crate::read_only_sync::infrastructure::held_file::DiskFiles;
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::product::generated::product_method;
 use nessa_protocol::product_contract::generated::ConversationErrorCode;
@@ -185,10 +186,11 @@ fn an_output_already_there_answers_before_anything_is_dialled() {
 
     // A part an earlier run left, held by no one, goes once the output is
     // there and is the file.
-    let part = root
-        .path()
-        .join(format!("file.bin.{}.part", file.digest().to_hex()));
-    fs::write(&part, b"partial").unwrap();
+    DiskFiles::new(&out, &file)
+        .unwrap()
+        .append(b"partial")
+        .unwrap();
+    assert_eq!(entries(root.path()), 1);
     fs::write(&out, bytes()).unwrap();
     let answer = kept(&file, &out, &mut output).unwrap();
     assert!(answer.is_ok());
@@ -197,7 +199,7 @@ fn an_output_already_there_answers_before_anything_is_dialled() {
     assert_eq!(value["connectionCheck"], "notPerformed");
     assert_eq!(value["ranges"], "0");
     assert_eq!(value["recheck"], Value::Null);
-    assert!(!part.exists());
+    // Only the output is left.
     assert_eq!(entries(root.path()), 1);
 
     fs::write(&out, b"someone's own file").unwrap();
@@ -236,7 +238,7 @@ fn a_line_answered_before_dialling_has_the_keys_of_one_after() {
 #[test]
 fn an_output_name_with_no_room_for_a_part_is_refused_before_dialling() {
     let root = tempfile::tempdir().unwrap();
-    let out = root.path().join("n".repeat(186));
+    let out = root.path().join("n".repeat(218));
     let mut output = vec![];
     let answer = kept(&held(&bytes()), &out, &mut output).unwrap();
     assert!(matches!(answer, Err(CommandError::LocalFile)));

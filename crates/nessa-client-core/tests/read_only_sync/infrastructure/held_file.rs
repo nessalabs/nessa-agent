@@ -33,17 +33,41 @@ fn part_bytes(files: &mut DiskFiles) -> (u64, Vec<u8>) {
     (count, seen)
 }
 
+fn held_as(conversation: &str, digest: [u8; 32], media_type: &str, size: u64) -> HeldFile {
+    HeldFile::new(
+        ConversationId::new(conversation).unwrap(),
+        Sha256Digest::from_bytes(digest),
+        MediaType::parse(media_type).unwrap(),
+        size,
+    )
+    .unwrap()
+}
+
 #[test]
-fn the_part_is_named_beside_the_output_for_the_file_it_holds() {
-    let file = held(b"x");
-    assert_eq!(
-        part_path(Path::new("dir/a.png"), &file),
-        Path::new(&format!("dir/a.png.{}.part", file.digest().to_hex()))
-    );
-    assert_ne!(
-        part_path(Path::new("dir/a.png"), &file),
-        part_path(Path::new("dir/a.png"), &held(b"y"))
-    );
+fn the_part_is_named_beside_the_output_for_the_whole_file_it_holds() {
+    const A: &str = "00000000-0000-4000-8000-000000000001";
+    const B: &str = "00000000-0000-4000-8000-000000000002";
+    let file = held_as(A, [1; 32], "image/png", 10);
+    let out = Path::new("dir/a.png");
+    let part = part_path(out, &file);
+    assert_eq!(part.parent(), Some(Path::new("dir")));
+    let name = part.file_name().unwrap().to_str().unwrap();
+    let key = name
+        .strip_prefix("a.png.")
+        .and_then(|rest| rest.strip_suffix(".part"))
+        .unwrap();
+    assert_eq!(key.len(), 32);
+    assert!(key.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    // Every field that names the file names another part.
+    for other in [
+        held_as(B, [1; 32], "image/png", 10),
+        held_as(A, [2; 32], "image/png", 10),
+        held_as(A, [1; 32], "image/jpeg", 10),
+        held_as(A, [1; 32], "image/png", 11),
+    ] {
+        assert_ne!(part_path(out, &other), part, "{other:?}");
+    }
+    assert_eq!(part_path(out, &file.clone()), part);
 }
 
 #[test]
@@ -206,10 +230,15 @@ fn a_second_fetch_of_one_output_stops_on_the_lock_and_the_first_keeps_the_file()
 /// discarded, and the output never appears.
 #[test]
 fn a_part_of_other_bytes_on_disk_is_discarded_and_no_output_appears() {
-    struct Nothing;
-    impl HeldFileSource for Nothing {
-        fn read(&mut self, _: &HeldFile, _: HeldRange) -> Result<RangeAnswer, GatewayError> {
-            panic!("a complete part asks nothing");
+    /// A complete part still asks its last range, answered here as the
+    /// file is.
+    struct Right;
+    impl HeldFileSource for Right {
+        fn read(&mut self, _: &HeldFile, range: HeldRange) -> Result<RangeAnswer, GatewayError> {
+            Ok(RangeAnswer {
+                offset: range.offset(),
+                bytes: b"right".to_vec(),
+            })
         }
     }
     struct NoPause;
@@ -221,7 +250,7 @@ fn a_part_of_other_bytes_on_disk_is_discarded_and_no_output_appears() {
     let file = held(b"right");
     fs::write(part_path(&out, &file), b"wrong").unwrap();
     let failure = fetch_held_file(
-        &mut Nothing,
+        &mut Right,
         &NoPause,
         &mut DiskFiles::new(&out, &file).unwrap(),
         &file,
@@ -363,4 +392,70 @@ fn a_name_moved_to_another_file_no_longer_names_the_one_held() {
     assert!(!still_named(&path, &held));
     fs::write(&path, b"b").unwrap();
     assert_eq!(still_named(&path, &held), cfg!(not(unix)));
+}
+
+/// Review P2 (PR #765): a part one conversation's fetch assembled is never
+/// another conversation's. A complete part left when the output appeared
+/// is not resumed by a fetch of the same bytes for another conversation,
+/// which reads every range from the gateway itself.
+#[test]
+fn a_part_assembled_for_one_conversation_is_never_used_for_another() {
+    struct Serving {
+        bytes: Vec<u8>,
+        asked: Vec<u64>,
+    }
+    impl HeldFileSource for Serving {
+        fn read(&mut self, _: &HeldFile, range: HeldRange) -> Result<RangeAnswer, GatewayError> {
+            self.asked.push(range.offset());
+            let start = range.offset() as usize;
+            Ok(RangeAnswer {
+                offset: range.offset(),
+                bytes: self.bytes[start..start + range.length() as usize].to_vec(),
+            })
+        }
+    }
+    struct NoPause;
+    impl Pause for NoPause {
+        fn pause(&self, _: Duration) {}
+    }
+    let root = tempfile::tempdir().unwrap();
+    let out = root.path().join("file.bin");
+    let bytes: Vec<u8> = (0..40_000).map(|index| (index % 251) as u8).collect();
+    let digest: [u8; 32] = Sha256::digest(&bytes).into();
+    let in_a = held_as(
+        "00000000-0000-4000-8000-00000000000a",
+        digest,
+        "application/octet-stream",
+        bytes.len() as u64,
+    );
+    let in_b = held_as(
+        "00000000-0000-4000-8000-00000000000b",
+        digest,
+        "application/octet-stream",
+        bytes.len() as u64,
+    );
+    // A's fetch assembles the whole part, then finds the output there.
+    let mut files = DiskFiles::new(&out, &in_a).unwrap();
+    files.append(&bytes).unwrap();
+    fs::write(&out, b"someone's").unwrap();
+    assert_eq!(files.keep(), Err(KeepRefusal::OutputExists));
+    drop(files);
+    fs::remove_file(&out).unwrap();
+    // B's fetch of the same bytes finds no part of its own.
+    let mut source = Serving {
+        bytes: bytes.clone(),
+        asked: vec![],
+    };
+    let progress = fetch_held_file(
+        &mut source,
+        &NoPause,
+        &mut DiskFiles::new(&out, &in_b).unwrap(),
+        &in_b,
+    )
+    .unwrap();
+    assert_eq!(progress.resumed_from, 0);
+    assert_eq!(source.asked, [0, 32_768]);
+    assert_eq!(fs::read(&out).unwrap(), bytes);
+    // A's part is still A's, untouched.
+    assert_eq!(fs::read(part_path(&out, &in_a)).unwrap(), bytes);
 }

@@ -8,7 +8,10 @@
 //!                      --anything else (not opened if not a regular
 //!                        file of the size, links never followed)--> refused
 //!   either way: a part no fetch holds is removed; nothing is asked
-//! part (held exclusively) --length--> range at that length
+//! part (held exclusively, named for the whole file: conversation, digest,
+//!   media type, size) --length--> range at that length
+//!   --complete--> the last range asked again all the same: a part never
+//!                 stands in for the gateway saying the file is held now
 //!   --> source.read --busy--> pause, the same range again (bounded)
 //!                   --answer is the range--> append, next range
 //!                   --anything else--> fail; the part stays for a resume
@@ -98,7 +101,9 @@ pub(crate) enum KeepRefusal {
 }
 
 /// The output and the part file it is assembled in. The part is named for
-/// the file it holds, so a part another file left is never resumed; it is
+/// the whole file it holds (conversation, digest, media type and size), so a
+/// part another file left, or the same bytes fetched for another
+/// conversation, is never resumed; it is
 /// held exclusively from `open_part` or the first `append` until `keep` or
 /// `discard`, so two fetches never write one part.
 pub(crate) trait FetchFiles {
@@ -139,7 +144,8 @@ pub(crate) struct FetchProgress {
     /// Bytes of the file kept when the fetch ended. 0 after an integrity
     /// failure: what the part held was not the file, so none of it counts.
     pub(crate) reached: u64,
-    /// Ranges answered and kept by this run.
+    /// Ranges answered by this run: each one kept, or, for a part that was
+    /// already complete, its last range asked again and not kept.
     pub(crate) ranges: u64,
     /// Busy answers asked again.
     pub(crate) busy_retries: u64,
@@ -223,7 +229,9 @@ pub(crate) fn kept_output(
 /// Fetch `file` into its part and keep it under the output's name only once
 /// the part, read back from disk, has the named size and digest. Resumes
 /// from the part an earlier run left when it is shorter than the file; one
-/// longer cannot be it and is started again. Every failure but `Integrity`
+/// longer cannot be it and is started again; one already complete still
+/// asks the gateway for its last range, so at least one range is always
+/// asked. Every failure but `Integrity`
 /// leaves the part for a later run to resume.
 pub(crate) fn fetch_held_file(
     source: &mut dyn HeldFileSource,
@@ -244,6 +252,20 @@ pub(crate) fn fetch_held_file(
     } else {
         progress.resumed_from = kept;
         progress.reached = kept;
+    }
+    if progress.reached == file.size() {
+        // A complete part is the bytes an earlier run was given, not this
+        // run's authority to have them: the gateway is asked for the last
+        // range again, and anything but that range keeps nothing.
+        let range = file.last_range();
+        let answer = match read_range(source, pause, file, range, &mut progress.busy_retries) {
+            Ok(answer) => answer,
+            Err(error) => return fail(FetchCause::Gateway(error), progress),
+        };
+        if !range.answered_by(answer.offset, &answer.bytes) {
+            return fail(FetchCause::WrongRange, progress);
+        }
+        progress.ranges += 1;
     }
     while let Some(range) = file.range_at(progress.reached) {
         let answer = match read_range(source, pause, file, range, &mut progress.busy_retries) {

@@ -115,6 +115,9 @@ export function Transcript({
             className="mt-auto gap-5 select-text"
           >
             {conversation.turns.length === 0 &&
+            // A file the agent published is something in the conversation,
+            // even with no turn shown: it is listed, not an empty welcome.
+            (conversation.remote?.artifacts ?? []).length === 0 &&
             conversation.phase === "idle" &&
             emptyState ? (
               <EmptyState

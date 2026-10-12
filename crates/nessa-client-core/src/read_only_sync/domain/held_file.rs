@@ -66,6 +66,15 @@ impl HeldFile {
             length: left.min(HELD_FILE_RANGE_BYTES),
         })
     }
+    /// The range the file ends in: where a complete part is asked about
+    /// again, so a part is never taken in place of the gateway's answer.
+    pub(crate) fn last_range(&self) -> HeldRange {
+        let offset = (self.size() - 1) / HELD_FILE_RANGE_BYTES * HELD_FILE_RANGE_BYTES;
+        HeldRange {
+            offset,
+            length: self.size() - offset,
+        }
+    }
 }
 
 /// One range of a held file: where it starts and exactly how many bytes the

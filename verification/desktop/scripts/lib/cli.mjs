@@ -133,6 +133,7 @@ export const devServerOnlyChecks = [
   "lease-details",
   "app-review",
   "gateway-states",
+  "published-files",
   // The sandbox proxy is provided by the dev server, not vite preview.
   "mcp-apps",
 ]

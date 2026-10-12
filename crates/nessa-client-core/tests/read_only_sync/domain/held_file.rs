@@ -55,3 +55,18 @@ fn a_held_file_has_one_byte_to_the_largest_a_read_names() {
     assert_eq!(sized(0), Err(SizeOutOfRange));
     assert_eq!(sized(MAX_HELD_FILE_BYTES + 1), Err(SizeOutOfRange));
 }
+
+#[test]
+fn the_last_range_is_the_one_the_file_ends_in() {
+    let file = self::file(2 * HELD_FILE_RANGE_BYTES + 5);
+    assert_eq!(
+        Some(file.last_range()),
+        file.range_at(2 * HELD_FILE_RANGE_BYTES)
+    );
+    let whole = self::file(2 * HELD_FILE_RANGE_BYTES);
+    assert_eq!(
+        Some(whole.last_range()),
+        whole.range_at(HELD_FILE_RANGE_BYTES)
+    );
+    assert_eq!(Some(self::file(1).last_range()), self::file(1).range_at(0));
+}
