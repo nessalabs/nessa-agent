@@ -81,7 +81,10 @@ impl ExecutionEvent {
                 )?;
                 Ok(())
             }
-            ExecutionUpdate::ReviewDeclined(_) | ExecutionUpdate::DeadlineAnswered { .. } => Ok(()),
+            ExecutionUpdate::ReviewDeclined(_) => Ok(()),
+            // A permission identity is bounded only where it is checked, and
+            // saved history checks this one, so it is checked here too.
+            ExecutionUpdate::DeadlineAnswered { id, .. } => validate_observation_id(id.as_str()),
             // An ask is bounded by its own construction — every text and both
             // collections — so what is left to check is the identity beside it.
             ExecutionUpdate::QuestionClosed { id } => validate_observation_id(id.as_str()),
