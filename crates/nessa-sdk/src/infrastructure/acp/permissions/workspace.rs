@@ -90,11 +90,43 @@ pub(crate) async fn bounded_review_class(
     workspace: PathBuf,
     paths: Arc<dyn WorkspacePaths>,
 ) -> PermissionToolClass {
+    review_class_on(
+        &RESOLVER_THREADS,
+        clock,
+        in_flight,
+        kind,
+        locations,
+        workspace,
+        paths,
+    )
+    .await
+}
+
+/// The most path reads that run at once in this process. A read stuck on a
+/// hung mount keeps its thread, and each worker holds at most one, so this is
+/// what bounds the threads stuck reads keep across every worker
+/// (`stuck_reads_across_workers_share_one_bound`).
+const MAX_RESOLVER_THREADS: usize = 16;
+static RESOLVER_THREADS: Semaphore = Semaphore::const_new(MAX_RESOLVER_THREADS);
+
+/// [`bounded_review_class`] with `threads` as the process's read bound.
+async fn review_class_on(
+    threads: &'static Semaphore,
+    clock: &dyn Clock,
+    in_flight: &Arc<Semaphore>,
+    kind: Option<ToolKind>,
+    locations: Option<Vec<FileLocation>>,
+    workspace: PathBuf,
+    paths: Arc<dyn WorkspacePaths>,
+) -> PermissionToolClass {
     let Ok(permit) = Arc::clone(in_flight).try_acquire_owned() else {
         return PermissionToolClass::Other;
     };
+    let Ok(thread) = threads.try_acquire() else {
+        return PermissionToolClass::Other;
+    };
     let work = move || {
-        let _permit = permit;
+        let _permits = (permit, thread);
         review_class_with(kind, &locations, &workspace, &mut |path| {
             paths.resolve(path)
         })
@@ -382,9 +414,74 @@ mod tests {
         );
     }
 
-    // The bound is measured on the worker's clock, not the runtime's: a read
-    // still stuck after the runtime's own 250 ms has not timed out until the
-    // injected clock passes the bound, and then gives up at once.
+    #[tokio::test]
+    async fn stuck_reads_across_workers_share_one_bound() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("workspace");
+        fs::create_dir(&workspace).unwrap();
+        let inside = at(&workspace, "notes.txt");
+        let threads: &'static Semaphore = Box::leak(Box::new(Semaphore::new(1)));
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_for_read = Arc::clone(&stop);
+        struct Release(Arc<AtomicBool>);
+        impl Drop for Release {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Relaxed);
+            }
+        }
+        let _release = Release(Arc::clone(&stop));
+        let stuck = {
+            let locations = Some(vec![location(&inside)]);
+            let workspace = workspace.clone();
+            tokio::spawn(async move {
+                super::review_class_on(
+                    threads,
+                    &RuntimeClock::new(),
+                    &Arc::new(Semaphore::new(1)),
+                    Some(ToolKind::Read),
+                    locations,
+                    workspace,
+                    Arc::new(move |_: &Path| {
+                        while !stop_for_read.load(Ordering::Relaxed) {
+                            std::thread::sleep(Duration::from_millis(20));
+                        }
+                        None
+                    }),
+                )
+                .await
+            })
+        };
+        timeout(Duration::from_secs(1), async {
+            while threads.available_permits() != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the stuck read never took its thread");
+        // Another worker, with its own permit, starts no read of its own.
+        let read = Arc::new(AtomicBool::new(false));
+        let read_for_resolver = Arc::clone(&read);
+        let other = super::review_class_on(
+            threads,
+            &RuntimeClock::new(),
+            &Arc::new(Semaphore::new(1)),
+            Some(ToolKind::Read),
+            Some(vec![location(&inside)]),
+            workspace,
+            Arc::new(move |_: &Path| {
+                read_for_resolver.store(true, Ordering::Relaxed);
+                Some(std::path::PathBuf::from("/"))
+            }),
+        )
+        .await;
+        assert_eq!(other, PermissionToolClass::Other);
+        assert!(
+            !read.load(Ordering::Relaxed),
+            "a second read thread started"
+        );
+        assert_eq!(stuck.await.unwrap(), PermissionToolClass::Other);
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_stuck_read_does_not_hold_runtime_shutdown() {
@@ -431,6 +528,10 @@ mod tests {
         );
     }
 
+    // The bound is measured on the worker's clock, not the runtime's: a read
+    // still stuck after the runtime's own 250 ms has not timed out until the
+    // injected clock passes the bound, and then gives up at once.
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_stuck_filesystem_gives_up_on_the_injected_clock() {
         use crate::infrastructure::clock::manual::ManualClock;
