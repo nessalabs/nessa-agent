@@ -1,7 +1,9 @@
 //! A published file's bytes, read off the host (issue #701): over an
 //! artifact channel, resumed where a channel that failed left off
 //! ([`SftpBytes`]); or, on a paired connection, which has nothing beside
-//! its lease frames (issue #706), over those frames ([`FrameBytes`]).
+//! its lease frames (issue #706), over those frames ([`FrameBytes`]). And
+//! a fetched file's bytes, written onto an artifact channel the same way
+//! (slice D3b); never over the frames.
 //!
 //! ```text
 //! SftpBytes:
@@ -12,6 +14,13 @@
 //!   the lease no longer routed here ──▶ LeaseEnded, at once
 //!   past ARTIFACT_READ_RESUMES, or the host misspoke ──▶ Unavailable
 //! dropped ──▶ the task is stopped, its channel ended
+//! write_part(path, size, source):
+//!   open a channel ──▶ sftp INIT ──▶ write_file(path, size, acknowledged)
+//!     each range read from the conversation's hold ──▶ WRITE
+//!   the channel failed ──▶ resume from what the host has and acknowledged,
+//!     on a new one, ARTIFACT_READ_RESUMES times; past that ──▶ ChannelUnavailable
+//!   the hold let go ──▶ NotHeld;  not readable here ──▶ SourceUnavailable
+//!   the lease no longer routed here ──▶ LeaseEnded, at once
 //! FrameBytes:
 //! next() ──▶ ask ranges of MAX_DATA_BYTES in file order, at most
 //!            MAX_ARTIFACT_READS_IN_FLIGHT unanswered (HostLink::read_artifact)
@@ -29,13 +38,18 @@
 use super::{
     connector::ArtifactChannels,
     link::{ArtifactReadAnswer, HostLink},
-    sftp::{ByteSink, SftpError, SftpSession, SinkWrite},
+    sftp::{ByteSink, ByteSource, SftpError, SftpSession, SinkWrite, SourceRead},
 };
 use crate::conversation::application::{
-    ArtifactBytes, ArtifactChunk, ArtifactReadFailure, ARTIFACT_READ_RESUMES,
+    ArtifactBytes, ArtifactChunk, ArtifactReadFailure, HeldSource, HeldSourceFailure,
+    ARTIFACT_READ_RESUMES,
 };
 use nessa_protocol::lease::{ArtifactReadRefusal, MAX_ARTIFACT_READS_IN_FLIGHT, MAX_DATA_BYTES};
-use std::{collections::VecDeque, io, sync::Arc};
+use std::{
+    collections::VecDeque,
+    io,
+    sync::{Arc, Mutex, PoisonError},
+};
 use tokio::{
     sync::{mpsc, oneshot, watch},
     task::JoinHandle,
@@ -187,6 +201,119 @@ impl ByteSink for Sender<'_> {
                 .send(Ok(chunk))
                 .await
                 .map_err(|_| io::Error::from(io::ErrorKind::BrokenPipe))
+        })
+    }
+}
+
+/// Why a fetched file's part was not written whole.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WriteFailure {
+    /// The conversation let go of the file.
+    NotHeld,
+    /// The file's bytes could not be read here.
+    SourceUnavailable,
+    /// The channel failed more often than it is resumed, the host misspoke,
+    /// or the part is not there to write.
+    ChannelUnavailable,
+    /// The lease is no longer routed here.
+    LeaseEnded,
+}
+
+/// Write the whole of `size` bytes from `source` to `path` over `channels`,
+/// resuming on a new channel when one fails, while the lease's `gone` is
+/// open.
+pub(crate) async fn write_part(
+    channels: &dyn ArtifactChannels,
+    path: &str,
+    size: u64,
+    source: Arc<dyn HeldSource>,
+    mut gone: watch::Receiver<()>,
+) -> Result<(), WriteFailure> {
+    let mut reached = 0;
+    let mut resumes = 0;
+    let lost = async move { while gone.changed().await.is_ok() {} };
+    tokio::pin!(lost);
+    loop {
+        let read = Arc::new(Mutex::new(None));
+        let mut from = Held {
+            source: source.as_ref(),
+            failure: read.clone(),
+        };
+        let attempt = write_attempt(channels, path, size, reached, &mut from);
+        let outcome = tokio::select! {
+            outcome = attempt => outcome,
+            () = &mut lost => return Err(WriteFailure::LeaseEnded),
+        };
+        match outcome {
+            Ok(()) => return Ok(()),
+            Err((SftpError::Source, _)) => {
+                let failure = *read.lock().unwrap_or_else(PoisonError::into_inner);
+                return Err(match failure {
+                    Some(HeldSourceFailure::NotHeld) => WriteFailure::NotHeld,
+                    _ => WriteFailure::SourceUnavailable,
+                });
+            }
+            Err((SftpError::Unavailable(kind), at)) if resumes < ARTIFACT_READ_RESUMES => {
+                tracing::warn!(
+                    ?kind,
+                    reached = at,
+                    "an artifact channel failed while writing; resuming"
+                );
+                resumes += 1;
+                reached = at;
+            }
+            // The host let its part go: only a lease's end or the fetch
+            // given up does that.
+            Err((SftpError::NoSuchFile, _)) => return Err(WriteFailure::LeaseEnded),
+            Err((error, _)) => {
+                tracing::warn!(%error, "a fetched file could not be written to its host");
+                return Err(WriteFailure::ChannelUnavailable);
+            }
+        }
+    }
+}
+
+/// One channel's write, from what is acknowledged: the error and how far
+/// the host acknowledged.
+async fn write_attempt(
+    channels: &dyn ArtifactChannels,
+    path: &str,
+    size: u64,
+    known: u64,
+    source: &mut dyn ByteSource,
+) -> Result<(), (SftpError, u64)> {
+    let channel = channels
+        .open()
+        .map_err(|error| (SftpError::Unavailable(error.kind()), known))?;
+    // Held until the write is done: dropping it ends the channel.
+    let _keep = channel.keep;
+    let mut session = SftpSession::start(channel.from_host, channel.to_host)
+        .await
+        .map_err(|error| (error, known))?;
+    session
+        .write_file(path, size, known, source)
+        .await
+        .map(|_| ())
+        .map_err(|failure| (failure.error, failure.reached))
+}
+
+/// The conversation's hold, as an sftp write's source, keeping why a read
+/// failed.
+struct Held<'a> {
+    source: &'a dyn HeldSource,
+    failure: Arc<Mutex<Option<HeldSourceFailure>>>,
+}
+
+impl ByteSource for Held<'_> {
+    fn read(&mut self, offset: u64, max: u32) -> SourceRead<'_> {
+        Box::pin(async move {
+            self.source
+                .read(offset, max as usize)
+                .await
+                .map_err(|failure| {
+                    *self.failure.lock().unwrap_or_else(PoisonError::into_inner) = Some(failure);
+                    io::Error::other("the held file could not be read")
+                })
         })
     }
 }

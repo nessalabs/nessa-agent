@@ -2,11 +2,13 @@
 //! domain rule, and a record this build cannot read is kept, not refused.
 
 use super::*;
+use crate::application::agent_execution::sessions::{EnvironmentPath, FetchOutcome};
 use crate::domain::agent_execution::leases::{
     AgentWork, CommandExit, CommandOutput, CommandRefusal, CommandTerms, CommandWork,
     EnvironmentRef, LeaseDeadline, LeaseGrants, LeasePhase, LeaseWork, SandboxProfile,
     SshDestination,
 };
+use crate::domain::common::value_objects::{MediaType, Sha256Digest};
 
 fn id(value: &str) -> LeaseId {
     LeaseId::new(value).unwrap()
@@ -482,4 +484,164 @@ fn l14_command_records_the_lease_rules_refuse_are_corrupt() {
         Some(&full),
         &command_issued("c9", "a")
     )));
+}
+
+fn fetch_asked(request: &str, lease: &str) -> LeaseRecord {
+    LeaseRecord::FetchAsked {
+        lease: id(lease),
+        request: request.into(),
+        file: PublishedFile::new(
+            Sha256Digest::parse(
+                "sha256:00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff",
+            )
+            .unwrap(),
+            MediaType::parse("image/png").unwrap(),
+            12,
+        )
+        .unwrap(),
+        destination: EnvironmentPath::new("assets/a.png").unwrap(),
+        actor: actor(request),
+    }
+}
+fn fetch_ended(request: &str, lease: &str) -> LeaseRecord {
+    LeaseRecord::FetchEnded {
+        lease: id(lease),
+        request: request.into(),
+        outcome: FetchOutcome::Placed {
+            path: EnvironmentPath::new("/srv/work/assets/a.png").unwrap(),
+        },
+    }
+}
+
+#[test]
+fn a_fetch_is_kept_while_under_way_and_changes_nothing_the_lease_holds() {
+    let issued_only = fold(&[issued("a", 1)]).unwrap();
+    let current = fold(&[
+        issued("a", 1),
+        fetch_asked("f1", "a"),
+        fetch_asked("f2", "a"),
+    ])
+    .unwrap();
+    assert_eq!(current.state(), issued_only.state());
+    assert_eq!(current.asked_fetches(), 2);
+    assert_eq!(
+        current.records(),
+        [
+            issued("a", 1),
+            fetch_asked("f1", "a"),
+            fetch_asked("f2", "a")
+        ]
+    );
+    // Its end settles it, and stays in the stream alone.
+    let current = CurrentLease::apply(Some(&current), &fetch_ended("f1", "a")).unwrap();
+    assert_eq!(current.state(), issued_only.state());
+    assert_eq!(current.records(), [issued("a", 1), fetch_asked("f2", "a")]);
+    assert_eq!(current.asked_fetches(), 1);
+    // A saved lease with a fetch under way resumes with it, its end owed.
+    let resumed = CurrentLease::resume(Some(LeaseRevision::FIRST), current.records()).unwrap();
+    assert_eq!(resumed, current);
+    // Once its lease is final, its end is late evidence, accepted once.
+    let ended_lease = fold(&[
+        issued("a", 1),
+        fetch_asked("f1", "a"),
+        ending("a", LeaseEndCause::Closed),
+        ended("a"),
+    ])
+    .unwrap();
+    let late = CurrentLease::apply(Some(&ended_lease), &fetch_ended("f1", "a")).unwrap();
+    assert_eq!(late.state(), ended_lease.state());
+    assert_eq!(
+        late.records(),
+        [
+            issued("a", 1),
+            ending("a", LeaseEndCause::Closed),
+            ended("a")
+        ]
+    );
+    assert!(is_corrupt(CurrentLease::apply(
+        Some(&late),
+        &fetch_ended("f1", "a")
+    )));
+    // The same request may be asked again once its first fetch ended.
+    let again = CurrentLease::apply(Some(&current), &fetch_asked("f1", "a")).unwrap();
+    assert_eq!(again.asked_fetches(), 2);
+}
+
+#[test]
+fn fetch_records_the_lease_rules_refuse_are_corrupt() {
+    let live = fold(&[issued("a", 1), fetch_asked("f1", "a")]).unwrap();
+    let ending_lease = fold(&[issued("a", 1), ending("a", LeaseEndCause::Closed)]).unwrap();
+    let refused_lease = fold(&[refused("a", 1)]).unwrap();
+    let someone_elses = match fetch_asked("f2", "a") {
+        LeaseRecord::FetchAsked {
+            lease,
+            request,
+            file,
+            destination,
+            ..
+        } => LeaseRecord::FetchAsked {
+            lease,
+            request,
+            file,
+            destination,
+            actor: actor("f9"),
+        },
+        other => other,
+    };
+    for (prior, record) in [
+        // Another lease's.
+        (&live, fetch_asked("f2", "other")),
+        (&live, fetch_ended("f1", "other")),
+        // Asked again while under way, or for a request not its asker's.
+        (&live, fetch_asked("f1", "a")),
+        (&live, someone_elses),
+        // An end nobody asked for.
+        (&live, fetch_ended("f2", "a")),
+        // Asked once the lease is no longer Live, or was never issued.
+        (&ending_lease, fetch_asked("f2", "a")),
+        (&ending_lease, fetch_ended("f2", "a")),
+        (&refused_lease, fetch_asked("f2", "a")),
+    ] {
+        assert!(
+            is_corrupt(CurrentLease::apply(Some(prior), &record)),
+            "{record:?}"
+        );
+    }
+    assert!(is_corrupt(CurrentLease::apply(
+        None,
+        &fetch_asked("f1", "a")
+    )));
+    // No more under way at once than a lease may have.
+    let mut full = live;
+    for n in 2..=CurrentLease::MAX_ASKED_FETCHES {
+        full = CurrentLease::apply(Some(&full), &fetch_asked(&format!("f{n}"), "a")).unwrap();
+    }
+    assert!(is_corrupt(CurrentLease::apply(
+        Some(&full),
+        &fetch_asked("f9", "a")
+    )));
+    // A fetch under way takes one of the records a lease keeps, as a
+    // command's issuance does: with every one taken, nothing more is kept
+    // until its end makes room.
+    let mut records = vec![issued("a", 1)];
+    for n in 1..=CurrentLease::MAX_ASKED_FETCHES {
+        records.push(fetch_asked(&format!("f{n}"), "a"));
+    }
+    records.extend([ending("a", LeaseEndCause::Closed), ended("a")]);
+    while records.len() < CurrentLease::MAX_RECORDS {
+        records.push(LeaseRecord::EventDropped {
+            lease: id("a"),
+            turn: ExecutionId::new("t").unwrap(),
+            cursor: records.len() as u64,
+        });
+    }
+    let at_cap = fold(&records).unwrap();
+    let dropped = LeaseRecord::EventDropped {
+        lease: id("a"),
+        turn: ExecutionId::new("t").unwrap(),
+        cursor: 99,
+    };
+    assert!(is_corrupt(CurrentLease::apply(Some(&at_cap), &dropped)));
+    let room = CurrentLease::apply(Some(&at_cap), &fetch_ended("f1", "a")).unwrap();
+    assert!(CurrentLease::apply(Some(&room), &dropped).is_ok());
 }

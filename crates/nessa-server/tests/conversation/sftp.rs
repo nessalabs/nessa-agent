@@ -1,7 +1,10 @@
-//! The SFTP client against a scripted SFTP v3 server in memory: whole files,
-//! resumes after a cut stream, short and reordered answers, and what it
-//! refuses.
-use super::{ByteSink, ReadFailure, SftpError, SftpSession, SinkWrite, MAX_PACKET, READ_CHUNK};
+//! The SFTP client against a scripted SFTP v3 server in memory: whole files
+//! read and written, resumes after a cut stream, short and reordered
+//! answers, and what it refuses.
+use super::{
+    ByteSink, ByteSource, ReadFailure, SftpError, SftpSession, SinkWrite, SourceRead, WriteFailure,
+    MAX_PACKET, READ_CHUNK,
+};
 use scripted::{ScriptedSftp, SftpScript};
 use std::{collections::HashMap, io, time::Duration};
 use tokio::io::{duplex, AsyncReadExt, AsyncWriteExt, DuplexStream, ReadHalf, WriteHalf};
@@ -12,7 +15,7 @@ pub(crate) mod scripted {
         collections::HashMap,
         sync::{
             atomic::{AtomicU64, Ordering},
-            Arc,
+            Arc, Mutex,
         },
     };
     use tokio::io::{duplex, AsyncReadExt, AsyncWriteExt, DuplexStream, ReadHalf, WriteHalf};
@@ -29,7 +32,16 @@ pub(crate) mod scripted {
         pub(crate) reorder: bool,
         /// Answer EOF to any READ at or past this offset.
         pub(crate) eof_at: Option<u64>,
+        /// End the stream once this many file bytes were written in all;
+        /// the WRITE that crosses it lands only up to it, unanswered.
+        pub(crate) cut_writes_after: Option<u64>,
+        /// Write to the real file at each written path too, as a host's
+        /// SFTP server would, beginning from what that file holds.
+        pub(crate) write_through: bool,
     }
+
+    /// The files written, by path: what a host's disk holds of them.
+    pub(crate) type Written = Arc<Mutex<HashMap<String, Vec<u8>>>>;
 
     /// A running server: the client's ends of its stream.
     pub(crate) struct ScriptedSftp {
@@ -41,11 +53,20 @@ pub(crate) mod scripted {
 
     impl ScriptedSftp {
         /// Serve `files` (by path) under `script`. A path not among them
-        /// answers NO_SUCH_FILE.
+        /// answers NO_SUCH_FILE to a read; one opened to write is made.
         pub(crate) fn serve(files: HashMap<String, Vec<u8>>, script: SftpScript) -> Self {
+            Self::over(files, Written::default(), script)
+        }
+        /// [`Self::serve`], writing into `written`, which an earlier server
+        /// may have written to: as a new session finds the host's disk.
+        pub(crate) fn over(
+            files: HashMap<String, Vec<u8>>,
+            written: Written,
+            script: SftpScript,
+        ) -> Self {
             let (client, server) = duplex(1024 * 1024);
             let sent = Arc::new(AtomicU64::new(0));
-            tokio::spawn(run(server, files, script, sent.clone()));
+            tokio::spawn(run(server, files, written, script, sent.clone()));
             let (reader, writer) = tokio::io::split(client);
             Self {
                 reader,
@@ -114,11 +135,15 @@ pub(crate) mod scripted {
     async fn run(
         stream: DuplexStream,
         files: HashMap<String, Vec<u8>>,
+        written: Written,
         script: SftpScript,
         sent: Arc<AtomicU64>,
     ) {
         let (mut reader, mut writer) = tokio::io::split(stream);
         let mut handles: HashMap<Vec<u8>, String> = HashMap::new();
+        // The handles opened to write.
+        let mut writing: HashMap<Vec<u8>, String> = HashMap::new();
+        let mut received = 0u64;
         let mut held: Vec<Reply> = Vec::new();
         loop {
             let Ok(len) = reader.read_u32().await else {
@@ -137,7 +162,28 @@ pub(crate) mod scripted {
                 3 => {
                     let id = fields.u32();
                     let path = String::from_utf8(fields.bytes()).unwrap();
-                    if files.contains_key(&path) {
+                    let flags = fields.u32();
+                    if flags & 2 != 0 {
+                        let mut written = written.lock().unwrap();
+                        if !written.contains_key(&path) {
+                            let on_disk = match script.write_through {
+                                true => std::fs::read(&path).ok(),
+                                false => None,
+                            };
+                            if let Some(on_disk) = on_disk {
+                                written.insert(path.clone(), on_disk);
+                            } else if flags & 8 != 0 {
+                                written.insert(path.clone(), Vec::new());
+                            }
+                        }
+                        if written.contains_key(&path) {
+                            let handle = format!("w{}", writing.len()).into_bytes();
+                            writing.insert(handle.clone(), path);
+                            packet(102, &[&id.to_be_bytes(), &string(&handle)])
+                        } else {
+                            status(id, 2)
+                        }
+                    } else if files.contains_key(&path) {
                         let handle = format!("h{}", handles.len()).into_bytes();
                         handles.insert(handle.clone(), path);
                         packet(102, &[&id.to_be_bytes(), &string(&handle)])
@@ -147,12 +193,59 @@ pub(crate) mod scripted {
                 }
                 4 => {
                     let id = fields.u32();
-                    handles.remove(&fields.bytes());
+                    let handle = fields.bytes();
+                    handles.remove(&handle);
+                    writing.remove(&handle);
+                    status(id, 0)
+                }
+                6 => {
+                    let id = fields.u32();
+                    let path = writing[&fields.bytes()].clone();
+                    let offset = fields.u64();
+                    let mut data = fields.bytes();
+                    let cut = script
+                        .cut_writes_after
+                        .is_some_and(|cut| received + data.len() as u64 > cut);
+                    if cut {
+                        let keep = script.cut_writes_after.unwrap() - received;
+                        data.truncate(keep as usize);
+                    }
+                    received += data.len() as u64;
+                    {
+                        let mut written = written.lock().unwrap();
+                        let file = written.get_mut(&path).unwrap();
+                        let end = offset as usize + data.len();
+                        if file.len() < end {
+                            file.resize(end, 0);
+                        }
+                        file[offset as usize..end].copy_from_slice(&data);
+                        if script.write_through {
+                            std::fs::write(&path, &file).unwrap();
+                        }
+                    }
+                    if cut {
+                        let _ = writer.shutdown().await;
+                        return;
+                    }
                     status(id, 0)
                 }
                 8 => {
                     let id = fields.u32();
-                    let file = &files[&handles[&fields.bytes()]];
+                    let handle = fields.bytes();
+                    if let Some(path) = writing.get(&handle) {
+                        let size = written.lock().unwrap()[path].len() as u64;
+                        held.push(packet(
+                            105,
+                            &[&id.to_be_bytes(), &1u32.to_be_bytes(), &size.to_be_bytes()],
+                        ));
+                        while let Some(reply) = held.pop() {
+                            if !send(&mut writer, reply, &script, &sent).await {
+                                return;
+                            }
+                        }
+                        continue;
+                    }
+                    let file = &files[&handles[&handle]];
                     let size = file.len() as u64;
                     packet(
                         105,
@@ -486,4 +579,179 @@ async fn a_stream_that_ends_at_start_is_unavailable() {
         SftpSession::start(reader, writer).await,
         Err(SftpError::Unavailable(_))
     ));
+}
+
+/// A file's bytes to write, from memory: every range it was asked for, and
+/// whether it fails or answers more than it was asked.
+struct Source {
+    content: Vec<u8>,
+    asked: Vec<(u64, u32)>,
+    failing: bool,
+    overreaching: bool,
+}
+
+impl Source {
+    fn of(content: &[u8]) -> Self {
+        Self {
+            content: content.to_vec(),
+            asked: Vec::new(),
+            failing: false,
+            overreaching: false,
+        }
+    }
+}
+
+impl ByteSource for Source {
+    fn read(&mut self, offset: u64, max: u32) -> SourceRead<'_> {
+        Box::pin(async move {
+            self.asked.push((offset, max));
+            if self.failing {
+                return Err(io::Error::other("not held"));
+            }
+            let start = offset as usize;
+            let mut end = (start + max as usize).min(self.content.len());
+            if self.overreaching {
+                end = self.content.len();
+            }
+            Ok(self.content[start..end].to_vec())
+        })
+    }
+}
+
+const PART: &str = "/inbox/l/0.part";
+
+async fn write(
+    content: &[u8],
+    written: super::tests::scripted::Written,
+    script: SftpScript,
+    known: u64,
+) -> (Result<u64, WriteFailure>, Source) {
+    // The host made the part: it is only ever opened here.
+    written.lock().unwrap().entry(PART.into()).or_default();
+    let server = ScriptedSftp::over(HashMap::new(), written, script);
+    let mut session = session(server).await;
+    let mut source = Source::of(content);
+    let result = session
+        .write_file(PART, content.len() as u64, known, &mut source)
+        .await;
+    (result, source)
+}
+
+#[tokio::test]
+async fn a_written_file_arrives_whole_in_its_place() {
+    let content = file(20 * READ_CHUNK as usize + 123);
+    let written = super::tests::scripted::Written::default();
+    let (result, source) = write(&content, written.clone(), SftpScript::default(), 0).await;
+    assert_eq!(result, Ok(content.len() as u64));
+    assert_eq!(written.lock().unwrap()[PART], content);
+    // Asked range by range, never past the end nor more than a chunk.
+    assert!(source.asked.iter().all(
+        |(offset, max)| *max <= READ_CHUNK && offset + u64::from(*max) <= content.len() as u64
+    ));
+}
+
+/// Cut mid-write, a new session resumes from what the host has and had
+/// acknowledged, whichever is less, and the part ends as the exact file.
+#[tokio::test]
+async fn a_cut_write_resumes_by_the_parts_length_and_reproduces_the_exact_bytes() {
+    let content = file(5 * READ_CHUNK as usize + 77);
+    let written = super::tests::scripted::Written::default();
+    let cut = 2 * u64::from(READ_CHUNK) + 1000;
+    let script = SftpScript {
+        cut_writes_after: Some(cut),
+        ..SftpScript::default()
+    };
+    let (result, _) = write(&content, written.clone(), script, 0).await;
+    let failure = result.expect_err("the cut stream fails the write");
+    assert!(matches!(failure.error, SftpError::Unavailable(_)));
+    // Every acknowledged byte is on the host; the cut WRITE was not answered.
+    assert!(failure.reached <= cut, "{}", failure.reached);
+    assert_eq!(written.lock().unwrap()[PART].len() as u64, cut);
+    let (resumed, source) = write(
+        &content,
+        written.clone(),
+        SftpScript::default(),
+        failure.reached,
+    )
+    .await;
+    assert_eq!(resumed, Ok(content.len() as u64));
+    assert_eq!(source.asked[0].0, failure.reached);
+    assert_eq!(written.lock().unwrap()[PART], content);
+}
+
+/// What is on the host decides too: a part shorter than what was
+/// acknowledged is written from its own end, never trusted past it.
+#[tokio::test]
+async fn a_resume_starts_from_the_shorter_of_acknowledged_and_on_the_host() {
+    let content = file(4 * READ_CHUNK as usize);
+    let written = super::tests::scripted::Written::default();
+    written
+        .lock()
+        .unwrap()
+        .insert(PART.into(), content[..READ_CHUNK as usize].to_vec());
+    let (result, source) = write(
+        &content,
+        written.clone(),
+        SftpScript::default(),
+        3 * u64::from(READ_CHUNK),
+    )
+    .await;
+    assert_eq!(result, Ok(content.len() as u64));
+    assert_eq!(source.asked[0].0, u64::from(READ_CHUNK));
+    assert_eq!(written.lock().unwrap()[PART], content);
+}
+
+#[tokio::test]
+async fn a_part_longer_than_the_file_is_size_changed_and_nothing_is_written() {
+    let content = file(100);
+    let written = super::tests::scripted::Written::default();
+    written.lock().unwrap().insert(PART.into(), file(101));
+    let (result, source) = write(&content, written.clone(), SftpScript::default(), 0).await;
+    assert_eq!(result.unwrap_err().error, SftpError::SizeChanged);
+    assert!(source.asked.is_empty());
+    assert_eq!(written.lock().unwrap()[PART], file(101));
+}
+
+/// A source that cannot answer, or answers more than it was asked, fails
+/// the write on this side: nothing of it is sent.
+#[tokio::test]
+async fn a_source_that_fails_or_overreaches_fails_the_write_on_this_side() {
+    let content = file(3 * READ_CHUNK as usize);
+    for (failing, overreaching) in [(true, false), (false, true)] {
+        let written = super::tests::scripted::Written::default();
+        written.lock().unwrap().insert(PART.into(), Vec::new());
+        let server = ScriptedSftp::over(HashMap::new(), written.clone(), SftpScript::default());
+        let mut session = session(server).await;
+        let mut source = Source::of(&content);
+        source.failing = failing;
+        source.overreaching = overreaching;
+        let result = session
+            .write_file(PART, content.len() as u64, 0, &mut source)
+            .await;
+        assert_eq!(
+            result,
+            Err(WriteFailure {
+                error: SftpError::Source,
+                reached: 0
+            })
+        );
+        assert!(written.lock().unwrap()[PART].is_empty());
+    }
+}
+
+/// A part is only ever opened, never made: one the host let go answers no
+/// such file, and nothing is written in its place.
+#[tokio::test]
+async fn a_part_the_host_let_go_is_no_such_file_and_never_made_again() {
+    let content = file(100);
+    let written = super::tests::scripted::Written::default();
+    let server = ScriptedSftp::over(HashMap::new(), written.clone(), SftpScript::default());
+    let mut session = session(server).await;
+    let mut source = Source::of(&content);
+    let result = session
+        .write_file(PART, content.len() as u64, 0, &mut source)
+        .await;
+    assert_eq!(result.unwrap_err().error, SftpError::NoSuchFile);
+    assert!(source.asked.is_empty());
+    assert!(written.lock().unwrap().is_empty());
 }
