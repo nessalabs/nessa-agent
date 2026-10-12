@@ -99,8 +99,21 @@ pub(crate) async fn bounded_review_class(
             paths.resolve(path)
         })
     };
+    // A detached thread, not `spawn_blocking`: dropping a runtime waits for
+    // its blocking tasks, so a read stuck on a hung mount would hold the
+    // gateway's shutdown after the wait gave up
+    // (`a_stuck_read_does_not_hold_runtime_shutdown`).
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let spawned = std::thread::Builder::new()
+        .name("nessa-review-class".into())
+        .spawn(move || {
+            let _ = sender.send(work());
+        });
+    if spawned.is_err() {
+        return PermissionToolClass::Other;
+    }
     let deadline = clock.now() + PATH_RESOLUTION_BOUND;
-    match within(clock, deadline, tokio::task::spawn_blocking(work)).await {
+    match within(clock, deadline, receiver).await {
         Some(Ok(class)) => class,
         _ => PermissionToolClass::Other,
     }
@@ -373,6 +386,51 @@ mod tests {
     // still stuck after the runtime's own 250 ms has not timed out until the
     // injected clock passes the bound, and then gives up at once.
     #[cfg(unix)]
+    #[test]
+    fn a_stuck_read_does_not_hold_runtime_shutdown() {
+        use crate::infrastructure::clock::manual::ManualClock;
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("workspace");
+        fs::create_dir(&workspace).unwrap();
+        let inside = at(&workspace, "notes.txt");
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_for_read = Arc::clone(&stop);
+        let (dropped_sender, dropped) = std::sync::mpsc::channel();
+        let shutdown = std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let class = runtime.block_on(async {
+                let clock = ManualClock::default();
+                let budget = Arc::new(Semaphore::new(1));
+                let classification = super::bounded_review_class(
+                    &clock,
+                    &budget,
+                    Some(ToolKind::Read),
+                    Some(vec![location(&inside)]),
+                    workspace,
+                    Arc::new(move |_: &Path| {
+                        while !stop_for_read.load(Ordering::Relaxed) {
+                            std::thread::sleep(Duration::from_millis(20));
+                        }
+                        None
+                    }),
+                );
+                tokio::join!(classification, clock.run_out(|_| true)).0
+            });
+            drop(runtime);
+            let _ = dropped_sender.send(class);
+        });
+        let class = dropped.recv_timeout(Duration::from_secs(5));
+        stop.store(true, Ordering::Relaxed);
+        shutdown.join().unwrap();
+        assert_eq!(
+            class.expect("dropping the runtime waited for the stuck read"),
+            PermissionToolClass::Other
+        );
+    }
+
     #[tokio::test]
     async fn a_stuck_filesystem_gives_up_on_the_injected_clock() {
         use crate::infrastructure::clock::manual::ManualClock;

@@ -2,6 +2,7 @@
 use super::{corrupt, validate_observation_context};
 use crate::application::agent_execution::{
     executions::{limits::validate_observation_id, ExecutionEvent, ExecutionUpdate},
+    permissions::CancellationOrigin,
     sessions::{app_sources, InvocationRecord, ProviderContext, StorageError},
 };
 use crate::domain::agent_execution::{
@@ -88,11 +89,24 @@ impl Observations {
                     tool_id,
                     options,
                     input,
+                    deadline,
                     ..
                 } = record.events[previous].update()
                 else {
                     unreachable!("review correlation index")
                 };
+                // A cancellation made by a deadline names the deadline the
+                // review published, not another.
+                if let CancellationOrigin::Deadline(cancelled_by) = cancellation.origin() {
+                    if !deadline
+                        .as_ref()
+                        .is_some_and(|published| published.decides_as(cancelled_by))
+                    {
+                        return Err(corrupt(
+                            "deadline cancellation is not the review's published deadline",
+                        ));
+                    }
+                }
                 let mut pending = PermissionRequest::new(
                     id.clone(),
                     event.execution_id().clone(),

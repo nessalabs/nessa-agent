@@ -998,6 +998,120 @@ async fn custom_storage_cannot_cancel_a_review_its_deadline_answered() {
 }
 
 #[tokio::test]
+async fn custom_storage_cannot_cancel_a_review_by_a_deadline_it_did_not_publish() {
+    let deadline = |seconds| {
+        PermissionReviewDeadline::new(
+            PermissionToolClass::Other,
+            Duration::from_secs(seconds),
+            PermissionEffect::Deny,
+            "denied because nobody answered",
+        )
+        .unwrap()
+    };
+    // The published deadline, the one the cancellation names, and whether
+    // that history is corrupt.
+    let cases = [
+        (Some(deadline(30)), deadline(30), false),
+        (Some(deadline(30)), deadline(31), true),
+        (None, deadline(30), true),
+    ];
+    for (published, cancelled_by, corrupt) in cases {
+        let (agent, _, storage) = probe(false).await;
+        agent.invoke(input("saved-review"), actor()).await.unwrap();
+        drop(agent);
+        {
+            let mut state = storage.0.lock().unwrap();
+            let saved = state.snapshot.as_mut().unwrap();
+            let decision =
+                PermissionDecision::new(PermissionEffect::Allow, PermissionScope::request());
+            let options = PermissionOptions::new(
+                vec![PermissionOption::new(
+                    PermissionOptionId::new("allow").unwrap(),
+                    "Allow",
+                    decision.clone(),
+                )
+                .unwrap()],
+                &PermissionOfferPolicy::new(vec![decision]).unwrap(),
+            )
+            .unwrap();
+            let id = PermissionId::new("7").unwrap();
+            let execution = saved.invocations[0].request.execution_id.clone();
+            let tool = ToolCallId::new("tool").unwrap();
+            let input = ToolReviewInput {
+                name: "Read".into(),
+                arguments_json: "{}".into(),
+            };
+            let request = PermissionRequest::new(
+                id.clone(),
+                execution.clone(),
+                tool.clone(),
+                options.clone(),
+            );
+            let mut aggregate =
+                ExecutionSession::new(saved.provider_context.recorded().unwrap().clone());
+            aggregate.begin_execution(execution.clone()).unwrap();
+            aggregate
+                .observe_tool(
+                    &execution,
+                    ToolCallUpdate::new(tool.clone(), None, None, None, None, None),
+                )
+                .unwrap();
+            aggregate.request_permission(request).unwrap();
+            let request = aggregate
+                .cancel_permission(
+                    &execution,
+                    &id,
+                    PermissionCancellationReason::deadline_exceeded(),
+                )
+                .unwrap()
+                .unwrap();
+            let cancellation = PermissionCancellation::from_record(
+                saved.provider_context.recorded().unwrap().clone(),
+                request,
+                input.clone(),
+                CancellationOrigin::Deadline(cancelled_by),
+            )
+            .unwrap();
+            let mut events = vec![ExecutionUpdate::PermissionRequested {
+                id: id.clone(),
+                tool_id: tool,
+                observation: ToolObservation::default(),
+                input,
+                options,
+                deadline: published,
+            }];
+            events.push(ExecutionUpdate::PermissionCancelled(cancellation));
+            for (at, update) in events.into_iter().enumerate() {
+                saved.invocations[0]
+                    .events
+                    .insert(at, ExecutionEvent::new(execution.clone(), update));
+            }
+        }
+        let (_, backend, _) = probe(false).await;
+        let (_, receiver) = mpsc::unbounded_channel();
+        let restored = attached_agent(
+            Arc::new(ProbeFactory {
+                backend,
+                receiver: Mutex::new(Some(receiver)),
+            }),
+            storage.manager().await,
+        )
+        .await;
+        if corrupt {
+            assert!(
+                matches!(
+                    &restored,
+                    Err(AgentError::Storage(StorageError::Corrupt(_)))
+                ),
+                "a cancellation by another deadline restored"
+            );
+        } else {
+            assert!(restored.is_ok(), "{:?}", restored.err());
+        }
+    }
+}
+
+#[tokio::test]
 async fn custom_storage_cannot_give_a_review_and_a_decline_one_identity() {
     // The decline's identity, whether it comes before the review, and
     // whether the review shares it.
