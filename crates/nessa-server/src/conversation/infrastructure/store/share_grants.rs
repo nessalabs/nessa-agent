@@ -2,7 +2,8 @@
 //! the conversations and the catalogue revisions a grant change moves.
 //!
 //! [`granted`] is the one statement of "this receiver holds a grant on this
-//! conversation", of any role. `is_granted` asks it for one conversation, and
+//! conversation", of any role. `held_role` reads the role from the same row
+//! for one conversation, and
 //! the catalogue page and resolve ask it for a paired device's rows
 //! (`store.rs`), so a device's list and its reads cannot disagree about what
 //! it may see.
@@ -23,13 +24,23 @@ use nessa_local_database::rusqlite::{params, OptionalExtension, Transaction, Tra
 use nessa_protocol::conversation::domain::ConversationId;
 use serde_json::{json, Map, Value};
 
+/// SQL naming the one grant row the receiver bound to parameter `receiver`
+/// holds on the conversation whose id is `conversation`, as `g`. Both are
+/// names this adapter writes, never a caller's text. [`granted`] asks whether
+/// it exists and `held_role` reads its role, so the two cannot disagree.
+fn grant_row(conversation: &str, receiver: &str) -> String {
+    format!(
+        "share_grants AS g
+         WHERE g.conversation_id = {conversation} AND g.receiver_id = {receiver}"
+    )
+}
+
 /// SQL that is true when the receiver bound to parameter `receiver` holds a
-/// grant, of any role, on the conversation whose id is `conversation`. Both
-/// are names this adapter writes, never a caller's text.
+/// grant, of any role, on the conversation whose id is `conversation`.
 pub(super) fn granted(conversation: &str, receiver: &str) -> String {
     format!(
-        "EXISTS (SELECT 1 FROM share_grants AS g
-                 WHERE g.conversation_id = {conversation} AND g.receiver_id = {receiver})"
+        "EXISTS (SELECT 1 FROM {})",
+        grant_row(conversation, receiver)
     )
 }
 
@@ -139,25 +150,27 @@ fn count(transaction: &Transaction<'_>, sql: &str, id: &str) -> Result<i64, Conv
 }
 
 impl ShareGrants for LocalConversationStore {
-    fn is_granted<'a>(
+    fn held_role<'a>(
         &'a self,
         id: &'a ConversationId,
         receiver_id: &'a str,
-    ) -> ConversationFuture<'a, bool> {
+    ) -> ConversationFuture<'a, Option<ShareRole>> {
         let (id, receiver_id) = (id.to_string(), receiver_id.to_owned());
         self.run(move |connection| {
-            let found = connection
+            let role = connection
                 .query_row(
                     &format!(
-                        "SELECT {} FROM conversations AS c WHERE c.id = ?1",
-                        granted("c.id", "?2")
+                        "SELECT (SELECT g.role FROM {}) FROM conversations AS c WHERE c.id = ?1",
+                        grant_row("c.id", "?2")
                     ),
                     params![id, receiver_id],
-                    |row| row.get::<_, bool>(0),
+                    |row| row.get::<_, Option<String>>(0),
                 )
                 .optional()
-                .map_err(failed)?;
-            Ok(found.unwrap_or(false))
+                .map_err(failed)?
+                .flatten();
+            role.map(|name| role_named(&name).ok_or_else(|| unreadable("share_grants", &id)))
+                .transpose()
         })
     }
 
