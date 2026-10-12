@@ -86,8 +86,10 @@ impl CodexAcpProvider {
     /// beforehand. Configuring a binding with tools disabled is refused rather
     /// than accepted as a text-only Codex that does not exist.
     ///
-    /// Every launch also requests Codex's user-configured hooks and its legacy
-    /// notify command off (`features.hooks` false, `notify` empty). That request
+    /// By default every launch also requests Codex's user-configured hooks and
+    /// its legacy notify command off (`features.hooks` false, `notify` empty).
+    /// A launch whose [`Self::with_native_hooks`] switch is on omits both keys
+    /// and so does not make that request. The request
     /// does not outrank legacy managed configuration, and ACP cannot show the
     /// effective setting, so a negotiated session reports native hook suppression
     /// as unsupported. The open still completes, and so does restoration.
