@@ -85,7 +85,10 @@ async function mount(text = "") {
               canChoosePaths: true,
               digest: async () => `sha256:${"ab".repeat(32)}`,
               followConversationChoices: (show) => {
-                show({ catalog: { agents: [], environments: [] }, chosenAgent: undefined })
+                show({
+                  catalog: { agents: [], environments: [] },
+                  chosenAgent: undefined,
+                })
                 return () => undefined
               },
             }),
