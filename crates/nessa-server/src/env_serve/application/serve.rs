@@ -416,7 +416,6 @@ pub(crate) async fn serve<R, W>(
         leases: HashMap::new(),
         granted: HashSet::new(),
         ends: HashMap::new(),
-        deadlines: HashMap::new(),
         commands: HashMap::new(),
         runner: commands,
         serving,
@@ -579,6 +578,9 @@ struct Held {
     /// Its publish point and the artifacts in flight under it; `None` when
     /// the point could not be opened.
     artifacts: Option<LeaseArtifacts>,
+    /// When it ends by itself, and how long it was granted for; `None` when
+    /// it lasts until ended.
+    deadline: Option<(Moment, u64)>,
 }
 
 /// One command lease this connection holds.
@@ -609,9 +611,6 @@ struct Served {
     /// once recorded. What answers an account or end of it meanwhile, and
     /// what serving waits for before it returns.
     ends: HashMap<String, watch::Receiver<Option<Cleanup>>>,
-    /// Each held harness's lease granted for at most a while: when it ends
-    /// by itself, and how long it was granted for.
-    deadlines: HashMap<String, (Moment, u64)>,
     /// The command leases granted on this connection and not yet ended by
     /// the gateway, by id.
     commands: HashMap<String, HeldCommand>,
@@ -724,10 +723,7 @@ impl Served {
                 self.end_command(lease).await;
             }
             ToEnvironment::End { lease } => match self.leases.remove(&lease) {
-                Some(held) => {
-                    self.deadlines.remove(&lease);
-                    self.end(lease, held, EndCause::Asked, true);
-                }
+                Some(held) => self.end(lease, held, EndCause::Asked, true),
                 // Not held on this connection: what its end under way, or
                 // the audit, says of it.
                 None => {
@@ -874,12 +870,10 @@ impl Served {
                         stopped: HashMap::new(),
                         stops: Vec::new(),
                         artifacts,
+                        deadline: lease_ms
+                            .map(|ms| (self.timer.now() + Duration::from_millis(ms), ms)),
                     },
                 );
-                if let Some(ms) = lease_ms {
-                    let deadline = self.timer.now() + Duration::from_millis(ms);
-                    self.deadlines.insert(lease.clone(), (deadline, ms));
-                }
                 let terms = GrantedTerms {
                     sandbox,
                     timeout_ms: None,
@@ -1132,7 +1126,10 @@ impl Served {
 
     /// The earliest moment a held lease ends by itself, if one does.
     fn next_deadline(&self) -> Option<Moment> {
-        self.deadlines.values().map(|(deadline, _)| *deadline).min()
+        self.leases
+            .values()
+            .filter_map(|held| held.deadline.map(|(deadline, _)| deadline))
+            .min()
     }
 
     /// End every held lease that has lasted as long as it was granted, if
@@ -1140,14 +1137,15 @@ impl Served {
     async fn expire_passed(&mut self) {
         let now = self.timer.now();
         let mut due: Vec<_> = self
-            .deadlines
+            .leases
             .iter()
-            .filter(|(_, (deadline, _))| *deadline <= now)
-            .map(|(lease, (deadline, ms))| (*deadline, lease.clone(), *ms))
+            .filter_map(|(lease, held)| {
+                let (deadline, ms) = held.deadline?;
+                (deadline <= now).then(|| (deadline, lease.clone(), ms))
+            })
             .collect();
         due.sort();
         for (_, lease, lease_ms) in due {
-            self.deadlines.remove(&lease);
             if let Some(held) = self.leases.remove(&lease) {
                 self.expire(lease, held, lease_ms).await;
             }
@@ -1187,9 +1185,12 @@ impl Served {
     /// uncertain.
     fn end(&mut self, lease: String, mut held: Held, cause: EndCause, recorded: bool) {
         // Nothing more is published under it, and nothing it staged is read
-        // again: the gateway ended it, is gone, or it expired.
+        // again: the gateway ended it, is gone, or it expired. Only the
+        // gateway's own end says what it made of a file still in flight
+        // (it took none); once lost or expired, the gateway may have kept
+        // it, so it is recorded unanswered rather than refused.
         if let Some(artifacts) = held.artifacts.take() {
-            artifacts.end(cause == EndCause::Lost);
+            artifacts.end(cause != EndCause::Asked);
         }
         let (done, ended) = watch::channel(None);
         // Ends already recorded are the audit's to answer from.
@@ -1474,8 +1475,6 @@ impl Served {
     /// every end under way.
     async fn lose_all(&mut self) {
         let leases: Vec<_> = self.leases.drain().collect();
-        // Nothing ends by itself any more: every lease is lost.
-        self.deadlines.clear();
         for (lease, held) in leases {
             tracing::warn!(lease, "the gateway's connection ended; its lease is lost");
             self.end(lease, held, EndCause::Lost, true);

@@ -650,11 +650,11 @@ impl LeaseHold for SshHold {
             // The host saying it is ending the lease, or the route's end; a
             // route already gone answers at once. An `Ending` read before
             // the route went is still what ended it.
-            let said = ending.wait_for(Option::is_some).await.is_ok() || ending.borrow().is_some();
-            if said {
-                LeaseEndCause::Expired
-            } else {
-                LeaseEndCause::Lost
+            let _ = ending.wait_for(Option::is_some).await;
+            let said = *ending.borrow();
+            match said {
+                Some(EndingCause::Expired) => LeaseEndCause::Expired,
+                None => LeaseEndCause::Lost,
             }
         }))
     }

@@ -2679,6 +2679,15 @@ const MAX_LEASE: Duration = Duration::from_secs(30);
 /// Served as SSH granted everything, its leases lasting at most
 /// [`MAX_LEASE`], on `timer`, recording in `ledger`.
 fn expiring(timer: Arc<ManualTimer>, ledger: Arc<MemoryLedger>) -> Gateway {
+    expiring_over(timer, ledger, Arc::new(NoOutbox))
+}
+
+/// As [`expiring`], publishing through `outbox`.
+fn expiring_over(
+    timer: Arc<ManualTimer>,
+    ledger: Arc<MemoryLedger>,
+    outbox: Arc<dyn ArtifactOutbox>,
+) -> Gateway {
     let grants = MemoryGrants::none();
     grants.set(
         Peer::Ssh,
@@ -2687,7 +2696,7 @@ fn expiring(timer: Arc<ManualTimer>, ledger: Arc<MemoryLedger>) -> Gateway {
                 .with_max_lease(MaxLease::new(MAX_LEASE.as_millis() as u64).unwrap()),
         ),
     );
-    Gateway::for_peer(Peer::Ssh, grants, ledger, Arc::new(NoOutbox), true, timer)
+    Gateway::for_peer(Peer::Ssh, grants, ledger, outbox, true, timer)
 }
 
 impl Gateway {
@@ -3106,4 +3115,51 @@ async fn a_gateway_sending_without_pause_cannot_put_off_an_expiry() {
     assert!(!entries
         .iter()
         .any(|entry| matches!(entry, LedgerEntry::Started { channel: 2, .. })));
+}
+
+/// A file still in flight when its lease expires may already be kept by the
+/// gateway: it is recorded unanswered, never refused as the lease ending,
+/// which only the gateway's own end says.
+#[tokio::test]
+async fn a_file_in_flight_when_its_lease_expires_is_left_unanswered() {
+    let timer = Arc::new(ManualTimer::default());
+    let outbox = Arc::new(RecordingOutbox::default());
+    let mut gateway = expiring_over(
+        timer.clone(),
+        Arc::new(MemoryLedger::default()),
+        outbox.clone(),
+    );
+    gateway.started_expiring(LEASE).await;
+    let answered = publish(&outbox, LEASE).await;
+    assert!(matches!(
+        gateway.said().await,
+        FromEnvironment::Published { artifact: 0, .. }
+    ));
+    timer.advance(MAX_LEASE);
+    assert!(matches!(
+        gateway.said().await,
+        FromEnvironment::Ending { .. }
+    ));
+    assert_eq!(
+        answer_of(answered).await,
+        crate::env_serve::application::PublishAnswer::Unanswered
+    );
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while ended_entries(&gateway.ledger, LEASE) == 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the expired lease's end is recorded");
+    let entries = gateway.ledger.entries();
+    assert!(entries.contains(&LedgerEntry::Unanswered {
+        lease: LEASE.into(),
+        artifact: 0,
+    }));
+    assert!(
+        !entries
+            .iter()
+            .any(|entry| matches!(entry, LedgerEntry::Collected { .. })),
+        "{entries:?}"
+    );
 }

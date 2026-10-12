@@ -21,7 +21,7 @@ use crate::conversation::infrastructure::LocalReceiverAuthority;
 use crate::device_pairing::infrastructure::PairingOwnerCommands;
 use crate::env::{LEASE_PROTOCOL, VERSION};
 use crate::env_serve::application::{
-    serve, CommandRan, CommandRunner, CommandStop, Runners, ServeTimings, Serving,
+    serve, CommandRan, CommandRunner, CommandStop, ManualTimer, Runners, ServeTimings, Serving,
 };
 use crate::env_serve::domain::{Agents, CommandGrant, MaxLease, Peer, PeerGrant};
 use crate::env_serve::infrastructure::{
@@ -294,6 +294,8 @@ struct Host {
     grants: Arc<FileGrants>,
     /// Where `ledger` is written.
     ledger_path: std::path::PathBuf,
+    /// What its serving waits on.
+    timer: Arc<dyn crate::env_serve::application::Timer>,
 }
 
 impl Host {
@@ -320,6 +322,7 @@ impl Host {
         let workspace = root.canonicalize().unwrap();
         Self {
             ledger_path: workspace.join("leases.jsonl"),
+            timer: Arc::new(TokioTimer::new()),
             peer: Peer::Gateway { pin },
             grants: Arc::new(FileGrants::new(&workspace)),
             ledger: Arc::new(FileLedger::open(workspace.join("leases.jsonl")).unwrap()),
@@ -369,7 +372,7 @@ impl Host {
             self.ledger.clone(),
             self.outbox.clone(),
             ServeTimings::default(),
-            Arc::new(TokioTimer::new()),
+            self.timer.clone(),
         )
         .await;
     }
@@ -814,17 +817,22 @@ async fn a_paired_environment_expires_a_lease_and_both_sides_record_it() {
     let stream = dial(a.native, e.identity.clone(), e.pin, clock())
         .await
         .unwrap();
-    // E runs `claude` as `cat`, which runs until it is stopped.
+    // E runs `claude` as `cat`, which runs until it is stopped. Its serving
+    // waits on a timer only this test moves, so the lease's deadline comes
+    // when the test says, never before its harness has started.
     let cat = LaunchSpec {
         executable: "/bin/cat".into(),
         args: Vec::new(),
         environment: Default::default(),
     };
-    let host = Arc::new(Host::running(
+    let timer = Arc::new(ManualTimer::default());
+    let mut host = Host::running(
         &directory.path().join("e"),
         e.pin,
         HashMap::from([(nessa_protocol::agents::AgentId::Claude, cat)]),
-    ));
+    );
+    host.timer = timer.clone();
+    let host = Arc::new(host);
     let max_lease = MaxLease::new(1_500).unwrap();
     host.grants
         .change(&host.peer, |_| {
@@ -868,10 +876,26 @@ async fn a_paired_environment_expires_a_lease_and_both_sides_record_it() {
     assert_eq!(opened.granted.lease_ms, Some(1_500));
     let harness_host = given.lock().unwrap().clone().unwrap();
     let mut harness = harness_host.start(HarnessLaunch::default()).unwrap();
+    // Its start is recorded before the deadline is reached.
+    let recorded = |kind: &'static str| {
+        let ledger = std::fs::read_to_string(&host.ledger_path).unwrap();
+        ledger.lines().any(|line| {
+            let entry: serde_json::Value = serde_json::from_str(line).unwrap();
+            entry["kind"] == kind && entry["lease"] == lease.as_str()
+        })
+    };
+    tokio::time::timeout(WAIT, async {
+        while !recorded("started") {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the harness starts");
     let ends = opened
         .hold
         .ends()
         .expect("a paired environment's lease can end there");
+    timer.advance(Duration::from_millis(1_500));
     assert_eq!(
         tokio::time::timeout(WAIT, ends).await.expect("E ends it"),
         LeaseEndCause::Expired
@@ -889,7 +913,10 @@ async fn a_paired_environment_expires_a_lease_and_both_sides_record_it() {
     );
     // The harness was stopped there: its output ends.
     let mut rest = Vec::new();
-    let _ = tokio::time::timeout(WAIT, harness.output.read_to_end(&mut rest)).await;
+    tokio::time::timeout(WAIT, harness.output.read_to_end(&mut rest))
+        .await
+        .expect("the harness's output ends")
+        .expect("and reads to its end");
     let entries: Vec<serde_json::Value> = std::fs::read_to_string(&host.ledger_path)
         .unwrap()
         .lines()

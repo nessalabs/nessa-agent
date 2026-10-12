@@ -32,5 +32,7 @@ pub(crate) use serve::{
 };
 #[cfg(test)]
 pub(crate) use serve::{Asked, EndCause};
+#[cfg(test)]
+pub(crate) use timer::manual::ManualTimer;
 pub(crate) use timer::{Moment, Sleep, Timer};
 pub(crate) use wire::FrameStream;
