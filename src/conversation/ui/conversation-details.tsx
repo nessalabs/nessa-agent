@@ -25,9 +25,10 @@ import type { AgentFeatures, Conversation, ConversationLease } from "../model"
 
 type FeatureSupport = Exclude<AgentFeatures[keyof AgentFeatures], "off" | "on">
 
-const NEXT_START = "Applies the next time each conversation's agent starts."
+const TRUST =
+  "This also applies the repo's .claude settings, including its allow rules and startup hooks, so turn it on only for projects you trust."
 
-/** What this process started with, and, when the switch has since changed, that the new value waits for the next start. */
+/** What this process started with, and, when the switch has since changed, the value the next start will use. */
 function nativeHooksCopy(
   started: "off" | "on",
   agent: string | undefined,
@@ -36,10 +37,19 @@ function nativeHooksCopy(
   const start =
     started === "on"
       ? agent === "claude"
-        ? "For this run, hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts. This also applies the repo's .claude settings, including its allow rules and startup hooks, so turn it on only for projects you trust."
+        ? `For this run, hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts. ${TRUST}`
         : "For this run, hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts."
       : "For this run, Nessa asks this agent to leave its own hooks off."
-  return current !== undefined && current !== started ? `${start} ${NEXT_START}` : start
+  if (current === undefined || current === started) return start
+  // Name the value that applies next, so the sentence cannot be read as the
+  // run's own value carrying over.
+  const next =
+    current === "on"
+      ? agent === "claude"
+        ? `The next time this agent starts, its own hooks will run. ${TRUST}`
+        : "The next time this agent starts, its own hooks will run."
+      : "The next time this agent starts, Nessa asks it to leave its own hooks off."
+  return `${start} ${next}`
 }
 
 /** One capability in a word or two: whether it works here, not how. */

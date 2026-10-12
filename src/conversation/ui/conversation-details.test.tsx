@@ -127,9 +127,7 @@ it("says a hook can change a tool call when native hooks are on", () => {
     "For this run, hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts.",
   )
   expect(group("Approvals")).toContain("only for projects you trust")
-  expect(group("Approvals")).not.toContain(
-    "Applies the next time each conversation's agent starts.",
-  )
+  expect(group("Approvals")).not.toContain("The next time this agent starts")
 })
 
 it("says the current switch applies at the next start when this run differs", async () => {
@@ -159,7 +157,36 @@ it("says the current switch applies at the next start when this run differs", as
     )
   })
   expect(group("Approvals")).toContain(
-    "Applies the next time each conversation's agent starts.",
+    "The next time this agent starts, Nessa asks it to leave its own hooks off.",
+  )
+  expect(group("Approvals")).not.toContain("its own hooks will run")
+})
+
+it("names hooks on, and warns about the repo's settings, when Claude's next start turns them on", async () => {
+  const item = attached()
+  if (!item.remote) throw new Error("missing remote")
+  item.remote.runtime = {
+    model: "claude-sonnet-5",
+    provider: "claude-acp",
+    workspace: "/work/nessa",
+    agent: "claude",
+    modelName: "Sonnet 5",
+    contextWindowTokens: 200_000,
+    reasoning: true,
+  }
+  await act(async () => {
+    root.render(
+      <ConversationDetails
+        conversation={item}
+        rename={false}
+        onClose={() => {}}
+        onRename={() => {}}
+        readNativeHooks={async () => "on"}
+      />,
+    )
+  })
+  expect(group("Approvals")).toContain(
+    "For this run, Nessa asks this agent to leave its own hooks off. The next time this agent starts, its own hooks will run.",
   )
   expect(group("Approvals")).toContain("only for projects you trust")
 })
@@ -179,7 +206,7 @@ it("reads the switch again when the window is focused", async () => {
     )
   })
   expect(group("Approvals")).toContain(
-    "Applies the next time each conversation's agent starts.",
+    "The next time this agent starts, its own hooks will run.",
   )
   choice = "off"
   await act(async () => {
@@ -188,9 +215,7 @@ it("reads the switch again when the window is focused", async () => {
   expect(group("Approvals")).toContain(
     "For this run, Nessa asks this agent to leave its own hooks off.",
   )
-  expect(group("Approvals")).not.toContain(
-    "Applies the next time each conversation's agent starts.",
-  )
+  expect(group("Approvals")).not.toContain("The next time this agent starts")
 })
 
 it("keeps the newest read when an older one settles last", async () => {
@@ -218,9 +243,7 @@ it("keeps the newest read when an older one settles last", async () => {
   expect(group("Approvals")).toContain(
     "For this run, Nessa asks this agent to leave its own hooks off.",
   )
-  expect(group("Approvals")).not.toContain(
-    "Applies the next time each conversation's agent starts.",
-  )
+  expect(group("Approvals")).not.toContain("The next time this agent starts")
 })
 
 it("keeps this run's sentence when the switch still matches", async () => {
@@ -239,9 +262,7 @@ it("keeps this run's sentence when the switch still matches", async () => {
   expect(group("Approvals")).toContain(
     "For this run, Nessa asks this agent to leave its own hooks off.",
   )
-  expect(group("Approvals")).not.toContain(
-    "Applies the next time each conversation's agent starts.",
-  )
+  expect(group("Approvals")).not.toContain("The next time this agent starts")
 })
 
 it("names the model and its agent once the gateway reports them", () => {
