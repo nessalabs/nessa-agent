@@ -1,8 +1,8 @@
 /**
- * Settings › Privacy & Permissions › Access with a gateway connected and
- * Claude's hooks choice on. `settings-page.mjs` opens Privacy & Permissions
- * and screenshots the trust warning. Codex stays off. Both agents are in
- * the catalog, so neither row says it isn't set up.
+ * Settings › Privacy & Permissions › Access with a gateway connected.
+ * `?state=on` (the default) has Claude's choice on. `?state=unset` leaves
+ * Claude out of the catalog. `?state=failed` refuses the next change, so
+ * the row says it could not change. Codex stays off and configured.
  */
 import { createRoot } from "react-dom/client"
 import { Provider } from "react-redux"
@@ -16,6 +16,8 @@ import "@fontsource-variable/geist"
 import "@fontsource-variable/geist-mono"
 import "../../../../src/desktop/styles.css"
 
+const state = new URLSearchParams(window.location.search).get("state") ?? "on"
+const claudeConfigured = state !== "unset"
 const gateway: NativeHooksGateway = {
   read: () =>
     Promise.resolve({
@@ -23,11 +25,14 @@ const gateway: NativeHooksGateway = {
       choice: {
         claude: true,
         codex: false,
-        claudeConfigured: true,
+        claudeConfigured,
         codexConfigured: true,
       },
     }),
-  set: (agent, enabled) => Promise.resolve({ ok: true, agent, enabled }),
+  set: (agent, enabled) =>
+    state === "failed"
+      ? Promise.resolve({ ok: false })
+      : Promise.resolve({ ok: true, agent, enabled }),
 }
 
 const root = document.getElementById("root")

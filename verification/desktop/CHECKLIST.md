@@ -858,8 +858,9 @@ phone's scanner is not this screen.
   commands when the agent starts. OpenCode has no row. With a gateway
   and Claude's choice on, that row's switch is on and says to turn it on
   only for projects you trust, and that the choice applies the next time
-  each conversation's agent starts. _Check:_
-  `settings-page.mjs --only native-hooks,native-hooks-on`; unit tests
+  each conversation's agent starts. Claude on but missing from the catalog
+  says it isn't set up. A refused change says it could not change. _Check:_
+  `settings-page.mjs --only native-hooks,native-hooks-on,native-hooks-unset,native-hooks-failed`; unit tests
   `native-hooks-rows.test.tsx`, `native-hooks-gateway.test.ts`.
 
 ### Integrations: the gateway's MCP servers
