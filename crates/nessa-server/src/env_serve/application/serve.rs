@@ -1876,9 +1876,9 @@ impl Served {
 
     /// Whether a drain has left nothing to serve: no lease held, no command
     /// running, the `End` of every lease this side ended unasked asked, and
-    /// every answer queued
-    /// here handed to the writer. Answers already handed on, or still
-    /// awaiting an end's record, reach the gateway before the stream closes.
+    /// every answer queued here handed to the writer. Answers already handed
+    /// on, or still awaiting an end's record, reach the gateway before the
+    /// stream closes.
     fn drained(&self) -> bool {
         self.draining
             && self.leases.is_empty()
