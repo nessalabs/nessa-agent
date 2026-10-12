@@ -71,6 +71,7 @@ different command. The rows are the orders the store implements.
 `a_marker_that_names_a_requested_record_loads_as_off`,
 `a_recorded_change_whose_marker_cannot_be_removed_fails_the_command`,
 `a_readable_outcome_whose_directory_does_not_sync_keeps_the_harness_off`,
+`a_retry_after_the_switch_moved_does_not_reapply_its_choice`,
 `a_recorded_change_whose_file_rename_was_lost_is_written_again`, and
 `hooks_turned_off_by_a_crashed_command_go_back_on_only_with_its_requested_record`
 are those rows.
@@ -99,6 +100,7 @@ and
 | The pending marker cannot be read, is not a file, or does not name an outcome record for the choice it asked for | The gateway starts, or the next command arrives | The file is written off and the marker is removed, or moved aside when it is not a file. The settlement fails, and the next command is refused, until the marker is gone |
 | The file is not one JSON object, names a harness twice, or is larger than any choice | The gateway starts | That file loads as off and the gateway keeps starting |
 | Both records written for this choice | The same caller, harness, and request id | The command succeeds. The records stay as first written, including the observation time |
+| Requested record written, outcome absent, the switch moved since | The same request id is retried | The command fails with an audit failure and changes nothing. A retry finishes only the change its first attempt started; a new request makes a new change |
 | Outcome written for a different choice | The same request id | The command fails. The file is unchanged |
 | Another client changes the choice | Settings › Access is open and the window regains focus or becomes visible | The rows read the choice again. Only the latest read answers, and a read never overrides a change in progress |
 | The choice is on | That harness's process starts | Claude sends setting sources user, project, and local and omits `disableAllHooks`. Codex omits `features.hooks` and `notify`. A process already running is not restarted |

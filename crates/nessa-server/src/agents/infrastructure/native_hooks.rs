@@ -209,7 +209,15 @@ fn set_blocking(
         return Ok(selection_of(&claude, &codex));
     }
     let current = flag(&claude, &codex, change.agent);
-    let before = recorded_before(&directory, &change)?.unwrap_or(current);
+    // A retry finishes only the change its first attempt started. Once the
+    // switch has moved since then, the before value in its requested record
+    // no longer describes this change, so the retry fails and a new request
+    // makes the change instead.
+    let before = match recorded_before(&directory, &change)? {
+        Some(before) if before != current => return Err(NativeHooksError::Audit),
+        Some(before) => before,
+        None => current,
+    };
     audit.record(&change.evidence(NativeHooksPhase::Requested, before, None))?;
     if current == change.enabled {
         audit.record(&change.evidence(NativeHooksPhase::Outcome, before, Some(current)))?;
@@ -1743,6 +1751,68 @@ mod tests {
         // A crash could still lose the record, so no start runs with hooks.
         assert!(!preferences.selection().codex());
         assert!(directory.join(PENDING).exists());
+    }
+
+    /// Writes the requested record, then fails before writing the outcome.
+    struct OutcomeNeverWritten {
+        inner: DurableNativeHooksAudit,
+    }
+    impl NativeHooksAudit for OutcomeNeverWritten {
+        fn record(&self, evidence: &NativeHooksEvidence) -> Result<(), NativeHooksError> {
+            if evidence.phase == NativeHooksPhase::Outcome {
+                return Err(NativeHooksError::Audit);
+            }
+            self.inner.record(evidence)
+        }
+    }
+
+    #[tokio::test]
+    async fn a_retry_after_the_switch_moved_does_not_reapply_its_choice() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("data");
+        let first = NativeHooksPreferences::open(directory.clone(), Arc::new(FixedClock)).unwrap();
+        first
+            .set(change(NativeHooksAgent::Claude, true, "request-on"))
+            .await
+            .unwrap();
+        // Already on: this request only records, and its outcome is lost.
+        let failing = NativeHooksPreferences::open_with(
+            directory.clone(),
+            Arc::new(OutcomeNeverWritten {
+                inner: DurableNativeHooksAudit::new(
+                    directory.join("audit").join("native-hooks"),
+                    Arc::new(FixedClock),
+                )
+                .unwrap(),
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            failing
+                .set(change(NativeHooksAgent::Claude, true, "request-noop"))
+                .await
+                .unwrap_err(),
+            NativeHooksError::Audit
+        );
+        // Another client turns hooks off.
+        let later = NativeHooksPreferences::open(directory.clone(), Arc::new(FixedClock)).unwrap();
+        assert!(!later
+            .set(change(NativeHooksAgent::Claude, false, "request-off"))
+            .await
+            .unwrap()
+            .claude());
+        // The retry's requested record says hooks were on before it; they
+        // are off now, so it cannot finish that change.
+        assert_eq!(
+            later
+                .set(change(NativeHooksAgent::Claude, true, "request-noop"))
+                .await
+                .unwrap_err(),
+            NativeHooksError::Audit
+        );
+        assert!(!later.selection().claude());
+        let restarted = NativeHooksPreferences::open(directory, Arc::new(FixedClock)).unwrap();
+        assert!(!restarted.selection().claude());
     }
 
     #[tokio::test]
