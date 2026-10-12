@@ -4845,6 +4845,37 @@ async fn k1_a_drain_ends_every_lease_recorded_then_serving_ends_once_answered() 
     }));
 }
 
+/// A grant ready to read as the drain is asked is refused, never admitted:
+/// the drain wins the race with a frame already waiting.
+#[tokio::test]
+async fn k1_a_grant_waiting_as_the_drain_is_asked_is_refused() {
+    let mut gateway = revocable(Arc::new(MemoryLedger::default()));
+    gateway.started(LEASE).await;
+    gateway.drain.send_replace(true);
+    gateway
+        .send(ToEnvironment::Grant {
+            lease: OTHER_LEASE.into(),
+            agent: "claude".into(),
+            sandbox: Sandbox::HarnessDefault,
+        })
+        .await;
+    let mut refused = None;
+    while refused.is_none() {
+        match gateway.said().await {
+            FromEnvironment::Ending { .. } => {}
+            frame @ FromEnvironment::Refused { .. } => refused = Some(frame),
+            other => panic!("admitted after the drain: {other:?}"),
+        }
+    }
+    assert_eq!(
+        refused,
+        Some(FromEnvironment::Refused {
+            lease: OTHER_LEASE.into(),
+            reason: GrantRefusal::Draining,
+        })
+    );
+}
+
 /// A host holding nothing when asked to drain has nothing to wait for: it
 /// stops serving at once, recording nothing.
 #[tokio::test]

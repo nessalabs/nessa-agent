@@ -520,12 +520,15 @@ pub(crate) async fn serve<R, W>(
         // `next` keeps what a cancelled read had read, so the bound costs
         // nothing of a frame arriving slowly, nor a drain asked meanwhile.
         let finished = served.finished.clone();
+        // A drain asked wins over a frame ready at the same time: a grant
+        // the host reads after the signal is refused, never admitted.
         let read = tokio::select! {
-            read = within(&*timer, wake, stream.next()) => read,
+            biased;
             () = drain_asked(&mut drain), if !served.draining => {
                 served.drain();
                 continue;
             }
+            read = within(&*timer, wake, stream.next()) => read,
             // A command's `Ran` needs no `End`: draining, its end alone may
             // leave nothing to serve.
             () = finished.notified(), if served.draining => continue,
@@ -1017,11 +1020,12 @@ impl Served {
             // writer up starts at once: its leases end, recorded, before a
             // deadline closes the connection, and are not found lost.
             let flushed = tokio::select! {
-                flushed = within(&*timer, wake, self.flush()) => flushed,
+                biased;
                 () = drain_asked(drain), if !self.draining => {
                     self.drain();
                     continue;
                 }
+                flushed = within(&*timer, wake, self.flush()) => flushed,
             };
             if flushed.is_err() && timer.now() >= silent {
                 return false;
