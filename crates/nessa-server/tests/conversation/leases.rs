@@ -2426,6 +2426,7 @@ async fn an_environment_ends_the_lease(
     let (prefix, surface) = match cause {
         LeaseEndCause::Expired => ("expired-", "environment_expired"),
         LeaseEndCause::Revoked => ("revoked-", "environment_revoked"),
+        LeaseEndCause::Stopped => ("drained-", "environment_drained"),
         other => panic!("not an environment's own end: {other:?}"),
     };
     let root = tempfile::tempdir().unwrap();
@@ -2507,6 +2508,23 @@ async fn a_revocation_whose_end_goes_unanswered_is_interrupted() {
     assert_eq!(kinds, ["issued", "ending", "interrupted"]);
     let view = nessa_protocol::conversation::projection::lease_view(&lease);
     assert_eq!(view.cause, Some(ConversationLeaseCause::Revoked));
+}
+
+/// Row K1: a paired environment draining before it stops ends its lease as a
+/// system stop by `environment_drained`, never a person and never lost, and
+/// ended with the environment's cleanup.
+#[tokio::test]
+async fn k1_an_environment_drain_is_recorded_stopped_by_the_system_then_ended() {
+    let (lease, kinds) = an_environment_ends_the_lease(
+        LeaseEndCause::Stopped,
+        Some(LeaseCleanup::Confirmed { forced: false }),
+    )
+    .await;
+    assert_eq!(kinds, ["issued", "ending", "ended"]);
+    let view = nessa_protocol::conversation::projection::lease_view(&lease);
+    assert_eq!(view.state, ConversationLeaseState::Ended);
+    assert_eq!(view.cause, Some(ConversationLeaseCause::Stopped));
+    assert_eq!(view.cleanup, Some(ConversationLeaseCleanup::Confirmed));
 }
 
 // Command leases (rows L14, L15; issue #700): the agent's `run` through the
@@ -4383,17 +4401,20 @@ async fn a_fetch_whose_placement_read_stalls_is_timed_out_or_cancelled() {
         FetchAnswer::Refused(FetchCallRefusal::Cancelled { delivered: false })
     );
     assert!(host.fetching.asks.lock().unwrap().is_empty());
-    // Let the stalled reads go, so nothing is left waiting: a writer
-    // opening and closing the pipe ends their wait. Then put the placement
-    // back.
-    drop(
-        std::fs::OpenOptions::new()
-            .write(true)
-            .open(&placement)
-            .unwrap(),
-    );
+    // Let the stalled reads go, so nothing is left waiting: a writer on the
+    // pipe ends their wait. It opens for reading too, so it does not itself
+    // wait for a reader: on a slow machine a call can time out before its
+    // read ever opens the pipe, and then no reader comes. It stays open
+    // until the placement is back, so a read that reaches the pipe after it
+    // opened finds a writer too.
+    let writer = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&placement)
+        .unwrap();
     std::fs::remove_file(&placement).unwrap();
     std::fs::write(&placement, &kept).unwrap();
+    drop(writer);
     go.send(()).unwrap();
 }
 

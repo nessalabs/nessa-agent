@@ -301,6 +301,8 @@ struct Host {
     ledger_path: std::path::PathBuf,
     /// What its serving waits on.
     timer: Arc<dyn crate::env_serve::application::Timer>,
+    /// Asks it to drain, as `env dial`'s signal does.
+    drain: Arc<watch::Sender<bool>>,
 }
 
 impl Host {
@@ -328,6 +330,7 @@ impl Host {
         Self {
             ledger_path: workspace.join("leases.jsonl"),
             timer: Arc::new(TokioTimer::new()),
+            drain: Arc::new(watch::channel(false).0),
             peer: Peer::Gateway { pin },
             grants: Arc::new(FileGrants::new(&workspace)),
             ledger: Arc::new(FileLedger::open(workspace.join("leases.jsonl")).unwrap()),
@@ -379,6 +382,7 @@ impl Host {
             None,
             ServeTimings::default(),
             self.timer.clone(),
+            self.drain.subscribe(),
         )
         .await;
     }
@@ -595,7 +599,7 @@ async fn an_enrolled_environment_waits_for_approval_then_stays_dialed_in() {
     let native = a.native;
     let pairing = FilePairingEnvironment::open(&environment, &native.to_string(), clock()).unwrap();
     let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
-    tokio::time::timeout(WAIT, pairing.enroll(code))
+    tokio::time::timeout(WAIT, crate::env_serve::application::enroll(&pairing, code))
         .await
         .unwrap()
         .unwrap();
@@ -660,6 +664,7 @@ async fn an_enrolled_environment_waits_for_approval_then_stays_dialed_in() {
                 },
                 &TokioTimer::new(),
                 stopping,
+                watch::channel(false).1,
             )
             .await
         })
@@ -736,7 +741,7 @@ async fn waiting_for_approval_ends_when_denied_or_never_paired() {
     nessa_local_storage::create_directory(&denied).unwrap();
     let pairing = FilePairingEnvironment::open(&denied, &native, clock()).unwrap();
     let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
-    tokio::time::timeout(WAIT, pairing.enroll(code))
+    tokio::time::timeout(WAIT, crate::env_serve::application::enroll(&pairing, code))
         .await
         .unwrap()
         .unwrap();
@@ -941,6 +946,137 @@ async fn a_paired_environment_expires_a_lease_and_both_sides_record_it() {
     assert_eq!(entries[0]["leaseMs"], 1_500);
     assert_eq!(entries[2]["leaseMs"], 1_500);
     assert_eq!(entries[4]["cause"], "expired");
+    assert_eq!(entries[4]["cleanup"]["outcome"], "confirmed");
+}
+
+/// Row K1: a paired environment asked to drain, as `env dial
+/// --drain-deadline` is at a signal, ends its lease on both sides with E's
+/// cleanup, never as lost: A sees the lease ending as the system stopping it
+/// and asks its End, E answers with what stopping the harness took, and then
+/// E stops serving and the connection closes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn k1_a_paired_environment_drains_and_both_sides_record_its_cleanup() {
+    let directory = tempfile::tempdir().unwrap();
+    let a = Gateway::start(&directory.path().join("a")).await;
+    let e = a
+        .pair(
+            &directory.path().join("e-state"),
+            ConsentClass::PeerEnvironment,
+        )
+        .await;
+    let stream = dial(a.native, e.identity.clone(), e.pin, clock())
+        .await
+        .unwrap();
+    // E runs `claude` as `cat`, which runs until it is stopped.
+    let cat = LaunchSpec {
+        executable: "/bin/cat".into(),
+        args: Vec::new(),
+        environment: Default::default(),
+    };
+    let host = Arc::new(Host::running(
+        &directory.path().join("e"),
+        e.pin,
+        HashMap::from([(nessa_protocol::agents::AgentId::Claude, cat)]),
+    ));
+    host.grants
+        .change(&host.peer, |_| {
+            Ok::<_, ()>(Some(PeerGrant::nothing().with_agents(Agents::All)))
+        })
+        .unwrap();
+    let (from_gateway, to_gateway) = tokio::io::split(stream);
+    let serving = {
+        let host = host.clone();
+        tokio::spawn(async move { host.serve(from_gateway, to_gateway).await })
+    };
+    a.until_connected(e.peer, true).await;
+
+    let environment = a.peers.environment(&e.peer);
+    let lease = LeaseId::new(uuid()).unwrap();
+    let terms = LeaseTerms {
+        environment: environment.declaration().environment,
+        work: LeaseWork::Agent(AgentWork::new("claude", "model").unwrap()),
+        sandbox: SandboxProfile::HarnessDefault,
+        grants: LeaseGrants::Opening,
+        deadline: LeaseDeadline::UntilEnded,
+    };
+    let given = Arc::new(std::sync::Mutex::new(None));
+    let binding = Arc::new(OnHost {
+        capabilities: crate::conversation_test_support::Provider::new(Arc::new(
+            crate::conversation_test_support::ProviderFactory::default(),
+        ))
+        .capabilities()
+        .clone(),
+        host: given.clone(),
+    });
+    let opened = tokio::time::timeout(WAIT, environment.open(&lease, &terms, binding))
+        .await
+        .unwrap()
+        .unwrap_or_else(|refusal| panic!("granted: {refusal:?}"));
+    let harness_host = given.lock().unwrap().clone().unwrap();
+    let mut harness = harness_host.start(HarnessLaunch::default()).unwrap();
+    let recorded = |kind: &'static str| {
+        let ledger = std::fs::read_to_string(&host.ledger_path).unwrap();
+        ledger.lines().any(|line| {
+            let entry: serde_json::Value = serde_json::from_str(line).unwrap();
+            entry["kind"] == kind && entry["lease"] == lease.as_str()
+        })
+    };
+    tokio::time::timeout(WAIT, async {
+        while !recorded("started") {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the harness starts");
+    let ends = opened
+        .hold
+        .ends()
+        .expect("a paired environment's lease can end there");
+    host.drain.send_replace(true);
+    // A system stop, as the gateway retiring is: never a lost lease.
+    assert_eq!(
+        tokio::time::timeout(WAIT, ends).await.expect("E ends it"),
+        LeaseEndCause::Stopped
+    );
+    // Draining, E has not stopped serving: it waits for A's End.
+    assert!(!serving.is_finished());
+    let released = tokio::time::timeout(WAIT, opened.hold.end(LeaseEndCause::Stopped))
+        .await
+        .unwrap();
+    assert!(
+        matches!(
+            released,
+            LeaseRelease::Released(LeaseCleanup::Confirmed { .. })
+        ),
+        "{released:?}"
+    );
+    // Every End answered: E stops serving, and A sees it leave.
+    tokio::time::timeout(WAIT, serving)
+        .await
+        .expect("a drained environment stops serving")
+        .unwrap();
+    a.until_connected(e.peer, false).await;
+    let mut rest = Vec::new();
+    tokio::time::timeout(WAIT, harness.output.read_to_end(&mut rest))
+        .await
+        .expect("the harness's output ends")
+        .expect("and reads to its end");
+    let entries: Vec<serde_json::Value> = std::fs::read_to_string(&host.ledger_path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .filter(|entry: &serde_json::Value| entry["lease"] == lease.as_str())
+        .collect();
+    let kinds: Vec<_> = entries
+        .iter()
+        .map(|entry| entry["kind"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        kinds,
+        ["granted", "started", "draining", "stopped", "ended"],
+        "{entries:?}"
+    );
+    assert_eq!(entries[4]["cause"], "drained");
     assert_eq!(entries[4]["cleanup"]["outcome"], "confirmed");
 }
 
@@ -1492,4 +1628,155 @@ async fn connection_changes_are_said_as_a_paired_environment_connects_ends_and_i
         .await
         .expect("the revoked environment's serving ends")
         .unwrap();
+}
+
+/// A code file as a container's secret holds it: the display form and a
+/// line end.
+fn code_file(directory: &Path, name: &str, code: &ManualCode) -> std::path::PathBuf {
+    let path = directory.join(name);
+    let mut bytes = code.display_bytes().to_vec();
+    bytes.push(b'\n');
+    std::fs::write(&path, bytes).unwrap();
+    path
+}
+
+/// Row K2: `env dial --enroll-code-file` enrolls a machine paired with
+/// nothing, and on every later start, approved or not yet, finds it paired
+/// with that gateway and sends nothing, so a container's entrypoint is the
+/// same command each time.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn k2_a_code_file_enrolls_once_then_dials() {
+    use crate::env_serve::application::{approval, enroll_once, EnrolledOnce};
+    use crate::env_serve::infrastructure::{FileEnrollmentCode, FilePairingEnvironment};
+
+    let directory = tempfile::tempdir().unwrap();
+    let a = Gateway::start(&directory.path().join("a")).await;
+    let created = a
+        .commands
+        .create(&a.session, ConsentClass::PeerEnvironment)
+        .await
+        .unwrap();
+    let code = FileEnrollmentCode(code_file(directory.path(), "code", created.code()));
+    let environment = directory.path().join("e-environment");
+    nessa_local_storage::create_directory(&environment).unwrap();
+    let address = a.native.to_string();
+    let enroll_once = || async {
+        let pairing = FilePairingEnvironment::open(&environment, &address, clock()).unwrap();
+        let enrolled = tokio::time::timeout(WAIT, enroll_once(&pairing, &code))
+            .await
+            .unwrap();
+        pairing.shutdown().await;
+        enrolled
+    };
+
+    assert_eq!(enroll_once().await, Ok(EnrolledOnce::Now));
+    // Restarted before the owner approved: still paired with A, nothing sent.
+    assert_eq!(enroll_once().await, Ok(EnrolledOnce::Before));
+    let id = created.record().id();
+    let claimed = a.commands.status(&a.session, id).await.unwrap();
+    let (_, key) = claimed.claim_binding().unwrap();
+    a.commands.approve(&a.session, id, key).await.unwrap();
+    let pairing = FilePairingEnvironment::open(&environment, &address, clock()).unwrap();
+    let (_, running) = watch::channel(false);
+    let (_, pin) = tokio::time::timeout(
+        WAIT,
+        approval(
+            &pairing,
+            Duration::from_millis(20),
+            &TokioTimer::new(),
+            running,
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap()
+    .expect("not stopped");
+    pairing.shutdown().await;
+    drop(pairing);
+    // Restarted once approved: the same, and its pin is A's.
+    assert_eq!(enroll_once().await, Ok(EnrolledOnce::Before));
+    let saved = FilePairingEnvironment::approved_gateway(&environment, clock())
+        .await
+        .unwrap();
+    assert_eq!(saved, Some(pin));
+}
+
+/// Row K2: a volume paired with gateway A, given gateway B's address and
+/// code, refuses to dial B instead of taking B's code as its pairing's, and
+/// sends B nothing: B's invitation is still unclaimed. A pairing that
+/// recorded no gateway refuses too, and a file holding no code says so.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn k2_a_volume_paired_to_one_gateway_refuses_enrolling_with_another() {
+    use crate::env_serve::application::{enroll_once, NotEnrolled};
+    use crate::env_serve::infrastructure::{FileEnrollmentCode, FilePairingEnvironment};
+
+    let directory = tempfile::tempdir().unwrap();
+    let a = Gateway::start(&directory.path().join("a")).await;
+    let b = Gateway::start(&directory.path().join("b")).await;
+    let environment = directory.path().join("e-environment");
+    nessa_local_storage::create_directory(&environment).unwrap();
+
+    let not_a_code = FileEnrollmentCode(directory.path().join("not-a-code"));
+    std::fs::write(&not_a_code.0, b"hello\n").unwrap();
+    let pairing =
+        FilePairingEnvironment::open(&environment, &a.native.to_string(), clock()).unwrap();
+    let refused = enroll_once(&pairing, &not_a_code).await.unwrap_err();
+    assert_eq!(
+        refused,
+        NotEnrolled::Failed(format!("{} holds no pairing code", not_a_code.0.display()))
+    );
+    let for_a = a
+        .commands
+        .create(&a.session, ConsentClass::PeerEnvironment)
+        .await
+        .unwrap();
+    // A code the gateway never gave: refused, and the address it recorded
+    // first is left over a pairing that does not exist, read by nothing.
+    let wrong = FileEnrollmentCode(directory.path().join("wrong"));
+    std::fs::write(&wrong.0, b"ABCD-EFGH\n").unwrap();
+    let refused = tokio::time::timeout(WAIT, enroll_once(&pairing, &wrong))
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(
+        refused,
+        NotEnrolled::Failed("the code is not the one the gateway gave".into())
+    );
+    let code_a = FileEnrollmentCode(code_file(directory.path(), "code-a", for_a.code()));
+    tokio::time::timeout(WAIT, enroll_once(&pairing, &code_a))
+        .await
+        .unwrap()
+        .unwrap();
+    pairing.shutdown().await;
+    drop(pairing);
+
+    let for_b = b
+        .commands
+        .create(&b.session, ConsentClass::PeerEnvironment)
+        .await
+        .unwrap();
+    let code_b = FileEnrollmentCode(code_file(directory.path(), "code-b", for_b.code()));
+    let pairing =
+        FilePairingEnvironment::open(&environment, &b.native.to_string(), clock()).unwrap();
+    let refused = enroll_once(&pairing, &code_b).await.unwrap_err();
+    assert_eq!(
+        refused,
+        NotEnrolled::PairedElsewhere(Some(a.native.to_string()))
+    );
+    pairing.shutdown().await;
+    drop(pairing);
+    let unclaimed = b
+        .commands
+        .status(&b.session, for_b.record().id())
+        .await
+        .unwrap();
+    assert!(unclaimed.claim_binding().is_none());
+
+    // Paired, with no record of which gateway: refused, not guessed.
+    std::fs::remove_file(environment.join("paired-with")).unwrap();
+    let pairing =
+        FilePairingEnvironment::open(&environment, &a.native.to_string(), clock()).unwrap();
+    let refused = enroll_once(&pairing, &code_a).await.unwrap_err();
+    assert_eq!(refused, NotEnrolled::PairedElsewhere(None));
+    pairing.shutdown().await;
 }
