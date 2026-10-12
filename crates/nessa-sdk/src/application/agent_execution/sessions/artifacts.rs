@@ -9,8 +9,9 @@
 //! ```
 //!
 //! Arrows are the one rule both paths ask: a record is committed only while
-//! the lease it names is the conversation's latest, still live, and issued by
-//! the actor it names, and the same rule reads it back. The list only grows; a
+//! the lease it names is the conversation's latest and still live, and its
+//! actor is that lease's issuer or the person of the turn it names, and the
+//! same rule reads it back. The list only grows; a
 //! record past [`ArtifactRecord::MAX_PER_CONVERSATION`] is refused, never
 //! made room for. An artifact recorded under a lease this build cannot read is
 //! kept as written, as that lease's own records are.
@@ -21,7 +22,7 @@ use crate::domain::agent_execution::{
     leases::{LeaseId, LeasePhase},
 };
 use crate::domain::common::value_objects::{MediaType, Sha256Digest};
-use std::{collections::HashSet, error::Error, fmt};
+use std::{collections::HashMap, error::Error, fmt};
 
 /// A value of an artifact record is outside what one may hold.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -138,7 +139,9 @@ pub struct ArtifactRecord {
     pub name: ArtifactName,
     /// What the file is.
     pub file: PublishedFile,
-    /// Who asked for the work that published it: the lease's issuer.
+    /// Who asked for it: the lease's issuer, for a file its work published;
+    /// or the person of [`Self::turn`], with their own request, for a file
+    /// that turn's agent asked to publish under the lease.
     pub actor: ActionContext,
 }
 impl ArtifactRecord {
@@ -146,13 +149,34 @@ impl ArtifactRecord {
     /// than an earlier one dropped.
     pub const MAX_PER_CONVERSATION: usize = 1024;
 
-    /// Whether `self` may follow what `snapshot` already records, `knows_turn`
-    /// saying whether the conversation accepted a turn. One rule for
-    /// committing a record and reading it back.
+    /// Whether `self` and `other` are one record: the same file under the
+    /// same lease, asked for by the same person (principal and surface) in
+    /// the same turn, whatever request each asked with. Recorded again, such
+    /// a record adds nothing and the first one's request stands; the same
+    /// file asked for by another person, or in another turn, is a record of
+    /// its own.
+    pub fn is_same_record(&self, other: &Self) -> bool {
+        self.lease == other.lease
+            && self.file == other.file
+            && self.turn == other.turn
+            && self.actor.principal_id() == other.actor.principal_id()
+            && self.actor.surface_id() == other.actor.surface_id()
+    }
+
+    /// Whether `self` may follow what `snapshot` already records,
+    /// `turn_actor` naming who a turn the conversation accepted was for, and
+    /// `None` for a turn it did not accept. One rule for committing a record
+    /// and reading it back.
+    ///
+    /// It holds the actor to the person of the turn the record names, not
+    /// to that turn having run under the record's lease: a turn does not
+    /// record its lease. That the turn is the one running under this Live
+    /// lease is the caller's to decide, as the gateway's
+    /// `artifacts_publish` does.
     pub(super) fn admit(
         &self,
         snapshot: &SessionSnapshot,
-        knows_turn: impl Fn(&ExecutionId) -> bool,
+        turn_actor: impl Fn(&ExecutionId) -> Option<ActionContext>,
     ) -> Result<(), ArtifactRefusal> {
         let current = snapshot
             .lease
@@ -162,16 +186,18 @@ impl ArtifactRecord {
             CurrentLeaseState::Unreadable { .. } => return Err(ArtifactRefusal::LeaseUnreadable),
             CurrentLeaseState::Refused { .. } => return Err(ArtifactRefusal::NotThisLease),
             CurrentLeaseState::Held(lease)
-                if lease.id() != &self.lease
-                    || lease.phase() != LeasePhase::Live
-                    || current.issued_by() != Some(&self.actor) =>
+                if lease.id() != &self.lease || lease.phase() != LeasePhase::Live =>
             {
                 return Err(ArtifactRefusal::NotThisLease);
             }
             CurrentLeaseState::Held(_) => {}
         }
-        if self.turn.as_ref().is_some_and(|turn| !knows_turn(turn)) {
-            return Err(ArtifactRefusal::UnknownTurn);
+        let turn = match &self.turn {
+            Some(turn) => Some(turn_actor(turn).ok_or(ArtifactRefusal::UnknownTurn)?),
+            None => None,
+        };
+        if !self.asked_by(current.issued_by(), turn.as_ref()) {
+            return Err(ArtifactRefusal::NotThisLease);
         }
         // Last, so a refusal for room is one the record would otherwise
         // pass: what lets a file already recorded be answered as recorded.
@@ -187,7 +213,7 @@ impl ArtifactRecord {
     pub(super) fn admit_saved(
         &self,
         snapshot: &SessionSnapshot,
-        knows_turn: impl Fn(&ExecutionId) -> bool,
+        turn_actor: impl Fn(&ExecutionId) -> Option<ActionContext>,
     ) -> Result<(), StorageError> {
         // The bound holds under every lease, one this build cannot read too.
         if snapshot.artifacts.len() >= Self::MAX_PER_CONVERSATION {
@@ -196,10 +222,24 @@ impl ArtifactRecord {
                 ArtifactRefusal::Full
             )));
         }
-        match self.admit(snapshot, knows_turn) {
+        match self.admit(snapshot, turn_actor) {
             Ok(()) | Err(ArtifactRefusal::LeaseUnreadable) => Ok(()),
             Err(refusal) => Err(StorageError::Corrupt(format!("artifact record: {refusal}"))),
         }
+    }
+
+    /// Whether the record's actor may have asked for it under a lease
+    /// issued by `issuer`, `None` when it was never issued: that issuer, or
+    /// the person `turn` was for (the record's own turn), asking with a
+    /// request of their own.
+    fn asked_by(&self, issuer: Option<&ActionContext>, turn: Option<&ActionContext>) -> bool {
+        issuer.is_some_and(|issuer| {
+            issuer == &self.actor
+                || turn.is_some_and(|turn| {
+                    turn.principal_id() == self.actor.principal_id()
+                        && turn.surface_id() == self.actor.surface_id()
+                })
+        })
     }
 }
 
@@ -208,8 +248,8 @@ impl ArtifactRecord {
 pub(super) enum ArtifactRefusal {
     /// The conversation already records its most artifacts.
     Full,
-    /// The record's lease is not the conversation's latest, is not live, or
-    /// was not issued by the record's actor.
+    /// The record's lease is not the conversation's latest or is not live,
+    /// or its actor is neither that lease's issuer nor its turn's person.
     NotThisLease,
     /// The conversation's latest lease is of a kind this build cannot read.
     LeaseUnreadable,
@@ -220,7 +260,9 @@ impl fmt::Display for ArtifactRefusal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::Full => "the conversation records its most artifacts",
-            Self::NotThisLease => "it names a lease that is not the latest live one",
+            Self::NotThisLease => {
+                "it names a lease that is not the latest live one, or nobody who asked under it"
+            }
             Self::LeaseUnreadable => "the latest lease cannot be read",
             Self::UnknownTurn => "it names a turn the conversation did not accept",
         })
@@ -230,7 +272,8 @@ impl fmt::Display for ArtifactRefusal {
 /// Whether every artifact `snapshot` saves stays within the conversation's
 /// bound, names a turn it accepted, and, when it names the snapshot's latest
 /// lease, was published under it as [`ArtifactRecord::admit`] allows: that
-/// lease was issued, to the record's actor. A saved snapshot keeps only the
+/// lease was issued, and the record's actor is its issuer or the person of
+/// the record's turn. A saved snapshot keeps only the
 /// latest lease, so an artifact under an earlier one is kept as written; a
 /// record log replays each beside its lease and checks it in full.
 pub(super) fn validate_saved(snapshot: &SessionSnapshot) -> Result<(), StorageError> {
@@ -239,16 +282,16 @@ pub(super) fn validate_saved(snapshot: &SessionSnapshot) -> Result<(), StorageEr
             "artifact record: more than one conversation records".into(),
         ));
     }
-    let accepted: HashSet<&ExecutionId> = snapshot
+    let accepted: HashMap<&ExecutionId, &ActionContext> = snapshot
         .invocations
         .iter()
-        .map(|invocation| &invocation.request.execution_id)
+        .map(|invocation| (&invocation.request.execution_id, &invocation.actor))
         .collect();
     let named_turn_unknown = snapshot.artifacts.iter().any(|artifact| {
         artifact
             .turn
             .as_ref()
-            .is_some_and(|turn| !accepted.contains(turn))
+            .is_some_and(|turn| !accepted.contains_key(turn))
     });
     if named_turn_unknown {
         return Err(StorageError::Corrupt(format!(
@@ -269,10 +312,13 @@ pub(super) fn validate_saved(snapshot: &SessionSnapshot) -> Result<(), StorageEr
             _ => return Ok(()),
         },
     };
-    let unproven = snapshot
-        .artifacts
-        .iter()
-        .any(|artifact| &artifact.lease == lease && issuer != Some(&artifact.actor));
+    let unproven = snapshot.artifacts.iter().any(|artifact| {
+        let turn = artifact
+            .turn
+            .as_ref()
+            .and_then(|turn| accepted.get(turn).copied());
+        &artifact.lease == lease && !artifact.asked_by(issuer, turn)
+    });
     if unproven {
         return Err(StorageError::Corrupt(format!(
             "artifact record: {}",

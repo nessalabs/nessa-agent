@@ -13,6 +13,9 @@
 //!   ──▶ ArtifactOutbox::discard ──▶ answer the harness
 //! the lease ends ──▶ every artifact not collected answered lease_ended,
 //!                    its publish point closed, its outbox let go
+//! Publish{request, path} from the gateway ──▶ LeaseArtifacts::ask
+//!   ──▶ the same publish, bound and ledger ──▶ Published{.., request, ..}
+//!   not published ──▶ NotPublished{lease, request, reason}
 //! ```
 //!
 //! Arrows are calls and frames, in order. The bytes the gateway reads are
@@ -20,7 +23,9 @@
 //! read, whatever the harness does to its file afterwards. The control
 //! stream carries only where the copy is and what it hashes to.
 use super::serve::{LeaseLedger, LedgerEntry};
-use nessa_protocol::lease::{Collection, CollectionRefusal, FromEnvironment, StagedArtifact};
+use nessa_protocol::lease::{
+    Collection, CollectionRefusal, FromEnvironment, PublishRefusal, StagedArtifact,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -35,7 +40,8 @@ use tokio::{
 /// Set by this side, never by the gateway.
 pub(crate) const PUBLISH_POINT_VARIABLE: &str = "NESSA_ARTIFACTS";
 
-/// What `nessa artifact publish` asks.
+/// What `nessa artifact publish` asks, and what the gateway's `Publish`
+/// asks once its path is resolved against the workspace.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct PublishRequest {
@@ -45,30 +51,6 @@ pub(crate) struct PublishRequest {
     /// the file's extension.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) media_type: Option<String>,
-}
-
-/// Why this side did not publish a file at all: nothing reached the gateway.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) enum PublishRefusal {
-    /// The path is not a regular file inside the workspace, after every
-    /// link in it is followed.
-    OutsideWorkspace,
-    /// No such file, or not one that can be read.
-    Unreadable,
-    /// Empty, or larger than [`nessa_protocol::lease::MAX_ARTIFACT_BYTES`].
-    Size,
-    /// A media type that is not lowercase `type/subtype`, or a file name
-    /// that cannot be shown.
-    Invalid,
-    /// This lease already has as many artifacts in flight as it may.
-    Busy,
-    /// The copy could not be staged.
-    StagingFailed,
-    /// The publish could not be recorded in this side's audit.
-    AuditUnavailable,
-    /// The lease ended before the gateway answered.
-    LeaseEnded,
 }
 
 /// What `nessa artifact publish` is answered.
@@ -221,6 +203,9 @@ pub(crate) struct LeaseArtifacts {
     address: String,
     in_flight: Arc<Mutex<InFlight>>,
     dispatcher: JoinHandle<()>,
+    /// What publishes the gateway's own asks, as the dispatcher does a
+    /// harness's: one bound, one outbox, one ledger.
+    publisher: Publisher,
     outbox: Arc<dyn ArtifactOutbox>,
     ledger: Arc<dyn LeaseLedger>,
 }
@@ -243,24 +228,42 @@ impl LeaseArtifacts {
             }
         };
         let in_flight = Arc::new(Mutex::new(InFlight::default()));
-        let dispatcher = tokio::spawn(dispatch(
-            lease.to_owned(),
-            point.calls,
-            Publisher {
-                in_flight: in_flight.clone(),
-                outbox: outbox.clone(),
-                ledger: ledger.clone(),
-                frames,
-            },
-        ));
+        let publisher = Publisher {
+            in_flight: in_flight.clone(),
+            outbox: outbox.clone(),
+            ledger: ledger.clone(),
+            frames,
+        };
+        let dispatcher = tokio::spawn(dispatch(lease.to_owned(), point.calls, publisher.clone()));
         Some(Self {
             lease: lease.to_owned(),
             address: point.address,
             in_flight,
             dispatcher,
+            publisher,
             outbox,
             ledger,
         })
+    }
+
+    /// Publish what the gateway asked as `request`, on a task of its own,
+    /// exactly as a harness's publish is: its `Published` names `request`,
+    /// and a file not published is answered `NotPublished`. What the
+    /// gateway then makes of it is settled by its `Collected`, as for any.
+    pub(crate) fn ask(&self, request: String, asked: PublishRequest) {
+        let publisher = self.publisher.clone();
+        let lease = self.lease.clone();
+        tokio::spawn(async move {
+            let answer = publisher.publish(&lease, Some(&request), &asked).await;
+            if let PublishAnswer::NotPublished { reason } = answer {
+                let frame = FromEnvironment::NotPublished {
+                    lease,
+                    request,
+                    reason,
+                };
+                let _ = publisher.frames.send(frame).await;
+            }
+        });
     }
 
     /// What a harness under this lease is told: the publish point.
@@ -334,7 +337,7 @@ async fn dispatch(lease: String, mut calls: mpsc::Receiver<PublishCall>, publish
         let lease = lease.clone();
         let publisher = publisher.clone();
         tokio::spawn(async move {
-            let answer = publisher.publish(&lease, &call.request).await;
+            let answer = publisher.publish(&lease, None, &call.request).await;
             let _ = call.answer.send(answer);
         });
     }
@@ -343,7 +346,13 @@ async fn dispatch(lease: String, mut calls: mpsc::Receiver<PublishCall>, publish
 impl Publisher {
     /// Publish one file: stage it, record it, tell the gateway, and wait for
     /// its answer, which the lease's end gives when the gateway does not.
-    async fn publish(&self, lease: &str, request: &PublishRequest) -> PublishAnswer {
+    /// `asked` is the gateway's request it answers, `None` for a harness's.
+    async fn publish(
+        &self,
+        lease: &str,
+        asked: Option<&str>,
+        request: &PublishRequest,
+    ) -> PublishAnswer {
         let refused = |reason| PublishAnswer::NotPublished { reason };
         let artifact = {
             let mut in_flight = lock(&self.in_flight);
@@ -360,7 +369,7 @@ impl Publisher {
             in_flight.next = in_flight.next.wrapping_add(1);
             artifact
         };
-        let answer = self.publish_as(lease, artifact, request).await;
+        let answer = self.publish_as(lease, artifact, asked, request).await;
         let mut in_flight = lock(&self.in_flight);
         in_flight.waiting.remove(&artifact);
         in_flight.reserved -= 1;
@@ -371,6 +380,7 @@ impl Publisher {
         &self,
         lease: &str,
         artifact: u32,
+        asked: Option<&str>,
         request: &PublishRequest,
     ) -> PublishAnswer {
         let refused = |reason| PublishAnswer::NotPublished { reason };
@@ -397,6 +407,7 @@ impl Publisher {
                 let entry = LedgerEntry::Published {
                     lease: lease.to_owned(),
                     artifact,
+                    request: asked.map(str::to_owned),
                     digest: staged.digest.clone(),
                     size: staged.size,
                 };
@@ -420,6 +431,7 @@ impl Publisher {
         let frame = FromEnvironment::Published {
             lease: lease.to_owned(),
             artifact,
+            request: asked.map(str::to_owned),
             file: staged,
         };
         // No frame sent: the connection is gone, and with it what the

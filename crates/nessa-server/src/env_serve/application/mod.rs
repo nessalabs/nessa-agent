@@ -18,7 +18,7 @@ mod timer;
 mod wire;
 pub(crate) use approval::{approval, Answer, EnvironmentPairing, NotApproved, Saved};
 pub(crate) use artifacts::{
-    ArtifactOutbox, PublishAnswer, PublishCall, PublishPoint, PublishRefusal, PublishRequest,
+    ArtifactOutbox, PublishAnswer, PublishCall, PublishPoint, PublishRequest,
     PUBLISH_POINT_VARIABLE,
 };
 pub(crate) use grants::{

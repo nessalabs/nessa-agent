@@ -15,7 +15,7 @@ fn the_tools_are_named_as_a_model_api_accepts_and_run_is_marked_destructive() {
         .iter()
         .map(|tool| tool["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["environments_list", "run"]);
+    assert_eq!(names, ["environments_list", "run", "artifacts_publish"]);
     for name in names.iter().chain([SERVER_NAME].iter()) {
         assert!(
             !name.is_empty()
@@ -32,6 +32,91 @@ fn the_tools_are_named_as_a_model_api_accepts_and_run_is_marked_destructive() {
         listed[1]["inputSchema"]["required"],
         json!(["environment", "argv"])
     );
+    assert_eq!(listed[2]["annotations"]["destructiveHint"], false);
+    assert_eq!(
+        listed[2]["inputSchema"]["required"],
+        json!(["environment", "path"])
+    );
+}
+
+#[test]
+fn artifacts_publish_reads_its_arguments_and_refuses_anything_else() {
+    let call = publish_call(
+        json!({"environment": "devbox", "path": "out/report.pdf"}),
+        "c".into(),
+    )
+    .unwrap();
+    assert_eq!(call.environment, "devbox");
+    assert_eq!(call.path, "out/report.pdf");
+    assert_eq!(call.media_type, None);
+    assert_eq!(call.call, "c");
+    let call = publish_call(
+        json!({"environment": "here", "path": "/srv/work/a.png", "mediaType": "image/png"}),
+        "c".into(),
+    )
+    .unwrap();
+    assert_eq!(call.media_type.as_deref(), Some("image/png"));
+    for refused in [
+        json!({"path": "a.png"}),
+        json!({"environment": "devbox"}),
+        json!({"environment": "devbox", "path": 3}),
+        json!({"environment": "devbox", "path": "a.png", "media_type": "image/png"}),
+        json!({"environment": "devbox", "path": "a.png", "bytes": "AAAA"}),
+    ] {
+        assert!(
+            publish_call(refused.clone(), "c".into()).is_err(),
+            "{refused}"
+        );
+    }
+}
+
+#[test]
+fn a_publish_answer_mirrors_the_hosts_and_is_an_error_unless_held() {
+    let held = published(&PublishAnswer::Kept {
+        already_held: false,
+        name: "report.pdf".into(),
+        digest: "ab".repeat(32),
+        size: 20,
+    });
+    assert_eq!(held["isError"], false);
+    assert_eq!(
+        held["structuredContent"],
+        json!({"outcome": "held", "digest": "ab".repeat(32), "size": 20, "name": "report.pdf"})
+    );
+    let again = published(&PublishAnswer::Kept {
+        already_held: true,
+        name: "report.pdf".into(),
+        digest: "ab".repeat(32),
+        size: 20,
+    });
+    assert_eq!(again["isError"], false);
+    assert_eq!(again["structuredContent"]["outcome"], "alreadyHeld");
+    for (refusal, code) in [
+        (
+            PublishCallRefusal::EnvironmentNotLeased,
+            "environment_not_leased",
+        ),
+        (PublishCallRefusal::NoTurn, "no_turn"),
+        (PublishCallRefusal::DuplicateRequest, "duplicate_request"),
+        (
+            PublishCallRefusal::PublishUnavailable,
+            "publish_unavailable",
+        ),
+        (PublishCallRefusal::TimedOut, "timed_out"),
+        (
+            PublishCallRefusal::NotPublished(PublishRefusal::OutsideWorkspace),
+            "outside_workspace",
+        ),
+        (
+            PublishCallRefusal::NotKept(CollectionRefusal::BudgetExceeded),
+            "budget_exceeded",
+        ),
+    ] {
+        let answer = published(&PublishAnswer::Refused(refusal));
+        assert_eq!(answer["isError"], true, "{code}");
+        assert_eq!(answer["structuredContent"]["refused"], code);
+        assert!(answer["structuredContent"]["message"].is_string());
+    }
 }
 
 #[test]

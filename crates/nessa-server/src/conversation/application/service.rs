@@ -19,7 +19,8 @@ use super::{
     ConversationModeAudit, ConversationModeAuditPhase, ConversationModeRequest,
     ConversationModeRequestState, ConversationOwnershipState, ConversationRepository,
     ConversationSummaries, DeletionFailures, ListedConversation, ObservationCursor,
-    ObservedConversations, RuntimeReadiness, StopFailure, SubmittedMessage, UnfinishedDeletions,
+    ObservedConversations, PublishRequests, RuntimeReadiness, StopFailure, SubmittedMessage,
+    UnfinishedDeletions,
 };
 use crate::conversation::domain::{
     Conversation, ConversationDeletion, ProviderSessionErasure, ProviderSessionLink,
@@ -583,6 +584,9 @@ struct LiveConversation {
     /// the epoch of this opening of it.
     app_reviews: Arc<AppReviews>,
     app_epoch: u64,
+    /// The publishes its agent asked for under its lease and not yet
+    /// offered (`artifacts_publish`), shared with its lease's collector.
+    publishes: Arc<PublishRequests>,
 }
 enum AttachmentOwner {
     Running(JoinHandle<()>),
@@ -1660,6 +1664,7 @@ impl ConversationService {
                                 attachment_owner: Mutex::new(AttachmentOwner::Running(owner)),
                                 app_reviews,
                                 app_epoch,
+                                publishes: Arc::default(),
                             });
                             // What the host publishes under the lease is
                             // kept for as long as the lease is held.
@@ -1773,7 +1778,9 @@ impl ConversationService {
                 let Some(live) = live.upgrade() else {
                     continue;
                 };
-                collector.collect(offer, &live.agent, &live.lease).await;
+                collector
+                    .collect(offer, &live.agent, &live.lease, &live.publishes)
+                    .await;
             }
         });
     }
@@ -5407,6 +5414,8 @@ fn awaits_images(snapshot: Option<&SessionSnapshot>) -> bool {
     })
 }
 
+mod artifact_publish;
+pub use artifact_publish::{PublishAnswer, PublishCall, PublishCallRefusal};
 mod environment_tools;
 pub use environment_tools::{
     CommandAnswer, CommandCall, CommandCallError, EnvironmentListing, HERE,
