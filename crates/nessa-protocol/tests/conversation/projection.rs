@@ -323,6 +323,41 @@ fn cancelled_review(
         .unwrap();
     event(ExecutionUpdate::PermissionCancelled(cancelled))
 }
+/// The review cancelled by `deadline`, the one it published, because no
+/// refusal was offered.
+fn deadline_cancelled_review(deadline: PermissionReviewDeadline) -> ExecutionEvent {
+    let ExecutionUpdate::PermissionRequested {
+        id, input, options, ..
+    } = review("{}".into()).update().clone()
+    else {
+        unreachable!()
+    };
+    let execution = ExecutionId::new("execution").unwrap();
+    let mut owner = ExecutionController::new(ExecutionSessionId::new("provider-session").unwrap());
+    owner.begin_execution(execution.clone()).unwrap();
+    owner
+        .request_permission(
+            &execution,
+            id.clone(),
+            ToolCallUpdate::new(
+                ToolCallId::new("tool").unwrap(),
+                None,
+                None,
+                None,
+                None,
+                None,
+            ),
+            input,
+            options,
+            Some(deadline.clone().promise(1_700_000_030_000).unwrap()),
+        )
+        .unwrap();
+    let cancelled = owner
+        .cancel_deadline_for_test(&execution, &id, deadline)
+        .unwrap()
+        .unwrap();
+    event(ExecutionUpdate::PermissionCancelled(cancelled))
+}
 fn review_snapshot(events: Vec<ExecutionEvent>) -> SessionSnapshot {
     SessionSnapshot {
         id: SessionId::new("conversation").unwrap(),
@@ -2618,12 +2653,18 @@ fn a_saved_deadline_counts_down_while_this_process_holds_the_review() {
         unreachable!()
     };
     let due = 1_700_000_030_000;
-    let restored =
-        PermissionReviewDeadline::stopping(PermissionToolClass::Other, Duration::from_secs(30))
-            .promise(due)
-            .unwrap()
-            .restored(true, Some(due))
-            .expect("a stopping deny deadline restores");
+    let restored = PermissionReviewDeadline::new(
+        PermissionToolClass::Other,
+        Duration::from_secs(30),
+        PermissionEffect::Deny,
+        STANDARD_DENY_REASON,
+    )
+    .unwrap()
+    .stopping()
+    .promise(due)
+    .unwrap()
+    .restored(true, Some(due))
+    .expect("a stopping deny deadline restores");
     assert!(!restored.armed());
     let snapshot = review_snapshot(vec![event(ExecutionUpdate::PermissionRequested {
         id,
@@ -2838,6 +2879,33 @@ fn a_deadline_notice_is_shown_only_as_the_one_settlement_its_review_published() 
                 PermissionCancellationReason::deadline_exceeded(),
                 CancellationOrigin::Runtime,
             ),
+            deny(),
+        ]),
+        (vec![], 0),
+        "an execution timeout shares the reason, but the review's deadline did not settle it"
+    );
+    let deadline = |effect, reason| {
+        PermissionReviewDeadline::new(
+            PermissionToolClass::Other,
+            std::time::Duration::from_secs(30),
+            effect,
+            reason,
+        )
+        .unwrap()
+    };
+    assert_eq!(
+        shown(vec![
+            published(),
+            deadline_cancelled_review(deadline(PermissionEffect::Allow, STANDARD_ALLOW_REASON)),
+            deny(),
+        ]),
+        (vec![], 0),
+        "a cancellation by a deadline the review did not publish settles nothing"
+    );
+    assert_eq!(
+        shown(vec![
+            published(),
+            deadline_cancelled_review(deadline(PermissionEffect::Deny, STANDARD_DENY_REASON)),
             deny(),
         ]),
         (vec![denied], 0),

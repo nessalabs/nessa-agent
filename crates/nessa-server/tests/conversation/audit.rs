@@ -517,15 +517,21 @@ fn audit_maps_a_deadline_answer_exactly() {
 #[test]
 fn audit_records_that_a_deadline_refusal_stopped_the_turn() {
     use nessa_sdk::domain::agent_execution::permissions::{
-        PermissionReviewDeadline, PermissionToolClass, STANDARD_STOP_REASON,
+        PermissionReviewDeadline, PermissionToolClass, STANDARD_DENY_REASON, STANDARD_STOP_REASON,
     };
     use serde_json::json;
     use std::time::Duration;
 
-    let value = deadline_answer_value(PermissionReviewDeadline::stopping(
-        PermissionToolClass::Other,
-        Duration::from_secs(30),
-    ));
+    let value = deadline_answer_value(
+        PermissionReviewDeadline::new(
+            PermissionToolClass::Other,
+            Duration::from_secs(30),
+            PermissionEffect::Deny,
+            STANDARD_DENY_REASON,
+        )
+        .unwrap()
+        .stopping(),
+    );
     assert_eq!(
         value["basis"],
         json!({

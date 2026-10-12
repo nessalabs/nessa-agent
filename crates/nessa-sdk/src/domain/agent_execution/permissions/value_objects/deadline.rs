@@ -168,12 +168,16 @@ impl PermissionReviewDeadline {
         })
     }
 
-    /// A denial of `class` after `wait` whose only offered refusal stops the turn.
-    pub fn stopping(class: PermissionToolClass, wait: Duration) -> Self {
+    /// This deadline's class and wait, as a denial whose only offered refusal
+    /// stops the turn. The class and wait were checked when this deadline was
+    /// made, so only the outcome and the sentence change.
+    pub fn stopping(self) -> Self {
         Self {
+            effect: PermissionEffect::Deny,
+            reason: checked_deadline_reason(STANDARD_STOP_REASON.to_owned())
+                .expect("the standard stop sentence is a valid reason"),
             stops_turn: true,
-            ..Self::new(class, wait, PermissionEffect::Deny, STANDARD_STOP_REASON)
-                .expect("stop sentence")
+            ..self
         }
     }
 
@@ -376,7 +380,7 @@ impl PermissionDeadlinePolicy {
                 .map(|option| option.id()),
         );
         if chosen.as_ref().is_some_and(|(_, stops)| *stops) {
-            deadline = PermissionReviewDeadline::stopping(deadline.class(), deadline.wait());
+            deadline = deadline.stopping();
         }
         PermissionDeadlineSettlement {
             deadline,
@@ -682,8 +686,14 @@ mod tests {
             PermissionDeadlinePolicy::new(read_only.clone(), read_only.clone()),
             Err(ExecutionError::MismatchedPermissionDeadline)
         );
-        let stopping =
-            PermissionReviewDeadline::stopping(PermissionToolClass::Other, Duration::from_secs(1));
+        let stopping = PermissionReviewDeadline::new(
+            PermissionToolClass::Other,
+            Duration::from_secs(1),
+            PermissionEffect::Deny,
+            STANDARD_DENY_REASON,
+        )
+        .unwrap()
+        .stopping();
         let promised = other.clone().promise(1_000).unwrap();
         let restored = other.clone().restored(false, Some(1_000)).unwrap();
         for settled in [stopping, promised, restored] {
@@ -906,10 +916,16 @@ mod tests {
             Err(ExecutionError::EmptyValue("permission deadline reason"))
         );
         assert_eq!(wait_ms(Duration::MAX), u64::MAX);
-        let promised =
-            PermissionReviewDeadline::stopping(PermissionToolClass::Other, Duration::from_secs(30))
-                .promise(1_700_000_030_000)
-                .unwrap();
+        let promised = PermissionReviewDeadline::new(
+            PermissionToolClass::Other,
+            Duration::from_secs(30),
+            PermissionEffect::Deny,
+            STANDARD_DENY_REASON,
+        )
+        .unwrap()
+        .stopping()
+        .promise(1_700_000_030_000)
+        .unwrap();
         assert!(promised.armed());
         assert_eq!(promised.due_at_ms(), Some(1_700_000_030_000));
         assert_eq!(promised.recorded_reason().as_str(), STANDARD_STOP_REASON);
@@ -932,10 +948,16 @@ mod tests {
         .restored(true, Some(due))
         .unwrap();
         assert_ne!(promised, different_class);
-        let different_wait =
-            PermissionReviewDeadline::stopping(PermissionToolClass::Other, Duration::from_secs(8))
-                .promise(due)
-                .unwrap();
+        let different_wait = PermissionReviewDeadline::new(
+            PermissionToolClass::Other,
+            Duration::from_secs(8),
+            PermissionEffect::Deny,
+            STANDARD_DENY_REASON,
+        )
+        .unwrap()
+        .stopping()
+        .promise(due)
+        .unwrap();
         assert_ne!(promised, different_wait);
         let allow = PermissionReviewDeadline::new(
             PermissionToolClass::Other,

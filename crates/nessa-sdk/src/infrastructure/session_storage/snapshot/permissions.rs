@@ -278,8 +278,14 @@ mod tests {
     fn a_deadline_cancellation_keeps_its_deadline_through_storage() {
         let execution = ExecutionId::new("execution").unwrap();
         let permission = PermissionId::new("1").unwrap();
-        let deadline =
-            PermissionReviewDeadline::stopping(PermissionToolClass::Other, Duration::from_secs(30));
+        let deadline = PermissionReviewDeadline::new(
+            PermissionToolClass::Other,
+            Duration::from_secs(30),
+            PermissionEffect::Deny,
+            STANDARD_DENY_REASON,
+        )
+        .unwrap()
+        .stopping();
         let options = PermissionOptions::new(
             vec![PermissionOption::new(
                 PermissionOptionId::new("allow").unwrap(),

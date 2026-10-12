@@ -18,5 +18,6 @@ tokio = { version = "1", default-features = false, features = ["rt"] }
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
+nessa-sdk = { path = "../nessa-sdk", features = ["test-support"] }
 tempfile = "3"
 nessa-local-storage = { path = "../nessa-local-storage" }

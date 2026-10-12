@@ -12,6 +12,7 @@ use super::view::{
     ConversationQuestion, ConversationRuntime, ConversationSelectionView, ConversationTool,
     ConversationTranscriptState, ConversationView, MAX_STRUCTURED_CONTENT_BYTES,
 };
+use nessa_sdk::application::agent_execution::permissions::CancellationOrigin;
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
     executions::{ExecutionEvent, ExecutionUpdate, SubmissionMode},
@@ -28,9 +29,8 @@ use nessa_sdk::domain::agent_execution::tools::McpTool;
 use nessa_sdk::domain::agent_execution::{
     executions::{ExecutionId, ExecutionOutcome, InvocationStage, MessageKind},
     permissions::{
-        PermissionCancellationReasonView, PermissionEffect, PermissionReviewDeadline,
-        PermissionScope, PermissionStateView, RefusalOutcome, ReviewDecline, ReviewDeclineReason,
-        ReviewDeclineStage,
+        PermissionEffect, PermissionReviewDeadline, PermissionScope, RefusalOutcome, ReviewDecline,
+        ReviewDeclineReason, ReviewDeclineStage,
     },
     questions::{AnswerShape, MAX_OPEN_QUESTIONS},
     tools::{ToolContentView, ToolKind, ToolStatus},
@@ -1058,10 +1058,18 @@ impl Projection {
             ExecutionUpdate::PermissionRequested { .. } => self.observe_permission(event),
             ExecutionUpdate::QuestionAsked { .. } => self.observe_question(event),
             ExecutionUpdate::PermissionCancelled(cancellation) => {
+                // Only the review's own published deadline settles it by
+                // cancelling. An execution timeout shares the reason but has
+                // a runtime origin, so its review was settled otherwise.
                 let by_deadline = matches!(
-                    cancellation.request().state(),
-                    PermissionStateView::Cancelled { reason }
-                        if matches!(reason.view(), PermissionCancellationReasonView::DeadlineExceeded)
+                    cancellation.origin(),
+                    CancellationOrigin::Deadline(deadline)
+                        if self.deadline_settled(
+                            execution,
+                            cancellation.request().id().as_str(),
+                            deadline.effect(),
+                            deadline.reason(),
+                        )
                 );
                 if !by_deadline {
                     self.cancelled_otherwise.insert((

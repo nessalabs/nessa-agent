@@ -817,10 +817,16 @@ mod borrowed_event_tests {
         use crate::domain::agent_execution::tools::{ToolCallId, ToolObservation};
         use std::time::Duration;
 
-        let deadline =
-            PermissionReviewDeadline::stopping(PermissionToolClass::Other, Duration::from_secs(30))
-                .promise(1_700_000_030_000)
-                .unwrap();
+        let deadline = PermissionReviewDeadline::new(
+            PermissionToolClass::Other,
+            Duration::from_secs(30),
+            PermissionEffect::Deny,
+            STANDARD_DENY_REASON,
+        )
+        .unwrap()
+        .stopping()
+        .promise(1_700_000_030_000)
+        .unwrap();
         let options = PermissionOptions::new(
             vec![PermissionOption::new(
                 PermissionOptionId::new("cancel").unwrap(),
