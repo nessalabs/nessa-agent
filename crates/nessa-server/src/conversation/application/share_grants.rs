@@ -5,9 +5,10 @@
 //!
 //! A grant has a role, Read, Comment or Drive, and a Drive grant a tool
 //! policy ([`ShareAccess`]). Every role reads, and reads exactly as Read
-//! does: nothing here or behind it asks the role yet, so a Comment or Drive
-//! grant admits no write (rows J1, J2). Later slices admit Drive's commands
-//! and Comment's notes by asking the role from here.
+//! does (row J1). Only a Drive grant drives the conversation it names
+//! ([`admit_drive`], row J11); its tools run unchecked until the policy is
+//! enforced (issue 707, slice J4). A later slice admits Comment's notes by
+//! asking the role from here.
 //!
 //! One authority answers "may this reader read this conversation":
 //! [`admit_read`] for one conversation, and for a paired device's list the
@@ -83,6 +84,15 @@ pub async fn reader_of(
     receivers: &dyn ReceiverAuthority,
     context: &AuthContext,
 ) -> Result<Reader, ReadRefusal> {
+    Ok(Reader::of(binding_of(receivers, context).await?.as_ref()))
+}
+
+/// The active receiver binding `context`'s credential holds, checked as
+/// [`reader_of`] says, or `None` for the owner's own surface.
+pub async fn binding_of(
+    receivers: &dyn ReceiverAuthority,
+    context: &AuthContext,
+) -> Result<Option<ReceiverBinding>, ReadRefusal> {
     let binding = receivers.resolve(context.credential_id()).await?;
     if let Some(binding) = &binding {
         if !binding.active {
@@ -94,7 +104,7 @@ pub async fn reader_of(
             return Err(ReadRefusal::Unverifiable);
         }
     }
-    Ok(Reader::of(binding.as_ref()))
+    Ok(binding)
 }
 
 /// Whether `reader` may read conversation `id`. Ownership is the caller's
@@ -114,6 +124,41 @@ pub async fn admit_read(
             Ok(true) => Ok(()),
             Ok(false) => Err(ReadRefusal::WrongOwner),
             Err(_) => Err(ReadRefusal::Unverifiable),
+        },
+    }
+}
+
+/// Why a paired party may not drive a conversation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DriveRefusal {
+    /// It holds no grant there: to it, the conversation does not exist, as
+    /// for a read (row G1).
+    NotGranted,
+    /// It holds a Read or Comment grant there, which may see the
+    /// conversation but not drive it.
+    BelowDrive,
+    /// The grant could not be read.
+    Unverifiable,
+}
+
+/// Whether `reader` may drive conversation `id`: start and steer turns in it,
+/// stop them, answer and cancel their questions, and look up the receipts of
+/// those commands (row J11). Only a Drive grant does; ownership is the
+/// caller's check, as for [`admit_read`]. A role is read from the grant at
+/// each command, so a role lowered or revoked refuses the next command, and
+/// one already admitted finishes (row J13).
+pub async fn admit_drive(
+    grants: &dyn ShareGrants,
+    reader: &Reader,
+    id: &ConversationId,
+) -> Result<(), DriveRefusal> {
+    match reader {
+        Reader::Owner => Ok(()),
+        Reader::PairedDevice { receiver_id } => match grants.held_role(id, receiver_id).await {
+            Ok(Some(role)) if role.at_least(ShareRole::Drive) => Ok(()),
+            Ok(Some(_)) => Err(DriveRefusal::BelowDrive),
+            Ok(None) => Err(DriveRefusal::NotGranted),
+            Err(_) => Err(DriveRefusal::Unverifiable),
         },
     }
 }
@@ -179,12 +224,21 @@ pub struct ShareGrantChange {
 /// tables: this is the owner's side only, and a follower's choice of what to
 /// keep never reaches it.
 pub trait ShareGrants: Send + Sync {
+    /// The role `receiver_id` holds on `id`, or `None` when it holds no
+    /// grant there.
+    fn held_role<'a>(
+        &'a self,
+        id: &'a ConversationId,
+        receiver_id: &'a str,
+    ) -> ConversationFuture<'a, Option<ShareRole>>;
     /// Whether `receiver_id` holds a grant on `id`, of any role.
     fn is_granted<'a>(
         &'a self,
         id: &'a ConversationId,
         receiver_id: &'a str,
-    ) -> ConversationFuture<'a, bool>;
+    ) -> ConversationFuture<'a, bool> {
+        Box::pin(async move { Ok(self.held_role(id, receiver_id).await?.is_some()) })
+    }
     /// Apply one change. `false` when it changed nothing (granting the role
     /// and policy already held, revoking a grant not held). A grant naming
     /// another role or policy than the one held replaces them and is `true`
