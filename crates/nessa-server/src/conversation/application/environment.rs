@@ -185,6 +185,10 @@ pub(crate) trait LeaseHold: Send + Sync {
 
 /// A file the conversation holds, asked into the environment's workspace.
 #[derive(Clone)]
+#[cfg_attr(
+    not(unix),
+    allow(dead_code, reason = "read by the Unix gateway's SSH adapter")
+)]
 pub(crate) struct FetchAsk {
     /// The tool call it is for.
     pub(crate) request: String,
@@ -226,6 +230,10 @@ pub(crate) enum HeldSourceFailure {
 
 /// Where a fetched file is, once the environment placed it.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    not(unix),
+    allow(dead_code, reason = "answered by the Unix gateway's SSH adapter")
+)]
 pub(crate) enum FetchPlaced {
     /// Verified and linked at `path`, where nothing was before.
     Placed { path: String },
