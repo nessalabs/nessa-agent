@@ -115,7 +115,11 @@ fn line(change: &GrantChange) -> Value {
 
 fn operation(operation: &GrantOperation) -> Value {
     match operation {
-        GrantOperation::Grant { agents, commands } => {
+        GrantOperation::Grant {
+            agents,
+            commands,
+            max_lease,
+        } => {
             let mut value = json!({"op": "grant"});
             match agents {
                 Some(Agents::All) => value["agents"] = json!("*"),
@@ -126,6 +130,9 @@ fn operation(operation: &GrantOperation) -> Value {
             }
             if let Some(commands) = commands {
                 value["maxTimeoutMs"] = json!(commands.max_timeout_ms());
+            }
+            if let Some(max_lease) = max_lease {
+                value["maxLeaseMs"] = json!(max_lease.ms());
             }
             value
         }

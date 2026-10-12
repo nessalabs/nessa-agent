@@ -337,11 +337,15 @@ one:
 ```sh
 nessa env grant --agent claude                          # the gateway this machine paired with
 nessa env grant --commands --max-timeout 10m            # commands, each cut to at most 10 minutes
+nessa env grant --max-lease 8h                          # each agent lease ended after 8 hours
 nessa env ungrant --commands
 nessa env grants                                        # every entry, as JSON
 ```
 
-A second `--max-timeout` replaces the first, shorter or longer.
+A second `--max-timeout` replaces the first, shorter or longer, and a second
+`--max-lease` likewise. Past its `--max-lease`, this machine stops the
+agent's harness itself and the gateway records the lease as expired; with
+none, a lease lasts until it is ended. `ungrant --all` takes the limit back.
 
 `--peer ssh` changes what a gateway reaching this machine over SSH gets
 instead. Without an entry, SSH keeps everything the machine's `config.json`

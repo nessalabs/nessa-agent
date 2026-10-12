@@ -22,8 +22,8 @@ use nessa_sdk::application::agent_execution::executions::{
     ExecutionUpdate, PermissionAuthoritySource,
 };
 use nessa_sdk::application::agent_execution::permissions::{
-    PermissionAnswer, PermissionCancellation, PermissionCancellationRequest, PermissionResolution,
-    PermissionSelectionState, QuestionAnswer,
+    ActionContext, PermissionAnswer, PermissionCancellation, PermissionCancellationRequest,
+    PermissionResolution, PermissionSelectionState, QuestionAnswer,
 };
 use nessa_sdk::application::agent_execution::providers::{
     AgentProvider, ApprovalMode, CleanupFuture, CleanupReport, CloseOutcome, ExecutionEventStream,
@@ -947,6 +947,8 @@ pub(crate) struct MemoryAttachments {
     pub(crate) release_entered: Notify,
     /// Every published file kept: its lease, name and bytes.
     pub(crate) published: Mutex<Vec<(String, String, Vec<u8>)>>,
+    /// Who each published file kept was asked for by, in the same order.
+    pub(crate) requested_by: Mutex<Vec<ActionContext>>,
     /// When set, `keep_published` notifies [`Self::record_entered`] once
     /// the bytes are read and waits for this before it asks for the record.
     pub(crate) hold_record: Mutex<Option<oneshot::Receiver<()>>>,
@@ -1012,6 +1014,10 @@ impl ConversationAttachments for MemoryAttachments {
             if !(published.record)().await {
                 return Err(nessa_protocol::lease::CollectionRefusal::NotKept);
             }
+            self.requested_by
+                .lock()
+                .unwrap()
+                .push(published.requested_by.clone());
             self.published
                 .lock()
                 .unwrap()

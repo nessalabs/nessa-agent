@@ -1,7 +1,10 @@
-//! A published file's bytes, read off the host over an artifact channel
-//! (issue #701), resumed where a channel that failed left off.
+//! A published file's bytes, read off the host (issue #701): over an
+//! artifact channel, resumed where a channel that failed left off
+//! ([`SftpBytes`]); or, on a paired connection, which has nothing beside
+//! its lease frames (issue #706), over those frames ([`FrameBytes`]).
 //!
 //! ```text
+//! SftpBytes:
 //! first next() ──▶ a task: open a channel ──▶ sftp INIT ──▶ read_file(path, reached)
 //!   chunks, in file order ──▶ a queue of a few ──▶ next() hands each on
 //!   the channel failed ──▶ resume from `reached` on a new one, ARTIFACT_READ_RESUMES times
@@ -9,21 +12,32 @@
 //!   the lease no longer routed here ──▶ LeaseEnded, at once
 //!   past ARTIFACT_READ_RESUMES, or the host misspoke ──▶ Unavailable
 //! dropped ──▶ the task is stopped, its channel ended
+//! FrameBytes:
+//! next() ──▶ ask ranges of MAX_DATA_BYTES in file order, at most
+//!            MAX_ARTIFACT_READS_IN_FLIGHT unanswered (HostLink::read_artifact)
+//!   ──▶ the first range's answer: its bytes ──▶ handed on, as many as came
+//!   unreadable there ──▶ Changed
+//!   busy ──▶ Unavailable (the host misspoke)
+//!   not staged there, not asked, or the lease's route gone ──▶ LeaseEnded
 //! ```
 //!
 //! Arrows are steps, in order. Nothing here checks the bytes: their size
 //! and digest are checked by whoever keeps them, against what the host
-//! published, so a resume that went wrong is a mismatch, never a file.
+//! published, so a resume that went wrong is a mismatch, never a file. A
+//! paired connection's frames have no channel of their own to fail: when
+//! the connection goes, the lease goes with it, so nothing is resumed.
 use super::{
     connector::ArtifactChannels,
+    link::{ArtifactReadAnswer, HostLink},
     sftp::{ByteSink, SftpError, SftpSession, SinkWrite},
 };
 use crate::conversation::application::{
     ArtifactBytes, ArtifactChunk, ArtifactReadFailure, ARTIFACT_READ_RESUMES,
 };
-use std::{io, sync::Arc};
+use nessa_protocol::lease::{ArtifactReadRefusal, MAX_ARTIFACT_READS_IN_FLIGHT, MAX_DATA_BYTES};
+use std::{collections::VecDeque, io, sync::Arc};
 use tokio::{
-    sync::{mpsc, watch},
+    sync::{mpsc, oneshot, watch},
     task::JoinHandle,
 };
 
@@ -173,6 +187,90 @@ impl ByteSink for Sender<'_> {
                 .send(Ok(chunk))
                 .await
                 .map_err(|_| io::Error::from(io::ErrorKind::BrokenPipe))
+        })
+    }
+}
+
+/// One published file's bytes on a paired environment, read over its lease
+/// frames a range at a time.
+pub(crate) struct FrameBytes {
+    link: Arc<HostLink>,
+    lease: String,
+    artifact: u32,
+    size: u64,
+    /// The first offset not yet asked.
+    asked: u64,
+    /// Ranges asked and not yet handed on, in file order: where each
+    /// answer arrives.
+    pending: VecDeque<oneshot::Receiver<ArtifactReadAnswer>>,
+    /// A failure was handed on: nothing more is read.
+    failed: bool,
+}
+
+impl FrameBytes {
+    /// The bytes of the file published as `artifact` under `lease`, `size`
+    /// long, read over `link`'s frames.
+    pub(crate) fn new(link: Arc<HostLink>, lease: String, artifact: u32, size: u64) -> Self {
+        Self {
+            link,
+            lease,
+            artifact,
+            size,
+            asked: 0,
+            pending: VecDeque::new(),
+            failed: false,
+        }
+    }
+
+    /// The next range in file order, once read: its bytes, or why the file
+    /// cannot be read on. Keeps as many ranges asked as may be.
+    async fn read_next(&mut self) -> Result<Option<Vec<u8>>, ArtifactReadFailure> {
+        while self.pending.len() < MAX_ARTIFACT_READS_IN_FLIGHT && self.asked < self.size {
+            let length = (self.size - self.asked).min(MAX_DATA_BYTES as u64);
+            let length = u32::try_from(length).unwrap_or(u32::MAX);
+            let answer = self
+                .link
+                .read_artifact(&self.lease, self.artifact, self.asked, length)
+                .await
+                .ok_or(ArtifactReadFailure::LeaseEnded)?;
+            self.pending.push_back(answer);
+            self.asked += u64::from(length);
+        }
+        let Some(answer) = self.pending.pop_front() else {
+            return Ok(None);
+        };
+        // Its wait ends with the lease's route.
+        let data = match answer.await {
+            Ok(Ok(data)) => data,
+            Ok(Err(ArtifactReadRefusal::NotStaged)) | Err(_) => {
+                return Err(ArtifactReadFailure::LeaseEnded)
+            }
+            Ok(Err(ArtifactReadRefusal::Unreadable)) => return Err(ArtifactReadFailure::Changed),
+            Ok(Err(ArtifactReadRefusal::Busy)) => {
+                tracing::warn!(
+                    lease = self.lease,
+                    artifact = self.artifact,
+                    "the host refused a read this gateway kept within its bound"
+                );
+                return Err(ArtifactReadFailure::Unavailable);
+            }
+        };
+        Ok(Some(data))
+    }
+}
+
+impl ArtifactBytes for FrameBytes {
+    fn next(&mut self) -> ArtifactChunk<'_> {
+        Box::pin(async move {
+            if self.failed {
+                return Ok(None);
+            }
+            let next = self.read_next().await;
+            if next.is_err() {
+                self.failed = true;
+                self.pending.clear();
+            }
+            next
         })
     }
 }

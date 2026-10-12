@@ -9,23 +9,31 @@
 //!         ──▶ the key's environment ──▶ HostLink::over(peer:<key>, stream)
 //!               hello, this build? ──▶ replaces the connection it had
 //!               (that one closed: its leases lost) ──▶ held until it ends
+//!               every keepalive interval: ServingCredentials::serves(proof)?
+//!                 no ──▶ HostLink::revoke
 //! open / grant / account ──▶ that environment's current connection
 //!   ──▶ ServingCredentials::serves(the proof it was opened with)?
-//!         no ──▶ the connection closed, the lease refused unreachable
+//!         no ──▶ HostLink::revoke, the lease refused unreachable
+//! HostLink::revoke ──▶ no lease admitted ──▶ Revoked queued to the host first
+//!   ──▶ then each lease ending as revoked (so its End goes after Revoked)
+//!   ──▶ each End answered ──▶ the connection closed
 //! ```
 //!
 //! Arrows are calls, in order. A paired environment is one key: its name is
 //! `peer:` and the key in hex ([`PeerEnvironment`]), whichever connection it
 //! last made. Whether that key may serve is the registry's and the policy's
 //! answer, never a copy kept here: it is asked when the connection is
-//! admitted and again before every lease on it. Only the connection differs
+//! admitted, again before every lease on it, and again every keepalive
+//! interval while it is open, so a credential revoked, expired or whose
+//! membership was disabled ends an idle connection too, and the leases
+//! running on it as revoked, on both sides. Only the connection differs
 //! from an SSH host's; the leases on it, their frames and their audit are
-//! the same [`SshEnvironment`]'s. A file the host publishes is not fetched
-//! over a paired connection yet: it has no artifact channel, so its
-//! collection is refused.
+//! the same [`SshEnvironment`]'s. A file the host publishes is read over
+//! the lease frames themselves ([`ArtifactTransport::Frames`]), since a
+//! paired connection carries nothing beside them.
 use super::{
     audit::EnvironmentAudit,
-    connector::{ArtifactChannel, ArtifactChannels, LeaseConnection},
+    connector::{ArtifactTransport, LeaseConnection},
     environment::{SshEnvironment, SshTimings},
 };
 use crate::conversation::application::{Environment, EnvironmentFuture, PairedEnvironments};
@@ -33,7 +41,6 @@ use nessa_auth::application::{pairing::DeviceConnectionProof, ports::AccessError
 use nessa_sdk::domain::agent_execution::leases::PeerEnvironment;
 use std::{
     collections::BTreeMap,
-    io,
     sync::{Arc, Mutex, PoisonError},
 };
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -93,7 +100,7 @@ impl PeerEnvironments {
             from_environment,
             to_environment,
             keep,
-            artifacts: Arc::new(NoArtifactChannels),
+            artifacts: ArtifactTransport::Frames,
         };
         environment.serve(proof, connection).await;
     }
@@ -145,17 +152,5 @@ impl PairedEnvironments for PeerEnvironments {
             .filter(|(_, environment)| environment.is_connected())
             .map(|(peer, _)| *peer)
             .collect()
-    }
-}
-
-/// A paired connection carries no artifact channel yet.
-struct NoArtifactChannels;
-
-impl ArtifactChannels for NoArtifactChannels {
-    fn open(&self) -> io::Result<ArtifactChannel> {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "a paired environment's files are not fetched yet",
-        ))
     }
 }

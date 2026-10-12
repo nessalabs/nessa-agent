@@ -12,6 +12,7 @@ use super::paired_environments::{ListenerEnvironments, RegistryServing};
 use super::peer_reading_tests::{inputs, owned, uuid, NoAgents, WAIT};
 use super::runtime_config::NativeConfig;
 use crate::app::dependencies::RuntimeDependencies;
+use crate::conversation::application::LeaseRelease;
 use crate::conversation::application::{CommandResult, EnvironmentFuture, PairedEnvironments};
 use crate::conversation::infrastructure::ssh_environment::{
     DurableEnvironmentAudit, PeerEnvironments, ServingCredentials, SshTimings,
@@ -20,11 +21,11 @@ use crate::conversation::infrastructure::LocalReceiverAuthority;
 use crate::device_pairing::infrastructure::PairingOwnerCommands;
 use crate::env::{LEASE_PROTOCOL, VERSION};
 use crate::env_serve::application::{
-    serve, CommandRan, CommandRunner, CommandStop, Runners, ServeTimings, Serving,
+    serve, CommandRan, CommandRunner, CommandStop, ManualTimer, Runners, ServeTimings, Serving,
 };
-use crate::env_serve::domain::{CommandGrant, Peer, PeerGrant};
+use crate::env_serve::domain::{Agents, CommandGrant, MaxLease, Peer, PeerGrant};
 use crate::env_serve::infrastructure::{
-    dial, ConfiguredLauncher, FileGrants, FileLedger, FileOutbox, TokioTimer,
+    dial, ConfiguredLauncher, FileGrants, FileLedger, FileOutbox, LaunchSpec, TokioTimer,
 };
 use crate::product::{ProductDependencies, ProductRouteState};
 use nessa_auth::adapters::cedar::CedarPolicyEvaluator;
@@ -40,6 +41,16 @@ use nessa_auth::domain::{AudienceId, OrganizationId, Resource, ResourceId};
 use nessa_client_core::pairing::NativeEnrollmentClient;
 use nessa_protocol::lease::{Cleanup, CommandEnd};
 use nessa_protocol::pairing::wire::NativePairingStatus;
+use nessa_sdk::application::agent_execution::{
+    agents::AgentError,
+    providers::{
+        AgentProvider, HarnessHost, HarnessLaunch, ProviderIdentity, ProviderOpenError,
+        ProviderOpenFuture, ProviderOpenRequest,
+    },
+};
+use nessa_sdk::domain::agent_execution::leases::{
+    AgentWork, LeaseDeadline, LeaseEndCause, LeaseGrants, LeaseTerms, LeaseWork, SandboxProfile,
+};
 use nessa_sdk::domain::agent_execution::leases::{
     CommandExit, CommandRefusal, CommandWork, LeaseCleanup, LeaseId, LeaseRefusal, PeerEnvironment,
 };
@@ -52,6 +63,7 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::io::AsyncReadExt;
 use tokio::sync::{watch, Notify};
 use tokio::task::JoinHandle;
 
@@ -94,6 +106,11 @@ impl ServingCredentials for Gate {
 
 impl Gateway {
     async fn start(root: &Path) -> Self {
+        Self::start_with(root, SshTimings::default()).await
+    }
+
+    /// As [`Self::start`], its paired environments kept with `timings`.
+    async fn start_with(root: &Path, timings: SshTimings) -> Self {
         let (gateway, organization) = (uuid(), uuid());
         let (auth, session, owner) = owned(root, &gateway, &organization).await;
         let receivers = Arc::new(
@@ -131,7 +148,7 @@ impl Gateway {
         let peers = Arc::new(PeerEnvironments::new(
             gate.clone(),
             DurableEnvironmentAudit::new(root.join("environments"), Arc::new(SystemClock)).unwrap(),
-            SshTimings::default(),
+            timings,
         ));
         let prepared = prepared.with_environments(Arc::new(ListenerEnvironments(peers.clone())));
         let state = ProductRouteState::new(
@@ -280,6 +297,10 @@ struct Host {
     launcher: Arc<ConfiguredLauncher>,
     peer: Peer,
     grants: Arc<FileGrants>,
+    /// Where `ledger` is written.
+    ledger_path: std::path::PathBuf,
+    /// What its serving waits on.
+    timer: Arc<dyn crate::env_serve::application::Timer>,
 }
 
 impl Host {
@@ -292,9 +313,21 @@ impl Host {
 
     /// A host whose owner granted the gateway `pin` names nothing yet.
     fn ungranted(root: &Path, pin: [u8; 44]) -> Self {
+        Self::running(root, pin, HashMap::new())
+    }
+
+    /// A host whose configuration starts `agents`, its owner granting the
+    /// gateway `pin` names nothing yet.
+    fn running(
+        root: &Path,
+        pin: [u8; 44],
+        agents: HashMap<nessa_protocol::agents::AgentId, LaunchSpec>,
+    ) -> Self {
         nessa_local_storage::create_directory(root).unwrap();
         let workspace = root.canonicalize().unwrap();
         Self {
+            ledger_path: workspace.join("leases.jsonl"),
+            timer: Arc::new(TokioTimer::new()),
             peer: Peer::Gateway { pin },
             grants: Arc::new(FileGrants::new(&workspace)),
             ledger: Arc::new(FileLedger::open(workspace.join("leases.jsonl")).unwrap()),
@@ -308,7 +341,7 @@ impl Host {
             ),
             launcher: Arc::new(ConfiguredLauncher::new(
                 workspace.to_string_lossy().into_owned(),
-                HashMap::new(),
+                agents,
             )),
         }
     }
@@ -344,7 +377,7 @@ impl Host {
             self.ledger.clone(),
             self.outbox.clone(),
             ServeTimings::default(),
-            Arc::new(TokioTimer::new()),
+            self.timer.clone(),
         )
         .await;
     }
@@ -741,4 +774,653 @@ async fn a_pin_that_is_not_a_key_is_invalid_input_and_another_key_is_not() {
         .err()
         .expect("another key's pin does not match the gateway");
     assert_eq!(not_the_gateway.kind(), ErrorKind::ConnectionAborted);
+}
+
+/// A binding that runs its harness on whichever host it is given, and
+/// remembers that host.
+struct OnHost {
+    capabilities: nessa_sdk::domain::effective_capabilities::value_objects::EffectiveCapabilities,
+    host: Arc<std::sync::Mutex<Option<Arc<dyn HarnessHost>>>>,
+}
+
+impl AgentProvider for OnHost {
+    fn identity(&self) -> ProviderIdentity {
+        ProviderIdentity::new("fixture", "model", "context").expect("a fixed identity is valid")
+    }
+    fn capabilities(
+        &self,
+    ) -> &nessa_sdk::domain::effective_capabilities::value_objects::EffectiveCapabilities {
+        &self.capabilities
+    }
+    fn open(&self, _request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
+        Box::pin(async { Err(ProviderOpenError::no_resources(AgentError::Closed)) })
+    }
+    fn on_host(&self, host: Arc<dyn HarnessHost>) -> Result<Arc<dyn AgentProvider>, AgentError> {
+        *self.host.lock().unwrap() = Some(host);
+        Ok(Arc::new(Self {
+            capabilities: self.capabilities.clone(),
+            host: self.host.clone(),
+        }))
+    }
+}
+
+/// Row I7 end to end: E's owner lets A's agent leases last a while. A asks
+/// for one with no deadline and is granted it with that duration; past it,
+/// E stops the harness, records the lease expiring and ended as expired,
+/// and says so; A's hold sees the lease ended as expired, and A's End is
+/// answered with what E's own end took.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_paired_environment_expires_a_lease_and_both_sides_record_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let a = Gateway::start(&directory.path().join("a")).await;
+    let e = a
+        .pair(
+            &directory.path().join("e-state"),
+            ConsentClass::PeerEnvironment,
+        )
+        .await;
+    let stream = dial(a.native, e.identity.clone(), e.pin, clock())
+        .await
+        .unwrap();
+    // E runs `claude` as `cat`, which runs until it is stopped. Its serving
+    // waits on a timer only this test moves, so the lease's deadline comes
+    // when the test says, never before its harness has started.
+    let cat = LaunchSpec {
+        executable: "/bin/cat".into(),
+        args: Vec::new(),
+        environment: Default::default(),
+    };
+    let timer = Arc::new(ManualTimer::default());
+    let mut host = Host::running(
+        &directory.path().join("e"),
+        e.pin,
+        HashMap::from([(nessa_protocol::agents::AgentId::Claude, cat)]),
+    );
+    host.timer = timer.clone();
+    let host = Arc::new(host);
+    let max_lease = MaxLease::new(1_500).unwrap();
+    host.grants
+        .change(&host.peer, |_| {
+            Ok::<_, ()>(Some(
+                PeerGrant::nothing()
+                    .with_agents(Agents::All)
+                    .with_max_lease(max_lease),
+            ))
+        })
+        .unwrap();
+    let (from_gateway, to_gateway) = tokio::io::split(stream);
+    let _serving = {
+        let host = host.clone();
+        tokio::spawn(async move { host.serve(from_gateway, to_gateway).await })
+    };
+    a.until_connected(e.peer, true).await;
+
+    let environment = a.peers.environment(&e.peer);
+    let lease = LeaseId::new(uuid()).unwrap();
+    let terms = LeaseTerms {
+        environment: environment.declaration().environment,
+        work: LeaseWork::Agent(AgentWork::new("claude", "model").unwrap()),
+        sandbox: SandboxProfile::HarnessDefault,
+        grants: LeaseGrants::Opening,
+        deadline: LeaseDeadline::UntilEnded,
+    };
+    let given = Arc::new(std::sync::Mutex::new(None));
+    let binding = Arc::new(OnHost {
+        capabilities: crate::conversation_test_support::Provider::new(Arc::new(
+            crate::conversation_test_support::ProviderFactory::default(),
+        ))
+        .capabilities()
+        .clone(),
+        host: given.clone(),
+    });
+    let opened = tokio::time::timeout(WAIT, environment.open(&lease, &terms, binding))
+        .await
+        .unwrap()
+        .unwrap_or_else(|refusal| panic!("granted: {refusal:?}"));
+    // Granted with the duration E's owner set, though none was asked.
+    assert_eq!(opened.granted.lease_ms, Some(1_500));
+    let harness_host = given.lock().unwrap().clone().unwrap();
+    let mut harness = harness_host.start(HarnessLaunch::default()).unwrap();
+    // Its start is recorded before the deadline is reached.
+    let recorded = |kind: &'static str| {
+        let ledger = std::fs::read_to_string(&host.ledger_path).unwrap();
+        ledger.lines().any(|line| {
+            let entry: serde_json::Value = serde_json::from_str(line).unwrap();
+            entry["kind"] == kind && entry["lease"] == lease.as_str()
+        })
+    };
+    tokio::time::timeout(WAIT, async {
+        while !recorded("started") {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the harness starts");
+    let ends = opened
+        .hold
+        .ends()
+        .expect("a paired environment's lease can end there");
+    timer.advance(Duration::from_millis(1_500));
+    assert_eq!(
+        tokio::time::timeout(WAIT, ends).await.expect("E ends it"),
+        LeaseEndCause::Expired
+    );
+    // A's End is answered with E's own end's cleanup.
+    let released = tokio::time::timeout(WAIT, opened.hold.end(LeaseEndCause::Expired))
+        .await
+        .unwrap();
+    assert!(
+        matches!(
+            released,
+            LeaseRelease::Released(LeaseCleanup::Confirmed { .. })
+        ),
+        "{released:?}"
+    );
+    // The harness was stopped there: its output ends.
+    let mut rest = Vec::new();
+    tokio::time::timeout(WAIT, harness.output.read_to_end(&mut rest))
+        .await
+        .expect("the harness's output ends")
+        .expect("and reads to its end");
+    let entries: Vec<serde_json::Value> = std::fs::read_to_string(&host.ledger_path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .filter(|entry: &serde_json::Value| entry["lease"] == lease.as_str())
+        .collect();
+    let kinds: Vec<_> = entries
+        .iter()
+        .map(|entry| entry["kind"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        kinds,
+        ["granted", "started", "expiring", "stopped", "ended"],
+        "{entries:?}"
+    );
+    assert_eq!(entries[0]["leaseMs"], 1_500);
+    assert_eq!(entries[2]["leaseMs"], 1_500);
+    assert_eq!(entries[4]["cause"], "expired");
+    assert_eq!(entries[4]["cleanup"]["outcome"], "confirmed");
+}
+
+/// Whether a key still serves is asked again this often in the revocation
+/// tests, in place of the keepalive interval.
+const RECHECK: Duration = Duration::from_millis(100);
+
+impl Gateway {
+    /// The owner revokes `machine`'s credential.
+    fn revoke(&self, machine: &Machine) {
+        self.auth
+            .revoke_sync(RevokeCredentialRequest {
+                request_id: uuid(),
+                issuer_principal_id: self.owner.clone(),
+                credential_id: machine.credential.clone(),
+                revoked_at: SystemClock.unix_seconds(),
+            })
+            .unwrap();
+    }
+
+    /// Every record of `kind` in the gateway's environment audit under
+    /// `root`.
+    fn environment_records(root: &Path, kind: &str) -> Vec<serde_json::Value> {
+        let mut records = Vec::new();
+        let mut directories = vec![root.join("environments")];
+        while let Some(directory) = directories.pop() {
+            let Ok(entries) = std::fs::read_dir(&directory) else {
+                continue;
+            };
+            for entry in entries {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    directories.push(path);
+                    continue;
+                }
+                let Ok(text) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
+                let Ok(record) = serde_json::from_str::<serde_json::Value>(&text) else {
+                    continue;
+                };
+                if record["kind"] == kind {
+                    records.push(record);
+                }
+            }
+        }
+        records
+    }
+}
+
+/// Row I8: an idle paired environment whose credential is revoked has its
+/// connection closed once the gateway asks again, with no lease asked of
+/// it: it leaves the connected list at once, its serving ends, and its next
+/// dial is refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_idle_paired_environment_is_closed_once_revoked() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("a");
+    let a = Gateway::start_with(
+        &root,
+        SshTimings {
+            keepalive: RECHECK,
+            ..SshTimings::default()
+        },
+    )
+    .await;
+    let e = a
+        .pair(
+            &directory.path().join("e-state"),
+            ConsentClass::PeerEnvironment,
+        )
+        .await;
+    let stream = dial(a.native, e.identity.clone(), e.pin, clock())
+        .await
+        .unwrap();
+    let served = serving(&directory.path().join("e"), e.pin, stream);
+    a.until_connected(e.peer, true).await;
+    a.revoke(&e);
+    tokio::time::timeout(WAIT, served)
+        .await
+        .expect("the revoked environment's serving ends with no lease asked")
+        .unwrap();
+    a.until_connected(e.peer, false).await;
+    let records = Gateway::environment_records(&root, "revoked");
+    assert_eq!(records.len(), 1, "{records:?}");
+    let refused = dial(a.native, e.identity.clone(), e.pin, clock())
+        .await
+        .err()
+        .expect("a revoked environment is refused");
+    assert_eq!(refused.kind(), ErrorKind::PermissionDenied);
+}
+
+/// Row I8 end to end: E runs a harness for A under a lease; A's owner
+/// revokes E's credential. Without any new lease asked, A sees it at its
+/// next check, ends the lease as revoked, tells E, and E stops the harness
+/// and records the lease revoking and ended as revoked; A's End is answered
+/// with E's cleanup, A closes the connection, and E's next dial is refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_paired_environment_revoked_mid_lease_ends_it_on_both_sides_and_closes() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("a");
+    let a = Gateway::start_with(
+        &root,
+        SshTimings {
+            keepalive: RECHECK,
+            ..SshTimings::default()
+        },
+    )
+    .await;
+    let e = a
+        .pair(
+            &directory.path().join("e-state"),
+            ConsentClass::PeerEnvironment,
+        )
+        .await;
+    let stream = dial(a.native, e.identity.clone(), e.pin, clock())
+        .await
+        .unwrap();
+    // E runs `claude` as `cat`, which runs until it is stopped.
+    let cat = LaunchSpec {
+        executable: "/bin/cat".into(),
+        args: Vec::new(),
+        environment: Default::default(),
+    };
+    let host = Arc::new(Host::running(
+        &directory.path().join("e"),
+        e.pin,
+        HashMap::from([(nessa_protocol::agents::AgentId::Claude, cat)]),
+    ));
+    host.grants
+        .change(&host.peer, |_| {
+            Ok::<_, ()>(Some(PeerGrant::nothing().with_agents(Agents::All)))
+        })
+        .unwrap();
+    let (from_gateway, to_gateway) = tokio::io::split(stream);
+    let served = {
+        let host = host.clone();
+        tokio::spawn(async move { host.serve(from_gateway, to_gateway).await })
+    };
+    a.until_connected(e.peer, true).await;
+
+    let environment = a.peers.environment(&e.peer);
+    let lease = LeaseId::new(uuid()).unwrap();
+    let terms = LeaseTerms {
+        environment: environment.declaration().environment,
+        work: LeaseWork::Agent(AgentWork::new("claude", "model").unwrap()),
+        sandbox: SandboxProfile::HarnessDefault,
+        grants: LeaseGrants::Opening,
+        deadline: LeaseDeadline::UntilEnded,
+    };
+    let given = Arc::new(std::sync::Mutex::new(None));
+    let binding = Arc::new(OnHost {
+        capabilities: crate::conversation_test_support::Provider::new(Arc::new(
+            crate::conversation_test_support::ProviderFactory::default(),
+        ))
+        .capabilities()
+        .clone(),
+        host: given.clone(),
+    });
+    let opened = tokio::time::timeout(WAIT, environment.open(&lease, &terms, binding))
+        .await
+        .unwrap()
+        .unwrap_or_else(|refusal| panic!("granted: {refusal:?}"));
+    let harness_host = given.lock().unwrap().clone().unwrap();
+    let mut harness = harness_host.start(HarnessLaunch::default()).unwrap();
+    let entries = || -> Vec<serde_json::Value> {
+        std::fs::read_to_string(&host.ledger_path)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .filter(|entry: &serde_json::Value| entry["lease"] == lease.as_str())
+            .collect()
+    };
+    tokio::time::timeout(WAIT, async {
+        while !entries().iter().any(|entry| entry["kind"] == "started") {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the harness starts");
+    let ends = opened
+        .hold
+        .ends()
+        .expect("a paired environment's lease can end there");
+
+    a.revoke(&e);
+    assert_eq!(
+        tokio::time::timeout(WAIT, ends)
+            .await
+            .expect("A sees the revocation with no lease asked"),
+        LeaseEndCause::Revoked
+    );
+    // It leaves the connected list at once, though its connection still
+    // carries the lease's end.
+    assert!(!a.peers.connected().contains(&e.peer));
+    let released = tokio::time::timeout(WAIT, opened.hold.end(LeaseEndCause::Revoked))
+        .await
+        .unwrap();
+    assert!(
+        matches!(
+            released,
+            LeaseRelease::Released(LeaseCleanup::Confirmed { .. })
+        ),
+        "{released:?}"
+    );
+    // The harness was stopped there: its output ends.
+    let mut rest = Vec::new();
+    tokio::time::timeout(WAIT, harness.output.read_to_end(&mut rest))
+        .await
+        .expect("the harness's output ends")
+        .expect("and reads to its end");
+    drop(opened);
+    // A closes the connection once the lease is let go; E's serving ends.
+    tokio::time::timeout(WAIT, served)
+        .await
+        .expect("the revoked environment's serving ends")
+        .unwrap();
+    let entries = entries();
+    let kinds: Vec<_> = entries
+        .iter()
+        .map(|entry| entry["kind"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        kinds,
+        ["granted", "started", "revoking", "stopped", "ended"],
+        "{entries:?}"
+    );
+    // The revocation names the gateway the lease was granted to.
+    assert_eq!(entries[2]["peer"], entries[0]["peer"]);
+    assert!(entries[2]["peer"].is_string(), "{entries:?}");
+    assert_eq!(entries[4]["cause"], "revoked");
+    assert_eq!(entries[4]["cleanup"]["outcome"], "confirmed");
+    let revoked = Gateway::environment_records(&root, "revoked");
+    assert_eq!(revoked.len(), 1, "{revoked:?}");
+    assert!(
+        revoked[0].to_string().contains(lease.as_str()),
+        "{revoked:?}"
+    );
+    let refused = dial(a.native, e.identity.clone(), e.pin, clock())
+        .await
+        .err()
+        .expect("a revoked environment is refused");
+    assert_eq!(refused.kind(), ErrorKind::PermissionDenied);
+}
+
+/// Every bytes of `bytes`, pulled in order until the end.
+async fn read_all(bytes: &mut Box<dyn crate::conversation::application::ArtifactBytes>) -> Vec<u8> {
+    let mut read = Vec::new();
+    while let Some(chunk) = tokio::time::timeout(WAIT, bytes.next())
+        .await
+        .expect("each chunk in time")
+        .expect("the file reads to its end")
+    {
+        read.extend_from_slice(&chunk);
+    }
+    read
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// Row I9 end to end: E runs a harness for A under a lease over the
+/// connection E dialed. The harness publishes a file on its lease's
+/// publish point, and A asks E to publish another for the agent; A reads
+/// each over that same connection's lease frames, finds the bytes are
+/// what E published, and answers held. The harness is told the
+/// conversation holds its file, and E records each publish and A's answer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_paired_environment_publishes_a_file_and_the_gateway_reads_it_back() {
+    use crate::conversation::application::{ArtifactOffer, PublishAsk};
+    use crate::env_serve::application::{PublishAnswer, PublishRequest};
+    use nessa_protocol::lease::Collection;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+    let directory = tempfile::tempdir().unwrap();
+    let a = Gateway::start(&directory.path().join("a")).await;
+    let e = a
+        .pair(
+            &directory.path().join("e-state"),
+            ConsentClass::PeerEnvironment,
+        )
+        .await;
+    let stream = dial(a.native, e.identity.clone(), e.pin, clock())
+        .await
+        .unwrap();
+    // E runs `claude` as a shell that notes its publish point where the
+    // test can find it, then runs as `cat` until it is stopped.
+    let harness = LaunchSpec {
+        executable: "/bin/sh".into(),
+        args: vec![
+            "-c".into(),
+            r#"printf %s "$NESSA_ARTIFACTS" > point.part && mv point.part point && exec cat"#
+                .into(),
+        ],
+        environment: Default::default(),
+    };
+    let host = Arc::new(Host::running(
+        &directory.path().join("e"),
+        e.pin,
+        HashMap::from([(nessa_protocol::agents::AgentId::Claude, harness)]),
+    ));
+    host.grants
+        .change(&host.peer, |_| {
+            Ok::<_, ()>(Some(PeerGrant::nothing().with_agents(Agents::All)))
+        })
+        .unwrap();
+    let workspace = host.ledger_path.parent().unwrap().to_path_buf();
+    let (from_gateway, to_gateway) = tokio::io::split(stream);
+    let _serving = {
+        let host = host.clone();
+        tokio::spawn(async move { host.serve(from_gateway, to_gateway).await })
+    };
+    a.until_connected(e.peer, true).await;
+
+    let environment = a.peers.environment(&e.peer);
+    let lease = LeaseId::new(uuid()).unwrap();
+    let terms = LeaseTerms {
+        environment: environment.declaration().environment,
+        work: LeaseWork::Agent(AgentWork::new("claude", "model").unwrap()),
+        sandbox: SandboxProfile::HarnessDefault,
+        grants: LeaseGrants::Opening,
+        deadline: LeaseDeadline::UntilEnded,
+    };
+    let given = Arc::new(std::sync::Mutex::new(None));
+    let binding = Arc::new(OnHost {
+        capabilities: crate::conversation_test_support::Provider::new(Arc::new(
+            crate::conversation_test_support::ProviderFactory::default(),
+        ))
+        .capabilities()
+        .clone(),
+        host: given.clone(),
+    });
+    let opened = tokio::time::timeout(WAIT, environment.open(&lease, &terms, binding))
+        .await
+        .unwrap()
+        .unwrap_or_else(|refusal| panic!("granted: {refusal:?}"));
+    let mut offers = opened
+        .hold
+        .artifacts()
+        .expect("a paired environment's lease publishes");
+    let harness_host = given.lock().unwrap().clone().unwrap();
+    let _harness = harness_host.start(HarnessLaunch::default()).unwrap();
+    let point_file = workspace.join("point");
+    let point = tokio::time::timeout(WAIT, async {
+        loop {
+            match std::fs::read_to_string(&point_file) {
+                Ok(point) if !point.is_empty() => break point,
+                _ => tokio::time::sleep(Duration::from_millis(10)).await,
+            }
+        }
+    })
+    .await
+    .expect("the harness is told its publish point");
+
+    // The harness publishes a file larger than many ranges, as
+    // `nessa artifact publish` would.
+    let image: Vec<u8> = (0..300_017u32).map(|index| (index % 251) as u8).collect();
+    let image_path = workspace.join("Nessa.dmg");
+    std::fs::write(&image_path, &image).unwrap();
+    let publisher = tokio::spawn(async move {
+        let mut socket = tokio::net::UnixStream::connect(point).await.unwrap();
+        let mut line = serde_json::to_vec(&PublishRequest {
+            path: image_path.to_str().unwrap().to_owned(),
+            media_type: None,
+        })
+        .unwrap();
+        line.push(b'\n');
+        socket.write_all(&line).await.unwrap();
+        let mut answer = String::new();
+        tokio::io::BufReader::new(socket)
+            .read_line(&mut answer)
+            .await
+            .unwrap();
+        serde_json::from_str::<PublishAnswer>(&answer).unwrap()
+    });
+    let ArtifactOffer {
+        file,
+        mut bytes,
+        answer,
+        request,
+    } = tokio::time::timeout(WAIT, offers.recv())
+        .await
+        .expect("offered in time")
+        .expect("an offer");
+    assert_eq!(request, None);
+    assert_eq!(file.name, "Nessa.dmg");
+    assert_eq!(file.size, image.len() as u64);
+    let read = read_all(&mut bytes).await;
+    assert_eq!(read, image);
+    assert_eq!(sha256_hex(&read), file.digest);
+    answer.answer(Collection::Held).await;
+    assert_eq!(
+        tokio::time::timeout(WAIT, publisher)
+            .await
+            .expect("the harness is answered")
+            .unwrap(),
+        PublishAnswer::Held {
+            digest: sha256_hex(&image),
+            size: image.len() as u64,
+        }
+    );
+
+    // The gateway asks for one on the agent's behalf.
+    let report = b"a report the agent asked to keep".to_vec();
+    std::fs::write(workspace.join("report.txt"), &report).unwrap();
+    let publish = opened
+        .hold
+        .publish(PublishAsk {
+            request: "call-1".into(),
+            path: "report.txt".into(),
+            media_type: None,
+        })
+        .expect("a paired environment's lease publishes");
+    assert_eq!(tokio::time::timeout(WAIT, publish).await.unwrap(), Ok(()));
+    let ArtifactOffer {
+        file,
+        mut bytes,
+        answer,
+        request,
+    } = tokio::time::timeout(WAIT, offers.recv())
+        .await
+        .expect("offered in time")
+        .expect("an offer");
+    assert_eq!(request.as_deref(), Some("call-1"));
+    assert_eq!(read_all(&mut bytes).await, report);
+    assert_eq!(sha256_hex(&report), file.digest);
+    answer.answer(Collection::Held).await;
+
+    let released = tokio::time::timeout(WAIT, opened.hold.end(LeaseEndCause::Stopped))
+        .await
+        .unwrap();
+    assert!(
+        matches!(
+            released,
+            LeaseRelease::Released(LeaseCleanup::Confirmed { .. })
+        ),
+        "{released:?}"
+    );
+    // E recorded each publish and A's answer to it, before the lease ended.
+    let entries: Vec<serde_json::Value> = std::fs::read_to_string(&host.ledger_path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .filter(|entry: &serde_json::Value| entry["lease"] == lease.as_str())
+        .collect();
+    let kinds: Vec<_> = entries
+        .iter()
+        .map(|entry| entry["kind"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "granted",
+            "started",
+            "published",
+            "collected",
+            "publish_asked",
+            "published",
+            "collected",
+            "stopped",
+            "ended",
+        ],
+        "{entries:?}"
+    );
+    assert_eq!(entries[2]["digest"], sha256_hex(&image));
+    assert_eq!(entries[3]["outcome"]["outcome"], "held");
+    assert_eq!(entries[5]["request"], "call-1");
+    assert_eq!(entries[6]["outcome"]["outcome"], "held");
+    // Nothing is left staged on E.
+    let staged = std::fs::read_dir(workspace.join("outbox"))
+        .map(|entries| entries.count())
+        .unwrap_or(0);
+    assert_eq!(staged, 0);
+    // A recorded every frame E sent it to a lease it held: none dropped.
+    let a_root = directory.path().join("a");
+    assert!(!Gateway::environment_records(&a_root, "connected").is_empty());
+    let dropped = Gateway::environment_records(&a_root, "frame_dropped");
+    assert!(dropped.is_empty(), "{dropped:?}");
 }
