@@ -230,11 +230,28 @@ impl ConversationService {
             delivered,
             placed_nothing: None,
         };
-        // Read once for the call's person before the environment is asked.
-        if let Err(failure) = source.read(0, 1).await {
-            return refused(source_refusal(failure));
-        }
         let answer = tokio::time::timeout(environments.fetch_wait(), async {
+            // Read once for the call's person before the environment is
+            // asked, inside the call's wait and its stop: a store that stays
+            // busy holds the call no longer than any other step.
+            let first = source.read(0, 1);
+            tokio::pin!(first);
+            loop {
+                tokio::select! {
+                    biased;
+                    read = &mut first => {
+                        if let Err(failure) = read {
+                            return refused(source_refusal(failure));
+                        }
+                        break;
+                    }
+                    changed = stop.changed() => {
+                        if changed.is_err() || *stop.borrow() {
+                            return refused(FetchCallRefusal::Cancelled);
+                        }
+                    }
+                }
+            }
             tokio::pin!(fetching);
             let fetched = loop {
                 tokio::select! {

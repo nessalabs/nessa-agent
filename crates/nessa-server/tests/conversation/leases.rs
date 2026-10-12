@@ -4109,6 +4109,46 @@ async fn a_fetch_not_answered_within_its_wait_answers_timed_out() {
     go.send(()).unwrap();
 }
 
+/// A store that stays busy before the host is asked holds the call no
+/// longer than its wait or its caller: it answers timed out, or cancelled,
+/// with the host never asked and the call let go.
+#[tokio::test]
+async fn a_fetch_whose_store_stays_busy_still_ends_on_its_wait_or_its_stop() {
+    let root = tempfile::tempdir().unwrap();
+    let bytes = b"a picture".to_vec();
+    let (harness, host, attachments, go) =
+        fetching_turn(root.path(), &bytes, Duration::from_millis(100)).await;
+    attachments
+        .range_errors
+        .lock()
+        .unwrap()
+        .extend(std::iter::repeat_n(HeldRangeError::Busy, 64));
+    assert_eq!(
+        harness
+            .fetch_file(fetch_call("devbox", &bytes, "a.bin", "call-1"))
+            .await,
+        FetchAnswer::Refused(FetchCallRefusal::TimedOut)
+    );
+    let (caller_gone, stop) = tokio::sync::watch::channel(false);
+    let stopped = {
+        let service = harness.service.clone();
+        let id = harness.id.clone();
+        let call = fetch_call("devbox", &bytes, "a.bin", "call-1");
+        tokio::spawn(async move { service.fetch_artifact(&id, call, stop).await })
+    };
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    caller_gone.send(true).unwrap();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), stopped)
+            .await
+            .unwrap()
+            .unwrap(),
+        FetchAnswer::Refused(FetchCallRefusal::Cancelled)
+    );
+    assert!(host.fetching.asks.lock().unwrap().is_empty());
+    go.send(()).unwrap();
+}
+
 /// What a call reserved is given back when it stops waiting before every
 /// byte was delivered, since nothing can be placed then; one that stops
 /// after stays counted, since the host may still place it.
