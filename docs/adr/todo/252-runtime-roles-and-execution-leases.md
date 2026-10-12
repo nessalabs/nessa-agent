@@ -216,8 +216,8 @@ Environments lane, in order:
   refusal, never a weaker check.
 - [x] **K. Hosted workers** ([#708](https://github.com/nessalabs/nessa-agent/issues/708); merged in
   [#786](https://github.com/nessalabs/nessa-agent/pull/786) (drain),
-  [#790](https://github.com/nessalabs/nessa-agent/pull/790) (start) and the
-  isolation tests). Environment-only gateways
+  [#790](https://github.com/nessalabs/nessa-agent/pull/790) (start) and
+  [#792](https://github.com/nessalabs/nessa-agent/pull/792) (isolation)). Environment-only gateways
   per organization in containers. *Gate:* two-organization isolation
   across leases, artifacts, tools and audit. Pools of workers per
   organization and organization budgets are
