@@ -2,6 +2,7 @@
 import json
 import os
 import pathlib
+import subprocess
 import sys
 
 mode = sys.argv[1]
@@ -20,12 +21,28 @@ if mode == "instructions":
     assert config["instructions"] == "Core instructions.\nPlugin instructions."
 else:
     assert "instructions" not in config
-# Session override the pinned adapter forwards into thread/start. User hooks
-# and the legacy notify command are requested off. Seeing the request here is
-# not the effective configuration: managed layers can restore either setting,
-# and the binding reports native hook suppression as unsupported for that.
-assert config["features"] == {"hooks": False}
-assert config["notify"] == []
+# Session override the pinned adapter forwards into thread/start. By default
+# user hooks and the legacy notify command are requested off. Seeing the
+# request here is not the effective configuration: managed layers can restore
+# either setting, and the binding reports native hook suppression as
+# unsupported for that. `native-hooks` is the opt-in: both keys are absent,
+# and the planted command hook runs.
+if mode == "native-hooks":
+    assert "features" not in config
+    assert "notify" not in config
+    spec_path = root / "native-hook.json"
+    assert spec_path.is_file(), "native-hooks mode requires a planted hook"
+    spec = json.loads(spec_path.read_text())
+    subprocess.run(
+        [sys.executable, spec["script"], *spec["argv"]],
+        input=json.dumps(spec["payload"]).encode(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    )
+else:
+    assert config["features"] == {"hooks": False}
+    assert config["notify"] == []
 
 (root / "pid").write_text(str(os.getpid()))
 selected = "codex-default"

@@ -299,6 +299,7 @@ pub(super) async fn product_state(
                         built.mcp_authorization,
                         built.record_watches,
                         built.catalogue_watches,
+                        built.native_hooks,
                     )),
                     built.agent_probe,
                     built.warm_ups,
@@ -379,6 +380,7 @@ pub(super) async fn product_state(
         mcp_authorization,
         record_watches,
         catalogue_watches,
+        native_hooks,
     )) = conversations
     {
         record_reader = Some(reader.clone());
@@ -390,7 +392,8 @@ pub(super) async fn product_state(
             .with_record_source(reader)
             .with_catalogue_source(catalogue)
             .with_attachments(attachments.0, attachments.1)
-            .with_agents_catalog(agents_catalog);
+            .with_agents_catalog(agents_catalog)
+            .with_native_hooks(native_hooks);
         if let Some(connected) = connected_environments {
             product = product.with_connected_environments(connected);
         }
@@ -473,6 +476,7 @@ struct BuiltConversations {
     read_grants: Arc<dyn ReadGrants>,
     attachments: (AttachmentService, HeldReads),
     agents_catalog: AgentsListResult,
+    native_hooks: Arc<crate::agents::infrastructure::NativeHooksPreferences>,
     /// Which configured agents this run cannot start even though they are
     /// installed. Known only once every provider has been built, and needed
     /// before the readiness probe is, which is why this is a function rather
@@ -1122,6 +1126,7 @@ async fn conversations(
         provider_directory: root.clone(),
         clock: clock.clone(),
         images: attachments.images.clone(),
+        native_hooks: built.native_hooks.clone(),
         warm_up: CurrentOpenCodeWarmUp::new(records.clone(), warm_up_audit.clone(), clock.clone()),
     }));
     let selected = resolver.default_agent()?;
@@ -1203,6 +1208,7 @@ async fn conversations(
         metadata,
         attachments: (attachments.service, attachments.reads),
         agents_catalog,
+        native_hooks: built.native_hooks,
         record_reader,
         catalogue_reader,
         record_watches,
@@ -1376,6 +1382,7 @@ fn agent_catalog(
                 agent: agent.name().into(),
                 default_model: default_model.into(),
                 models: options,
+                native_hooks: None,
             })
         })
         .collect::<Result<Vec<_>, RunError>>()?;

@@ -2,6 +2,7 @@ use super::operational_limits::OperationalLimits;
 use super::{change_watch::WatchOwners, WatchTaskFault};
 use crate::agent_install::application::AgentInstallations;
 use crate::agents::application::{AgentProbe, SharedAgentReadiness};
+use crate::agents::infrastructure::NativeHooksPreferences;
 use crate::attachments::{
     application::{AttachmentService, HeldReads},
     entrypoint::http::UploadRoute,
@@ -102,6 +103,9 @@ pub struct ProductRouteState {
     pub(crate) agent_installations: Option<Arc<dyn AgentInstallations>>,
     pub(crate) installs: Arc<Semaphore>,
     pub(crate) agents_catalog: Option<Arc<AgentsListResult>>,
+    /// Claude and Codex native-hook choices. None when this route has no
+    /// conversation directory. OpenCode is not in the store.
+    pub(crate) native_hooks: Option<Arc<NativeHooksPreferences>>,
     /// The paired environments connected now, by name: added to the
     /// catalog's places each time it is asked, since they come and go.
     pub(crate) connected_environments: Option<ConnectedEnvironments>,
@@ -255,6 +259,7 @@ impl ProductRouteState {
             record_source: None,
             catalogue_source: None,
             agents_catalog: None,
+            native_hooks: None,
             connected_environments: None,
             agent_installations: None,
             installs: Arc::new(Semaphore::new(1)),
@@ -383,6 +388,12 @@ impl ProductRouteState {
     /// Publish the validated choices composed for this gateway.
     pub fn with_agents_catalog(mut self, catalog: AgentsListResult) -> Self {
         self.agents_catalog = Some(Arc::new(catalog));
+        self
+    }
+
+    /// The native-hook choices Claude and Codex launches read.
+    pub fn with_native_hooks(mut self, native_hooks: Arc<NativeHooksPreferences>) -> Self {
+        self.native_hooks = Some(native_hooks);
         self
     }
 

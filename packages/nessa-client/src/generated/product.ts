@@ -306,6 +306,12 @@ export const NativeHookSuppressionSupport = {
 } as const
 export type NativeHookSuppressionSupport =
   (typeof NativeHookSuppressionSupport)[keyof typeof NativeHookSuppressionSupport]
+/** Whether the next launch of this conversation's harness omits Nessa's request to leave the harness's own hooks off. Off is the default. On does not prove the harness ran a hook, and it does not change nativeHookSuppression. */
+export const NativeHooksChoice = { Off: "off", On: "on" } as const
+export type NativeHooksChoice = (typeof NativeHooksChoice)[keyof typeof NativeHooksChoice]
+/** A harness whose own hooks the caller can allow. OpenCode is not in this set and stays suppressed. */
+export const NativeHooksAgent = { Claude: "claude", Codex: "codex" } as const
+export type NativeHooksAgent = (typeof NativeHooksAgent)[keyof typeof NativeHooksAgent]
 /** Whether Nessa reports provider compaction with invocation correlation. */
 export const CompactionReportingSupport = {
   UnsupportedNotImplemented: "unsupported_not_implemented",
@@ -373,6 +379,8 @@ export interface ConversationAgentFeatures {
   permissionDenial: PermissionDenialSupport
   /** Verified suppression state for user-configured provider hooks. */
   nativeHookSuppression: NativeHookSuppressionSupport
+  /** Whether this launch omits the request to leave the harness's own hooks off. When on, a hook can deny or change a tool call before Nessa asks. */
+  nativeHooks: NativeHooksChoice
   /** Effective Nessa support for correlated compaction reporting. */
   compactionReporting: CompactionReportingSupport
   /** Effective Nessa support for validated model-switch reporting. */
@@ -1629,6 +1637,26 @@ export interface AgentOption {
   defaultModel: string
   /** Models runnable by this agent. */
   models: AgentModelOption[]
+  /** Whether the next launch of this agent omits Nessa's request to leave its own hooks off. Present for Claude and Codex. Absent for OpenCode, which stays suppressed. */
+  nativeHooks?: boolean
+}
+/** Allow or stop allowing one harness to run its own hooks. The next launch of that harness omits Nessa's suppression request when enabled is true. OpenCode is not a value of agent. */
+export interface AgentsSetNativeHooksParams {
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** Claude or Codex. */
+  agent: NativeHooksAgent
+  /** True omits the suppression request on the next launch. False restores it. */
+  enabled: boolean
+}
+/** The choice now in effect for the named harness. A hook can deny or change a tool call before Nessa asks when enabled is true. */
+export interface AgentsSetNativeHooksResult {
+  /** Original action identifier. */
+  requestId: string
+  /** The harness this command changed. */
+  agent: NativeHooksAgent
+  /** The choice now in effect. */
+  enabled: boolean
 }
 /** Configured agents and their model-specific choices. */
 export interface AgentsListResult {
@@ -2304,7 +2332,7 @@ export const mcpServerRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 62,
+  maxReadyMethods: 63,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -2314,6 +2342,8 @@ export const bounds = {
   maxRecordResponseBytes: 131072,
   minAgentInstallRequestIdCharacters: 1,
   maxAgentInstallRequestIdBytes: 256,
+  minNativeHooksRequestIdCharacters: 1,
+  maxNativeHooksRequestIdBytes: 256,
   maxConfiguredAgents: 3,
   maxAgentInstallVersionBytes: 128,
   maxImageBytes: 5242880,
@@ -2390,6 +2420,7 @@ export const ProductMethod = {
   ArtifactRead: "artifact.read",
   AttachmentBegin: "attachment.begin",
   AgentsList: "agents.list",
+  AgentsSetNativeHooks: "agents.setNativeHooks",
   ConversationSetApprovalMode: "conversation.setApprovalMode",
   AgentsInstallOptions: "agents.installOptions",
   AgentsInstall: "agents.install",
@@ -2463,6 +2494,7 @@ export const productReadyMethods = [
   "artifact.read",
   "attachment.begin",
   "agents.list",
+  "agents.setNativeHooks",
   "conversation.setApprovalMode",
   "agents.installOptions",
   "agents.install",
@@ -2529,6 +2561,7 @@ export const productMethodGrants = {
   "artifact.read": "conversation.read",
   "attachment.begin": "conversation.write",
   "agents.list": "server.read",
+  "agents.setNativeHooks": "conversation.write",
   "conversation.setApprovalMode": "conversation.write",
   "agents.installOptions": "server.read",
   "agents.install": "conversation.write",

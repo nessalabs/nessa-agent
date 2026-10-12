@@ -852,6 +852,11 @@ phone's scanner is not this screen.
 - [ ] **Keyboard focus shows the window's focus ring** on Settings' tabs and
   controls (not a fill). _Check:_ `settings-page.mjs --only focus-ring`
   (WebKit walks with ⌥Tab, as Safari does).
+- [ ] **Claude and Codex native hooks rest without a gateway.** Access shows
+  both rows disabled, with no switch, and says a hook can deny or change a
+  tool call before Nessa asks. OpenCode has no row. _Check:_
+  `settings-page.mjs --only native-hooks`; unit tests
+  `native-hooks-rows.test.tsx`, `native-hooks-gateway.test.ts`.
 
 ### Integrations: the gateway's MCP servers
 

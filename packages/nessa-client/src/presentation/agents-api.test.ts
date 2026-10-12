@@ -156,3 +156,35 @@ it("rejects invalid invocation IDs before dispatch and preserves bounded IDs", a
     )
   }
 })
+
+it("sends a native-hooks choice and reads the choice now in effect", async () => {
+  const result = { requestId: "turn", agent: "claude", enabled: true }
+  const request = vi.fn().mockResolvedValue(result)
+  const api = createAgentsApi({ request })
+  expect(await api.setNativeHooks("claude", true, "turn")).toEqual(result)
+  expect(request).toHaveBeenCalledWith("agents.setNativeHooks", {
+    agent: "claude",
+    enabled: true,
+    requestId: "turn",
+  })
+})
+
+it("rejects an unknown harness and a non-boolean catalog flag before display", async () => {
+  const request = vi
+    .fn()
+    .mockResolvedValue({ requestId: "turn", agent: "opencode", enabled: true })
+  const api = createAgentsApi({ request })
+  await expect(api.setNativeHooks("claude", true, "turn")).rejects.toThrow(
+    "Invalid native hooks agent",
+  )
+  request.mockResolvedValue({
+    ...offered,
+    agents: [{ ...offered.agents[0], nativeHooks: "on" }],
+  })
+  await expect(api.list()).rejects.toThrow("Invalid native hooks choice")
+  request.mockResolvedValue({
+    ...offered,
+    agents: [{ ...offered.agents[0], nativeHooks: false }],
+  })
+  expect((await api.list()).agents[0].nativeHooks).toBe(false)
+})

@@ -86,6 +86,7 @@ this table. None of it changes implementation or approval status.
 | 15 | [329 — Subagents](todo/329-subagents.md) | Proposed: ordinary child Agents with durable parent ownership, inherited approval configuration and recursive parent closure; runtime creation, recovery and regression tables; a joined desktop source, panel and header accessory. Desktop slices #330–#332; runtime slices to be filed under #329 |
 | 16 | [333 — Experiments](todo/333-experiments.md) | Proposed: an experiment drawn from its definition (metric, splits, guardrails, verdicts), validated at its adapter, with the best run named by the harness, so any kind reads the same way; `ExperimentSource`; its swarm as subagents. Slices #334–#337 |
 | — | [392 — Remote MCP](todo/392-remote-mcp-servers.md) | Accepted and implemented in the gateway and desktop: owned HTTP sessions, OAuth/refresh/revoke, generation fencing, honest app-call outcomes, and authorize/revoke/consent. Remaining: an owner-run check against a consenting remote server. Priority not assigned |
+| — | [768 — Native harness hooks are a per-harness choice](todo/768-native-harness-hooks.md) | Accepted. Claude and Codex can omit the suppression request on the next launch when the caller allows it. Off is the default. OpenCode stays suppressed. Priority not assigned |
 
 Auth API readiness and operating-bound work is complete. The
 [current Rust SDK](../../crates/nessa-sdk/docs/agent_execution/README.md) provides

@@ -4,8 +4,8 @@ use super::profile::ClaudeProfile;
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::ExecutionAudit;
 use crate::application::agent_execution::providers::{
-    AgentProvider, ApprovalMode, HarnessHost, HarnessLaunch, ProviderIdentity, ProviderOpenFuture,
-    ProviderOpenRequest,
+    AgentProvider, ApprovalMode, HarnessHost, HarnessLaunch, NativeHooksSwitch, ProviderIdentity,
+    ProviderOpenFuture, ProviderOpenRequest,
 };
 use crate::domain::agent_execution::permissions::PermissionScope;
 use crate::domain::agent_execution::prompts::SystemPrompt;
@@ -32,6 +32,8 @@ pub struct ClaudeAcpProvider {
     system_prompt: Option<SystemPrompt>,
     approval_mode: ApprovalMode,
     effort_level: Option<EffortLevel>,
+    /// Read at each launch. Off sends today's suppression request.
+    native_hooks: NativeHooksSwitch,
     audit: Arc<dyn ExecutionAudit>,
     /// Deletions this binding started that are still stopping their process.
     deletions: DeletionCleanups,
@@ -126,6 +128,7 @@ impl ClaudeAcpProvider {
             system_prompt: None,
             approval_mode: ApprovalMode::Ask,
             effort_level: None,
+            native_hooks: NativeHooksSwitch::off(),
             audit,
             deletions: DeletionCleanups::default(),
             host: None,
@@ -179,6 +182,15 @@ impl ClaudeAcpProvider {
         thought_level::selectable(&self.capabilities, &level)?;
         self.effort_level = Some(level);
         Ok(self)
+    }
+    /// Let Claude run its own hooks on the next launch this factory opens.
+    ///
+    /// Off keeps `disableAllHooks` and empty `settingSources`. On omits both.
+    /// The other session settings stay. The switch is read when the session
+    /// parameters are built, so a change applies to the next process.
+    pub fn with_native_hooks(mut self, native_hooks: NativeHooksSwitch) -> Self {
+        self.native_hooks = native_hooks;
+        self
     }
     /// Borrow the configured override and its contribution provenance, or None
     /// when opening should retain the harness default prompt.
@@ -299,5 +311,6 @@ impl ClaudeAcpProvider {
             self.approval_mode,
             self.effort_level.clone(),
         )
+        .allowing_native_hooks(self.native_hooks.allowed())
     }
 }

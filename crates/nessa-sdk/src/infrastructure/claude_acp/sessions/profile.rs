@@ -64,6 +64,8 @@ pub(crate) struct ClaudeProfile {
     tool_names: HashMap<String, wire::ObservedTool>,
     system_prompt: Option<SystemPrompt>,
     mcp_prefixes: Vec<String>,
+    /// When true, the session parameters omit the suppression request.
+    native_hooks: bool,
 }
 impl ClaudeProfile {
     pub(crate) fn new(
@@ -77,7 +79,18 @@ impl ClaudeProfile {
             tool_names: HashMap::new(),
             system_prompt,
             mcp_prefixes: Vec::new(),
+            native_hooks: false,
         }
+    }
+
+    /// Omit `disableAllHooks` and `settingSources` on the next session.
+    ///
+    /// The default sends both, which is how project and user hooks stay off.
+    /// Managed hooks still cannot be suppressed by that request. The
+    /// negotiated suppression fact stays unknown either way.
+    pub(crate) fn allowing_native_hooks(mut self, allowed: bool) -> Self {
+        self.native_hooks = allowed;
+        self
     }
 }
 impl AcpProfile for ClaudeProfile {
@@ -102,6 +115,10 @@ impl AcpProfile for ClaudeProfile {
             .pointer("/_meta/steering/supported")
             .and_then(Value::as_bool)
             == Some(true)
+    }
+
+    fn native_hooks(&self) -> bool {
+        self.native_hooks
     }
 
     fn supports_questions(&self) -> bool {
@@ -140,6 +157,20 @@ impl AcpProfile for ClaudeProfile {
             "settings":{"disableAllHooks":true,"allowedMcpServers":allowed_servers,"disableClaudeAiConnectors":true,
                 "permissions":{"defaultMode":native_mode(self.approval_mode),"deny":wire::DISALLOWED_TOOLS}}
         }}}});
+        if self.native_hooks {
+            // Empty settingSources is itself suppression. Omit the key, and
+            // omit disableAllHooks. The other settings stay.
+            let options = params
+                .pointer_mut("/_meta/claudeCode/options")
+                .and_then(Value::as_object_mut)
+                .expect("claude session options are an object");
+            options.remove("settingSources");
+            options
+                .get_mut("settings")
+                .and_then(Value::as_object_mut)
+                .expect("claude settings are an object")
+                .remove("disableAllHooks");
+        }
         if let Some(prompt) = &self.system_prompt {
             params["_meta"]["systemPrompt"] = json!(prompt.text().as_str());
         }

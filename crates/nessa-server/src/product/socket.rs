@@ -39,8 +39,10 @@ use nessa_protocol::product::generated::{
     action_for_method, CredentialIssueParams, CredentialListParams, CredentialListResult,
     CredentialRevokeParams, CredentialRevokeResult, ExistingCredentialResult,
     IssuedCredentialResult, ProductSessionReady, SessionAuthenticateParams, SessionChallenge,
-    SessionTermination, MAX_PRODUCT_CLIENT_ID_CHARACTERS, MAX_PRODUCT_SURFACE_INSTANCE_CHARACTERS,
-    MAX_RECORD_RESPONSE_BYTES, PRODUCT_HANDSHAKE_METHOD, PRODUCT_READY_METHODS, PRODUCT_VERSION,
+    SessionTermination, MAX_NATIVE_HOOKS_REQUEST_ID_BYTES, MAX_PRODUCT_CLIENT_ID_CHARACTERS,
+    MAX_PRODUCT_SURFACE_INSTANCE_CHARACTERS, MAX_RECORD_RESPONSE_BYTES,
+    MIN_NATIVE_HOOKS_REQUEST_ID_CHARACTERS, PRODUCT_HANDSHAKE_METHOD, PRODUCT_READY_METHODS,
+    PRODUCT_VERSION,
 };
 use nessa_protocol::product::handshake::{authentication_close_reason, supports_product_version};
 use nessa_protocol::product_contract::generated::SessionCloseReason;
@@ -1533,6 +1535,66 @@ async fn authorize(
     .await
 }
 
+fn agent_catalog_value(state: &ProductRouteState, catalog: &impl serde::Serialize) -> Value {
+    let mut value = json!(catalog);
+    if let Some(hooks) = state.native_hooks.as_ref() {
+        crate::agents::application::overlay_native_hooks(&mut value, hooks.selection());
+    }
+    value
+}
+
+async fn set_native_hooks(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+    frame: RequestFrame,
+) -> OutgoingMessage {
+    use crate::agents::application::{
+        NativeHooksAgent as Choice, NativeHooksChange, NativeHooksError,
+    };
+    use nessa_protocol::product::generated::{
+        AgentsSetNativeHooksParams, AgentsSetNativeHooksResult, NativeHooksAgent as WireAgent,
+    };
+    let Some(hooks) = state.native_hooks.as_ref() else {
+        return failure(&frame.id, "conversations_not_configured");
+    };
+    let params: AgentsSetNativeHooksParams = match serde_json::from_value(frame.params) {
+        Ok(params) => params,
+        Err(_) => return failure(&frame.id, "invalid_request"),
+    };
+    if params.request_id.chars().count() < MIN_NATIVE_HOOKS_REQUEST_ID_CHARACTERS
+        || params.request_id.len() > MAX_NATIVE_HOOKS_REQUEST_ID_BYTES
+    {
+        return failure(&frame.id, "invalid_request");
+    }
+    let agent = match params.agent {
+        WireAgent::Claude => Choice::Claude,
+        WireAgent::Codex => Choice::Codex,
+    };
+    let context = session.context();
+    let enabled = params.enabled;
+    let request_id = params.request_id.clone();
+    let change = NativeHooksChange {
+        agent,
+        enabled,
+        request_id: params.request_id,
+        organization_id: context.organization_id().as_str().to_owned(),
+        principal_id: context.principal_id().as_str().to_owned(),
+        surface_id: context.credential_id().as_str().to_owned(),
+    };
+    match hooks.set(change).await {
+        Ok(selection) => success(
+            &frame.id,
+            &AgentsSetNativeHooksResult {
+                request_id,
+                agent: params.agent,
+                enabled: selection.get(agent),
+            },
+        ),
+        Err(NativeHooksError::Audit) => failure(&frame.id, "audit_unavailable"),
+        Err(NativeHooksError::Storage) => failure(&frame.id, "temporarily_unavailable"),
+    }
+}
+
 async fn dispatch_authorized(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
@@ -1547,11 +1609,13 @@ async fn dispatch_authorized(
                 state.agents_catalog.as_ref(),
                 state.connected_environments.as_ref(),
             ) {
-                (Some(catalog), None) => success(&frame.id, catalog.as_ref()),
+                (Some(catalog), None) => {
+                    success(&frame.id, &agent_catalog_value(state, catalog.as_ref()))
+                }
                 // The SSH hosts are fixed at startup; a paired environment is
                 // a place only while it is connected, so it is added as asked.
                 (Some(catalog), Some(connected)) => {
-                    let mut catalog = json!(catalog.as_ref());
+                    let mut catalog = agent_catalog_value(state, catalog.as_ref());
                     if let Some(places) = catalog["environments"].as_array_mut() {
                         places.extend(connected().into_iter().map(Value::String));
                     }
@@ -1560,6 +1624,7 @@ async fn dispatch_authorized(
                 (None, _) => failure(&frame.id, "conversations_not_configured"),
             }
         }
+        "agents.setNativeHooks" => set_native_hooks(state, session, frame).await,
         "agents.installOptions" | "agents.install" => {
             super::agent_install::dispatch(state, session, frame).await
         }

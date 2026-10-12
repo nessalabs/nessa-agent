@@ -76,7 +76,11 @@ export const settingsCategories = [
     id: "privacy",
     label: "Privacy & Permissions",
     tabs: [
-      { id: "access", label: "Access", keywords: "permissions approval ask shield" },
+      {
+        id: "access",
+        label: "Access",
+        keywords: "permissions approval ask shield hooks",
+      },
       { id: "data", label: "Data", keywords: "history crash reports storage" },
     ],
   },
@@ -374,6 +378,20 @@ export const settingsEntries = [
     label: "Remember approvals for a session",
     detail: "A command you allow once is allowed again in the same session.",
     keywords: "allow",
+  },
+  {
+    id: "claude-native-hooks",
+    tab: "access",
+    label: "Claude Code hooks",
+    detail: "A hook can deny or change a tool call before Nessa asks.",
+    keywords: "native hooks claude",
+  },
+  {
+    id: "codex-native-hooks",
+    tab: "access",
+    label: "Codex hooks",
+    detail: "A hook can deny or change a tool call before Nessa asks.",
+    keywords: "native hooks codex",
   },
   // Privacy & Permissions › Data
   {

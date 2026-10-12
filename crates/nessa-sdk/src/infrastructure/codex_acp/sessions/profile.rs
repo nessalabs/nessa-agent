@@ -81,6 +81,9 @@ pub(super) struct CodexProfile {
     /// `None` leaves the agent on its own default, and nothing is sent.
     effort_level: Option<EffortLevel>,
     tools: ObservedTools,
+    /// When true, the launch omits the suppression keys. The fact below stays
+    /// unsupported: this flag is the caller's choice, not proof.
+    native_hooks: bool,
 }
 impl CodexProfile {
     pub(super) fn new(
@@ -93,7 +96,17 @@ impl CodexProfile {
             approval_mode,
             effort_level,
             tools: ObservedTools::default(),
+            native_hooks: false,
         }
+    }
+
+    /// Record that this launch omits `features` and `notify`.
+    ///
+    /// The suppression fact stays unsupported. Omitting the request does not
+    /// prove the effective configuration, and sending it did not either.
+    pub(super) fn allowing_native_hooks(mut self, allowed: bool) -> Self {
+        self.native_hooks = allowed;
+        self
     }
 }
 impl AcpProfile for CodexProfile {
@@ -128,19 +141,24 @@ impl AcpProfile for CodexProfile {
         false
     }
 
-    /// The launch configuration requests `features.hooks: false` and
-    /// `notify: []`. That is a session override on the pinned loader: legacy
-    /// managed configuration and MDM are applied after it and can turn either
-    /// setting back on. ACP exposes no effective hooks or notify value, and
-    /// the adapter discards hook events, so their absence is not proof they
-    /// did not run. Provider builtin cleanup stays distinct from those
-    /// user-configured commands. The request is sent; effective suppression
-    /// is not established, and a session must not be read as Nessa owning
-    /// Codex's hook boundary. The open and a later restoration still complete.
+    /// The default launch requests `features.hooks: false` and `notify: []`.
+    /// That is a session override on the pinned loader: legacy managed
+    /// configuration and MDM are applied after it and can turn either setting
+    /// back on. ACP exposes no effective hooks or notify value, and the
+    /// adapter discards hook events, so their absence is not proof they did
+    /// not run. Provider builtin cleanup stays distinct from those
+    /// user-configured commands. Effective suppression is not established,
+    /// whether or not this launch sent the request, and a session must not be
+    /// read as Nessa owning Codex's hook boundary. The open and a later
+    /// restoration still complete.
     /// `codex_startup_and_restoration_continue_when_native_hook_suppression_is_unsupported`
-    /// is that check.
+    /// is that check for the default launch.
     fn native_hook_suppression(&self) -> NativeHookSuppressionCapability {
         NativeHookSuppressionCapability::Unsupported
+    }
+
+    fn native_hooks(&self) -> bool {
+        self.native_hooks
     }
 
     fn validate_initialize(&self, result: &Value) -> Result<(), AgentError> {

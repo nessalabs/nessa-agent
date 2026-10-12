@@ -23,7 +23,7 @@ import { AGENT_CHOICES } from "../../onboarding/model/onboarding"
 import { AgentMark } from "../../onboarding/ui/agent-mark"
 import type { AgentFeatures, Conversation, ConversationLease } from "../model"
 
-type FeatureSupport = AgentFeatures[keyof AgentFeatures]
+type FeatureSupport = Exclude<AgentFeatures[keyof AgentFeatures], "off" | "on">
 
 /** One capability in a word or two: whether it works here, not how. */
 function support(value: FeatureSupport) {
@@ -147,6 +147,14 @@ function ConversationFacts({ conversation }: { conversation: Conversation }) {
             <>
               <Fact label="Deny a request" value={support(features.permissionDenial)} />
               <Fact label="Answer later" value={support(features.permissionDeferral)} />
+              <Fact
+                label="Native hooks"
+                value={
+                  features.nativeHooks === "on"
+                    ? "A hook can deny or change a tool call before Nessa asks."
+                    : "Nessa asks this agent to leave its own hooks off."
+                }
+              />
             </>
           ) : (
             <Fact label="Deny a request" value="Not verified" />

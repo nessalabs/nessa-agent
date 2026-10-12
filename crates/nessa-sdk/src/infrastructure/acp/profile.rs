@@ -20,8 +20,18 @@ pub(crate) trait AcpProfile: Send + Sync + 'static {
             permission_denial: PermissionDenialCapability::SupportedForOfferedPermissionReviews,
             permission_deferral: ProviderPermissionDeferralCapability::Unsupported,
             native_hook_suppression: self.native_hook_suppression(),
+            native_hooks: self.native_hooks(),
             ..ProviderOperationCapabilities::default()
         }
+    }
+    /// Whether this launch omits the suppression request.
+    ///
+    /// False, the default, keeps today's request. True omits it. This is the
+    /// binding's launch choice. It does not change
+    /// [`native_hook_suppression`](Self::native_hook_suppression), which stays
+    /// a statement about proof.
+    fn native_hooks(&self) -> bool {
+        false
     }
     /// Whether user-configured executable hooks are proven disabled.
     ///

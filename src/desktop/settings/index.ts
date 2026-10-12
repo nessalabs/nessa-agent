@@ -28,17 +28,22 @@
  *    approve, revoke; the UI      rows L1–L21)              and the session, read into
  *    kit's code, orbs and                                    the model's words; the key
  *    fingerprint)                                            hash is model/device-key.ts)
+ *
+ *   ui/native-hooks-rows.tsx ──▶ adapters/native-hooks-gateway.ts
+ *   (Access: Claude and Codex     (`client.agents` list and
+ *    hook switches)                setNativeHooks)
  * ```
  *
  * An arrow points from what reads to what it reads. The window mounts
  * `SettingsHost` once; anything opens it with `openSettings`. Composition
- * (`dependencies.ts`) builds the servers' gateway and the pairing gateway
- * over the window's client and `main.tsx` provides them; with none, those
- * tabs are pending.
+ * (`dependencies.ts`) builds the servers' gateway, the pairing gateway, and
+ * the native-hooks gateway over the window's client and `main.tsx` provides
+ * them; with none, those tabs are pending and the hook rows rest.
  */
 export { openSettings, SettingsHost, useSettingsOpening } from "./ui/settings-view"
 export { McpServersProvider } from "./ui/integrations-tab"
 export { LinkedDevicesProvider } from "./ui/linked-devices-tab"
+export { NativeHooksProvider } from "./ui/native-hooks-rows"
 export {
   mcpServersGateway,
   type McpServersClient,
@@ -49,3 +54,8 @@ export {
   type LinkedDevicesClient,
   type LinkedDevicesGateway,
 } from "./adapters/linked-devices-gateway"
+export {
+  nativeHooksGateway,
+  type NativeHooksClient,
+  type NativeHooksGateway,
+} from "./adapters/native-hooks-gateway"

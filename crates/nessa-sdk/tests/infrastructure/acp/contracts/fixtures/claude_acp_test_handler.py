@@ -10,6 +10,24 @@ import time
 
 mode = sys.argv[1]
 root = pathlib.Path.cwd()
+
+def run_planted_hook(root):
+    """Run the planted command hook when this launch omitted suppression.
+
+    stdout is the ACP stream, so the hook's own output is captured. `record`
+    mode writes only its log.
+    """
+    spec_path = root / "native-hook.json"
+    assert spec_path.is_file(), "native-hooks mode requires a planted hook"
+    spec = json.loads(spec_path.read_text())
+    subprocess.run(
+        [sys.executable, spec["script"], *spec["argv"]],
+        input=json.dumps(spec["payload"]).encode(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    )
+
 model = os.environ["ANTHROPIC_MODEL"]
 approval_mode = {"approval-auto": "auto", "approval-auto-fallback": "auto", "approval-full": "bypassPermissions"}.get(mode, "default")
 assert model == os.environ["ANTHROPIC_CUSTOM_MODEL_OPTION"]
@@ -223,7 +241,6 @@ while True:
         assert options["model"] == model
         assert options["permissionMode"] == approval_mode
         assert options["settings"]["permissions"]["defaultMode"] == approval_mode
-        assert options["settingSources"] == []
         assert options["tools"] == ([] if mode == "questions-disabled" else {"type": "preset", "preset": "claude_code"})
         assert "Bash" in options["disallowedTools"]
         assert "Bash" in options["settings"]["permissions"]["deny"]
@@ -235,7 +252,13 @@ while True:
             assert historical not in options["settings"]["permissions"]["deny"]
         # Native approval presets own their asks; explicit Nessa denials stay fixed.
         assert "ask" not in options["settings"]["permissions"]
-        assert options["settings"]["disableAllHooks"] is True
+        if mode == "native-hooks":
+            assert "disableAllHooks" not in options["settings"]
+            assert "settingSources" not in options
+            run_planted_hook(root)
+        else:
+            assert options["settingSources"] == []
+            assert options["settings"]["disableAllHooks"] is True
         servers = msg["params"]["mcpServers"]
         # In `stand-ins` mode, the MCP server entries each session request
         # carried, by method, for the test to read back; otherwise none.

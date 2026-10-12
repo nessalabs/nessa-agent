@@ -8,6 +8,9 @@
  * window's focus ring on its controls. Measured as numbers, in Chromium and
  * WebKit.
  */
+import { mkdirSync } from "node:fs"
+import { dirname, join } from "node:path"
+import { fileURLToPath } from "node:url"
 import { attempt, chosen } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
@@ -317,6 +320,49 @@ const checks = {
     return { landed: m, failures }
   },
 
+  /**
+   * Privacy & Permissions › Access, with no gateway: Claude and Codex hook
+   * rows rest, and the page says a hook can deny or change a tool call.
+   */
+  "native-hooks": async (page, { engine }) => {
+    const failures = []
+    await show(page, "Privacy & Permissions", "Access")
+    const read = await page.$$eval("[data-setting]", (rows) =>
+      rows
+        .filter((row) =>
+          ["claude-native-hooks", "codex-native-hooks"].includes(row.dataset.setting),
+        )
+        .map((row) => ({
+          id: row.dataset.setting,
+          disabled: row.hasAttribute("data-disabled"),
+          switches: row.querySelectorAll('[role="switch"]').length,
+          text: row.textContent ?? "",
+        })),
+    )
+    const note = await page.$eval("#settings-panel", (panel) => panel.textContent ?? "")
+    if (!note.includes("A hook can deny or change a tool call before Nessa asks."))
+      failures.push("the page does not say a hook can deny or change a tool call")
+    for (const id of ["claude-native-hooks", "codex-native-hooks"]) {
+      const row = read.find((item) => item.id === id)
+      if (!row) failures.push(`${id} is missing`)
+      else if (!row.disabled || row.switches !== 0)
+        failures.push(`${id} is usable without a gateway: ${JSON.stringify(row)}`)
+      else if (!row.text.includes("Not available in this window."))
+        failures.push(`${id} does not say it is unavailable`)
+    }
+    const shot = join(
+      dirname(fileURLToPath(import.meta.url)),
+      "../evidence/settings-native-hooks",
+    )
+    mkdirSync(shot, { recursive: true })
+    const group = page.locator(".settings-group", {
+      has: page.locator('[data-setting="claude-native-hooks"]'),
+    })
+    await group.scrollIntoViewIfNeeded()
+    await group.screenshot({ path: join(shot, `access-resting-${engine}.png`) })
+    return { read, failures }
+  },
+
   /** Keyboard focus on a tab and a switch shows the window's focus ring. */
   "focus-ring": async (page, { engine }) => {
     const failures = []
@@ -354,13 +400,15 @@ const checks = {
 
 const meta = {
   name: "settings-page",
-  summary: "Settings' page: masthead, condensing bar, arrival motion, search, focus",
+  summary:
+    "Settings' page: masthead, condensing bar, arrival motion, search, focus, native hooks",
   defaults: { engine: "chromium,webkit" },
   options: { only: { type: "string" } },
   help: `
 Usage: node verification/desktop/scripts/settings-page.mjs [options]
 
-  --only <list>   Checks, comma-separated: masthead, condense, arrive, search, focus-ring
+  --only <list>   Checks, comma-separated: masthead, condense, arrive, search,
+                  focus-ring, native-hooks
 
 Per engine:
   masthead    every title below the titlebar row (16px clear) at 1440×900,
@@ -370,7 +418,9 @@ Per engine:
               the window's controls; scrolled back, it goes
   arrive      a page's motion is at most 300ms; none under less motion
   search      Enter lands on the setting, in view and marked a moment; ⌘F
-  focus-ring  a tab and a switch show the window's focus ring`,
+  focus-ring  a tab and a switch show the window's focus ring
+  native-hooks  Access rests Claude and Codex hook rows without a gateway, and
+                 says a hook can deny or change a tool call`,
 }
 
 await main(meta, async ({ options, rep, url }) => {

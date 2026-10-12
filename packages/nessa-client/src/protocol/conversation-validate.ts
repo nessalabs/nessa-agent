@@ -21,6 +21,7 @@ import {
   IncomingElicitationSupport,
   ModelSwitchReportingSupport,
   NativeHookSuppressionSupport,
+  NativeHooksChoice,
   PermissionDeferralSupport,
   PermissionDenialSupport,
   PolicyCloseSessionSupport,
@@ -619,6 +620,7 @@ export function conversationView(value: unknown, expected: string): Conversation
   const featureValues = {
     permissionDenial: PermissionDenialSupport,
     nativeHookSuppression: NativeHookSuppressionSupport,
+    nativeHooks: NativeHooksChoice,
     compactionReporting: CompactionReportingSupport,
     modelSwitchReporting: ModelSwitchReportingSupport,
     permissionDeferral: PermissionDeferralSupport,

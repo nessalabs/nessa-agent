@@ -168,6 +168,7 @@ fn application_absences_project_as_not_implemented() {
     .unwrap();
     assert_eq!(value["permissionDenial"], "unknown");
     assert_eq!(value["nativeHookSuppression"], "unknown");
+    assert_eq!(value["nativeHooks"], "off");
     assert_eq!(value["compactionReporting"], "unsupported_not_implemented");
     assert_eq!(value["modelSwitchReporting"], "unsupported_not_implemented");
     assert_eq!(value["permissionDeferral"], "unsupported_not_implemented");

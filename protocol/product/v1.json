@@ -216,7 +216,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 62,
+          "maxItems": 63,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -703,6 +703,16 @@
       "description": "Whether suppression of user-configured provider hooks has been verified.",
       "enum": ["unknown", "unsupported", "supported_for_user_configured_hooks"]
     },
+    "NativeHooksChoice": {
+      "type": "string",
+      "description": "Whether the next launch of this conversation's harness omits Nessa's request to leave the harness's own hooks off. Off is the default. On does not prove the harness ran a hook, and it does not change nativeHookSuppression.",
+      "enum": ["off", "on"]
+    },
+    "NativeHooksAgent": {
+      "type": "string",
+      "description": "A harness whose own hooks the caller can allow. OpenCode is not in this set and stays suppressed.",
+      "enum": ["claude", "codex"]
+    },
     "CompactionReportingSupport": {
       "type": "string",
       "description": "Whether Nessa reports provider compaction with invocation correlation.",
@@ -756,6 +766,10 @@
           "$ref": "#/$defs/NativeHookSuppressionSupport",
           "description": "Verified suppression state for user-configured provider hooks."
         },
+        "nativeHooks": {
+          "$ref": "#/$defs/NativeHooksChoice",
+          "description": "Whether this launch omits the request to leave the harness's own hooks off. When on, a hook can deny or change a tool call before Nessa asks."
+        },
         "compactionReporting": {
           "$ref": "#/$defs/CompactionReportingSupport",
           "description": "Effective Nessa support for correlated compaction reporting."
@@ -792,6 +806,7 @@
       "required": [
         "permissionDenial",
         "nativeHookSuppression",
+        "nativeHooks",
         "compactionReporting",
         "modelSwitchReporting",
         "permissionDeferral",
@@ -3951,9 +3966,56 @@
           "items": { "$ref": "#/$defs/AgentModelOption" },
           "maxItems": 256,
           "description": "Models runnable by this agent."
+        },
+        "nativeHooks": {
+          "type": "boolean",
+          "description": "Whether the next launch of this agent omits Nessa's request to leave its own hooks off. Present for Claude and Codex. Absent for OpenCode, which stays suppressed."
         }
       },
       "required": ["agent", "defaultModel", "models"]
+    },
+    "AgentsSetNativeHooksParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Allow or stop allowing one harness to run its own hooks. The next launch of that harness omits Nessa's suppression request when enabled is true. OpenCode is not a value of agent.",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "agent": {
+          "$ref": "#/$defs/NativeHooksAgent",
+          "description": "Claude or Codex."
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "True omits the suppression request on the next launch. False restores it."
+        }
+      },
+      "required": ["requestId", "agent", "enabled"]
+    },
+    "AgentsSetNativeHooksResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The choice now in effect for the named harness. A hook can deny or change a tool call before Nessa asks when enabled is true.",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Original action identifier."
+        },
+        "agent": {
+          "$ref": "#/$defs/NativeHooksAgent",
+          "description": "The harness this command changed."
+        },
+        "enabled": { "type": "boolean", "description": "The choice now in effect." }
+      },
+      "required": ["requestId", "agent", "enabled"]
     },
     "AgentsListResult": {
       "type": "object",

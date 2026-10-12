@@ -5,7 +5,20 @@
 //! `SharedAgentReadiness` is what an entrypoint asks. It bounds what the
 //! question costs: concurrent callers all want the same parameterless answer, so
 //! one probe runs and they share it, and nobody waits for it past a deadline.
+//!
+//! ```text
+//! stored bytes -> native_hooks::selection_from_stored
+//! agents.list JSON -> native_hooks::overlay_native_hooks
+//! ```
+//!
+//! Arrows are pure reads. The file and the audit adapter are infrastructure.
+mod native_hooks;
 mod ports;
+pub use native_hooks::{
+    overlay_native_hooks, selection_from_stored, NativeHooksAgent, NativeHooksAudit,
+    NativeHooksChange, NativeHooksError, NativeHooksEvidence, NativeHooksPhase,
+    NativeHooksSelection,
+};
 pub use ports::{
     AgentCredential, AgentCredentialFailure, AgentCredentialKind, AgentCredentialSource,
     AgentProbe, AgentProbeEvidence, ProbeFailure,

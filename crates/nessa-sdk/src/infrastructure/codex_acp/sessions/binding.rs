@@ -4,8 +4,8 @@ use super::profile::{native_mode, CodexProfile};
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::ExecutionAudit;
 use crate::application::agent_execution::providers::{
-    AgentProvider, ApprovalMode, HarnessHost, HarnessLaunch, ProviderIdentity, ProviderOpenFuture,
-    ProviderOpenRequest,
+    AgentProvider, ApprovalMode, HarnessHost, HarnessLaunch, NativeHooksSwitch, ProviderIdentity,
+    ProviderOpenFuture, ProviderOpenRequest,
 };
 use crate::domain::agent_execution::permissions::PermissionScope;
 use crate::domain::agent_execution::prompts::SystemPrompt;
@@ -33,6 +33,9 @@ pub struct CodexAcpProvider {
     system_prompt: Option<SystemPrompt>,
     approval_mode: ApprovalMode,
     effort_level: Option<EffortLevel>,
+    /// Read when `CODEX_CONFIG` is built for a launch. Off sends today's
+    /// suppression keys.
+    native_hooks: NativeHooksSwitch,
     audit: Arc<dyn ExecutionAudit>,
     /// Deletions this binding started that are still stopping their process.
     deletions: DeletionCleanups,
@@ -139,6 +142,7 @@ impl CodexAcpProvider {
             system_prompt: None,
             approval_mode: ApprovalMode::Ask,
             effort_level: None,
+            native_hooks: NativeHooksSwitch::off(),
             audit,
             deletions: DeletionCleanups::default(),
             host: None,
@@ -166,6 +170,17 @@ impl CodexAcpProvider {
         }
         self.approval_mode = mode;
         Ok(self)
+    }
+    /// Let Codex run its own hooks on the next launch this factory opens.
+    ///
+    /// Off keeps `features.hooks: false` and `notify: []` in `CODEX_CONFIG`.
+    /// On omits both keys, so the user's configuration is not overridden.
+    /// The model and instructions stay. The switch is read when the process
+    /// starts, so a change applies to the next launch. The negotiated
+    /// suppression fact stays unsupported either way.
+    pub fn with_native_hooks(mut self, native_hooks: NativeHooksSwitch) -> Self {
+        self.native_hooks = native_hooks;
+        self
     }
     /// Select one reasoning effort level for every session this factory opens.
     /// Without one, no level is sent and the agent keeps its own default.
@@ -198,20 +213,24 @@ impl CodexAcpProvider {
     /// `CODEX_CONFIG` as JSON and sends it as the `thread/start` config
     /// override, which the pinned loader applies as a session layer. The model
     /// and the instructions are supplied here and the model is read back over
-    /// the protocol. `features.hooks` and `notify` are not read back: legacy
-    /// managed configuration and MDM are applied after the session layer, and
-    /// ACP exposes no effective value, so the profile reports native hook
-    /// suppression as unsupported.
+    /// the protocol. By default `features.hooks` is false and `notify` is
+    /// empty. Those keys are not read back: legacy managed configuration and
+    /// MDM are applied after the session layer, and ACP exposes no effective
+    /// value, so the profile reports native hook suppression as unsupported.
+    /// When the caller has allowed native hooks, both keys are omitted and
+    /// the fact stays unsupported.
     fn session_config(&self) -> String {
         let mut config = json!({
             "model": self.capabilities.model().model_id(),
+        });
+        if !self.native_hooks.allowed() {
             // Ordinary configured handlers stop when the feature is false.
             // Provider builtin cleanup is a separate lifecycle path and is
             // not disabled here. Legacy notify is constructed independently
             // of the feature bit, so it is cleared on its own.
-            "features": {"hooks": false},
-            "notify": [],
-        });
+            config["features"] = json!({"hooks": false});
+            config["notify"] = json!([]);
+        }
         if let Some(prompt) = &self.system_prompt {
             config["instructions"] = json!(prompt.text().as_str());
         }
@@ -312,6 +331,7 @@ impl CodexAcpProvider {
             self.approval_mode,
             self.effort_level.clone(),
         )
+        .allowing_native_hooks(self.native_hooks.allowed())
     }
     /// How every connection this provider opens is launched.
     pub(super) fn process_factory(&self) -> acp_binding::ProcessFactory {

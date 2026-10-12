@@ -1,8 +1,9 @@
-import { InstallableAgent, bounds } from "../generated/product.js"
+import { InstallableAgent, NativeHooksAgent, bounds } from "../generated/product.js"
 import type {
   AgentInstallOptionsResult,
   AgentInstallResult,
   AgentsListResult,
+  AgentsSetNativeHooksResult,
   ApprovalModeChoice,
 } from "../generated/product.js"
 import { wellFormedText } from "./unicode.js"
@@ -66,7 +67,9 @@ export function agentsList(value: unknown): AgentsListResult {
   const agents = new Set<string>()
   for (const entry of result.agents) {
     const agent = object(entry)
-    exact(agent, ["agent", "defaultModel", "models"])
+    exact(agent, ["agent", "defaultModel", "models", "nativeHooks"])
+    if (Object.hasOwn(agent, "nativeHooks") && typeof agent.nativeHooks !== "boolean")
+      throw new Error("Invalid native hooks choice")
     const name = text(agent, "agent", 32)
     if (agents.has(name)) throw new Error("Repeated configured agent")
     agents.add(name)
@@ -143,6 +146,31 @@ export function agentInstallResult(value: unknown): AgentInstallResult {
   )
     throw new Error("Invalid installation result")
   return value as AgentInstallResult
+}
+
+const hookAgents = new Set<string>(Object.values(NativeHooksAgent))
+
+/** Validate the choice now in effect before a control shows it. */
+export function agentsSetNativeHooks(value: unknown): AgentsSetNativeHooksResult {
+  const result = object(value)
+  exact(result, ["requestId", "agent", "enabled"])
+  const agent = text(result, "agent", 32)
+  if (!hookAgents.has(agent)) throw new Error("Invalid native hooks agent")
+  nativeHooksRequestId(text(result, "requestId", bounds.maxNativeHooksRequestIdBytes))
+  if (typeof result.enabled !== "boolean") throw new Error("Invalid native hooks choice")
+  return value as AgentsSetNativeHooksResult
+}
+
+/** Validate the schema-owned invocation bound before sending a hooks command. */
+export function nativeHooksRequestId(value: string): string {
+  if (
+    typeof value !== "string" ||
+    !wellFormedText(value) ||
+    Array.from(value).length < bounds.minNativeHooksRequestIdCharacters ||
+    utf8.encode(value).byteLength > bounds.maxNativeHooksRequestIdBytes
+  )
+    throw new Error("Invalid native hooks request ID")
+  return value
 }
 
 /** Validate the schema-owned invocation bound before sending a download command. */

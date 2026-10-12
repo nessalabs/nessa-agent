@@ -2,7 +2,9 @@ import type {
   AgentInstallOptionsResult,
   AgentInstallResult,
   AgentsListResult,
+  AgentsSetNativeHooksResult,
   InstallableAgent,
+  NativeHooksAgent,
 } from "../generated/product.js"
 import { ProductMethod } from "../generated/product.js"
 import type { RpcRequester } from "../application/session-port.js"
@@ -11,6 +13,8 @@ import {
   agentInstallResult,
   agentInstallRequestId,
   agentsList,
+  agentsSetNativeHooks,
+  nativeHooksRequestId,
 } from "../protocol/agents-validate.js"
 
 /** Configured agent and model choices published by the authenticated gateway. */
@@ -26,6 +30,20 @@ export type AgentsApi = {
    * The gateway retains this attempt ID with authenticated audit attribution.
    */
   install(agent: InstallableAgent, requestId: string): Promise<AgentInstallResult>
+  /**
+   * Allow or restore suppression of one harness's own hooks. The next launch
+   * omits Nessa's suppression request when `enabled` is true. OpenCode is not
+   * a value of `agent`. A lost response does not undo the change; list again
+   * before retrying. `requestId` must be well-formed Unicode within the
+   * product schema's bound. The gateway retains this attempt with
+   * authenticated audit attribution. When enabled, a hook can deny or change
+   * a tool call before Nessa asks.
+   */
+  setNativeHooks(
+    agent: NativeHooksAgent,
+    enabled: boolean,
+    requestId: string,
+  ): Promise<AgentsSetNativeHooksResult>
 }
 
 export function createAgentsApi(session: RpcRequester): AgentsApi {
@@ -41,5 +59,13 @@ export function createAgentsApi(session: RpcRequester): AgentsApi {
         ),
       ),
     list: async () => agentsList(await session.request(ProductMethod.AgentsList, {})),
+    setNativeHooks: async (agent, enabled, requestId) =>
+      agentsSetNativeHooks(
+        await session.request(ProductMethod.AgentsSetNativeHooks, {
+          agent,
+          enabled,
+          requestId: nativeHooksRequestId(requestId),
+        }),
+      ),
   }
 }

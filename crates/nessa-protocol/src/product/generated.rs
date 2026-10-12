@@ -314,6 +314,34 @@ impl NativeHookSuppressionSupport {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
+pub enum NativeHooksChoice {
+    Off,
+    On,
+}
+impl NativeHooksChoice {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::On => "on",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeHooksAgent {
+    Claude,
+    Codex,
+}
+impl NativeHooksAgent {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Claude => "claude",
+            Self::Codex => "codex",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CompactionReportingSupport {
     UnsupportedNotImplemented,
     SupportedWithInvocationCorrelation,
@@ -439,6 +467,7 @@ impl IncomingElicitationSupport {
 pub struct ConversationAgentFeatures {
     pub permission_denial: PermissionDenialSupport,
     pub native_hook_suppression: NativeHookSuppressionSupport,
+    pub native_hooks: NativeHooksChoice,
     pub compaction_reporting: CompactionReportingSupport,
     pub model_switch_reporting: ModelSwitchReportingSupport,
     pub permission_deferral: PermissionDeferralSupport,
@@ -1585,6 +1614,22 @@ pub struct AgentOption {
     pub agent: String,
     pub default_model: String,
     pub models: Vec<AgentModelOption>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_hooks: Option<bool>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentsSetNativeHooksParams {
+    pub request_id: String,
+    pub agent: NativeHooksAgent,
+    pub enabled: bool,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentsSetNativeHooksResult {
+    pub request_id: String,
+    pub agent: NativeHooksAgent,
+    pub enabled: bool,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -2234,6 +2279,10 @@ pub const MIN_AGENT_INSTALL_REQUEST_ID_CHARACTERS: usize = 1;
 /// Published bound from the product schema.
 pub const MAX_AGENT_INSTALL_REQUEST_ID_BYTES: usize = 256;
 /// Published bound from the product schema.
+pub const MIN_NATIVE_HOOKS_REQUEST_ID_CHARACTERS: usize = 1;
+/// Published bound from the product schema.
+pub const MAX_NATIVE_HOOKS_REQUEST_ID_BYTES: usize = 256;
+/// Published bound from the product schema.
 pub const MAX_PHYSICAL_RECORD_PAYLOAD_BYTES: usize = 65546;
 /// Published bound from the product schema.
 pub const MAX_RECORD_PAGE_RECORDS: usize = 16;
@@ -2284,6 +2333,7 @@ pub mod product_method {
     pub const ARTIFACT_READ: &str = "artifact.read";
     pub const ATTACHMENT_BEGIN: &str = "attachment.begin";
     pub const AGENTS_LIST: &str = "agents.list";
+    pub const AGENTS_SET_NATIVE_HOOKS: &str = "agents.setNativeHooks";
     pub const CONVERSATION_SET_APPROVAL_MODE: &str = "conversation.setApprovalMode";
     pub const AGENTS_INSTALL_OPTIONS: &str = "agents.installOptions";
     pub const AGENTS_INSTALL: &str = "agents.install";
@@ -2507,7 +2557,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 62
+                items.len() <= 63
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -2559,6 +2609,7 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "artifact.read",
     "attachment.begin",
     "agents.list",
+    "agents.setNativeHooks",
     "conversation.setApprovalMode",
     "agents.installOptions",
     "agents.install",
@@ -2647,6 +2698,7 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "conversation.delete"
         | "conversation.reorder"
         | "attachment.begin"
+        | "agents.setNativeHooks"
         | "conversation.setApprovalMode"
         | "agents.install"
         | "mcp.callTool"

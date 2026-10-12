@@ -49,6 +49,7 @@ function attached(
       agentFeatures: {
         permissionDenial: "supported_for_offered_permission_reviews",
         nativeHookSuppression: "unknown",
+        nativeHooks: "off",
         compactionReporting: "unsupported_not_implemented",
         modelSwitchReporting: "unsupported_not_implemented",
         permissionDeferral: "unsupported_not_implemented",
@@ -100,10 +101,21 @@ it("says in a word whether approvals work here, without the capability jargon", 
   show(attached())
 
   expect(group("Approvals")).toBe(
-    "ApprovalsTool callsProvider asksDeny a requestSupportedAnswer laterNot yet in Nessa",
+    "ApprovalsTool callsProvider asksDeny a requestSupportedAnswer laterNot yet in NessaNative hooksNessa asks this agent to leave its own hooks off.",
   )
   expect(group("Model")).toBe("ModelImagesNot supported")
   expect(document.body.textContent).not.toContain("turn correlation")
+})
+
+it("says a hook can change a tool call when native hooks are on", () => {
+  const item = attached()
+  const features = item.remote?.capabilities.agentFeatures
+  if (!features) throw new Error("missing features")
+  features.nativeHooks = "on"
+  show(item)
+  expect(group("Approvals")).toContain(
+    "Native hooksA hook can deny or change a tool call before Nessa asks.",
+  )
 })
 
 it("names the model and its agent once the gateway reports them", () => {
