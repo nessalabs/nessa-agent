@@ -360,13 +360,17 @@ impl ArtifactInbox for FileInbox {
         // removed. A file put there after this one was deleted outright may
         // also be given its inode again, and pass the check.
         match identity_at(&directory, &name) {
-            Ok(there) if there == placed.identity => match unlink_at(&directory, &name) {
-                Ok(()) => true,
-                Err(error) => {
-                    tracing::warn!(%error, "a fetched file whose placing went unrecorded could not be taken back");
-                    false
+            // Gone only once the removal lasts: one a crash could undo is
+            // still said there.
+            Ok(there) if there == placed.identity => {
+                match unlink_at(&directory, &name).and_then(|()| directory.sync_all()) {
+                    Ok(()) => true,
+                    Err(error) => {
+                        tracing::warn!(%error, "a fetched file whose placing went unrecorded could not be taken back");
+                        false
+                    }
                 }
-            },
+            }
             // Gone, or another file put there since: not this fetch's.
             _ => {
                 tracing::warn!(
