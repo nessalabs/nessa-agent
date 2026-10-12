@@ -96,7 +96,9 @@ the binding can cancel one turn, and continue when it cannot. The review is
 withdrawn as the hook either way, so the provider is not left waiting.
 `ToolVerdict::refuse(_, EndTurn)` withdraws the pending review as the hook,
 naming the outcome, and then cancels the turn when the binding can. A turn
-the provider already finished while the hook ran is not cancelled again. Only a
+the provider already finished while the hook ran, shown by its reply having
+arrived, is not cancelled again. A turn that cleanup retired without a reply
+is not finished: the session still stops on the failure path. Only a
 continue is ever an answer, and the execution controller rejects a hook answer
 with any other outcome, so no answer carries a terminal outcome to replay.
 An end-turn the binding cannot perform is recorded as continue and does not
