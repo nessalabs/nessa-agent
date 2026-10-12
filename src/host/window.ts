@@ -14,6 +14,7 @@ import {
   type AgentApiKeySaveRejectionReason,
 } from "../onboarding/application/ports"
 import type { GatewayStartup, HostStartup } from "../startup/application/ports"
+import { saveInPage } from "./save-in-page"
 import { hostRefusalFromInvoke } from "./startup-refusals"
 export type { GatewayStartup, HostStartup } from "../startup/application/ports"
 
@@ -695,6 +696,61 @@ export async function readAttachmentBytes(ticket: string): Promise<ArrayBuffer |
   if (!inTauri) return null
   const { invoke } = await import("@tauri-apps/api/core")
   return invoke<ArrayBuffer>("read_attachment_bytes", { ticket })
+}
+
+/**
+ * The request header that carries a saved file's suggested name, percent-
+ * encoded. Matches `saving::NAME_HEADER`.
+ */
+export const SAVE_NAME_HEADER = "x-nessa-save-name"
+
+/** Why the host saved nothing. Matches `saving::NotSavedReason`. */
+export type NotSavedReason = "too-large" | "malformed" | "no-dialog" | "not-written"
+
+/** The host saved nothing, and why. Matches `saving::FileNotSaved`. */
+export interface FileNotSaved {
+  reason: NotSavedReason
+  /** The host's own words, for the diagnostics rather than the screen. */
+  detail: string
+}
+
+/**
+ * `text` with each lone surrogate replaced by U+FFFD, as
+ * `String.prototype.toWellFormed` does — which `encodeURIComponent` needs, and
+ * which neither this build's library target nor every webview it runs in has.
+ */
+function wellFormed(text: string): string {
+  return text.replace(
+    /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,
+    "\uFFFD",
+  )
+}
+
+/**
+ * Save `bytes` as a file the person chooses, suggesting `name`.
+ *
+ * In the desktop app the host puts its own save dialog on screen and writes
+ * the bytes where the person chose (`save_file`): the webview downloads
+ * nothing, and no `<a download>` or `blob:` link is ever followed, which the
+ * host's link policy refuses (`src-tauri/src/links.rs`). The host cleans the
+ * name before suggesting it, and refuses more than it would ever hand the
+ * page. In a plain browser the page downloads them itself (`saveInPage`).
+ *
+ * Resolves `cancelled` when the person closed the dialog without choosing,
+ * which is not a failure. Rejects with {@link FileNotSaved} when nothing was
+ * saved for any other reason.
+ */
+export async function saveFile(
+  bytes: Blob,
+  name: string,
+): Promise<"saved" | "cancelled"> {
+  if (!inTauri) return saveInPage(bytes, name)
+  const { invoke } = await import("@tauri-apps/api/core")
+  return invoke<"saved" | "cancelled">(
+    "save_file",
+    new Uint8Array(await bytes.arrayBuffer()),
+    { headers: { [SAVE_NAME_HEADER]: encodeURIComponent(wellFormed(name)) } },
+  )
 }
 
 /** Why a clicked link did nothing. Matches `host::NotOpened`. */

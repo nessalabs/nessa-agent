@@ -67,6 +67,7 @@ function workingConversation(id: string): Conversation {
       },
     ],
     remote: {
+      artifacts: [],
       approvalMode: "ask",
       approvalModes: [
         {
@@ -188,6 +189,7 @@ function terminalConversation(
       },
     ],
     remote: {
+      artifacts: [],
       approvalMode: "ask",
       approvalModes: [
         {
@@ -234,6 +236,7 @@ function queuedConversation(): Conversation {
       },
     ],
     remote: {
+      artifacts: [],
       approvalMode: "ask",
       approvalModes: [
         {

@@ -9,6 +9,8 @@ import {
   type CommandFailure,
   type ConversationSelection,
   type FileAttachment,
+  type HeldFile,
+  type HeldFileFailure,
   type ImageReference,
   type MessageContent,
   type ReadFailure,
@@ -115,6 +117,14 @@ export interface ConversationEffects {
     /** Aborted when the file stops being wanted; the upload stops with it. */
     signal: AbortSignal,
   ): Promise<ImageReference>
+  /**
+   * Read back a file the conversation holds — an image uploaded into it, or
+   * one its agent published — as its view names it. Resolves only with bytes
+   * whose size and SHA-256 are the ones named, and rejects with a
+   * {@link HeldFileReadError} otherwise. Once `signal` aborts it rejects too,
+   * and nobody is left waiting for the reason.
+   */
+  readHeldFile: HeldFileReader
   reorder(
     conversationId: string,
     executionIds: readonly string[],
@@ -252,3 +262,38 @@ export type UploadChange = { fileId: string } & (
   | { to: "failed"; reason: UploadFailure }
   | { to: "not-started" }
 )
+
+/**
+ * Reads back one file a conversation holds, verified: see
+ * {@link ConversationEffects.readHeldFile}.
+ */
+export type HeldFileReader = (
+  conversationId: string,
+  file: HeldFile,
+  /** Aborted when the file stops being wanted; the read stops with it. */
+  signal: AbortSignal,
+) => Promise<Blob>
+
+/**
+ * Hands verified bytes to the person to keep, under a suggested `name`: the
+ * host's own way of saving a file — a save dialog on a desktop host, the
+ * page's download in a browser. Resolves `cancelled` when the person closed
+ * the dialog without choosing anywhere, which is not a failure; rejects when
+ * nothing was saved for any other reason. Provided by composition, from the
+ * host.
+ */
+export type HeldFileSaver = (bytes: Blob, name: string) => Promise<"saved" | "cancelled">
+
+/**
+ * A held file was not read back, and why, as something to branch on — never by
+ * reading the message. Nothing of it was handed over.
+ */
+export class HeldFileReadError extends Error {
+  constructor(
+    readonly reason: HeldFileFailure,
+    cause?: unknown,
+  ) {
+    super(`The file was not read back (${reason}).`, { cause })
+    this.name = "HeldFileReadError"
+  }
+}

@@ -32,6 +32,7 @@ import {
  */
 const view = (conversationId: string): ConversationView => ({
   conversationId,
+  artifacts: [],
   approvalMode: "ask",
   approvalModes: [
     { id: "ask", name: "Provider asks", description: "Provider asks where required." },

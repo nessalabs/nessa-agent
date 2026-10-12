@@ -39,6 +39,7 @@
 import {
   NessaMcpAppError,
   NessaRpcError,
+  type AttachmentApi,
   type AuthApi,
   type ConversationMessage,
   type ConversationPermission,
@@ -307,6 +308,8 @@ const settingsParts = {
   pairing: {} as PairingApi,
   credentials: {} as CredentialApi,
   auth: {} as AuthApi,
+  // Read back only for a file a view names; none here does.
+  attachments: {} as AttachmentApi,
 }
 
 const dependencies = createDesktopDependencies({

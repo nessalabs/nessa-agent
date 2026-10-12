@@ -1227,6 +1227,61 @@ sequenceDiagram
 - **Not audited.** A read changes nothing and is admitted exactly as
   `conversation.read` is, which is not audited either.
 
+On the client, `attachments.fetch` in `@nessa/client` is the one reader:
+it asks for 32 KiB ranges from offset 0, one after another, holds each answer
+to the range asked (its offset, canonical base64, and exactly the bytes left,
+fewer only at the end), asks a busy range again after each of
+`HELD_FILE_BUSY_RETRY_DELAYS_MS`, and returns a `Blob` only once the whole
+has the named size and SHA-256 (`NessaHeldFileError` otherwise, `integrity`
+for bytes that are not the file). The panel and the desktop window read
+through the conversation vertical's `heldFileReader`, the one place the
+client's codes become the panel's `HeldFileFailure`. Its `HeldFilesProvider`
+reads a file when something first shows it, keeps one object URL per
+conversation and file while anything shows it, and revokes it after; a newer
+view of the conversation reads nothing again. Every read a window makes, for
+showing or saving, waits in one queue two at a time: the panel and the
+desktop window each take two of the gateway's four read slots. That is not a
+guarantee — a read abandoned mid-range can hold its slot until the gateway
+finishes that range, and other devices read too — so a read refused busy
+recovers through the retries below rather than failing. A file that is not held, a deleted conversation and bytes that did not
+verify are kept while shown; a file that could not be read now is asked for
+again after a growing wait, or at once from its Retry. The transcript places
+each file with `placePublished`, the one rule the panel and the desktop share:
+under the turn that published it, before the first turn when that turn is one
+the bounded view left out, and after the last when no turn ran. A picture up
+to the gateway's image bound is shown once verified; a larger one, and any
+other file, is read only to save it. Saving goes through the host's own port
+(`saveFile`): the desktop app's save dialog, written by the host
+(`save_file`, `src-tauri/src/saving/`), since its webviews have no download
+handler and its link policy refuses `blob:`; a plain browser downloads from an
+object URL it revokes after. Images a turn names by reference are painted from
+the same reader, saying why when they cannot be.
+
+```mermaid
+sequenceDiagram
+    participant T as Transcript card (panel or desktop)
+    participant C as HeldFilesProvider (queue, 2 at a time; object URL per file shown)
+    participant R as heldFileReader (conversation vertical)
+    participant A as attachments.fetch (@nessa/client)
+    participant P as Product socket
+    T->>C: show {conversation, digest, type, size}
+    C->>R: read, once while it is shown, when its turn in the queue comes
+    R->>A: fetch(conversation, file, signal)
+    loop each 32 KiB range from 0
+        A->>P: artifact.read{offset, maxBytes 32768}
+        P-->>A: {offset, data} or temporarily_unavailable (asked again, bounded)
+        A->>A: offset, base64 and length are the range asked
+    end
+    A->>A: size and SHA-256 of the whole
+    A-->>R: Blob, or NessaHeldFileError
+    R-->>C: Blob, or HeldFileReadError(not-held, deleted, damaged, unavailable)
+    C-->>T: object URL, or the reason; revoked when nothing shows it
+    Note over C: unavailable: asked again after a growing wait, or on Retry
+    T->>C: Save
+    C-->>T: the bytes shown, the read going, or a queued read
+    T->>T: saveFile: host save dialog (desktop) or object URL download (browser)
+```
+
 A paired device reads the same way over its protected channel:
 `nessa-client-core`'s `fetch PROFILE CONVERSATION DIGEST MIMETYPE SIZE OUT`
 (`fetch_held_file`) asks one 32 KiB range per operation, holds each answer to

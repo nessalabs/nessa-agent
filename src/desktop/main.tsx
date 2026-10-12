@@ -7,7 +7,9 @@ import {
   sandboxSchemeRegistered,
   signInToProvider,
   providerLoginAvailable,
+  saveFile,
 } from "../host"
+import { HeldFilesProvider } from "../conversation"
 import { environmentFromVite } from "../env/vite"
 import { connectBrowserSession, createBrowserAuth } from "../session"
 import { StartupMounted } from "../startup/ui/mounted-signal"
@@ -101,11 +103,13 @@ createRoot(container).render(
             <DesktopIconFamilyProvider>
               <McpServersProvider gateway={dependencies.mcpServers}>
                 <LinkedDevicesProvider gateway={dependencies.linkedDevices}>
-                  <DesktopWindow
-                    hostKind={host.kind}
-                    browserSurface={host.kind === "browser"}
-                    inspectable={import.meta.env.DEV}
-                  />
+                  <HeldFilesProvider read={dependencies.heldFiles} save={saveFile}>
+                    <DesktopWindow
+                      hostKind={host.kind}
+                      browserSurface={host.kind === "browser"}
+                      inspectable={import.meta.env.DEV}
+                    />
+                  </HeldFilesProvider>
                 </LinkedDevicesProvider>
               </McpServersProvider>
             </DesktopIconFamilyProvider>

@@ -456,3 +456,49 @@ describe("handing setup over to the panel", () => {
     expect(invoke).not.toHaveBeenCalled()
   })
 })
+
+describe("saving a file", () => {
+  it("hands the host the bytes and the name, and downloads nothing in the page", async () => {
+    invoke.mockResolvedValueOnce("saved")
+    const { saveFile, SAVE_NAME_HEADER } = await import("./window")
+    const name = "résumé 1/2.pdf"
+
+    await expect(saveFile(new Blob(["%PDF-1"]), name)).resolves.toBe("saved")
+
+    expect(invoke).toHaveBeenCalledOnce()
+    const [command, body, options] = invoke.mock.calls[0] as [
+      string,
+      Uint8Array,
+      { headers: Record<string, string> },
+    ]
+    expect(command).toBe("save_file")
+    expect(new TextDecoder().decode(body)).toBe("%PDF-1")
+    // Headers carry ASCII only: the name goes percent-encoded and comes back whole.
+    const sent = options.headers[SAVE_NAME_HEADER]!
+    expect(sent).toMatch(/^[\x21-\x7e]+$/)
+    expect(decodeURIComponent(sent)).toBe(name)
+  })
+
+  it("says a cancelled dialog is a cancellation, and a refusal is a rejection", async () => {
+    const { saveFile } = await import("./window")
+    invoke.mockResolvedValueOnce("cancelled")
+    await expect(saveFile(new Blob(["x"]), "x.txt")).resolves.toBe("cancelled")
+    const refusal = { reason: "not-written", detail: "read-only volume" }
+    invoke.mockRejectedValueOnce(refusal)
+    await expect(saveFile(new Blob(["x"]), "x.txt")).rejects.toBe(refusal)
+  })
+
+  it("sends a name with a lone surrogate, the surrogate replaced", async () => {
+    invoke.mockResolvedValueOnce("saved")
+    const { saveFile, SAVE_NAME_HEADER } = await import("./window")
+    await expect(saveFile(new Blob(["x"]), "a\uD800b\uDC00.txt")).resolves.toBe("saved")
+    const [, , options] = invoke.mock.calls[0] as [
+      string,
+      Uint8Array,
+      { headers: Record<string, string> },
+    ]
+    expect(decodeURIComponent(options.headers[SAVE_NAME_HEADER]!)).toBe(
+      "a\uFFFDb\uFFFD.txt",
+    )
+  })
+})

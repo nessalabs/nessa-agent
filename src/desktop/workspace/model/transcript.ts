@@ -31,8 +31,25 @@ export type Part =
    * pass over it, and the overview's peek drops it (`model/overview/peek.ts`).
    */
   | { readonly kind: "widget"; readonly widget: WidgetRef }
+  /**
+   * A file the agent published, which the conversation holds: by its name, for
+   * people, and by exactly what the conversation holds it as — its SHA-256,
+   * media type and size — which is what reads its bytes back. A card shows it
+   * (`PublishedFiles`, `ui/transcript/message.tsx`); like a widget, the
+   * readers of a message's text pass over it, and the overview's peek drops it.
+   */
+  | {
+      readonly kind: "file"
+      readonly name: string
+      readonly digest: string
+      readonly mimeType: string
+      readonly size: number
+    }
 
 export type StepPart = Extract<Part, { kind: "step" }>
+export type FilePart = Extract<Part, { kind: "file" }>
+/** Files published one after another in a message, shown as one list. */
+export type FileGroup = { readonly kind: "files"; readonly files: FilePart[] }
 
 /**
  * Whether a message the person wrote here has reached the source. Absent on
@@ -199,14 +216,22 @@ export function unconfirmed(
 
 /**
  * A message's parts with consecutive steps gathered, so they read as one quiet
- * group. Anything that is not a step — prose, code, a widget — ends a group.
+ * group, and consecutive published files gathered, so they read as one list.
+ * Anything else — prose, code, a widget — ends a group.
  */
-export function groupSteps(parts: readonly Part[]): (Part | StepPart[])[] {
-  const groups: (Part | StepPart[])[] = []
+export function groupSteps(
+  parts: readonly Part[],
+): (Exclude<Part, FilePart> | StepPart[] | FileGroup)[] {
+  const groups: (Exclude<Part, FilePart> | StepPart[] | FileGroup)[] = []
   for (const part of parts) {
     const last = groups[groups.length - 1]
-    if (part.kind === "step" && Array.isArray(last)) last.push(part)
-    else groups.push(part.kind === "step" ? [part] : part)
+    if (part.kind === "step") {
+      if (Array.isArray(last)) last.push(part)
+      else groups.push([part])
+    } else if (part.kind === "file") {
+      if (last && !Array.isArray(last) && last.kind === "files") last.files.push(part)
+      else groups.push({ kind: "files", files: [part] })
+    } else groups.push(part)
   }
   return groups
 }
