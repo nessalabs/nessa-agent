@@ -71,7 +71,7 @@ and
 | Requested record written, file still off | The outcome record fails | The file and the flag stay off. The command fails |
 | Requested record written, file on, flag still off | The outcome record fails and the revert write succeeds | The file returns to the choice this call started from, and the flag never moved. The command fails |
 | File published | The revert write fails | The flag stays with that file. The command fails. The outcome record is absent |
-| Requested record written | The file is renamed into place and its directory sync fails | The outcome is recorded and the flag follows the file. The command reports the storage failure. A retry succeeds |
+| Requested record written | The file is renamed into place and its directory sync fails | The outcome is recorded and the flag follows the file. The command reports the storage failure. A retry succeeds once the directory syncs, and reports the storage failure until then |
 | File and flag on | The outcome record is readable but reports a failure | Nothing is reverted, because the record says the change took effect. The command fails. A retry succeeds |
 | File written, outcome absent | The process starts | The start loads the file |
 | The file is not one JSON object, names a harness twice, or is larger than any choice | The gateway starts | That file loads as off and the gateway keeps starting |

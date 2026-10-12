@@ -150,7 +150,10 @@ fn set_blocking(
 ) -> Result<NativeHooksSelection, NativeHooksError> {
     // A retry of a command that already recorded its outcome keeps that
     // record. The before value in it is the one from the first attempt.
+    // It succeeds only once the choice's directory is synced: the first
+    // attempt may have recorded its outcome after that sync failed.
     if already_recorded(&directory, &change)? {
+        sync(&directory).map_err(|_| NativeHooksError::Storage)?;
         return Ok(selection_of(&claude, &codex));
     }
     let current = flag(&claude, &codex, change.agent);
@@ -698,8 +701,16 @@ mod tests {
         // The running switch agrees with the file the next start will load.
         assert!(preferences.selection().claude());
         assert!(preferences.switch(NativeHooksAgent::Claude).allowed());
-        let reloaded = NativeHooksPreferences::open(directory, Arc::new(FixedClock)).unwrap();
+        let reloaded =
+            NativeHooksPreferences::open(directory.clone(), Arc::new(FixedClock)).unwrap();
         assert_eq!(reloaded.selection(), preferences.selection());
+        // A retry is not acknowledged until the directory sync succeeds.
+        let retry = change(NativeHooksAgent::Claude, true, "request-unsynced");
+        assert_eq!(
+            preferences.set(retry.clone()).await.unwrap_err(),
+            NativeHooksError::Storage
+        );
+        assert!(reloaded.set(retry).await.unwrap().claude());
     }
 
     /// Publishes every record, then reports the outcome record as failed: the
