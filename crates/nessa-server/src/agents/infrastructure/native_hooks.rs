@@ -222,11 +222,16 @@ fn selection_of(claude: &AtomicBool, codex: &AtomicBool) -> NativeHooksSelection
     )
 }
 
-/// A choice file that cannot be opened or read is off. A missing file is the
+/// The written choice is about 30 bytes. Reading stops past this, so a
+/// damaged or replaced file cannot make the gateway hold it all in memory.
+const MAX_CHOICE_BYTES: u64 = 4096;
+
+/// A choice file that cannot be opened, read, or is larger than
+/// `MAX_CHOICE_BYTES` is off. A missing file is the
 /// first start and stays quiet. Every other failure is logged: off is the
 /// safe direction, and it must not stop the gateway.
 fn read_choice(path: &Path) -> NativeHooksSelection {
-    let mut file = match open(path, OpenMode::Read) {
+    let file = match open(path, OpenMode::Read) {
         Ok(file) => file,
         Err(error) if error.kind() == ErrorKind::NotFound => return NativeHooksSelection::off(),
         Err(error) => {
@@ -235,8 +240,12 @@ fn read_choice(path: &Path) -> NativeHooksSelection {
         }
     };
     let mut bytes = Vec::new();
-    if let Err(error) = file.read_to_end(&mut bytes) {
+    if let Err(error) = file.take(MAX_CHOICE_BYTES + 1).read_to_end(&mut bytes) {
         tracing::warn!(%error, path = %path.display(), "native hooks choice file could not be read; loading as off");
+        return NativeHooksSelection::off();
+    }
+    if bytes.len() as u64 > MAX_CHOICE_BYTES {
+        tracing::warn!(path = %path.display(), "native hooks choice file is larger than any choice; loading as off");
         return NativeHooksSelection::off();
     }
     selection_from_stored(&bytes)
@@ -850,6 +859,25 @@ mod tests {
         let path = directory.join("native-hooks.json");
         std::fs::write(&path, br#"{"claude":true,"codex":true}"#).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let loaded = NativeHooksPreferences::open(directory, Arc::new(FixedClock)).unwrap();
+        assert_eq!(loaded.selection(), NativeHooksSelection::off());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_choice_file_larger_than_any_choice_loads_as_off() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("data");
+        NativeHooksPreferences::open(directory.clone(), Arc::new(FixedClock)).unwrap();
+        let path = directory.join("native-hooks.json");
+        // Valid JSON that would turn both on if it were read whole.
+        let padded = format!(
+            r#"{{"claude":true,{}"codex":true}}"#,
+            " ".repeat(MAX_CHOICE_BYTES as usize)
+        );
+        std::fs::write(&path, padded).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
         let loaded = NativeHooksPreferences::open(directory, Arc::new(FixedClock)).unwrap();
         assert_eq!(loaded.selection(), NativeHooksSelection::off());
     }

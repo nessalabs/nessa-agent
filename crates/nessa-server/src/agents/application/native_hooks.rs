@@ -11,7 +11,9 @@
 //! live in infrastructure; this module owns the selection and the evidence
 //! the adapter is given.
 
-use serde_json::{Map, Value};
+use serde::de::{self, Deserializer as _, IgnoredAny, MapAccess, Visitor};
+use serde_json::Value;
+use std::fmt;
 
 /// A harness whose own hooks the caller can allow.
 ///
@@ -81,22 +83,52 @@ impl NativeHooksSelection {
 
 /// Read a stored document. Anything that is not a boolean under `claude` or
 /// `codex` is off. Unknown keys are ignored. A document that is not an object,
-/// or is not JSON, is off.
+/// is not JSON, or names `claude` or `codex` twice is off: a repeated key has
+/// no single answer, and a parser that keeps the last one could turn hooks on.
 pub fn selection_from_stored(bytes: &[u8]) -> NativeHooksSelection {
-    let Ok(value) = serde_json::from_slice::<Value>(bytes) else {
-        return NativeHooksSelection::off();
-    };
-    let Some(object) = value.as_object() else {
-        return NativeHooksSelection::off();
-    };
-    NativeHooksSelection::new(
-        bool_field(object, NativeHooksAgent::Claude.name()),
-        bool_field(object, NativeHooksAgent::Codex.name()),
-    )
+    let mut reader = serde_json::Deserializer::from_slice(bytes);
+    match reader
+        .deserialize_map(StoredChoice)
+        .and_then(|selection| reader.end().map(|()| selection))
+    {
+        Ok(selection) => selection,
+        Err(_) => NativeHooksSelection::off(),
+    }
 }
 
-fn bool_field(object: &Map<String, Value>, key: &str) -> bool {
-    object.get(key).and_then(Value::as_bool).unwrap_or(false)
+/// Reads the stored object one member at a time, so a repeated harness key
+/// is seen rather than overwritten.
+struct StoredChoice;
+
+impl<'de> Visitor<'de> for StoredChoice {
+    type Value = NativeHooksSelection;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("an object of native hooks choices")
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut members: A) -> Result<Self::Value, A::Error> {
+        let mut claude = None;
+        let mut codex = None;
+        while let Some(key) = members.next_key::<String>()? {
+            let slot = if key == NativeHooksAgent::Claude.name() {
+                &mut claude
+            } else if key == NativeHooksAgent::Codex.name() {
+                &mut codex
+            } else {
+                members.next_value::<IgnoredAny>()?;
+                continue;
+            };
+            if slot.is_some() {
+                return Err(de::Error::custom(format_args!("duplicate `{key}`")));
+            }
+            *slot = Some(members.next_value::<Value>()?.as_bool().unwrap_or(false));
+        }
+        Ok(NativeHooksSelection::new(
+            claude.unwrap_or(false),
+            codex.unwrap_or(false),
+        ))
+    }
 }
 
 /// Where a settings change learns whether the caller is a person, an agent,
@@ -245,6 +277,23 @@ mod tests {
         assert_eq!(
             selection_from_stored(br#"{"claude":true,"codex":false}"#),
             NativeHooksSelection::new(true, false)
+        );
+    }
+
+    #[test]
+    fn a_harness_named_twice_is_off_whichever_value_comes_last() {
+        assert_eq!(
+            selection_from_stored(br#"{"claude":false,"claude":true,"codex":true}"#),
+            NativeHooksSelection::off()
+        );
+        assert_eq!(
+            selection_from_stored(br#"{"codex":true,"codex":true}"#),
+            NativeHooksSelection::off()
+        );
+        // A repeated key that is not a harness changes nothing.
+        assert_eq!(
+            selection_from_stored(br#"{"other":1,"other":2,"codex":true}"#),
+            NativeHooksSelection::new(false, true)
         );
     }
 }

@@ -283,11 +283,15 @@ export function ConversationDetails({
       setNativeHooksSwitch(undefined)
       return
     }
+    // Focus and visibility can start reads that overlap. Only the latest read
+    // may answer, so an older one that settles last cannot undo a newer one.
+    let latest = 0
     let current = true
-    const apply = (choice: "off" | "on" | undefined) => {
-      if (current) setNativeHooksSwitch(choice)
-    }
     const read = () => {
+      const generation = ++latest
+      const apply = (choice: "off" | "on" | undefined) => {
+        if (current && generation === latest) setNativeHooksSwitch(choice)
+      }
       void readNativeHooks()
         .then(apply)
         .catch(() => apply(undefined))

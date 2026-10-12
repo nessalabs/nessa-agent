@@ -193,6 +193,36 @@ it("reads the switch again when the window is focused", async () => {
   )
 })
 
+it("keeps the newest read when an older one settles last", async () => {
+  const item = attached()
+  const pending: Array<(choice: "off" | "on") => void> = []
+  await act(async () => {
+    root.render(
+      <ConversationDetails
+        conversation={item}
+        rename={false}
+        onClose={() => {}}
+        onRename={() => {}}
+        readNativeHooks={() => new Promise((resolve) => pending.push(resolve))}
+      />,
+    )
+  })
+  await act(async () => pending[0]("off"))
+  await act(async () => {
+    window.dispatchEvent(new Event("focus"))
+    window.dispatchEvent(new Event("focus"))
+  })
+  // The newer read answers first, then the older one with an outdated switch.
+  await act(async () => pending[2]("off"))
+  await act(async () => pending[1]("on"))
+  expect(group("Approvals")).toContain(
+    "For this run, Nessa asks this agent to leave its own hooks off.",
+  )
+  expect(group("Approvals")).not.toContain(
+    "Applies the next time each conversation's agent starts.",
+  )
+})
+
 it("keeps this run's sentence when the switch still matches", async () => {
   const item = attached()
   await act(async () => {
