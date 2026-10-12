@@ -694,7 +694,9 @@ struct Served {
     /// ends once nothing is left to answer.
     draining: bool,
     /// Leases this side ended unasked (drained, expired or revoked) whose
-    /// `End` the gateway has not yet asked: a drain waits for each.
+    /// `End` the gateway has not yet asked, and commands a drain ended
+    /// unrun whose `Run` or `End` it has not yet sent: a drain waits for
+    /// each, so the gateway hears every end before the stream closes.
     unended: HashSet<String>,
     /// Told whenever a command's end is recorded, its `Ran` handed on: a
     /// drain waiting on it looks again.
@@ -1572,6 +1574,7 @@ impl Served {
     /// which records how it ended and answers with its `Ran`. A lease not
     /// granted here, or run already, is answered as never started.
     fn run(&mut self, lease: String) {
+        self.unended.remove(&lease);
         let work = match self.commands.remove(&lease) {
             Some(HeldCommand::Granted(work)) => work,
             // Still running: its own `Ran` will answer.
@@ -1808,8 +1811,9 @@ impl Served {
     /// `Ending{drained}` for each harness lease, so the gateway asks its
     /// `End` and gets this end's cleanup rather than finding it lost. A
     /// running command is stopped and answers with its `Ran`; one granted
-    /// and never run ends holding nothing. Nothing more is admitted. Nothing
-    /// here waits; asked twice, it acts once.
+    /// and never run ends holding nothing, and serving waits for the
+    /// gateway's `Run` of it (answered never started) or its `End`. Nothing
+    /// more is admitted. Nothing here waits; asked twice, it acts once.
     fn drain(&mut self) {
         if std::mem::replace(&mut self.draining, true) {
             return;
@@ -1852,6 +1856,10 @@ impl Served {
                         Cleanup::Uncertain
                     };
                     self.end_unrun_with(&lease, EndCause::Drained, cleanup);
+                    // The gateway takes no `Ending` for a command: its `Run`
+                    // (answered never started) or `End` tells it, so the
+                    // drain waits for one.
+                    self.unended.insert(lease);
                 }
                 _ => {}
             }

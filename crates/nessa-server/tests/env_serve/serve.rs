@@ -4926,6 +4926,45 @@ async fn k1_a_drain_ends_serving_once_its_last_command_answers() {
     }));
 }
 
+/// A command granted and never run, ended by a drain, keeps serving open
+/// until the gateway's `Run` of it, which is answered never started: the
+/// gateway hears its end rather than finding it lost with the connection.
+#[tokio::test]
+async fn k1_a_drain_waits_for_the_run_of_a_command_it_ended_unrun() {
+    let mut gateway = revocable(Arc::new(MemoryLedger::default()));
+    assert_eq!(gateway.next().await, hello());
+    gateway.send(grant_command(UNRUN, &["wait"], None)).await;
+    gateway.next().await;
+    gateway.settled().await;
+    gateway.drain.send_replace(true);
+    // Recorded ended, but the gateway has not heard: serving is open.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!gateway.served.is_finished());
+    assert!(gateway.ledger.entries().contains(&LedgerEntry::Ended {
+        lease: UNRUN.into(),
+        cleanup: Cleanup::NotHeld,
+        cause: EndCause::Drained,
+    }));
+    gateway
+        .send(ToEnvironment::Run {
+            lease: UNRUN.into(),
+        })
+        .await;
+    assert!(matches!(
+        gateway.said().await,
+        FromEnvironment::Ran {
+            end: CommandEnd::NotStarted,
+            cleanup: Cleanup::NotHeld,
+            ..
+        }
+    ));
+    tokio::time::timeout(Duration::from_secs(5), &mut gateway.served)
+        .await
+        .expect("serving ends once the unrun command's end is said")
+        .unwrap();
+    assert_eq!(ended_entries(&gateway.ledger, UNRUN), 1);
+}
+
 /// A lease that expired before the drain still waits for its `End`: the
 /// drain does not close the connection on an end the gateway has not heard.
 #[tokio::test]
