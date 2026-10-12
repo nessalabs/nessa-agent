@@ -171,7 +171,8 @@ fn lease_refusal(refused: AdmissionRefused) -> LeaseRefusal {
             | GrantRefusal::AuditUnavailable
             | GrantRefusal::CommandsUnavailable
             | GrantRefusal::InvalidCommand
-            | GrantRefusal::Revoked,
+            | GrantRefusal::Revoked
+            | GrantRefusal::Draining,
         )
         | AdmissionRefused::Unreachable => LeaseRefusal::EnvironmentUnreachable,
     }
@@ -1427,6 +1428,9 @@ fn route_frame(routes: &mut Routes, frame: FromEnvironment) -> Routed {
             Some(route) if !route.command => {
                 let cause = match cause {
                     EndingCause::Expired => LeaseEndCause::Expired,
+                    // The host stopping is a system stop, as the gateway
+                    // retiring is: the lease ends with what that took.
+                    EndingCause::Drained => LeaseEndCause::Stopped,
                 };
                 route.ending_cause.send_if_modified(|known| {
                     let unknown = known.is_none();

@@ -446,6 +446,7 @@ cannot be reached.
 ```text
 nessa env enroll ADDRESS CODE   pair as an environment, with an environment invitation's code
 nessa env dial ADDRESS          wait for the owner's approval, then serve, dialing again whenever a connection ends
+                                [--drain-deadline 20s] a signal drains every lease before it stops (row K1)
 ```
 
 ```mermaid
@@ -495,11 +496,97 @@ sequenceDiagram
   tried in turn.
 - **Stopping.** SIGINT or SIGTERM closes the connection being served, so its
   leases end as they do when a gateway goes away, and then dialing stops. A
-  second signal while that drains exits at once.
+  second signal while that drains exits at once. With `--drain-deadline`,
+  the signal drains instead ([row K1](#draining-before-it-stops-row-k1)).
 - **Known limits.** An approved machine pairs again only by removing
   `environment/pairing` first, and a pairing still pending is abandoned the
   same way: the same-enrollment retry the device client has is not offered
   here yet.
+
+### Draining before it stops (row K1)
+
+A hosted worker (slice K, [#708](https://github.com/nessalabs/nessa-agent/issues/708))
+runs `nessa env dial` in a container, and a container is stopped with SIGTERM
+and then, a grace period later, killed. Closing the connection at SIGTERM, as
+a laptop does, would leave the gateway to find each lease lost, with no
+cleanup it can trust. So a worker drains first:
+
+```text
+nessa env dial ADDRESS --drain-deadline 20s
+```
+
+```mermaid
+sequenceDiagram
+    participant K as Container runtime
+    participant D as env dial (E)
+    participant S as env serve's frame loop (E)
+    participant J as E's ledger
+    participant L as HostLink (G)
+    participant C as Conversation service (G)
+    K->>D: SIGTERM
+    D->>S: drain (and start the drain deadline)
+    S->>S: admit nothing more: a Grant or GrantCommand is refused draining
+    loop each lease held
+        S->>J: draining (with the gateway it is for)
+        S->>S: stop every harness under it; a running command is stopped and answers Ran
+        S->>J: ended (drained, cleanup)
+        S->>L: Ending{drained}
+        L->>C: the hold ends as a system stop
+        C->>C: record ending (stopped), actor environment_drained
+        C->>L: End(lease)
+        L->>S: End(lease)
+        S-->>L: Ended(cleanup), the drain's own end
+        C->>C: record ended with that cleanup
+    end
+    S->>S: nothing held, no command running, every drained lease's End asked
+    S-->>L: the connection closes
+    D->>D: dial no more, sweep, release the lock, exit
+    Note over D,K: past the deadline the connection is closed and what is left is lost; a second signal exits at once
+```
+
+- **Inert until asked.** Only `--drain-deadline` makes a signal drain;
+  without it a signal closes the connection at once, as before. `env serve`
+  over SSH never drains: the SSH session's own end is its stop.
+- **Composition asks it, never the gateway.** The drain is a watch handed to
+  serving with its peer and grants, so a gateway cannot make a worker drain
+  or stop draining.
+- **One end per lease, recorded first.** Each lease held is recorded
+  `draining` with the gateway it was for, then ended as an end does, and
+  recorded `ended` with cause `drained` and what that took; a harness's
+  lease is said with `Ending{drained}`, so the gateway asks its `End` and is
+  answered with that cleanup. A drain that cannot be recorded still stops
+  everything, and that end answers `uncertain`. A command lease is stopped
+  through its own stop and answers its `Ran`, since the gateway takes no
+  `Ending` for a command. One granted and never run is recorded ended
+  holding nothing on the worker; the gateway, told nothing of it, learns it
+  at its `Run` (answered never started) or finds it lost when the
+  connection closes. A file still in flight is left unanswered, as on an
+  expiry.
+- **A system stop on the gateway.** The gateway records the lease ending as
+  `stopped` ("a person, or a system stop such as the gateway retiring"), by
+  the actor `environment_drained`, never a person and never `lost`, then
+  `ended` with the environment's cleanup, or `interrupted` past the cleanup
+  bound. No stored shape changes.
+- **When it ends.** Serving ends by itself once nothing is held, no command
+  runs (a stopped command's `Ran` needs no `End`, so its end alone can be
+  the last), the gateway has asked the `End` of every lease the worker
+  ended unasked, drained or earlier expired or revoked, and every
+  answer has gone to the writer: the connection then closes, `env dial`
+  dials no more, and it exits after sweeping. A drain asked while waiting
+  for approval or between dials ends that wait. A gateway that never asks
+  an `End` holds the drain open until the deadline, which then closes the
+  connection: whatever is still held is lost there, as when a gateway goes
+  away. Set the deadline below the container's stop grace.
+- **What crosses it.** A grant the gateway sent before it saw `Ending` is
+  refused `draining`, recorded with that reason (never the owner's
+  `not_granted`), and reported unreachable by the gateway. A revocation
+  arriving during a drain ends nothing twice: each lease keeps the drain as
+  its cause.
+- **Replacing a worker** is draining one container and then starting the
+  next on the same pairing volume, so the key, and the `peer:` name
+  conversations were placed on, stays the same. The two must not overlap: a
+  second connection from the same key takes the first one's place and its
+  leases are lost, and only one process serves a data directory at a time.
 
 ### What the environment grants
 
@@ -720,6 +807,7 @@ Each row has at least one test.
 | I7 | The environment's owner grants a peer `maxLeaseMs`; one of its agent leases outlives it, or is ended as the deadline passes, or its expiry cannot be recorded, or its connection is lost first; a command lease under the same grant; a host says it is ending a lease the gateway does not hold | E grants the lease with `leaseMs`, records it, and at the deadline (not a moment before, and however continuously the gateway sends) records `expiring`, stops the harness, records `ended` with cause `expired` and says `Ending`; the silence bound still runs from the gateway's last frame; a Start read after the deadline starts nothing; an answer held up on a full output queue does not hold the expiry back, nor does one lease's `Ending` waiting for room hold another lease's expiry back, due at once or later, nor a lease's own `Granted` waiting for room hold back its expiry; a lease due as the gateway is taken as gone is expired, not lost; a file still in flight is recorded unanswered, never refused as the lease ending; the gateway's End is answered with that cleanup; an End and the deadline at once end the lease once; without a limit nothing expires and the wait is only the silence bound; an expiry that cannot be recorded still stops and answers `uncertain`; after the connection is lost nothing more is recorded; a command is bounded by its own timeout, granted no `leaseMs`; G records the deadline as its clock read before the Grant plus `leaseMs` (the earliest E's can be), and on `Ending` records the lease ending as expired by the system and then ended with the cleanup, or interrupted with none; an `Ending` for a lease not held, or for a command's lease, is dropped and recorded; a command answer carrying `leaseMs` is refused as the environment's `EnvironmentNotGranted`; `--max-lease` writes grants.json as version 2, version 1 still reads, and the audit's operation, before and after carry it | `a_lease_past_its_granted_duration_is_stopped_recorded_expired_and_said`; `an_end_and_a_deadline_at_once_end_the_lease_once`; `a_lease_with_no_max_never_expires`; `an_expiry_that_cannot_be_recorded_still_stops_and_answers_uncertain`; `a_deadline_after_the_connection_is_lost_records_nothing_more`; `a_command_is_bounded_by_its_timeout_not_the_max_lease`; `max_lease_is_written_as_version_2_and_version_1_still_reads`; `a_granted_duration_is_recorded_as_the_deadline`; `an_environment_expiry_is_recorded_ending_then_ended_with_its_cleanup`; `an_expiry_whose_end_goes_unanswered_is_interrupted`; `an_ending_for_a_lease_not_held_is_dropped_with_evidence`; `an_ending_for_a_command_lease_is_dropped_with_evidence`; `a_gateway_sending_without_pause_cannot_put_off_an_expiry`; `a_reply_blocked_on_a_full_output_queue_does_not_hold_back_an_expiry`; `two_leases_due_at_once_both_expire_at_the_deadline`; `staggered_deadlines_each_expire_at_their_own`; `a_lease_granted_while_the_gateway_reads_nothing_expires_at_its_deadline`; `a_lease_due_as_the_gateway_falls_silent_is_expired_not_lost`; `a_granted_duration_is_recorded_on_the_issued_lease`; `a_file_in_flight_when_its_lease_expires_is_left_unanswered`; `i5_a_narrowed_command_is_recorded_as_granted_and_a_wider_one_is_refused`; `a_paired_environment_expires_a_lease_and_both_sides_record_it`; `a_grant_writes_intended_then_written`; `env_grant_names_agents_or_every_agent_and_commands_with_their_longest_run`; `a_grant_names_its_sandbox_and_its_answer_the_granted_terms` |
 | I8 | The owner revokes a paired environment's credential while it is connected, idle or running a lease; the revocation races an expiry or a grant; either side cannot record it | Without a lease being asked, the gateway sees it at its next check (each keepalive interval), refuses new leases, harness starts and publishes there (a command run after it is answered never started, holding nothing) and drops the environment from the connected list, records `revoked` with the leases the host granted (and one more `revoked` for a lease granted after, its Grant sent before), queues `Revoked` before any lease is seen ending so every End follows it, ends each harness lease as revoked by the system (`environment_revoked`), and says `Revoked`; the environment records `revoking` naming the gateway, stops everything, records `ended` with cause `revoked`, stops a running command (its `Ran` answers), never writing `revoking` after a command's own recorded end, and ends an unrun one holding nothing, refuses anything more as `revoked` (never `not_granted`), never waits on a gone gateway to say a command's `Ran` whatever stopped it, and answers each `End` with that cleanup; the gateway records the lease ending (revoked) then ended with that cleanup, or interrupted with none; the connection closes once every lease is let go, or at the silence bound when one is never ended; the first cause known is kept on each side, and the environment ends an expired lease once; said or asked twice, it acts once; an unrecordable revocation still ends everything, harness and command leases unconfirmed on the gateway and `uncertain` on the environment; the next dial is refused | `a_paired_environment_revoked_mid_lease_ends_it_on_both_sides_and_closes`; `an_idle_paired_environment_is_closed_once_revoked`; `a_paired_environment_dials_in_serves_and_stops_at_revocation`; `a_revoked_link_ends_each_lease_as_revoked_and_closes_once_they_are_ended`; `a_revoked_link_closes_at_its_bound_when_a_lease_is_never_ended`; `a_revocation_whose_audit_fails_leaves_its_leases_unconfirmed`; `a_lease_granted_after_its_revocation_is_recorded_revoked_on_its_own`; `a_command_run_after_its_revocation_is_answered_never_started`; `a_command_whose_end_is_recorded_is_not_revoked_while_its_ran_waits_for_room`; `a_lease_ending_for_one_cause_keeps_it_when_the_other_comes`; `a_revoked_gateway_has_every_lease_ended_recorded_revoked_and_its_ends_answered`; `a_revocation_that_cannot_be_recorded_still_stops_and_answers_uncertain`; `a_revocation_after_an_expiry_ends_the_lease_once_as_expired`; `an_environment_revocation_is_recorded_ending_then_ended_with_its_cleanup`; `a_revocation_whose_end_goes_unanswered_is_interrupted`; `every_frame_round_trips_and_names_its_lease` |
 | I9 | A paired environment's harness publishes a file, or the gateway asks it to publish one for the agent; the gateway reads it over the connection; the connection is lost mid-read, or the staged copy is cut short; the gateway reads a range of an artifact not waiting for its answer, or more ranges than the bound | The file's bytes come over the lease frames, at most four 64 KiB ranges of one file unanswered, no artifact channel opened; verified by digest and held with the lease as cause; E records `published` then `collected` (held) and answers the harness `held`, and lets the copy go. A loss mid-read refuses the file `leaseEnded` with nothing held, E records it `unanswered`; a copy cut short is refused `mismatch`. E answers only a copy staged under that lease and still unanswered (else `notStaged`, and a lease not held is a recorded drop), clamps a range to 64 KiB, answers short or empty at the copy's end, refuses a fifth read of one artifact `busy` while four are read or wait for the writer (a gateway reading nothing holds no more), stops a lease's reads at its end so none answers after `Ended`, an unreadable copy `unreadable`, and one let go while it was read `notStaged`; after `Revoked`, a read of a file it had offered is `notStaged` | `a_paired_environment_publishes_a_file_and_the_gateway_reads_it_back`; `a_paired_connection_carries_a_published_file_on_its_lease_frames_and_it_verifies`; `a_paired_lease_lost_mid_read_fails_as_ended_and_leaves_no_partial_hold`; `a_staged_copy_cut_short_mid_read_on_a_paired_connection_is_a_mismatch`; `a_staged_copy_is_read_by_range_only_while_it_waits_for_its_answer`; `reads_past_the_bound_are_refused_busy_and_an_unreadable_copy_is_said`; `a_read_after_the_gateway_revoked_is_answered_not_staged`; `a_copy_let_go_while_it_is_read_is_answered_not_staged`; `no_read_answers_after_its_lease_ended`; `a_gateway_that_reads_nothing_holds_a_bounded_number_of_answers`; `an_artifact_read_names_its_range_and_its_answer_the_bytes_or_why_not`; `every_frame_round_trips_and_names_its_lease` |
+| K1 | A worker started with `env dial --drain-deadline` is signalled while it holds a harness's lease, a running command and a command never run; a grant crosses the drain; the drain's record cannot be kept; the gateway revokes it while it drains; it holds nothing; the deadline passes | Each lease is recorded `draining` (with its gateway) then `ended` with cause `drained`; the harness is stopped, `Ending{drained}` is said and the gateway's `End` answered with that cleanup; the command is stopped and answers its `Ran`; the unrun one ends holding nothing; a crossing grant is refused `draining`, recorded so; an unrecorded drain still stops and answers `uncertain`; a revocation after it ends nothing twice; serving ends once every drained lease's `End` is asked, at once when nothing is held; on the gateway the lease is recorded ending as `stopped` by `environment_drained`, then ended with E's cleanup, and E leaves the connected list; a drain asked between dials ends the wait and dials no more; past the deadline stop is asked | `k1_a_drain_ends_every_lease_recorded_then_serving_ends_once_answered`; `k1_an_idle_host_asked_to_drain_stops_serving_at_once`; `k1_a_drain_that_cannot_be_recorded_still_stops_and_answers_uncertain`; `k1_a_revocation_after_a_drain_ends_the_lease_once_as_drained`; `k1_a_paired_environment_drains_and_both_sides_record_its_cleanup`; `k1_an_environment_drain_is_recorded_stopped_by_the_system_then_ended`; `a_drain_lets_the_connection_end_by_itself_and_dials_no_more`; `a_drain_asked_while_waiting_ends_the_wait`; `a_drain_past_its_deadline_asks_stop` |
 | H10 | A registry whose owner membership is disabled or not an admin | Refused on open (`owner_membership`). The pairing initiator's membership is what keeps a grantor live; the owner's is the one the registry pins | `a_registry_whose_owner_is_not_an_active_admin_does_not_open` |
 
 ## The dialing side

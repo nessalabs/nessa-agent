@@ -582,7 +582,8 @@ fn command_refusal(host: &str, refused: AdmissionRefused) -> CommandRefusal {
             GrantRefusal::AgentUnavailable
             | GrantRefusal::Duplicate
             | GrantRefusal::AuditUnavailable
-            | GrantRefusal::Revoked,
+            | GrantRefusal::Revoked
+            | GrantRefusal::Draining,
         )
         | AdmissionRefused::Unreachable => {
             CommandRefusal::Environment(LeaseRefusal::EnvironmentUnreachable)

@@ -25,7 +25,7 @@ pub(crate) use grants::{
     change_grant, Applied, ChangeFailed, GrantAudit, GrantChange, GrantOutcome, GrantStore,
     PeerGrants,
 };
-pub(crate) use redial::{redial, Backoff};
+pub(crate) use redial::{redial, stop_past_deadline, Backoff};
 pub(crate) use serve::{
     refuse, serve, CommandRan, CommandRunner, CommandStop, HarnessLauncher, LeaseLedger,
     LedgerEntry, Runners, ServeTimings, Serving,

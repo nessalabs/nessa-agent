@@ -304,6 +304,7 @@ impl LeaseConnector for Connector {
                         ..ServeTimings::default()
                     },
                     Arc::new(TokioTimer::new()),
+                    tokio::sync::watch::channel(false).1,
                 ));
             }
             Reach::Stalling(mut gate) => {

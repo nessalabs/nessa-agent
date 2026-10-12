@@ -175,6 +175,8 @@ struct MemoryLedger {
     failing_expiring: AtomicBool,
     /// Refuses only a lease's revocation, likewise.
     failing_revoking: AtomicBool,
+    /// Refuses only a lease's drain, likewise.
+    failing_draining: AtomicBool,
 }
 
 impl MemoryLedger {
@@ -192,6 +194,8 @@ impl LeaseLedger for MemoryLedger {
                 && self.failing_expiring.load(Ordering::SeqCst))
             || (matches!(entry, LedgerEntry::Revoking { .. })
                 && self.failing_revoking.load(Ordering::SeqCst))
+            || (matches!(entry, LedgerEntry::Draining { .. })
+                && self.failing_draining.load(Ordering::SeqCst))
         {
             return Err(io::Error::other("disk gone"));
         }
@@ -302,6 +306,8 @@ struct Gateway {
     launcher: Arc<EchoLauncher>,
     commands: Arc<FakeCommands>,
     grants: Arc<MemoryGrants>,
+    /// Asks the host to drain, as its composition does at a signal.
+    drain: watch::Sender<bool>,
 }
 
 impl Gateway {
@@ -373,6 +379,7 @@ impl Gateway {
         });
         let commands = Arc::new(FakeCommands::default());
         let runner = runs_commands.then(|| commands.clone() as Arc<dyn CommandRunner>);
+        let (drain, draining) = watch::channel(false);
         let served = tokio::spawn(serve(
             environment_in,
             environment_out,
@@ -394,6 +401,7 @@ impl Gateway {
                 ..ServeTimings::default()
             },
             timer,
+            draining,
         ));
         let (reader, writer) = split(gateway);
         Self {
@@ -405,6 +413,7 @@ impl Gateway {
             launcher,
             commands,
             grants,
+            drain,
         }
     }
     async fn send(&mut self, frame: ToEnvironment) {
@@ -4657,4 +4666,293 @@ async fn a_command_stopped_for_a_revocation_never_holds_serving_open_once_the_ga
             .any(|frame| matches!(frame, FromEnvironment::Ran { lease, .. } if lease == COMMAND)),
         "the Ran reached the gateway before it went"
     );
+}
+
+// Row K1 on the host: it is stopping, and drains before it does.
+
+/// A drain ends every lease held, each recorded `draining` before its end:
+/// a harness's lease is said `Ending{drained}` and its `End` answered with
+/// what that took, a running command is stopped and answers its `Ran`, one
+/// never run ends holding nothing, and a grant crossing it is refused
+/// `draining`. Serving stays open until the gateway has asked the `End` of
+/// every lease drained, then ends by itself.
+#[tokio::test]
+async fn k1_a_drain_ends_every_lease_recorded_then_serving_ends_once_answered() {
+    let mut gateway = revocable(Arc::new(MemoryLedger::default()));
+    gateway.started(LEASE).await;
+    gateway.send(grant_command(COMMAND, &["wait"], None)).await;
+    gateway.next().await;
+    gateway
+        .send(ToEnvironment::Run {
+            lease: COMMAND.into(),
+        })
+        .await;
+    gateway.send(grant_command(UNRUN, &["wait"], None)).await;
+    gateway.next().await;
+    gateway.settled().await;
+    // Asked twice, acted on once.
+    gateway.drain.send_replace(true);
+    gateway.drain.send_replace(true);
+    let (mut ending, mut ran) = (None, None);
+    while ending.is_none() || ran.is_none() {
+        match gateway.said().await {
+            frame @ FromEnvironment::Ending { .. } => ending = Some(frame),
+            frame @ FromEnvironment::Ran { .. } => ran = Some(frame),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+    assert_eq!(
+        ending,
+        Some(FromEnvironment::Ending {
+            lease: LEASE.into(),
+            cause: EndingCause::Drained,
+        })
+    );
+    assert!(matches!(
+        ran,
+        Some(FromEnvironment::Ran {
+            end: CommandEnd::Stopped,
+            cleanup: Cleanup::Confirmed { forced: true },
+            ..
+        })
+    ));
+    // Asked once the drain is said, a grant crosses it.
+    gateway
+        .send(ToEnvironment::Grant {
+            lease: OTHER_LEASE.into(),
+            agent: "claude".into(),
+            sandbox: Sandbox::HarnessDefault,
+        })
+        .await;
+    const CROSSED: &str = "0b7d3a1e-0000-4000-8000-0000000000c4";
+    gateway.send(grant_command(CROSSED, &["echo"], None)).await;
+    for lease in [OTHER_LEASE, CROSSED] {
+        assert_eq!(
+            gateway.said().await,
+            FromEnvironment::Refused {
+                lease: lease.into(),
+                reason: GrantRefusal::Draining,
+            }
+        );
+    }
+    // The command never run is ended holding nothing, and its End says so.
+    gateway
+        .send(ToEnvironment::End {
+            lease: UNRUN.into(),
+        })
+        .await;
+    assert_eq!(
+        gateway.said().await,
+        FromEnvironment::Ended {
+            lease: UNRUN.into(),
+            cleanup: Cleanup::NotHeld,
+        }
+    );
+    // The harness's lease still waits for its End: serving is open.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!gateway.served.is_finished());
+    gateway
+        .send(ToEnvironment::End {
+            lease: LEASE.into(),
+        })
+        .await;
+    assert_eq!(
+        gateway.said().await,
+        FromEnvironment::Ended {
+            lease: LEASE.into(),
+            cleanup: Cleanup::Confirmed { forced: false },
+        }
+    );
+    // Every End answered: serving ends, and the stream with it.
+    tokio::time::timeout(Duration::from_secs(5), &mut gateway.served)
+        .await
+        .expect("a drained host stops serving")
+        .unwrap();
+    assert_eq!(gateway.stopped.load(Ordering::SeqCst), 1);
+    let entries = gateway.ledger.entries();
+    for (lease, cleanup) in [
+        (LEASE, Cleanup::Confirmed { forced: false }),
+        (COMMAND, Cleanup::Confirmed { forced: true }),
+        (UNRUN, Cleanup::NotHeld),
+    ] {
+        let draining = LedgerEntry::Draining {
+            lease: lease.into(),
+            peer: DIALED,
+        };
+        let ended = LedgerEntry::Ended {
+            lease: lease.into(),
+            cleanup,
+            cause: EndCause::Drained,
+        };
+        let at = |wanted: &LedgerEntry| entries.iter().position(|entry| entry == wanted);
+        assert_eq!(
+            entries.iter().filter(|entry| **entry == draining).count(),
+            1,
+            "{entries:?}"
+        );
+        assert!(at(&draining) < at(&ended), "{entries:?}");
+        assert_eq!(ended_entries(&gateway.ledger, lease), 1, "{entries:?}");
+    }
+    // Recorded as the drain it crossed, never as the owner's grant.
+    assert!(entries.contains(&LedgerEntry::Refused {
+        lease: OTHER_LEASE.into(),
+        peer: DIALED,
+        reason: GrantRefusal::Draining,
+        asked: Asked::Agent {
+            agent: "claude".into(),
+            sandbox: Sandbox::HarnessDefault,
+        },
+    }));
+}
+
+/// A host holding nothing when asked to drain has nothing to wait for: it
+/// stops serving at once, recording nothing.
+#[tokio::test]
+async fn k1_an_idle_host_asked_to_drain_stops_serving_at_once() {
+    let mut gateway = revocable(Arc::new(MemoryLedger::default()));
+    assert_eq!(gateway.next().await, hello());
+    gateway.drain.send_replace(true);
+    tokio::time::timeout(Duration::from_secs(5), &mut gateway.served)
+        .await
+        .expect("an idle host stops serving when drained")
+        .unwrap();
+    assert!(gateway.ledger.entries().is_empty());
+}
+
+/// A drain whose record cannot be kept still stops everything, and the
+/// lease's end then settles nothing: it answers uncertain.
+#[tokio::test]
+async fn k1_a_drain_that_cannot_be_recorded_still_stops_and_answers_uncertain() {
+    let ledger = Arc::new(MemoryLedger::default());
+    ledger.failing_draining.store(true, Ordering::SeqCst);
+    let mut gateway = revocable(ledger.clone());
+    gateway.started(LEASE).await;
+    gateway.drain.send_replace(true);
+    assert_eq!(
+        gateway.said().await,
+        FromEnvironment::Ending {
+            lease: LEASE.into(),
+            cause: EndingCause::Drained,
+        }
+    );
+    gateway
+        .send(ToEnvironment::End {
+            lease: LEASE.into(),
+        })
+        .await;
+    assert_eq!(
+        gateway.said().await,
+        FromEnvironment::Ended {
+            lease: LEASE.into(),
+            cleanup: Cleanup::Uncertain,
+        }
+    );
+    assert_eq!(gateway.stopped.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        ledger.entries().last(),
+        Some(&LedgerEntry::Ended {
+            lease: LEASE.into(),
+            cleanup: Cleanup::Uncertain,
+            cause: EndCause::Drained,
+        })
+    );
+}
+
+/// A gateway's revocation arriving while the host drains ends nothing twice:
+/// each lease keeps the drain as its cause.
+#[tokio::test]
+async fn k1_a_revocation_after_a_drain_ends_the_lease_once_as_drained() {
+    let mut gateway = revocable(Arc::new(MemoryLedger::default()));
+    gateway.started(LEASE).await;
+    gateway.drain.send_replace(true);
+    assert_eq!(
+        gateway.said().await,
+        FromEnvironment::Ending {
+            lease: LEASE.into(),
+            cause: EndingCause::Drained,
+        }
+    );
+    gateway.send(ToEnvironment::Revoked).await;
+    gateway
+        .send(ToEnvironment::End {
+            lease: LEASE.into(),
+        })
+        .await;
+    assert_eq!(
+        gateway.said().await,
+        FromEnvironment::Ended {
+            lease: LEASE.into(),
+            cleanup: Cleanup::Confirmed { forced: false },
+        }
+    );
+    assert_eq!(ended_entries(&gateway.ledger, LEASE), 1);
+    assert!(!gateway
+        .ledger
+        .entries()
+        .iter()
+        .any(|entry| matches!(entry, LedgerEntry::Revoking { .. })));
+}
+
+/// A drain that leaves only a running command ends serving once that
+/// command's `Ran` is said, with no `End` to wait for: the gateway asks none.
+#[tokio::test]
+async fn k1_a_drain_ends_serving_once_its_last_command_answers() {
+    let mut gateway = revocable(Arc::new(MemoryLedger::default()));
+    assert_eq!(gateway.next().await, hello());
+    gateway.send(grant_command(COMMAND, &["wait"], None)).await;
+    gateway.next().await;
+    gateway
+        .send(ToEnvironment::Run {
+            lease: COMMAND.into(),
+        })
+        .await;
+    gateway.settled().await;
+    gateway.drain.send_replace(true);
+    assert!(matches!(
+        gateway.said().await,
+        FromEnvironment::Ran {
+            end: CommandEnd::Stopped,
+            ..
+        }
+    ));
+    tokio::time::timeout(Duration::from_secs(5), &mut gateway.served)
+        .await
+        .expect("serving ends once the command answered, with nothing more asked")
+        .unwrap();
+    assert!(gateway.ledger.entries().contains(&LedgerEntry::Ended {
+        lease: COMMAND.into(),
+        cleanup: Cleanup::Confirmed { forced: true },
+        cause: EndCause::Drained,
+    }));
+}
+
+/// A lease that expired before the drain still waits for its `End`: the
+/// drain does not close the connection on an end the gateway has not heard.
+#[tokio::test]
+async fn k1_a_drain_waits_for_the_end_of_a_lease_expired_before_it() {
+    let timer = Arc::new(ManualTimer::default());
+    let mut gateway = expiring(timer.clone(), Arc::new(MemoryLedger::default()));
+    gateway.started_expiring(LEASE).await;
+    timer.advance(MAX_LEASE);
+    assert_eq!(
+        gateway.said().await,
+        FromEnvironment::Ending {
+            lease: LEASE.into(),
+            cause: EndingCause::Expired,
+        }
+    );
+    gateway.drain.send_replace(true);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!gateway.served.is_finished());
+    assert_eq!(
+        gateway.ended(LEASE).await,
+        FromEnvironment::Ended {
+            lease: LEASE.into(),
+            cleanup: Cleanup::Confirmed { forced: false },
+        }
+    );
+    tokio::time::timeout(Duration::from_secs(5), &mut gateway.served)
+        .await
+        .expect("serving ends once the expired lease's End is answered")
+        .unwrap();
 }

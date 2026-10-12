@@ -148,7 +148,9 @@ pub(crate) trait LeaseHold: Send + Sync {
     /// Resolves once the environment can no longer run anything for the
     /// lease, with why: [`LeaseEndCause::Lost`] for its connection lost (row
     /// L10), [`LeaseEndCause::Expired`] for the environment ending it past
-    /// the duration it granted (row I7). It also resolves, as lost, once the
+    /// the duration it granted (row I7), [`LeaseEndCause::Revoked`] for the
+    /// environment's credential revoked (row I8), [`LeaseEndCause::Stopped`]
+    /// for the environment draining before it stops (row K1). It also resolves, as lost, once the
     /// lease ends. `None` when that cannot happen apart from the gateway
     /// itself, as in process.
     fn ends(&self) -> Option<EnvironmentFuture<'static, LeaseEndCause>>;
