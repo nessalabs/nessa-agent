@@ -1867,7 +1867,21 @@ async fn k1_a_command_its_host_drained_is_stopped_by_the_system_not_lost() {
         .hold;
     let (_stop, stopped) = tokio::sync::watch::channel(None);
     let running = tokio::spawn(hold.run(10_000, stopped));
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    // Drained once it runs, not before: one never run ends not started.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !connector
+            .ledger
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|entry| matches!(entry, LedgerEntry::CommandStarted { .. }))
+        {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the command starts on the host");
     connector.drain.send_replace(true);
     let result = tokio::time::timeout(Duration::from_secs(5), running)
         .await
