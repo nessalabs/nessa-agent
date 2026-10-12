@@ -12,9 +12,10 @@
 //! ```
 //! Arrows are calls. A key serves while some credential bound to it
 //! authenticates and is allowed `environment.serve` on this gateway now: the
-//! same session and policy every other action passes, asked at admission and
-//! before every lease, so a revoked credential or a disabled membership stops
-//! the next lease without a copy kept anywhere.
+//! same session and policy every other action passes, asked at admission,
+//! before every lease and every keepalive interval while connected, so a
+//! revoked credential or a disabled membership ends the connection and its
+//! leases without a copy kept anywhere.
 use crate::conversation::application::EnvironmentFuture;
 use crate::conversation::infrastructure::ssh_environment::{PeerEnvironments, ServingCredentials};
 use crate::device_pairing::infrastructure::{EnvironmentPeers, TlsCloser, TlsStream};

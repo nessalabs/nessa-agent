@@ -106,6 +106,11 @@ impl ServingCredentials for Gate {
 
 impl Gateway {
     async fn start(root: &Path) -> Self {
+        Self::start_with(root, SshTimings::default()).await
+    }
+
+    /// As [`Self::start`], its paired environments kept with `timings`.
+    async fn start_with(root: &Path, timings: SshTimings) -> Self {
         let (gateway, organization) = (uuid(), uuid());
         let (auth, session, owner) = owned(root, &gateway, &organization).await;
         let receivers = Arc::new(
@@ -143,7 +148,7 @@ impl Gateway {
         let peers = Arc::new(PeerEnvironments::new(
             gate.clone(),
             DurableEnvironmentAudit::new(root.join("environments"), Arc::new(SystemClock)).unwrap(),
-            SshTimings::default(),
+            timings,
         ));
         let prepared = prepared.with_environments(Arc::new(ListenerEnvironments(peers.clone())));
         let state = ProductRouteState::new(
@@ -936,4 +941,246 @@ async fn a_paired_environment_expires_a_lease_and_both_sides_record_it() {
     assert_eq!(entries[2]["leaseMs"], 1_500);
     assert_eq!(entries[4]["cause"], "expired");
     assert_eq!(entries[4]["cleanup"]["outcome"], "confirmed");
+}
+
+/// Whether a key still serves is asked again this often in the revocation
+/// tests, in place of the keepalive interval.
+const RECHECK: Duration = Duration::from_millis(100);
+
+impl Gateway {
+    /// The owner revokes `machine`'s credential.
+    fn revoke(&self, machine: &Machine) {
+        self.auth
+            .revoke_sync(RevokeCredentialRequest {
+                request_id: uuid(),
+                issuer_principal_id: self.owner.clone(),
+                credential_id: machine.credential.clone(),
+                revoked_at: SystemClock.unix_seconds(),
+            })
+            .unwrap();
+    }
+
+    /// Every record of `kind` in the gateway's environment audit under
+    /// `root`.
+    fn environment_records(root: &Path, kind: &str) -> Vec<serde_json::Value> {
+        let mut records = Vec::new();
+        let mut directories = vec![root.join("environments")];
+        while let Some(directory) = directories.pop() {
+            let Ok(entries) = std::fs::read_dir(&directory) else {
+                continue;
+            };
+            for entry in entries {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    directories.push(path);
+                    continue;
+                }
+                let Ok(text) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
+                let Ok(record) = serde_json::from_str::<serde_json::Value>(&text) else {
+                    continue;
+                };
+                if record["kind"] == kind {
+                    records.push(record);
+                }
+            }
+        }
+        records
+    }
+}
+
+/// Row I8: an idle paired environment whose credential is revoked has its
+/// connection closed once the gateway asks again, with no lease asked of
+/// it: it leaves the connected list at once, its serving ends, and its next
+/// dial is refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_idle_paired_environment_is_closed_once_revoked() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("a");
+    let a = Gateway::start_with(
+        &root,
+        SshTimings {
+            keepalive: RECHECK,
+            ..SshTimings::default()
+        },
+    )
+    .await;
+    let e = a
+        .pair(
+            &directory.path().join("e-state"),
+            ConsentClass::PeerEnvironment,
+        )
+        .await;
+    let stream = dial(a.native, e.identity.clone(), e.pin, clock())
+        .await
+        .unwrap();
+    let served = serving(&directory.path().join("e"), e.pin, stream);
+    a.until_connected(e.peer, true).await;
+    a.revoke(&e);
+    tokio::time::timeout(WAIT, served)
+        .await
+        .expect("the revoked environment's serving ends with no lease asked")
+        .unwrap();
+    a.until_connected(e.peer, false).await;
+    let records = Gateway::environment_records(&root, "revoked");
+    assert_eq!(records.len(), 1, "{records:?}");
+    let refused = dial(a.native, e.identity.clone(), e.pin, clock())
+        .await
+        .err()
+        .expect("a revoked environment is refused");
+    assert_eq!(refused.kind(), ErrorKind::PermissionDenied);
+}
+
+/// Row I8 end to end: E runs a harness for A under a lease; A's owner
+/// revokes E's credential. Without any new lease asked, A sees it at its
+/// next check, ends the lease as revoked, tells E, and E stops the harness
+/// and records the lease revoking and ended as revoked; A's End is answered
+/// with E's cleanup, A closes the connection, and E's next dial is refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_paired_environment_revoked_mid_lease_ends_it_on_both_sides_and_closes() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("a");
+    let a = Gateway::start_with(
+        &root,
+        SshTimings {
+            keepalive: RECHECK,
+            ..SshTimings::default()
+        },
+    )
+    .await;
+    let e = a
+        .pair(
+            &directory.path().join("e-state"),
+            ConsentClass::PeerEnvironment,
+        )
+        .await;
+    let stream = dial(a.native, e.identity.clone(), e.pin, clock())
+        .await
+        .unwrap();
+    // E runs `claude` as `cat`, which runs until it is stopped.
+    let cat = LaunchSpec {
+        executable: "/bin/cat".into(),
+        args: Vec::new(),
+        environment: Default::default(),
+    };
+    let host = Arc::new(Host::running(
+        &directory.path().join("e"),
+        e.pin,
+        HashMap::from([(nessa_protocol::agents::AgentId::Claude, cat)]),
+    ));
+    host.grants
+        .change(&host.peer, |_| {
+            Ok::<_, ()>(Some(PeerGrant::nothing().with_agents(Agents::All)))
+        })
+        .unwrap();
+    let (from_gateway, to_gateway) = tokio::io::split(stream);
+    let served = {
+        let host = host.clone();
+        tokio::spawn(async move { host.serve(from_gateway, to_gateway).await })
+    };
+    a.until_connected(e.peer, true).await;
+
+    let environment = a.peers.environment(&e.peer);
+    let lease = LeaseId::new(uuid()).unwrap();
+    let terms = LeaseTerms {
+        environment: environment.declaration().environment,
+        work: LeaseWork::Agent(AgentWork::new("claude", "model").unwrap()),
+        sandbox: SandboxProfile::HarnessDefault,
+        grants: LeaseGrants::Opening,
+        deadline: LeaseDeadline::UntilEnded,
+    };
+    let given = Arc::new(std::sync::Mutex::new(None));
+    let binding = Arc::new(OnHost {
+        capabilities: crate::conversation_test_support::Provider::new(Arc::new(
+            crate::conversation_test_support::ProviderFactory::default(),
+        ))
+        .capabilities()
+        .clone(),
+        host: given.clone(),
+    });
+    let opened = tokio::time::timeout(WAIT, environment.open(&lease, &terms, binding))
+        .await
+        .unwrap()
+        .unwrap_or_else(|refusal| panic!("granted: {refusal:?}"));
+    let harness_host = given.lock().unwrap().clone().unwrap();
+    let mut harness = harness_host.start(HarnessLaunch::default()).unwrap();
+    let entries = || -> Vec<serde_json::Value> {
+        std::fs::read_to_string(&host.ledger_path)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .filter(|entry: &serde_json::Value| entry["lease"] == lease.as_str())
+            .collect()
+    };
+    tokio::time::timeout(WAIT, async {
+        while !entries().iter().any(|entry| entry["kind"] == "started") {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the harness starts");
+    let ends = opened
+        .hold
+        .ends()
+        .expect("a paired environment's lease can end there");
+
+    a.revoke(&e);
+    assert_eq!(
+        tokio::time::timeout(WAIT, ends)
+            .await
+            .expect("A sees the revocation with no lease asked"),
+        LeaseEndCause::Revoked
+    );
+    // It leaves the connected list at once, though its connection still
+    // carries the lease's end.
+    assert!(!a.peers.connected().contains(&e.peer));
+    let released = tokio::time::timeout(WAIT, opened.hold.end(LeaseEndCause::Revoked))
+        .await
+        .unwrap();
+    assert!(
+        matches!(
+            released,
+            LeaseRelease::Released(LeaseCleanup::Confirmed { .. })
+        ),
+        "{released:?}"
+    );
+    // The harness was stopped there: its output ends.
+    let mut rest = Vec::new();
+    tokio::time::timeout(WAIT, harness.output.read_to_end(&mut rest))
+        .await
+        .expect("the harness's output ends")
+        .expect("and reads to its end");
+    drop(opened);
+    // A closes the connection once the lease is let go; E's serving ends.
+    tokio::time::timeout(WAIT, served)
+        .await
+        .expect("the revoked environment's serving ends")
+        .unwrap();
+    let entries = entries();
+    let kinds: Vec<_> = entries
+        .iter()
+        .map(|entry| entry["kind"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        kinds,
+        ["granted", "started", "revoking", "stopped", "ended"],
+        "{entries:?}"
+    );
+    // The revocation names the gateway the lease was granted to.
+    assert_eq!(entries[2]["peer"], entries[0]["peer"]);
+    assert!(entries[2]["peer"].is_string(), "{entries:?}");
+    assert_eq!(entries[4]["cause"], "revoked");
+    assert_eq!(entries[4]["cleanup"]["outcome"], "confirmed");
+    let revoked = Gateway::environment_records(&root, "revoked");
+    assert_eq!(revoked.len(), 1, "{revoked:?}");
+    assert!(
+        revoked[0].to_string().contains(lease.as_str()),
+        "{revoked:?}"
+    );
+    let refused = dial(a.native, e.identity.clone(), e.pin, clock())
+        .await
+        .err()
+        .expect("a revoked environment is refused");
+    assert_eq!(refused.kind(), ErrorKind::PermissionDenied);
 }
