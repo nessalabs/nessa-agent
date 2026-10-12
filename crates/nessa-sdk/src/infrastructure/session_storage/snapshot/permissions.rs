@@ -1,3 +1,4 @@
+use super::records::{restore_deadline, saved_deadline, SavedDeadline};
 use super::tools::corrupt;
 use crate::application::agent_execution::{
     executions::limits::validate_observation_id, permissions::*, sessions::storage::StorageError,
@@ -162,6 +163,7 @@ enum Origin {
     Client(Actor),
     Provider,
     Runtime,
+    Deadline(SavedDeadline),
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -194,6 +196,9 @@ impl From<&PermissionCancellation> for Cancellation {
                 CancellationOrigin::Client(actor) => Origin::Client(actor.into()),
                 CancellationOrigin::Provider => Origin::Provider,
                 CancellationOrigin::Runtime => Origin::Runtime,
+                CancellationOrigin::Deadline(deadline) => {
+                    Origin::Deadline(saved_deadline(deadline))
+                }
             },
             reason: match reason.view() {
                 PermissionCancellationReasonView::ProviderWithdrawal => Reason::ProviderWithdrawal,
@@ -252,8 +257,85 @@ impl Cancellation {
                 Origin::Client(actor) => CancellationOrigin::Client(actor.decode()?),
                 Origin::Provider => CancellationOrigin::Provider,
                 Origin::Runtime => CancellationOrigin::Runtime,
+                Origin::Deadline(saved) => CancellationOrigin::Deadline(
+                    restore_deadline(saved)
+                        .ok_or_else(|| corrupt("a deadline cancellation without its deadline"))?,
+                ),
             },
         )
         .map_err(corrupt)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::application::agent_execution::executions::ExecutionController;
+    use crate::domain::agent_execution::tools::ToolCallUpdate;
+    use std::time::Duration;
+
+    #[test]
+    fn a_deadline_cancellation_keeps_its_deadline_through_storage() {
+        let execution = ExecutionId::new("execution").unwrap();
+        let permission = PermissionId::new("1").unwrap();
+        let deadline =
+            PermissionReviewDeadline::stopping(PermissionToolClass::Other, Duration::from_secs(30));
+        let options = PermissionOptions::new(
+            vec![PermissionOption::new(
+                PermissionOptionId::new("allow").unwrap(),
+                "Allow",
+                PermissionDecision::new(PermissionEffect::Allow, PermissionScope::request()),
+            )
+            .unwrap()],
+            &PermissionOfferPolicy::once_only(),
+        )
+        .unwrap();
+        let mut controller = ExecutionController::new(ExecutionSessionId::new("session").unwrap());
+        controller.begin_execution(execution.clone()).unwrap();
+        controller
+            .request_permission(
+                &execution,
+                permission.clone(),
+                ToolCallUpdate::new(
+                    ToolCallId::new("tool").unwrap(),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                ),
+                ToolReviewInput {
+                    name: "Write".into(),
+                    arguments_json: "{}".into(),
+                },
+                options,
+                Some(deadline.clone().promise(1_700_000_030_000).unwrap()),
+            )
+            .unwrap();
+        let cancelled = controller
+            .cancel_permission(
+                &execution,
+                &permission,
+                PermissionCancellationReason::deadline_exceeded(),
+                CancellationOrigin::Deadline(deadline.clone()),
+            )
+            .unwrap()
+            .unwrap();
+
+        let saved = serde_json::to_string(&Cancellation::from(&cancelled)).unwrap();
+        let restored = serde_json::from_str::<Cancellation>(&saved)
+            .unwrap()
+            .decode()
+            .unwrap();
+        assert_eq!(restored.origin(), &CancellationOrigin::Deadline(deadline));
+
+        let unreadable = saved.replace("\"wait_ms\":30000", "\"wait_ms\":0");
+        assert_ne!(unreadable, saved);
+        assert!(matches!(
+            serde_json::from_str::<Cancellation>(&unreadable)
+                .unwrap()
+                .decode(),
+            Err(StorageError::Corrupt(_))
+        ));
     }
 }

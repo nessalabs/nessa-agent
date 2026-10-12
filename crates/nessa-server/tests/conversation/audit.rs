@@ -438,16 +438,12 @@ fn deadline_answer_value(
         )
         .unwrap();
     let answer = controller
-        .answer_permission(PermissionAnswer {
-            execution_id: id,
-            id: permission,
-            option_id: PermissionOptionId::new("deny-once").unwrap(),
-            attribution: ApprovalAttribution::deadline(
-                &PermissionId::new("permission").unwrap(),
-                deadline,
-            )
-            .unwrap(),
-        })
+        .settle_deadline_for_test(
+            &id,
+            &permission,
+            &PermissionOptionId::new("deny-once").unwrap(),
+            deadline,
+        )
         .unwrap();
     record_value(&ExecutionAuditRecord::Answered(
         PermissionAnswerRecord::new(answer, PermissionAnswerDelivery::Selected),
@@ -965,4 +961,78 @@ fn answer_audit_correlation_matches_the_admitted_question_event() {
             );
         }
     }
+}
+
+#[test]
+fn audit_names_the_deadline_that_cancelled_a_review_it_could_not_refuse() {
+    use nessa_sdk::domain::agent_execution::permissions::{
+        PermissionReviewDeadline, PermissionToolClass, STANDARD_DENY_REASON,
+    };
+    use serde_json::json;
+    use std::time::Duration;
+
+    let id = ExecutionId::new("execution").unwrap();
+    let permission = PermissionId::new("permission").unwrap();
+    let deadline = PermissionReviewDeadline::new(
+        PermissionToolClass::Other,
+        Duration::from_secs(30),
+        PermissionEffect::Deny,
+        STANDARD_DENY_REASON,
+    )
+    .unwrap();
+    let mut controller = ExecutionController::new(ExecutionSessionId::new("session").unwrap());
+    controller.begin_execution(id.clone()).unwrap();
+    controller
+        .request_permission(
+            &id,
+            permission.clone(),
+            ToolCallUpdate::new(
+                ToolCallId::new("tool").unwrap(),
+                Some("Write file".into()),
+                None,
+                None,
+                None,
+                None,
+            ),
+            ToolReviewInput {
+                name: "Write".into(),
+                arguments_json: "{}".into(),
+            },
+            options(),
+            Some(deadline.clone().promise(1_700_000_030_000).unwrap()),
+        )
+        .unwrap();
+    let cancellation = controller
+        .cancel_permission(
+            &id,
+            &permission,
+            PermissionCancellationReason::deadline_exceeded(),
+            CancellationOrigin::Deadline(deadline),
+        )
+        .unwrap()
+        .unwrap();
+    let value = record_value(&ExecutionAuditRecord::Cancelled(cancellation));
+    assert_eq!(
+        value["origin"],
+        json!({
+            "kind": "deadline",
+            "actor": {
+                "principalId": "permission-deadline",
+                "surfaceId": "other",
+                "requestId": "permission",
+            },
+            "basis": {
+                "kind": "deadline",
+                "class": "other",
+                "waitMs": 30000,
+                "effect": "deny",
+                "reason": STANDARD_DENY_REASON,
+                "stopsTurn": false,
+            },
+        })
+    );
+    assert_eq!(
+        value["request"]["transition"]["reason"]["code"],
+        "deadline_exceeded"
+    );
 }

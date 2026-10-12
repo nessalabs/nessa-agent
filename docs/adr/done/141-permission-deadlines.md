@@ -100,7 +100,15 @@ The deadline is its own decider. The audit basis is `deadline`, the actor
 principal is `permission-deadline`, and the surface is the tool class. It is
 not a person and not a rule. The basis keeps the class, the wait, the effect,
 the reason, and `stopsTurn`, so an audit reader can tell a refusal that let the
-turn continue from one that ended it without parsing the reason.
+turn continue from one that ended it without parsing the reason. When no
+refusal was offered and the deadline cancels the review instead, the
+cancellation's origin is `deadline` with the same actor and basis, so it is not
+mistaken for an execution timeout, which is a runtime cancellation with the
+same `deadline_exceeded` reason. Only the worker that armed the deadline can
+answer or cancel as it: a caller's answer that claims a deadline basis is
+refused and the review stays pending. A due time is a whole number of Unix
+milliseconds from 1 to 2^53−1, the range a client reads exactly. A wall clock
+past that publishes no deadline, and the review waits for a person.
 
 ## Ordering
 
@@ -116,7 +124,7 @@ first row that matches is what happens.
 | The provider withdraws the review, or the person cancels it, first | That cancellation. The deadline is disarmed. |
 | The execution's own deadline passes | The worker fails, as it does today. The permission deadline is a separate wait and does not shorten this one. |
 | The configured effect has no offered option, and deny is offered | Deny, with the deny sentence, after the same wait. An allow is never sent as a deny. A missing allow does not reuse the allow sentence. |
-| The configured effect has no offered option, and deny is not offered | Cancel the review with `deadline_exceeded` and origin runtime, after the same wait. The transcript still says the deadline denied it. |
+| The configured effect has no offered option, and deny is not offered | Cancel the review with `deadline_exceeded` and origin `deadline`, after the same wait. The transcript still says the deadline denied it. |
 | The only refusal offered stops the turn | Deny that option. The reason and the notice say the agent stopped. Codex `cancel` is that option. Codex `decline` is not, and is preferred when both are offered. |
 | A deadline's stopping refusal is written, and the provider then reports the turn cancelled | That turn ends with Finished(Cancelled). The session stays open. The cancelled result is the turn ending, because the refusal asked for it. |
 | A person selects a refusal that stops the turn, and that selection is written | That turn ends with Finished(Cancelled). The session stays open. Codex ends the turn when `cancel` is chosen; Nessa does not tear the session down. |

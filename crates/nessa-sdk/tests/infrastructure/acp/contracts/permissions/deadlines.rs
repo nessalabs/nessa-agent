@@ -626,7 +626,7 @@ async fn a_review_with_no_deny_option_is_cancelled_and_the_turn_continues() {
         updates.first(),
         Some(ExecutionUpdate::PermissionCancelled(cancellation))
             if cancellation.request().id() == &id
-                && cancellation.origin() == &CancellationOrigin::Runtime
+                && matches!(cancellation.origin(), CancellationOrigin::Deadline(by) if by.decides_as(&deadline))
     ));
     assert!(updates.iter().any(|update| matches!(
         update,
@@ -648,7 +648,11 @@ async fn a_review_with_no_deny_option_is_cancelled_and_the_turn_continues() {
     let cancellations = audit.records.lock().unwrap().clone();
     assert_eq!(cancellations.len(), 1);
     assert_eq!(cancellations[0].request().id(), &id);
-    assert_eq!(cancellations[0].origin(), &CancellationOrigin::Runtime);
+    assert!(
+        matches!(cancellations[0].origin(), CancellationOrigin::Deadline(by) if by.decides_as(&deadline)),
+        "the audit names the deadline as the decider: {:?}",
+        cancellations[0].origin()
+    );
     let wire: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(root.path().join("permission-outcome")).unwrap(),
     )

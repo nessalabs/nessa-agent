@@ -136,6 +136,7 @@ impl ExecutionEvent {
                         .len()
                         .saturating_add(actor.surface_id().len())
                         .saturating_add(actor.request_id().len()),
+                    CancellationOrigin::Deadline(deadline) => deadline.reason().len(),
                     CancellationOrigin::Provider | CancellationOrigin::Runtime => 0,
                 };
                 record

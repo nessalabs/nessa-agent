@@ -32,11 +32,10 @@ use crate::application::agent_execution::executions::{
 };
 
 use crate::application::agent_execution::permissions::{
-    admit_configured_outcome, ApprovalAttribution, ApprovalRuleReference, CancellationOrigin,
-    ConfiguredRefusal, PermissionAnswer, PermissionAnswerDelivery, PermissionAnswerRecord,
-    PermissionCancellation, PermissionCancellationRequest, PermissionResolution,
-    PermissionSelectionState, QuestionAnswer, QuestionAnswerRecord, QuestionRefusalRecord,
-    RefusedAsk, ReviewDeclineRecord, StopKind,
+    admit_configured_outcome, ApprovalRuleReference, CancellationOrigin, ConfiguredRefusal,
+    PermissionAnswer, PermissionAnswerDelivery, PermissionAnswerRecord, PermissionCancellation,
+    PermissionCancellationRequest, PermissionResolution, PermissionSelectionState, QuestionAnswer,
+    QuestionAnswerRecord, QuestionRefusalRecord, RefusedAsk, ReviewDeclineRecord, StopKind,
 };
 use crate::application::agent_execution::providers::{
     ApprovalMode, CleanupReport, ExecutionReport, ImageInputRefusal, ObservationFailureCause,
@@ -3968,14 +3967,12 @@ impl<P: AcpProfile> Worker<P> {
         let reason = deadline.recorded_reason();
         let mut delivery_correlation = None;
         let sent = if let Some(option_id) = armed.settlement.option().cloned() {
-            let attribution = ApprovalAttribution::deadline(&id, deadline)
-                .map_err(|error| self.record_failure(OperationEffectPhase::Worker, error))?;
-            let resolution = match execution.answer_permission(PermissionAnswer {
-                attribution,
-                execution_id: execution_id.clone(),
-                id: id.clone(),
-                option_id: option_id.clone(),
-            }) {
+            let resolution = match execution.settle_deadline(
+                &execution_id,
+                &id,
+                &option_id,
+                deadline,
+            ) {
                 Ok(resolution) => resolution,
                 Err(error) => {
                     tracing::warn!(%error, permission_id = %id.as_str(), "permission deadline found the review already resolved");
@@ -4029,7 +4026,7 @@ impl<P: AcpProfile> Worker<P> {
                     &execution_id,
                     &id,
                     PermissionCancellationReason::deadline_exceeded(),
-                    CancellationOrigin::Runtime,
+                    CancellationOrigin::Deadline(deadline),
                 )
                 .map_err(|error| self.record_failure(OperationEffectPhase::Worker, error))?
             {

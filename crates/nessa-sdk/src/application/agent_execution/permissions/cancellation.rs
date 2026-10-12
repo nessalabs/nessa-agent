@@ -5,7 +5,7 @@ use crate::domain::agent_execution::{
     executions::ExecutionId,
     permissions::{
         PermissionCancellationReason, PermissionCancellationReasonView, PermissionId,
-        PermissionRequest, PermissionStateView,
+        PermissionRequest, PermissionReviewDeadline, PermissionStateView,
     },
     sessions::ExecutionSessionId,
 };
@@ -18,8 +18,11 @@ pub enum CancellationOrigin {
     Client(ActionContext),
     /// Withdrawal observed from the provider; no human attribution is inferred.
     Provider,
-    /// Automatic SDK lifecycle cleanup, deadline, or failure.
+    /// Automatic SDK lifecycle cleanup, execution timeout, or failure.
     Runtime,
+    /// The review's own deadline, when the agent offered no refusal to select.
+    /// Its principal is the deadline, as when a deadline selects an option.
+    Deadline(PermissionReviewDeadline),
 }
 
 impl CancellationOrigin {
@@ -38,6 +41,10 @@ impl CancellationOrigin {
                 reason.view(),
                 PermissionCancellationReasonView::Custom(_)
                     | PermissionCancellationReasonView::SessionClosed
+            ),
+            Self::Deadline(_) => matches!(
+                reason.view(),
+                PermissionCancellationReasonView::DeadlineExceeded
             ),
             Self::Runtime => !matches!(
                 reason.view(),

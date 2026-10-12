@@ -408,7 +408,7 @@ fn saved_effect(effect: PermissionEffect) -> SavedEffect {
     effect.into()
 }
 
-fn saved_deadline(deadline: &PermissionReviewDeadline) -> SavedDeadline {
+pub(super) fn saved_deadline(deadline: &PermissionReviewDeadline) -> SavedDeadline {
     SavedDeadline {
         class: match deadline.class() {
             PermissionToolClass::ReadOnly => SavedClass::ReadOnly,
@@ -427,7 +427,7 @@ fn saved_deadline(deadline: &PermissionReviewDeadline) -> SavedDeadline {
 /// wrong-typed deadline never reaches here: serde rejects it as corrupt
 /// before this runs. Restoring does not arm the deadline: the provider
 /// request died with the process that saved it.
-fn restore_deadline(saved: SavedDeadline) -> Option<PermissionReviewDeadline> {
+pub(super) fn restore_deadline(saved: SavedDeadline) -> Option<PermissionReviewDeadline> {
     let class = match saved.class {
         SavedClass::ReadOnly => PermissionToolClass::ReadOnly,
         SavedClass::Other => PermissionToolClass::Other,
