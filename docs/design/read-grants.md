@@ -227,8 +227,8 @@ Slice J2 of #707 admits a Drive grant's commands: `conversation.send`,
   revoked refuses the next one (row J13).
 - **A driver sends text.** An image names a digest in the owner's
   attachment store and a linked file a path on the owner's machine, so
-  either could name something never shared; both are refused, and so is the
-  receipt of a create (row J14).
+  either could name something never shared; both are refused, in a command
+  or a receipt, and so is the receipt of a create (row J14).
 
 The turn runs as one of the owner's: the device signs in as its owner, so
 the command is the owner's command from the device's surface. Its tools run
@@ -243,7 +243,8 @@ sequenceDiagram
     participant Grants as share_grants
     participant Service as ConversationService
     Device->>Socket: conversation.send {conversationId, text}
-    Socket->>Socket: reader_of: a receiver binding, so paired
+    Socket->>Socket: binding_of: a receiver binding, so paired
+    Socket->>Socket: binding owner is the session's principal, else forbidden
     Socket->>Cedar: conversation.read (pairing's grant)
     Cedar-->>Socket: allow
     Socket->>Grants: held_role(conversation, receiver)
@@ -312,6 +313,10 @@ sequenceDiagram
   `conversation.write` request on a gateway that pairs reads it, as
   `conversation.read` already did; when it cannot be read the request is
   refused `temporarily_unavailable`.
+- **A driver shares its owner's request ids.** Receipts are keyed by
+  principal and request id, and a device signs in as its owner, so a driver
+  reusing an id its owner used is refused as a conflict rather than "not
+  found". It learns only that the id was used; request ids are random.
 - **A driver cannot attach.** Uploading an image (`attachment.begin`) and
   linking a file are refused to a paired session; a shared upload needs its
   own store scoped to the conversation.
@@ -355,4 +360,4 @@ otherwise.
 | J11 | A paired session with pairing's `conversation.read` and a Drive grant sends, steers, stops, answers, cancels, or asks a receipt, naming the granted conversation; then naming another of the owner's | Admitted, and its message starts a turn there; the other is `conversation_not_found` | `a_drive_grant_drives_only_the_conversation_it_names` |
 | J12 | A paired session, holding `conversation.write` and a Drive grant, calls any other method whose grant is `conversation.write`; or, holding a Read or Comment grant, a Drive command; or a party signed in as a principal other than its grantor, as a peer is, holding Drive, a Drive command | `forbidden` | `a_paired_session_writes_only_what_a_drive_grant_admits` |
 | J13 | A Drive grant lowered to Read, then revoked; the device unpaired; or a device without pairing's `conversation.read` | The next command `forbidden`, `conversation_not_found`, `unauthorized`, and `forbidden` before its grant is read | `a_drive_grant_lowered_revoked_or_unpaired_drives_no_more` |
-| J14 | A driver's message naming an image or a linked file; a driver asking the receipt of a create | `forbidden` | `a_driver_sends_text_and_names_nothing_of_the_owners` |
+| J14 | A driver's message, or receipt, naming an image or a linked file; a driver asking the receipt of a create | `forbidden` | `a_driver_sends_text_and_names_nothing_of_the_owners` |

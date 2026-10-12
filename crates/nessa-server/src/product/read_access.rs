@@ -1,7 +1,8 @@
 //! Share grants on the socket (issues 704, 707): the reader a session is, the
 //! one question every socket read asks before it reads a conversation or a
-//! list, and the owner's `conversation.share`, `.unshare` and `.shares`
-//! commands. Every role reads alike, so nothing here asks a grant's role.
+//! list, the one admission of every socket request ([`admit_request`]), and
+//! the owner's `conversation.share`, `.unshare` and `.shares` commands.
+//! Every role reads alike; only a Drive command asks a grant's role.
 //!
 //! The rule is `conversation::application::share_grants`; this module only
 //! asks it, and maps a share's role and policy between the wire and the

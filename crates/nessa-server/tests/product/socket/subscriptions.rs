@@ -2291,6 +2291,7 @@ async fn a_drive_grant_drives_only_the_conversation_it_names() {
         )
         .await;
     assert_eq!(receipt["ok"], true, "{receipt}");
+    assert_eq!(receipt["payload"]["found"], true, "{receipt}");
 }
 
 /// Row J12: a paired session is refused `forbidden` every other method whose
@@ -2424,6 +2425,10 @@ async fn a_driver_sends_text_and_names_nothing_of_the_owners() {
             assert_eq!(answer["error"]["code"], "forbidden", "{method} {field}: {answer}");
         }
     }
+    let mut params = drive_params("conversation.receipt", &fixture.id, "named");
+    params["files"] = json!([{"path": "/home/owner/notes.txt"}]);
+    let answer = fixture.call("conversation.receipt", params).await;
+    assert_eq!(answer["error"]["code"], "forbidden", "{answer}");
     let mut params = drive_params("conversation.receipt", &fixture.id, "named");
     params["operation"] = json!("create");
     let answer = fixture.call("conversation.receipt", params).await;
