@@ -29,9 +29,12 @@ use crate::{
     core::RunError,
     device_pairing::infrastructure::TlsStream,
     env_serve::{
-        application::{self, redial, stop_past_deadline, Backoff, NotApproved},
+        application::{
+            self, enroll_once, redial, stop_past_deadline, Backoff, EnrolledOnce, NotApproved,
+            NotEnrolled,
+        },
         domain::Peer,
-        infrastructure::{dial, Approved, EnrolledOnce, FilePairingEnvironment, TokioTimer},
+        infrastructure::{dial, Approved, FileEnrollmentCode, FilePairingEnvironment, TokioTimer},
     },
 };
 use nessa_auth::adapters::pairing::{ManualCode, NativeIdentity};
@@ -61,7 +64,7 @@ pub(super) async fn enroll(address: &str, code: &str) -> Result<(), RunError> {
         .map_err(|_| RunError::Agent("that is not a pairing code".into()))?;
     check_address(address)?;
     let pairing = open(address)?;
-    let enrolled = pairing.enroll(code).await;
+    let enrolled = application::enroll(&pairing, code).await;
     pairing.shutdown().await;
     enrolled.map_err(RunError::Agent)?;
     writeln!(
@@ -73,7 +76,7 @@ pub(super) async fn enroll(address: &str, code: &str) -> Result<(), RunError> {
 
 /// `nessa env dial ADDRESS [--drain-deadline DURATION] [--enroll-code-file
 /// PATH]`: with `enroll_code_file`, enrolled first when nothing is paired
-/// here ([`FilePairingEnvironment::enroll_once`]); then, once the owner has
+/// here ([`enroll_once`]); then, once the owner has
 /// approved this machine, serve the gateway at `address` over connections
 /// this machine dials, until SIGINT or SIGTERM. With `drain_deadline`, that
 /// signal drains: every lease ends with its cleanup on both sides before
@@ -97,9 +100,23 @@ pub(super) async fn dial_in(
     // drain, and the process's default ends it.
     if let Some(code_file) = enroll_code_file {
         let pairing = open(address)?;
-        let enrolled = pairing.enroll_once(code_file).await;
+        let enrolled = enroll_once(&pairing, &FileEnrollmentCode(code_file.into())).await;
         pairing.shutdown().await;
-        match enrolled.map_err(RunError::Agent)? {
+        let enrolled = enrolled.map_err(|refused| {
+            RunError::Agent(match refused {
+                NotEnrolled::PairedElsewhere(recorded) => format!(
+                    "this machine is already paired with {}: run nessa env dial without \
+                     --enroll-code-file to serve it, or remove {} to pair it with {address}",
+                    recorded.map_or_else(
+                        || "a gateway it did not record".to_owned(),
+                        |recorded| format!("the gateway at {recorded}")
+                    ),
+                    pairing.directory().display(),
+                ),
+                NotEnrolled::Failed(reason) => reason,
+            })
+        })?;
+        match enrolled {
             EnrolledOnce::Now => {
                 tracing::info!(%address, "enrolled; waiting for the owner's approval");
             }
