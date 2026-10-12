@@ -20,7 +20,9 @@
 //! RecoveryReady / captured peer reply ──bounded FIFO with control reserve──▶ HTTP writer
 //! HttpSession owns binding claims and the shared authorized modern POST policy.
 //! A panicked HTTP writer settles that outcome, records ServerGone, then logs
-//! the marker. A recovery completion it drops waits for the settlement, outside
+//! the marker. A reply reader, legacy stream, server stream, or recovery
+//! panic uses that same record. A recovery completion the writer drops waits
+//! for the settlement, outside
 //! the recovery deadline, before choosing an end cause. Request and response
 //! debug output keeps scheme, host, an
 //! explicit port, header names, and a body length. An adapter's own panic
