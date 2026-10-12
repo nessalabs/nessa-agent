@@ -106,8 +106,8 @@ impl CredentialedClaudeProvider {
         Ok(self)
     }
 
-    /// Let Claude run its own hooks on the next launch, including a deletion
-    /// launch. Off keeps today's suppression request.
+    /// Let Claude run its own hooks when a process start reads the switch on,
+    /// including a deletion. Off keeps today's suppression request.
     pub fn with_native_hooks(mut self, native_hooks: NativeHooksSwitch) -> Self {
         self.native_hooks = native_hooks;
         self

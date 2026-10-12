@@ -190,14 +190,18 @@ impl<P: AcpProfile + Clone> WorkerFactory<P> {
         let _entered = span.enter();
         let started = self.config.clock.now();
         tracing::info!(target: "nessa_sdk::timing", phase = "process_start", "agent startup started");
-        // Negotiated facts reset until this process answers. The hooks choice
-        // is already on the profile and stays published: a reader during
-        // startup stamps tool rows from it, and those rows are not rewritten.
-        let native_hooks_allowed = self
-            .profile
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .native_hooks_allowed();
+        // Negotiated facts reset until this process answers. This start reads
+        // the switch once, onto the profile, before anything is published: a
+        // reader during startup stamps tool rows from that value, and those
+        // rows are not rewritten. The process factory reads the same bool.
+        let native_hooks_allowed = {
+            let mut profile = self
+                .profile
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            profile.capture_native_hooks();
+            profile.native_hooks_allowed()
+        };
         self.operation_capabilities
             .send_replace(ProviderOperationCapabilities {
                 native_hooks_allowed,

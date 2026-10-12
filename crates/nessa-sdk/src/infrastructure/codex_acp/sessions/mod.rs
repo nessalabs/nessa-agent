@@ -9,8 +9,9 @@
 //! launch-input fingerprint that identifies a restorable context remain shared
 //! ACP responsibilities, not provider-specific lifecycle implementations.
 //! By default `CodexAcpProvider` puts `features.hooks: false` and `notify: []`
-//! in the launch configuration. `with_native_hooks` omits both keys on the
-//! next launch. The profile reports native hook suppression as unsupported
+//! in the launch configuration. `with_native_hooks` omits both keys on a
+//! process start that reads the switch on. The profile reports native hook
+//! suppression as unsupported
 //! either way, because that request is not the effective setting and omitting
 //! it is not proof either. Startup and restoration still complete.
 //! `deletion` says what a successful `session/delete` means for Codex: the

@@ -109,7 +109,10 @@ hooks for Claude, the profile sends `settingSources` `user`, `project`, and
 `local` — the sources the Claude CLI loads — and omits `disableAllHooks`. The
 other settings stay. That is not an enable flag. It also applies the repo's
 `.claude` settings, including its allow rules and startup hooks, so turn it on
-only for projects you trust. Hooks can approve, deny, or change a tool call
+only for projects you trust. Each process start reads the current switch
+once, including the next start of a conversation already open. Applies the
+next time each conversation's agent starts. A process already running keeps
+the choice it started with. Hooks can approve, deny, or change a tool call
 and its result without Nessa asking, and can run commands when the agent
 starts. With hooks on, recorded input and output are what the model proposed
 or the tool returned, and a hook may have changed or approved them. The
@@ -222,8 +225,10 @@ these observations do not expose pre-compaction or general model-switch vetoes.
 By default every launch asks for suppression and does not treat the ask as
 proof. The [binding](../../../crates/nessa-sdk/src/infrastructure/codex_acp/sessions/binding.rs)
 puts `features.hooks: false` and `notify: []` in `CODEX_CONFIG` beside the model
-and, when the binding has them, the instructions. When the caller has allowed
-native hooks for Codex, both keys are omitted. The binding does not set
+and, when the binding has them, the instructions. Each process start reads the current switch once and, when that start has
+allowed native hooks for Codex, both keys are omitted. Applies the next time
+each conversation's agent starts. A process already running keeps the choice
+it started with. The binding does not set
 `features.hooks` true. Hooks can approve, deny, or change a tool call and its
 result without Nessa asking, and can run commands when the agent starts. With
 hooks on, recorded input and output are what the model proposed or the tool
@@ -534,7 +539,7 @@ closed as not planned and deferred; it is not part of this implementation plan.
 
 | Capability | Baseline answer | Activation requirement |
 | --- | --- | --- |
-| Native executable-hook suppression | By default Claude sends `disableAllHooks: true`, which suppresses project and user hooks, and reports `Unknown`. Managed hooks still fire with that flag, so managed hooks cannot be suppressed. By default Codex sends `features.hooks: false` and `notify: []` and reports `Unsupported`, because legacy managed configuration and MDM still apply after the session override. When the caller allows native hooks for that harness, Claude sends `settingSources` `user`, `project`, and `local` and omits `disableAllHooks`, and Codex omits `features` and `notify`; neither fact changes. Hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts. For Claude, on also applies the repo's `.claude` settings, including its allow rules and startup hooks, so turn it on only for projects you trust. OpenCode sends `OPENCODE_PURE=1` with private roots and project config disabled, and reports `Unknown`; default plugins stay loaded. OpenCode has no such allowance. Allowing OpenCode's hooks is not planned now. | Report unproven suppression and continue startup and restoration, including with zero Nessa hooks. Do not report supported without effective proof. Preserve provider builtin cleanup. |
+| Native executable-hook suppression | By default Claude sends `disableAllHooks: true`, which suppresses project and user hooks, and reports `Unknown`. Managed hooks still fire with that flag, so managed hooks cannot be suppressed. By default Codex sends `features.hooks: false` and `notify: []` and reports `Unsupported`, because legacy managed configuration and MDM still apply after the session override. Each process start reads the current switch once, for a new conversation and for one already open. When that start allows native hooks, Claude sends `settingSources` `user`, `project`, and `local` and omits `disableAllHooks`, and Codex omits `features` and `notify`; neither fact changes. Applies the next time each conversation's agent starts. Hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts. For Claude, on also applies the repo's `.claude` settings, including its allow rules and startup hooks, so turn it on only for projects you trust. OpenCode sends `OPENCODE_PURE=1` with private roots and project config disabled, and reports `Unknown`; default plugins stay loaded. OpenCode has no such allowance. Allowing OpenCode's hooks is not planned now. | Report unproven suppression and continue startup and restoration, including with zero Nessa hooks. Do not report supported without effective proof. Preserve provider builtin cleanup. |
 | Pre-tool denial | Conditional ACP review path, not universal coverage | Prove the requested tool set cannot execute before Nessa's decision. |
 | Policy end-turn | Not implemented | Same target across direct/queued/steered work; late provider result and reusable session verified. |
 | Policy session close | Existing attributed close primitive, configured policy integration absent | Rule cause retained through all cleanup/audit paths. |

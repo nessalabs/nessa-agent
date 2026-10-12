@@ -33,6 +33,14 @@ pub(crate) trait AcpProfile: Send + Sync + 'static {
     fn native_hooks_allowed(&self) -> bool {
         false
     }
+    /// Read the live switch once and store it as this process start's choice.
+    ///
+    /// Called at the beginning of every process start, before capabilities are
+    /// published and before the process is spawned. The default keeps the
+    /// profile's current choice. Claude and Codex read their switch here so
+    /// the session parameters and, for Codex, the process environment share
+    /// one bool. A later start reads again.
+    fn capture_native_hooks(&mut self) {}
     /// The harness name and the launch choice, when this profile is Claude or
     /// Codex. Other profiles have no such launch and record nothing.
     fn native_hooks_launch(&self) -> Option<(&'static str, bool)> {

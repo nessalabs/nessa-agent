@@ -2,7 +2,7 @@ use super::super::tools::wire::{self, ObservedTools};
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::ExecutionRequest;
 use crate::application::agent_execution::providers::{
-    ApprovalMode, ApprovalModeChoice, NativeHookSuppressionCapability,
+    ApprovalMode, ApprovalModeChoice, NativeHookSuppressionCapability, NativeHooksSwitch,
 };
 use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::domain::agent_execution::tools::ToolCallUpdate;
@@ -13,6 +13,10 @@ use crate::infrastructure::acp::profile::AcpProfile;
 use crate::infrastructure::acp::sessions::{configuration, thought_level, AcpConfig};
 use crate::infrastructure::json_rpc::protocol;
 use serde_json::{json, Value};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 /// The npm package this profile is written against. Codex's adapter is not the
 /// only one publishing an ACP server for Codex, and a fork's wire behavior is
@@ -84,6 +88,12 @@ pub(super) struct CodexProfile {
     /// When true, the launch omits the suppression keys. The fact below stays
     /// unsupported: this flag is the caller's choice, not proof.
     native_hooks_allowed: bool,
+    /// Read once at each process start. Absent when the bool above is already
+    /// this profile's choice, as on a deletion.
+    native_hooks: Option<NativeHooksSwitch>,
+    /// Written by that one read and read by the process factory, so the
+    /// environment cannot see a different value than the profile.
+    launch_hooks: Option<Arc<AtomicBool>>,
 }
 impl CodexProfile {
     pub(super) fn new(
@@ -97,7 +107,17 @@ impl CodexProfile {
             effort_level,
             tools: ObservedTools::default(),
             native_hooks_allowed: false,
+            native_hooks: None,
+            launch_hooks: None,
         }
+    }
+
+    /// This profile reads `switch` once each time its process starts, and
+    /// stores that bool in `launch` for the process factory.
+    pub(super) fn following(mut self, switch: NativeHooksSwitch, launch: Arc<AtomicBool>) -> Self {
+        self.native_hooks = Some(switch);
+        self.launch_hooks = Some(launch);
+        self
     }
 
     /// Record that this launch omits `features` and `notify`.
@@ -155,6 +175,17 @@ impl AcpProfile for CodexProfile {
     /// is that check for the default launch.
     fn native_hook_suppression(&self) -> NativeHookSuppressionCapability {
         NativeHookSuppressionCapability::Unsupported
+    }
+
+    fn capture_native_hooks(&mut self) {
+        let Some(switch) = &self.native_hooks else {
+            return;
+        };
+        let allowed = switch.allowed();
+        self.native_hooks_allowed = allowed;
+        if let Some(launch) = &self.launch_hooks {
+            launch.store(allowed, Ordering::Relaxed);
+        }
     }
 
     fn native_hooks_allowed(&self) -> bool {

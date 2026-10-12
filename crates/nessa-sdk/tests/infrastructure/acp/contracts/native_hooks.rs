@@ -5,12 +5,16 @@
 //!            -> fixture runs hook_cmd.py with a PreToolUse payload
 //!            -> log line is the hook-behavior record shape
 //!            -> negotiated suppression fact stays what the profile already reports
+//! switch off after that open -> the same conversation's next process start
+//!                             -> fixture sees the suppression request
 //! ```
 //!
-//! Arrows are the order of one open. The fixture is not the real harness. It
-//! runs the planted command only in `native-hooks` mode, and only after the
-//! suppression keys are absent. Every other mode still requires those keys, so
-//! a default launch that stops sending them fails the existing suppression
+//! Arrows are the order of one open, and of one later start of that same
+//! provider session. The fixture is not the real harness. It runs the planted
+//! command only in `native-hooks` mode, and only after the suppression keys
+//! are absent. `hooks-record` accepts either shape and writes what that
+//! process start sent. Every other mode still requires the suppression keys,
+//! so a default launch that stops sending them fails the existing suppression
 //! tests. A switch that still sends them fails the tests here.
 //!
 //! OpenCode has no switch and is not covered here.
@@ -92,28 +96,106 @@ async fn claude_native_hook_runs_when_the_launch_omits_suppression() {
     assert_gone(&root, "pid");
 }
 
-#[test]
-fn a_codex_open_keeps_the_hooks_choice_it_read() {
-    let (_root, config, model) = codex_configuration("native-hooks", 16);
-    let flag = Arc::new(AtomicBool::new(true));
-    let binding = CodexAcpProvider::new(
-        config,
-        &model,
-        TokenLimits::new(900, 100).unwrap(),
-        Arc::new(RecordingAudit::default()),
+fn hooks_launch(root: &Path, pid: i32) -> serde_json::Value {
+    let path = root.join(format!("hooks-launch-{pid}"));
+    serde_json::from_str(
+        &std::fs::read_to_string(path).expect("the launch recorded its hooks request"),
     )
-    .unwrap()
-    .with_native_hooks(NativeHooksSwitch::from_shared(flag.clone()));
-    let allowed = binding.read_native_hooks(Some("conversation"));
-    let profile = binding.profile_allows_native_hooks(allowed);
+    .expect("the hooks record is JSON")
+}
+
+fn launch_pids(root: &Path) -> Vec<i32> {
+    serde_json::from_str(&std::fs::read_to_string(root.join("launches")).unwrap()).unwrap()
+}
+
+/// Open with hooks on, turn the switch off, and relaunch the same provider session.
+async fn relaunch_after_turning_hooks_off(
+    binding: impl AgentProvider,
+    flag: &AtomicBool,
+) -> OpenedProviderSession {
+    let (_, _, control) = ProviderOpenRequest::without_startup_control(None).into_parts();
+    let request = ProviderOpenRequest::new(
+        crate::domain::agent_execution::sessions::SessionId::new("conversation").unwrap(),
+        None,
+        control,
+    );
+    let opened = binding
+        .open(request)
+        .await
+        .expect("hooks on must not refuse the open");
+    assert!(opened
+        .session
+        .operation_capabilities()
+        .native_hooks_allowed());
     flag.store(false, Ordering::Relaxed);
-    let config = binding.session_config_for(allowed);
-    assert!(profile);
-    assert!(allowed);
-    assert!(!config.contains("\"hooks\":false"));
-    assert!(!config.contains("\"notify\""));
-    let reread = binding.session_config_for(binding.native_hooks_allowed());
-    assert!(reread.contains("\"hooks\":false"));
+    // The process already running keeps the choice it started with.
+    assert!(opened
+        .session
+        .operation_capabilities()
+        .native_hooks_allowed());
+    opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await
+        .into_result()
+        .unwrap();
+    assert_eq!(
+        opened.session.execute(prompt("again")).await.into_result(),
+        Ok(ExecutionOutcome::Completed)
+    );
+    assert!(!opened
+        .session
+        .operation_capabilities()
+        .native_hooks_allowed());
+    opened
+}
+
+#[tokio::test]
+async fn turning_hooks_off_suppresses_an_existing_claude_conversations_next_launch() {
+    let _process_slot = process_test_slot().await;
+    let (root, binding) = test_acp_binding("hooks-record", 16);
+    let flag = Arc::new(AtomicBool::new(true));
+    let binding = binding.with_native_hooks(NativeHooksSwitch::from_shared(flag.clone()));
+    let opened = relaunch_after_turning_hooks_off(binding, &flag).await;
+    let pids = launch_pids(root.path());
+    assert_eq!(pids.len(), 2, "relaunched");
+    let first = hooks_launch(root.path(), pids[0]);
+    assert_eq!(first["settingSources"], json!(["user", "project", "local"]));
+    assert!(first["disableAllHooks"].is_null());
+    let second = hooks_launch(root.path(), pids[1]);
+    assert_eq!(second["settingSources"], json!([]));
+    assert_eq!(second["disableAllHooks"], true);
+    opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await
+        .into_result()
+        .unwrap();
+    assert_gone(&root, "pid");
+}
+
+#[tokio::test]
+async fn turning_hooks_off_suppresses_an_existing_codex_conversations_next_launch() {
+    let _process_slot = process_test_slot().await;
+    let (root, binding) = test_codex_binding("hooks-record", 16);
+    let flag = Arc::new(AtomicBool::new(true));
+    let binding = binding.with_native_hooks(NativeHooksSwitch::from_shared(flag.clone()));
+    let opened = relaunch_after_turning_hooks_off(binding, &flag).await;
+    let pids = launch_pids(root.path());
+    assert_eq!(pids.len(), 2, "relaunched");
+    let first = hooks_launch(root.path(), pids[0]);
+    assert!(first["features"].is_null());
+    assert!(first["notify"].is_null());
+    let second = hooks_launch(root.path(), pids[1]);
+    assert_eq!(second["features"], json!({"hooks": false}));
+    assert_eq!(second["notify"], json!([]));
+    opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await
+        .into_result()
+        .unwrap();
+    assert_gone(&root, "pid");
 }
 
 #[tokio::test]

@@ -13,7 +13,7 @@ export interface NativeHooksClient {
 /** The choice for one harness the caller can change. */
 export type NativeHooksAgentName = NativeHooksAgent
 
-/** What the next new conversation of Claude and Codex will do. True allows hooks. */
+/** What the next process start of Claude and Codex will do. True allows hooks. */
 export interface NativeHooksChoice {
   readonly claude: boolean
   readonly codex: boolean

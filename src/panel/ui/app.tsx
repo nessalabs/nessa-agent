@@ -201,6 +201,16 @@ export function App({
   const detailsConversation = chat.conversations.find(
     (item) => item.id === tabDetails?.id,
   )
+  const nativeHooksAgent = detailsConversation?.remote?.runtime?.agent
+  const readNativeHooks = React.useCallback(async () => {
+    if (nativeHooksAgent !== "claude" && nativeHooksAgent !== "codex") return undefined
+    try {
+      const loaded = await loadConversationChoices()
+      return loaded.catalog.nativeHooks[nativeHooksAgent]
+    } catch {
+      return undefined
+    }
+  }, [nativeHooksAgent, loadConversationChoices])
   const attachments = useFileAttachments(chat, attachmentResources)
   const uploads = useAttachmentUploads(chat, attachmentResources, digest)
   const folderDrop = useFolderDrop(
@@ -636,6 +646,7 @@ export function App({
               rename={tabDetails.rename}
               onClose={() => setTabDetails(null)}
               onRename={(title) => chat.rename(tabDetails.id, title)}
+              readNativeHooks={readNativeHooks}
             />
           )}
           {/* Hidden rather than unmounted while the update or Messages tab is

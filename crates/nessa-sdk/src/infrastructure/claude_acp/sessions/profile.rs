@@ -2,7 +2,9 @@ use super::super::tools::wire;
 use super::configuration;
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::ExecutionRequest;
-use crate::application::agent_execution::providers::{ApprovalMode, ApprovalModeChoice};
+use crate::application::agent_execution::providers::{
+    ApprovalMode, ApprovalModeChoice, NativeHooksSwitch,
+};
 use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::domain::agent_execution::prompts::SystemPrompt;
 use crate::domain::agent_execution::tools::ToolCallUpdate;
@@ -70,9 +72,12 @@ pub(crate) struct ClaudeProfile {
     tool_names: HashMap<String, wire::ObservedTool>,
     system_prompt: Option<SystemPrompt>,
     mcp_prefixes: Vec<String>,
-    /// When true, this launch allows Claude's own hooks and loads
+    /// When true, this process start allows Claude's own hooks and loads
     /// [`CLAUDE_NATIVE_HOOKS_SETTING_SOURCES`].
     native_hooks_allowed: bool,
+    /// Read once at each process start. Absent when the bool above is already
+    /// this profile's choice, as on a deletion.
+    native_hooks: Option<NativeHooksSwitch>,
 }
 impl ClaudeProfile {
     pub(crate) fn new(
@@ -87,7 +92,14 @@ impl ClaudeProfile {
             system_prompt,
             mcp_prefixes: Vec::new(),
             native_hooks_allowed: false,
+            native_hooks: None,
         }
+    }
+
+    /// This profile reads `switch` once each time its process starts.
+    pub(crate) fn following(mut self, switch: NativeHooksSwitch) -> Self {
+        self.native_hooks = Some(switch);
+        self
     }
 
     /// Allow Claude's own hooks on this launch.
@@ -124,6 +136,12 @@ impl AcpProfile for ClaudeProfile {
             .pointer("/_meta/steering/supported")
             .and_then(Value::as_bool)
             == Some(true)
+    }
+
+    fn capture_native_hooks(&mut self) {
+        if let Some(switch) = &self.native_hooks {
+            self.native_hooks_allowed = switch.allowed();
+        }
     }
 
     fn native_hooks_allowed(&self) -> bool {

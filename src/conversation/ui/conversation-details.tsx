@@ -1,4 +1,4 @@
-import { useId, useState, type ReactElement, type ReactNode } from "react"
+import { useEffect, useId, useState, type ReactElement, type ReactNode } from "react"
 import { conversationLeasePlace, conversationLeaseStatus } from "@nessa/client"
 import { Info, Pencil } from "lucide-react"
 import {
@@ -24,6 +24,23 @@ import { AgentMark } from "../../onboarding/ui/agent-mark"
 import type { AgentFeatures, Conversation, ConversationLease } from "../model"
 
 type FeatureSupport = Exclude<AgentFeatures[keyof AgentFeatures], "off" | "on">
+
+const NEXT_START = "Applies the next time each conversation's agent starts."
+
+/** What this process started with, and, when the switch has since changed, that the new value waits for the next start. */
+function nativeHooksCopy(
+  started: "off" | "on",
+  agent: string | undefined,
+  current: "off" | "on" | undefined,
+) {
+  const start =
+    started === "on"
+      ? agent === "claude"
+        ? "For this run, hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts. This also applies the repo's .claude settings, including its allow rules and startup hooks, so turn it on only for projects you trust."
+        : "For this run, hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts."
+      : "For this run, Nessa asks this agent to leave its own hooks off."
+  return current !== undefined && current !== started ? `${start} ${NEXT_START}` : start
+}
 
 /** One capability in a word or two: whether it works here, not how. */
 function support(value: FeatureSupport) {
@@ -97,7 +114,13 @@ function Fact({ label, value }: { label: string; value: ReactNode }) {
  * What a conversation runs on and how its tools are approved. Read-only: the
  * composer is where the model and the approval mode are chosen.
  */
-function ConversationFacts({ conversation }: { conversation: Conversation }) {
+function ConversationFacts({
+  conversation,
+  nativeHooksSwitch,
+}: {
+  conversation: Conversation
+  nativeHooksSwitch?: "off" | "on"
+}) {
   const remote = conversation.remote
   const runtime = remote?.runtime
   const features = remote?.capabilities.agentFeatures
@@ -149,13 +172,11 @@ function ConversationFacts({ conversation }: { conversation: Conversation }) {
               <Fact label="Answer later" value={support(features.permissionDeferral)} />
               <Fact
                 label="Native hooks"
-                value={
-                  features.nativeHooks === "on"
-                    ? runtime?.agent === "claude"
-                      ? "For this run, hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts. This also applies the repo's .claude settings, including its allow rules and startup hooks, so turn it on only for projects you trust."
-                      : "For this run, hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts."
-                    : "For this run, Nessa asks this agent to leave its own hooks off."
-                }
+                value={nativeHooksCopy(
+                  features.nativeHooks,
+                  runtime?.agent,
+                  nativeHooksSwitch,
+                )}
               />
             </>
           ) : (
@@ -240,13 +261,39 @@ export function ConversationDetails({
   rename,
   onClose,
   onRename,
+  readNativeHooks,
 }: {
   conversation: Conversation
   rename: boolean
   onClose: () => void
   onRename: (title: string) => void
+  /** The switch as it stands now, for this conversation's harness. Absent when it cannot be read. */
+  readNativeHooks?: () => Promise<"off" | "on" | undefined>
 }) {
   const [title, setTitle] = useState(conversation.title)
+  const [nativeHooksSwitch, setNativeHooksSwitch] = useState<"off" | "on" | undefined>(
+    undefined,
+  )
+  useEffect(() => {
+    // Drop the previous conversation's switch before this read answers, so a
+    // difference that belonged to the last one is not shown on this one.
+    if (!readNativeHooks) {
+      setNativeHooksSwitch(undefined)
+      return
+    }
+    let current = true
+    setNativeHooksSwitch(undefined)
+    void readNativeHooks()
+      .then((choice) => {
+        if (current) setNativeHooksSwitch(choice)
+      })
+      .catch(() => {
+        if (current) setNativeHooksSwitch(undefined)
+      })
+    return () => {
+      current = false
+    }
+  }, [readNativeHooks])
   return (
     <Sheet
       className="nessa-detail-sheet"
@@ -290,7 +337,10 @@ export function ConversationDetails({
             </button>
           </form>
         ) : (
-          <ConversationFacts conversation={conversation} />
+          <ConversationFacts
+            conversation={conversation}
+            nativeHooksSwitch={nativeHooksSwitch}
+          />
         )}
       </SheetBody>
     </Sheet>

@@ -8,8 +8,8 @@ import type {
 import { Group, ItemRow, Toggle } from "./settings-controls"
 
 /**
- * Settings › Privacy & Permissions › Access: whether the next launch of
- * Claude or Codex omits Nessa's request to leave that harness's own hooks
+ * Settings › Privacy & Permissions › Access: whether the next process start
+ * of Claude or Codex omits Nessa's request to leave that harness's own hooks
  * off. With no gateway the rows rest. OpenCode has no row.
  */
 const NativeHooksContext = createContext<NativeHooksGateway | undefined>(undefined)

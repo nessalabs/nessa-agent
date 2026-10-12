@@ -53,8 +53,8 @@ impl ProviderOpenRequest {
 
     /// The SDK session this open is for, when the request names one.
     ///
-    /// A launch choice is remembered under this id so a later open of the
-    /// same conversation uses the choice from the first open.
+    /// Recorded on this process start's hooks audit. It does not choose the
+    /// hooks setting: each process start reads the current switch.
     pub fn session_key(&self) -> Option<&str> {
         self.session.as_ref().map(|session| session.as_str())
     }

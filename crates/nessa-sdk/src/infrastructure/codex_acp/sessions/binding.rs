@@ -22,7 +22,14 @@ use crate::infrastructure::acp::sessions::{
 };
 use crate::infrastructure::process::ProcessScope;
 use serde_json::json;
-use std::{collections::BTreeMap, ffi::OsString, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    ffi::OsString,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+};
 use tokio::process::Command;
 
 /// Immutable composition factory; opening twice creates independent process scopes.
@@ -171,12 +178,13 @@ impl CodexAcpProvider {
         self.approval_mode = mode;
         Ok(self)
     }
-    /// Let Codex run its own hooks on the next launch this factory opens.
+    /// Let Codex run its own hooks when a process this factory starts reads the switch on.
     ///
     /// Off keeps `features.hooks: false` and `notify: []` in `CODEX_CONFIG`.
     /// On omits both keys, so the user's configuration is not overridden.
-    /// The model and instructions stay. The switch is read when the process
-    /// starts, so a change applies to the next launch. The negotiated
+    /// The model and instructions stay. Each process start reads the switch
+    /// once and uses that bool for both the profile and `CODEX_CONFIG`,
+    /// including the next start of a conversation already open. The negotiated
     /// suppression fact stays unsupported either way.
     pub fn with_native_hooks(mut self, native_hooks: NativeHooksSwitch) -> Self {
         self.native_hooks = native_hooks;
@@ -305,9 +313,11 @@ impl AgentProvider for CodexAcpProvider {
         }))
     }
     fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
-        let allowed = self.native_hooks.choice_for(request.session_key());
-        let profile = self.profile_allowing(allowed);
-        let process = self.process_factory_allowing(allowed);
+        // The process start reads the switch once into `launch`. The profile
+        // and the process factory share that cell, so they cannot diverge.
+        let launch = Arc::new(AtomicBool::new(false));
+        let profile = self.launch_profile(launch.clone());
+        let process = self.process_factory_following(launch);
         Box::pin(async move {
             acp_binding::open(
                 process,
@@ -330,44 +340,22 @@ impl CodexAcpProvider {
     pub(super) fn deletions(&self) -> &DeletionCleanups {
         &self.deletions
     }
-    /// The profile for the flag as it stands now.
-    ///
-    /// [`open`](AgentProvider::open) and deletion do not use this. Each reads
-    /// the switch once and passes that value to
-    /// [`profile_allowing`](Self::profile_allowing).
-    #[cfg(test)]
-    #[expect(
-        dead_code,
-        reason = "the live read beside the one-shot snapshot, for a caller that asks once"
-    )]
-    pub(super) fn profile(&self) -> CodexProfile {
-        self.profile_allowing(self.native_hooks.allowed())
-    }
-    /// How a process is launched for the flag as it stands now.
-    ///
-    /// [`open`](AgentProvider::open) and deletion do not use this. Each reads
-    /// the switch once and passes that value to
-    /// [`process_factory_allowing`](Self::process_factory_allowing).
-    #[cfg(test)]
-    #[expect(
-        dead_code,
-        reason = "the live read beside the one-shot snapshot, for a caller that asks once"
-    )]
-    pub(super) fn process_factory(&self) -> acp_binding::ProcessFactory {
-        self.process_factory_allowing(self.native_hooks.allowed())
-    }
-    /// The hooks choice for a launch that is not a conversation open.
-    ///
-    /// Deletion names no conversation session, so this reads the current flag
-    /// and records nothing.
-    pub(super) fn current_native_hooks(&self) -> bool {
-        self.native_hooks.choice_for(None)
+    /// The profile a process start captures from the live switch.
+    fn launch_profile(&self, launch: Arc<AtomicBool>) -> CodexProfile {
+        CodexProfile::new(
+            self.capabilities.model().model_id(),
+            self.approval_mode,
+            self.effort_level.clone(),
+        )
+        .following(self.native_hooks.clone(), launch)
     }
 
     /// The profile a launch speaks when native hooks are `allowed`.
     ///
-    /// `open` reads the switch once and passes that value here and to
-    /// [`process_factory_allowing`](Self::process_factory_allowing).
+    /// Deletion reads the switch once and passes that value here and to
+    /// [`process_factory_allowing`](Self::process_factory_allowing). A
+    /// conversation's process start uses the profile `open` builds, which
+    /// reads the switch once at that start.
     pub(super) fn profile_allowing(&self, allowed: bool) -> CodexProfile {
         CodexProfile::new(
             self.capabilities.model().model_id(),
@@ -376,30 +364,11 @@ impl CodexAcpProvider {
         )
         .allowing_native_hooks(allowed)
     }
-    /// The one read `open` makes. The profile and the process use the bool it
-    /// returns; they do not read the switch again.
-    #[cfg(test)]
-    pub fn read_native_hooks(&self, session: Option<&str>) -> bool {
-        self.native_hooks.choice_for(session)
-    }
 
-    /// Whether the profile for `allowed` reports hooks allowed.
-    #[cfg(test)]
-    pub fn profile_allows_native_hooks(&self, allowed: bool) -> bool {
-        use crate::infrastructure::acp::profile::AcpProfile;
-        self.profile_allowing(allowed).native_hooks_allowed()
-    }
-
-    /// The `CODEX_CONFIG` `open`'s process closure builds for `allowed`.
-    #[cfg(test)]
-    pub fn session_config_for(&self, allowed: bool) -> String {
-        self.session_config(allowed)
-    }
-
-    /// How a launch is started for the choice `open` already read.
+    /// How a deletion process is launched for one read of the current switch.
     ///
-    /// The closure keeps `allowed`. It does not read the switch again, so a
-    /// change after this open does not alter this process.
+    /// The closure keeps `allowed`. A conversation's process start does not
+    /// use this: it reads the shared cell the profile writes at that start.
     pub(super) fn process_factory_allowing(&self, allowed: bool) -> acp_binding::ProcessFactory {
         let factory = self.clone();
         match &self.host {
@@ -414,6 +383,29 @@ impl CodexAcpProvider {
             }
             None => Arc::new(move || {
                 ProcessScope::spawn(factory.launch_command(allowed)).map_err(Into::into)
+            }),
+        }
+    }
+
+    /// How a conversation's process is launched.
+    ///
+    /// The closure reads `launch`, which the profile writes from the one
+    /// switch read at the start of that process. It does not read the switch.
+    fn process_factory_following(&self, launch: Arc<AtomicBool>) -> acp_binding::ProcessFactory {
+        let factory = self.clone();
+        match &self.host {
+            Some(host) => {
+                let host = host.clone();
+                Arc::new(move || {
+                    let launch = HarnessLaunch {
+                        environment: factory.launch_environment(launch.load(Ordering::Relaxed)),
+                    };
+                    Ok(ProcessScope::remote(host.start(launch)?))
+                })
+            }
+            None => Arc::new(move || {
+                ProcessScope::spawn(factory.launch_command(launch.load(Ordering::Relaxed)))
+                    .map_err(Into::into)
             }),
         }
     }

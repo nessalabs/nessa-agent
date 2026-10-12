@@ -256,6 +256,15 @@ while True:
             assert "disableAllHooks" not in options["settings"]
             assert options["settingSources"] == ["user", "project", "local"]
             run_planted_hook(root)
+        elif mode == "hooks-record":
+            # Either shape is accepted. The test reads what this process start sent.
+            record(
+                "hooks-launch-" + str(os.getpid()),
+                json.dumps({
+                    "settingSources": options.get("settingSources"),
+                    "disableAllHooks": options["settings"].get("disableAllHooks"),
+                }),
+            )
         else:
             assert options["settingSources"] == []
             assert options["settings"]["disableAllHooks"] is True

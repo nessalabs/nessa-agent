@@ -3973,7 +3973,7 @@
         },
         "nativeHooks": {
           "$ref": "#/$defs/NativeHooksChoice",
-          "description": "The stored choice for this agent's next new conversation. Present for Claude and Codex. Absent for OpenCode, which stays suppressed. Hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts. For Claude, on also applies the repo's .claude settings, including its allow rules and startup hooks, so turn it on only for projects you trust."
+          "description": "The stored choice this agent's next process start reads. Present for Claude and Codex. Absent for OpenCode, which stays suppressed. Hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts. For Claude, on also applies the repo's .claude settings, including its allow rules and startup hooks, so turn it on only for projects you trust. Applies the next time each conversation's agent starts."
         }
       },
       "required": ["agent", "defaultModel", "models"]
@@ -3996,7 +3996,7 @@
         },
         "enabled": {
           "type": "boolean",
-          "description": "True omits the suppression request on the next launch. False restores it."
+          "description": "True omits the suppression request the next time that harness's agent starts. False restores it."
         }
       },
       "required": ["requestId", "agent", "enabled"]
@@ -4004,7 +4004,7 @@
     "AgentsSetNativeHooksResult": {
       "type": "object",
       "additionalProperties": false,
-      "description": "The choice now in effect for the named harness. When enabled is true, hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts. A change applies to newly started conversations. Conversations already running keep their setting.",
+      "description": "The choice now in effect for the named harness. When enabled is true, hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts. Applies the next time each conversation's agent starts.",
       "properties": {
         "requestId": {
           "type": "string",
@@ -4045,7 +4045,7 @@
         },
         "nativeHooks": {
           "$ref": "#/$defs/AgentsNativeHooks",
-          "description": "The stored choice for the next new Claude and Codex conversation, whether or not that agent is in this catalog."
+          "description": "The stored choice the next process start of Claude and Codex reads, whether or not that agent is in this catalog."
         }
       },
       "required": ["agents", "environments", "nativeHooks"]
@@ -4053,7 +4053,7 @@
     "AgentsNativeHooks": {
       "type": "object",
       "additionalProperties": false,
-      "description": "The choice in effect for the next new conversation of each harness. Off keeps Nessa's request to leave that harness's hooks off. On means hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts. For Claude, on also applies the repo's .claude settings, including its allow rules and startup hooks, so turn it on only for projects you trust. A change applies to newly started conversations. Conversations already running keep their setting.",
+      "description": "The choice in effect for the next process start of each harness. Off keeps Nessa's request to leave that harness's hooks off. On means hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts. For Claude, on also applies the repo's .claude settings, including its allow rules and startup hooks, so turn it on only for projects you trust. Applies the next time each conversation's agent starts.",
       "properties": {
         "claude": {
           "$ref": "#/$defs/NativeHooksChoice",

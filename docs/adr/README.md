@@ -62,6 +62,7 @@ the Interactive macOS policy, local timing logs, and deferred follow-up work.
 | [344 — MCP UI](done/344-mcp-ui.md) | Nessa hosts MCP Apps: a gateway MCP client, tool identity and `_meta`, app calls with policy and audit, and a sandboxed iframe host. Slices #346–#349 are closed. Amends 326 (plugin kinds) and 333 (where an experiment view is built) |
 | [483 — Gateway protocol and device client crates](done/483-protocol-and-client-core-crates.md) | Shared wire/read model in `nessa-protocol`, device enrollment and retained sync in `nessa-client-core`, gateway links the client without its `cli` feature (amended, #705) and portable dependency boundaries |
 | [596 — Observe every owned conversation](done/596-observe-every-owned-conversation.md) | The desktop index walks `conversation.observe` when `conversation.list` is incomplete. The list bound stays 500. The page size is the catalogue's. Listing and observing open no provider |
+| [768 — Native harness hooks are a per-harness choice](done/768-native-harness-hooks.md) | Claude and Codex read the stored choice at each process start. Off is the default. OpenCode stays suppressed |
 
 ## Todo — implementation priority
 
@@ -86,7 +87,6 @@ this table. None of it changes implementation or approval status.
 | 15 | [329 — Subagents](todo/329-subagents.md) | Proposed: ordinary child Agents with durable parent ownership, inherited approval configuration and recursive parent closure; runtime creation, recovery and regression tables; a joined desktop source, panel and header accessory. Desktop slices #330–#332; runtime slices to be filed under #329 |
 | 16 | [333 — Experiments](todo/333-experiments.md) | Proposed: an experiment drawn from its definition (metric, splits, guardrails, verdicts), validated at its adapter, with the best run named by the harness, so any kind reads the same way; `ExperimentSource`; its swarm as subagents. Slices #334–#337 |
 | — | [392 — Remote MCP](todo/392-remote-mcp-servers.md) | Accepted and implemented in the gateway and desktop: owned HTTP sessions, OAuth/refresh/revoke, generation fencing, honest app-call outcomes, and authorize/revoke/consent. Remaining: an owner-run check against a consenting remote server. Priority not assigned |
-| — | [768 — Native harness hooks are a per-harness choice](todo/768-native-harness-hooks.md) | Accepted. Claude and Codex can omit the suppression request on the next launch when the caller allows it. Off is the default. OpenCode stays suppressed. Priority not assigned |
 
 Auth API readiness and operating-bound work is complete. The
 [current Rust SDK](../../crates/nessa-sdk/docs/agent_execution/README.md) provides

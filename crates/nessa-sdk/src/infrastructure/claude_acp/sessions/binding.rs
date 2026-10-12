@@ -183,12 +183,13 @@ impl ClaudeAcpProvider {
         self.effort_level = Some(level);
         Ok(self)
     }
-    /// Let Claude run its own hooks on the next launch this factory opens.
+    /// Let Claude run its own hooks when a process this factory starts reads the switch on.
     ///
     /// Off keeps `disableAllHooks` and empty `settingSources`. On sends the
     /// Claude CLI's default sources, user, project, and local, and omits
-    /// `disableAllHooks`. The other session settings stay. One open reads the
-    /// switch once, so a change applies to a conversation that has not opened.
+    /// `disableAllHooks`. The other session settings stay. Each process start
+    /// reads the switch once, including the next start of a conversation
+    /// already open.
     pub fn with_native_hooks(mut self, native_hooks: NativeHooksSwitch) -> Self {
         self.native_hooks = native_hooks;
         self
@@ -265,8 +266,8 @@ impl AgentProvider for ClaudeAcpProvider {
         }))
     }
     fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
-        let allowed = self.native_hooks.choice_for(request.session_key());
-        let profile = self.profile_allowing(allowed);
+        // The process start reads the switch. This open does not snapshot it.
+        let profile = self.launch_profile();
         Box::pin(async move {
             acp_binding::open(
                 self.process_factory(),
@@ -313,11 +314,21 @@ impl ClaudeAcpProvider {
     }
     /// The profile for the flag as it stands now.
     ///
-    /// Deletion uses this. [`open`](AgentProvider::open) does not: it reads the
-    /// switch once and passes that value to [`profile_allowing`](Self::profile_allowing).
+    /// Deletion uses this. A conversation's process start does not: it reads
+    /// the switch once inside the start, on the profile `open` builds.
     /// Claude's process factory does not read the switch.
     pub(crate) fn profile(&self) -> ClaudeProfile {
         self.profile_allowing(self.native_hooks.allowed())
+    }
+
+    /// The profile a process start captures from the live switch.
+    fn launch_profile(&self) -> ClaudeProfile {
+        ClaudeProfile::new(
+            self.system_prompt.clone(),
+            self.approval_mode,
+            self.effort_level.clone(),
+        )
+        .following(self.native_hooks.clone())
     }
 
     /// The profile a launch speaks when native hooks are `allowed`.

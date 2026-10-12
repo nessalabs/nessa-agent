@@ -367,6 +367,47 @@ const checks = {
     return { read, failures }
   },
 
+  /**
+   * The same Access group with a gateway connected and Claude's choice on:
+   * the switch is on, and the row says the repo's settings apply and that a
+   * change waits for the next start.
+   */
+  "native-hooks-on": async (page, { engine, url }) => {
+    const failures = []
+    const fixture = new URL(
+      "/verification/desktop/fixtures/native-hooks-on/index.html",
+      url,
+    ).href
+    await page.goto(fixture)
+    await need(page, css.settings, "Settings")
+    await settled(page)
+    await show(page, "Privacy & Permissions", "Access")
+    const row = page.locator('[data-setting="claude-native-hooks"]')
+    const text = (await row.textContent()) ?? ""
+    const checked = await row.locator('[role="switch"]').getAttribute("aria-checked")
+    if (checked !== "true") failures.push(`Claude's switch is ${checked}, not on`)
+    if (!text.includes("turn it on only for projects you trust"))
+      failures.push("the on row does not show the trust warning")
+    if (!text.includes("Applies the next time each conversation's agent starts."))
+      failures.push("the on row does not say the choice applies at the next start")
+    const note = await page.$eval("#settings-panel", (panel) => panel.textContent ?? "")
+    if (
+      !note.includes(
+        "Hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts.",
+      )
+    )
+      failures.push("the page does not say what hooks can do")
+    const shot = join(
+      dirname(fileURLToPath(import.meta.url)),
+      "../evidence/settings-native-hooks",
+    )
+    mkdirSync(shot, { recursive: true })
+    const group = page.locator(".settings-group", { has: row })
+    await group.scrollIntoViewIfNeeded()
+    await group.screenshot({ path: join(shot, `access-on-${engine}.png`) })
+    return { checked, failures }
+  },
+
   /** Keyboard focus on a tab and a switch shows the window's focus ring. */
   "focus-ring": async (page, { engine }) => {
     const failures = []
@@ -412,7 +453,7 @@ const meta = {
 Usage: node verification/desktop/scripts/settings-page.mjs [options]
 
   --only <list>   Checks, comma-separated: masthead, condense, arrive, search,
-                  focus-ring, native-hooks
+                  focus-ring, native-hooks, native-hooks-on
 
 Per engine:
   masthead    every title below the titlebar row (16px clear) at 1440×900,
@@ -424,7 +465,9 @@ Per engine:
   search      Enter lands on the setting, in view and marked a moment; ⌘F
   focus-ring  a tab and a switch show the window's focus ring
   native-hooks  Access rests Claude and Codex hook rows without a gateway, and
-                 says a hook can deny or change a tool call`,
+                 says a hook can deny or change a tool call
+  native-hooks-on  with a gateway, Claude's switch on shows the trust warning
+                 and that the choice applies at the next start`,
 }
 
 await main(meta, async ({ options, rep, url }) => {

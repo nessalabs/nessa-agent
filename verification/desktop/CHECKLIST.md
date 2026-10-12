@@ -855,8 +855,11 @@ phone's scanner is not this screen.
 - [ ] **Claude and Codex native hooks rest without a gateway.** Access shows
   both rows disabled, with no switch, and says hooks can approve, deny, or
   change a tool call and its result without Nessa asking, and can run
-  commands when the agent starts. OpenCode has no row. _Check:_
-  `settings-page.mjs --only native-hooks`; unit tests
+  commands when the agent starts. OpenCode has no row. With a gateway
+  and Claude's choice on, that row's switch is on and says to turn it on
+  only for projects you trust, and that the choice applies the next time
+  each conversation's agent starts. _Check:_
+  `settings-page.mjs --only native-hooks,native-hooks-on`; unit tests
   `native-hooks-rows.test.tsx`, `native-hooks-gateway.test.ts`.
 
 ### Integrations: the gateway's MCP servers

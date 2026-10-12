@@ -27,7 +27,17 @@ else:
 # either setting, and the binding reports native hook suppression as
 # unsupported for that. `native-hooks` is the opt-in: both keys are absent,
 # and the planted command hook runs.
-if mode == "native-hooks":
+if mode == "hooks-record":
+    # Either shape is accepted. The test reads what this process start sent.
+    launches_path = root / "launches"
+    launches = json.loads(launches_path.read_text()) if launches_path.exists() else []
+    launches.append(os.getpid())
+    launches_path.write_text(json.dumps(launches))
+    (root / ("hooks-launch-" + str(os.getpid()))).write_text(json.dumps({
+        "features": config.get("features"),
+        "notify": config["notify"] if "notify" in config else None,
+    }))
+elif mode == "native-hooks":
     assert "features" not in config
     assert "notify" not in config
     spec_path = root / "native-hook.json"
