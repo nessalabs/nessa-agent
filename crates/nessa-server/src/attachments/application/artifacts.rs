@@ -4,6 +4,7 @@ use super::PortFuture;
 use crate::attachments::domain::{ArtifactId, Attachment};
 use nessa_auth::domain::OrganizationId;
 use nessa_protocol::conversation::domain::ConversationId;
+use std::time::Duration;
 
 /// Current content state; revision is derived from this state by the source adapter.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -25,6 +26,22 @@ impl ArtifactState {
 
 /// Attachment-owned manifest facts, independent of receiving-device scope.
 pub trait AttachmentArtifacts: Send + Sync {
+    /// At most `max_bytes` of `stored` from `offset`, when `conversation`
+    /// keeps exactly that file now: a confirmed hold of that digest, media
+    /// type and size, looked up and its bytes opened in one step. `Missing`
+    /// for a pending, retired or absent hold. Waits for the source's slot in
+    /// arrival order, at most `wait`, then answers `Busy`.
+    #[allow(clippy::too_many_arguments)]
+    fn read_held<'a>(
+        &'a self,
+        organization: &'a OrganizationId,
+        conversation: &'a ConversationId,
+        stored: &'a Attachment,
+        offset: u64,
+        max_bytes: usize,
+        wait: Duration,
+    ) -> PortFuture<'a, ArtifactBytes, ArtifactReadError>;
+
     /// Read an exact registration. None is missing, not deletion or permission.
     /// The caller supplies actual current operation admission before network use.
     fn manifest<'a>(

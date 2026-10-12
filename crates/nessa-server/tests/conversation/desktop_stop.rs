@@ -231,22 +231,54 @@ impl Fixture {
 
     /// Cleanup may still be held while the SDK commits a message's outcome.
     /// This evidence does not publish the stopping owner's current controls.
+    ///
+    /// `retained_view` has an empty live set, so an invocation that is saved
+    /// and has no result yet is `Unresolved`, not `Running`. That is the
+    /// in-flight record. [`Self::settled`] reads the live service, where the
+    /// same gap is `Running` and `Unresolved` means a turn this process will
+    /// not run. `BOUND` is the hang detector when that commit does not arrive.
     async fn settled_committed(&self) -> Vec<(String, ConversationMessageStatus)> {
-        self.wait_for_settled(|| async {
-            // The session key owner supplies the same identity composition uses.
-            let committed = self
-                .storage
-                .read_committed(conversation_session(&self.id))
-                .await?
-                .ok_or(ConversationError::NotFound)?;
-            Ok(nessa_protocol::conversation::projection::retained_view(
-                &self.id,
-                committed.snapshot(),
-                committed.status(),
-                Uuid::new_v4(),
-            ))
+        tokio::time::timeout(BOUND, async {
+            loop {
+                let view = match self.committed_view().await {
+                    Ok(view) => view,
+                    Err(error) => panic!("the conversation stays readable: {error:?}"),
+                };
+                let in_flight = view.messages.iter().any(|message| {
+                    matches!(
+                        message.status,
+                        ConversationMessageStatus::Queued
+                            | ConversationMessageStatus::Running
+                            | ConversationMessageStatus::Unresolved
+                    )
+                });
+                if !in_flight {
+                    return view
+                        .messages
+                        .iter()
+                        .map(|message| (message.execution_id.clone(), message.status))
+                        .collect();
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
         })
         .await
+        .expect("the committed messages reach a terminal status")
+    }
+
+    async fn committed_view(&self) -> Result<ConversationView, ConversationError> {
+        // The session key owner supplies the same identity composition uses.
+        let committed = self
+            .storage
+            .read_committed(conversation_session(&self.id))
+            .await?
+            .ok_or(ConversationError::NotFound)?;
+        Ok(nessa_protocol::conversation::projection::retained_view(
+            &self.id,
+            committed.snapshot(),
+            committed.status(),
+            Uuid::new_v4(),
+        ))
     }
 
     async fn wait_for_settled<F>(

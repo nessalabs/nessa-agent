@@ -20,6 +20,7 @@ use crate::env_serve::application::{
     PeerGrants, Runners, ServeTimings, Serving,
 };
 use crate::env_serve::domain::{Agents, CommandGrant, Peer, PeerGrant};
+use crate::env_serve::infrastructure::TokioTimer;
 use crate::env_serve::install::Platform;
 use nessa_protocol::lease::{
     decode, encode, Cleanup, CommandEnd, Data, FromEnvironment, GrantedTerms as WireTerms, Sandbox,
@@ -290,6 +291,7 @@ impl LeaseConnector for Connector {
                         kill: Duration::from_millis(100),
                         ..ServeTimings::default()
                     },
+                    Arc::new(TokioTimer::new()),
                 ));
             }
             Reach::Stalling(mut gate) => {

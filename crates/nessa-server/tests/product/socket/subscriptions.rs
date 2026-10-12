@@ -1904,6 +1904,65 @@ async fn a_binding_owned_by_another_principal_reads_only_what_it_was_granted() {
     fixture.assert_lists_refused().await;
 }
 
+/// Slice D2: `artifact.read` admits a paired reader as `conversation.read`
+/// does. Ungranted, a held file in the conversation answers
+/// `conversation_not_found`; granted, its bytes; an inactive binding is
+/// refused; and a binding owned by another principal, the shape a peer
+/// gateway has, is granted the conversation but not the caller's to read
+/// files in, as its own principal owns none.
+#[tokio::test]
+async fn a_paired_reader_reads_back_a_held_file_only_where_it_was_granted() {
+    use crate::attachments::application::AttachmentLimits;
+    use crate::attachments_test_support::{digest_of, Fixture};
+    let held = Fixture::new(AttachmentLimits::default());
+    let fixture = SubscriptionFixture::new().await;
+    grants(
+        &fixture.authority,
+        &["conversation.read", "conversation.write", "server.read"],
+    );
+    held.held.hold("organization", &fixture.id.to_string(), b"a held file", "text/plain");
+    held.ownership
+        .give(&fixture.id.to_string(), "organization", "principal");
+    let read = json!({
+        "conversationId": fixture.id.to_string(),
+        "digest": digest_of(b"a held file").to_string(),
+        "mimeType": "text/plain",
+        "size": 11,
+        "offset": 0,
+        "maxBytes": 5,
+    });
+    let with = |fixture: SubscriptionFixture, devices| {
+        let mut fixture = fixture.with_devices(devices);
+        fixture.state = fixture
+            .state
+            .clone()
+            .with_attachments(held.service.clone(), held.reads());
+        fixture
+    };
+    let fixture = with(fixture, this_device(true));
+    let reply = fixture.call("artifact.read", read.clone()).await;
+    assert_eq!(reply["error"]["code"], "conversation_not_found", "{reply}");
+    fixture
+        .grant_to(crate::conversation::application::ReadGrantTransition::Grant)
+        .await;
+    let reply = fixture.call("artifact.read", read.clone()).await;
+    assert_eq!(reply["ok"], true, "{reply}");
+    assert_eq!(reply["payload"]["data"], "YSBoZWw=");
+    let fixture = with(fixture, this_device(false));
+    let reply = fixture.call("artifact.read", read.clone()).await;
+    assert_eq!(reply["error"]["code"], "unauthorized", "{reply}");
+    let peer = with(
+        fixture,
+        Devices::new(&[("credential", "receiver", "grantor", true)]),
+    );
+    // The fixture's session is the conversation owner's principal, so a
+    // binding owned by another principal is the peer's shape only for the
+    // grant; the ownership check is what refuses a peer's own principal.
+    held.ownership.give(&peer.id.to_string(), "organization", "grantor");
+    let reply = peer.call("artifact.read", read).await;
+    assert_eq!(reply["error"]["code"], "conversation_not_found", "{reply}");
+}
+
 /// Row G13: a revoke ends a device's subscription before its next batch.
 #[tokio::test]
 async fn a_revoke_ends_a_device_subscription_before_its_next_batch() {

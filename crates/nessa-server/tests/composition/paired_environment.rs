@@ -24,7 +24,7 @@ use crate::env_serve::application::{
 };
 use crate::env_serve::domain::{CommandGrant, Peer, PeerGrant};
 use crate::env_serve::infrastructure::{
-    dial, ConfiguredLauncher, FileGrants, FileLedger, FileOutbox,
+    dial, ConfiguredLauncher, FileGrants, FileLedger, FileOutbox, TokioTimer,
 };
 use crate::product::{ProductDependencies, ProductRouteState};
 use nessa_auth::adapters::cedar::CedarPolicyEvaluator;
@@ -344,6 +344,7 @@ impl Host {
             self.ledger.clone(),
             self.outbox.clone(),
             ServeTimings::default(),
+            Arc::new(TokioTimer::new()),
         )
         .await;
     }
@@ -570,7 +571,7 @@ async fn an_enrolled_environment_waits_for_approval_then_stays_dialed_in() {
     let poll = Duration::from_millis(20);
     assert!(tokio::time::timeout(
         Duration::from_millis(300),
-        approval(&pairing, poll, running.clone())
+        approval(&pairing, poll, &TokioTimer::new(), running.clone())
     )
     .await
     .is_err());
@@ -578,11 +579,12 @@ async fn an_enrolled_environment_waits_for_approval_then_stays_dialed_in() {
     let claimed = a.commands.status(&a.session, id).await.unwrap();
     let (_, key) = claimed.claim_binding().unwrap();
     a.commands.approve(&a.session, id, key).await.unwrap();
-    let (identity, pin) = tokio::time::timeout(WAIT, approval(&pairing, poll, running))
-        .await
-        .unwrap()
-        .unwrap()
-        .expect("not stopped");
+    let (identity, pin) =
+        tokio::time::timeout(WAIT, approval(&pairing, poll, &TokioTimer::new(), running))
+            .await
+            .unwrap()
+            .unwrap()
+            .expect("not stopped");
     pairing.shutdown().await;
     let peer = PeerEnvironment::new(*key.bytes());
 
@@ -595,34 +597,38 @@ async fn an_enrolled_environment_waits_for_approval_then_stays_dialed_in() {
     let (stop, stopping) = watch::channel(false);
     let dialing = {
         let served = served.clone();
-        tokio::spawn(redial(
-            move || {
-                let identity = identity.clone();
-                let mut released = released.clone();
-                let n = dials.fetch_add(1, Ordering::SeqCst);
-                async move {
-                    if n > 0 {
-                        let _ = released.wait_for(|go| *go).await;
+        tokio::spawn(async move {
+            redial(
+                move || {
+                    let identity = identity.clone();
+                    let mut released = released.clone();
+                    let n = dials.fetch_add(1, Ordering::SeqCst);
+                    async move {
+                        if n > 0 {
+                            let _ = released.wait_for(|go| *go).await;
+                        }
+                        dial(native, identity, pin, clock()).await
                     }
-                    dial(native, identity, pin, clock()).await
-                }
-            },
-            move |stream, stopping| {
-                served.lock().unwrap().push(stream.closer());
-                let host = host.clone();
-                async move {
-                    serve_until_stopped(stream, stopping, |input, output| async move {
-                        host.serve(input, output).await;
-                    })
-                    .await;
-                }
-            },
-            Backoff {
-                first: Duration::from_millis(10),
-                most: Duration::from_millis(100),
-            },
-            stopping,
-        ))
+                },
+                move |stream, stopping| {
+                    served.lock().unwrap().push(stream.closer());
+                    let host = host.clone();
+                    async move {
+                        serve_until_stopped(stream, stopping, |input, output| async move {
+                            host.serve(input, output).await;
+                        })
+                        .await;
+                    }
+                },
+                Backoff {
+                    first: Duration::from_millis(10),
+                    most: Duration::from_millis(100),
+                },
+                &TokioTimer::new(),
+                stopping,
+            )
+            .await
+        })
     };
     a.until_connected(peer, true).await;
     let ran = a.echo(peer, "first").await.unwrap();
@@ -678,9 +684,12 @@ async fn waiting_for_approval_ends_when_denied_or_never_paired() {
     let unpaired = directory.path().join("unpaired");
     nessa_local_storage::create_directory(&unpaired).unwrap();
     let pairing = FilePairingEnvironment::open(&unpaired, &nowhere, clock()).unwrap();
-    let never = tokio::time::timeout(WAIT, approval(&pairing, poll, running.clone()))
-        .await
-        .unwrap();
+    let never = tokio::time::timeout(
+        WAIT,
+        approval(&pairing, poll, &TokioTimer::new(), running.clone()),
+    )
+    .await
+    .unwrap();
     assert_eq!(never.err(), Some(NotApproved::NotPaired));
     pairing.shutdown().await;
 
@@ -701,7 +710,7 @@ async fn waiting_for_approval_ends_when_denied_or_never_paired() {
         .decide(&a.session, created.record().id(), OwnerDecision::Deny)
         .await
         .unwrap();
-    let ended = tokio::time::timeout(WAIT, approval(&pairing, poll, running))
+    let ended = tokio::time::timeout(WAIT, approval(&pairing, poll, &TokioTimer::new(), running))
         .await
         .unwrap();
     assert_eq!(ended.err(), Some(NotApproved::Ended));

@@ -1092,7 +1092,7 @@ machines is a transfer of an artifact:
 | Movement | Channel | Verified by |
 | --- | --- | --- |
 | Agent output on an environment to the gateway (a DMG, a screenshot, a log) | The **artifact channel**: sftp on the SSH connection; a bounded artifact stream on a paired connection | Digest on receipt; hold recorded with the lease as cause |
-| Gateway to a surface (download, preview) | The existing ticketed `/attachments` path; the device's protected channel for phones | Digest on receipt |
+| Gateway to a surface (download, preview) | `artifact.read`, by range over the surface's own authenticated connection: the product socket for a desktop or browser, the device's protected channel for a phone | Size and digest of the assembled file, on receipt |
 | Gateway to an environment (an image in a prompt, a file the agent needs) | Lease-scoped ticket, fetched by digest | Digest on receipt |
 | Surface upload (a screenshot you drag in) | The existing ticketed upload | Digest at the gateway |
 
@@ -1177,6 +1177,55 @@ sequenceDiagram
   record is then the only word on it, and publishing again answers which.
   Its hold is the conversation's, released with its other files; the
   record stays as history.
+
+### Reading a held file back (slice D2)
+
+A surface reads any file a conversation holds (an artifact its agent
+published, or an image uploaded into it) with `artifact.read`, one range
+of at most `artifact.read_range_bytes` (32 KiB) at a time, base64 in an
+ordinary answer. It names the file exactly as the view does: digest, media
+type and size, since the same bytes held as another type are another file.
+
+```mermaid
+sequenceDiagram
+    participant U as Surface (desktop, browser or phone)
+    participant P as Product socket
+    participant H as HeldReads (attachments)
+    participant S as Attachment store
+    U->>P: artifact.read{conversation, digest, type, size, offset, maxBytes}
+    P->>P: conversation.read grant, admitted to the conversation (a device only if shared)
+    P->>H: read(caller, conversation, file, range)
+    H->>H: the caller's conversation? (as an upload asks)
+    H->>S: read_held(file, range): the hold for exactly this file, and its bytes opened, in one step
+    S-->>H: at most 32 KiB
+    H-->>P: the range
+    P-->>U: {offset, data}
+    U->>U: next range, then size and digest of the whole, before it is shown or kept
+```
+
+- **One authority for what may be read.** The hold is: only a file the
+  caller's conversation keeps now, whatever else names its digest. Every
+  range checks again, in the step that opens the bytes, so a release between
+  two ranges answers the next `attachment_not_found`, and no range of other
+  bytes is served under its name. A file kept again in the meantime reads on.
+- **One path for every surface.** The answer is ordinary, so it fits the
+  socket's 64 KiB frame and the protected channel's alike; no unauthenticated
+  route or ticket is needed, since each surface already holds an
+  authenticated connection. A 64 MiB file is 2048 ranges, which is cheap on
+  the loopback a desktop uses and slow on a distant phone; a streamed route
+  is a later change if that matters.
+- **Verified by the receiver.** A range is not checked on its own. The
+  surface assembles the file and checks its size and digest before it shows
+  or keeps it, which is the only check that holds for what arrived.
+- **Contention.** The store reads with one slot, held for one record read
+  and one range. Ranges queue for it in arrival order, each at most
+  `artifact.read_busy_wait`, then answer `temporarily_unavailable`, and the
+  same range can be asked again. At most `server.artifact_reads` ranges are
+  read or waiting at once, on capacity of their own, so a burst of them never
+  holds the requests every other method needs; a surface reads its ranges
+  one after another.
+- **Not audited.** A read changes nothing and is admitted exactly as
+  `conversation.read` is, which is not audited either.
 
 ## Previews: a port, not a file
 

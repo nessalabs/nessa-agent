@@ -531,7 +531,14 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    /// A failed response write keeps a candidate that was already framed.
+    ///
+    /// The duplex half uses the product's framing budget on a paused clock.
+    /// Paused time advances only while the runtime is idle, so a loaded
+    /// runner's scheduling delay does not spend the budget during the 1-byte
+    /// hand-off. The budget's own behavior is
+    /// `a3f_trickle_does_not_reset_connection_budget`.
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn a3g_response_failure_keeps_framed_candidate() {
         let stream = BrokenWriter(Chunks(VecDeque::from([REQUEST.to_vec()])));
         assert_eq!(

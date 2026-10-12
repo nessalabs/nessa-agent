@@ -65,6 +65,7 @@
 //! reading a ledger that does not hold it yet.
 use super::artifacts::{ArtifactOutbox, LeaseArtifacts};
 use super::grants::{grant_for, PeerGrants};
+use super::timer::{timeout, within, Timer};
 use super::wire::{write_frame, FrameStream};
 use crate::env_serve::domain::{admit_agent, admit_command, Peer, PeerGrant};
 use nessa_protocol::lease::{
@@ -90,7 +91,6 @@ use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     sync::{mpsc, watch},
     task::JoinHandle,
-    time::Instant,
 };
 
 /// How the host starts an agent's harness: its own executable, arguments,
@@ -329,7 +329,8 @@ pub(crate) struct Serving {
 }
 
 /// Serve one gateway, `serving`'s peer, until its stream ends, then end
-/// every lease it held as lost and return once each is recorded.
+/// every lease it held as lost and return once each is recorded. Every wait
+/// is measured on `timer`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn serve<R, W>(
     input: R,
@@ -341,6 +342,7 @@ pub(crate) async fn serve<R, W>(
     ledger: Arc<dyn LeaseLedger>,
     outbox: Arc<dyn ArtifactOutbox>,
     timings: ServeTimings,
+    timer: Arc<dyn Timer>,
 ) where
     R: AsyncRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin + Send + 'static,
@@ -349,7 +351,7 @@ pub(crate) async fn serve<R, W>(
         harnesses: launcher,
         commands,
     } = runners;
-    let (frames, mut writer) = start_writer(output);
+    let (frames, mut writer) = start_writer(output, timer.clone());
     let _ = frames
         .send(FromEnvironment::Hello {
             build: build.into(),
@@ -369,18 +371,19 @@ pub(crate) async fn serve<R, W>(
         ledger,
         outbox,
         timings,
+        timer: timer.clone(),
         drops: 0,
     };
     let mut stream = FrameStream::new(input);
     // Nothing read for `silence` is the gateway gone, whether this side is
     // waiting for its next frame or is held up answering one: a frame this
     // side cannot send is a gateway not reading, which a gateway always does.
-    let mut heard = Instant::now();
+    let mut heard = timer.now();
     loop {
         let silent = heard + timings.silence;
         // `next` keeps what a cancelled read had read, so the bound costs
         // nothing of a frame arriving slowly.
-        let body = match tokio::time::timeout_at(silent, stream.next()).await {
+        let body = match within(&*timer, silent, stream.next()).await {
             Ok(Ok(Some(body))) => body,
             Ok(Ok(None)) => break,
             Ok(Err(error)) => {
@@ -392,7 +395,7 @@ pub(crate) async fn serve<R, W>(
                 break;
             }
         };
-        heard = Instant::now();
+        heard = timer.now();
         let handled = async {
             match decode::<ToEnvironment>(&body) {
                 Ok(frame) => served.handle(frame).await,
@@ -404,7 +407,7 @@ pub(crate) async fn serve<R, W>(
         };
         // Every state change a frame makes comes before the answer it waits
         // to send, so one given up on here leaves nothing half-applied.
-        if tokio::time::timeout_at(heard + timings.silence, handled)
+        if within(&*timer, heard + timings.silence, handled)
             .await
             .is_err()
         {
@@ -416,7 +419,7 @@ pub(crate) async fn serve<R, W>(
     drop(served);
     // What is still queued for a gateway that reads nothing is given up on,
     // so serving, and the lock it holds, always ends.
-    if tokio::time::timeout(timings.silence, &mut writer)
+    if timeout(&*timer, timings.silence, &mut writer)
         .await
         .is_err()
     {
@@ -424,7 +427,10 @@ pub(crate) async fn serve<R, W>(
     }
 }
 
-fn start_writer<W>(mut output: W) -> (mpsc::Sender<FromEnvironment>, JoinHandle<()>)
+fn start_writer<W>(
+    mut output: W,
+    timer: Arc<dyn Timer>,
+) -> (mpsc::Sender<FromEnvironment>, JoinHandle<()>)
 where
     W: AsyncWrite + Unpin + Send + 'static,
 {
@@ -433,7 +439,7 @@ where
         loop {
             // Idle for a keepalive interval: the gateway is told this side is
             // still there, which a network gone silent cannot tell it.
-            let frame = match tokio::time::timeout(KEEPALIVE_INTERVAL, receiver.recv()).await {
+            let frame = match timeout(&*timer, KEEPALIVE_INTERVAL, receiver.recv()).await {
                 Ok(Some(frame)) => frame,
                 Ok(None) => break,
                 Err(_) => FromEnvironment::Keepalive,
@@ -536,6 +542,8 @@ struct Served {
     ledger: Arc<dyn LeaseLedger>,
     outbox: Arc<dyn ArtifactOutbox>,
     timings: ServeTimings,
+    /// What every wait, the stops' own included, is measured on.
+    timer: Arc<dyn Timer>,
     drops: u32,
 }
 
@@ -965,6 +973,7 @@ impl Served {
         } = stop;
         let ledger = self.ledger.clone();
         let frames = self.frames.clone();
+        let timer = self.timer.clone();
         let (done, cleanup) = watch::channel(None);
         let task = tokio::spawn(async move {
             let Channel {
@@ -978,7 +987,7 @@ impl Served {
             // input still on its way. Bounded by the grace itself: a harness
             // that does not read is not waited on longer (`stop_steps`).
             drop(input);
-            if tokio::time::timeout(grace, &mut pump).await.is_err() {
+            if timeout(&*timer, grace, &mut pump).await.is_err() {
                 pump.abort();
             }
             let cleanup = match control.cleanup(grace, kill).await {
@@ -992,7 +1001,7 @@ impl Served {
             };
             // Its process tree is gone, so its output ends; past the bound
             // the pump is stopped, and nothing more is read from it.
-            if tokio::time::timeout(kill, &mut output).await.is_err() {
+            if timeout(&*timer, kill, &mut output).await.is_err() {
                 output.abort();
             }
             let entry = LedgerEntry::Stopped {

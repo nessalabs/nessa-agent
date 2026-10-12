@@ -8,6 +8,7 @@
 //! <data>/environment/leases.jsonl ──▶ FileLedger
 //! <data>/environment/grants.json ──▶ FileGrants (read at every lease)
 //! <data>/environment/outbox/, a private temporary directory ──▶ FileOutbox
+//! TokioTimer ──▶ what serving's waits are measured on
 //! stdin, stdout ──▶ serve(Peer::Ssh, ...) until the gateway's stream ends
 //! ```
 //!
@@ -20,12 +21,12 @@ use crate::{
     env::{Environment, LEASE_PROTOCOL, VERSION},
     env_serve::{
         application::{
-            refuse, serve, CommandRunner, HarnessLauncher, Runners, ServeTimings, Serving,
+            refuse, serve, CommandRunner, HarnessLauncher, Runners, ServeTimings, Serving, Timer,
         },
         domain::Peer,
         infrastructure::{
             ConfiguredLauncher, FileGrants, FileLedger, FileOutbox, LaunchSpec, ServeLock,
-            ServeLockError, ShepherdCommands, COMMAND_VARIABLES,
+            ServeLockError, ShepherdCommands, TokioTimer, COMMAND_VARIABLES,
         },
     },
 };
@@ -82,6 +83,7 @@ pub(super) struct Composed {
     /// The publish points' directory, removed when serving ends.
     sockets: std::path::PathBuf,
     lock: ServeLock,
+    timer: Arc<dyn Timer>,
 }
 
 impl Composed {
@@ -112,6 +114,7 @@ impl Composed {
             self.ledger.clone(),
             self.outbox.clone(),
             ServeTimings::default(),
+            self.timer.clone(),
         )
         .await;
     }
@@ -187,6 +190,7 @@ pub(super) async fn compose() -> Result<Composed, (Unavailability, RunError)> {
         outbox: Arc::new(outbox),
         sockets,
         lock,
+        timer: Arc::new(TokioTimer::new()),
     })
 }
 
