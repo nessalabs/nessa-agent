@@ -22,7 +22,8 @@ pub(crate) use artifacts::{
     PUBLISH_POINT_VARIABLE,
 };
 pub(crate) use grants::{
-    change_grant, ChangeFailed, GrantAudit, GrantChange, GrantOutcome, GrantStore, PeerGrants,
+    change_grant, Applied, ChangeFailed, GrantAudit, GrantChange, GrantOutcome, GrantStore,
+    PeerGrants,
 };
 pub(crate) use redial::{redial, Backoff};
 #[cfg(test)]

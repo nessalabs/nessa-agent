@@ -7,8 +7,9 @@
 //!   machine's pairing approved (FilePairingEnvironment), or ssh
 //!   ──▶ change_grant(FileGrants, FileGrantAudit, SystemClock, this account)
 //!       ──▶ what the peer has now (its entry, or the defaults) ──▶ granted
-//!       more / less ──▶ the change audited in grants-audit.jsonl ──▶
+//!       more / less ──▶ its intent audited in grants-audit.jsonl ──▶
 //!       written, or the entry removed when it is the peer's defaults again
+//!       ──▶ its outcome audited
 //!   ──▶ every entry printed
 //! env grants ──▶ FileGrants::read ──▶ every entry printed
 //! ```
@@ -109,6 +110,12 @@ fn change(directory: &Path, peer: Peer, operation: GrantOperation) -> Result<(),
             ChangeFailed::Store(reason) => reason,
             ChangeFailed::Audit(reason) => {
                 format!("the change was not made, since it could not be audited: {reason}")
+            }
+            ChangeFailed::NotDurable(reason) => {
+                format!("the change is written but not yet durable: {reason}")
+            }
+            ChangeFailed::Unconfirmed(reason) => {
+                format!("the change is in force, but its confirmation was not recorded: {reason}")
             }
         })
     })?;

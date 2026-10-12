@@ -1,36 +1,54 @@
 //! Every change this host's owner makes to what a gateway is granted, kept
 //! for good: `<data>/environment/grants-audit.jsonl`, one JSON line per
-//! change, beside the grants it audits.
+//! record, beside the grants it audits.
 //!
 //! ```text
 //! {"schemaVersion": 1, "committedAtMs": 1760000000000, "initiator": "unix:1000",
 //!  "peer": "ssh", "operation": {"op": "grant", "agents": ["claude"]},
 //!  "before": {"agents": "*", "commands": {"maxTimeoutMs": 3600000}},
-//!  "after": {...}, "outcome": "changed"}
+//!  "after": {...}, "outcome": "intended"}
 //! ```
 //!
 //! ```text
-//! FileGrantAudit::record ──▶ open (private, appending) ──▶ the line written
-//!   ──▶ synced ──▶ Ok, and only then grants.json is renamed in place
+//! FileGrantAudit::record ──▶ open (private, O_APPEND) ──▶ the line written
+//!   in one write ──▶ synced ──▶ Ok
 //! ```
 //!
-//! Arrows are steps, in order. It is written while the grants' lock is
-//! held, so records are in the order the changes were made. `before` and
-//! `after` are the peer's whole grant, its defaults included; `outcome` is
-//! `changed`, `unchanged`, or `not_written` for a change whose record was
-//! kept but whose grants could not then be written. Lines are only ever
-//! appended, never rewritten. The journal is not bounded: it grows by one
-//! line, at most about two grants entries long, for each change the owner
-//! makes by hand, which no gateway can cause.
+//! Arrows are steps, in order. `before` and `after` are the peer's whole
+//! grant, its defaults included. Every record is written while grants.lock
+//! is held, and with `O_APPEND`, so records are in the order the changes
+//! were made and no two lines overwrite each other. Lines are only ever
+//! appended, never rewritten.
+//!
+//! **What a change leaves here.** A change that leaves the grant as it was
+//! leaves one `unchanged` record. Any other leaves two:
+//!
+//! - `intended`, kept before grants.json is replaced. If it cannot be kept,
+//!   grants.json is left as it was and the command fails.
+//! - then the outcome: `written` once grants.json was replaced, with
+//!   `durable: false` when the directory could not then be synced (the
+//!   command fails, saying the change is in force but not yet durable);
+//!   or `not_written` when it could not be replaced (the grant is still
+//!   `before`, and the command fails).
+//!
+//! An `intended` record with nothing after it is a change whose process
+//! died between the two, or whose outcome record could not be kept (the
+//! command then fails, saying the change is in force but unconfirmed): it
+//! may or may not be in force, and grants.json is the authority for what
+//! is. The journal is not bounded: it grows by two lines, each at most
+//! about two grants entries long, for each change the owner makes by hand,
+//! which no gateway can cause.
 use super::grants::{grant_value, peer_name};
 use crate::env_serve::{
     application::{GrantAudit, GrantChange, GrantOutcome},
     domain::{Agents, GrantOperation},
 };
-use nessa_local_storage::{open, OpenMode};
+use nessa_local_storage::verify_file;
 use serde_json::{json, Value};
 use std::{
-    io::{Seek, SeekFrom, Write},
+    fs::OpenOptions,
+    io::Write,
+    os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
 };
 
@@ -58,15 +76,23 @@ impl GrantAudit for FileGrantAudit {
         let mut line = serde_json::to_vec(&line(change)).map_err(|error| error.to_string())?;
         line.push(b'\n');
         let failed = |error: std::io::Error| format!("{FILE} could not be written: {error}");
-        let mut file = open(&self.path, OpenMode::OpenOrCreate).map_err(failed)?;
-        file.seek(SeekFrom::End(0)).map_err(failed)?;
+        // O_APPEND: each write lands at the end as it is made, whoever else
+        // has the journal open.
+        let mut file = OpenOptions::new()
+            .append(true)
+            .create(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&self.path)
+            .map_err(failed)?;
+        verify_file(&file).map_err(failed)?;
         file.write_all(&line).map_err(failed)?;
         file.sync_data().map_err(failed)
     }
 }
 
 fn line(change: &GrantChange) -> Value {
-    json!({
+    let mut line = json!({
         "schemaVersion": SCHEMA_VERSION,
         "committedAtMs": change.committed_at_ms,
         "initiator": change.initiator,
@@ -75,11 +101,16 @@ fn line(change: &GrantChange) -> Value {
         "before": grant_value(&change.before),
         "after": grant_value(&change.after),
         "outcome": match change.outcome {
-            GrantOutcome::Changed => "changed",
+            GrantOutcome::Intended => "intended",
             GrantOutcome::Unchanged => "unchanged",
+            GrantOutcome::Written { .. } => "written",
             GrantOutcome::NotWritten => "not_written",
         },
-    })
+    });
+    if let GrantOutcome::Written { durable } = change.outcome {
+        line["durable"] = json!(durable);
+    }
+    line
 }
 
 fn operation(operation: &GrantOperation) -> Value {

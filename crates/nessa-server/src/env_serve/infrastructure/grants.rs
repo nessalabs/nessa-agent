@@ -22,21 +22,24 @@
 //!
 //! ```text
 //! FileGrants::entry ──▶ open (private, bounded) ──▶ parse ──▶ the peer's entry
-//! FileGrants::change_committed ──▶ grants.lock (held) ──▶ read ──▶ change
-//!   ──▶ encoded (past the bound: refused, nothing written) ──▶ a private
-//!   temporary file ──▶ synced ──▶ commit (the audit record kept, or the
-//!   change refused) ──▶ renamed over grants.json ──▶ directory synced
+//! FileGrants::change_settled ──▶ grants.lock (held throughout) ──▶ read
+//!   ──▶ change ──▶ encoded (past the bound: refused, nothing written)
+//!   ──▶ a private temporary file ──▶ synced ──▶ intend (the intended
+//!   record kept, or the change refused) ──▶ renamed over grants.json
+//!   ──▶ directory synced ──▶ settle (written, durable or not, or not
+//!   written) ──▶ grants.lock released
 //! ```
 //!
 //! Arrows are steps, in order. A reader never takes the lock: the rename
 //! means it reads the whole file before a change or after it. A file this
 //! build cannot read (another schema version, larger than the bound, not
 //! private, not this shape, a peer named twice) is an error, never taken as
-//! no grants. An owner's change is audited between the sync and the rename
-//! (`GrantStore`, `grant_audit.rs`): if its record cannot be kept, the
-//! temporary file goes and grants.json stays as it was.
+//! no grants. An owner's change is audited twice, holding the lock
+//! (`GrantStore`, `grant_audit.rs`): its intent between the sync and the
+//! rename, so a record that cannot be kept leaves grants.json as it was,
+//! and its outcome after the rename.
 use crate::env_serve::{
-    application::{ChangeFailed, GrantStore, PeerGrants},
+    application::{Applied, ChangeFailed, GrantStore, PeerGrants},
     domain::{AgentName, Agents, CommandGrant, Peer, PeerGrant},
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
@@ -198,6 +201,7 @@ struct StoredCommands {
 /// The grants file of one data directory.
 pub(crate) struct FileGrants {
     directory: PathBuf,
+    replace: Box<dyn Replace>,
 }
 
 impl FileGrants {
@@ -205,6 +209,16 @@ impl FileGrants {
     pub(crate) fn new(environment: &Path) -> Self {
         Self {
             directory: environment.to_path_buf(),
+            replace: Box::new(OnDisk),
+        }
+    }
+
+    /// The grants kept in `environment`, replaced through `replace`.
+    #[cfg(test)]
+    pub(crate) fn replacing(environment: &Path, replace: Box<dyn Replace>) -> Self {
+        Self {
+            directory: environment.to_path_buf(),
+            replace,
         }
     }
 
@@ -236,36 +250,49 @@ impl FileGrants {
         decode(&bytes)
     }
 
-    /// [`Self::change_committed`] with nothing to commit: the tests' way
-    /// to set grants. The owner's changes are audited ([`GrantStore`]).
+    /// [`Self::change_settled`] with nothing to audit: the tests' way to
+    /// set grants. The owner's changes are audited ([`GrantStore`]).
     ///
     /// # Errors
-    /// As [`Self::change_committed`].
+    /// As [`Self::change_settled`]; a replacement that failed, or was not
+    /// synced, is [`Changed::Grants`].
     #[cfg(test)]
     pub(crate) fn change<E>(
         &self,
         peer: &Peer,
         change: impl FnOnce(Option<PeerGrant>) -> Result<Option<PeerGrant>, E>,
     ) -> Result<(), Changed<E>> {
-        self.change_committed(peer, change, || Ok(()))
+        self.change_settled(
+            peer,
+            change,
+            || Ok(()),
+            |applied| match applied {
+                Applied::Written { synced: Ok(()) } => Ok(()),
+                Applied::Written { synced: Err(error) } | Applied::NotWritten(error) => Err(
+                    Changed::Grants(GrantsError::Unavailable(io::Error::other(error))),
+                ),
+            },
+        )
     }
 
     /// Change `peer`'s entry with `change`, which is given the entry it has
-    /// now and answers the one to keep (`None` removes it), or why not; the
-    /// new file is written and synced, then `commit` must succeed before it
-    /// replaces the old one. One change at a time; serving reads the file
-    /// before it or after it.
+    /// now and answers the one to keep (`None` removes it), or why not. The
+    /// new file is written and synced, `intend` must succeed, then it is
+    /// renamed over grants.json and the directory synced, and `settle` is
+    /// told how that went and answers for it. Everything happens holding
+    /// grants.lock, so one change at a time; serving reads the file before
+    /// it or after it.
     ///
     /// # Errors
-    /// [`Changed::Grants`] when the file could not be read or written, and
-    /// [`Changed::Refused`] with `change`'s or `commit`'s own refusal; with
-    /// `grants.json` unchanged, except when it could not be renamed in place
-    /// after `commit`.
-    pub(crate) fn change_committed<E>(
+    /// [`Changed::Grants`] when the file could not be read or staged, and
+    /// [`Changed::Refused`] with `change`'s or `intend`'s refusal, with
+    /// grants.json unchanged; or `settle`'s answer.
+    pub(crate) fn change_settled<E>(
         &self,
         peer: &Peer,
         change: impl FnOnce(Option<PeerGrant>) -> Result<Option<PeerGrant>, E>,
-        commit: impl FnOnce() -> Result<(), E>,
+        intend: impl FnOnce() -> Result<(), E>,
+        settle: impl FnOnce(Applied) -> Result<(), Changed<E>>,
     ) -> Result<(), Changed<E>> {
         let unavailable = |error| Changed::Grants(GrantsError::Unavailable(error));
         let lock = open(&self.directory.join(LOCK), OpenMode::OpenOrCreate).map_err(unavailable)?;
@@ -287,12 +314,18 @@ impl FileGrants {
         file.as_file_mut().write_all(&bytes).map_err(unavailable)?;
         file.as_file().sync_all().map_err(unavailable)?;
         // Refused here, the temporary file goes and grants.json stays.
-        commit().map_err(Changed::Refused)?;
-        file.persist(&self.directory.join(FILE))
-            .map_err(unavailable)?;
-        let synced = sync_directory(&self.directory).map_err(unavailable);
+        intend().map_err(Changed::Refused)?;
+        let applied = match self.replace.persist(file, &self.directory.join(FILE)) {
+            Err(error) => Applied::NotWritten(format!("{FILE} could not be replaced: {error}")),
+            Ok(()) => Applied::Written {
+                synced: self.replace.sync(&self.directory).map_err(|error| {
+                    format!("{FILE} was replaced but could not be synced to disk: {error}")
+                }),
+            },
+        };
+        let settled = settle(applied);
         drop(lock);
-        synced
+        settled
     }
 }
 
@@ -301,13 +334,35 @@ impl GrantStore for FileGrants {
         &self,
         peer: &Peer,
         decide: &mut dyn FnMut(Option<PeerGrant>) -> Result<Option<PeerGrant>, ChangeFailed>,
-        commit: &mut dyn FnMut() -> Result<(), ChangeFailed>,
+        intend: &mut dyn FnMut() -> Result<(), ChangeFailed>,
+        settle: &mut dyn FnMut(Applied) -> Result<(), ChangeFailed>,
     ) -> Result<(), ChangeFailed> {
-        self.change_committed(peer, decide, commit)
-            .map_err(|failure| match failure {
-                Changed::Grants(error) => ChangeFailed::Store(error.to_string()),
-                Changed::Refused(refused) => refused,
-            })
+        self.change_settled(peer, decide, intend, |applied| {
+            settle(applied).map_err(Changed::Refused)
+        })
+        .map_err(|failure| match failure {
+            Changed::Grants(error) => ChangeFailed::Store(error.to_string()),
+            Changed::Refused(refused) => refused,
+        })
+    }
+}
+
+/// How a staged file replaces grants.json, and the directory is synced: on
+/// disk, or, in tests, failing where a disk cannot be made to.
+pub(crate) trait Replace: Send + Sync {
+    fn persist(&self, file: PrivateTempFile, destination: &Path) -> io::Result<()>;
+    fn sync(&self, directory: &Path) -> io::Result<()>;
+}
+
+/// Renamed and synced on disk.
+struct OnDisk;
+
+impl Replace for OnDisk {
+    fn persist(&self, file: PrivateTempFile, destination: &Path) -> io::Result<()> {
+        file.persist(destination)
+    }
+    fn sync(&self, directory: &Path) -> io::Result<()> {
+        sync_directory(directory)
     }
 }
 
