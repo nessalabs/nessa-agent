@@ -2412,6 +2412,22 @@ async fn a_granted_duration_is_recorded_on_the_issued_lease() {
 async fn an_environment_expiry_ends_the_lease(
     release: Option<LeaseCleanup>,
 ) -> (CurrentLease, Vec<&'static str>) {
+    an_environment_ends_the_lease(LeaseEndCause::Expired, release).await
+}
+
+/// The environment's hold ending the lease for `cause` stops the
+/// conversation as the system, never a person: the lease is recorded ending
+/// for that cause, by the system's actor for it, its End asked, and ended
+/// with the environment's cleanup, or interrupted when no answer comes.
+async fn an_environment_ends_the_lease(
+    cause: LeaseEndCause,
+    release: Option<LeaseCleanup>,
+) -> (CurrentLease, Vec<&'static str>) {
+    let (prefix, surface) = match cause {
+        LeaseEndCause::Expired => ("expired-", "environment_expired"),
+        LeaseEndCause::Revoked => ("revoked-", "environment_revoked"),
+        other => panic!("not an environment's own end: {other:?}"),
+    };
     let root = tempfile::tempdir().unwrap();
     let here = Arc::new(Substitute::new(SandboxProfiles::HARNESS_DEFAULT));
     let host = Arc::new(Host::new());
@@ -2420,7 +2436,7 @@ async fn an_environment_expiry_ends_the_lease(
     let harness = with_host(root.path(), here, Some(host.clone()));
     harness.create_on("devbox").await.unwrap();
     harness.turn("turn-1").await;
-    host.lose.send_replace(Some(LeaseEndCause::Expired));
+    host.lose.send_replace(Some(cause));
     let lease = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let lease = harness.lease().await;
@@ -2431,10 +2447,10 @@ async fn an_environment_expiry_ends_the_lease(
         }
     })
     .await
-    .expect("the expired lease ends");
-    let (cause, actor) = ending_cause(&lease).unwrap();
-    assert_eq!(cause, LeaseEndCause::Expired);
-    assert!(actor.is_some_and(|actor| actor.starts_with("expired-")));
+    .expect("the lease ends");
+    let (recorded, actor) = ending_cause(&lease).unwrap();
+    assert_eq!(recorded, cause);
+    assert!(actor.is_some_and(|actor| actor.starts_with(prefix)));
     let ending = lease.records().iter().find_map(|record| match record {
         LeaseRecord::Ending { actor, .. } => actor.clone(),
         _ => None,
@@ -2442,7 +2458,7 @@ async fn an_environment_expiry_ends_the_lease(
     let ending = ending.unwrap();
     assert_eq!(
         (ending.principal_id(), ending.surface_id()),
-        ("gateway", "environment_expired")
+        ("gateway", surface)
     );
     assert_eq!(harness.provider.close_calls.load(Ordering::SeqCst), 1);
     let kinds = kinds(&lease);
@@ -2466,6 +2482,31 @@ async fn an_expiry_whose_end_goes_unanswered_is_interrupted() {
     assert_eq!(kinds, ["issued", "ending", "interrupted"]);
     let view = nessa_protocol::conversation::projection::lease_view(&lease);
     assert_eq!(view.cause, Some(ConversationLeaseCause::Expired));
+}
+
+/// Row I8: a paired environment revoked while its lease runs is ended as
+/// revoked, by the system, and ended with the environment's cleanup, or
+/// interrupted when no answer comes.
+#[tokio::test]
+async fn an_environment_revocation_is_recorded_ending_then_ended_with_its_cleanup() {
+    let (lease, kinds) = an_environment_ends_the_lease(
+        LeaseEndCause::Revoked,
+        Some(LeaseCleanup::Confirmed { forced: false }),
+    )
+    .await;
+    assert_eq!(kinds, ["issued", "ending", "ended"]);
+    let view = nessa_protocol::conversation::projection::lease_view(&lease);
+    assert_eq!(view.state, ConversationLeaseState::Ended);
+    assert_eq!(view.cause, Some(ConversationLeaseCause::Revoked));
+    assert_eq!(view.cleanup, Some(ConversationLeaseCleanup::Confirmed));
+}
+
+#[tokio::test]
+async fn a_revocation_whose_end_goes_unanswered_is_interrupted() {
+    let (lease, kinds) = an_environment_ends_the_lease(LeaseEndCause::Revoked, None).await;
+    assert_eq!(kinds, ["issued", "ending", "interrupted"]);
+    let view = nessa_protocol::conversation::projection::lease_view(&lease);
+    assert_eq!(view.cause, Some(ConversationLeaseCause::Revoked));
 }
 
 // Command leases (rows L14, L15; issue #700): the agent's `run` through the

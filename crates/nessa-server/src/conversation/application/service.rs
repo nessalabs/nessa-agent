@@ -1729,8 +1729,9 @@ impl ConversationService {
     }
 
     /// Stop the opening `slot` holds once its environment can no longer run
-    /// anything for its lease: its SSH connection lost (row L10), or the
-    /// environment ending it past the duration it granted (row I7). The
+    /// anything for its lease: its SSH connection lost (row L10), the
+    /// environment ending it past the duration it granted (row I7), or a
+    /// paired environment's credential revoked while it runs (row I8). The
     /// lease ends for that cause, the system's stop and never a person's,
     /// recorded first like any other end; its End is still asked, and the
     /// environment answers it with what its own end took. There is no
@@ -1758,6 +1759,7 @@ impl ConversationService {
             }
             let (operation, prefix) = match cause {
                 LeaseEndCause::Expired => ("environment_expired", "expired"),
+                LeaseEndCause::Revoked => ("environment_revoked", "revoked"),
                 _ => ("environment_lost", "lost"),
             };
             let Ok(actor) =

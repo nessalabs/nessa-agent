@@ -13,6 +13,9 @@
 //! gateway ── End{lease} ──▶ environment ── Ended{cleanup} ──▶ gateway
 //! environment ── Ending{lease, expired} ──▶ gateway   (past Granted's leaseMs: it stops
 //!   everything) ── gateway ── End{lease} ──▶ environment ── Ended{cleanup} ──▶ gateway
+//! gateway ── Revoked ──▶ environment   (the gateway no longer lets it serve: it ends every
+//!   lease it holds as revoked and admits none) ── gateway ── End{lease} ──▶ environment
+//!   ── Ended{cleanup} ──▶ gateway, which then closes the connection
 //! gateway ── Account{lease} ──▶ environment ── Accounted{cleanup} ──▶ gateway
 //! gateway ── Keepalive ──▶ environment   (every KEEPALIVE_INTERVAL, always)
 //! environment ── Keepalive ──▶ gateway   (when idle KEEPALIVE_INTERVAL)
@@ -240,6 +243,10 @@ pub enum GrantRefusal {
     /// The environment cannot enforce the sandbox asked for, and never
     /// substitutes another.
     SandboxUnavailable,
+    /// The gateway already said `Revoked` on this connection: nothing more
+    /// is admitted on it. Not the owner's grant: the gateway's own
+    /// revocation, which the ask crossed.
+    Revoked,
 }
 
 /// A sandbox profile on the wire: what encloses a lease's work on the
@@ -578,6 +585,13 @@ pub enum ToEnvironment {
     },
     /// The gateway is still there; nothing else.
     Keepalive,
+    /// The gateway no longer lets this environment serve it: the credential
+    /// it was admitted with was revoked there. The environment ends every
+    /// lease it holds on this connection, recording that as their cause,
+    /// and admits no more on it; it answers each lease's `End` with what
+    /// that end took, and the gateway then closes the connection. Names no
+    /// lease: it is about the connection.
+    Revoked,
     /// What became of the lease's published `artifact`: the environment
     /// lets its staged copy go.
     Collected {
@@ -833,7 +847,7 @@ impl ToEnvironment {
     /// The lease the frame names, if it names one.
     pub fn lease(&self) -> Option<&str> {
         match self {
-            Self::Keepalive => None,
+            Self::Keepalive | Self::Revoked => None,
             Self::Grant { lease, .. }
             | Self::Start { lease, .. }
             | Self::Input { lease, .. }
