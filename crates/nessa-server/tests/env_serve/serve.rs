@@ -490,6 +490,7 @@ async fn a_lease_runs_a_harness_and_its_end_is_answered_with_recorded_cleanup() 
         [
             LedgerEntry::Granted {
                 lease: LEASE.into(),
+                peer: Peer::Ssh,
                 agent: "claude".into(),
                 sandbox: Sandbox::HarnessDefault,
             },
@@ -649,6 +650,7 @@ async fn account_answers_only_what_was_recorded() {
     for entry in [
         LedgerEntry::Granted {
             lease: "ended".into(),
+            peer: Peer::Ssh,
             agent: "claude".into(),
             sandbox: Sandbox::HarnessDefault,
         },
@@ -659,6 +661,7 @@ async fn account_answers_only_what_was_recorded() {
         },
         LedgerEntry::Granted {
             lease: "unfinished".into(),
+            peer: Peer::Ssh,
             agent: "claude".into(),
             sandbox: Sandbox::HarnessDefault,
         },
@@ -847,11 +850,22 @@ async fn i4_a_dialed_gateway_without_a_grant_is_refused_and_nothing_runs() {
         [
             LedgerEntry::Refused {
                 lease: LEASE.into(),
+                peer: DIALED,
                 reason: GrantRefusal::NotGranted,
+                asked: Asked::Agent {
+                    agent: "claude".into(),
+                    sandbox: Sandbox::HarnessDefault,
+                },
             },
             LedgerEntry::Refused {
                 lease: COMMAND.into(),
+                peer: DIALED,
                 reason: GrantRefusal::NotGranted,
+                asked: Asked::Command {
+                    argv: vec!["echo".into(), "a".into()],
+                    cwd: None,
+                    asked_timeout_ms: 1_000,
+                },
             },
         ]
     );
@@ -1053,6 +1067,7 @@ async fn i5_a_command_timeout_is_narrowed_recorded_and_run_with() {
         gateway.ledger.entries()[0],
         LedgerEntry::CommandGranted {
             lease: COMMAND.into(),
+            peer: DIALED,
             argv: vec!["echo".into(), "a".into()],
             cwd: None,
             timeout_ms: 400,
@@ -1168,7 +1183,12 @@ async fn a_sandbox_the_host_cannot_enforce_is_refused() {
         gateway.ledger.entries(),
         [LedgerEntry::Refused {
             lease: LEASE.into(),
+            peer: Peer::Ssh,
             reason: GrantRefusal::SandboxUnavailable,
+            asked: Asked::Agent {
+                agent: "claude".into(),
+                sandbox: Sandbox::None,
+            },
         }]
     );
     assert!(gateway.launcher.launched.lock().unwrap().is_empty());
@@ -2400,6 +2420,7 @@ async fn a_command_lease_runs_its_command_once_and_its_ran_ends_it() {
         [
             LedgerEntry::CommandGranted {
                 lease: COMMAND.into(),
+                peer: Peer::Ssh,
                 argv: vec!["echo".into(), "a".into(), "b".into()],
                 cwd: Some("sub".into()),
                 timeout_ms: 1_000,
@@ -2477,7 +2498,13 @@ async fn a_command_lease_is_refused_with_its_reason() {
     assert!(gateway.commands.ran.lock().unwrap().is_empty());
     assert!(gateway.ledger.entries().contains(&LedgerEntry::Refused {
         lease: COMMAND.into(),
+        peer: Peer::Ssh,
         reason: GrantRefusal::InvalidCommand,
+        asked: Asked::Command {
+            argv: vec!["echo".into()],
+            cwd: Some("../out".into()),
+            asked_timeout_ms: 1_000,
+        },
     }));
 }
 

@@ -211,3 +211,25 @@ fn a_change_past_the_bound_is_refused_and_writes_nothing() {
     grants.change(&gateway(0), |_| Ok::<_, ()>(None)).unwrap();
     assert_eq!(grants.read().unwrap().len(), peers.len() - 1);
 }
+
+/// A peer named twice is not this shape, in either order: the file is
+/// unreadable, never read as the last of the two.
+#[test]
+fn a_peer_named_twice_is_refused_in_either_order() {
+    let wide = r#"{"agents":"*","commands":{"maxTimeoutMs":3600000}}"#;
+    let narrow = r#"{"agents":["claude"]}"#;
+    for (first, second) in [(wide, narrow), (narrow, wide)] {
+        for name in ["ssh".to_owned(), peer_name(&gateway())] {
+            let directory = private_directory();
+            write_private(
+                directory.path(),
+                &format!(r#"{{"schemaVersion":1,"peers":{{"{name}":{first},"{name}":{second}}}}}"#),
+            );
+            let grants = FileGrants::new(directory.path());
+            let refused = grants.read().unwrap_err();
+            assert!(matches!(refused, GrantsError::Unreadable(_)), "{refused}");
+            assert!(refused.to_string().contains("more than once"), "{refused}");
+            assert!(grants.entry(&Peer::Ssh).is_err());
+        }
+    }
+}

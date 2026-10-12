@@ -4,6 +4,7 @@
 //! ```text
 //! Peer (ssh, or a dialed gateway's pin) ──▶ its PeerGrant, or none
 //!   none ──▶ granted_to: ssh keeps everything, a dialed gateway nothing
+//! GrantOperation::apply(grant)     ──▶ the grant after an owner's change
 //! admit_agent(grant, agent)        ──▶ Ok, or NotGranted
 //! admit_command(grant, timeout_ms) ──▶ min(asked, maxTimeoutMs), or NotGranted
 //! ```
@@ -176,6 +177,49 @@ impl PeerGrant {
             commands: None,
             ..self
         }
+    }
+}
+
+/// One change this host's owner makes to a peer's grant, as `nessa env
+/// grant` and `nessa env ungrant` ask it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum GrantOperation {
+    /// `agents` beside those granted, and commands of at most `commands`
+    /// each in place of the longest granted before.
+    Grant {
+        agents: Option<Agents>,
+        commands: Option<CommandGrant>,
+    },
+    /// One agent taken back.
+    UngrantAgent(AgentName),
+    /// Commands taken back.
+    UngrantCommands,
+    /// Everything taken back.
+    UngrantAll,
+}
+
+impl GrantOperation {
+    /// `grant` after this change.
+    ///
+    /// # Errors
+    /// [`AllAgents`] when one agent is taken by name from a grant of every
+    /// agent.
+    pub(crate) fn apply(&self, grant: PeerGrant) -> Result<PeerGrant, AllAgents> {
+        Ok(match self {
+            Self::Grant { agents, commands } => {
+                let grant = match agents {
+                    Some(agents) => grant.with_agents(agents.clone()),
+                    None => grant,
+                };
+                match commands {
+                    Some(commands) => grant.with_commands(*commands),
+                    None => grant,
+                }
+            }
+            Self::UngrantAgent(agent) => grant.without_agent(agent)?,
+            Self::UngrantCommands => grant.without_commands(),
+            Self::UngrantAll => PeerGrant::nothing(),
+        })
     }
 }
 

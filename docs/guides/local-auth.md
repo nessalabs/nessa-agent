@@ -350,6 +350,9 @@ what it keeps. A grant only narrows: `config.json` still decides what the
 machine runs at all, and `envServe.commands` must be on for any command. A
 lease the machine did not grant is shown as the environment being
 unavailable, and the `run` tool answers `environment_not_granted`.
+Each change is kept, with who made it and the grant before and after, in
+`environment/grants-audit.jsonl`; a change that cannot be recorded there is
+not made.
 
 To let the agent run single commands on a host with its `run` tool (beside
 `environments_list`), name the host in `environmentTools.commandHosts` on the

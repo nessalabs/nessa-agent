@@ -164,7 +164,25 @@ impl CommandRan {
     }
 }
 
-/// One entry of the environment's own audit of its leases.
+/// What a refused lease asked for, in the fields its grant would have been
+/// recorded with.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(untagged, rename_all_fields = "camelCase")]
+pub(crate) enum Asked {
+    /// A harness of `agent`, enclosed by `sandbox`.
+    Agent { agent: String, sandbox: Sandbox },
+    /// `argv` run once in `cwd`, for at most `asked_timeout_ms`.
+    Command {
+        argv: Vec<String>,
+        cwd: Option<String>,
+        asked_timeout_ms: u64,
+    },
+}
+
+/// One entry of the environment's own audit of its leases. Each grant and
+/// refusal names the peer it was for: `ssh`, or the dialed gateway's pin.
+/// Lines from before a field was added still read: accounting reads only a
+/// line's kind, lease and cleanup.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(
     tag = "kind",
@@ -172,14 +190,21 @@ impl CommandRan {
     rename_all_fields = "camelCase"
 )]
 pub(crate) enum LedgerEntry {
-    /// A lease was admitted, enclosed by `sandbox`.
+    /// A lease was admitted for `peer`, enclosed by `sandbox`.
     Granted {
         lease: String,
+        peer: Peer,
         agent: String,
         sandbox: Sandbox,
     },
-    /// A lease was refused; nothing ran.
-    Refused { lease: String, reason: GrantRefusal },
+    /// A lease `peer` asked for was refused, and what it asked; nothing ran.
+    Refused {
+        lease: String,
+        peer: Peer,
+        reason: GrantRefusal,
+        #[serde(flatten)]
+        asked: Asked,
+    },
     /// A harness is about to start under a lease.
     Started { lease: String, channel: u32 },
     /// The harness did not start.
@@ -217,11 +242,12 @@ pub(crate) enum LedgerEntry {
     /// The connection to the gateway was lost before it answered a
     /// published file: what the gateway made of it is not known here.
     Unanswered { lease: String, artifact: u32 },
-    /// A command lease was admitted to run `argv` once, for at most
-    /// `timeout_ms`: the `asked_timeout_ms`, or shorter as the peer's grant
-    /// has it. Nothing encloses it (`sandbox`).
+    /// A command lease was admitted for `peer` to run `argv` once, for at
+    /// most `timeout_ms`: the `asked_timeout_ms`, or shorter as the peer's
+    /// grant has it. Nothing encloses it (`sandbox`).
     CommandGranted {
         lease: String,
+        peer: Peer,
         argv: Vec<String>,
         cwd: Option<String>,
         timeout_ms: u64,
@@ -756,6 +782,7 @@ impl Served {
         } else {
             match self.ledger.record(&LedgerEntry::Granted {
                 lease: lease.clone(),
+                peer: self.serving.peer,
                 agent: agent.clone(),
                 sandbox,
             }) {
@@ -795,7 +822,9 @@ impl Served {
                 if reason != GrantRefusal::AuditUnavailable {
                     let entry = LedgerEntry::Refused {
                         lease: lease.clone(),
+                        peer: self.serving.peer,
                         reason,
+                        asked: Asked::Agent { agent, sandbox },
                     };
                     if let Err(error) = self.ledger.record(&entry) {
                         tracing::error!(lease, %error, "a refused lease could not be recorded");
@@ -1126,8 +1155,9 @@ impl Served {
                     Err(_) => Err(GrantRefusal::InvalidCommand),
                     Ok(work) => match self.ledger.record(&LedgerEntry::CommandGranted {
                         lease: lease.clone(),
-                        argv,
-                        cwd,
+                        peer: self.serving.peer,
+                        argv: argv.clone(),
+                        cwd: cwd.clone(),
                         timeout_ms: granted,
                         asked_timeout_ms: timeout_ms,
                         sandbox: Sandbox::None,
@@ -1156,7 +1186,13 @@ impl Served {
                 if reason != GrantRefusal::AuditUnavailable {
                     let entry = LedgerEntry::Refused {
                         lease: lease.clone(),
+                        peer: self.serving.peer,
                         reason,
+                        asked: Asked::Command {
+                            argv,
+                            cwd,
+                            asked_timeout_ms: timeout_ms,
+                        },
                     };
                     if let Err(error) = self.ledger.record(&entry) {
                         tracing::error!(lease, %error, "a refused command lease could not be recorded");

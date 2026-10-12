@@ -71,6 +71,7 @@ lease_protocol!(
     "../env_serve/infrastructure/outbox.rs",
     "../env_serve/infrastructure/dial.rs",
     "../env_serve/infrastructure/pairing.rs",
+    "../env_serve/infrastructure/grant_audit.rs",
     "../env_serve/infrastructure/grants.rs",
     "../env_serve/infrastructure/timer.rs",
     "../env_serve/install.rs",

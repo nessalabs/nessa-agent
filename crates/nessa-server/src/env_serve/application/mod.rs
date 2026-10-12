@@ -21,8 +21,12 @@ pub(crate) use artifacts::{
     ArtifactOutbox, PublishAnswer, PublishCall, PublishPoint, PublishRefusal, PublishRequest,
     PUBLISH_POINT_VARIABLE,
 };
-pub(crate) use grants::PeerGrants;
+pub(crate) use grants::{
+    change_grant, ChangeFailed, GrantAudit, GrantChange, GrantOutcome, GrantStore, PeerGrants,
+};
 pub(crate) use redial::{redial, Backoff};
+#[cfg(test)]
+pub(crate) use serve::Asked;
 pub(crate) use serve::{
     refuse, serve, CommandRan, CommandRunner, CommandStop, HarnessLauncher, LeaseLedger,
     LedgerEntry, Runners, ServeTimings, Serving,

@@ -5,9 +5,11 @@
 //! ```text
 //! env grant / ungrant [--peer P] ──▶ the peer: P, or the gateway this
 //!   machine's pairing approved (FilePairingEnvironment), or ssh
-//!   ──▶ FileGrants::change: what the peer has now (its entry, or the
-//!       defaults) ──▶ granted more / less ──▶ written, or the entry removed
-//!       when it is the peer's defaults again ──▶ every entry printed
+//!   ──▶ change_grant(FileGrants, FileGrantAudit, SystemClock, this account)
+//!       ──▶ what the peer has now (its entry, or the defaults) ──▶ granted
+//!       more / less ──▶ the change audited in grants-audit.jsonl ──▶
+//!       written, or the entry removed when it is the peer's defaults again
+//!   ──▶ every entry printed
 //! env grants ──▶ FileGrants::read ──▶ every entry printed
 //! ```
 //!
@@ -16,14 +18,17 @@
 //! file again at every lease, so a change applies from the next one, and
 //! the leases already running go on.
 use super::env_serve_command::environment_directory;
+use super::install_command::local_account_id;
+use super::local_auth::SystemClock;
 use crate::{
     app::dependencies::RuntimeDependencies,
     cli::entrypoint::{GrantedAgents, Ungranted},
     core::RunError,
     env_serve::{
-        domain::{granted_to, AgentName, Agents, AllAgents, CommandGrant, Peer, PeerGrant},
+        application::{change_grant, ChangeFailed},
+        domain::{AgentName, Agents, CommandGrant, GrantOperation, Peer},
         infrastructure::{
-            parse_peer, peer_name, printed, Changed, FileGrants, FilePairingEnvironment,
+            parse_peer, peer_name, printed, FileGrantAudit, FileGrants, FilePairingEnvironment,
         },
     },
 };
@@ -56,18 +61,7 @@ pub(super) async fn grant(
         .transpose()?;
     let directory = environment_directory()?;
     let peer = peer_named(&directory, peer).await?;
-    let grants = FileGrants::new(&directory);
-    change(&grants, &peer, |current| {
-        let grant = match agents {
-            Some(agents) => current.with_agents(agents),
-            None => current,
-        };
-        Ok(match commands {
-            Some(commands) => grant.with_commands(commands),
-            None => grant,
-        })
-    })?;
-    print(&grants)
+    change(&directory, peer, GrantOperation::Grant { agents, commands })
 }
 
 /// `nessa env ungrant`: take `what` back from `peer`.
@@ -76,24 +70,14 @@ pub(super) async fn grant(
 /// The peer or agent is not one, an agent is taken by name from a grant
 /// of every agent, or the grants could not be read or written.
 pub(super) async fn ungrant(peer: Option<&str>, what: Ungranted) -> Result<(), RunError> {
-    let agent = match &what {
-        Ungranted::Agent(name) => Some(agent_name(name)?),
-        Ungranted::Commands | Ungranted::All => None,
+    let operation = match what {
+        Ungranted::Agent(name) => GrantOperation::UngrantAgent(agent_name(&name)?),
+        Ungranted::Commands => GrantOperation::UngrantCommands,
+        Ungranted::All => GrantOperation::UngrantAll,
     };
     let directory = environment_directory()?;
     let peer = peer_named(&directory, peer).await?;
-    let grants = FileGrants::new(&directory);
-    change(&grants, &peer, |current| match (what, agent) {
-        (Ungranted::Agent(_), Some(agent)) => current.without_agent(&agent).map_err(|AllAgents| {
-            RunError::Agent(format!(
-                "{} is granted every agent: ungrant --all, then grant the agents it keeps",
-                peer_name(&peer)
-            ))
-        }),
-        (Ungranted::Commands, _) => Ok(current.without_commands()),
-        (Ungranted::All | Ungranted::Agent(_), _) => Ok(PeerGrant::nothing()),
-    })?;
-    print(&grants)
+    change(&directory, peer, operation)
 }
 
 /// `nessa env grants`: every entry, as JSON on standard output.
@@ -104,24 +88,31 @@ pub(super) fn grants() -> Result<(), RunError> {
     print(&FileGrants::new(&environment_directory()?))
 }
 
-/// Change `peer`'s grant with `change`, which is given what the peer has
-/// now, its defaults when it has no entry. A grant equal to its defaults is
-/// kept as no entry, so the defaults stay the only statement of it.
-fn change(
-    grants: &FileGrants,
-    peer: &Peer,
-    change: impl FnOnce(PeerGrant) -> Result<PeerGrant, RunError>,
-) -> Result<(), RunError> {
-    let defaults = granted_to(peer, None);
-    grants
-        .change(peer, |entry| {
-            let changed = change(granted_to(peer, entry))?;
-            Ok((changed != defaults).then_some(changed))
+/// Make `operation` to `peer`'s grant, audited as this account's, then
+/// print every entry.
+fn change(directory: &Path, peer: Peer, operation: GrantOperation) -> Result<(), RunError> {
+    let grants = FileGrants::new(directory);
+    change_grant(
+        &grants,
+        &FileGrantAudit::new(directory),
+        &SystemClock,
+        &local_account_id(),
+        peer,
+        operation,
+    )
+    .map_err(|failure| {
+        RunError::Agent(match failure {
+            ChangeFailed::AllAgents => format!(
+                "{} is granted every agent: ungrant --all, then grant the agents it keeps",
+                peer_name(&peer)
+            ),
+            ChangeFailed::Store(reason) => reason,
+            ChangeFailed::Audit(reason) => {
+                format!("the change was not made, since it could not be audited: {reason}")
+            }
         })
-        .map_err(|failure| match failure {
-            Changed::Grants(error) => RunError::Agent(error.to_string()),
-            Changed::Refused(refused) => refused,
-        })
+    })?;
+    print(&grants)
 }
 
 fn print(grants: &FileGrants) -> Result<(), RunError> {

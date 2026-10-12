@@ -22,17 +22,21 @@
 //!
 //! ```text
 //! FileGrants::entry ──▶ open (private, bounded) ──▶ parse ──▶ the peer's entry
-//! FileGrants::change ──▶ grants.lock (held) ──▶ read ──▶ change ──▶ encoded
-//!   (past the bound: refused, nothing written) ──▶ a private temporary file
-//!   ──▶ synced ──▶ renamed over grants.json ──▶ directory synced
+//! FileGrants::change_committed ──▶ grants.lock (held) ──▶ read ──▶ change
+//!   ──▶ encoded (past the bound: refused, nothing written) ──▶ a private
+//!   temporary file ──▶ synced ──▶ commit (the audit record kept, or the
+//!   change refused) ──▶ renamed over grants.json ──▶ directory synced
 //! ```
 //!
 //! Arrows are steps, in order. A reader never takes the lock: the rename
 //! means it reads the whole file before a change or after it. A file this
 //! build cannot read (another schema version, larger than the bound, not
-//! private, not this shape) is an error, never taken as no grants.
+//! private, not this shape, a peer named twice) is an error, never taken as
+//! no grants. An owner's change is audited between the sync and the rename
+//! (`GrantStore`, `grant_audit.rs`): if its record cannot be kept, the
+//! temporary file goes and grants.json stays as it was.
 use crate::env_serve::{
-    application::PeerGrants,
+    application::{ChangeFailed, GrantStore, PeerGrants},
     domain::{AgentName, Agents, CommandGrant, Peer, PeerGrant},
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
@@ -64,6 +68,14 @@ pub(crate) fn peer_name(peer: &Peer) -> String {
     match peer {
         Peer::Ssh => SSH.into(),
         Peer::Gateway { pin } => STANDARD.encode(pin),
+    }
+}
+
+/// A peer in the audit and on disk is its one spelling, [`peer_name`]: the
+/// domain's peer holds no text form of its own.
+impl Serialize for Peer {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&peer_name(self))
     }
 }
 
@@ -118,8 +130,38 @@ impl fmt::Display for GrantsError {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Stored {
     schema_version: u32,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "unique_peers")]
     peers: BTreeMap<String, StoredGrant>,
+}
+
+/// The file's peers, each named once: a peer named twice is not this
+/// shape, so the file is unreadable rather than read as the last of them.
+fn unique_peers<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<BTreeMap<String, StoredGrant>, D::Error> {
+    struct Unique;
+    impl<'de> serde::de::Visitor<'de> for Unique {
+        type Value = BTreeMap<String, StoredGrant>;
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("a map of peers, each named once")
+        }
+        fn visit_map<A: serde::de::MapAccess<'de>>(
+            self,
+            mut map: A,
+        ) -> Result<Self::Value, A::Error> {
+            let mut peers = BTreeMap::new();
+            while let Some((name, grant)) = map.next_entry::<String, StoredGrant>()? {
+                if peers.contains_key(&name) {
+                    return Err(serde::de::Error::custom(format!(
+                        "{name} is named more than once"
+                    )));
+                }
+                peers.insert(name, grant);
+            }
+            Ok(peers)
+        }
+    }
+    deserializer.deserialize_map(Unique)
 }
 
 /// Only the version, so another version is named as such whatever else
@@ -194,17 +236,36 @@ impl FileGrants {
         decode(&bytes)
     }
 
-    /// Change `peer`'s entry with `change`, which is given the entry it has
-    /// now and answers the one to keep (`None` removes it), or why not. One
-    /// change at a time; serving reads the file before it or after it.
+    /// [`Self::change_committed`] with nothing to commit: the tests' way
+    /// to set grants. The owner's changes are audited ([`GrantStore`]).
     ///
     /// # Errors
-    /// [`Changed::Grants`] when the file could not be read or written, with
-    /// nothing changed; [`Changed::Refused`] with `change`'s own refusal.
+    /// As [`Self::change_committed`].
+    #[cfg(test)]
     pub(crate) fn change<E>(
         &self,
         peer: &Peer,
         change: impl FnOnce(Option<PeerGrant>) -> Result<Option<PeerGrant>, E>,
+    ) -> Result<(), Changed<E>> {
+        self.change_committed(peer, change, || Ok(()))
+    }
+
+    /// Change `peer`'s entry with `change`, which is given the entry it has
+    /// now and answers the one to keep (`None` removes it), or why not; the
+    /// new file is written and synced, then `commit` must succeed before it
+    /// replaces the old one. One change at a time; serving reads the file
+    /// before it or after it.
+    ///
+    /// # Errors
+    /// [`Changed::Grants`] when the file could not be read or written, and
+    /// [`Changed::Refused`] with `change`'s or `commit`'s own refusal; with
+    /// `grants.json` unchanged, except when it could not be renamed in place
+    /// after `commit`.
+    pub(crate) fn change_committed<E>(
+        &self,
+        peer: &Peer,
+        change: impl FnOnce(Option<PeerGrant>) -> Result<Option<PeerGrant>, E>,
+        commit: impl FnOnce() -> Result<(), E>,
     ) -> Result<(), Changed<E>> {
         let unavailable = |error| Changed::Grants(GrantsError::Unavailable(error));
         let lock = open(&self.directory.join(LOCK), OpenMode::OpenOrCreate).map_err(unavailable)?;
@@ -222,17 +283,31 @@ impl FileGrants {
         if bytes.len() as u64 > MAX_BYTES {
             return Err(Changed::Grants(GrantsError::TooLarge));
         }
-        let written = self.write(&bytes).map_err(unavailable);
+        let mut file = PrivateTempFile::new_in(&self.directory).map_err(unavailable)?;
+        file.as_file_mut().write_all(&bytes).map_err(unavailable)?;
+        file.as_file().sync_all().map_err(unavailable)?;
+        // Refused here, the temporary file goes and grants.json stays.
+        commit().map_err(Changed::Refused)?;
+        file.persist(&self.directory.join(FILE))
+            .map_err(unavailable)?;
+        let synced = sync_directory(&self.directory).map_err(unavailable);
         drop(lock);
-        written
+        synced
     }
+}
 
-    fn write(&self, bytes: &[u8]) -> io::Result<()> {
-        let mut file = PrivateTempFile::new_in(&self.directory)?;
-        file.as_file_mut().write_all(bytes)?;
-        file.as_file().sync_all()?;
-        file.persist(&self.directory.join(FILE))?;
-        sync_directory(&self.directory)
+impl GrantStore for FileGrants {
+    fn change(
+        &self,
+        peer: &Peer,
+        decide: &mut dyn FnMut(Option<PeerGrant>) -> Result<Option<PeerGrant>, ChangeFailed>,
+        commit: &mut dyn FnMut() -> Result<(), ChangeFailed>,
+    ) -> Result<(), ChangeFailed> {
+        self.change_committed(peer, decide, commit)
+            .map_err(|failure| match failure {
+                Changed::Grants(error) => ChangeFailed::Store(error.to_string()),
+                Changed::Refused(refused) => refused,
+            })
     }
 }
 
@@ -316,6 +391,11 @@ fn stored(grant: &PeerGrant) -> StoredGrant {
             max_timeout_ms: commands.max_timeout_ms(),
         }),
     }
+}
+
+/// One peer's grant in the file's own shape, as the audit keeps it.
+pub(super) fn grant_value(grant: &PeerGrant) -> serde_json::Value {
+    serde_json::to_value(stored(grant)).unwrap_or_default()
 }
 
 /// `grants` as `nessa env grants` prints them: the file's own shape.
