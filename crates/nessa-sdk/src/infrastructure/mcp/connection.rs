@@ -18,8 +18,10 @@
 //! payload, and settles the writer as panicked. It then asks the same owner
 //! for [`McpError::ServerGone`] and, after that record, logs a fixed marker
 //! and the server id. The other HTTP session tasks that run a custom adapter
-//! use that same record through [`PanicEnd`]. A recovery completion the
-//! writer drops waits for that settlement outside the recovery deadline:
+//! use that same end through [`PanicEnd`]. Their marker is logged after that
+//! end, from a task shutdown does not join, so a subscriber that blocks cannot
+//! hold the upstream session claim. A recovery completion the writer drops
+//! waits for that settlement outside the recovery deadline:
 //! panic resolves
 //! [`McpError::ServerGone`], and a clean finish or cancellation resolves
 //! [`McpError::Unconfirmed`]. An already-due deadline does not replace that
@@ -590,9 +592,10 @@ pub(super) struct PanicEnd {
 }
 
 impl PanicEnd {
-    /// [`shutdown_and_end`] with [`McpError::ServerGone`], then `task`'s marker.
-    pub(super) fn record(&self, session: &HttpSession, task: HttpTask) {
-        record_session_panic(session, &self.shared, task);
+    /// [`shutdown_and_end`] with [`McpError::ServerGone`]. Does not log. The
+    /// session task logs after this returns, from a task shutdown does not join.
+    pub(super) fn end(&self, session: &HttpSession) {
+        shutdown_and_end(session, &self.shared, McpError::ServerGone);
     }
 }
 

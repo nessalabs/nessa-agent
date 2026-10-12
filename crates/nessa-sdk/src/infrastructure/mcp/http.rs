@@ -33,8 +33,10 @@
 //! DELETE. The DELETE itself is best-effort and bounded by the exchange. A panic
 //! in that DELETE still releases the claimed id and signals [`HttpSession::finished`].
 //! A panic in a reply reader, the legacy stream, the server stream, or recovery
-//! settles that task, asks the connection end owner for [`McpError::ServerGone`],
-//! and only then logs a fixed marker (ADR 392 J28).
+//! settles that task and asks the connection end owner for [`McpError::ServerGone`].
+//! The fixed marker is logged only after that end, on a task shutdown does not
+//! join, so a blocking subscriber cannot hold the upstream session claim
+//! (ADR 392 J28).
 #![deny(missing_docs)]
 
 use super::authorization::{Bearer, RemoteAuthorization};
@@ -221,8 +223,10 @@ struct PostReader {
     _permit: OwnedSemaphorePermit,
 }
 
-/// The watch joins the work. Shutdown aborts the work, then joins the watch,
-/// so a caught panic can still record before the watch observes a clean exit.
+/// The watch joins the work. Shutdown aborts the work, then joins the watch.
+/// A caught panic records [`McpError::ServerGone`] before it returns, so the
+/// watch observes a clean exit. The marker is logged from a task this join
+/// does not wait for.
 struct TrackedTask {
     watch: JoinHandle<()>,
     work: AbortHandle,
@@ -305,16 +309,24 @@ impl HttpSession {
         *self.panic_end.lock().expect("panic end") = Some(end);
     }
 
-    /// Settle is the caller's step, already done. Fence, record
-    /// [`McpError::ServerGone`], then log `task`'s marker. A session exercised
-    /// without a connection has no end owner; the marker is still logged.
+    /// Settle is the caller's step, already done. Fence and record
+    /// [`McpError::ServerGone`]. The marker is logged after that, on a task
+    /// [`Self::shutdown`] does not join. The work and its watch are on that
+    /// join. A subscriber that blocks must not sit on that join: shutdown
+    /// would then never release the upstream session claim. A session
+    /// exercised without a connection has no end owner; the marker is still
+    /// logged from that same detached task.
     fn record_task_panic(&self, task: HttpTask) {
         let end = self.panic_end.lock().expect("panic end").clone();
         if let Some(end) = end {
-            end.record(self, task);
-        } else {
-            log_task_panic(self.server(), task);
+            end.end(self);
         }
+        let server = self.server();
+        // Detach. Joining this log would put a blocking subscriber back on the
+        // shutdown path this function just started.
+        drop(self.runtime.spawn(async move {
+            log_task_panic(server, task);
+        }));
     }
 
     /// Record the HTTP writer task's outcome once. Later calls keep the first.
@@ -1370,10 +1382,12 @@ async fn settled_as_panic(mut settled: watch::Receiver<Option<bool>>) -> bool {
     }
 }
 
-/// Run `work` on the session runtime. A caught panic settles, asks the
-/// connection end owner for [`McpError::ServerGone`], then logs. The watch
-/// does that only when a panic still fails the task. The returned receiver is
-/// the task's settlement; only the legacy writer keeps it.
+/// Run `work` on the session runtime. A caught panic settles and asks the
+/// connection end owner for [`McpError::ServerGone`] before this task returns.
+/// The marker is logged from a task shutdown does not join. The watch asks for
+/// that end only when a panic still fails the task, and it does not log on
+/// the joined task either. The returned receiver is the task's settlement;
+/// only the legacy writer keeps it.
 ///
 /// Callers hold the readers lock across this call and the push of the returned
 /// task. Shutdown takes that same lock, so the task is already visible to the
@@ -1404,8 +1418,8 @@ fn spawn_tracked(
 }
 
 /// Join `task`. A panic that still fails it is not a second end owner:
-/// settle, then the same `ServerGone` record the caught path uses.
-/// A cancellation records nothing.
+/// settle, then the same `ServerGone` end the caught path uses. The marker
+/// is logged off this task. A cancellation records nothing.
 pub(super) async fn watch_http_task(
     task: JoinHandle<()>,
     weak: Weak<HttpSession>,

@@ -21,13 +21,14 @@
 //! HttpSession owns binding claims and the shared authorized modern POST policy.
 //! A panicked HTTP writer settles that outcome, records ServerGone, then logs
 //! the marker. A reply reader, legacy stream, server stream, or recovery
-//! panic uses that same record. A recovery completion the writer drops waits
+//! panic records that same end, then logs its marker from a task shutdown
+//! does not join. A recovery completion the writer drops waits
 //! for the settlement, outside the recovery deadline, before choosing an end
 //! cause. Request and response debug output keeps scheme, host, an explicit
 //! port, header names, and a body length. An adapter's own panic
 //! string is the host app's responsibility.
-//! Its watch joins a panic that still fails the task, asks that same owner,
-//! and then logs the same marker.
+//! Its watch joins a panic that still fails the task and asks that same owner.
+//! The marker is logged off that joined task.
 //! Shutdown releases a claimed session id even when DELETE panics.
 //! ```
 //!

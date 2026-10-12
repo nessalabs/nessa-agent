@@ -10,7 +10,7 @@ use crate::infrastructure::clock::RuntimeClock;
 use async_trait::async_trait;
 use serde_json::json;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 use tokio::sync::{watch, Notify, Semaphore};
 use uuid::Uuid;
@@ -338,7 +338,18 @@ fn watch_marker(marker: &'static str) -> Watching {
 }
 
 impl Watching {
-    fn assert_secret_stays_out(&self) {
+    async fn assert_secret_stays_out(&self) {
+        // The marker is logged on a detached task, after the end. Yield until
+        // that task runs. The bound is the hang guard, not a timer sync.
+        bounded(async {
+            loop {
+                if self.text.lock().expect("log").contains(self.marker) {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
         let text = self.text.lock().expect("log").clone();
         assert!(
             text.contains(self.marker),
@@ -384,7 +395,7 @@ async fn reply_reader_panic_ends_server_gone() {
         McpError::ServerGone
     );
     assert_eq!(connection.end_cause(), Some(McpError::ServerGone));
-    log.assert_secret_stays_out();
+    log.assert_secret_stays_out().await;
     bounded(finished.wait_for(|done| *done))
         .await
         .expect("finished");
@@ -412,7 +423,7 @@ async fn legacy_stream_panic_ends_server_gone() {
         .expect_err("legacy stream panic");
     assert_eq!(error, McpError::ServerGone);
     assert_eq!(connection.end_cause(), Some(McpError::ServerGone));
-    log.assert_secret_stays_out();
+    log.assert_secret_stays_out().await;
     bounded(finished.wait_for(|done| *done))
         .await
         .expect("finished");
@@ -450,7 +461,7 @@ async fn server_stream_panic_ends_server_gone() {
             .expect_err("server stream panic"),
         McpError::ServerGone
     );
-    log.assert_secret_stays_out();
+    log.assert_secret_stays_out().await;
     bounded(finished.wait_for(|done| *done))
         .await
         .expect("finished");
@@ -492,7 +503,7 @@ async fn recovery_panic_ends_server_gone() {
     );
     assert_ne!(connection.end_cause(), Some(McpError::Timeout));
     assert_ne!(connection.end_cause(), Some(McpError::Unconfirmed));
-    log.assert_secret_stays_out();
+    log.assert_secret_stays_out().await;
     bounded(finished.wait_for(|done| *done))
         .await
         .expect("finished");
@@ -532,7 +543,7 @@ async fn session_task_watch_records_escaped_panic() {
     )
     .await;
     assert_eq!(connection.end_cause(), Some(McpError::ServerGone));
-    log.assert_secret_stays_out();
+    log.assert_secret_stays_out().await;
 }
 
 #[tokio::test]
@@ -563,5 +574,169 @@ async fn unset_owner_still_logs_the_panic_marker() {
         HttpTask::ServerStream,
     )
     .await;
-    log.assert_secret_stays_out();
+    log.assert_secret_stays_out().await;
+}
+
+/// A subscriber that blocks inside the panic marker, as a flush that waits
+/// for session shutdown would. The block is on the log's thread only.
+#[derive(Clone)]
+struct BlockingLog {
+    marker: &'static str,
+    connection: Arc<Mutex<Option<Arc<Connection>>>>,
+    entered: Arc<AtomicBool>,
+    end_before_log: Arc<AtomicBool>,
+    release: Arc<(Mutex<bool>, Condvar)>,
+    text: Arc<Mutex<String>>,
+}
+
+impl tracing::Subscriber for BlockingLog {
+    fn register_callsite(
+        &self,
+        _metadata: &'static tracing::Metadata<'static>,
+    ) -> tracing::subscriber::Interest {
+        tracing::subscriber::Interest::sometimes()
+    }
+
+    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+        *metadata.level() == tracing::Level::ERROR
+    }
+
+    fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+
+    fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+
+    fn event(&self, event: &tracing::Event<'_>) {
+        let mut message = String::new();
+        event.record(&mut Capture(&mut message));
+        if !message.contains(self.marker) {
+            return;
+        }
+        if let Some(connection) = self.connection.lock().expect("connection").clone() {
+            self.end_before_log.store(
+                connection.end_cause() == Some(McpError::ServerGone),
+                Ordering::SeqCst,
+            );
+        }
+        self.entered.store(true, Ordering::SeqCst);
+        let mut released = self.release.0.lock().expect("release");
+        let wait = Duration::from_secs(5);
+        while !*released {
+            let (guard, timed_out) = self
+                .release
+                .1
+                .wait_timeout(released, wait)
+                .expect("release");
+            released = guard;
+            if timed_out.timed_out() {
+                break;
+            }
+        }
+        drop(released);
+        self.text.lock().expect("log").push_str(&message);
+    }
+
+    fn enter(&self, _span: &tracing::span::Id) {}
+
+    fn exit(&self, _span: &tracing::span::Id) {}
+}
+
+#[test]
+fn blocking_panic_log_does_not_hold_the_session_claim() {
+    let release = Arc::new((Mutex::new(false), Condvar::new()));
+    let entered = Arc::new(AtomicBool::new(false));
+    let end_before_log = Arc::new(AtomicBool::new(false));
+    let text = Arc::new(Mutex::new(String::new()));
+    let connection_slot = Arc::new(Mutex::new(None));
+    let subscriber = BlockingLog {
+        marker: "custom HTTP reply reader panicked",
+        connection: Arc::clone(&connection_slot),
+        entered: Arc::clone(&entered),
+        end_before_log: Arc::clone(&end_before_log),
+        release: Arc::clone(&release),
+        text: Arc::clone(&text),
+    };
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .thread_name("panic-log")
+        .on_thread_start({
+            let subscriber = subscriber.clone();
+            move || {
+                let guard = tracing::subscriber::set_default(subscriber.clone());
+                Box::leak(Box::new(guard));
+            }
+        })
+        .build()
+        .expect("runtime");
+    runtime.block_on(async move {
+        tracing::callsite::rebuild_interest_cache();
+        let exchange = Arc::new(ReplyExchange {
+            seen: Seen(Mutex::new(vec![])),
+        });
+        let (connection, session) = open(exchange.clone(), Arc::new(RuntimeClock::new()));
+        bounded(connection.call("initialize", None))
+            .await
+            .expect("initialize")
+            .expect("initialize result");
+        *connection_slot.lock().expect("connection") = Some(Arc::clone(&connection));
+        let mut finished = session.finished();
+        let (error, done) = tokio::join!(
+            bounded(connection.call("tools/list", None)),
+            bounded(finished.wait_for(|done| *done)),
+        );
+        assert_eq!(error.expect_err("reply reader panic"), McpError::ServerGone);
+        done.expect("finished");
+        bounded(async {
+            while !entered.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        assert!(
+            end_before_log.load(Ordering::SeqCst),
+            "panic log ran before ServerGone was recorded"
+        );
+        assert!(
+            !text
+                .lock()
+                .expect("log")
+                .contains("custom HTTP reply reader panicked"),
+            "the marker returned before shutdown finished"
+        );
+        assert_eq!(
+            exchange
+                .seen
+                .count(|request| request.method == HttpMethod::Delete),
+            1
+        );
+        {
+            let mut released = release.0.lock().expect("release");
+            *released = true;
+            release.1.notify_all();
+        }
+        bounded(async {
+            loop {
+                if text
+                    .lock()
+                    .expect("log")
+                    .contains("custom HTTP reply reader panicked")
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        let logged = text.lock().expect("log").clone();
+        assert!(
+            !logged.contains(SECRET)
+                && !logged.contains("secret-path")
+                && !logged.contains("bearer-secret"),
+            "request contents leaked into the log: {logged}"
+        );
+    });
 }
