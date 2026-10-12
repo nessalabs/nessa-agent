@@ -61,7 +61,13 @@ impl Observations {
             ExecutionUpdate::PermissionRequested { id, tool_id, .. } => {
                 validate_observation_id(id.as_str()).map_err(corrupt)?;
                 validate_observation_id(tool_id.as_str()).map_err(corrupt)?;
-                if self.review_ids.contains(id) {
+                // A review and a decline share one identity sequence, so a
+                // deadline notice, which takes its review's id, never names a
+                // decline's notice.
+                if self.review_ids.contains(id)
+                    || ReviewDeclineId::new(id.as_str())
+                        .is_ok_and(|decline| self.declines.contains_key(&decline))
+                {
                     return Err(corrupt(
                         "permission identity is repeated within an invocation",
                     ));
@@ -113,6 +119,13 @@ impl Observations {
             ExecutionUpdate::ReviewDeclined(observation) => {
                 let previous = self.declines.get(observation.id()).copied();
                 match previous {
+                    None if PermissionId::new(observation.id().as_str())
+                        .is_ok_and(|review| self.review_ids.contains(&review)) =>
+                    {
+                        return Err(corrupt(
+                            "declined review identity repeats a permission identity",
+                        ))
+                    }
                     None if observation.stage() == ReviewDeclineStage::Selected => {}
                     Some(previous) => {
                         let ExecutionUpdate::ReviewDeclined(selected) =
@@ -143,14 +156,30 @@ impl Observations {
             // A deadline's answer ends its review as a cancellation does, so
             // a later cancellation of it contradicts the notice. A deadline
             // that cancelled its review comes after that cancellation and
-            // finds nothing pending.
-            ExecutionUpdate::DeadlineAnswered { id, .. } => match self.reviews.remove_entry(id) {
-                Some((id, previous)) => {
+            // finds nothing pending. A notice that is not the review's own
+            // published deadline answered nothing, so it ends nothing.
+            ExecutionUpdate::DeadlineAnswered { id, effect, reason } => {
+                let answered = self.reviews.get(id).is_some_and(|&previous| {
+                    let ExecutionUpdate::PermissionRequested { deadline, .. } =
+                        record.events[previous].update()
+                    else {
+                        unreachable!("review correlation index")
+                    };
+                    deadline.as_ref().is_some_and(|published| {
+                        published.effect() == *effect && published.reason() == reason.as_str()
+                    })
+                });
+                if answered {
+                    let (id, previous) = self
+                        .reviews
+                        .remove_entry(id)
+                        .expect("validated prior request");
                     self.identity_bytes -= id.as_str().len();
                     ObservationUndo::Cancelled(id, previous)
+                } else {
+                    ObservationUndo::None
                 }
-                None => ObservationUndo::None,
-            },
+            }
             ExecutionUpdate::QuestionAsked { id, .. } => {
                 validate_observation_id(id.as_str()).map_err(corrupt)?;
                 if self.asked_ids.contains(id) {

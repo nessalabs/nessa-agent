@@ -881,7 +881,128 @@ async fn custom_storage_cannot_restore_a_cancellation_without_its_original_reque
 // history restores, so the answer is what makes it corrupt.
 #[tokio::test]
 async fn custom_storage_cannot_cancel_a_review_its_deadline_answered() {
-    for answered in [false, true] {
+    let deadline = |effect| {
+        PermissionReviewDeadline::new(
+            PermissionToolClass::ReadOnly,
+            Duration::from_secs(8),
+            effect,
+            "allowed because nobody answered",
+        )
+        .unwrap()
+    };
+    // The published deadline, and whether a matching notice ended the review.
+    let cases = [
+        (Some(deadline(PermissionEffect::Allow)), false, false),
+        (Some(deadline(PermissionEffect::Allow)), true, true),
+        (None, true, false),
+        (Some(deadline(PermissionEffect::Deny)), true, false),
+    ];
+    for (published, noticed, answered) in cases {
+        let (agent, _, storage) = probe(false).await;
+        agent.invoke(input("saved-review"), actor()).await.unwrap();
+        drop(agent);
+        {
+            let mut state = storage.0.lock().unwrap();
+            let saved = state.snapshot.as_mut().unwrap();
+            let decision =
+                PermissionDecision::new(PermissionEffect::Allow, PermissionScope::request());
+            let options = PermissionOptions::new(
+                vec![PermissionOption::new(
+                    PermissionOptionId::new("allow").unwrap(),
+                    "Allow",
+                    decision.clone(),
+                )
+                .unwrap()],
+                &PermissionOfferPolicy::new(vec![decision]).unwrap(),
+            )
+            .unwrap();
+            let id = PermissionId::new("7").unwrap();
+            let execution = saved.invocations[0].request.execution_id.clone();
+            let tool = ToolCallId::new("tool").unwrap();
+            let input = ToolReviewInput {
+                name: "Read".into(),
+                arguments_json: "{}".into(),
+            };
+            let request = PermissionRequest::new(
+                id.clone(),
+                execution.clone(),
+                tool.clone(),
+                options.clone(),
+            );
+            let mut aggregate =
+                ExecutionSession::new(saved.provider_context.recorded().unwrap().clone());
+            aggregate.begin_execution(execution.clone()).unwrap();
+            aggregate
+                .observe_tool(
+                    &execution,
+                    ToolCallUpdate::new(tool.clone(), None, None, None, None, None),
+                )
+                .unwrap();
+            aggregate.request_permission(request).unwrap();
+            let request = aggregate
+                .finish_execution(&execution, Ok(ExecutionOutcome::Completed))
+                .unwrap()
+                .1
+                .remove(0);
+            let cancellation = PermissionCancellation::from_record(
+                saved.provider_context.recorded().unwrap().clone(),
+                request,
+                input.clone(),
+                CancellationOrigin::Runtime,
+            )
+            .unwrap();
+            let mut events = vec![ExecutionUpdate::PermissionRequested {
+                id: id.clone(),
+                tool_id: tool,
+                observation: ToolObservation::default(),
+                input,
+                options,
+                deadline: published,
+            }];
+            if noticed {
+                events.push(ExecutionUpdate::DeadlineAnswered {
+                    id,
+                    effect: PermissionEffect::Allow,
+                    reason: DeadlineReason::new("allowed because nobody answered").unwrap(),
+                });
+            }
+            events.push(ExecutionUpdate::PermissionCancelled(cancellation));
+            for (at, update) in events.into_iter().enumerate() {
+                saved.invocations[0]
+                    .events
+                    .insert(at, ExecutionEvent::new(execution.clone(), update));
+            }
+        }
+        let (_, backend, _) = probe(false).await;
+        let (_, receiver) = mpsc::unbounded_channel();
+        let restored = attached_agent(
+            Arc::new(ProbeFactory {
+                backend,
+                receiver: Mutex::new(Some(receiver)),
+            }),
+            storage.manager().await,
+        )
+        .await;
+        if answered {
+            assert!(
+                matches!(
+                    &restored,
+                    Err(AgentError::Storage(StorageError::Corrupt(_)))
+                ),
+                "a cancellation after the deadline's answer restored"
+            );
+        } else {
+            assert!(restored.is_ok(), "{:?}", restored.err());
+        }
+    }
+}
+
+#[tokio::test]
+async fn custom_storage_cannot_give_a_review_and_a_decline_one_identity() {
+    // The decline's identity, whether it comes before the review, and
+    // whether the review shares it.
+    let cases = [("8", false, false), ("7", false, true), ("7", true, true)];
+    for (decline, before, shared) in cases {
         let (agent, _, storage) = probe(false).await;
         agent.invoke(input("saved-review"), actor()).await.unwrap();
         drop(agent);
@@ -943,13 +1064,15 @@ async fn custom_storage_cannot_cancel_a_review_its_deadline_answered() {
                 options,
                 deadline: None,
             }];
-            if answered {
-                events.push(ExecutionUpdate::DeadlineAnswered {
-                    id,
-                    effect: PermissionEffect::Allow,
-                    reason: DeadlineReason::new("allowed because nobody answered").unwrap(),
-                });
-            }
+            let declined = ExecutionUpdate::ReviewDeclined(ReviewDeclineObservation::selected(
+                ReviewDeclineId::new(decline).unwrap(),
+                ReviewDecline::new(
+                    Some("Write"),
+                    ReviewDeclineReason::ToolNotReviewable,
+                    RefusalOutcome::Continue,
+                ),
+            ));
+            events.insert(if before { 0 } else { 1 }, declined);
             events.push(ExecutionUpdate::PermissionCancelled(cancellation));
             for (at, update) in events.into_iter().enumerate() {
                 saved.invocations[0]
@@ -967,13 +1090,13 @@ async fn custom_storage_cannot_cancel_a_review_its_deadline_answered() {
             storage.manager().await,
         )
         .await;
-        if answered {
+        if shared {
             assert!(
                 matches!(
                     &restored,
                     Err(AgentError::Storage(StorageError::Corrupt(_)))
                 ),
-                "a cancellation after the deadline's answer restored"
+                "a review and a decline restored under one identity"
             );
         } else {
             assert!(restored.is_ok(), "{:?}", restored.err());
