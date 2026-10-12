@@ -28,12 +28,12 @@
 //! membership was disabled ends an idle connection too, and the leases
 //! running on it as revoked, on both sides. Only the connection differs
 //! from an SSH host's; the leases on it, their frames and their audit are
-//! the same [`SshEnvironment`]'s. A file the host publishes is not fetched
-//! over a paired connection yet: it has no artifact channel, so its
-//! collection is refused.
+//! the same [`SshEnvironment`]'s. A file the host publishes is read over
+//! the lease frames themselves ([`ArtifactTransport::Frames`]), since a
+//! paired connection carries nothing beside them.
 use super::{
     audit::EnvironmentAudit,
-    connector::{ArtifactChannel, ArtifactChannels, LeaseConnection},
+    connector::{ArtifactTransport, LeaseConnection},
     environment::{SshEnvironment, SshTimings},
 };
 use crate::conversation::application::{Environment, EnvironmentFuture, PairedEnvironments};
@@ -41,7 +41,6 @@ use nessa_auth::application::{pairing::DeviceConnectionProof, ports::AccessError
 use nessa_sdk::domain::agent_execution::leases::PeerEnvironment;
 use std::{
     collections::BTreeMap,
-    io,
     sync::{Arc, Mutex, PoisonError},
 };
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -101,7 +100,7 @@ impl PeerEnvironments {
             from_environment,
             to_environment,
             keep,
-            artifacts: Arc::new(NoArtifactChannels),
+            artifacts: ArtifactTransport::Frames,
         };
         environment.serve(proof, connection).await;
     }
@@ -153,17 +152,5 @@ impl PairedEnvironments for PeerEnvironments {
             .filter(|(_, environment)| environment.is_connected())
             .map(|(peer, _)| *peer)
             .collect()
-    }
-}
-
-/// A paired connection carries no artifact channel yet.
-struct NoArtifactChannels;
-
-impl ArtifactChannels for NoArtifactChannels {
-    fn open(&self) -> io::Result<ArtifactChannel> {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "a paired environment's files are not fetched yet",
-        ))
     }
 }

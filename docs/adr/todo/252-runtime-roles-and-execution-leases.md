@@ -87,6 +87,8 @@ What this decides for the rest, each settled in the map:
   ([Sharing a conversation](../../design/runtime-architecture.md#sharing-a-conversation)).
 - **Files move only as artifacts.** Bytes by digest, held by the
   conversation, on an artifact channel beside the lease's control channel
+  over SSH, and on a paired connection, which has nothing beside it, in
+  bounded ranges on that channel, asked by the gateway
   ([Artifacts across devices](../../design/runtime-architecture.md#artifacts-across-devices)).
 - **The agent gets names, not plumbing.** `environments.list`,
   `thread.create`, `run` and `artifacts.*` through `nessa-mcp`, thin over

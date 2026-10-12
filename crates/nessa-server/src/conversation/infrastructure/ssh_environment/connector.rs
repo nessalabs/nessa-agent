@@ -41,8 +41,20 @@ pub(crate) struct LeaseConnection {
     pub(crate) to_environment: Box<dyn AsyncWrite + Send + Unpin>,
     /// Whatever keeps the stream open; dropping it ends the connection.
     pub(crate) keep: Box<dyn Send>,
-    /// How artifact channels are opened on this same connection.
-    pub(crate) artifacts: Arc<dyn ArtifactChannels>,
+    /// How a published file's bytes are read off the host over it.
+    pub(crate) artifacts: ArtifactTransport,
+}
+
+/// How a connection carries a published file's bytes from the host.
+#[derive(Clone)]
+pub(crate) enum ArtifactTransport {
+    /// Artifact channels beside the lease frames: sftp on the same SSH
+    /// connection.
+    Channels(Arc<dyn ArtifactChannels>),
+    /// The lease frames themselves (`ReadArtifact`, answered
+    /// `ArtifactRead`): a paired connection, which carries nothing beside
+    /// them.
+    Frames,
 }
 
 /// One artifact channel: an sftp session's two directions, and whatever
