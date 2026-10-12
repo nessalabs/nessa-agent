@@ -137,8 +137,10 @@ not show that reason. It says what will happen, from the effect and the time
 left until `dueAtMs`: "If nobody answers within 30 seconds, this is denied
 automatically." When the only refusal stops the turn, that line says the
 agent stops. A reloaded client counts down from `dueAtMs` rather than
-starting `waitMs` again. When the deadline answers, the transcript gains a
-local notice in the past tense: "Allowed automatically" or "Denied
+starting `waitMs` again. The desktop approval card and the floating
+conversation card both read that time again each second, so the count goes
+down while the review is pending. When the deadline answers, the transcript
+gains a local notice in the past tense: "Allowed automatically" or "Denied
 automatically", plus the reason. The audit records the same past-tense
 reason. An app review has no deadline. A restored review keeps the deadline
 on the saved record and the projection omits it, so the card never promises

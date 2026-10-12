@@ -2,6 +2,7 @@ import { deadlinePendingLine } from "@nessa/client"
 import type { Conversation } from "../model"
 import { controlConversation } from "../adapters/store/slice"
 import { useConversationDispatch } from "../adapters/store/hooks"
+import { useNow } from "./clock"
 
 import { ShieldCheck } from "lucide-react"
 import {
@@ -26,6 +27,7 @@ export function ConversationControls({
 }) {
   const dispatch = useConversationDispatch()
   const remote = conversation.remote
+  const now = useNow(1000)
   return (
     <div className="flex flex-col gap-3 text-sm">
       {remote?.truncated ? (
@@ -55,7 +57,7 @@ export function ConversationControls({
               <ToolApprovalTitle>{permission.title}</ToolApprovalTitle>
               <ToolApprovalDescription>
                 {permission.deadline
-                  ? `${permission.toolName}. ${deadlinePendingLine(permission.deadline, Date.now())}`
+                  ? `${permission.toolName}. ${deadlinePendingLine(permission.deadline, now)}`
                   : permission.toolName}
               </ToolApprovalDescription>
             </ToolApprovalHeading>
