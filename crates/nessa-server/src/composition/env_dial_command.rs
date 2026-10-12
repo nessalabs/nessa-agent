@@ -11,6 +11,10 @@
 //!   ──▶ compose, as env serve does (lock, ledger, launcher)
 //!   ──▶ redial(dial, Composed::serve as the gateway the pin names) until
 //!   SIGINT or SIGTERM ──▶ finish
+//! with --drain-deadline, the first SIGINT or SIGTERM drains instead: the
+//!   connection being served ends every lease with its cleanup and closes,
+//!   nothing is dialed again ──▶ finish; stop_past_deadline closes it at the
+//!   deadline, and a second signal exits at once
 //! ```
 //!
 //! Arrows are construction, then calls in order. The credential the
@@ -22,7 +26,7 @@ use crate::{
     core::RunError,
     device_pairing::infrastructure::TlsStream,
     env_serve::{
-        application::{self, redial, Backoff, NotApproved},
+        application::{self, redial, stop_past_deadline, Backoff, NotApproved},
         domain::Peer,
         infrastructure::{dial, Approved, FilePairingEnvironment, TokioTimer},
     },
@@ -63,9 +67,12 @@ pub(super) async fn enroll(address: &str, code: &str) -> Result<(), RunError> {
     Ok(())
 }
 
-/// `nessa env dial ADDRESS`: once the owner has approved this machine,
-/// serve the gateway at `address` over connections this machine dials,
-/// until SIGINT or SIGTERM.
+/// `nessa env dial ADDRESS [--drain-deadline DURATION]`: once the owner has
+/// approved this machine, serve the gateway at `address` over connections
+/// this machine dials, until SIGINT or SIGTERM. With `drain_deadline`, that
+/// signal drains: every lease ends with its cleanup on both sides before
+/// this returns, or the connection is closed once the deadline passes, as a
+/// container's stop grace needs.
 ///
 /// The name is looked up on every connection, not here: started at boot,
 /// before names resolve, it keeps trying.
@@ -73,12 +80,28 @@ pub(super) async fn enroll(address: &str, code: &str) -> Result<(), RunError> {
 /// # Errors
 /// The address is not `HOST:PORT`, this machine is not paired, this host
 /// cannot serve, or its pairing cannot dial.
-pub(super) async fn dial_in(address: &str) -> Result<(), RunError> {
+pub(super) async fn dial_in(
+    address: &str,
+    drain_deadline: Option<Duration>,
+) -> Result<(), RunError> {
     check_address(address)?;
-    let (stop, stopping) = watch::channel(false);
-    let signals = tokio::spawn(stop_on_signal(stop));
-    let served = approved_then_served(address, stopping).await;
+    let stop = Arc::new(watch::channel(false).0);
+    let stopping = stop.subscribe();
+    let (drain, draining) = watch::channel(false);
+    let deadline = drain_deadline.map(|deadline| {
+        let (stop, draining) = (stop.clone(), draining.clone());
+        tokio::spawn(async move {
+            stop_past_deadline(draining, deadline, &TokioTimer::new(), &stop).await;
+        })
+    });
+    // Without a deadline nothing drains: the signal stops, as before.
+    let drain = drain_deadline.is_some().then_some(drain);
+    let signals = tokio::spawn(on_signal(stop, drain));
+    let served = approved_then_served(address, stopping, draining).await;
     signals.abort();
+    if let Some(deadline) = deadline {
+        deadline.abort();
+    }
     served
 }
 
@@ -87,13 +110,41 @@ pub(super) async fn dial_in(address: &str) -> Result<(), RunError> {
 async fn approved_then_served(
     address: &str,
     stopping: watch::Receiver<bool>,
+    draining: watch::Receiver<bool>,
 ) -> Result<(), RunError> {
-    let Some((identity, pin)) = approval(address, &stopping).await? else {
+    // A drain asked before anything is served has nothing to drain: it
+    // stops the wait for approval as stop does.
+    // Each resolves only once asked: a sender gone (no drain without a
+    // deadline) never asks.
+    let (waiting, drained) = (stopping.clone(), draining.clone());
+    let (asked, asking) = watch::channel(false);
+    let either = tokio::spawn(async move {
+        tokio::select! {
+            () = stopped(waiting) => {}
+            () = stopped(drained) => {}
+        }
+        let _ = asked.send(true);
+    });
+    let approved = approval(address, &asking).await;
+    let Some((identity, pin)) = approved? else {
+        either.abort();
         return Ok(());
     };
     tracing::info!(%address, "approved; serving the gateway");
-    let composed = compose().await.map_err(|(_, failure)| failure)?;
-    let served = serve_dialing(&composed, address, identity, pin, stopping).await;
+    // Composing can wait on the serve lock; a stop or drain asked then
+    // still has nothing to drain, so it ends the wait. The wait holds
+    // nothing until it returns, so dropping it leaves nothing behind.
+    let composed = tokio::select! {
+        biased;
+        () = stopped(asking) => None,
+        composed = compose() => Some(composed),
+    };
+    either.abort();
+    let Some(composed) = composed else {
+        return Ok(());
+    };
+    let composed = composed.map_err(|(_, failure)| failure)?;
+    let served = serve_dialing(&composed, address, identity, pin, stopping, draining).await;
     composed.finish().await;
     served
 }
@@ -138,7 +189,9 @@ async fn serve_dialing(
     identity: Arc<NativeIdentity>,
     pin: [u8; 44],
     stopping: watch::Receiver<bool>,
+    draining: watch::Receiver<bool>,
 ) -> Result<(), RunError> {
+    let drain = draining.clone();
     redial(
         || {
             let identity = identity.clone();
@@ -161,13 +214,15 @@ async fn serve_dialing(
         |stream, stopping| {
             // Each connection was dialed to the gateway holding this pin: its
             // grants are that gateway's.
+            let drain = drain.clone();
             serve_until_stopped(stream, stopping, |input, output| {
-                composed.serve(Peer::Gateway { pin }, input, output)
+                composed.serve(Peer::Gateway { pin }, input, output, drain)
             })
         },
         Backoff::default(),
         &TokioTimer::new(),
         stopping,
+        draining,
     )
     .await
     .map_err(|error| RunError::Agent(format!("{address}: {error}")))
@@ -199,9 +254,9 @@ async fn stopped(mut stopping: watch::Receiver<bool>) {
     }
 }
 
-/// The first SIGINT or SIGTERM asks stop; a second, while stopping drains,
-/// exits at once.
-async fn stop_on_signal(stop: watch::Sender<bool>) {
+/// The first SIGINT or SIGTERM asks a drain when there is one to ask, and
+/// stop otherwise; a second, while either is under way, exits at once.
+async fn on_signal(stop: Arc<watch::Sender<bool>>, drain: Option<watch::Sender<bool>>) {
     use tokio::signal::unix::{signal, SignalKind};
     let (Ok(mut interrupt), Ok(mut terminate)) = (
         signal(SignalKind::interrupt()),
@@ -214,7 +269,15 @@ async fn stop_on_signal(stop: watch::Sender<bool>) {
         _ = interrupt.recv() => {}
         _ = terminate.recv() => {}
     }
-    let _ = stop.send(true);
+    match &drain {
+        Some(drain) => {
+            tracing::info!("asked to stop: draining every lease first");
+            drain.send_replace(true);
+        }
+        None => {
+            stop.send_replace(true);
+        }
+    }
     tokio::select! {
         _ = interrupt.recv() => {}
         _ = terminate.recv() => {}

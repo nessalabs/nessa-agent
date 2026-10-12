@@ -13,6 +13,10 @@
 //! gateway ── End{lease} ──▶ environment ── Ended{cleanup} ──▶ gateway
 //! environment ── Ending{lease, expired} ──▶ gateway   (past Granted's leaseMs: it stops
 //!   everything) ── gateway ── End{lease} ──▶ environment ── Ended{cleanup} ──▶ gateway
+//! environment ── Ending{lease, drained} ──▶ gateway   (the host is stopping: it ends every
+//!   lease it holds and admits none) ── gateway ── End{lease} ──▶ environment
+//!   ── Ended{cleanup} ──▶ gateway; once every lease is answered the environment
+//!   closes the connection
 //! gateway ── Revoked ──▶ environment   (the gateway no longer lets it serve: it ends every
 //!   lease it holds as revoked and admits none) ── gateway ── End{lease} ──▶ environment
 //!   ── Ended{cleanup} ──▶ gateway, which then closes the connection
@@ -264,6 +268,10 @@ pub enum GrantRefusal {
     /// is admitted on it. Not the owner's grant: the gateway's own
     /// revocation, which the ask crossed.
     Revoked,
+    /// The environment is draining: it is ending every lease it holds before
+    /// it stops, and admits no more. Not the owner's grant: the host going
+    /// away, which the ask crossed.
+    Draining,
 }
 
 /// A sandbox profile on the wire: what encloses a lease's work on the
@@ -319,6 +327,9 @@ pub struct GrantedTerms {
 pub enum EndingCause {
     /// The lease lasted as long as it was granted ([`GrantedTerms::lease_ms`]).
     Expired,
+    /// The environment is draining before it stops: it ends every lease it
+    /// holds, with what that took, rather than leaving them to be lost.
+    Drained,
 }
 
 /// How a command lease's command ended.
@@ -344,6 +355,9 @@ pub enum CommandEnd {
     TimedOut,
     /// The gateway's `End`, or its connection's end, stopped it.
     Stopped,
+    /// Its host is draining before it stops, and stopped it: a system
+    /// stop, not a loss.
+    Drained,
     /// Its program could not be started; nothing ran.
     NotStarted,
     /// The environment could not observe how it ended.
