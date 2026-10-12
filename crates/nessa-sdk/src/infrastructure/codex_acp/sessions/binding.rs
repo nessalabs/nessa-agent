@@ -116,9 +116,11 @@ impl CodexAcpProvider {
             ));
         }
         let text = Modalities::new(true, false, false).expect("text modality is nonempty");
+        let input = Modalities::new(true, config.images.is_some(), false)
+            .expect("text input modality is nonempty");
         let restrictions = BindingRestrictions::new(
             // An effort level is sent (`with_effort_level`); fast mode is not.
-            ModelFeatures::new(text, text, true, true, false),
+            ModelFeatures::new(input, text, true, true, false),
             // Binding ceilings for this first profile, not model or Codex facts.
             // Codex owns its own context window and compacts it without telling
             // Nessa, and takes no per-turn output limit through ACP, so these

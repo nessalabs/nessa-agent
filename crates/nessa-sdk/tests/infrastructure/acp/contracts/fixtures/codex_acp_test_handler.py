@@ -95,7 +95,8 @@ for line in sys.stdin:
         result(msg["id"], {
             "protocolVersion": 1,
             "agentInfo": {"name": name, "title": "Codex", "version": version},
-            "agentCapabilities": {"sessionCapabilities": {"resume": {}}},
+            "agentCapabilities": {"sessionCapabilities": {"resume": {}},
+                                  "promptCapabilities": {"image": mode == "image-input"}},
             "_meta": {"steering": {"supported": True}},
         })
     elif method in ("session/new", "session/resume"):
@@ -214,6 +215,9 @@ for line in sys.stdin:
                 ], "_meta": meta,
             }})
             continue
+        elif mode in ("image-input", "image-plain"):
+            (root / "prompt-observed").write_text(json.dumps(msg["params"]["prompt"]))
+            text("image received")
         else:
             text(msg["params"]["prompt"][0]["text"])
         result(pending, {"stopReason": "end_turn"})
