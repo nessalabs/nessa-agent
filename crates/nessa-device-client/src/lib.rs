@@ -8,6 +8,9 @@ mod infrastructure;
 mod native_session;
 mod saved;
 mod session;
+#[cfg(test)]
+#[path = "../tests/support/private_directory.rs"]
+mod test_support;
 uniffi::setup_scaffolding!();
 pub use failures::*;
 pub use native_session::*;

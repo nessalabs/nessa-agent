@@ -92,6 +92,7 @@ invented disclosure.
 | Offline saved page versus later page | Compare actual full scope/progress/generation; do not combine another snapshot silently |
 | Native buffer/handle lifetime and large progress | Generated ABI linked/executed under Swift 6; owned object/buffer release and UInt64 precision |
 | View serialization exceeds published bound | Explicit serialization failure, no partial view or fabricated NotLoaded |
+| Native fixtures run on Windows versus Unix | Construct private directories through the local-storage owner on both platforms; retain accepted drive-absolute Windows paths instead of producing rejected verbatim paths. CI must exercise the same lifecycle tests, without skipping Windows or weakening storage validation |
 
 Astra medium reviewed the design and identified these ordering requirements before
 implementation. Actual core linking, Swift queue admission/cancellation, paired

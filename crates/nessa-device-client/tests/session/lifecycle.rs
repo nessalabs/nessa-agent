@@ -1,6 +1,7 @@
 //! Admission and scope lifetime use actual private state and held connector effects.
 use super::*;
-use nessa_local_storage::create_directory;
+use crate::test_support::PrivateFixture;
+use nessa_local_storage::create_directory_beneath;
 use std::{
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -56,20 +57,14 @@ impl EnrollmentConnector for Held {
         Err(NativeClientError::Io(ErrorKind::ConnectionRefused))
     }
 }
-fn root() -> tempfile::TempDir {
-    let root = tempfile::tempdir().unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-    }
-    create_directory(&root.path().join("private")).unwrap();
+fn root() -> PrivateFixture {
+    let root = PrivateFixture::new();
+    create_directory_beneath(root.path(), Path::new("private")).unwrap();
     root
 }
 fn compose(root: &Path, connector: Arc<dyn EnrollmentConnector>) -> NativeSession {
-    let root = root.canonicalize().unwrap();
     NativeSession::compose(Dependencies {
-        state: Arc::new(FilePairingState::open(&root, Path::new("private")).unwrap()),
+        state: Arc::new(FilePairingState::open(root, Path::new("private")).unwrap()),
         path: root.join("private/cache.sqlite"),
         address: "127.0.0.1:9".parse().unwrap(),
         connector,

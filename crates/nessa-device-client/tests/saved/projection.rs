@@ -1,17 +1,10 @@
 //! The foreign adapter preserves absence/failure and delegates actual disk reads.
 use super::*;
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
-fn directory() -> tempfile::TempDir {
-    let directory = tempfile::tempdir().unwrap();
-    #[cfg(unix)]
-    std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-    directory
-}
+use crate::test_support::PrivateFixture;
 const CONVERSATION: &str = "00000000-0000-4000-8000-000000000001";
 #[test]
 fn foreign_snapshot_absence_survives_cache_recreation() {
-    let root = directory();
+    let root = PrivateFixture::new();
     let path = root
         .path()
         .join("cache.sqlite")
@@ -39,7 +32,7 @@ fn foreign_snapshot_absence_survives_cache_recreation() {
 }
 #[test]
 fn foreign_invalid_selection_is_a_failure_not_absence() {
-    let root = directory();
+    let root = PrivateFixture::new();
     let cache =
         NativeSavedCache::open(root.path().join("cache.sqlite").to_str().unwrap().into()).unwrap();
     assert!(matches!(
@@ -54,7 +47,7 @@ fn foreign_invalid_selection_is_a_failure_not_absence() {
 }
 #[test]
 fn foreign_direct_concurrent_call_refuses_without_waiting() {
-    let root = directory();
+    let root = PrivateFixture::new();
     let cache =
         NativeSavedCache::open(root.path().join("cache.sqlite").to_str().unwrap().into()).unwrap();
     let _admitted = cache.cache.lock().unwrap();
