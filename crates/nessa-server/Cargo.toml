@@ -92,6 +92,8 @@ security-framework-sys = "2.17"
 [dev-dependencies]
 # Online process tests drive the example's command entry point.
 nessa-client-core = { path = "../nessa-client-core", features = ["cli"] }
+# Actual native-session tests share the existing paired gateway process fixture.
+nessa-device-client = { path = "../nessa-device-client" }
 # Plants an unmarked session record. A production build of this crate does not
 # enable it.
 nessa-sdk = { path = "../nessa-sdk", features = ["test-support"] }

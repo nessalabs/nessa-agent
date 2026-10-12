@@ -21,6 +21,7 @@ use nessa_auth::{
     },
     domain::{pairing::PublicIntent, CredentialId, ResourceId},
 };
+use nessa_protocol::pairing::wire::NativePairingStatus;
 use nessa_protocol::product_contract::generated::{
     CatalogueReadErrorCode, ChangeWatchErrorCode, RecordReadErrorCode,
 };
@@ -29,13 +30,42 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 /// The device's enrollment as the gateway reported it on a pinned connection.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum PinnedStatus {
+pub enum PinnedStatus {
     /// Readable: the receiver the credential is paired with and its epoch now.
-    Active { receiver: Id, access_epoch: u64 },
+    Active {
+        /// Receiver named by the pinned gateway status.
+        receiver: Id,
+        /// Access epoch observed in that status.
+        access_epoch: u64,
+    },
     /// The enrollment ended; the client has ended the record, purging first.
     Terminal,
     /// Any phase before Active; nothing to read and nothing to purge.
     NotActive,
+}
+
+impl PinnedStatus {
+    /// Interpret a status from the existing pinned channel owner for retained
+    /// reads. This classification grants no authority; the gateway authorizes
+    /// each read. Invalid sync receiver identity returns `None`.
+    pub fn from_native(status: &NativePairingStatus) -> Option<Self> {
+        Some(match status {
+            NativePairingStatus::Active {
+                receiver,
+                access_epoch,
+                ..
+            } => Self::Active {
+                receiver: Id::new(receiver.as_str()).ok()?,
+                access_epoch: *access_epoch,
+            },
+            NativePairingStatus::Terminal { .. } => Self::Terminal,
+            NativePairingStatus::Pending(_)
+            | NativePairingStatus::Unclaimed { .. }
+            | NativePairingStatus::Claimed(_)
+            | NativePairingStatus::Approved(_)
+            | NativePairingStatus::Staging(_) => Self::NotActive,
+        })
+    }
 }
 
 /// Original durable purge evidence; returning it again does not repeat it.

@@ -310,3 +310,63 @@ fn only_authority_refusals_ask_status_again() {
         assert!(!asks_status(keeps), "{keeps:?}");
     }
 }
+
+#[test]
+fn published_pinned_classifier_preserves_phase_receiver_and_epoch() {
+    use nessa_auth::domain::pairing::{DisclosedConsent, TerminalCause};
+    use nessa_auth::domain::{AudienceId, OrganizationId, Resource};
+    let public = intent();
+    let consent = Box::new(
+        DisclosedConsent::new(
+            public,
+            AudienceId::new("gateway").unwrap(),
+            ConsentClass::DeviceRead
+                .grant(Resource::new(
+                    OrganizationId::new("org").unwrap(),
+                    ResourceId::new("owner").unwrap(),
+                ))
+                .unwrap(),
+        )
+        .unwrap(),
+    );
+    for status in [
+        NativePairingStatus::Pending(public),
+        NativePairingStatus::Claimed(consent.clone()),
+        NativePairingStatus::Approved(consent.clone()),
+        NativePairingStatus::Staging(consent.clone()),
+    ] {
+        assert_eq!(
+            PinnedStatus::from_native(&status),
+            Some(PinnedStatus::NotActive)
+        );
+    }
+    let active = NativePairingStatus::Active {
+        consent: consent.clone(),
+        credential: CredentialId::new("credential").unwrap(),
+        receiver: ResourceId::new("receiver").unwrap(),
+        access_epoch: 7,
+    };
+    assert_eq!(
+        PinnedStatus::from_native(&active),
+        Some(PinnedStatus::Active {
+            receiver: Id::new("receiver").unwrap(),
+            access_epoch: 7,
+        })
+    );
+    let oversized = NativePairingStatus::Active {
+        consent: consent.clone(),
+        credential: CredentialId::new("credential").unwrap(),
+        receiver: ResourceId::new("r".repeat(nessa_sync::replication::domain::MAX_ID_BYTES + 1))
+            .unwrap(),
+        access_epoch: 7,
+    };
+    assert_eq!(PinnedStatus::from_native(&oversized), None);
+    let terminal = NativePairingStatus::Terminal {
+        consent,
+        cause: TerminalCause::CredentialRevoked,
+    };
+    assert_eq!(
+        PinnedStatus::from_native(&terminal),
+        Some(PinnedStatus::Terminal)
+    );
+}

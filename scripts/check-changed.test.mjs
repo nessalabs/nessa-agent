@@ -70,6 +70,11 @@ test("paths this table does not own run the full local check", () => {
 })
 
 test("each owned crate maps to the package script CI already runs for it", () => {
+  assert.deepEqual(plan(["crates/nessa-device-client/src/session.rs"]).commands, [
+    "server:fmt:check",
+    "server:clippy",
+    "server:test",
+  ])
   assert.deepEqual(plan(["crates/nessa-server/src/lib.rs"]).commands, [
     "server:fmt:check",
     "server:clippy",

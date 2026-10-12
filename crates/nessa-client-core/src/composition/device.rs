@@ -10,14 +10,12 @@
 use super::profile::Profile;
 use crate::composition::clock::MonotonicClock;
 use crate::pairing::{NativeClientError, NativeEnrollmentClient};
-use crate::read_only_sync::application::device::PinnedStatus;
 use nessa_auth::{
     adapters::pairing::{ManualCode, OsEntropy},
     application::pairing::ClientPendingStore,
     domain::pairing::{AttemptOutcome, TerminalCause},
 };
 use nessa_protocol::pairing::wire::NativePairingStatus;
-use nessa_sync::replication::domain::Id;
 use serde_json::{json, Value};
 use std::{
     io::Read,
@@ -110,27 +108,6 @@ pub(super) fn read_code(input: &mut dyn Read) -> Option<ManualCode> {
 #[cfg(test)]
 #[path = "../../tests/composition/read_only_device.rs"]
 mod tests;
-
-/// What the application decides from; `None` for an Active status whose
-/// receiver is not a valid sync identity.
-pub(super) fn pinned(status: &NativePairingStatus) -> Option<PinnedStatus> {
-    Some(match status {
-        NativePairingStatus::Active {
-            receiver,
-            access_epoch,
-            ..
-        } => PinnedStatus::Active {
-            receiver: Id::new(receiver.as_str()).ok()?,
-            access_epoch: *access_epoch,
-        },
-        NativePairingStatus::Terminal { .. } => PinnedStatus::Terminal,
-        NativePairingStatus::Pending(_)
-        | NativePairingStatus::Unclaimed { .. }
-        | NativePairingStatus::Claimed(_)
-        | NativePairingStatus::Approved(_)
-        | NativePairingStatus::Staging(_) => PinnedStatus::NotActive,
-    })
-}
 
 /// Public status fields for stdout: phase, and what Active and Terminal add.
 /// No key, pin or private selector.

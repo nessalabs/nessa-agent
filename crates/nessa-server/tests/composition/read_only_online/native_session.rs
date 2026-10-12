@@ -1,0 +1,159 @@
+//! The native session uses the real paired gateway, physical cache and private scope.
+use super::fixtures::{Gateway, Setup};
+use nessa_client_core::retained::{ReadStop, RetainedTranscript};
+use nessa_device_client::{NativeSession, SessionFailure};
+use nessa_protocol::{conversation::domain::ConversationId, pairing::wire::NativePairingStatus};
+use serde_json::Value;
+use std::{net::SocketAddr, path::Path};
+use uuid::Uuid;
+
+/// Opt-in generated Swift executable, linked against the same shared library.
+/// No executable configured means this explicit host probe is ignored by default.
+#[test]
+#[ignore = "set NESSA_NATIVE_SWIFT_CHECK to the compiled generated-Swift harness"]
+fn generated_swift_runs_paired_native_lifecycle() {
+    let binary =
+        std::env::var_os("NESSA_NATIVE_SWIFT_CHECK").expect("explicit native Swift checker");
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("gateway");
+    let gateway = Gateway::start(&root);
+    let setup: Setup =
+        serde_json::from_slice(&std::fs::read(root.join("setup.json")).unwrap()).unwrap();
+    let profile: Value =
+        serde_json::from_slice(&std::fs::read(root.join("profile.json")).unwrap()).unwrap();
+    let run = |mode: &str| {
+        let output = std::process::Command::new(&binary)
+            .args([
+                mode,
+                profile["stateRoot"].as_str().unwrap(),
+                profile["stateDirectory"].as_str().unwrap(),
+                profile["gatewayAddress"].as_str().unwrap(),
+                &setup.conversation,
+                &setup.receiver,
+                &setup.gateway,
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "Swift {mode}: {} {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        print!("{}", String::from_utf8_lossy(&output.stdout));
+    };
+    run("first");
+    drop(gateway);
+    run("offline");
+    let restarted = Gateway::start(&root);
+    run("resumed");
+    drop(restarted);
+    let _revoked = Gateway::start_mode(&root, "revoke");
+    run("terminal");
+}
+
+#[test]
+fn native_session_keeps_paired_records_offline_reopens_and_purges_on_terminal() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("gateway");
+    let gateway = Gateway::start(&root);
+    let setup: Setup =
+        serde_json::from_slice(&std::fs::read(root.join("setup.json")).unwrap()).unwrap();
+    let profile: Value =
+        serde_json::from_slice(&std::fs::read(root.join("profile.json")).unwrap()).unwrap();
+    let address: SocketAddr = profile["gatewayAddress"].as_str().unwrap().parse().unwrap();
+    let state_root = Path::new(profile["stateRoot"].as_str().unwrap());
+    let state_directory = Path::new(profile["stateDirectory"].as_str().unwrap());
+    let open = || NativeSession::open(state_root, state_directory, address).unwrap();
+    let native = open();
+    let refresh = native.refresh(ReadStop::new()).unwrap();
+    assert!(matches!(
+        refresh.initial().as_ref().unwrap().enrollment(),
+        Ok(NativePairingStatus::Active { .. })
+    ));
+    assert!(refresh.initial().as_ref().unwrap().purge().is_none());
+    assert!(refresh.selection_failure().is_none());
+    assert!(refresh.read().unwrap().result().as_ref().unwrap().complete);
+    assert!(
+        refresh
+            .read()
+            .unwrap()
+            .result()
+            .as_ref()
+            .unwrap()
+            .conversations
+            >= 2
+    );
+    assert!(refresh.read().unwrap().withdrawn().is_empty());
+    assert!(refresh.recheck().is_none());
+    let page = native.catalogue_page(None, 16).unwrap().unwrap();
+    assert_eq!(page.progress().scope.receiver().as_str(), setup.receiver);
+    assert!(page
+        .entries()
+        .iter()
+        .any(|entry| entry.manifest().key.id.as_str() == setup.conversation));
+    let conversation = ConversationId::new(&setup.conversation).unwrap();
+    let RetainedTranscript::Retained(original) =
+        native.transcript(&conversation, Uuid::nil()).unwrap()
+    else {
+        panic!("paired canonical records were not projected");
+    };
+    assert!(original.progress().downloaded() > 0);
+    assert_eq!(
+        original.progress().downloaded(),
+        original.progress().applied()
+    );
+    assert!(original.progress().facts() > 0);
+    let view = serde_json::to_value(original.view()).unwrap();
+    native.close().unwrap();
+    assert!(matches!(
+        native.transcript(&conversation, Uuid::nil()),
+        Err(SessionFailure::Closed)
+    ));
+    drop(gateway);
+    let offline = open();
+    let RetainedTranscript::Retained(saved) =
+        offline.transcript(&conversation, Uuid::nil()).unwrap()
+    else {
+        panic!("offline session lost saved records");
+    };
+    assert_eq!(saved.progress(), original.progress());
+    assert_eq!(serde_json::to_value(saved.view()).unwrap(), view);
+    offline.close().unwrap();
+    let restarted = Gateway::start(&root);
+    let resumed = open();
+    let refresh = resumed.refresh(ReadStop::new()).unwrap();
+    assert!(refresh.read().unwrap().result().as_ref().unwrap().complete);
+    assert!(!refresh.read().unwrap().result().as_ref().unwrap().moved);
+    drop(restarted);
+    let _revoked = Gateway::start_mode(&root, "revoke");
+    let terminal = resumed.refresh(ReadStop::new()).unwrap();
+    let status = terminal.initial().as_ref().unwrap();
+    assert!(matches!(
+        status.enrollment(),
+        Ok(NativePairingStatus::Terminal { .. })
+    ));
+    let purge = status.purge().unwrap().as_ref().unwrap();
+    assert!(purge.records() > 0);
+    assert!(purge.transcripts() > 0);
+    assert!(purge.catalogue_entries() >= 2);
+    assert!(terminal.read().is_none());
+    assert!(terminal.recheck().is_none());
+    assert_eq!(
+        resumed.purge_receipt(&setup.receiver).unwrap().as_ref(),
+        Some(purge)
+    );
+    assert!(matches!(
+        resumed.transcript(&conversation, Uuid::nil()),
+        Err(SessionFailure::NoCredential)
+    ));
+    // Escaped snapshots remain historical owned evidence after terminal purge.
+    assert_eq!(serde_json::to_value(original.view()).unwrap(), view);
+    resumed.close().unwrap();
+    let recovered = open();
+    assert_eq!(
+        recovered.purge_receipt(&setup.receiver).unwrap().as_ref(),
+        Some(purge)
+    );
+    recovered.close().unwrap();
+}

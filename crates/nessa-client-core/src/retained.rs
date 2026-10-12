@@ -36,6 +36,7 @@
 //! that: the rest of the conversations are still asked, only whether they
 //! are granted, so a withdrawal always applies and frees what it held.
 use crate::read_only_sync::application::device::asks_status;
+pub use crate::read_only_sync::application::device::PinnedStatus;
 use crate::read_only_sync::application::driver::{
     run_catalogue, run_records, RecordDriverCause, RecordDriverError,
 };
@@ -71,8 +72,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
+mod active;
 mod device;
 mod saved;
+pub use active::RetainedDeviceReader;
 pub use device::{RetainedEnrollmentClient, RetainedEnrollmentStatus, RetainedPurge};
 pub use saved::{
     RetainedCatalogueEntry, RetainedCataloguePage, RetainedProgress, RetainedTranscript,

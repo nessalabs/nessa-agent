@@ -65,3 +65,55 @@ are implementation requirements, not current phone guarantees.
 ## Consequences
 
 The phone and existing clients share the actual fold/checkpoint rules. Public APIs, explicit reader selection and native binary distribution require tests and platform maintenance. First-slice library exposure is not phone integration or completion of the wider sync goal; native enrollment, retained projection, revocation, artifact recovery and weak-link/device experiments remain explicit gates.
+
+## Native bridge design review
+
+The next slice uses generated C/Swift declarations (UniFFI synchronous exports),
+immutable foreign snapshot objects and a dedicated serial Swift queue with
+admission before enqueueing. It retains one private state/cache scope and one
+runtime; no process-global runtime, second fold or CLI parser. The existing
+`PinnedStatus` classification is promoted from CLI composition into its original
+application device owner for both consumers. Consent correlation remains in
+Auth/protocol. Retained disclosure is per authenticated intent; reopening has no
+invented disclosure.
+
+| Additional native ordering | Required result / verification |
+| --- | --- |
+| Second Swift call before first queued dispatch | Reject Busy before enqueue; direct generated callers also receive Rust Busy |
+| Stop before retained read registration | Retain stop state through registration; existing bounded read wakes |
+| Close before dispatch or while physical read runs | Close admission first, stop/drain actual owner before scope replacement |
+| Repeated close / final foreign handle drop | No reopened admission or premature private lock release |
+| Swift waiter cancels before dispatch or while admitted | Stop latch is reserved before enqueue; admission remains occupied until the queued physical call settles |
+| Swift close waiter cancels, another close joins | One retained drain task continues independently of waiters; new work is refused and replacement waits for actual drain |
+| Last Swift worker reference drops without close | Signal native close and retain the native handle in a queued off-UI drain; no blocking native deallocation on the UI caller |
+| Status, binding load, read, then refusal recheck | One driver admission; preserve separate original status/purge, read/withdrawals and recheck facts |
+| Unknown status delivery after purge | Recover historical durable receipt separately; no claim of absent purge |
+| Offline saved page versus later page | Compare actual full scope/progress/generation; do not combine another snapshot silently |
+| Native buffer/handle lifetime and large progress | Generated ABI linked/executed under Swift 6; owned object/buffer release and UInt64 precision |
+| View serialization exceeds published bound | Explicit serialization failure, no partial view or fabricated NotLoaded |
+
+Astra medium reviewed the design and identified these ordering requirements before
+implementation. Actual core linking, Swift queue admission/cancellation, paired
+reads, device/simulator XCFramework execution and phone repository integration are
+not yet established by that review.
+
+## Bridge implementation evidence (phone wiring remains proposed)
+
+The generated bridge now owns one native private scope/runtime and delegates
+status, purge, read selection and physical cache progress to the existing owners.
+The Swift dispatch adapter reserves admission before enqueue, keeps a stop per
+operation and shares a physical drain task independently of canceled waiters.
+Real paired-gateway execution through Swift covers records/progress, offline
+reopen, unchanged restart and authenticated revocation/purge receipt recovery.
+Release libraries link for arm64 device/simulator; the disposable simulator app
+executes session open, typed refusal, off-UI dispatch and close/reopen. The macOS
+static package executes the paired fixture. Physical phone execution, Nessa's
+repository/authority wiring, remote artifacts and durable deletion are still open.
+
+CI includes the bridge package. Its multi-output library target exposed a test
+runner omission; the runner now recognizes the actual native unit-test executable.
+A reverted target-kind fix fails its regression. The shared gateway suite also
+exposed an existing callback fixture race: channel closure preceded the owning
+task's listener teardown. That test now consumes its existing task-completion
+receipt instead of treating an OS port observation as listener identity. This
+changes verification only, not callback production behavior.

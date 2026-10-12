@@ -1864,3 +1864,29 @@ supervisor, four-case Docker orchestration and its substitute-runner tests.
 The [cleanup state](state/services/sdk/runtime/stop-cancels-owned-work-and-confirms-process-cleanup.md#linux-container-acceptance-630)
 owns its ordering table. Production SDK cleanup remains in
 `crates/nessa-sdk/src/infrastructure/process.rs`.
+
+## Native device foreign adapter (in development)
+
+`crates/nessa-device-client` generates C/Swift declarations over the no-CLI shared
+client core. `src/saved.rs` owns foreign historical selectors and immutable
+snapshot handles; it delegates cache/fold/progress decisions to the existing
+retained owner. `src/infrastructure.rs` provides injected platform clocks at the
+foreign construction boundary. Tests follow the same feature in `tests/saved`.
+The `bindgen` binary is optional host tooling, not a native runtime dependency.
+`src/session.rs` coordinates one physically admitted private scope and delegates
+status/purge/binding/read decisions to core. Its clock/socket/entropy inputs are
+injected; `src/native_session.rs` and `src/failures.rs` own immutable foreign
+representations. Admission/failure tests live in `tests/session`; the server's
+`tests/composition/read_only_online/native_session.rs` drives the actual paired
+gateway and the optional generated Swift probe under `verification/native-device`.
+Core's `retained/active.rs` validates fresh status against the current immutable
+issued record before product selection. Release Apple packaging is verified;
+the actual phone repository remains unfinished under issue 782. This module does not supply native
+authority from a panel token or an arbitrary saved cache target.
+
+`swift/NativeSessionWorker.swift` is the generated API's dispatch adapter: one
+admission reserved before enqueue, a per-call stop latch and a cancellation-independent
+close task. Verification holds actual private scope locks through physical drain.
+`scripts/build-native-device.sh` generates a local Apple Swift package/XCFramework
+from a frozen checkout; generated declarations remain build output, not hand-edited
+source. The package has not yet been wired into Nessa's product repository.
