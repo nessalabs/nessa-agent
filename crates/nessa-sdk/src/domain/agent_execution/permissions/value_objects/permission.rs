@@ -247,13 +247,24 @@ impl PermissionOptions {
     /// and scoped identities. Immutable storage has no spare string/vector capacity.
     /// Callers choose their admission budget; this measurement imposes no policy cap.
     pub fn payload_bytes(&self) -> usize {
-        self.0.iter().fold(0usize, |total, option| {
-            total
+        self.payload_bytes_up_to(usize::MAX)
+    }
+    /// [`Self::payload_bytes`], stopping once the count passes `limit`. A
+    /// result above `limit` says only that the choices are larger than `limit`,
+    /// so sizing a long list does not walk every choice.
+    pub fn payload_bytes_up_to(&self, limit: usize) -> usize {
+        let mut total = 0usize;
+        for option in self.0.iter() {
+            if total > limit {
+                return total;
+            }
+            total = total
                 .saturating_add(std::mem::size_of::<PermissionOption>())
                 .saturating_add(option.id().as_str().len())
                 .saturating_add(option.label().len())
-                .saturating_add(option.decision().payload_bytes())
-        })
+                .saturating_add(option.decision().payload_bytes());
+        }
+        total
     }
     /// Find the admitted option with exact `id`, or None if absent.
     pub fn find(&self, id: &PermissionOptionId) -> Option<&PermissionOption> {

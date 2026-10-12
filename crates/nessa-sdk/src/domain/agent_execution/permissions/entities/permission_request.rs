@@ -150,6 +150,12 @@ impl PermissionRequest {
     /// struct size and any external collection keys. Pending aggregate storage and
     /// returned terminal evidence have different owners and are budgeted separately.
     pub fn payload_bytes(&self) -> usize {
+        self.payload_bytes_up_to(usize::MAX)
+    }
+    /// [`Self::payload_bytes`], with the options sized by
+    /// [`PermissionOptions::payload_bytes_up_to`]. A result above `limit` says
+    /// only that the request is larger than `limit`.
+    pub fn payload_bytes_up_to(&self, limit: usize) -> usize {
         let state_bytes = match &self.state {
             PermissionState::Pending => 0,
             PermissionState::Answered {
@@ -172,7 +178,7 @@ impl PermissionRequest {
             .len()
             .saturating_add(self.execution_id.as_str().len())
             .saturating_add(self.tool_id.as_str().len())
-            .saturating_add(self.options.payload_bytes())
+            .saturating_add(self.options.payload_bytes_up_to(limit))
             .saturating_add(state_bytes)
     }
     /// Resolve the offered option for the matching execution. Returns DifferentExecution, PermissionResolved, or UnknownPermissionOption without changing state on rejection.

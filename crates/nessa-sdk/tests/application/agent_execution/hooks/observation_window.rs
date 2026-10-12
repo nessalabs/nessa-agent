@@ -1266,17 +1266,39 @@ async fn a_substituted_message_clock_times_out_a_slow_hook() {
     }
 }
 
+/// A [`ReleasableHook`] that reports when it is about to return.
+struct ReportingHook {
+    inner: ReleasableHook,
+    returning: Arc<AtomicBool>,
+}
+
+impl InvocationHook for ReportingHook {
+    fn before_permission_review(
+        &self,
+        call: &ProposedToolCall<'_>,
+        observations: &InvocationObservationWindow<'_>,
+    ) -> Result<ToolVerdict, HookError> {
+        let verdict = self.inner.before_permission_review(call, observations);
+        self.returning.store(true, Ordering::SeqCst);
+        verdict
+    }
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn a_verdict_first_seen_after_the_deadline_is_a_timeout() {
     let clock = Arc::new(ManualMessageClock::new());
     let entered = Arc::new(AtomicBool::new(false));
     let release = Arc::new(AtomicBool::new(false));
+    let returning = Arc::new(AtomicBool::new(false));
     let _release = ReleaseOnDrop(release.clone());
     let fixture = open_on_clock(
         script(),
-        vec![Arc::new(ReleasableHook {
-            entered: entered.clone(),
-            release: release.clone(),
+        vec![Arc::new(ReportingHook {
+            inner: ReleasableHook {
+                entered: entered.clone(),
+                release: release.clone(),
+            },
+            returning: returning.clone(),
         })],
         FixtureKnobs {
             turn_cancel: true,
@@ -1300,7 +1322,16 @@ async fn a_verdict_first_seen_after_the_deadline_is_a_timeout() {
     // only runtime thread, so the supervisor next sees both at once.
     clock.advance(std::time::Duration::from_secs(2));
     release.store(true, Ordering::SeqCst);
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    let returned_by = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while !returning.load(Ordering::SeqCst) {
+        assert!(
+            std::time::Instant::now() < returned_by,
+            "the hook never returned"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    // The hook has its verdict; give its blocking task time to complete.
+    std::thread::sleep(std::time::Duration::from_millis(100));
     turn.await.unwrap().expect("timeout is deny-and-continue");
     let answers = fixture.answers.lock().unwrap();
     assert_eq!(answers.len(), 1, "a late allow was accepted");

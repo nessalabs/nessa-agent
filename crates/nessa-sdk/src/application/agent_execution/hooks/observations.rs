@@ -505,8 +505,9 @@ fn sequence_was_cut(events: &[ExecutionEvent], start: usize) -> bool {
 }
 
 /// The event's payload bytes, exact up to the window's byte cap. A larger
-/// result says only that the event is oversized: a tool's elements are not
-/// walked past the cap.
+/// result says only that the event is oversized: a tool's elements and a
+/// review's options are not walked past the cap. Every other part is a fixed
+/// number of strings or bounded by admission, as a question's options are.
 fn payload_bytes(event: &ExecutionEvent) -> usize {
     let limit = InvocationObservationWindow::MAX_PAYLOAD_BYTES;
     match event.update() {
@@ -523,13 +524,13 @@ fn payload_bytes(event: &ExecutionEvent) -> usize {
             .len()
             .saturating_add(input.arguments_json.len())
             .saturating_add(observation.payload_bytes_up_to(limit))
-            .saturating_add(options.payload_bytes()),
+            .saturating_add(options.payload_bytes_up_to(limit)),
         ExecutionUpdate::PermissionCancelled(record) => record
             .input()
             .name
             .len()
             .saturating_add(record.input().arguments_json.len())
-            .saturating_add(record.request().payload_bytes()),
+            .saturating_add(record.request().payload_bytes_up_to(limit)),
         ExecutionUpdate::ReviewDeclined(observation) => {
             observation.decline().declared().map_or(0, str::len)
         }
