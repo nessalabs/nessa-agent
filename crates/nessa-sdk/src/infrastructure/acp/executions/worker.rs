@@ -4,7 +4,7 @@ use super::super::{
     profile::AcpProfile,
     questions::wire as question_wire,
     sessions::{
-        binding::{Command, Completion, DispatchedPrompt, COMMAND_QUEUE_CAPACITY},
+        binding::{Command, Completion, DispatchedPrompt},
         cleanup::ProcessCleanup,
         forwarded::{attach_arguments, attach_forwarded},
         thought_level, AcpConfig,
@@ -1381,18 +1381,16 @@ impl<P: AcpProfile> Worker<P> {
                 Input::PermissionDeadline => {
                     // Answers and cancellations of a due review were admitted
                     // before this wait returned. They decide it. The snapshot
-                    // is taken before anything here is awaited, and it stops
-                    // at the queue's capacity, so a refill cannot postpone
-                    // the deadline or grow without bound. Anything else in
-                    // that snapshot waits until those reviews are settled
+                    // is what the queue held as the deadline won, taken before
+                    // anything here is awaited: each command taken frees a
+                    // slot, and a command admitted into it came after the
+                    // deadline, so it is not taken here
+                    // (`a_command_admitted_after_the_deadline_is_not_in_its_snapshot`).
+                    // Anything else in that snapshot waits until those reviews
+                    // are settled
                     // (`an_unrelated_command_already_queued_does_not_hold_a_due_deadline`).
-                    let mut ready = Vec::new();
-                    while ready.len() < COMMAND_QUEUE_CAPACITY {
-                        match self.commands.try_recv() {
-                            Ok(command) => ready.push(command),
-                            Err(_) => break,
-                        }
-                    }
+                    let admitted = self.commands.len();
+                    let ready = admitted_before_deadline(&mut self.commands, admitted);
                     let mut later = Vec::new();
                     for command in ready {
                         if self.command_answers_due_review(&command) {
@@ -4060,6 +4058,45 @@ fn wait_for_deadline(clock: &dyn Clock, deadline: Option<ClockInstant>) -> Clock
     match deadline {
         Some(deadline) => clock.sleep_until(deadline),
         None => Box::pin(std::future::pending()),
+    }
+}
+
+/// The first `admitted` commands in `queue`: what it held when the deadline
+/// won, counted then, and nothing admitted after.
+///
+/// Taking a command frees its slot, and a sender waiting on a full queue
+/// fills it at once, so draining until the queue is empty could take a
+/// command that arrived after the deadline.
+fn admitted_before_deadline<T>(queue: &mut mpsc::Receiver<T>, admitted: usize) -> Vec<T> {
+    let mut ready = Vec::with_capacity(admitted);
+    while ready.len() < admitted {
+        match queue.try_recv() {
+            Ok(command) => ready.push(command),
+            Err(_) => break,
+        }
+    }
+    ready
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::admitted_before_deadline;
+    use tokio::sync::mpsc;
+
+    #[test]
+    fn a_command_admitted_after_the_deadline_is_not_in_its_snapshot() {
+        let (sender, mut queue) = mpsc::channel(4);
+        sender.try_send("before").unwrap();
+        sender.try_send("also before").unwrap();
+        let admitted = queue.len();
+        // Admitted after the count: a sender that was waiting for the slot
+        // the first taken command frees arrives the same way.
+        sender.try_send("after").unwrap();
+        assert_eq!(
+            admitted_before_deadline(&mut queue, admitted),
+            vec!["before", "also before"]
+        );
+        assert_eq!(queue.try_recv().unwrap(), "after");
     }
 }
 

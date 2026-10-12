@@ -1246,6 +1246,7 @@
         "dueAtMs": {
           "type": "integer",
           "minimum": 1,
+          "maximum": 9007199254740991,
           "description": "Unix milliseconds on the gateway's clock when the deadline decides. A reloaded client counts down from this rather than starting waitMs again, measured from the view's serverNowMs rather than its own clock."
         },
         "effect": {

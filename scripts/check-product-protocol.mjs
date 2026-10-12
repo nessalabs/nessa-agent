@@ -191,6 +191,24 @@ for (const invalid of [
   if (validateView(JSON.parse(JSON.stringify(invalid))))
     throw new Error("Product conversation view accepts an invalid artifact")
 }
+// A deadline's dueAtMs and the view's serverNowMs are compared in a client's
+// numbers, so both stop at the largest integer a client reads exactly.
+const validateDeadline = ajv.getSchema(
+  `${schema.$id}#/$defs/ConversationPermissionDeadline`,
+)
+const deadline = {
+  waitMs: 30000,
+  dueAtMs: Number.MAX_SAFE_INTEGER,
+  effect: "deny",
+  reason: "No human answered in time.",
+  stopsTurn: false,
+}
+if (!validateDeadline(deadline))
+  throw new Error("Product permission deadline rejects the largest exact dueAtMs")
+if (validateDeadline({ ...deadline, dueAtMs: Number.MAX_SAFE_INTEGER + 1 }))
+  throw new Error(
+    "Product permission deadline accepts a dueAtMs a client cannot read exactly",
+  )
 // A tool's MCP identity and structured result: optional, bounded, and closed.
 const validateTool = ajv.getSchema(`${schema.$id}#/$defs/ConversationTool`)
 const tool = {

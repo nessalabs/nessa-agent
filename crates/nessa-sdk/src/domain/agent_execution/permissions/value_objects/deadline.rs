@@ -128,7 +128,8 @@ pub struct PermissionReviewDeadline {
 impl PermissionReviewDeadline {
     /// Retain a wait, an effect, and a reason for `class`.
     ///
-    /// The wait must be positive and at most [`MAX_PERMISSION_DEADLINE`]. The
+    /// The wait must be positive, a whole number of milliseconds, and at most
+    /// [`MAX_PERMISSION_DEADLINE`]. The
     /// reason must contain non-whitespace text, no control character, and at
     /// most [`MAX_DEADLINE_REASON_BYTES`] UTF-8 bytes.
     pub fn new(
@@ -142,6 +143,9 @@ impl PermissionReviewDeadline {
         }
         if wait > MAX_PERMISSION_DEADLINE {
             return Err(ExecutionError::PermissionDeadlineTooLong);
+        }
+        if !wait.subsec_nanos().is_multiple_of(1_000_000) {
+            return Err(ExecutionError::FractionalPermissionDeadline);
         }
         Ok(Self {
             class,
@@ -633,6 +637,18 @@ mod tests {
             ),
             Err(ExecutionError::PermissionDeadlineTooLong)
         );
+        for fractional in [Duration::from_nanos(1), Duration::from_micros(1_500)] {
+            assert_eq!(
+                PermissionReviewDeadline::new(
+                    PermissionToolClass::Other,
+                    fractional,
+                    PermissionEffect::Deny,
+                    reason,
+                ),
+                Err(ExecutionError::FractionalPermissionDeadline),
+                "{fractional:?} cannot be carried as waitMs"
+            );
+        }
         assert_eq!(
             PermissionReviewDeadline::new(
                 PermissionToolClass::Other,
@@ -744,6 +760,7 @@ mod tests {
         for error in [
             ExecutionError::ZeroPermissionDeadline,
             ExecutionError::PermissionDeadlineTooLong,
+            ExecutionError::FractionalPermissionDeadline,
             ExecutionError::ControlCharacterInPermissionReason,
             ExecutionError::MismatchedPermissionDeadline,
             ExecutionError::AllowDeadlineStopsTurn,

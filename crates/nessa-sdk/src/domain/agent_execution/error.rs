@@ -139,6 +139,11 @@ pub enum ExecutionError {
     /// could push the moment past what the clock can reach and leave the
     /// review waiting.
     PermissionDeadlineTooLong,
+    /// A permission deadline's wait is not a whole number of milliseconds.
+    /// The wire and the saved record carry `waitMs`, so a part of a
+    /// millisecond would be lost on the way: a wait under one would read as
+    /// zero, which a client refuses.
+    FractionalPermissionDeadline,
     /// A permission deadline reason holds a control character, so it cannot be
     /// shown on one line.
     ControlCharacterInPermissionReason,
