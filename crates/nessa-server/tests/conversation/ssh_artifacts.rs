@@ -1322,7 +1322,7 @@ async fn a_fetch_given_up_before_its_acceptance_leaves_no_part_and_frees_its_pla
         }
         drop(fetch);
         let unanswered = format!(
-            r#""kind":"fetch_unanswered","lease":"{}","request":"{request}""#,
+            r#""kind":"fetch_unanswered","lease":"{}","request":"{request}#"#,
             leased.lease.as_str()
         );
         tokio::time::timeout(Duration::from_secs(5), async {
@@ -1387,7 +1387,7 @@ async fn a_fetch_given_up_with_its_acceptance_unread_lets_its_part_go() {
     let ledger = host.root.path().join("leases.jsonl");
     let recorded = |kind: &str, request: &str| {
         let line = format!(
-            r#""kind":"{kind}","lease":"{}","request":"{request}""#,
+            r#""kind":"{kind}","lease":"{}","request":"{request}#"#,
             leased.lease.as_str()
         );
         let ledger = ledger.clone();

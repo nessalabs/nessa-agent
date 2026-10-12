@@ -80,7 +80,7 @@ use nessa_protocol::lease::{
 };
 use nessa_sdk::domain::agent_execution::leases::{LeaseEndCause, LeaseRefusal, SshDestination};
 use std::{
-    collections::{hash_map::Entry, BTreeMap, HashMap, HashSet, VecDeque},
+    collections::{hash_map::Entry, BTreeMap, HashMap, HashSet},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, MutexGuard, PoisonError},
     time::Duration,
@@ -99,9 +99,6 @@ const OUTPUT_QUEUE: usize = 128;
 const PIPE_BYTES: usize = 64 * 1024;
 /// Most drops one connection records; more are counted in the log.
 const MAX_RECORDED_DROPS: u32 = 64;
-/// Most requests of fetches given up one lease keeps from being asked
-/// again; older ones may be asked again, their host long since done.
-pub(super) const RETIRED_FETCHES: usize = 64;
 /// How long a stop waits beyond every step the host takes
 /// ([`stop_steps`]) for its answer: the host recording it, and the frames'
 /// way there and back.
@@ -220,12 +217,10 @@ struct LeaseRoute {
     /// the host to offer the file or say why not. Dropped with the route,
     /// which answers each unanswered.
     publishes: HashMap<String, oneshot::Sender<Result<(), PublishFailure>>>,
-    /// Each fetch this gateway asked under it, by request, waiting for the
-    /// host's answers. Dropped with the route, which ends each wait.
+    /// Each fetch this gateway asked under it, by the request it names on
+    /// the wire, waiting for the host's answers. Dropped with the route,
+    /// which ends each wait.
     fetches: HashMap<String, mpsc::Sender<FetchAnswer>>,
-    /// The requests of the last fetches given up before the host's last
-    /// word, oldest first: not asked again under this lease while kept.
-    retired_fetches: VecDeque<String>,
     /// Each read of a published file this gateway asked under it, by
     /// artifact and offset, waiting for the host's bytes or why not.
     /// Dropped with the route, which ends each wait.
@@ -252,6 +247,9 @@ struct Routes {
     /// Leases a transition of which could not be recorded in the audit:
     /// none of their outcomes is settled as confirmed.
     unaudited: HashSet<String>,
+    /// How many fetches this connection has asked: each names itself on
+    /// the wire by its call and this count, so no two asks share a name.
+    fetches_asked: u64,
 }
 
 /// What the host said of a fetch, as the demux hands it on.
@@ -790,7 +788,6 @@ impl HostLink {
                     ending_cause: ending_sender,
                     publishes: HashMap::new(),
                     fetches: HashMap::new(),
-                    retired_fetches: VecDeque::new(),
                     reads: HashMap::new(),
                     gone: gone_sender,
                 },
@@ -1149,38 +1146,31 @@ impl HostLink {
         let Some(channels) = self.file_channels() else {
             return Err(FetchFailure::Refused(FetchRefusal::Unavailable));
         };
-        let frame = ToEnvironment::Fetch {
-            lease: lease.into(),
-            request: request.clone(),
-            destination,
-            digest: file.digest().to_hex(),
-            media_type: file.media_type().as_str().to_owned(),
-            size: file.size(),
-        };
-        // Larger than a frame carries: never queued, so never answered.
-        if encode(&frame).is_err() {
-            return Err(FetchFailure::Refused(FetchRefusal::Invalid));
-        }
-        let mut answers = {
+        let (request, mut answers) = {
             let mut routes = self.routes();
             if routes.closed {
                 return Err(FetchFailure::Unanswered);
             }
-            let Some(route) = routes
+            if !routes
                 .leases
-                .get_mut(lease)
-                .filter(|route| !route.ending && route.published.is_some())
-            else {
+                .get(lease)
+                .is_some_and(|route| !route.ending && route.published.is_some())
+            {
+                return Err(FetchFailure::Refused(FetchRefusal::LeaseEnded));
+            }
+            // Named on the wire by its call and the connection's count, so
+            // an ask never shares a name with one before it, even one given
+            // up whose host has not said its last word: what the host says
+            // of each reaches only the ask that named it.
+            let request = format!("{request}#{}", routes.fetches_asked);
+            routes.fetches_asked += 1;
+            let Some(route) = routes.leases.get_mut(lease) else {
                 return Err(FetchFailure::Refused(FetchRefusal::LeaseEnded));
             };
-            // One ask per request: the caller holds each until answered.
-            if route.fetches.contains_key(&request) || route.retired_fetches.contains(&request) {
-                return Err(FetchFailure::Refused(FetchRefusal::Invalid));
-            }
             // The host says at most two things of one fetch.
             let (answer, answers) = mpsc::channel(2);
             route.fetches.insert(request.clone(), answer);
-            answers
+            (request, answers)
         };
         // From here, however the call ends, its wait is let go; and from
         // the moment its Fetch is queued until the host's last word on it,
@@ -1194,6 +1184,18 @@ impl HostLink {
             request: request.clone(),
             undelivered: false,
         };
+        let frame = ToEnvironment::Fetch {
+            lease: lease.into(),
+            request: request.clone(),
+            destination,
+            digest: file.digest().to_hex(),
+            media_type: file.media_type().as_str().to_owned(),
+            size: file.size(),
+        };
+        // Larger than a frame carries: never queued, so never answered.
+        if encode(&frame).is_err() {
+            return Err(FetchFailure::Refused(FetchRefusal::Invalid));
+        }
         if self.frames.send(frame).await.is_err() {
             return Err(FetchFailure::Unanswered);
         }
@@ -1889,16 +1891,6 @@ impl Drop for Fetching {
         // lease's end. One already asked goes first, as it was asked first.
         let held = routes.leases.get_mut(&self.lease).map(|route| {
             route.fetches.remove(&self.request);
-            // The host may still answer the fetch given up, so its request
-            // is not asked again under the same id, whose late words would
-            // be taken as the new ask's: kept among the lease's last
-            // [`RETIRED_FETCHES`] given up, answered to nobody.
-            if self.undelivered {
-                if route.retired_fetches.len() == RETIRED_FETCHES {
-                    route.retired_fetches.pop_front();
-                }
-                route.retired_fetches.push_back(self.request.clone());
-            }
             match route.ending {
                 true => None,
                 false => route.pumps.clone().try_read_owned().ok(),
