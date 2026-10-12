@@ -669,6 +669,110 @@ async fn an_environment_is_paired_but_never_shared_with() {
     listener.await.unwrap().unwrap();
 }
 
+/// Row K3 (`docs/design/auth/peer-gateways.md`): a hosted worker holds no
+/// read grant outside its leases. Paired as an environment, its key and
+/// credential open a session on the gateway it serves, holding
+/// `environment.serve` alone, and every read on the native channel is
+/// refused `forbidden`: the catalogue, a conversation's records, and a
+/// watch of either. A device the owner shared that conversation with is
+/// let past the same checks with the same calls.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn k3_a_worker_reads_nothing_on_the_gateway_it_serves() {
+    let fixture = Fixture::new().await;
+    let metadata = conversation_store(&fixture);
+    let sessions = sessions_on(
+        &fixture,
+        Arc::new(Devices(fixture.registry.clone())),
+        metadata.clone(),
+    );
+    let (address, stop, listener, _) = fixture.listener_serving(Some(sessions)).await;
+    let worker = pair_as(&fixture, address, "worker", ConsentClass::PeerEnvironment).await;
+    let device = pair(&fixture, address, "device").await;
+    let conversation = Conversation::new(
+        ConversationId::new(&Uuid::new_v4().to_string()).unwrap(),
+        fixture.session.context().organization_id().clone(),
+        fixture.session.context().principal_id().clone(),
+        "panel".into(),
+        "create".into(),
+        1,
+        AgentId::Claude,
+        ConversationModelId::new("model").unwrap(),
+        ConversationApprovalMode::Ask,
+    )
+    .unwrap();
+    let id = conversation.id().clone();
+    metadata.create(conversation).await.unwrap();
+    let shares = ShareConversation {
+        conversations: metadata.as_ref(),
+        receivers: fixture.receivers.as_ref(),
+        grants: metadata.as_ref(),
+        access: fixture.registry.as_ref(),
+        gateway: &gateway(),
+    };
+    let caller = ConversationCaller {
+        organization_id: fixture.session.context().organization_id().clone(),
+        principal_id: fixture.session.context().principal_id().clone(),
+        surface_id: "panel".into(),
+        action_id: "share-device".into(),
+    };
+    assert!(shares
+        .share(
+            caller,
+            id.clone(),
+            CredentialId::new(device.credential.clone()).unwrap(),
+            110
+        )
+        .await
+        .unwrap());
+    // The same calls, made by `paired`: its session's answer, and each
+    // call's.
+    let calls = |paired: &Paired| {
+        let credential = paired.credential.clone();
+        let (receiver, epoch) = (paired.receiver.clone(), paired.epoch.to_string());
+        let saved = paired.store.clone();
+        let conversation = id.to_string();
+        blocking(move || {
+            let mut probe = Probe::open(address, &saved);
+            let nonce = probe.nonce.clone();
+            let ready = probe.authenticate(&credential, &nonce).unwrap();
+            let by_receiver = json!({"receiverId": receiver, "accessEpoch": epoch});
+            let mut in_conversation = by_receiver.clone();
+            in_conversation["conversationId"] = json!(conversation);
+            let calls = [
+                ("conversation.catalogueHead", by_receiver.clone()),
+                ("conversation.watchCatalogue", by_receiver),
+                ("conversation.recordsHead", in_conversation.clone()),
+                ("conversation.watchRecords", in_conversation),
+            ]
+            .map(|(method, params)| (method, probe.call(method, params).unwrap()));
+            (ready, calls)
+        })
+    };
+    // The device, shared with, is let through each check of who may read.
+    let (_, by_device) = calls(&device).await;
+    for (method, answer) in &by_device {
+        assert_ne!(code(answer), "forbidden", "device {method}: {answer}");
+    }
+    // The worker is who it was paired as, holding serving alone, and is
+    // refused each.
+    let (ready, by_worker) = calls(&worker).await;
+    assert_eq!(ready["ok"], true, "{ready}");
+    assert_eq!(
+        ready["payload"]["grants"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|grant| grant["action"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["environment.serve"]
+    );
+    for (method, answer) in &by_worker {
+        assert_eq!(code(answer), "forbidden", "worker {method}: {answer}");
+    }
+    stop.send(()).unwrap();
+    listener.await.unwrap().unwrap();
+}
+
 /// Row H8 (`docs/design/auth/peer-gateways.md`): a paired peer reads, on the
 /// native channel, exactly what the owner granted it, as a device does. The
 /// owner shares one of two conversations with the peer's credential, which

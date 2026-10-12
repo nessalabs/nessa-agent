@@ -730,6 +730,61 @@ sequenceDiagram
   the deadline below `stop_grace_period`, and a compose service per
   organization.
 
+### Two organizations, nothing shared (row K3)
+
+A hosted worker serves one organization because of what already holds,
+not because of a check of its own: a gateway is one organization, a
+pairing names one gateway, and each container keeps its own volume and
+workspace. Row K3 runs two of them side by side, gateways A and B, with
+worker W paired to A and worker X paired to B, and checks that nothing
+crosses:
+
+```mermaid
+sequenceDiagram
+    participant A as Gateway A (organization 1)
+    participant W as Worker W (paired to A)
+    participant X as Worker X (paired to B)
+    participant B as Gateway B (organization 2)
+    W->>A: dial with A's pin and W's key
+    X->>B: dial with B's pin and X's key
+    X-xA: dial with A's pin: X's key is not paired there, refused
+    A->>W: command and agent lease; publish report.txt
+    W-->>A: W's report.txt
+    A-xX: lease on X's name: unreachable, A holds no connection for it
+    A->>W: publish ../x/report.txt
+    W-->>A: refused outsideWorkspace
+    B->>X: command and agent lease; publish report.txt
+    X-->>B: X's report.txt
+```
+
+- **Leases.** A key paired with B is refused at A's door, and with its own
+  pin it does not reach A's key at all. A lease A asks on X's name finds no
+  connection: `PeerEnvironments` keeps only the keys that dialed this
+  gateway, and a name an agent makes up adds nothing.
+- **Workspaces and artifacts.** Each worker publishes from its own
+  workspace, so the same path gives each gateway its own organization's
+  file, and a path that leaves the workspace, even into a neighbour's
+  directory on the same disk, is refused `outsideWorkspace` before it is
+  read. In production the container boundary adds to this; the test does
+  not rely on it.
+- **Tools.** `environments_list`, `run`, `artifacts_publish` and
+  `artifacts_fetch` name environments through the gateway's own paired
+  list, so each gateway's tools see its own worker alone.
+- **Audit.** Each worker's ledger holds its own gateway's leases, every one
+  granted to that one gateway; each gateway's environment audit names its
+  own worker and that worker's workspace, and nothing of the other's.
+- **No read grant outside its leases.** A worker's credential holds
+  `environment.serve` alone. It opens a session on the gateway it serves,
+  and every read there is refused `forbidden`: the catalogue, a
+  conversation's records, and a watch of either. A device the owner shared
+  with is let past the same checks with the same calls. An owner's share to
+  a worker is refused (row I1).
+
+Not built ([#791](https://github.com/nessalabs/nessa-agent/issues/791)):
+pools of workers per organization, placing a conversation on "any worker
+of this organization", and per-organization budgets. A conversation names
+one worker, as it names one SSH host.
+
 ### What the environment grants
 
 Part 1d lets the environment's owner decide what each gateway may lease
@@ -952,6 +1007,7 @@ Each row has at least one test.
 | I10 | A surface follows the agent catalogue (`agents.subscribe`) while a paired environment connects, its connection ends, it connects again and is revoked; a change leaves the catalogue as it was; the follower's grant is lost; it subscribes twice, or unsubscribes with the other kind's method | `PeerEnvironments::connections` moves once each time a connection is admitted and once each time one ends, and once more when one is revoked, each after the connected list has changed; the subscription sends the catalogue `agents.list` answers then, after its reply and again on each move, and nothing when it is the same; moves while a frame waits are one frame; the conversation catalogue's head and list do not move; it is admitted as `agents.list` is (`server.read`, which no peer's credential holds), and a lost grant ends it `refused`; a second is `subscription_duplicate`; each unsubscribe answers `unknown_subscription` for the other's; it ends with its socket, and `source_closed` with its source; the panel's choices replace the list on each frame and stop the subscription on unmount | `connection_changes_are_said_as_a_paired_environment_connects_ends_and_is_revoked`; `the_agent_catalog_is_sent_again_as_paired_environments_come_and_go`; `a_gateway_pairing_no_environments_sends_its_catalog_once`; `changes_while_a_catalog_frame_waits_collapse_into_one_frame`; `paired_environments_coming_and_going_never_move_the_conversation_catalogue`; `a_second_agent_catalog_subscription_is_a_duplicate`; `following_the_agent_catalog_is_admitted_as_reading_it_is`; `each_unsubscribe_stops_only_its_own_kind`; `the_environments_source_closing_ends_the_catalog_subscription`; `an_agent_catalog_frame_is_the_generated_shape`; `replaces the choices with each catalog the follow sends, and stops it on unmount` (`src/panel/ui/use-agent-choices.test.ts`) |
 | K1 | A worker started with `env dial --drain-deadline` is signalled while it holds a harness's lease, a running command and a command never run; a grant crosses the drain; the drain's record cannot be kept; the gateway revokes it while it drains; it holds nothing; the deadline passes | Each lease is recorded `draining` (with its gateway) then `ended` with cause `drained`; the harness is stopped, `Ending{drained}` is said and the gateway's `End` answered with that cleanup; the command is stopped and answers its `Ran` as drained, which the gateway takes as a system stop; the unrun one ends holding nothing, and serving waits for its `Run`, answered never started; a crossing grant is refused `draining`, recorded so; an unrecorded drain still stops and answers `uncertain`; a revocation after it ends nothing twice; serving ends once every drained lease's `End` is asked, at once when nothing is held; on the gateway the lease is recorded ending as `stopped` by `environment_drained`, then ended with E's cleanup, and E leaves the connected list; a drain asked between dials ends the wait and dials no more; past the deadline stop is asked | `k1_a_drain_ends_every_lease_recorded_then_serving_ends_once_answered`; `k1_an_idle_host_asked_to_drain_stops_serving_at_once`; `k1_a_drain_that_cannot_be_recorded_still_stops_and_answers_uncertain`; `k1_a_drain_waits_for_the_run_of_a_command_it_ended_unrun`; `k1_a_drain_asked_while_the_gateway_reads_nothing_ends_the_lease_at_once`; `k1_a_grant_waiting_as_the_drain_is_asked_is_refused`; `k1_a_command_its_host_drained_is_stopped_by_the_system_not_lost`; `k1_an_unrecorded_drain_of_an_unrun_command_answers_its_run_uncertain`; `k1_a_revocation_after_a_drain_ends_the_lease_once_as_drained`; `k1_a_paired_environment_drains_and_both_sides_record_its_cleanup`; `k1_an_environment_drain_is_recorded_stopped_by_the_system_then_ended`; `a_drain_lets_the_connection_end_by_itself_and_dials_no_more`; `a_drain_asked_while_waiting_ends_the_wait`; `a_drain_past_its_deadline_asks_stop` |
 | K2 | `env dial --enroll-code-file` starts on a volume paired with nothing, again before approval, and again after; a volume paired with A starts with B's address and code; a pairing that recorded no address; a file holding no code; a code the gateway never gave | It enrolls once, then each restart sends nothing and finds A's pin; the volume paired with A refuses naming A, and B's invitation stays unclaimed; no recorded address refuses; the file is refused as holding no code; the wrong code is refused and leaves no pairing, so the right one then enrolls | `k2_a_code_file_enrolls_once_then_dials`; `k2_a_volume_paired_to_one_gateway_refuses_enrolling_with_another`; `env_enroll_names_a_gateway_and_a_code_and_env_dial_a_gateway`; and, through the `EnrollingPairing` and `EnrollmentCode` ports, `nothing_paired_records_the_address_then_sends_the_code`, `a_pairing_with_this_gateway_reads_and_sends_nothing`, `a_pairing_with_another_gateway_or_none_recorded_is_refused_untouched`, `a_code_that_cannot_be_read_sends_and_records_nothing`, `an_address_that_cannot_be_recorded_sends_no_code`, `a_gateway_that_refuses_the_code_is_said`, `a_pairing_that_cannot_be_read_enrolls_nothing`, `enrolling_over_a_pairing_keeps_its_recorded_address` |
+| K3 | Gateways A and B, one organization each, with workers W paired to A and X paired to B; X's key dials A, with A's pin and with its own; each gateway runs a command and an agent lease on its own worker and on the other's name; each publishes the same relative path; A asks W for a path into X's workspace; a worker's credential reads the gateway it serves | X is refused at A's door, `permissionDenied` with A's pin and failing with its own; each gateway's commands and leases run on its own worker, and on the other's name are refused `environmentUnreachable`; each gateway's paired list holds its own worker alone; each reads its own organization's file; the path out of W's workspace is refused `outsideWorkspace`; each worker's ledger holds its own gateway's leases, all granted to one gateway, and none of the other's; each gateway's environment audit names its own worker and workspace alone; the worker's session holds `environment.serve` alone, and the catalogue head, catalogue watch, records head and records watch are each refused `forbidden`, while a device shared with is let past them | `k3_two_organizations_share_no_lease_workspace_artifact_tool_or_audit`; `k3_a_worker_reads_nothing_on_the_gateway_it_serves` |
 | H10 | A registry whose owner membership is disabled or not an admin | Refused on open (`owner_membership`). The pairing initiator's membership is what keeps a grantor live; the owner's is the one the registry pins | `a_registry_whose_owner_is_not_an_active_admin_does_not_open` |
 
 ## The dialing side
