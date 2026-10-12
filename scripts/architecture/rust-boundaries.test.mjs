@@ -95,6 +95,44 @@ test("qualified inward values and application runtime coordination remain allowe
   }
 })
 
+test("associated-item names do not become layer or runtime dependencies", () => {
+  for (const name of [
+    "product",
+    "application",
+    "infrastructure",
+    "composition",
+    "adapters",
+    "presentation",
+    "tokio",
+    "serde",
+    "serde_json",
+    "tauri",
+    "reqwest",
+    "axum",
+    "shepherd",
+    "nessa_sync",
+  ]) {
+    for (const source of [
+      `fn call() { Order::${name}(); }`,
+      `fn call() { crate::domain::Order::${name}(); }`,
+    ]) {
+      assert.deepEqual(rustBoundaryViolations("src/domain/value.rs", source), [], source)
+      assert.deepEqual(
+        rustBoundaryViolations("src/application/service.rs", source),
+        [],
+        source,
+      )
+    }
+  }
+  for (const source of [
+    "use crate::product;",
+    "fn call() { crate::product::Order::new(); }",
+    "fn call() { product::Order::new(); }",
+    "#[derive(serde::Serialize)] struct Order;",
+  ])
+    assert.ok(rustBoundaryViolations("src/domain/value.rs", source).length, source)
+})
+
 test("literal and comment text does not create or hide qualified references", () => {
   const literal = String.raw`
     // std::fs::read("file");

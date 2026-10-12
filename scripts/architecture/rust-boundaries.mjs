@@ -1,6 +1,7 @@
 import { existsSync, lstatSync, readdirSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 
+/** Normalize platform path separators for layer classification. */
 export function normalizedPath(path) {
   return path.replaceAll("\\", "/")
 }
@@ -117,6 +118,7 @@ function pureNetValueReference(item) {
   return names.length > 0 && names.every((name) => values.has(name))
 }
 
+/** Check written domain/application dependencies, without resolving Rust names. */
 export function rustBoundaryViolations(path, source) {
   path = normalizedPath(path)
   const domain = /(?:\/domain\/|\/domain\.rs$)/.test(path)
@@ -134,16 +136,23 @@ export function rustBoundaryViolations(path, source) {
         /(?<![\p{ID_Continue}])(?:r#)?[\p{ID_Start}_][\p{ID_Continue}]*(?:\s*::\s*(?:r#)?[\p{ID_Start}_][\p{ID_Continue}]*)+/gu,
       ),
   ].map((match) => match[0])
-  const references = [...imports, ...qualified].map((item) =>
-    item
+  const references = [
+    ...imports.map((item) => ({ item, isImport: true })),
+    ...qualified.map((item) => ({ item, isImport: false })),
+  ].map(({ item, isImport }) => ({
+    item: item
       .trim()
       .replace(/\s*::\s*/g, "::")
       .replace(/\br#/g, "")
       .replace(/^::/, ""),
-  )
+    isImport,
+  }))
   const failures = new Set()
-  for (const item of references) {
-    const names = new Set(item.match(/[\p{ID_Start}_][\p{ID_Continue}]*/gu))
+  for (const { item, isImport } of references) {
+    // An expression's final segment selects an item, not its dependency:
+    // Order::product() is a method call. Imports also admit module names.
+    const dependency = isImport ? item : item.slice(0, item.lastIndexOf("::"))
+    const names = new Set(dependency.match(/[\p{ID_Start}_][\p{ID_Continue}]*/gu))
     if (
       ["infrastructure", "composition", "product", "adapters", "presentation"].some(
         (name) => names.has(name),
