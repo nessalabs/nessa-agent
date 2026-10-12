@@ -14,7 +14,9 @@
 //!   ──▶ its mode set to what a file this user makes gets (0666 less the umask)
 //!   ──▶ the destination resolved again ──▶ link that opened file at the name
 //!         (through /proc/self/fd where there is one, else by the part's path)
-//!   ──▶ what is at the name now is that very file? else unlinked: mismatch
+//!   ──▶ what is at the name now is that very file? else mismatch, and
+//!         taken back only when it is what the link was made from (a part
+//!         swapped in under its path); anything else there is left
 //!         something there ──▶ exactly this file? already placed : occupied
 //!         another file system ──▶ a copy of the opened file beside it,
 //!                                 checked as it is copied, then linked the same way
@@ -31,8 +33,15 @@
 //! held to that file by device and inode; the inbox is a directory only
 //! this user may enter. A placed file has the mode this user's other new
 //! files get, read from the umask once at start ([`note_umask`]).
-use crate::env_serve::application::{ArtifactInbox, Destination, FetchedFile};
-use nessa_protocol::lease::{FetchOutcome, FetchRefusal, MAX_ARTIFACT_PATH_BYTES};
+//!
+//! ```text
+//! take_back(placed) ──▶ its directory opened without following a last link
+//!   ──▶ the name still that very file (device and inode)? unlinked : left
+//! ```
+use crate::env_serve::application::{
+    ArtifactInbox, Destination, FetchedFile, FileIdentity, PlacedFile, Placement,
+};
+use nessa_protocol::lease::{FetchRefusal, MAX_ARTIFACT_PATH_BYTES};
 use sha2::{Digest, Sha256};
 use std::{
     ffi::{CString, OsStr},
@@ -177,17 +186,18 @@ impl FileInbox {
         opened: &mut File,
         resolved: &Resolved,
         file: &FetchedFile,
-    ) -> Result<FetchOutcome, FetchRefusal> {
-        let linked = match link_descriptor(opened, &resolved.directory, &resolved.name) {
-            Some(linked) => linked,
-            None => link_at(part, &resolved.directory, &resolved.name),
+    ) -> Result<Placement, FetchRefusal> {
+        let (linked, from) = match link_descriptor(opened, &resolved.directory, &resolved.name) {
+            Some(linked) => (linked, LinkedFrom::Descriptor),
+            None => (
+                link_at(part, &resolved.directory, &resolved.name),
+                LinkedFrom::Path(part),
+            ),
         };
         match linked {
-            Ok(()) => same_file(resolved, opened).map(|()| FetchOutcome::Placed {
-                path: resolved.path.clone(),
-            }),
+            Ok(()) => same_file(resolved, opened, from).map(Placement::Placed),
             Err(error) if error.raw_os_error() == Some(libc::EEXIST) => {
-                taken(resolved, file).map(|()| FetchOutcome::AlreadyPlaced {
+                taken(resolved, file).map(|()| Placement::AlreadyPlaced {
                     path: resolved.path.clone(),
                 })
             }
@@ -206,7 +216,7 @@ impl FileInbox {
         source: &mut File,
         resolved: &Resolved,
         file: &FetchedFile,
-    ) -> Result<FetchOutcome, FetchRefusal> {
+    ) -> Result<Placement, FetchRefusal> {
         let temporary = c_name(OsStr::new(&format!(
             ".nessa-fetch-{}",
             uuid::Uuid::new_v4().simple()
@@ -230,11 +240,10 @@ impl FileInbox {
                 .map_err(|_| FetchRefusal::PlacingFailed)?;
             copy.sync_all().map_err(|_| FetchRefusal::PlacingFailed)?;
             match link_within(&resolved.directory, &temporary, &resolved.name) {
-                Ok(()) => same_file(resolved, &copy).map(|()| FetchOutcome::Placed {
-                    path: resolved.path.clone(),
-                }),
+                Ok(()) => same_file(resolved, &copy, LinkedFrom::Beside(&temporary))
+                    .map(Placement::Placed),
                 Err(error) if error.raw_os_error() == Some(libc::EEXIST) => taken(resolved, file)
-                    .map(|()| FetchOutcome::AlreadyPlaced {
+                    .map(|()| Placement::AlreadyPlaced {
                         path: resolved.path.clone(),
                     }),
                 Err(_) => Err(FetchRefusal::PlacingFailed),
@@ -300,13 +309,7 @@ impl ArtifactInbox for FileInbox {
         Ok(path)
     }
 
-    fn place(
-        &self,
-        lease: &str,
-        fetch: u32,
-        destination: &str,
-        file: &FetchedFile,
-    ) -> FetchOutcome {
+    fn place(&self, lease: &str, fetch: u32, destination: &str, file: &FetchedFile) -> Placement {
         let part = self.part(lease, fetch);
         let placed = (|| {
             let mut opened = open_nofollow(&part).map_err(|_| FetchRefusal::PlacingFailed)?;
@@ -323,7 +326,37 @@ impl ArtifactInbox for FileInbox {
             Ok(outcome)
         })();
         self.discard(lease, fetch);
-        placed.unwrap_or_else(|reason| FetchOutcome::Refused { reason })
+        placed.unwrap_or_else(Placement::Refused)
+    }
+
+    fn take_back(&self, placed: &PlacedFile) {
+        let path = Path::new(&placed.path);
+        let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+            return;
+        };
+        let directory = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+            .open(parent);
+        let (Ok(directory), Ok(name)) = (directory, c_name(name)) else {
+            tracing::warn!("a fetched file whose placing went unrecorded could not be reached");
+            return;
+        };
+        // Between this check and the unlink another process may still swap
+        // the name; no call removes a name only if it is a given file. And a
+        // file put there after this one was deleted outright may be given
+        // its inode again.
+        match identity_at(&directory, &name) {
+            Ok(there) if there == placed.identity => {
+                if let Err(error) = unlink_at(&directory, &name) {
+                    tracing::warn!(%error, "a fetched file whose placing went unrecorded could not be taken back");
+                }
+            }
+            // Gone, or another file put there since: not this fetch's.
+            _ => tracing::warn!(
+                "a fetched file whose placing went unrecorded was no longer there to take back"
+            ),
+        }
     }
 
     fn discard(&self, lease: &str, fetch: u32) {
@@ -345,27 +378,93 @@ impl ArtifactInbox for FileInbox {
     }
 }
 
-/// Whether what was just linked at `resolved` is `linked` itself, by device
-/// and inode. When it is not (the part was swapped between its check and
-/// the link), what was linked is taken back and the fetch is a mismatch.
-fn same_file(resolved: &Resolved, linked: &File) -> Result<(), FetchRefusal> {
-    let ours = linked.metadata().map_err(|_| FetchRefusal::PlacingFailed)?;
-    let there = open_at(
-        &resolved.directory,
-        &resolved.name,
-        libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK,
-        0,
-    )
-    .and_then(|there| there.metadata());
+/// What a link at the destination was made from.
+#[derive(Clone, Copy)]
+enum LinkedFrom<'a> {
+    /// The hashed file's own descriptor: what was linked is that file.
+    Descriptor,
+    /// The part's path, which another process could have swapped.
+    Path(&'a Path),
+    /// The checked copy's name beside the destination, likewise.
+    Beside(&'a CString),
+}
+
+/// Whether what was just linked at `resolved` is `hashed` itself, by device
+/// and inode, and so which file was placed. When it is not, the fetch is a
+/// mismatch, and what is at the name is taken back only when it is what the
+/// link was made from: a part or copy swapped in under its name between its
+/// check and the link, which this fetch put there. Anything else there was
+/// put by someone else after the link, and is left.
+fn same_file(
+    resolved: &Resolved,
+    hashed: &File,
+    from: LinkedFrom<'_>,
+) -> Result<PlacedFile, FetchRefusal> {
+    let ours = hashed.metadata().map_err(|_| FetchRefusal::PlacingFailed)?;
+    let ours = FileIdentity {
+        device: ours.dev(),
+        inode: ours.ino(),
+    };
+    let there = identity_at(&resolved.directory, &resolved.name);
     match there {
-        Ok(there) if there.dev() == ours.dev() && there.ino() == ours.ino() => Ok(()),
-        _ => {
-            if let Err(error) = unlink_at(&resolved.directory, &resolved.name) {
-                tracing::warn!(%error, "a fetch linked as another file could not be taken back");
+        Ok(there) if there == ours => Ok(PlacedFile {
+            path: resolved.path.clone(),
+            identity: ours,
+        }),
+        Ok(there) => {
+            let linked = match from {
+                LinkedFrom::Descriptor => None,
+                LinkedFrom::Path(part) => {
+                    fs::symlink_metadata(part).ok().map(|source| FileIdentity {
+                        device: source.dev(),
+                        inode: source.ino(),
+                    })
+                }
+                LinkedFrom::Beside(name) => identity_at(&resolved.directory, name).ok(),
+            };
+            // Between this check and the unlink the name may still be
+            // swapped again; no call removes a name only if it is a given
+            // file, so that window stays.
+            if linked == Some(there) {
+                if let Err(error) = unlink_at(&resolved.directory, &resolved.name) {
+                    tracing::warn!(%error, "a fetch linked as another file could not be taken back");
+                }
             }
             Err(FetchRefusal::Mismatch)
         }
+        Err(_) => Err(FetchRefusal::Mismatch),
     }
+}
+
+/// The device and inode of `name` in `directory`, its last link not
+/// followed.
+fn identity_at(directory: &File, name: &CString) -> io::Result<FileIdentity> {
+    // SAFETY: an all-zero `stat` is a valid value to be overwritten.
+    let mut found: libc::stat = unsafe { std::mem::zeroed() };
+    // SAFETY: `name` is NUL-terminated and outlives the call, `directory` is
+    // an open descriptor, and `found` is a valid `stat` to write.
+    let status = unsafe {
+        libc::fstatat(
+            directory.as_raw_fd(),
+            name.as_ptr(),
+            &mut found,
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if status != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // As `MetadataExt::dev` and `ino` widen them: `dev_t` is signed on
+    // some systems, and either may be narrower than 64 bits.
+    #[allow(
+        clippy::unnecessary_cast,
+        clippy::cast_sign_loss,
+        reason = "the field types differ by system"
+    )]
+    Ok(FileIdentity {
+        device: found.st_dev as u64,
+        inode: found.st_ino as u64,
+    })
 }
 
 /// Whether what is at `resolved` is exactly `file`: `Ok` when it is,

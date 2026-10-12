@@ -14,6 +14,8 @@
 //! Delivered{request} ──▶ ArtifactInbox::place: the part as it is on disk,
 //!   its size and SHA-256, then linked at the destination, never over anything
 //!   ──▶ ledger: fetched(outcome) ──▶ Fetched{outcome}
+//!       not recorded ──▶ placed by this fetch? ArtifactInbox::take_back
+//!         ──▶ Fetched{refused: auditUnavailable}
 //! Undelivered{request} ──▶ the part let go ──▶ ledger: fetch_unanswered
 //!   (still being accepted: remembered, and its part let go once made)
 //! a request still held asked again ──▶ logged and dropped, nothing recorded
@@ -25,7 +27,9 @@
 //!
 //! Arrows are calls and frames, in order. Every fetch asked of a held lease
 //! ends in exactly one terminal ledger entry, `fetched` or
-//! `fetch_unanswered`, written before the frame that says it. The frames
+//! `fetch_unanswered`, written before the frame that says it. One whose
+//! entry cannot be written is answered `auditUnavailable` instead, and
+//! nothing it placed is kept. The frames
 //! carry where the bytes go and what became of them, never the bytes.
 use super::serve::{LeaseLedger, LedgerEntry};
 use nessa_protocol::lease::{
@@ -45,6 +49,48 @@ pub(crate) struct FetchedFile {
     pub(crate) digest: String,
     /// Its length in bytes.
     pub(crate) size: u64,
+}
+
+/// Which file a placement linked: its device and inode, so it is taken
+/// back only while its name is still that very file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FileIdentity {
+    pub(crate) device: u64,
+    pub(crate) inode: u64,
+}
+
+/// A file this fetch linked at its destination.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PlacedFile {
+    /// Absolute, as the gateway is told.
+    pub(crate) path: String,
+    pub(crate) identity: FileIdentity,
+}
+
+/// What became of a fetch's part, as the inbox placed it: the wire's
+/// [`FetchOutcome`], and for a file this fetch put there, which file it is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Placement {
+    /// Linked at the destination by this fetch.
+    Placed(PlacedFile),
+    /// Exactly this file was there already; nothing of it is this fetch's.
+    AlreadyPlaced {
+        path: String,
+    },
+    Refused(FetchRefusal),
+}
+
+impl Placement {
+    /// What the gateway is told of it.
+    pub(crate) fn outcome(&self) -> FetchOutcome {
+        match self {
+            Self::Placed(placed) => FetchOutcome::Placed {
+                path: placed.path.clone(),
+            },
+            Self::AlreadyPlaced { path } => FetchOutcome::AlreadyPlaced { path: path.clone() },
+            Self::Refused(reason) => FetchOutcome::Refused { reason: *reason },
+        }
+    }
 }
 
 /// What is at a fetch's destination now.
@@ -79,8 +125,11 @@ pub(crate) trait ArtifactInbox: Send + Sync {
     /// Check fetch `fetch`'s part as it is on disk against `file`, then
     /// link it at `destination`, resolved again, never over anything there.
     /// The part is let go whatever the outcome.
-    fn place(&self, lease: &str, fetch: u32, destination: &str, file: &FetchedFile)
-        -> FetchOutcome;
+    fn place(&self, lease: &str, fetch: u32, destination: &str, file: &FetchedFile) -> Placement;
+    /// Take back a file this fetch placed, whose placing could not be
+    /// recorded: removed only while its name is still that very file, so
+    /// anything put there since is left.
+    fn take_back(&self, placed: &PlacedFile);
     /// Let go of fetch `fetch`'s part.
     fn discard(&self, lease: &str, fetch: u32);
     /// Let go of every part `lease` has.
@@ -146,7 +195,7 @@ enum Next {
 /// What answers a fetch, for the ledger and for the gateway.
 enum Answer {
     Refused(FetchRefusal),
-    Fetched(FetchOutcome),
+    Fetched(Placement),
     Accepted(String),
 }
 
@@ -255,9 +304,7 @@ impl LeaseFetches {
                 inbox.place(&lease, fetch, &destination, &file)
             })
             .await
-            .unwrap_or(FetchOutcome::Refused {
-                reason: FetchRefusal::PlacingFailed,
-            });
+            .unwrap_or(Placement::Refused(FetchRefusal::PlacingFailed));
             fetches.answer(request, Answer::Fetched(outcome)).await;
         });
         self.spawned(task);
@@ -326,9 +373,7 @@ impl LeaseFetches {
                         tracing::error!(lease = self.lease, %error, "a fetch lost with its lease could not be recorded");
                     }
                 } else {
-                    let ended = FetchOutcome::Refused {
-                        reason: FetchRefusal::LeaseEnded,
-                    };
+                    let ended = Placement::Refused(FetchRefusal::LeaseEnded);
                     fetches.settle(request, Answer::Fetched(ended)).await;
                 }
             }
@@ -376,7 +421,7 @@ impl Handle {
         let made = tokio::task::spawn_blocking(move || {
             match inbox.destination(&destination, &checking)? {
                 Destination::AlreadyPlaced { path } => {
-                    Ok(Answer::Fetched(FetchOutcome::AlreadyPlaced { path }))
+                    Ok(Answer::Fetched(Placement::AlreadyPlaced { path }))
                 }
                 Destination::Free { .. } => inbox.open_part(&lease, fetch).map(Answer::Accepted),
             }
@@ -476,40 +521,58 @@ impl Handle {
         }
     }
 
-    /// Record `request`'s last word and send it.
+    /// Record `request`'s last word and send it. A last word that cannot be
+    /// recorded is never said as it was: the gateway is told
+    /// `auditUnavailable`, and a file this fetch placed is taken back first,
+    /// so nothing unrecorded stays placed.
     async fn settle(&self, request: String, answer: Answer) {
         let outcome = match &answer {
             Answer::Refused(reason) => FetchOutcome::Refused { reason: *reason },
-            Answer::Fetched(outcome) => outcome.clone(),
+            Answer::Fetched(placement) => placement.outcome(),
             Answer::Accepted(_) => unreachable!("an acceptance is not a last word"),
         };
         let entry = LedgerEntry::Fetched {
             lease: self.lease.clone(),
             request: request.clone(),
-            outcome,
+            outcome: outcome.clone(),
         };
         let recorded = self.ledger.record(&entry);
-        if let Err(error) = &recorded {
-            tracing::error!(lease = self.lease, %error, "a fetch's outcome could not be recorded");
-        }
-        let frame = match answer {
-            // A refusal said before anything was taken is not claimed
-            // recorded when it was not.
-            Answer::Refused(reason) => FromEnvironment::FetchRefused {
+        let frame = match (answer, recorded) {
+            (Answer::Refused(reason), Ok(())) => FromEnvironment::FetchRefused {
                 lease: self.lease.clone(),
                 request,
-                reason: match recorded {
-                    Ok(()) => reason,
-                    Err(_) => FetchRefusal::AuditUnavailable,
-                },
+                reason,
             },
-            // What was placed is placed: said as it is, recorded or not.
-            Answer::Fetched(outcome) => FromEnvironment::Fetched {
+            (Answer::Fetched(_), Ok(())) => FromEnvironment::Fetched {
                 lease: self.lease.clone(),
                 request,
                 outcome,
             },
-            Answer::Accepted(_) => unreachable!("an acceptance is not a last word"),
+            (Answer::Refused(_), Err(error)) => {
+                tracing::error!(lease = self.lease, %error, "a fetch's refusal could not be recorded");
+                FromEnvironment::FetchRefused {
+                    lease: self.lease.clone(),
+                    request,
+                    reason: FetchRefusal::AuditUnavailable,
+                }
+            }
+            (Answer::Fetched(placement), Err(error)) => {
+                tracing::error!(lease = self.lease, %error, "a fetch's outcome could not be recorded; it is not kept");
+                // Ours only when this fetch linked it: a file already there
+                // is left as it was.
+                if let Placement::Placed(placed) = placement {
+                    let inbox = self.inbox.clone();
+                    let _ = tokio::task::spawn_blocking(move || inbox.take_back(&placed)).await;
+                }
+                FromEnvironment::Fetched {
+                    lease: self.lease.clone(),
+                    request,
+                    outcome: FetchOutcome::Refused {
+                        reason: FetchRefusal::AuditUnavailable,
+                    },
+                }
+            }
+            (Answer::Accepted(_), _) => unreachable!("an acceptance is not a last word"),
         };
         self.send(frame).await;
     }

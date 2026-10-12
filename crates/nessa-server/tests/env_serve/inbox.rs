@@ -2,6 +2,7 @@
 //! destination is bounded to the workspace, and that placing it checks the
 //! part as it is on disk and never replaces anything.
 use super::*;
+use nessa_protocol::lease::FetchOutcome;
 use std::os::unix::fs::{symlink, PermissionsExt};
 
 struct Fixture {
@@ -88,7 +89,10 @@ fn a_verified_part_is_linked_at_its_destination_and_let_go() {
     let part = delivered(&fixture.inbox, "l", 1, bytes);
     let placed = fixture.workspace.join("assets/cat.png");
     assert_eq!(
-        fixture.inbox.place("l", 1, "assets/cat.png", &file),
+        fixture
+            .inbox
+            .place("l", 1, "assets/cat.png", &file)
+            .outcome(),
         FetchOutcome::Placed {
             path: placed.to_str().unwrap().into()
         }
@@ -104,7 +108,10 @@ fn a_verified_part_is_linked_at_its_destination_and_let_go() {
     );
     delivered(&fixture.inbox, "l", 2, bytes);
     assert_eq!(
-        fixture.inbox.place("l", 2, "assets/cat.png", &file),
+        fixture
+            .inbox
+            .place("l", 2, "assets/cat.png", &file)
+            .outcome(),
         FetchOutcome::AlreadyPlaced {
             path: placed.to_str().unwrap().into()
         }
@@ -122,7 +129,7 @@ fn a_part_that_is_not_the_file_asked_is_refused_mismatch_and_nothing_is_placed()
     ] {
         let part = delivered(&fixture.inbox, "l", fetch, wrong);
         assert_eq!(
-            fixture.inbox.place("l", fetch, "a.txt", &file),
+            fixture.inbox.place("l", fetch, "a.txt", &file).outcome(),
             FetchOutcome::Refused {
                 reason: FetchRefusal::Mismatch
             },
@@ -153,7 +160,7 @@ fn a_link_never_replaces_what_is_at_the_destination() {
     delivered(&fixture.inbox, "l", 1, bytes);
     fs::write(&late, b"written meanwhile").unwrap();
     assert_eq!(
-        fixture.inbox.place("l", 1, "late.txt", &file),
+        fixture.inbox.place("l", 1, "late.txt", &file).outcome(),
         FetchOutcome::Refused {
             reason: FetchRefusal::Occupied
         }
@@ -208,7 +215,7 @@ fn a_destination_outside_the_workspace_is_refused_however_it_is_reached() {
     fs::remove_dir(fixture.workspace.join("later")).unwrap();
     symlink(&fixture.outside, fixture.workspace.join("later")).unwrap();
     assert_eq!(
-        fixture.inbox.place("l", 1, "later/a.txt", &file),
+        fixture.inbox.place("l", 1, "later/a.txt", &file).outcome(),
         FetchOutcome::Refused {
             reason: FetchRefusal::OutsideWorkspace
         }
@@ -233,27 +240,107 @@ fn a_destination_outside_the_workspace_is_refused_however_it_is_reached() {
     );
 }
 
-/// What is linked is held to the very file that was hashed: anything else
-/// found at the name after the link is taken back, refused `mismatch`.
+/// What is at the name after the link is held to the hashed file. When it
+/// is not, the fetch is a mismatch, and what is there is taken back only
+/// when it is what the link was made from (a part or copy swapped in under
+/// its name): a file someone else put there after the link is left.
 #[test]
-fn a_link_that_is_not_the_hashed_file_is_taken_back_as_a_mismatch() {
+fn a_link_that_is_not_the_hashed_file_is_a_mismatch_and_only_what_was_linked_is_taken_back() {
     let fixture = fixture();
-    let hashed = fixture.workspace.join("hashed");
-    fs::write(&hashed, b"checked").unwrap();
-    let hashed = File::open(&hashed).unwrap();
+    let at = |name: &str| fixture.workspace.join(name);
+    fs::write(at("hashed"), b"checked").unwrap();
+    let hashed = File::open(at("hashed")).unwrap();
+    // Linked by descriptor, so what was linked was the hashed file: another
+    // file at the name now was put there by someone else, and stays.
+    let resolved = fixture.inbox.resolve("replaced.txt").unwrap();
+    fs::write(at("replaced.txt"), b"someone else's").unwrap();
+    assert_eq!(
+        same_file(&resolved, &hashed, LinkedFrom::Descriptor),
+        Err(FetchRefusal::Mismatch)
+    );
+    assert_eq!(fs::read(at("replaced.txt")).unwrap(), b"someone else's");
+    // Linked by the part's path, and the part is another file than the one
+    // at the name: that one is someone else's too, and stays.
+    let part = at("part");
+    fs::write(&part, b"the part now").unwrap();
+    assert_eq!(
+        same_file(&resolved, &hashed, LinkedFrom::Path(&part)),
+        Err(FetchRefusal::Mismatch)
+    );
+    assert_eq!(fs::read(at("replaced.txt")).unwrap(), b"someone else's");
+    // Linked by the part's path, and the name is the very file now at that
+    // path: a part swapped in before the link, which this fetch put there.
     let resolved = fixture.inbox.resolve("swapped.txt").unwrap();
-    fs::write(fixture.workspace.join("swapped.txt"), b"checked").unwrap();
-    assert_eq!(same_file(&resolved, &hashed), Err(FetchRefusal::Mismatch));
-    assert!(!fixture.workspace.join("swapped.txt").exists());
-    // The same file, by device and inode, stands.
-    fs::hard_link(
-        fixture.workspace.join("hashed"),
-        fixture.workspace.join("same.txt"),
+    fs::hard_link(&part, at("swapped.txt")).unwrap();
+    assert_eq!(
+        same_file(&resolved, &hashed, LinkedFrom::Path(&part)),
+        Err(FetchRefusal::Mismatch)
+    );
+    assert!(!at("swapped.txt").exists());
+    // Likewise a copy beside it, by its name there.
+    let copy = c_name(OsStr::new(".nessa-fetch-copy")).unwrap();
+    fs::write(at(".nessa-fetch-copy"), b"swapped copy").unwrap();
+    fs::hard_link(at(".nessa-fetch-copy"), at("swapped.txt")).unwrap();
+    assert_eq!(
+        same_file(&resolved, &hashed, LinkedFrom::Beside(&copy)),
+        Err(FetchRefusal::Mismatch)
+    );
+    assert!(!at("swapped.txt").exists());
+    fs::write(at("swapped.txt"), b"someone else's").unwrap();
+    assert_eq!(
+        same_file(&resolved, &hashed, LinkedFrom::Beside(&copy)),
+        Err(FetchRefusal::Mismatch)
+    );
+    assert!(at("swapped.txt").exists());
+    // The same file, by device and inode, stands, and is what was placed.
+    fs::hard_link(at("hashed"), at("same.txt")).unwrap();
+    let resolved = fixture.inbox.resolve("same.txt").unwrap();
+    let placed = same_file(&resolved, &hashed, LinkedFrom::Descriptor).unwrap();
+    assert_eq!(placed.path, at("same.txt").to_str().unwrap());
+    let metadata = fs::metadata(at("hashed")).unwrap();
+    assert_eq!(
+        placed.identity,
+        FileIdentity {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        }
+    );
+    assert!(at("same.txt").exists());
+}
+
+/// A file placed whose placing could not be recorded is taken back while
+/// its name is still that file, and left once anything else is there.
+#[test]
+fn a_placed_file_is_taken_back_only_while_its_name_is_still_that_file() {
+    let fixture = fixture();
+    let bytes = b"placed, then not kept";
+    let file = file_of(bytes);
+    delivered(&fixture.inbox, "l", 1, bytes);
+    let Placement::Placed(placed) = fixture.inbox.place("l", 1, "kept.txt", &file) else {
+        panic!("placed");
+    };
+    fixture.inbox.take_back(&placed);
+    assert!(!fixture.workspace.join("kept.txt").exists());
+    // Placed again, then replaced by someone else: theirs stays.
+    delivered(&fixture.inbox, "l", 2, bytes);
+    let Placement::Placed(placed) = fixture.inbox.place("l", 2, "kept.txt", &file) else {
+        panic!("placed");
+    };
+    // Moved away, not removed, so its inode is not free for theirs.
+    fs::rename(
+        fixture.workspace.join("kept.txt"),
+        fixture.workspace.join("moved.txt"),
     )
     .unwrap();
-    let resolved = fixture.inbox.resolve("same.txt").unwrap();
-    assert_eq!(same_file(&resolved, &hashed), Ok(()));
-    assert!(fixture.workspace.join("same.txt").exists());
+    fs::write(fixture.workspace.join("kept.txt"), b"someone else's").unwrap();
+    fixture.inbox.take_back(&placed);
+    assert_eq!(
+        fs::read(fixture.workspace.join("kept.txt")).unwrap(),
+        b"someone else's"
+    );
+    // Gone already: nothing to do.
+    fs::remove_file(fixture.workspace.join("kept.txt")).unwrap();
+    fixture.inbox.take_back(&placed);
 }
 
 /// A placed file gets the mode this user's other new files get, never the
@@ -269,7 +356,7 @@ fn a_placed_file_has_the_mode_new_files_get() {
         0o600
     );
     assert!(matches!(
-        fixture.inbox.place("l", 1, "readable.txt", &file),
+        fixture.inbox.place("l", 1, "readable.txt", &file).outcome(),
         FetchOutcome::Placed { .. }
     ));
     let mode = fs::metadata(fixture.workspace.join("readable.txt"))

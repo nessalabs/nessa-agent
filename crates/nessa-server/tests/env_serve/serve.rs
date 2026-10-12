@@ -1,6 +1,6 @@
 //! The environment role's frame loop, driven in process over a pipe: what it
 //! answers, what it records, and what it does when the gateway goes away.
-use super::super::fetches::{Destination, FetchedFile};
+use super::super::fetches::{Destination, FetchedFile, FileIdentity, PlacedFile, Placement};
 use super::*;
 use crate::env_serve::domain::{AgentName, Agents, CommandGrant};
 use crate::env_serve::{application::timer::manual::ManualTimer, infrastructure::TokioTimer};
@@ -174,6 +174,8 @@ struct MemoryLedger {
     failing_command_ran: AtomicBool,
     /// Refuses only a fetch's acceptance.
     failing_fetch_accepted: AtomicBool,
+    /// Refuses only a fetch's last word.
+    failing_fetched: AtomicBool,
 }
 
 impl MemoryLedger {
@@ -189,6 +191,8 @@ impl LeaseLedger for MemoryLedger {
                 && self.failing_command_ran.load(Ordering::SeqCst))
             || (matches!(entry, LedgerEntry::FetchAccepted { .. })
                 && self.failing_fetch_accepted.load(Ordering::SeqCst))
+            || (matches!(entry, LedgerEntry::Fetched { .. })
+                && self.failing_fetched.load(Ordering::SeqCst))
         {
             return Err(io::Error::other("disk gone"));
         }
@@ -2899,7 +2903,9 @@ struct RecordingInbox {
     /// What is at a destination, when not nothing.
     at: Mutex<HashMap<String, Result<Destination, FetchRefusal>>>,
     /// What placing answers, when not placed.
-    placing: Mutex<Option<FetchOutcome>>,
+    placing: Mutex<Option<Placement>>,
+    /// What was taken back, as placed.
+    taken_back: Mutex<Vec<PlacedFile>>,
     parts: Mutex<Vec<(String, u32)>>,
     placed: Mutex<Vec<(String, u32, String, FetchedFile)>>,
     discarded: Mutex<Vec<(String, u32)>>,
@@ -2931,25 +2937,24 @@ impl ArtifactInbox for RecordingInbox {
         self.parts.lock().unwrap().push((lease.into(), fetch));
         Ok(format!("/inbox/{fetch}.part"))
     }
-    fn place(
-        &self,
-        lease: &str,
-        fetch: u32,
-        destination: &str,
-        file: &FetchedFile,
-    ) -> FetchOutcome {
+    fn place(&self, lease: &str, fetch: u32, destination: &str, file: &FetchedFile) -> Placement {
         self.placed
             .lock()
             .unwrap()
             .push((lease.into(), fetch, destination.into(), file.clone()));
         self.discarded.lock().unwrap().push((lease.into(), fetch));
-        self.placing
-            .lock()
-            .unwrap()
-            .clone()
-            .unwrap_or(FetchOutcome::Placed {
+        self.placing.lock().unwrap().clone().unwrap_or_else(|| {
+            Placement::Placed(PlacedFile {
                 path: format!("/work/{destination}"),
+                identity: FileIdentity {
+                    device: 1,
+                    inode: u64::from(fetch),
+                },
             })
+        })
+    }
+    fn take_back(&self, placed: &PlacedFile) {
+        self.taken_back.lock().unwrap().push(placed.clone());
     }
     fn discard(&self, lease: &str, fetch: u32) {
         self.discarded.lock().unwrap().push((lease.into(), fetch));
@@ -3082,9 +3087,7 @@ async fn a_fetch_is_taken_into_a_part_and_placed_once_delivered_each_step_record
         LedgerEntry::Dropped { frame, .. } if frame == "delivered"
     )));
     // What placing found is said as it is: a part that is not the file.
-    *inbox.placing.lock().unwrap() = Some(FetchOutcome::Refused {
-        reason: FetchRefusal::Mismatch,
-    });
+    *inbox.placing.lock().unwrap() = Some(Placement::Refused(FetchRefusal::Mismatch));
     gateway.send(fetch_frame(LEASE, "call-2", "b.png")).await;
     assert!(matches!(
         gateway.next().await,
@@ -3106,6 +3109,81 @@ async fn a_fetch_is_taken_into_a_part_and_placed_once_delivered_each_step_record
             },
         }
     );
+}
+
+/// A fetch's last word that cannot be recorded is never said as it was: a
+/// file this fetch placed is taken back and the gateway told
+/// `auditUnavailable`; one already there is not this fetch's, and stays.
+#[tokio::test]
+async fn a_fetch_whose_outcome_cannot_be_recorded_is_answered_audit_unavailable_and_taken_back() {
+    let (mut gateway, inbox) = Gateway::fetching().await;
+    gateway.ledger.failing_fetched.store(true, Ordering::SeqCst);
+    let unrecorded = |request: &str| FromEnvironment::Fetched {
+        lease: LEASE.into(),
+        request: request.into(),
+        outcome: FetchOutcome::Refused {
+            reason: FetchRefusal::AuditUnavailable,
+        },
+    };
+    gateway.send(fetch_frame(LEASE, "call-1", "a.png")).await;
+    assert!(matches!(
+        gateway.next().await,
+        FromEnvironment::FetchAccepted { .. }
+    ));
+    gateway
+        .send(ToEnvironment::Delivered {
+            lease: LEASE.into(),
+            request: "call-1".into(),
+        })
+        .await;
+    assert_eq!(gateway.next().await, unrecorded("call-1"));
+    assert_eq!(
+        *inbox.taken_back.lock().unwrap(),
+        [PlacedFile {
+            path: "/work/a.png".into(),
+            identity: FileIdentity {
+                device: 1,
+                inode: 0,
+            },
+        }]
+    );
+    // Already there: said unrecorded, and nothing taken back.
+    inbox.at.lock().unwrap().insert(
+        "b.png".into(),
+        Ok(Destination::AlreadyPlaced {
+            path: "/work/b.png".into(),
+        }),
+    );
+    gateway.send(fetch_frame(LEASE, "call-2", "b.png")).await;
+    assert_eq!(gateway.next().await, unrecorded("call-2"));
+    assert_eq!(inbox.taken_back.lock().unwrap().len(), 1);
+    // Placed once the record can be made again: said as it is.
+    gateway
+        .ledger
+        .failing_fetched
+        .store(false, Ordering::SeqCst);
+    gateway.send(fetch_frame(LEASE, "call-3", "c.png")).await;
+    assert!(matches!(
+        gateway.next().await,
+        FromEnvironment::FetchAccepted { .. }
+    ));
+    gateway
+        .send(ToEnvironment::Delivered {
+            lease: LEASE.into(),
+            request: "call-3".into(),
+        })
+        .await;
+    assert_eq!(
+        gateway.next().await,
+        FromEnvironment::Fetched {
+            lease: LEASE.into(),
+            request: "call-3".into(),
+            outcome: FetchOutcome::Placed {
+                path: "/work/c.png".into(),
+            },
+        }
+    );
+    assert_eq!(inbox.taken_back.lock().unwrap().len(), 1);
 }
 
 /// A destination that already is exactly the file is answered at once, and

@@ -24,7 +24,9 @@ pub(crate) use artifacts::{
     ArtifactOutbox, PublishAnswer, PublishCall, PublishPoint, PublishRequest,
     PUBLISH_POINT_VARIABLE,
 };
-pub(crate) use fetches::{ArtifactInbox, Destination, FetchedFile};
+pub(crate) use fetches::{
+    ArtifactInbox, Destination, FetchedFile, FileIdentity, PlacedFile, Placement,
+};
 pub(crate) use grants::{
     change_grant, Applied, ChangeFailed, GrantAudit, GrantChange, GrantOutcome, GrantStore,
     PeerGrants,
