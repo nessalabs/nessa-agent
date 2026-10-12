@@ -3,10 +3,10 @@
 //!
 //! ```text
 //! Fetch{request, destination, digest, mediaType, size} ──▶ LeaseFetches::ask
-//!   off on this host ──▶ FetchRefused{unavailable} (serve.rs)
 //!   size, digest, media type unreadable; past the in-flight bound
 //!     ──▶ ledger: fetched(refused) ──▶ FetchRefused{reason}
 //!   ArtifactInbox::destination: inside the workspace? what is there?
+//!     off on this host (NoInbox) ──▶ ledger: fetched(unavailable) ──▶ FetchRefused
 //!     exactly this file ──▶ ledger: fetched(alreadyPlaced) ──▶ Fetched{alreadyPlaced}
 //!     something else, no directory, outside ──▶ ledger: fetched(refused) ──▶ FetchRefused
 //!     nothing ──▶ ArtifactInbox::open_part ──▶ ledger: fetch_accepted
@@ -27,18 +27,23 @@
 //!
 //! Arrows are calls and frames, in order. Every fetch asked of a held lease
 //! ends in exactly one terminal ledger entry, `fetched` or
-//! `fetch_unanswered`, written before the frame that says it. One whose
-//! entry cannot be written is answered `auditUnavailable` instead, and
-//! nothing it placed is kept. The frames
-//! carry where the bytes go and what became of them, never the bytes.
-use super::serve::{LeaseLedger, LedgerEntry};
+//! `fetch_unanswered`, written before the frame that says it, and each
+//! carries what the fetch asked for (destination, digest, media type, size),
+//! so it stands on its own. One whose entry cannot be written is answered
+//! `auditUnavailable` instead, nothing it placed is kept, and the lease's
+//! end is then recorded uncertain. The frames carry where the bytes go and
+//! what became of them, never the bytes.
+use super::serve::{FetchAsked, LeaseLedger, LedgerEntry};
 use nessa_protocol::lease::{
     FetchOutcome, FetchRefusal, FromEnvironment, MAX_ARTIFACT_BYTES, MAX_FETCHES_IN_FLIGHT,
 };
 use nessa_sdk::domain::common::value_objects::{MediaType, Sha256Digest};
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex, MutexGuard, PoisonError},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex, MutexGuard, PoisonError,
+    },
 };
 use tokio::{sync::mpsc, task::JoinHandle};
 
@@ -136,13 +141,52 @@ pub(crate) trait ArtifactInbox: Send + Sync {
     fn close(&self, lease: &str);
 }
 
+/// The inbox of a host that takes no files (`envServe.artifactsIn` off):
+/// every fetch is refused `unavailable` at its destination, recorded as any
+/// refusal, and nothing is ever made.
+pub(crate) struct NoInbox;
+
+impl ArtifactInbox for NoInbox {
+    fn destination(
+        &self,
+        _destination: &str,
+        _file: &FetchedFile,
+    ) -> Result<Destination, FetchRefusal> {
+        Err(FetchRefusal::Unavailable)
+    }
+    fn open_part(&self, _lease: &str, _fetch: u32) -> Result<String, FetchRefusal> {
+        Err(FetchRefusal::Unavailable)
+    }
+    fn place(
+        &self,
+        _lease: &str,
+        _fetch: u32,
+        _destination: &str,
+        _file: &FetchedFile,
+    ) -> Placement {
+        Placement::Refused(FetchRefusal::Unavailable)
+    }
+    fn take_back(&self, _placed: &PlacedFile) {}
+    fn discard(&self, _lease: &str, _fetch: u32) {}
+    fn close(&self, _lease: &str) {}
+}
+
+impl FetchAsked {
+    /// The file it names, as the inbox checks it.
+    fn file(&self) -> FetchedFile {
+        FetchedFile {
+            digest: self.digest.clone(),
+            size: self.size,
+        }
+    }
+}
+
 /// One fetch asked under a lease and not yet answered.
 struct Taken {
     /// The inbox's number for it; its part is named by it, never by the
     /// gateway's request, which is any text.
     fetch: u32,
-    destination: String,
-    file: FetchedFile,
+    asked: FetchAsked,
     stage: Stage,
     /// The gateway gave it up while it was still being accepted: once its
     /// part is made, it is let go instead of offered.
@@ -177,6 +221,26 @@ pub(crate) struct LeaseFetches {
     inbox: Arc<dyn ArtifactInbox>,
     ledger: Arc<dyn LeaseLedger>,
     frames: mpsc::Sender<FromEnvironment>,
+    /// Set once any entry of the lease's fetches could not be recorded.
+    unrecorded: Arc<AtomicBool>,
+}
+
+/// Record `entry` in `ledger`, noting in `unrecorded` when it could not be.
+fn record(
+    ledger: &dyn LeaseLedger,
+    unrecorded: &AtomicBool,
+    lease: &str,
+    entry: &LedgerEntry,
+    what: &str,
+) -> bool {
+    match ledger.record(entry) {
+        Ok(()) => true,
+        Err(error) => {
+            unrecorded.store(true, Ordering::SeqCst);
+            tracing::error!(lease, %error, what, "a fetch's entry could not be recorded");
+            false
+        }
+    }
 }
 
 fn lock(state: &Mutex<Fetching>) -> MutexGuard<'_, Fetching> {
@@ -189,7 +253,7 @@ enum Next {
     Discard(u32),
     Send(FromEnvironment),
     Unrecorded(u32, String),
-    Settle(String, Answer),
+    Settle(String, FetchAsked, Answer),
 }
 
 /// What answers a fetch, for the ledger and for the gateway.
@@ -212,24 +276,18 @@ impl LeaseFetches {
             inbox,
             ledger,
             frames,
+            unrecorded: Arc::default(),
         }
     }
 
     /// Take the gateway's fetch `request`, on a task of its own, and answer
     /// it: `FetchAccepted` with its part, `Fetched` when the destination is
     /// already exactly this file, or `FetchRefused`.
-    pub(crate) fn ask(
-        &self,
-        request: String,
-        destination: String,
-        digest: String,
-        media_type: &str,
-        size: u64,
-    ) {
-        let file = FetchedFile { digest, size };
-        let readable = Sha256Digest::parse(&format!("sha256:{}", file.digest)).is_ok()
-            && MediaType::parse(media_type).is_ok()
-            && !destination.is_empty();
+    pub(crate) fn ask(&self, request: String, asked: FetchAsked) {
+        let size = asked.size;
+        let readable = Sha256Digest::parse(&format!("sha256:{}", asked.digest)).is_ok()
+            && MediaType::parse(&asked.media_type).is_ok()
+            && !asked.destination.is_empty();
         let refusal = {
             let mut state = lock(&self.state);
             if !state.ended && state.taken.contains_key(&request) {
@@ -257,8 +315,7 @@ impl LeaseFetches {
                     request.clone(),
                     Taken {
                         fetch,
-                        destination: destination.clone(),
-                        file: file.clone(),
+                        asked: asked.clone(),
                         stage: Stage::Accepting,
                         undelivered: false,
                     },
@@ -270,8 +327,12 @@ impl LeaseFetches {
         let task = tokio::spawn(async move {
             match refusal {
                 // Not taken: nothing of it is held here to wait for.
-                Some(reason) => fetches.settle(request, Answer::Refused(reason)).await,
-                None => fetches.accept(request, destination, file).await,
+                Some(reason) => {
+                    fetches
+                        .settle(request, asked, Answer::Refused(reason))
+                        .await;
+                }
+                None => fetches.accept(request, asked).await,
             }
         });
         self.spawned(task);
@@ -289,7 +350,7 @@ impl LeaseFetches {
             match state.taken.get_mut(request) {
                 Some(taken) if taken.stage == Stage::Accepted => {
                     taken.stage = Stage::Placing;
-                    (taken.fetch, taken.destination.clone(), taken.file.clone())
+                    (taken.fetch, taken.asked.clone())
                 }
                 _ => return false,
             }
@@ -297,11 +358,11 @@ impl LeaseFetches {
         let fetches = self.handle();
         let request = request.to_owned();
         let task = tokio::spawn(async move {
-            let (fetch, destination, file) = taken;
+            let (fetch, asked) = taken;
             let inbox = fetches.inbox.clone();
             let lease = fetches.lease.clone();
             let outcome = tokio::task::spawn_blocking(move || {
-                inbox.place(&lease, fetch, &destination, &file)
+                inbox.place(&lease, fetch, &asked.destination, &asked.file())
             })
             .await
             .unwrap_or(Placement::Refused(FetchRefusal::PlacingFailed));
@@ -324,14 +385,20 @@ impl LeaseFetches {
                 }
                 Some(taken) if taken.stage == Stage::Accepted => {
                     let fetch = taken.fetch;
+                    let asked = taken.asked.clone();
                     state.taken.remove(request);
                     let entry = LedgerEntry::FetchUnanswered {
                         lease: self.lease.clone(),
                         request: request.to_owned(),
+                        asked,
                     };
-                    if let Err(error) = self.ledger.record(&entry) {
-                        tracing::error!(lease = self.lease, %error, "an undelivered fetch could not be recorded");
-                    }
+                    record(
+                        self.ledger.as_ref(),
+                        &self.unrecorded,
+                        &self.lease,
+                        &entry,
+                        "undelivered",
+                    );
                     fetch
                 }
                 _ => return false,
@@ -346,7 +413,9 @@ impl LeaseFetches {
     /// when the gateway ended it, or recorded unanswered when it was `lost`
     /// with the connection; then every part is let go. Awaited before the
     /// lease's own end is recorded and answered, so each answer goes first.
-    pub(crate) fn end(self, lost: bool) -> impl std::future::Future<Output = ()> + Send {
+    /// Resolves `false` when any entry of the lease's fetches went
+    /// unrecorded, so its end is not known clean.
+    pub(crate) fn end(self, lost: bool) -> impl std::future::Future<Output = bool> + Send {
         // Marked here, before anything is awaited: from now on nothing more
         // is taken or placed, whenever the returned future runs.
         let tasks = {
@@ -358,26 +427,36 @@ impl LeaseFetches {
             for task in tasks {
                 let _ = task.await;
             }
-            let unanswered: Vec<String> = {
+            let unanswered: Vec<(String, FetchAsked)> = {
                 let mut state = lock(&self.state);
-                state.taken.drain().map(|(request, _)| request).collect()
+                state
+                    .taken
+                    .drain()
+                    .map(|(request, taken)| (request, taken.asked))
+                    .collect()
             };
             let fetches = self.handle();
-            for request in unanswered {
+            for (request, asked) in unanswered {
                 if lost {
                     let entry = LedgerEntry::FetchUnanswered {
                         lease: self.lease.clone(),
                         request,
+                        asked,
                     };
-                    if let Err(error) = self.ledger.record(&entry) {
-                        tracing::error!(lease = self.lease, %error, "a fetch lost with its lease could not be recorded");
-                    }
+                    record(
+                        self.ledger.as_ref(),
+                        &self.unrecorded,
+                        &self.lease,
+                        &entry,
+                        "lost with its lease",
+                    );
                 } else {
                     let ended = Placement::Refused(FetchRefusal::LeaseEnded);
-                    fetches.settle(request, Answer::Fetched(ended)).await;
+                    fetches.settle(request, asked, Answer::Fetched(ended)).await;
                 }
             }
             self.inbox.close(&self.lease);
+            !self.unrecorded.load(Ordering::SeqCst)
         }
     }
 
@@ -388,6 +467,7 @@ impl LeaseFetches {
             inbox: self.inbox.clone(),
             ledger: self.ledger.clone(),
             frames: self.frames.clone(),
+            unrecorded: self.unrecorded.clone(),
         }
     }
 
@@ -405,11 +485,22 @@ struct Handle {
     inbox: Arc<dyn ArtifactInbox>,
     ledger: Arc<dyn LeaseLedger>,
     frames: mpsc::Sender<FromEnvironment>,
+    unrecorded: Arc<AtomicBool>,
 }
 
 impl Handle {
+    fn record(&self, entry: &LedgerEntry, what: &str) -> bool {
+        record(
+            self.ledger.as_ref(),
+            &self.unrecorded,
+            &self.lease,
+            entry,
+            what,
+        )
+    }
+
     /// Check `request`'s destination and make its part, then answer it.
-    async fn accept(&self, request: String, destination: String, file: FetchedFile) {
+    async fn accept(&self, request: String, asked: FetchAsked) {
         let inbox = self.inbox.clone();
         let lease = self.lease.clone();
         let fetch = lock(&self.state)
@@ -417,7 +508,8 @@ impl Handle {
             .get(&request)
             .map(|taken| taken.fetch);
         let Some(fetch) = fetch else { return };
-        let checking = file.clone();
+        let destination = asked.destination.clone();
+        let checking = asked.file();
         let made = tokio::task::spawn_blocking(move || {
             match inbox.destination(&destination, &checking)? {
                 Destination::AlreadyPlaced { path } => {
@@ -445,12 +537,12 @@ impl Handle {
             match state
                 .taken
                 .get(&request)
-                .map(|taken| (taken.fetch, taken.stage))
+                .map(|taken| (taken.fetch, taken.stage, taken.asked.clone()))
             {
                 None => Next::Nothing,
                 // Nothing of it is kept; the end answers it.
-                Some((fetch, Stage::Accepting)) if ended => Next::Discard(fetch),
-                Some((fetch, _)) => match answer {
+                Some((fetch, Stage::Accepting, _)) if ended => Next::Discard(fetch),
+                Some((fetch, _, asked)) => match answer {
                     Answer::Accepted(_)
                         if state
                             .taken
@@ -461,45 +553,35 @@ impl Handle {
                         let entry = LedgerEntry::FetchUnanswered {
                             lease: self.lease.clone(),
                             request,
+                            asked,
                         };
-                        if let Err(error) = self.ledger.record(&entry) {
-                            tracing::error!(lease = self.lease, %error, "an undelivered fetch could not be recorded");
-                        }
+                        self.record(&entry, "undelivered");
                         Next::Discard(fetch)
                     }
                     Answer::Accepted(path) => {
-                        let accepted = state.taken.get_mut(&request).map(|taken| {
-                            let entry = LedgerEntry::FetchAccepted {
-                                lease: self.lease.clone(),
-                                request: request.clone(),
-                                fetch,
-                                destination: taken.destination.clone(),
-                                digest: taken.file.digest.clone(),
-                                size: taken.file.size,
-                            };
-                            let recorded = self.ledger.record(&entry);
-                            if recorded.is_ok() {
+                        let entry = LedgerEntry::FetchAccepted {
+                            lease: self.lease.clone(),
+                            request: request.clone(),
+                            fetch,
+                            asked,
+                        };
+                        if self.record(&entry, "accepted; it is not taken") {
+                            if let Some(taken) = state.taken.get_mut(&request) {
                                 taken.stage = Stage::Accepted;
                             }
-                            recorded
-                        });
-                        match accepted {
-                            Some(Ok(())) => Next::Send(FromEnvironment::FetchAccepted {
+                            Next::Send(FromEnvironment::FetchAccepted {
                                 lease: self.lease.clone(),
                                 request,
                                 path,
-                            }),
-                            Some(Err(error)) => {
-                                tracing::error!(lease = self.lease, %error, "a fetch could not be recorded; it is not taken");
-                                state.taken.remove(&request);
-                                Next::Unrecorded(fetch, request)
-                            }
-                            None => Next::Nothing,
+                            })
+                        } else {
+                            state.taken.remove(&request);
+                            Next::Unrecorded(fetch, request)
                         }
                     }
                     answer => {
                         state.taken.remove(&request);
-                        Next::Settle(request, answer)
+                        Next::Settle(request, asked, answer)
                     }
                 },
             }
@@ -517,7 +599,7 @@ impl Handle {
                 })
                 .await;
             }
-            Next::Settle(request, answer) => self.settle(request, answer).await,
+            Next::Settle(request, asked, answer) => self.settle(request, asked, answer).await,
         }
     }
 
@@ -525,7 +607,7 @@ impl Handle {
     /// recorded is never said as it was: the gateway is told
     /// `auditUnavailable`, and a file this fetch placed is taken back first,
     /// so nothing unrecorded stays placed.
-    async fn settle(&self, request: String, answer: Answer) {
+    async fn settle(&self, request: String, asked: FetchAsked, answer: Answer) {
         let outcome = match &answer {
             Answer::Refused(reason) => FetchOutcome::Refused { reason: *reason },
             Answer::Fetched(placement) => placement.outcome(),
@@ -534,30 +616,27 @@ impl Handle {
         let entry = LedgerEntry::Fetched {
             lease: self.lease.clone(),
             request: request.clone(),
+            asked,
             outcome: outcome.clone(),
         };
-        let recorded = self.ledger.record(&entry);
+        let recorded = self.record(&entry, "its last word");
         let frame = match (answer, recorded) {
-            (Answer::Refused(reason), Ok(())) => FromEnvironment::FetchRefused {
+            (Answer::Refused(reason), true) => FromEnvironment::FetchRefused {
                 lease: self.lease.clone(),
                 request,
                 reason,
             },
-            (Answer::Fetched(_), Ok(())) => FromEnvironment::Fetched {
+            (Answer::Fetched(_), true) => FromEnvironment::Fetched {
                 lease: self.lease.clone(),
                 request,
                 outcome,
             },
-            (Answer::Refused(_), Err(error)) => {
-                tracing::error!(lease = self.lease, %error, "a fetch's refusal could not be recorded");
-                FromEnvironment::FetchRefused {
-                    lease: self.lease.clone(),
-                    request,
-                    reason: FetchRefusal::AuditUnavailable,
-                }
-            }
-            (Answer::Fetched(placement), Err(error)) => {
-                tracing::error!(lease = self.lease, %error, "a fetch's outcome could not be recorded; it is not kept");
+            (Answer::Refused(_), false) => FromEnvironment::FetchRefused {
+                lease: self.lease.clone(),
+                request,
+                reason: FetchRefusal::AuditUnavailable,
+            },
+            (Answer::Fetched(placement), false) => {
                 // Ours only when this fetch linked it: a file already there
                 // is left as it was.
                 if let Placement::Placed(placed) = placement {

@@ -342,10 +342,12 @@ impl ArtifactInbox for FileInbox {
             tracing::warn!("a fetched file whose placing went unrecorded could not be reached");
             return;
         };
-        // Between this check and the unlink another process may still swap
-        // the name; no call removes a name only if it is a given file. And a
-        // file put there after this one was deleted outright may be given
-        // its inode again.
+        // A window remains open here, and cannot be closed: the identity
+        // check and the unlink are two calls, and POSIX has no call that
+        // removes a name only if it is still a given file. Another process
+        // in the workspace that swaps the name between the two has its file
+        // removed. A file put there after this one was deleted outright may
+        // also be given its inode again, and pass the check.
         match identity_at(&directory, &name) {
             Ok(there) if there == placed.identity => {
                 if let Err(error) = unlink_at(&directory, &name) {
@@ -422,9 +424,11 @@ fn same_file(
                 }
                 LinkedFrom::Beside(name) => identity_at(&resolved.directory, name).ok(),
             };
-            // Between this check and the unlink the name may still be
-            // swapped again; no call removes a name only if it is a given
-            // file, so that window stays.
+            // A window remains open here, and cannot be closed: the
+            // identity check and the unlink are two calls, and POSIX has no
+            // call that removes a name only if it is still a given file.
+            // Another process in the workspace that swaps the name between
+            // the two has its file removed.
             if linked == Some(there) {
                 if let Err(error) = unlink_at(&resolved.directory, &resolved.name) {
                     tracing::warn!(%error, "a fetch linked as another file could not be taken back");

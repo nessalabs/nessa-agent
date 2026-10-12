@@ -11,8 +11,14 @@
 //!
 //! An entry's `agents` is a list of agent names or `"*"` for every agent,
 //! and none when missing; its `commands` is the longest a command may run,
-//! and no commands when missing. A peer with no entry has the defaults
-//! `domain::granted_to` gives it.
+//! and no commands when missing; its `maxLeaseMs` is the longest a
+//! harness's lease may last from its grant, and until ended when missing.
+//! A peer with no entry has the defaults `domain::granted_to` gives it.
+//!
+//! The file is written as schema version 2 only when some entry has a
+//! `maxLeaseMs`, and as version 1 otherwise; both are read. A build that
+//! reads only version 1 refuses a version 2 file, so it fails closed rather
+//! than serving leases without the limit the owner set.
 //!
 //! These grants only narrow what the host can run: `config.json`'s
 //! `envServe.commands` stays the host's own switch for commands at all
@@ -40,7 +46,7 @@
 //! and its outcome after the rename.
 use crate::env_serve::{
     application::{Applied, ChangeFailed, GrantStore, PeerGrants},
-    domain::{AgentName, Agents, CommandGrant, Peer, PeerGrant},
+    domain::{AgentName, Agents, CommandGrant, MaxLease, Peer, PeerGrant},
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
 use nessa_local_storage::{is_unsafe_file, open, sync_directory, OpenMode, PrivateTempFile};
@@ -56,8 +62,12 @@ use std::{
 const FILE: &str = "grants.json";
 /// What a change holds while it reads and writes the file.
 const LOCK: &str = "grants.lock";
-/// The only shape this build writes or reads.
+/// The shape without lease limits, which this build writes when no entry
+/// has one.
 const SCHEMA_VERSION: u32 = 1;
+/// The shape with lease limits (`maxLeaseMs`), which a build reading only
+/// version 1 refuses.
+const SCHEMA_VERSION_LEASES: u32 = 2;
 /// Most bytes the file may have: room for many peers, and a bound on what
 /// every lease reads.
 pub(crate) const MAX_BYTES: u64 = 64 * 1024;
@@ -182,6 +192,8 @@ struct StoredGrant {
     agents: Option<StoredAgents>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     commands: Option<StoredCommands>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    max_lease_ms: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -385,12 +397,16 @@ fn decode(bytes: &[u8]) -> Result<BTreeMap<Peer, PeerGrant>, GrantsError> {
     let unreadable = |reason: String| GrantsError::Unreadable(reason);
     let version: Version =
         serde_json::from_slice(bytes).map_err(|error| unreadable(error.to_string()))?;
-    if version.schema_version != u64::from(SCHEMA_VERSION) {
-        return Err(unreadable(format!(
-            "it has schema version {}, and this build reads {SCHEMA_VERSION}",
-            version.schema_version
-        )));
-    }
+    let leases = match version.schema_version {
+        version if version == u64::from(SCHEMA_VERSION) => false,
+        version if version == u64::from(SCHEMA_VERSION_LEASES) => true,
+        other => {
+            return Err(unreadable(format!(
+                "it has schema version {other}, and this build reads \
+                 {SCHEMA_VERSION} and {SCHEMA_VERSION_LEASES}"
+            )))
+        }
+    };
     let stored: Stored =
         serde_json::from_slice(bytes).map_err(|error| unreadable(error.to_string()))?;
     let mut grants = BTreeMap::new();
@@ -418,14 +434,34 @@ fn decode(bytes: &[u8]) -> Result<BTreeMap<Peer, PeerGrant>, GrantsError> {
             .map(|commands| CommandGrant::new(commands.max_timeout_ms))
             .transpose()
             .map_err(|_| unreadable(format!("{name}'s maxTimeoutMs is out of bounds")))?;
-        grants.insert(peer, PeerGrant::new(agents, commands));
+        let grant = PeerGrant::new(agents, commands);
+        let grant = match entry.max_lease_ms {
+            None => grant,
+            // Only version 2 holds a limit: one in a version 1 file was not
+            // written by any build, and is not this shape.
+            Some(_) if !leases => {
+                return Err(unreadable(format!(
+                    "{name} has a maxLeaseMs, which schema version {SCHEMA_VERSION} cannot hold"
+                )))
+            }
+            Some(ms) => grant.with_max_lease(
+                MaxLease::new(ms)
+                    .map_err(|_| unreadable(format!("{name}'s maxLeaseMs is out of bounds")))?,
+            ),
+        };
+        grants.insert(peer, grant);
     }
     Ok(grants)
 }
 
 fn encode(grants: &BTreeMap<Peer, PeerGrant>) -> Stored {
+    let leases = grants.values().any(|grant| grant.max_lease().is_some());
     Stored {
-        schema_version: SCHEMA_VERSION,
+        schema_version: if leases {
+            SCHEMA_VERSION_LEASES
+        } else {
+            SCHEMA_VERSION
+        },
         peers: grants
             .iter()
             .map(|(peer, grant)| (peer_name(peer), stored(grant)))
@@ -445,6 +481,7 @@ fn stored(grant: &PeerGrant) -> StoredGrant {
         commands: grant.commands().map(|commands| StoredCommands {
             max_timeout_ms: commands.max_timeout_ms(),
         }),
+        max_lease_ms: grant.max_lease().map(MaxLease::ms),
     }
 }
 

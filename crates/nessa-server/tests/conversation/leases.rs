@@ -128,6 +128,7 @@ impl Environment for Substitute {
         let granted = self.granted.lock().unwrap().unwrap_or(GrantedTerms {
             sandbox: grant.sandbox,
             timeout_ms: None,
+            lease_ms: None,
         });
         let released = self.released.clone();
         Box::pin(async move {
@@ -150,7 +151,7 @@ impl Environment for Substitute {
 /// dropped.
 struct CountedHold(Arc<AtomicUsize>);
 impl LeaseHold for CountedHold {
-    fn lost(&self) -> Option<EnvironmentFuture<'static, ()>> {
+    fn ends(&self) -> Option<EnvironmentFuture<'static, LeaseEndCause>> {
         None
     }
     fn end(&self, _cause: LeaseEndCause) -> EnvironmentFuture<'_, LeaseRelease> {
@@ -1422,7 +1423,10 @@ async fn the_view_of_an_ended_lease_says_why_it_ended() {
 /// What crosses the wire is the SSH adapter's own tests'.
 struct Host {
     opened: AtomicUsize,
-    lose: tokio::sync::watch::Sender<bool>,
+    /// Ends its leases for the cause sent: lost, or expired there.
+    lose: tokio::sync::watch::Sender<Option<LeaseEndCause>>,
+    /// The duration it grants each lease, if any.
+    lease_ms: Mutex<Option<u64>>,
     release: Mutex<Option<LeaseCleanup>>,
     /// What the first lease opened here publishes.
     offers: Mutex<Option<tokio::sync::mpsc::Receiver<ArtifactOffer>>>,
@@ -1516,7 +1520,8 @@ impl Host {
     fn new() -> Self {
         Self {
             opened: AtomicUsize::new(0),
-            lose: tokio::sync::watch::channel(false).0,
+            lose: tokio::sync::watch::channel(None).0,
+            lease_ms: Mutex::new(None),
             release: Mutex::new(Some(LeaseCleanup::Confirmed { forced: false })),
             offers: Mutex::new(None),
             ending: Arc::default(),
@@ -1549,6 +1554,7 @@ impl Environment for Host {
         binding: Arc<dyn AgentProvider>,
     ) -> EnvironmentFuture<'a, Result<EnvironmentLease, LeaseRefusal>> {
         self.opened.fetch_add(1, Ordering::SeqCst);
+        let lease_ms = *self.lease_ms.lock().unwrap();
         let hold = Arc::new(HostHold {
             lost: self.lose.subscribe(),
             release: *self.release.lock().unwrap(),
@@ -1564,6 +1570,7 @@ impl Environment for Host {
                 granted: GrantedTerms {
                     sandbox: SandboxProfile::HarnessDefault,
                     timeout_ms: None,
+                    lease_ms,
                 },
                 workspace: Some("/srv/work".into()),
             })
@@ -1574,7 +1581,7 @@ impl Environment for Host {
     }
 }
 struct HostHold {
-    lost: tokio::sync::watch::Receiver<bool>,
+    lost: tokio::sync::watch::Receiver<Option<LeaseEndCause>>,
     release: Option<LeaseCleanup>,
     offers: Mutex<Option<tokio::sync::mpsc::Receiver<ArtifactOffer>>>,
     ending: Arc<tokio::sync::Notify>,
@@ -1713,10 +1720,15 @@ impl LeaseHold for HostHold {
     fn artifacts(&self) -> Option<tokio::sync::mpsc::Receiver<ArtifactOffer>> {
         self.offers.lock().unwrap().take()
     }
-    fn lost(&self) -> Option<EnvironmentFuture<'static, ()>> {
+    fn ends(&self) -> Option<EnvironmentFuture<'static, LeaseEndCause>> {
         let mut lost = self.lost.clone();
         Some(Box::pin(async move {
-            let _ = lost.wait_for(|lost| *lost).await;
+            let cause = lost
+                .wait_for(Option::is_some)
+                .await
+                .ok()
+                .and_then(|cause| *cause);
+            cause.unwrap_or(LeaseEndCause::Lost)
         }))
     }
     fn end(&self, _cause: LeaseEndCause) -> EnvironmentFuture<'_, LeaseRelease> {
@@ -2299,7 +2311,7 @@ async fn b_gate2_a_lost_connection_stops_the_conversation_and_ends_its_lease_as_
         let harness = with_host(root.path(), here, Some(host.clone()));
         harness.create_on("devbox").await.unwrap();
         harness.turn("turn-1").await;
-        host.lose.send_replace(true);
+        host.lose.send_replace(Some(LeaseEndCause::Lost));
         let lease = tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 let lease = harness.lease().await;
@@ -2317,6 +2329,99 @@ async fn b_gate2_a_lost_connection_stops_the_conversation_and_ends_its_lease_as_
         assert!(actor.is_some_and(|actor| actor.starts_with("lost-")));
         assert_eq!(harness.provider.close_calls.load(Ordering::SeqCst), 1);
     }
+}
+
+/// Row I7 through the service: a duration the environment grants is
+/// recorded on the issued lease as its deadline, from the service's clock
+/// (`a_granted_duration_is_recorded_as_the_deadline` shows that clock is
+/// read before the lease is asked for).
+#[tokio::test]
+async fn a_granted_duration_is_recorded_on_the_issued_lease() {
+    let root = tempfile::tempdir().unwrap();
+    let here = Arc::new(Substitute::new(SandboxProfiles::HARNESS_DEFAULT));
+    let host = Arc::new(Host::new());
+    *host.lease_ms.lock().unwrap() = Some(3_600_000);
+    let harness = with_host(root.path(), here, Some(host.clone()));
+    harness.create_on("devbox").await.unwrap();
+    harness.turn("turn-1").await;
+    // Read once the conversation lets its stream go.
+    harness
+        .service
+        .close(harness.id.clone(), caller("close"))
+        .await
+        .unwrap();
+    let lease = harness.lease().await;
+    assert_eq!(kinds(&lease), ["issued", "ending", "ended"]);
+    let LeaseRecord::Issued { terms, .. } = &lease.records()[0] else {
+        panic!("issued first");
+    };
+    assert_eq!(
+        terms.deadline,
+        LeaseDeadline::At(TestClock.unix_milliseconds() + 3_600_000)
+    );
+}
+
+/// Row I7: the environment ending a lease past its granted duration stops
+/// the conversation as the system, never a person: the lease is recorded
+/// ending (expired), its End asked, and ended with the environment's
+/// cleanup, or interrupted when no answer comes.
+async fn an_environment_expiry_ends_the_lease(
+    release: Option<LeaseCleanup>,
+) -> (CurrentLease, Vec<&'static str>) {
+    let root = tempfile::tempdir().unwrap();
+    let here = Arc::new(Substitute::new(SandboxProfiles::HARNESS_DEFAULT));
+    let host = Arc::new(Host::new());
+    *host.release.lock().unwrap() = release;
+    *host.lease_ms.lock().unwrap() = Some(60_000);
+    let harness = with_host(root.path(), here, Some(host.clone()));
+    harness.create_on("devbox").await.unwrap();
+    harness.turn("turn-1").await;
+    host.lose.send_replace(Some(LeaseEndCause::Expired));
+    let lease = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let lease = harness.lease().await;
+            if kinds(&lease).len() == 3 {
+                break lease;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the expired lease ends");
+    let (cause, actor) = ending_cause(&lease).unwrap();
+    assert_eq!(cause, LeaseEndCause::Expired);
+    assert!(actor.is_some_and(|actor| actor.starts_with("expired-")));
+    let ending = lease.records().iter().find_map(|record| match record {
+        LeaseRecord::Ending { actor, .. } => actor.clone(),
+        _ => None,
+    });
+    let ending = ending.unwrap();
+    assert_eq!(
+        (ending.principal_id(), ending.surface_id()),
+        ("gateway", "environment_expired")
+    );
+    assert_eq!(harness.provider.close_calls.load(Ordering::SeqCst), 1);
+    let kinds = kinds(&lease);
+    (lease, kinds)
+}
+
+#[tokio::test]
+async fn an_environment_expiry_is_recorded_ending_then_ended_with_its_cleanup() {
+    let (lease, kinds) =
+        an_environment_expiry_ends_the_lease(Some(LeaseCleanup::Confirmed { forced: false })).await;
+    assert_eq!(kinds, ["issued", "ending", "ended"]);
+    let view = nessa_protocol::conversation::projection::lease_view(&lease);
+    assert_eq!(view.state, ConversationLeaseState::Ended);
+    assert_eq!(view.cause, Some(ConversationLeaseCause::Expired));
+    assert_eq!(view.cleanup, Some(ConversationLeaseCleanup::Confirmed));
+}
+
+#[tokio::test]
+async fn an_expiry_whose_end_goes_unanswered_is_interrupted() {
+    let (lease, kinds) = an_environment_expiry_ends_the_lease(None).await;
+    assert_eq!(kinds, ["issued", "ending", "interrupted"]);
+    let view = nessa_protocol::conversation::projection::lease_view(&lease);
+    assert_eq!(view.cause, Some(ConversationLeaseCause::Expired));
 }
 
 // Command leases (rows L14, L15; issue #700): the agent's `run` through the
@@ -2381,6 +2486,7 @@ impl CommandEnvironment for CommandHost {
         let granted = self.terms.lock().unwrap().unwrap_or(GrantedTerms {
             sandbox: SandboxProfile::None,
             timeout_ms: Some(command.timeout_ms()),
+            lease_ms: None,
         });
         Box::pin(async move {
             if let Some(refusal) = refusal {
@@ -3589,6 +3695,7 @@ async fn l1_an_environment_granting_other_terms_than_asked_is_refused_and_nothin
     *substitute.granted.lock().unwrap() = Some(GrantedTerms {
         sandbox: SandboxProfile::None,
         timeout_ms: None,
+        lease_ms: None,
     });
     let binding = Arc::new(Provider::new(provider.clone()));
     let harness = harness(
@@ -3626,8 +3733,8 @@ async fn l1_an_environment_granting_other_terms_than_asked_is_refused_and_nothin
 
 /// Row I5 on the gateway: a command whose environment narrowed its timeout
 /// is recorded issued with the timeout granted, never the one asked, and
-/// runs under it; an answer granting longer than asked, or another sandbox,
-/// is recorded refused and never runs.
+/// runs under it; an answer granting longer than asked, another sandbox, or
+/// a lease duration, is recorded refused and never runs.
 #[tokio::test]
 async fn i5_a_narrowed_command_is_recorded_as_granted_and_a_wider_one_is_refused() {
     let root = tempfile::tempdir().unwrap();
@@ -3640,6 +3747,7 @@ async fn i5_a_narrowed_command_is_recorded_as_granted_and_a_wider_one_is_refused
     *host.terms.lock().unwrap() = Some(GrantedTerms {
         sandbox: SandboxProfile::None,
         timeout_ms: Some(2_000),
+        lease_ms: None,
     });
     let answer = harness
         .run(command("devbox", &["echo", "hi"], "narrowed"))
@@ -3657,14 +3765,23 @@ async fn i5_a_narrowed_command_is_recorded_as_granted_and_a_wider_one_is_refused
         GrantedTerms {
             sandbox: SandboxProfile::None,
             timeout_ms: Some(20_000),
+            lease_ms: None,
         },
         GrantedTerms {
             sandbox: SandboxProfile::HarnessDefault,
             timeout_ms: Some(10_000),
+            lease_ms: None,
         },
         GrantedTerms {
             sandbox: SandboxProfile::None,
             timeout_ms: None,
+            lease_ms: None,
+        },
+        // A lease duration nobody asked for: a command has its timeout.
+        GrantedTerms {
+            sandbox: SandboxProfile::None,
+            timeout_ms: Some(2_000),
+            lease_ms: Some(60_000),
         },
     ]
     .into_iter()
@@ -4090,6 +4207,60 @@ async fn a_fetch_whose_lease_ends_mid_transfer_is_refused_lease_ended() {
         .unwrap()
         .unwrap()
         .unwrap();
+}
+
+/// A placement store that stalls holds the call no longer than its wait,
+/// and no longer than its caller stays: every step that can wait is inside
+/// both, the store's read included. A pipe is what stalls it here.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_fetch_whose_placement_read_stalls_is_timed_out_or_cancelled() {
+    use std::os::unix::ffi::OsStrExt as _;
+    let root = tempfile::tempdir().unwrap();
+    let bytes = b"a picture".to_vec();
+    let (harness, host, _attachments, go) =
+        fetching_turn(root.path(), &bytes, Duration::from_millis(200)).await;
+    // The placement becomes a pipe nobody writes: reading it waits.
+    let placement = placement_file(root.path());
+    let kept = std::fs::read(&placement).unwrap();
+    std::fs::remove_file(&placement).unwrap();
+    let fifo = std::ffi::CString::new(placement.as_os_str().as_bytes()).unwrap();
+    // SAFETY: mkfifo reads the NUL-terminated path only.
+    assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+    assert_eq!(
+        harness
+            .fetch_file(fetch_call("devbox", &bytes, "a.bin", "call-1"))
+            .await,
+        FetchAnswer::Refused(FetchCallRefusal::TimedOut)
+    );
+    let (caller_gone, stop) = tokio::sync::watch::channel(false);
+    let cancelled = {
+        let service = harness.service.clone();
+        let id = harness.id.clone();
+        let call = fetch_call("devbox", &bytes, "a.bin", "call-2");
+        tokio::spawn(async move { service.fetch_artifact(&id, call, stop).await })
+    };
+    caller_gone.send(true).unwrap();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), cancelled)
+            .await
+            .unwrap()
+            .unwrap(),
+        FetchAnswer::Refused(FetchCallRefusal::Cancelled)
+    );
+    assert!(host.fetching.asks.lock().unwrap().is_empty());
+    // Let the stalled reads go, so nothing is left waiting: a writer
+    // opening and closing the pipe ends their wait. Then put the placement
+    // back.
+    drop(
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&placement)
+            .unwrap(),
+    );
+    std::fs::remove_file(&placement).unwrap();
+    std::fs::write(&placement, &kept).unwrap();
+    go.send(()).unwrap();
 }
 
 /// Not answered within its wait: timed out, and it may still be placed.

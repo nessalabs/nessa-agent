@@ -126,8 +126,11 @@ fn a_file_this_build_cannot_read_is_refused() {
         "x".repeat(MAX_BYTES as usize)
     );
     for text in [
-        r#"{"schemaVersion":2,"peers":{}}"#,
+        r#"{"schemaVersion":3,"peers":{}}"#,
         r#"{"peers":{}}"#,
+        r#"{"schemaVersion":1,"peers":{"ssh":{"maxLeaseMs":60000}}}"#,
+        r#"{"schemaVersion":2,"peers":{"ssh":{"maxLeaseMs":0}}}"#,
+        r#"{"schemaVersion":2,"peers":{"ssh":{"maxLeaseMs":2592000001}}}"#,
         r#"{"schemaVersion":1,"peers":{"ssh":{"agents":"all"}}}"#,
         r#"{"schemaVersion":1,"peers":{"ssh":{"agents":["*"]}}}"#,
         r#"{"schemaVersion":1,"peers":{"ssh":{"commands":{"maxTimeoutMs":0}}}}"#,
@@ -151,10 +154,10 @@ fn a_file_this_build_cannot_read_is_refused() {
         ));
     }
     let version = private_directory();
-    write_private(version.path(), r#"{"schemaVersion":2,"peers":{}}"#);
+    write_private(version.path(), r#"{"schemaVersion":3,"peers":{}}"#);
     let refused = FileGrants::new(version.path()).read().unwrap_err();
     assert!(
-        refused.to_string().contains("schema version 2"),
+        refused.to_string().contains("schema version 3"),
         "{refused}"
     );
     let shared = private_directory();
@@ -168,6 +171,60 @@ fn a_file_this_build_cannot_read_is_refused() {
         FileGrants::new(shared.path()).read(),
         Err(GrantsError::Unreadable(_))
     ));
+}
+
+/// A lease limit is written as schema version 2, which a build reading only
+/// version 1 refuses rather than serving leases without it; a file with no
+/// limit is still written as version 1, and either version is read.
+#[test]
+fn max_lease_is_written_as_version_2_and_version_1_still_reads() {
+    let directory = private_directory();
+    let grants = FileGrants::new(directory.path());
+    let written = |directory: &Path| -> serde_json::Value {
+        serde_json::from_str(&std::fs::read_to_string(directory.join(FILE)).unwrap()).unwrap()
+    };
+    grants
+        .change(&Peer::Ssh, |_| Ok::<_, ()>(Some(PeerGrant::nothing())))
+        .unwrap();
+    assert_eq!(written(directory.path())["schemaVersion"], 1);
+    let limited = PeerGrant::everything().with_max_lease(MaxLease::new(3_600_000).unwrap());
+    grants
+        .change(&gateway(), |_| Ok::<_, ()>(Some(limited.clone())))
+        .unwrap();
+    assert_eq!(
+        written(directory.path()),
+        serde_json::json!({
+            "schemaVersion": 2,
+            "peers": {
+                "ssh": {},
+                peer_name(&gateway()): {
+                    "agents": "*",
+                    "commands": {
+                        "maxTimeoutMs":
+                            nessa_sdk::domain::agent_execution::leases::CommandWork::MAX_TIMEOUT_MS
+                    },
+                    "maxLeaseMs": 3_600_000,
+                },
+            }
+        })
+    );
+    assert_eq!(grants.entry(&gateway()), Ok(Some(limited)));
+    // The limit gone, the file is version 1 again.
+    grants.change(&gateway(), |_| Ok::<_, ()>(None)).unwrap();
+    assert_eq!(written(directory.path())["schemaVersion"], 1);
+    // A version 1 file, as an earlier build wrote it, still reads.
+    let earlier = private_directory();
+    write_private(
+        earlier.path(),
+        r#"{"schemaVersion":1,"peers":{"ssh":{"agents":["claude"]}}}"#,
+    );
+    assert_eq!(
+        FileGrants::new(earlier.path()).entry(&Peer::Ssh),
+        Ok(Some(PeerGrant::new(
+            Agents::Named([AgentName::new("claude").unwrap()].into()),
+            None
+        )))
+    );
 }
 
 /// A change that would make the file larger than every reader takes is

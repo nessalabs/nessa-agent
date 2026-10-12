@@ -15,6 +15,7 @@
 //!                     naming a request ──▶ that publish's waiter: offered, or refused
 //!                   not published ──▶ that publish's waiter: the host's reason
 //!                   fetch accepted / refused / fetched ──▶ that fetch's waiter
+//!                   ending ──▶ the lease's `ending` watch: the host is ending it
 //!                   none ──▶ FrameDropped, never applied elsewhere (row L9)
 //! end of stream ──▶ every route dropped: waiters unanswered, outputs ended,
 //!                   each lease's `gone` closed ──▶ ConnectionLost
@@ -67,9 +68,9 @@ use crate::env_serve::application::FrameStream;
 use futures_util::FutureExt;
 use nessa_protocol::lease::{
     decode, encode, read_hello, stop_steps, Cleanup, Collection, CollectionRefusal, CommandEnd,
-    Data, FetchOutcome, FetchRefusal, FromEnvironment, GrantRefusal, GrantedTerms, PublishRefusal,
-    Sandbox, StagedArtifact, ToEnvironment, Unavailability, MAX_ARTIFACTS_IN_FLIGHT,
-    MAX_DATA_BYTES,
+    Data, EndingCause, FetchOutcome, FetchRefusal, FromEnvironment, GrantRefusal, GrantedTerms,
+    PublishRefusal, Sandbox, StagedArtifact, ToEnvironment, Unavailability,
+    MAX_ARTIFACTS_IN_FLIGHT, MAX_DATA_BYTES,
 };
 use nessa_sdk::domain::agent_execution::leases::{LeaseRefusal, SshDestination};
 use std::{
@@ -184,6 +185,9 @@ struct LeaseRoute {
     grant: Option<oneshot::Sender<Result<GrantedTerms, GrantRefusal>>>,
     /// A command lease's run, waiting for its `Ran`.
     ran: Option<oneshot::Sender<CommandAnswer>>,
+    /// A command lease's: its `Ran` ends it, and the host never ends it
+    /// unasked.
+    command: bool,
     ended: Option<oneshot::Sender<Cleanup>>,
     /// Its End was asked: no harness starts under it and none is asked to
     /// stop, as its `Ended` answers their stops.
@@ -198,6 +202,8 @@ struct LeaseRoute {
     /// Where the files the host publishes under it are offered: `None`
     /// once whoever takes them let go, and for a command lease.
     published: Option<mpsc::Sender<Published>>,
+    /// Why the host said it is ending the lease unasked, once it said so.
+    environment_ending: watch::Sender<Option<EndingCause>>,
     /// Each publish this gateway asked under it, by request, waiting for
     /// the host to offer the file or say why not. Dropped with the route,
     /// which answers each unanswered.
@@ -251,6 +257,9 @@ pub(crate) struct Granted {
     pub(crate) terms: GrantedTerms,
     /// Closes once the lease is no longer routed here.
     pub(crate) gone: watch::Receiver<()>,
+    /// Why the host is ending the lease unasked, once it says so
+    /// (`Ending`); closes with `gone`.
+    pub(crate) ending: watch::Receiver<Option<EndingCause>>,
     /// Ends once the lease is no longer routed here.
     pub(crate) published: mpsc::Receiver<Published>,
 }
@@ -517,13 +526,18 @@ impl HostLink {
             agent: agent.into(),
             sandbox,
         };
-        let (gone, terms) = self
+        let Admitted {
+            gone,
+            ending,
+            terms,
+        } = self
             .admit(lease, frame, Some(offers), deadline)
             .await
             .map_err(lease_refusal)?;
         Ok(Granted {
             terms,
             gone,
+            ending,
             published,
         })
     }
@@ -548,7 +562,8 @@ impl HostLink {
             timeout_ms,
         };
         // A command publishes nothing: no file is offered under its lease.
-        self.admit(lease, frame, None, deadline).await
+        let admitted = self.admit(lease, frame, None, deadline).await?;
+        Ok((admitted.gone, admitted.terms))
     }
 
     /// Run a granted command lease's command and wait for its `Ran`. The
@@ -583,19 +598,22 @@ impl HostLink {
         frame: ToEnvironment,
         published: Option<mpsc::Sender<Published>>,
         deadline: Duration,
-    ) -> Result<(watch::Receiver<()>, GrantedTerms), AdmissionRefused> {
+    ) -> Result<Admitted, AdmissionRefused> {
         let (answer, answered) = oneshot::channel();
-        let gone = {
+        let (gone, ending) = {
             let mut routes = self.routes();
             if routes.closed || routes.leases.contains_key(lease) {
                 return Err(AdmissionRefused::Unreachable);
             }
             let (gone_sender, gone) = watch::channel(());
+            let (ending_sender, ending) = watch::channel(None);
             routes.leases.insert(
                 lease.into(),
                 LeaseRoute {
                     grant: Some(answer),
                     ran: None,
+                    // Only a harness's lease publishes.
+                    command: published.is_none(),
                     ended: None,
                     ending: false,
                     end_sent: false,
@@ -603,12 +621,13 @@ impl HostLink {
                     channels: HashMap::new(),
                     next_channel: 1,
                     published,
+                    environment_ending: ending_sender,
                     publishes: HashMap::new(),
                     fetches: HashMap::new(),
                     _gone: gone_sender,
                 },
             );
-            gone
+            (gone, ending)
         };
         let sent = self.frames.send(frame).await;
         if sent.is_err() {
@@ -616,7 +635,11 @@ impl HostLink {
             return Err(AdmissionRefused::Unreachable);
         }
         match tokio::time::timeout(deadline, answered).await {
-            Ok(Ok(Ok(terms))) => Ok((gone, terms)),
+            Ok(Ok(Ok(terms))) => Ok(Admitted {
+                gone,
+                ending,
+                terms,
+            }),
             refused => {
                 self.routes().leases.remove(lease);
                 if refused.is_err() {
@@ -1207,6 +1230,13 @@ impl Shared {
     }
 }
 
+/// A lease the host admitted: its watches, and the terms it granted.
+struct Admitted {
+    gone: watch::Receiver<()>,
+    ending: watch::Receiver<Option<EndingCause>>,
+    terms: GrantedTerms,
+}
+
 enum Routed {
     Done,
     /// Routed, and answered at once by this gateway; the fence it was
@@ -1296,6 +1326,16 @@ fn route_frame(routes: &mut Routes, frame: FromEnvironment) -> Routed {
                 ),
             }
         }
+        // The host is ending a lease unasked: said to whoever watches it,
+        // who asks its End, which the host answers with what that took.
+        // A command's lease is bounded by its timeout, never ended so.
+        FromEnvironment::Ending { lease, cause } => match routes.leases.get(&lease) {
+            Some(route) if !route.command => {
+                route.environment_ending.send_replace(Some(cause));
+                Routed::Done
+            }
+            _ => Routed::Dropped,
+        },
         FromEnvironment::NotPublished {
             lease,
             request,
@@ -1591,6 +1631,7 @@ fn frame_name(frame: &FromEnvironment) -> &'static str {
         FromEnvironment::Output { .. } => "output",
         FromEnvironment::OutputClosed { .. } => "output_closed",
         FromEnvironment::Stopped { .. } => "stopped",
+        FromEnvironment::Ending { .. } => "ending",
         FromEnvironment::Ended { .. } => "ended",
         FromEnvironment::Accounted { .. } => "accounted",
         FromEnvironment::Published { .. } => "published",

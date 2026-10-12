@@ -146,13 +146,29 @@ impl ConversationService {
     /// Place `call`'s file in conversation `id`'s environment, under its Live
     /// agent lease, for its running turn's person, and wait at most this
     /// gateway's fetch wait for it to be placed. `stop`, once true, stops
-    /// the wait as its caller gone.
+    /// the wait as its caller gone. Every step that can wait, the stores'
+    /// reads included, is inside both: none holds the call past either.
     pub async fn fetch_artifact(
         &self,
         id: &ConversationId,
         call: FetchCall,
         mut stop: watch::Receiver<bool>,
     ) -> FetchAnswer {
+        let wait = self.inner.environment.fetch_wait();
+        tokio::time::timeout(wait, async {
+            tokio::select! {
+                biased;
+                () = cancelled(&mut stop) => FetchAnswer::Refused(FetchCallRefusal::Cancelled),
+                answer = self.fetch_within(id, call) => answer,
+            }
+        })
+        .await
+        .unwrap_or(FetchAnswer::Refused(FetchCallRefusal::TimedOut))
+    }
+
+    /// [`Self::fetch_artifact`] without its wait or its stop, which drop
+    /// this future: a call reserved by then is let go by [`Taken`]'s drop.
+    async fn fetch_within(&self, id: &ConversationId, call: FetchCall) -> FetchAnswer {
         let refused = FetchAnswer::Refused;
         let Some(live) = self.live(id).await else {
             return refused(FetchCallRefusal::NoTurn);
@@ -168,18 +184,14 @@ impl ConversationService {
         if &lease != live.lease.id() || !live.lease.is_live() {
             return refused(FetchCallRefusal::NoTurn);
         }
-        let environments = &self.inner.environment;
         // Where the agent runs now is the only lease it holds, compared as
         // `artifacts_publish` compares it.
-        let placed = match environments.placement(id).await {
+        let placed = match self.inner.environment.placement(id).await {
             Ok(placed) => placed,
             Err(_) => return refused(FetchCallRefusal::EnvironmentNotLeased),
         };
         if call.environment != placed.as_deref().unwrap_or(super::HERE) {
             return refused(FetchCallRefusal::EnvironmentNotLeased);
-        }
-        if *stop.borrow() {
-            return refused(FetchCallRefusal::Cancelled);
         }
         let Some(file) = Sha256Digest::parse(&format!("sha256:{}", call.digest))
             .ok()
@@ -230,43 +242,12 @@ impl ConversationService {
             delivered,
             placed_nothing: None,
         };
-        let answer = tokio::time::timeout(environments.fetch_wait(), async {
-            // Read once for the call's person before the environment is
-            // asked, inside the call's wait and its stop: a store that stays
-            // busy holds the call no longer than any other step.
-            let first = source.read(0, 1);
-            tokio::pin!(first);
-            loop {
-                tokio::select! {
-                    biased;
-                    read = &mut first => {
-                        if let Err(failure) = read {
-                            return refused(source_refusal(failure));
-                        }
-                        break;
-                    }
-                    changed = stop.changed() => {
-                        if changed.is_err() || *stop.borrow() {
-                            return refused(FetchCallRefusal::Cancelled);
-                        }
-                    }
-                }
-            }
-            tokio::pin!(fetching);
-            let fetched = loop {
-                tokio::select! {
-                    biased;
-                    fetched = &mut fetching => break fetched,
-                    changed = stop.changed() => {
-                        if changed.is_err() || *stop.borrow() {
-                            return refused(FetchCallRefusal::Cancelled);
-                        }
-                    }
-                }
-            };
-            fetched.map_or_else(
-                |failure| refused(failure_refusal(failure)),
-                |placed| {
+        // Read once for the call's person before the environment is asked.
+        let answer = match source.read(0, 1).await {
+            Err(failure) => refused(source_refusal(failure)),
+            Ok(_) => match fetching.await {
+                Err(failure) => refused(failure_refusal(failure)),
+                Ok(placed) => {
                     let (already_placed, path) = match placed {
                         FetchPlaced::Placed { path } => (false, path),
                         FetchPlaced::AlreadyPlaced { path } => (true, path),
@@ -277,16 +258,23 @@ impl ConversationService {
                         digest: call.digest.clone(),
                         size,
                     }
-                },
-            )
-        })
-        .await
-        .unwrap_or(refused(FetchCallRefusal::TimedOut));
+                }
+            },
+        };
         taken.placed_nothing = match &answer {
             FetchAnswer::Placed { already_placed, .. } => Some(*already_placed),
             FetchAnswer::Refused(refusal) => refusal.placed_nothing(),
         };
         answer
+    }
+}
+
+/// Resolves once `stop` says the caller is gone, or can no longer say.
+async fn cancelled(stop: &mut watch::Receiver<bool>) {
+    while !*stop.borrow_and_update() {
+        if stop.changed().await.is_err() {
+            return;
+        }
     }
 }
 

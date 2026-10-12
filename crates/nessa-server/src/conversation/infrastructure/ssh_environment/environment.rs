@@ -59,7 +59,8 @@ use crate::conversation::application::{
 };
 use nessa_auth::application::pairing::DeviceConnectionProof;
 use nessa_protocol::lease::{
-    self, Cleanup, CommandEnd, GrantRefusal, COMMAND_STOP_WAIT, KEEPALIVE_INTERVAL, SILENCE_LIMIT,
+    self, Cleanup, CommandEnd, EndingCause, GrantRefusal, COMMAND_STOP_WAIT, KEEPALIVE_INTERVAL,
+    SILENCE_LIMIT,
 };
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
@@ -416,6 +417,7 @@ impl Environment for SshEnvironment {
             let Granted {
                 terms,
                 gone,
+                ending,
                 published,
             } = link
                 .grant(
@@ -435,6 +437,7 @@ impl Environment for SshEnvironment {
                     link,
                     lease: lease.as_str().into(),
                     gone,
+                    ending,
                     published: std::sync::Mutex::new(Some(published)),
                 }),
             })
@@ -507,6 +510,7 @@ fn granted(terms: lease::GrantedTerms) -> GrantedTerms {
     GrantedTerms {
         sandbox: terms.sandbox.into(),
         timeout_ms: terms.timeout_ms,
+        lease_ms: terms.lease_ms,
     }
 }
 
@@ -640,18 +644,26 @@ struct SshHold {
     /// Closed once the lease is no longer routed on its connection: taken
     /// at its grant, so a loss before anyone asks is still seen.
     gone: watch::Receiver<()>,
+    /// Why the host is ending it unasked, once it says so.
+    ending: watch::Receiver<Option<EndingCause>>,
     /// The files published under it, until [`LeaseHold::artifacts`] takes
     /// them.
     published: std::sync::Mutex<Option<mpsc::Receiver<Published>>>,
 }
 
 impl LeaseHold for SshHold {
-    fn lost(&self) -> Option<EnvironmentFuture<'static, ()>> {
-        let mut gone = self.gone.clone();
+    fn ends(&self) -> Option<EnvironmentFuture<'static, LeaseEndCause>> {
+        let mut ending = self.ending.clone();
         Some(Box::pin(async move {
-            // Only the route's end is waited for: it is never sent to, and
-            // a route already gone answers at once.
-            while gone.changed().await.is_ok() {}
+            // The host saying it is ending the lease, or the route's end; a
+            // route already gone answers at once. An `Ending` read before
+            // the route went is still what ended it.
+            let _ = ending.wait_for(Option::is_some).await;
+            let said = *ending.borrow();
+            match said {
+                Some(EndingCause::Expired) => LeaseEndCause::Expired,
+                None => LeaseEndCause::Lost,
+            }
         }))
     }
 

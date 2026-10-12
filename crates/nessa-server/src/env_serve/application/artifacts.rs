@@ -294,9 +294,9 @@ impl LeaseArtifacts {
     /// The lease ended: nothing more is published and what it staged is let
     /// go. An artifact still in flight is answered as ended with it when the
     /// gateway ended it, since the gateway answers each before its end; when
-    /// the lease was `lost` with the connection, it is left unanswered, as
-    /// the gateway may have kept it.
-    pub(crate) fn end(self, lost: bool) {
+    /// the gateway did not end it (`unasked`: lost with the connection, or
+    /// expired here), it is left unanswered, as the gateway may have kept it.
+    pub(crate) fn end(self, unasked: bool) {
         self.dispatcher.abort();
         let waiting: Vec<_> = {
             let mut in_flight = lock(&self.in_flight);
@@ -305,7 +305,7 @@ impl LeaseArtifacts {
         };
         // Recorded here, before the end itself is: each settled first.
         for (artifact, waiting) in waiting {
-            let outcome = (!lost).then_some(Collection::Refused {
+            let outcome = (!unasked).then_some(Collection::Refused {
                 reason: CollectionRefusal::LeaseEnded,
             });
             settle(

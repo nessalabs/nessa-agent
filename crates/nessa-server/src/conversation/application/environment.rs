@@ -27,12 +27,18 @@
 //! those are what is recorded, once checked here against what was asked.
 //! An answer granting anything else — another sandbox, or a timeout a lease
 //! of an agent does not have — is recorded refused, not granted as asked,
-//! and the environment is told to end it.
+//! and the environment is told to end it. A duration it grants a lease of
+//! an agent (`lease_ms`) is narrower than none, so it is accepted, and
+//! recorded as the lease's deadline from just before it was asked for: the
+//! earliest the environment's deadline can be. The environment, not this
+//! gateway, ends the lease once its own deadline passes
+//! ([`LeaseHold::ends`]).
 //!
 //! This module is the application's. The in-process adapter, the only one
 //! today, is `conversation::infrastructure::environment`; nothing in
 //! `product/` names either.
 use futures_util::FutureExt;
+use nessa_auth::application::ports::Clock;
 use nessa_protocol::lease::{CollectionRefusal, FetchRefusal, PublishRefusal};
 use nessa_sdk::application::agent_execution::{
     agents::{Agent, AgentError},
@@ -117,6 +123,9 @@ pub(crate) struct GrantedTerms {
     /// How long a command may run; `None` for a lease of an agent, which
     /// has no timeout.
     pub(crate) timeout_ms: Option<u64>,
+    /// How long a lease of an agent may last from its grant before the
+    /// environment ends it; `None` until it is ended, and for a command.
+    pub(crate) lease_ms: Option<u64>,
 }
 
 /// A lease an environment admitted: the provider that reaches the agent
@@ -138,9 +147,12 @@ pub(crate) struct EnvironmentLease {
 /// [`Self::end`] asks the environment to end it, unanswered.
 pub(crate) trait LeaseHold: Send + Sync {
     /// Resolves once the environment can no longer run anything for the
-    /// lease, such as its connection being lost (row L10). `None` when that
-    /// cannot happen apart from the gateway itself, as in process.
-    fn lost(&self) -> Option<EnvironmentFuture<'static, ()>>;
+    /// lease, with why: [`LeaseEndCause::Lost`] for its connection lost (row
+    /// L10), [`LeaseEndCause::Expired`] for the environment ending it past
+    /// the duration it granted (row I7). It also resolves, as lost, once the
+    /// lease ends. `None` when that cannot happen apart from the gateway
+    /// itself, as in process.
+    fn ends(&self) -> Option<EnvironmentFuture<'static, LeaseEndCause>>;
     /// End the lease for `cause`: the environment stops anything still
     /// running under it and answers what releasing it took. The caller bounds
     /// the wait.
@@ -336,21 +348,25 @@ pub(crate) struct LeaseOpening {
 /// terms the environment answered, which must be exactly the sandbox asked
 /// and no timeout; any other answer is refused
 /// [`LeaseRefusal::EnvironmentNotGranted`], and the hold it came with is let
-/// go, which ends the lease there.
+/// go, which ends the lease there. A duration granted (`lease_ms`) is
+/// recorded as the deadline it gives from `clock` read before the lease is
+/// asked for: the earliest the environment's own deadline can be, so the
+/// environment's expiry, which is the authority, never comes before it.
 pub(crate) async fn open_lease(
     environment: &dyn Environment,
     request: LeaseRequest,
     binding: Arc<dyn AgentProvider>,
+    clock: &dyn Clock,
 ) -> LeaseOpening {
     let declaration = environment.declaration();
     let lease = LeaseId::new(uuid::Uuid::new_v4().to_string())
         .expect("a UUID is a portable lease identity");
-    let terms = |sandbox| LeaseTerms {
+    let terms = |sandbox, deadline| LeaseTerms {
         environment: declaration.environment.clone(),
         work: LeaseWork::Agent(request.work.clone()),
         sandbox,
         grants: LeaseGrants::Opening,
-        deadline: LeaseDeadline::UntilEnded,
+        deadline,
     };
     let admitted = match declaration
         .sandbox
@@ -358,16 +374,34 @@ pub(crate) async fn open_lease(
         .admit(request.sandbox)
     {
         Ok(granted) => {
+            // Read before the ask: the environment's grant, and so its
+            // deadline, comes at or after this.
+            let asked_at = clock.unix_milliseconds();
             let asked = GrantedTerms {
                 sandbox: granted,
                 timeout_ms: None,
+                lease_ms: None,
             };
             match environment
-                .open(&lease, &terms(granted), binding.clone())
+                .open(
+                    &lease,
+                    &terms(granted, LeaseDeadline::UntilEnded),
+                    binding.clone(),
+                )
                 .await
             {
-                Ok(opened) if opened.granted == asked => {
-                    Ok((terms(opened.granted.sandbox), opened))
+                // Any duration is narrower than the none asked.
+                Ok(opened)
+                    if GrantedTerms {
+                        lease_ms: None,
+                        ..opened.granted
+                    } == asked =>
+                {
+                    let deadline = match opened.granted.lease_ms {
+                        Some(ms) => LeaseDeadline::At(asked_at.saturating_add(ms)),
+                        None => LeaseDeadline::UntilEnded,
+                    };
+                    Ok((terms(opened.granted.sandbox, deadline), opened))
                 }
                 Ok(opened) => {
                     tracing::warn!(
@@ -395,7 +429,7 @@ pub(crate) async fn open_lease(
         Err(refusal) => LeaseOpening {
             fence: LeaseFence::new(lease.clone(), binding, FencePhase::Closed),
             lease,
-            terms: terms(request.sandbox),
+            terms: terms(request.sandbox, LeaseDeadline::UntilEnded),
             refusal: Some(refusal),
             hold: None,
             workspace: None,
@@ -819,10 +853,10 @@ impl LiveLease {
     }
 
     /// Resolves once the environment can no longer run anything for this
-    /// lease (row L10); `None` when that cannot happen apart from the
-    /// gateway itself.
-    pub(crate) fn lost(&self) -> Option<EnvironmentFuture<'static, ()>> {
-        self.hold.as_ref().and_then(|hold| hold.lost())
+    /// lease, with why ([`LeaseHold::ends`]); `None` when that cannot happen
+    /// apart from the gateway itself.
+    pub(crate) fn ends(&self) -> Option<EnvironmentFuture<'static, LeaseEndCause>> {
+        self.hold.as_ref().and_then(|hold| hold.ends())
     }
 
     /// Ask the environment to publish a file under this lease; see
