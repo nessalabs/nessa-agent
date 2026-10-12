@@ -22,12 +22,12 @@ use crate::application::agent_execution::executions::{
 };
 use crate::application::agent_execution::hooks::{
     EvaluationSuffix, HookFailureKind, HookRegistration, InvocationHook, InvocationHooks,
-    PermissionReviewDecision, ToolVerdict, PRE_TOOL_HOOK_DEADLINE,
+    PermissionHookThreadGuard, PermissionReviewDecision, ToolVerdict, PRE_TOOL_HOOK_DEADLINE,
 };
 use crate::application::agent_execution::permissions::{
-    ActionContext, ApprovalAttribution, HookRefusal, PermissionAnswer, PermissionAnswerFailure,
-    PermissionAnswerFuture, PermissionCancellation, PermissionCancellationRequest,
-    PermissionSelectionState, QuestionAnswer,
+    ActionContext, ApprovalAttribution, ApprovalBasis, HookRefusal, PermissionAnswer,
+    PermissionAnswerFailure, PermissionAnswerFuture, PermissionCancellation,
+    PermissionCancellationRequest, PermissionSelectionState, QuestionAnswer,
 };
 use crate::application::agent_execution::providers::{
     validate_configured_input, AgentProvider, ApprovalMode, CleanupReport, CloseOutcome,
@@ -36,8 +36,8 @@ use crate::application::agent_execution::providers::{
     ProviderOperationResult, ProviderSessionState, SessionCloseRequest,
 };
 use crate::application::agent_execution::sessions::{
-    AttachmentOpenFailureSource, InvocationCancellationEvent, ProviderContext, SessionManager,
-    StorageError,
+    AttachmentOpenFailureSource, InvocationCancellationEvent, MessageCommitSleep, ProviderContext,
+    SessionManager, StorageError,
 };
 use crate::domain::agent_execution::permissions::{
     CustomPermissionCancellationReason, PermissionAuthorityError, PermissionCancellationReason,
@@ -102,11 +102,14 @@ struct SupervisedWait<'a, Execution> {
     result_known: bool,
 }
 
-struct ClearHookGuard(Arc<AtomicBool>);
+struct ClearHookGuard {
+    running: Arc<AtomicBool>,
+    _permit: PermissionHookThreadGuard,
+}
 
 impl Drop for ClearHookGuard {
     fn drop(&mut self) {
-        self.0.store(false, Ordering::Release);
+        self.running.store(false, Ordering::Release);
     }
 }
 
@@ -114,14 +117,18 @@ impl Drop for ClearHookGuard {
 ///
 /// Stop wins when it is already signaled and returns [`ToolVerdict::Stopped`].
 /// A timeout or a panicked task is a hook failure, which denies the call and
-/// lets the turn continue. A previous hook thread that is still running is
-/// refused immediately as busy, without another blocking thread. A runtime
-/// refusal records no hook index.
+/// lets the turn continue. A previous hook thread that is still running, or a
+/// process that already holds its hook-thread budget, is refused immediately
+/// as busy, without another blocking thread. Dropping the wait does not stop
+/// the callback: it keeps its thread until it returns, and its verdict is
+/// discarded. A runtime refusal records no hook index. `deadline` is the
+/// session clock's wake for the hook limit.
 async fn run_pre_tool_hook<Execution>(
     hooks: InvocationHooks,
     event: ExecutionEvent,
     suffix: EvaluationSuffix,
     running: &Arc<AtomicBool>,
+    deadline: MessageCommitSleep,
     wait: &mut SupervisedWait<'_, Execution>,
 ) -> PermissionReviewDecision
 where
@@ -142,14 +149,23 @@ where
             verdict: ToolVerdict::hook_failed(HookFailureKind::Busy),
         };
     }
-    let guard = ClearHookGuard(Arc::clone(running));
+    let Some(permit) = PermissionHookThreadGuard::try_acquire() else {
+        running.store(false, Ordering::Release);
+        return PermissionReviewDecision {
+            index: None,
+            verdict: ToolVerdict::hook_failed(HookFailureKind::Busy),
+        };
+    };
+    let guard = ClearHookGuard {
+        running: Arc::clone(running),
+        _permit: permit,
+    };
     let task = tokio::task::spawn_blocking(move || {
         let decision = hooks.before_permission_review(&event, &suffix);
         drop(guard);
         decision
     });
     tokio::pin!(task);
-    let deadline = tokio::time::sleep(PRE_TOOL_HOOK_DEADLINE);
     tokio::pin!(deadline);
     loop {
         tokio::select! {
@@ -1701,11 +1717,16 @@ impl Agent {
                                     .with_invocation_events(index, EvaluationSuffix::capture)
                                     .await
                                     .unwrap_or_else(|_| EvaluationSuffix::incomplete());
+                                let now = self.inner.manager.message_commit_now();
+                                let deadline = self.inner.manager.message_commit_sleep_until(
+                                    now.saturating_add(PRE_TOOL_HOOK_DEADLINE),
+                                );
                                 decision = run_pre_tool_hook(
                                     hooks.clone(),
                                     review,
                                     suffix,
                                     &self.inner.permission_hook_running,
+                                    deadline,
                                     &mut SupervisedWait {
                                         execution: execution.as_mut(),
                                         stop_notice: &mut stop_notice,
@@ -1932,12 +1953,18 @@ impl Agent {
     ) -> Result<(), AgentError> {
         let (id, attribution, explanation) = hook_attribution(event, index, reason, outcome)?;
         if let Some(option_id) = deny_option(event) {
-            self.answer_permission(PermissionAnswer {
-                attribution,
-                execution_id: event.execution_id().clone(),
-                id,
-                option_id,
-            })
+            // The runner applies end-turn after this answer. A public answer
+            // cannot record that outcome, because answering a deny does not
+            // itself cancel the turn.
+            self.answer_permission_with_outcome(
+                PermissionAnswer {
+                    attribution,
+                    execution_id: event.execution_id().clone(),
+                    id,
+                    option_id,
+                },
+                true,
+            )
             .await
             .map(|_| ())
             .map_err(|failure| failure.into_parts().0)
@@ -2073,12 +2100,37 @@ impl Agent {
     /// whose selection state distinguishes a still-pending review from a consumed
     /// decision and from an interrupted outcome that must be reloaded.
     ///
+    /// A hook basis on this path records continue. End-turn and close-session
+    /// are the runner's transitions: answering a deny does not itself cancel
+    /// the turn or close the session. A public answer with either of those
+    /// outcomes is rejected as invalid input and the review stays pending.
+    ///
     /// The caller's `Waker` is woken when the operation's own task finishes;
     /// a panic from it is logged and does not affect the operation. See
     /// "Caller wakers" in docs/agent_execution/lifecycle.md.
     pub fn answer_permission(&self, answer: PermissionAnswer) -> PermissionAnswerFuture<'_> {
+        self.answer_permission_with_outcome(answer, false)
+    }
+
+    fn answer_permission_with_outcome(
+        &self,
+        answer: PermissionAnswer,
+        runner_applies_outcome: bool,
+    ) -> PermissionAnswerFuture<'_> {
         let agent = self.clone();
         Box::pin(async move {
+            if !runner_applies_outcome {
+                if let ApprovalBasis::Hook(refusal) = answer.attribution.basis() {
+                    if refusal.outcome() != &RefusalOutcome::Continue {
+                        return Err(PermissionAnswerFailure::new(
+                            AgentError::InvalidInput(
+                                "a hook answer records continue; the runner applies end-turn and close-session".into(),
+                            ),
+                            PermissionSelectionState::Pending,
+                        ));
+                    }
+                }
+            }
             let admission = agent.accept_control().map_err(|error| {
                 PermissionAnswerFailure::new(error, PermissionSelectionState::Pending)
             })?;

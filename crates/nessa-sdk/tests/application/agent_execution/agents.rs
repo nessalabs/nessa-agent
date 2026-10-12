@@ -433,6 +433,19 @@ impl MemoryStorage {
         .await
         .unwrap()
     }
+
+    pub(super) async fn manager_with_clock(
+        &self,
+        clock: Arc<dyn nessa_sdk::application::agent_execution::sessions::MessageCommitClock>,
+    ) -> SessionManager {
+        SessionManager::open(
+            Some(SessionId::new("conversation").unwrap()),
+            Arc::new(self.clone()),
+            clock,
+        )
+        .await
+        .unwrap()
+    }
     pub(super) fn snapshot(&self) -> SessionSnapshot {
         self.0.lock().unwrap().snapshot.clone().unwrap()
     }

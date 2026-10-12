@@ -83,12 +83,23 @@ deny-and-continue with the reason `"hook failed: error"`,
 `"hook failed: panic"`, `"hook failed: timeout"`, or `"hook failed: busy"`.
 A stop that arrives while the hook is running, or that was already observed
 before the review, does not publish the review and does not answer it. While
-an earlier hook thread is still running, a later review is refused immediately,
-without another blocking thread.
+an earlier hook thread is still running, or while the process already holds
+its 32 hook threads, a later review is refused immediately, without another
+blocking thread.
+
+A public permission answer records a hook basis only for continue. End-turn
+and close-session are the runner's transitions: answering a deny does not
+itself cancel the turn or close the session. The runner's own answer path
+records end-turn and then cancels the turn. A public answer with either of
+those outcomes is rejected and the review stays pending.
 
 The review is human-paced. The suffix is copied, the evidence lock is released,
-and the hook runs on a blocking thread for at most two seconds, selected
-against stop. A stop that arrives first wins. Before and after hooks see the
+and the hook runs on a blocking thread until the session's injected
+message-commit clock advances two seconds, selected against stop. A stop that
+arrives first wins. Dropping the wait does not cancel the callback. The
+blocking task cannot be cancelled, so a hook that overruns keeps its thread
+until it returns; its late verdict is discarded, and it must not re-enter the
+session. Before and after hooks see the
 same window type from the same bounded copy. A failed capture runs the after
 hooks with an empty window marked incomplete, and keeps the provider result.
 An incomplete window does not by itself fail the tool. A rule that requires a
@@ -118,8 +129,10 @@ older text visible and the incomplete fact honest.
 
 Hook authors match text across chunk boundaries, see thinking, and tell each
 event's kind apart. They treat an inconclusive phrase and an incomplete window
-as a no when they need the whole turn. Permission-review callbacks return
-within two seconds and do not hold the evidence lock. A hook error does not
+as a no when they need the whole turn. Permission-review callbacks are waited
+on for two seconds of the session's message-commit clock and do not hold the
+evidence lock. A callback that overruns keeps its blocking thread until it
+returns. A hook error does not
 close the session. A close-session verdict does, and the close is a policy
 refusal. A refusal is audited as the hook, with its index, capped reason, and
 the outcome that was applied.

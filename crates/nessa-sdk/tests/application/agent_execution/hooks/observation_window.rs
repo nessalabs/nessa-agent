@@ -375,6 +375,15 @@ async fn open_fixture(
     hooks: Vec<Arc<dyn InvocationHook>>,
     knobs: FixtureKnobs,
 ) -> Fixture {
+    open_on_clock(events, hooks, knobs, None).await
+}
+
+async fn open_on_clock(
+    events: Vec<ExecutionEvent>,
+    hooks: Vec<Arc<dyn InvocationHook>>,
+    knobs: FixtureKnobs,
+    clock: Option<Arc<dyn MessageCommitClock>>,
+) -> Fixture {
     let storage = MemoryStorage::default();
     let answered = Arc::new(AtomicUsize::new(0));
     let cancelled = Arc::new(AtomicUsize::new(0));
@@ -400,7 +409,10 @@ async fn open_fixture(
             turn_cancel: knobs.turn_cancel,
             fail_delivery: knobs.fail_delivery,
         }),
-        storage.manager().await,
+        match clock {
+            Some(clock) => storage.manager_with_clock(clock).await,
+            None => storage.manager().await,
+        },
     )
     .await
     .unwrap();
@@ -1016,6 +1028,114 @@ async fn a_hook_past_the_deadline_is_deny_and_continue() {
         .invoke(second_request(), close_action())
         .await
         .expect("the session stays usable");
+}
+
+struct ManualMessageClock(tokio::sync::watch::Sender<std::time::Duration>);
+
+impl ManualMessageClock {
+    fn new() -> Self {
+        Self(tokio::sync::watch::channel(std::time::Duration::ZERO).0)
+    }
+
+    fn advance(&self, duration: std::time::Duration) {
+        let next = *self.0.borrow() + duration;
+        self.0.send_replace(next);
+    }
+}
+
+impl MessageCommitClock for ManualMessageClock {
+    fn now(&self) -> std::time::Duration {
+        *self.0.borrow()
+    }
+
+    fn sleep_until(&self, deadline: std::time::Duration) -> MessageCommitSleep {
+        let mut changes = self.0.subscribe();
+        Box::pin(async move {
+            loop {
+                if *changes.borrow() >= deadline {
+                    return;
+                }
+                changes.changed().await.expect("manual clock remains owned");
+            }
+        })
+    }
+}
+
+struct ReleasableHook {
+    entered: Arc<AtomicBool>,
+    release: Arc<AtomicBool>,
+}
+
+impl InvocationHook for ReleasableHook {
+    fn before_permission_review(
+        &self,
+        _: &ProposedToolCall<'_>,
+        _: &InvocationObservationWindow<'_>,
+    ) -> Result<ToolVerdict, HookError> {
+        self.entered.store(true, Ordering::SeqCst);
+        while !self.release.load(Ordering::SeqCst) {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        Ok(ToolVerdict::Allow)
+    }
+}
+
+struct ReleaseOnDrop(Arc<AtomicBool>);
+
+impl Drop for ReleaseOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_substituted_message_clock_times_out_a_slow_hook() {
+    let clock = Arc::new(ManualMessageClock::new());
+    let entered = Arc::new(AtomicBool::new(false));
+    let release = Arc::new(AtomicBool::new(false));
+    let _release = ReleaseOnDrop(release.clone());
+    let fixture = open_on_clock(
+        script(),
+        vec![Arc::new(ReleasableHook {
+            entered: entered.clone(),
+            release,
+        })],
+        FixtureKnobs {
+            turn_cancel: true,
+            fail_delivery: false,
+        },
+        Some(clock.clone()),
+    )
+    .await;
+    let runner = fixture.agent.clone();
+    let turn = tokio::spawn(async move { runner.invoke(request(), close_action()).await });
+    let wait_started = std::time::Instant::now();
+    while !entered.load(Ordering::SeqCst) {
+        assert!(
+            wait_started.elapsed() < std::time::Duration::from_secs(2),
+            "the hook never started"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    let started = std::time::Instant::now();
+    clock.advance(std::time::Duration::from_secs(2));
+    let finished = tokio::time::timeout(std::time::Duration::from_millis(800), turn).await;
+    let elapsed = started.elapsed();
+    let turn_result = finished
+        .expect("the substituted clock did not time the hook out")
+        .unwrap();
+    turn_result.expect("timeout is deny-and-continue");
+    assert!(
+        elapsed < std::time::Duration::from_secs(1),
+        "turn waited {elapsed:?} of real time for a two-second message-commit deadline"
+    );
+    {
+        let answers = fixture.answers.lock().unwrap();
+        let refusal = hook_refusal(&answers[0]);
+        assert_eq!(refusal.reason(), "hook failed: timeout");
+        assert_eq!(refusal.index(), None);
+        assert_eq!(answers[0].attribution.actor().surface_id(), "runtime");
+    }
 }
 
 #[tokio::test]

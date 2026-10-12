@@ -101,6 +101,46 @@ fn a_hook_refusal_cannot_select_an_allow_option() {
 }
 
 #[tokio::test]
+async fn a_public_hook_answer_records_only_continue() {
+    let agent = reviewed_agent(Arc::new(InMemoryPermissionBackend {
+        execution: Mutex::new(pending_controller()),
+        cancellations: Mutex::new(Vec::new()),
+        closures: Mutex::new(Vec::new()),
+    }))
+    .await;
+    let permission = PermissionId::new("permission").unwrap();
+    for outcome in [RefusalOutcome::EndTurn, RefusalOutcome::CloseSession] {
+        let failure = agent
+            .answer_permission(PermissionAnswer {
+                execution_id: ExecutionId::new("execution").unwrap(),
+                id: permission.clone(),
+                option_id: PermissionOptionId::new("allow").unwrap(),
+                attribution: ApprovalAttribution::hook(
+                    &permission,
+                    HookRefusal::new(Some(0), "stop", outcome),
+                )
+                .unwrap(),
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(failure.error(), AgentError::InvalidInput(_)));
+        assert_eq!(failure.selection(), PermissionSelectionState::Pending);
+    }
+    agent
+        .answer_permission(PermissionAnswer {
+            execution_id: ExecutionId::new("execution").unwrap(),
+            id: permission,
+            option_id: PermissionOptionId::new("allow").unwrap(),
+            attribution: ApprovalAttribution::new(
+                ActionContext::new("human", "nessa.panel", "grant-request").unwrap(),
+                ApprovalBasis::Explicit,
+            ),
+        })
+        .await
+        .expect("the rejected hook answer left the review pending");
+}
+
+#[tokio::test]
 async fn substituted_binding_preserves_each_actors_explicit_mode_or_rule_basis() {
     let human = ActionContext::new("human", "nessa.panel", "grant-request").unwrap();
     let bases = [

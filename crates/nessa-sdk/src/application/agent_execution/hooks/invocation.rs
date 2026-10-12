@@ -10,7 +10,10 @@ use crate::domain::agent_execution::{
 };
 use std::{
     panic::{catch_unwind, AssertUnwindSafe},
-    sync::Arc,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
     time::Duration,
 };
 
@@ -19,6 +22,43 @@ use std::{
 /// The review is human-paced. Two seconds stays under an eight-second permission
 /// deadline, so a hook that does not return cannot consume that deadline.
 pub(crate) const PRE_TOOL_HOOK_DEADLINE: Duration = Duration::from_secs(2);
+
+/// Most permission-review hook threads one process will run at once.
+///
+/// A hook that passes the deadline keeps its thread until the callback returns.
+/// This cap leaves the rest of Tokio's blocking pool for file and process work.
+pub(crate) const MAX_PERMISSION_HOOK_THREADS: usize = 32;
+
+static PERMISSION_HOOK_THREADS: AtomicUsize = AtomicUsize::new(0);
+
+/// One process-wide permission-review hook thread, released when the callback returns.
+pub(crate) struct PermissionHookThreadGuard;
+
+impl PermissionHookThreadGuard {
+    /// Reserve a hook thread, or `None` when [`MAX_PERMISSION_HOOK_THREADS`] are out.
+    pub(crate) fn try_acquire() -> Option<Self> {
+        try_increment_counter(&PERMISSION_HOOK_THREADS, MAX_PERMISSION_HOOK_THREADS).then_some(Self)
+    }
+}
+
+impl Drop for PermissionHookThreadGuard {
+    fn drop(&mut self) {
+        decrement_counter(&PERMISSION_HOOK_THREADS);
+    }
+}
+
+#[allow(deprecated, reason = "Rust 1.89 MSRV; try_update requires Rust 1.95")]
+fn try_increment_counter(count: &AtomicUsize, limit: usize) -> bool {
+    count
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            (current < limit).then_some(current + 1)
+        })
+        .is_ok()
+}
+
+fn decrement_counter(count: &AtomicUsize) {
+    count.fetch_sub(1, Ordering::Release);
+}
 
 /// The exact submitted input and the invocation's observation window.
 /// An invocation is an attempt, not proof of admission. `observations` borrows
@@ -145,9 +185,13 @@ pub trait InvocationHook: Send + Sync {
     /// review and answers it according to [`RefusalOutcome`], attributed to the
     /// hook rather than the person who submitted the turn. [`Err`] is a hook
     /// failure: the review is kept and answered as deny-and-continue with the
-    /// reason `"hook failed: error"`. A deadline is `"hook failed: timeout"`.
-    /// A review that arrives while an earlier hook thread is still running is
-    /// `"hook failed: busy"` and does not start another thread. The borrows last
+    /// reason `"hook failed: error"`. The runner stops waiting when the session's
+    /// message-commit clock has advanced two seconds; that deadline is
+    /// `"hook failed: timeout"`. A callback that is still running then keeps its
+    /// thread until it returns. Its late verdict is discarded. A review that
+    /// arrives while an earlier hook thread is still running, or while the
+    /// process already holds its hook-thread budget, is `"hook failed: busy"`
+    /// and does not start another thread. The borrows last
     /// only for this call. The hook must return promptly and must not re-enter
     /// the session. Do not return [`ToolVerdict::Stopped`]. The runner uses
     /// that verdict when the turn is already stopping. A hook that returns it
@@ -313,4 +357,19 @@ fn invoke_verdict(
     callback: impl FnOnce() -> Result<ToolVerdict, HookError>,
 ) -> Result<ToolVerdict, HookError> {
     catch_unwind(AssertUnwindSafe(callback)).unwrap_or(Err(HookError::Panicked))
+}
+
+#[cfg(test)]
+mod hook_thread_budget {
+    use super::{decrement_counter, try_increment_counter};
+    use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn the_process_budget_refuses_once_the_limit_is_held() {
+        let count = AtomicUsize::new(0);
+        assert!(try_increment_counter(&count, 1));
+        assert!(!try_increment_counter(&count, 1));
+        decrement_counter(&count);
+        assert!(try_increment_counter(&count, 1));
+    }
 }

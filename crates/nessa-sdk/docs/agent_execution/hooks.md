@@ -58,9 +58,14 @@ still matches. Messages that both lack an id share that identity. A miss is
 that needs the whole turn treats `Inconclusive`, and `!is_complete()`, as a no.
 
 The suffix is copied and the evidence lock is released before the callback. A
-permission-review hook runs on a blocking thread for at most two seconds and
-yields when stop arrives. While an earlier hook thread has not returned, a
-later review is refused immediately, without another blocking thread.
+permission-review hook runs on a blocking thread until the session's
+message-commit clock advances two seconds, and it yields when stop arrives.
+Dropping that wait does not cancel the callback: the blocking task cannot be
+cancelled, so a hook that overruns keeps its thread until it returns, its late
+verdict is discarded, and it must not re-enter the session. One process runs
+at most 32 of those threads. A review that arrives while that budget is held,
+or while this agent's earlier hook thread has not returned, is refused
+immediately as `"hook failed: busy"`, without another blocking thread.
 `ToolVerdict::Allow` leaves the review for the provider's ordinary answer.
 `ToolVerdict::Stopped` means the turn is already stopping: the review is
 retained, not published, and not answered. `Refuse { Continue }` keeps the

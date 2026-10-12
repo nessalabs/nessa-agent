@@ -13,8 +13,11 @@
 //!
 //! The copy is the evaluation suffix: at most 256 events and 64 KiB, including
 //! thinking. The evidence lock is released before the callback. A permission
-//! review is human-paced, so the hook runs on a blocking thread with a two-second
-//! limit and yields to stop. Every event kind is visible; [`ObservationKind`]
+//! review is human-paced, so the hook runs on a blocking thread until the
+//! session's message-commit clock advances two seconds, and it yields to stop.
+//! A callback that overruns keeps that thread until it returns; its late verdict
+//! is discarded. One process runs at most 32 of those threads. Every event kind
+//! is visible; [`ObservationKind`]
 //! tells them apart. Tools the harness runs without asking never reach the
 //! permission-review hook.
 
@@ -30,7 +33,9 @@ mod invocation;
 pub use invocation::{
     HookError, HookFailure, InvocationContext, InvocationHook, InvocationHooks, ToolVerdict,
 };
-pub(crate) use invocation::{HookFailureKind, PermissionReviewDecision, PRE_TOOL_HOOK_DEADLINE};
+pub(crate) use invocation::{
+    HookFailureKind, PermissionHookThreadGuard, PermissionReviewDecision, PRE_TOOL_HOOK_DEADLINE,
+};
 
 mod callbacks;
 pub use callbacks::{

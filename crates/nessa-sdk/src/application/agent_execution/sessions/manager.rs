@@ -1,10 +1,10 @@
 use super::{
     app_sources, artifacts::ArtifactRefusal, attachment::AttachmentLease,
     steering_position::SteeringPosition, ArtifactRecord, CurrentLease, InvocationCancellationEvent,
-    InvocationRecord, InvocationSchedulingEvent, LeaseRecord, MessageCommitClock, ProviderContext,
-    PublishedFile, QueueHistoryRecord, SessionChange, SessionLoadState, SessionSaveGeneration,
-    SessionSaveUnit, SessionSnapshot, SessionStorage, SessionStorageLease, StorageError,
-    StorageFuture, SubmissionAcknowledgement,
+    InvocationRecord, InvocationSchedulingEvent, LeaseRecord, MessageCommitClock,
+    MessageCommitSleep, ProviderContext, PublishedFile, QueueHistoryRecord, SessionChange,
+    SessionLoadState, SessionSaveGeneration, SessionSaveUnit, SessionSnapshot, SessionStorage,
+    SessionStorageLease, StorageError, StorageFuture, SubmissionAcknowledgement,
 };
 use crate::application::agent_execution::{
     agents::AgentError,
@@ -329,6 +329,14 @@ impl SessionManager {
     }
     pub(crate) async fn wait_for_message_deadline(&self, deadline: Duration) {
         self.message_commit_clock.sleep_until(deadline).await;
+    }
+    /// Elapsed time on the injected message-commit clock.
+    pub(crate) fn message_commit_now(&self) -> Duration {
+        self.message_commit_clock.now()
+    }
+    /// Wake when the injected message-commit clock reaches `deadline`.
+    pub(crate) fn message_commit_sleep_until(&self, deadline: Duration) -> MessageCommitSleep {
+        self.message_commit_clock.sleep_until(deadline)
     }
     pub(crate) async fn flush_due_messages(
         &self,

@@ -141,7 +141,10 @@ Every answer requires an immutable application `ApprovalAttribution`:
   permission-review hook: registration index when a hook returned (`null` when
   the runtime refused), reason capped at 1024 bytes, and the outcome that was
   applied. Its actor is `permission-review-hook`, not the
-  person who submitted the turn. An end-turn the binding cannot perform is
+  person who submitted the turn. A public answer records a hook basis only for
+  continue. End-turn and close-session are the runner's transitions; a public
+  answer with either outcome is rejected and the review stays pending. An
+  end-turn the binding cannot perform is
   recorded as continue. Automatic answers use their own
   host actor, preserving the human grantor separately. Hosts retain referenced
   configuration/rule revisions; these values do not implement a policy evaluator.
