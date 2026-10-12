@@ -12,15 +12,21 @@
 //! kind instead.
 use super::{permissions::Actor, tools::corrupt};
 use crate::{
-    application::agent_execution::sessions::{CurrentLease, LeaseRecord, StorageError},
-    domain::agent_execution::{
-        executions::ExecutionId,
-        leases::{
-            AgentWork, CommandExit, CommandOutput, CommandRefusal, CommandTerms, CommandWork,
-            EnvironmentRef, LeaseCleanup, LeaseDeadline, LeaseEndCause, LeaseGrants, LeaseId,
-            LeaseRefusal, LeaseRevision, LeaseTerms, LeaseWork, PeerEnvironment, SandboxProfile,
-            SshDestination,
+    application::agent_execution::sessions::{
+        CurrentLease, EnvironmentFetchRefusal, EnvironmentPath, FetchOutcome, FetchRefusalReason,
+        LeaseRecord, PublishedFile, StorageError,
+    },
+    domain::{
+        agent_execution::{
+            executions::ExecutionId,
+            leases::{
+                AgentWork, CommandExit, CommandOutput, CommandRefusal, CommandTerms, CommandWork,
+                EnvironmentRef, LeaseCleanup, LeaseDeadline, LeaseEndCause, LeaseGrants, LeaseId,
+                LeaseRefusal, LeaseRevision, LeaseTerms, LeaseWork, PeerEnvironment,
+                SandboxProfile, SshDestination,
+            },
         },
+        common::value_objects::{MediaType, Sha256Digest},
     },
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -104,6 +110,8 @@ const COMMAND_REFUSED_V2: &str = "command_refused_v2";
 /// as asked (issue #706), on any environment, likewise.
 const COMMAND_REFUSED_V3: &str = "command_refused_v3";
 const COMMAND_ENDED: &str = "command_ended";
+const FETCH_ASKED: &str = "fetch_asked";
+const FETCH_ENDED: &str = "fetch_ended";
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -168,6 +176,57 @@ struct CommandEnd {
     exit: Exit,
     output: Output,
     cleanup: Option<Cleanup>,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FetchAsk {
+    lease: String,
+    request: String,
+    digest: String,
+    media_type: String,
+    size: u64,
+    destination: String,
+    actor: Actor,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FetchEnd {
+    lease: String,
+    request: String,
+    outcome: Fetched,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+enum Fetched {
+    Placed { path: String },
+    AlreadyPlaced { path: String },
+    Refused(FetchRefused),
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+enum FetchRefused {
+    Environment(EnvironmentFetch),
+    NotHeld,
+    SourceUnavailable,
+    ChannelUnavailable,
+    Unanswered,
+    TimedOut,
+    Cancelled,
+    AuditUnavailable,
+}
+#[derive(Serialize, Deserialize)]
+enum EnvironmentFetch {
+    Unavailable,
+    OutsideWorkspace,
+    NoDirectory,
+    Occupied,
+    Size,
+    Invalid,
+    Busy,
+    Mismatch,
+    PlacingFailed,
+    AuditUnavailable,
+    LeaseEnded,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -279,6 +338,95 @@ impl From<CommandRefused> for CommandRefusal {
     }
 }
 
+impl From<&FetchOutcome> for Fetched {
+    fn from(value: &FetchOutcome) -> Self {
+        match value {
+            FetchOutcome::Placed { path } => Self::Placed {
+                path: path.as_str().into(),
+            },
+            FetchOutcome::AlreadyPlaced { path } => Self::AlreadyPlaced {
+                path: path.as_str().into(),
+            },
+            FetchOutcome::Refused(reason) => Self::Refused((*reason).into()),
+        }
+    }
+}
+impl Fetched {
+    fn decode(self) -> Result<FetchOutcome, StorageError> {
+        let path = |path| EnvironmentPath::new(path).map_err(corrupt);
+        Ok(match self {
+            Self::Placed { path: placed } => FetchOutcome::Placed {
+                path: path(placed)?,
+            },
+            Self::AlreadyPlaced { path: placed } => FetchOutcome::AlreadyPlaced {
+                path: path(placed)?,
+            },
+            Self::Refused(reason) => FetchOutcome::Refused(reason.into()),
+        })
+    }
+}
+impl From<FetchRefusalReason> for FetchRefused {
+    fn from(value: FetchRefusalReason) -> Self {
+        match value {
+            FetchRefusalReason::Environment(reason) => Self::Environment(reason.into()),
+            FetchRefusalReason::NotHeld => Self::NotHeld,
+            FetchRefusalReason::SourceUnavailable => Self::SourceUnavailable,
+            FetchRefusalReason::ChannelUnavailable => Self::ChannelUnavailable,
+            FetchRefusalReason::Unanswered => Self::Unanswered,
+            FetchRefusalReason::TimedOut => Self::TimedOut,
+            FetchRefusalReason::Cancelled => Self::Cancelled,
+            FetchRefusalReason::AuditUnavailable => Self::AuditUnavailable,
+        }
+    }
+}
+impl From<FetchRefused> for FetchRefusalReason {
+    fn from(value: FetchRefused) -> Self {
+        match value {
+            FetchRefused::Environment(reason) => Self::Environment(reason.into()),
+            FetchRefused::NotHeld => Self::NotHeld,
+            FetchRefused::SourceUnavailable => Self::SourceUnavailable,
+            FetchRefused::ChannelUnavailable => Self::ChannelUnavailable,
+            FetchRefused::Unanswered => Self::Unanswered,
+            FetchRefused::TimedOut => Self::TimedOut,
+            FetchRefused::Cancelled => Self::Cancelled,
+            FetchRefused::AuditUnavailable => Self::AuditUnavailable,
+        }
+    }
+}
+impl From<EnvironmentFetchRefusal> for EnvironmentFetch {
+    fn from(value: EnvironmentFetchRefusal) -> Self {
+        match value {
+            EnvironmentFetchRefusal::Unavailable => Self::Unavailable,
+            EnvironmentFetchRefusal::OutsideWorkspace => Self::OutsideWorkspace,
+            EnvironmentFetchRefusal::NoDirectory => Self::NoDirectory,
+            EnvironmentFetchRefusal::Occupied => Self::Occupied,
+            EnvironmentFetchRefusal::Size => Self::Size,
+            EnvironmentFetchRefusal::Invalid => Self::Invalid,
+            EnvironmentFetchRefusal::Busy => Self::Busy,
+            EnvironmentFetchRefusal::Mismatch => Self::Mismatch,
+            EnvironmentFetchRefusal::PlacingFailed => Self::PlacingFailed,
+            EnvironmentFetchRefusal::AuditUnavailable => Self::AuditUnavailable,
+            EnvironmentFetchRefusal::LeaseEnded => Self::LeaseEnded,
+        }
+    }
+}
+impl From<EnvironmentFetch> for EnvironmentFetchRefusal {
+    fn from(value: EnvironmentFetch) -> Self {
+        match value {
+            EnvironmentFetch::Unavailable => Self::Unavailable,
+            EnvironmentFetch::OutsideWorkspace => Self::OutsideWorkspace,
+            EnvironmentFetch::NoDirectory => Self::NoDirectory,
+            EnvironmentFetch::Occupied => Self::Occupied,
+            EnvironmentFetch::Size => Self::Size,
+            EnvironmentFetch::Invalid => Self::Invalid,
+            EnvironmentFetch::Busy => Self::Busy,
+            EnvironmentFetch::Mismatch => Self::Mismatch,
+            EnvironmentFetch::PlacingFailed => Self::PlacingFailed,
+            EnvironmentFetch::AuditUnavailable => Self::AuditUnavailable,
+            EnvironmentFetch::LeaseEnded => Self::LeaseEnded,
+        }
+    }
+}
 impl From<SandboxProfile> for Sandbox {
     fn from(value: SandboxProfile) -> Self {
         match value {
@@ -702,6 +850,36 @@ impl From<&LeaseRecord> for WireLease {
                     cleanup: cleanup.map(Cleanup::from),
                 },
             ),
+            LeaseRecord::FetchAsked {
+                lease,
+                request,
+                file,
+                destination,
+                actor,
+            } => text(
+                FETCH_ASKED,
+                &FetchAsk {
+                    lease: lease.as_str().into(),
+                    request: request.clone(),
+                    digest: file.digest().to_string(),
+                    media_type: file.media_type().as_str().into(),
+                    size: file.size(),
+                    destination: destination.as_str().into(),
+                    actor: actor.into(),
+                },
+            ),
+            LeaseRecord::FetchEnded {
+                lease,
+                request,
+                outcome,
+            } => text(
+                FETCH_ENDED,
+                &FetchEnd {
+                    lease: lease.as_str().into(),
+                    request: request.clone(),
+                    outcome: outcome.into(),
+                },
+            ),
             LeaseRecord::Unreadable { kind, body } => Self {
                 kind: kind.clone(),
                 body: body.clone(),
@@ -819,6 +997,29 @@ impl WireLease {
                     exit: saved.exit.into(),
                     output: saved.output.decode()?,
                     cleanup: saved.cleanup.map(LeaseCleanup::from),
+                }
+            }
+            FETCH_ASKED => {
+                let saved: FetchAsk = body(&self.body)?;
+                LeaseRecord::FetchAsked {
+                    lease: lease(saved.lease)?,
+                    request: saved.request,
+                    file: PublishedFile::new(
+                        Sha256Digest::parse(&saved.digest).map_err(corrupt)?,
+                        MediaType::parse(&saved.media_type).map_err(corrupt)?,
+                        saved.size,
+                    )
+                    .map_err(corrupt)?,
+                    destination: EnvironmentPath::new(saved.destination).map_err(corrupt)?,
+                    actor: saved.actor.decode()?,
+                }
+            }
+            FETCH_ENDED => {
+                let saved: FetchEnd = body(&self.body)?;
+                LeaseRecord::FetchEnded {
+                    lease: lease(saved.lease)?,
+                    request: saved.request,
+                    outcome: saved.outcome.decode()?,
                 }
             }
             _ => LeaseRecord::Unreadable {
@@ -960,7 +1161,66 @@ mod tests {
                 cleanup,
             });
         }
+        records.push(fetch_asked("call-1", "assets/é\n.bin"));
+        let path = || EnvironmentPath::new("/srv/work/a.bin").unwrap();
+        let mut outcomes = vec![
+            FetchOutcome::Placed { path: path() },
+            FetchOutcome::AlreadyPlaced { path: path() },
+        ];
+        outcomes.extend(
+            [
+                FetchRefusalReason::NotHeld,
+                FetchRefusalReason::SourceUnavailable,
+                FetchRefusalReason::ChannelUnavailable,
+                FetchRefusalReason::Unanswered,
+                FetchRefusalReason::TimedOut,
+                FetchRefusalReason::Cancelled,
+                FetchRefusalReason::AuditUnavailable,
+            ]
+            .into_iter()
+            .chain(
+                [
+                    EnvironmentFetchRefusal::Unavailable,
+                    EnvironmentFetchRefusal::OutsideWorkspace,
+                    EnvironmentFetchRefusal::NoDirectory,
+                    EnvironmentFetchRefusal::Occupied,
+                    EnvironmentFetchRefusal::Size,
+                    EnvironmentFetchRefusal::Invalid,
+                    EnvironmentFetchRefusal::Busy,
+                    EnvironmentFetchRefusal::Mismatch,
+                    EnvironmentFetchRefusal::PlacingFailed,
+                    EnvironmentFetchRefusal::AuditUnavailable,
+                    EnvironmentFetchRefusal::LeaseEnded,
+                ]
+                .map(FetchRefusalReason::Environment),
+            )
+            .map(FetchOutcome::Refused),
+        );
+        for outcome in outcomes {
+            records.push(LeaseRecord::FetchEnded {
+                lease: lease.clone(),
+                request: "call-1".into(),
+                outcome,
+            });
+        }
         records
+    }
+    fn fetch_asked(request: &str, destination: &str) -> LeaseRecord {
+        LeaseRecord::FetchAsked {
+            lease: id("lease-1"),
+            request: request.into(),
+            file: PublishedFile::new(
+                Sha256Digest::parse(
+                    "sha256:00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff",
+                )
+                .unwrap(),
+                MediaType::parse("image/png").unwrap(),
+                12,
+            )
+            .unwrap(),
+            destination: EnvironmentPath::new(destination).unwrap(),
+            actor: ActionContext::new("person", "desktop", request).unwrap(),
+        }
     }
     fn command_terms(cwd: Option<&str>) -> CommandTerms {
         CommandTerms {
@@ -1102,6 +1362,71 @@ mod tests {
         ];
         for wire in cases {
             let body = wire.body.clone();
+            assert!(
+                matches!(wire.decode(), Err(StorageError::Corrupt(_))),
+                "{body}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_fetch_record_past_its_bounds_is_corrupt() {
+        let asked = WireLease::from(&fetch_asked("call-1", "a.bin"));
+        let ended = WireLease::from(&LeaseRecord::FetchEnded {
+            lease: id("lease-1"),
+            request: "call-1".into(),
+            outcome: FetchOutcome::Placed {
+                path: EnvironmentPath::new("/srv/a.bin").unwrap(),
+            },
+        });
+        let long = format!(
+            r#""destination":"{}""#,
+            "a".repeat(EnvironmentPath::MAX_BYTES + 1)
+        );
+        let destination = r#""destination":"a.bin""#;
+        let cases = [
+            (
+                FETCH_ASKED,
+                asked.body.replace(destination, r#""destination":"""#),
+            ),
+            (FETCH_ASKED, asked.body.replace(destination, &long)),
+            (
+                FETCH_ASKED,
+                asked.body.replace(r#""size":12"#, r#""size":0"#),
+            ),
+            (
+                FETCH_ASKED,
+                asked
+                    .body
+                    .replace(r#""digest":"sha256:"#, r#""digest":"md5:"#),
+            ),
+            (
+                FETCH_ASKED,
+                asked
+                    .body
+                    .replace(r#""media_type":"image/png""#, r#""media_type":"image""#),
+            ),
+            (
+                FETCH_ASKED,
+                asked.body.replace(r#""lease":"lease-1""#, r#""lease":"""#),
+            ),
+            (
+                FETCH_ENDED,
+                ended.body.replace(r#""path":"/srv/a.bin""#, r#""path":"""#),
+            ),
+            (FETCH_ENDED, ended.body.replace("Placed", "Moved")),
+            (
+                FETCH_ENDED,
+                ended
+                    .body
+                    .replace(r#""lease":"lease-1""#, r#""lease":"bad id""#),
+            ),
+        ];
+        for (kind, body) in cases {
+            let wire = WireLease {
+                kind: kind.into(),
+                body: body.clone(),
+            };
             assert!(
                 matches!(wire.decode(), Err(StorageError::Corrupt(_))),
                 "{body}"
@@ -1452,6 +1777,34 @@ mod tests {
         }
         let bad_record = text.replace(r#""kind":"interrupted""#, r#""kind":"ended""#);
         assert!(matches!(decode(&bad_record), Err(StorageError::Corrupt(_))));
+    }
+
+    #[test]
+    fn a_checkpoint_keeps_a_fetch_under_way_and_folds_it_again() {
+        let records = every_kind();
+        let mut lease = Some(CurrentLease::apply(None, &records[0]).unwrap());
+        for record in [
+            fetch_asked("call-1", "a.bin"),
+            fetch_asked("call-2", "b.bin"),
+        ] {
+            lease = Some(CurrentLease::apply(lease.as_ref(), &record).unwrap());
+        }
+        let ended = LeaseRecord::FetchEnded {
+            lease: id("lease-1"),
+            request: "call-1".into(),
+            outcome: FetchOutcome::Refused(FetchRefusalReason::TimedOut),
+        };
+        lease = Some(CurrentLease::apply(lease.as_ref(), &ended).unwrap());
+        let mut snapshot = history_fixture(1);
+        snapshot.lease = lease;
+        let text = checkpoint(&snapshot);
+        let read = decode(&text).unwrap();
+        assert_eq!(read, snapshot);
+        // Only the fetch still under way is kept: its end is owed.
+        assert_eq!(
+            read.lease.unwrap().records(),
+            [records[0].clone(), fetch_asked("call-2", "b.bin")]
+        );
     }
 
     /// The conversation's second lease, issued or refused after the first

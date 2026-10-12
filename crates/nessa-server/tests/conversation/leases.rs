@@ -485,6 +485,8 @@ fn kinds(lease: &CurrentLease) -> Vec<&'static str> {
             LeaseRecord::CommandIssued { .. } => "command_issued",
             LeaseRecord::CommandRefused { .. } => "command_refused",
             LeaseRecord::CommandEnded { .. } => "command_ended",
+            LeaseRecord::FetchAsked { .. } => "fetch_asked",
+            LeaseRecord::FetchEnded { .. } => "fetch_ended",
         })
         .collect()
 }
@@ -1453,6 +1455,12 @@ struct Fetching {
     /// Set, and said, once a lease's end is asked here.
     ended: AtomicBool,
     ending: tokio::sync::Notify,
+    /// The store's saved records, when a test watches them: each fetch asked
+    /// notes whether its asking was saved before it was asked here.
+    saved: Mutex<Option<SavedRecords>>,
+    /// For each fetch asked while `saved` is set, its request and whether
+    /// its asking was saved first.
+    saved_first: Mutex<Vec<(String, bool)>>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -1600,6 +1608,17 @@ impl LeaseHold for HostHold {
                 .lock()
                 .unwrap()
                 .push((ask.request.clone(), ask.destination.clone()));
+            let saved = fetching.saved.lock().unwrap().clone();
+            if let Some(saved) = saved {
+                let first = saved.lock().unwrap().iter().any(|record| {
+                    matches!(record, LeaseRecord::FetchAsked { request, .. } if request == &ask.request)
+                });
+                fetching
+                    .saved_first
+                    .lock()
+                    .unwrap()
+                    .push((ask.request.clone(), first));
+            }
             fetching.noted.notify_one();
             let path = format!("/srv/work/{}", ask.destination);
             let script = *fetching.script.lock().unwrap();
@@ -3824,7 +3843,9 @@ use crate::conversation::application::{
     HeldRangeError, HeldSourceFailure, FETCH_CALL_WAIT,
 };
 use nessa_protocol::lease::FetchRefusal;
-use nessa_sdk::application::agent_execution::sessions::PublishedFile;
+use nessa_sdk::application::agent_execution::sessions::{
+    EnvironmentFetchRefusal, EnvironmentPath, FetchOutcome, FetchRefusalReason, PublishedFile,
+};
 use sha2::Digest as _;
 
 fn digest_hex(bytes: &[u8]) -> String {
@@ -3846,6 +3867,37 @@ fn fetch_call(environment: &str, bytes: &[u8], destination: &str, call: &str) ->
 }
 
 impl Harness {
+    /// Every fetch record the store was handed to save, in order.
+    fn saved_fetches(&self) -> Vec<LeaseRecord> {
+        self.storage
+            .saved
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|record| {
+                matches!(
+                    record,
+                    LeaseRecord::FetchAsked { .. } | LeaseRecord::FetchEnded { .. }
+                )
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// Each fetch's end the store was handed to save: its request and
+    /// outcome, in order.
+    fn saved_fetch_ends(&self) -> Vec<(String, FetchOutcome)> {
+        self.saved_fetches()
+            .into_iter()
+            .filter_map(|record| match record {
+                LeaseRecord::FetchEnded {
+                    request, outcome, ..
+                } => Some((request, outcome)),
+                _ => None,
+            })
+            .collect()
+    }
+
     async fn fetch_file(&self, call: FetchCall) -> FetchAnswer {
         let (_caller, stop) = tokio::sync::watch::channel(false);
         tokio::time::timeout(
@@ -3856,6 +3908,10 @@ impl Harness {
         .expect("the fetch is answered in time")
     }
 }
+
+/// A fetch wait short enough to time out quickly, and long enough for a
+/// call that is answered to save its asking first, under a loaded machine.
+const FETCH_SAVE_WAIT: Duration = Duration::from_secs(1);
 
 /// A host's harness with its conversation created there, a turn running
 /// that `go` lets finish, and `bytes` held by the conversation.
@@ -3898,6 +3954,7 @@ async fn a_held_file_is_fetched_for_the_turns_person_and_placed() {
             path: "/srv/work/assets/a.bin".into(),
             digest: digest_hex(&bytes),
             size: bytes.len() as u64,
+            recorded: true,
         }
     );
     assert_eq!(
@@ -3957,13 +4014,23 @@ async fn a_fetch_without_this_conversations_lease_or_turn_is_refused_typed() {
     empty.size = 0;
     let mut untyped = fetch_call("devbox", &bytes, "a.bin", "call-1");
     untyped.media_type = "image".into();
-    for invalid in [unreadable, empty, untyped] {
+    // Nor is a place no environment reads.
+    let nowhere = fetch_call("devbox", &bytes, "", "call-1");
+    let too_long = fetch_call(
+        "devbox",
+        &bytes,
+        &"a".repeat(EnvironmentPath::MAX_BYTES + 1),
+        "call-1",
+    );
+    for invalid in [unreadable, empty, untyped, nowhere, too_long] {
         assert_eq!(
             harness.fetch_file(invalid).await,
             FetchAnswer::Refused(FetchCallRefusal::Invalid)
         );
     }
     assert!(host.fetching.asks.lock().unwrap().is_empty());
+    // Refused before it was decided: nothing is recorded.
+    assert!(harness.saved_fetches().is_empty());
     go.send(()).unwrap();
 
     let root = tempfile::tempdir().unwrap();
@@ -3980,6 +4047,7 @@ async fn a_fetch_without_this_conversations_lease_or_turn_is_refused_typed() {
         FetchAnswer::Refused(FetchCallRefusal::NoTurn)
     );
     assert!(host.fetching.asks.lock().unwrap().is_empty());
+    assert!(harness.saved_fetches().is_empty());
 }
 
 /// Here takes no files: a conversation running on this gateway's own
@@ -4329,7 +4397,7 @@ async fn a_fetch_stopped_before_delivery_gives_its_size_back_and_one_after_does_
     let largest = PublishedFile::MAX_BYTES as usize;
     let bytes = vec![3u8; largest];
     let (harness, host, _attachments, go) =
-        fetching_turn(root.path(), &bytes, Duration::from_millis(100)).await;
+        fetching_turn(root.path(), &bytes, FETCH_SAVE_WAIT).await;
     let fits = (ArtifactBudget::LEASE.fetch_bytes / PublishedFile::MAX_BYTES) as usize;
     let script = |script| *host.fetching.script.lock().unwrap() = script;
     script(FetchScript::Lost);
@@ -4404,7 +4472,8 @@ async fn concurrent_fetches_never_read_more_than_the_gateways_bound_at_once() {
     let (harness, _host, attachments, go) =
         fetching_turn(root.path(), &bytes, FETCH_CALL_WAIT).await;
     *attachments.range_delay.lock().unwrap() = Some(Duration::from_millis(5));
-    let fetches: Vec<_> = (0..6)
+    // As many as one lease may have under way, more than read at once.
+    let fetches: Vec<_> = (0..CurrentLease::MAX_ASKED_FETCHES)
         .map(|n| {
             let service = harness.service.clone();
             let id = harness.id.clone();
@@ -4431,5 +4500,388 @@ async fn concurrent_fetches_never_read_more_than_the_gateways_bound_at_once() {
         "the bound was reached, never passed"
     );
 
+    go.send(()).unwrap();
+}
+
+fn placed_at(path: &str) -> FetchOutcome {
+    FetchOutcome::Placed {
+        path: EnvironmentPath::new(path).unwrap(),
+    }
+}
+
+/// Before the host is asked, the fetch is recorded asked for the turn's
+/// person with the call as their request; whatever it comes to, its end is
+/// recorded once, after it.
+#[tokio::test]
+async fn a_fetch_is_recorded_asked_for_the_turns_person_before_the_host_is_asked_and_ended_once() {
+    let root = tempfile::tempdir().unwrap();
+    let bytes = b"a picture".to_vec();
+    let (harness, host, _attachments, go) =
+        fetching_turn(root.path(), &bytes, FETCH_CALL_WAIT).await;
+    *host.fetching.saved.lock().unwrap() = Some(harness.storage.saved.clone());
+    let script = |script| *host.fetching.script.lock().unwrap() = script;
+    assert!(matches!(
+        harness
+            .fetch_file(fetch_call("devbox", &bytes, "a.bin", "call-1"))
+            .await,
+        FetchAnswer::Placed {
+            already_placed: false,
+            recorded: true,
+            ..
+        }
+    ));
+    script(FetchScript::AlreadyPlaced);
+    assert!(matches!(
+        harness
+            .fetch_file(fetch_call("devbox", &bytes, "a.bin", "call-2"))
+            .await,
+        FetchAnswer::Placed {
+            already_placed: true,
+            recorded: true,
+            ..
+        }
+    ));
+    script(FetchScript::Refuse(FetchRefusal::Occupied));
+    assert_eq!(
+        harness
+            .fetch_file(fetch_call("devbox", &bytes, "b.bin", "call-3"))
+            .await,
+        FetchAnswer::Refused(FetchCallRefusal::NotPlaced(FetchRefusal::Occupied))
+    );
+    // Not held: refused on its first read, after it was recorded asked and
+    // before the host was asked.
+    script(FetchScript::Place);
+    assert_eq!(
+        harness
+            .fetch_file(fetch_call("devbox", b"never attached", "c.bin", "call-4"))
+            .await,
+        FetchAnswer::Refused(FetchCallRefusal::NotHeld)
+    );
+    assert_eq!(
+        *host.fetching.saved_first.lock().unwrap(),
+        [
+            ("call-1".to_owned(), true),
+            ("call-2".to_owned(), true),
+            ("call-3".to_owned(), true)
+        ]
+    );
+
+    let saved = harness.saved_fetches();
+    let asked: Vec<(String, String, String, String)> = saved
+        .iter()
+        .filter_map(|record| match record {
+            LeaseRecord::FetchAsked {
+                request,
+                file,
+                destination,
+                actor,
+                ..
+            } => {
+                assert_eq!(actor.request_id(), request);
+                Some((
+                    request.clone(),
+                    actor.principal_id().to_owned(),
+                    destination.as_str().to_owned(),
+                    file.media_type().as_str().to_owned(),
+                ))
+            }
+            _ => None,
+        })
+        .collect();
+    let octets = "application/octet-stream".to_owned();
+    assert_eq!(
+        asked,
+        [
+            (
+                "call-1".into(),
+                "person".into(),
+                "a.bin".into(),
+                octets.clone()
+            ),
+            (
+                "call-2".into(),
+                "person".into(),
+                "a.bin".into(),
+                octets.clone()
+            ),
+            (
+                "call-3".into(),
+                "person".into(),
+                "b.bin".into(),
+                octets.clone()
+            ),
+            ("call-4".into(), "person".into(), "c.bin".into(), octets),
+        ]
+    );
+    assert_eq!(
+        harness.saved_fetch_ends(),
+        [
+            ("call-1".into(), placed_at("/srv/work/a.bin")),
+            (
+                "call-2".into(),
+                FetchOutcome::AlreadyPlaced {
+                    path: EnvironmentPath::new("/srv/work/a.bin").unwrap()
+                }
+            ),
+            (
+                "call-3".into(),
+                FetchOutcome::Refused(FetchRefusalReason::Environment(
+                    EnvironmentFetchRefusal::Occupied
+                ))
+            ),
+            (
+                "call-4".into(),
+                FetchOutcome::Refused(FetchRefusalReason::NotHeld)
+            ),
+        ]
+    );
+    // Each end follows its own asking.
+    for request in ["call-1", "call-2", "call-3", "call-4"] {
+        let at = |ended: bool| {
+            saved.iter().position(|record| match record {
+                LeaseRecord::FetchAsked { request: asked, .. } => !ended && asked == request,
+                LeaseRecord::FetchEnded { request: asked, .. } => ended && asked == request,
+                _ => false,
+            })
+        };
+        assert!(at(false) < at(true), "{request}");
+    }
+    go.send(()).unwrap();
+}
+
+/// A fetch whose asking cannot be saved is refused `audit_unavailable`:
+/// the host is never asked, its size is given back, and its end is kept
+/// beside its asking, so both are saved once the store recovers.
+#[tokio::test]
+async fn a_fetch_that_cannot_be_recorded_asked_is_refused_audit_unavailable_and_never_asked() {
+    let root = tempfile::tempdir().unwrap();
+    let largest = PublishedFile::MAX_BYTES as usize;
+    let bytes = vec![5u8; largest];
+    let (harness, host, _attachments, go) =
+        fetching_turn(root.path(), &bytes, FETCH_CALL_WAIT).await;
+    let fits = (ArtifactBudget::LEASE.fetch_bytes / PublishedFile::MAX_BYTES) as usize;
+    *harness.storage.failing.lock().unwrap() =
+        Some(|record| matches!(record, LeaseRecord::FetchAsked { .. }));
+    // More than the budget holds and more than may be under way at once:
+    // none of them is counted, nor left under way.
+    for n in 0..=fits.max(CurrentLease::MAX_ASKED_FETCHES) {
+        assert_eq!(
+            harness
+                .fetch_file(fetch_call("devbox", &bytes, "a.bin", &format!("audit-{n}")))
+                .await,
+            FetchAnswer::Refused(FetchCallRefusal::AuditUnavailable)
+        );
+    }
+    assert!(host.fetching.asks.lock().unwrap().is_empty());
+    assert!(harness.saved_fetches().is_empty());
+    *harness.storage.failing.lock().unwrap() = None;
+    // Every byte of the budget is still there to fetch.
+    *host.fetching.script.lock().unwrap() = FetchScript::Lost;
+    for n in 0..fits {
+        assert_eq!(
+            harness
+                .fetch_file(fetch_call("devbox", &bytes, "a.bin", &format!("lost-{n}")))
+                .await,
+            FetchAnswer::Refused(FetchCallRefusal::Unanswered)
+        );
+    }
+    // The first asking is saved now, with the end that says it was never
+    // asked of the host.
+    let saved = harness.saved_fetches();
+    assert!(saved.iter().any(|record| matches!(
+        record,
+        LeaseRecord::FetchAsked { request, .. } if request == "audit-0"
+    )));
+    assert!(harness.saved_fetch_ends().contains(&(
+        "audit-0".into(),
+        FetchOutcome::Refused(FetchRefusalReason::AuditUnavailable)
+    )));
+    go.send(()).unwrap();
+}
+
+/// A fetch the wait or the stop gives up on is recorded ended so, after the
+/// call let go of it.
+#[tokio::test]
+async fn a_fetch_timed_out_or_cancelled_is_recorded_ended_timed_out_or_cancelled() {
+    let root = tempfile::tempdir().unwrap();
+    let bytes = b"a picture".to_vec();
+    let (harness, host, _attachments, go) =
+        fetching_turn(root.path(), &bytes, FETCH_SAVE_WAIT).await;
+    *host.fetching.script.lock().unwrap() = FetchScript::Silent;
+    assert_eq!(
+        harness
+            .fetch_file(fetch_call("devbox", &bytes, "a.bin", "call-1"))
+            .await,
+        FetchAnswer::Refused(FetchCallRefusal::TimedOut)
+    );
+    let (caller_gone, stop) = tokio::sync::watch::channel(false);
+    let cancelled = {
+        let service = harness.service.clone();
+        let id = harness.id.clone();
+        let call = fetch_call("devbox", &bytes, "a.bin", "call-2");
+        tokio::spawn(async move { service.fetch_artifact(&id, call, stop).await })
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while host.fetching.asks.lock().unwrap().len() < 2 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the host was asked");
+    caller_gone.send(true).unwrap();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), cancelled)
+            .await
+            .unwrap()
+            .unwrap(),
+        FetchAnswer::Refused(FetchCallRefusal::Cancelled)
+    );
+    assert_eq!(
+        harness.saved_fetch_ends(),
+        [
+            (
+                "call-1".into(),
+                FetchOutcome::Refused(FetchRefusalReason::TimedOut)
+            ),
+            (
+                "call-2".into(),
+                FetchOutcome::Refused(FetchRefusalReason::Cancelled)
+            ),
+        ]
+    );
+    go.send(()).unwrap();
+}
+
+/// A fetch whose end cannot be saved, even once more, says so on a
+/// placement; a refusal stays that refusal. The end stays retained and
+/// goes with the next save.
+#[tokio::test]
+async fn a_fetch_whose_end_cannot_be_saved_is_placed_unrecorded_or_still_refused() {
+    let root = tempfile::tempdir().unwrap();
+    let bytes = b"a picture".to_vec();
+    let (harness, host, _attachments, go) =
+        fetching_turn(root.path(), &bytes, FETCH_CALL_WAIT).await;
+    let failing = || {
+        *harness.storage.failing.lock().unwrap() =
+            Some(|record| matches!(record, LeaseRecord::FetchEnded { .. }));
+    };
+    let recovered = || *harness.storage.failing.lock().unwrap() = None;
+    failing();
+    *host.fetching.script.lock().unwrap() = FetchScript::Refuse(FetchRefusal::Occupied);
+    assert_eq!(
+        harness
+            .fetch_file(fetch_call("devbox", &bytes, "a.bin", "refused"))
+            .await,
+        FetchAnswer::Refused(FetchCallRefusal::NotPlaced(FetchRefusal::Occupied))
+    );
+    assert!(harness.saved_fetch_ends().is_empty());
+    recovered();
+    *host.fetching.script.lock().unwrap() = FetchScript::Place;
+    assert!(matches!(
+        harness
+            .fetch_file(fetch_call("devbox", &bytes, "a.bin", "saved"))
+            .await,
+        FetchAnswer::Placed { recorded: true, .. }
+    ));
+    failing();
+    assert_eq!(
+        harness
+            .fetch_file(fetch_call("devbox", &bytes, "b.bin", "unsaved"))
+            .await,
+        FetchAnswer::Placed {
+            already_placed: false,
+            path: "/srv/work/b.bin".into(),
+            digest: digest_hex(&bytes),
+            size: bytes.len() as u64,
+            recorded: false,
+        }
+    );
+    recovered();
+    assert!(matches!(
+        harness
+            .fetch_file(fetch_call("devbox", &bytes, "c.bin", "after"))
+            .await,
+        FetchAnswer::Placed { recorded: true, .. }
+    ));
+    let ends = harness.saved_fetch_ends();
+    for (request, outcome) in [
+        (
+            "refused",
+            FetchOutcome::Refused(FetchRefusalReason::Environment(
+                EnvironmentFetchRefusal::Occupied,
+            )),
+        ),
+        ("saved", placed_at("/srv/work/a.bin")),
+        ("unsaved", placed_at("/srv/work/b.bin")),
+        ("after", placed_at("/srv/work/c.bin")),
+    ] {
+        assert_eq!(
+            ends.iter()
+                .filter(|(ended, _)| ended == request)
+                .collect::<Vec<_>>(),
+            [&(request.to_owned(), outcome)]
+        );
+    }
+    go.send(()).unwrap();
+}
+
+/// A lease has at most as many fetches under way as an environment takes
+/// in flight; another is refused `busy`, with nothing recorded and the host
+/// never asked, until one ends.
+#[tokio::test]
+async fn a_fetch_past_what_a_lease_may_have_under_way_is_refused_busy_and_never_asked() {
+    let root = tempfile::tempdir().unwrap();
+    let bytes = b"a picture".to_vec();
+    let (harness, host, _attachments, go) =
+        fetching_turn(root.path(), &bytes, FETCH_CALL_WAIT).await;
+    *host.fetching.script.lock().unwrap() = FetchScript::Silent;
+    let (caller_gone, stop) = tokio::sync::watch::channel(false);
+    let under_way: Vec<_> = (0..CurrentLease::MAX_ASKED_FETCHES)
+        .map(|n| {
+            let service = harness.service.clone();
+            let id = harness.id.clone();
+            let call = fetch_call("devbox", &bytes, "a.bin", &format!("call-{n}"));
+            let stop = stop.clone();
+            tokio::spawn(async move { service.fetch_artifact(&id, call, stop).await })
+        })
+        .collect();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while host.fetching.asks.lock().unwrap().len() < CurrentLease::MAX_ASKED_FETCHES {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the host was asked for each");
+    assert_eq!(
+        harness
+            .fetch_file(fetch_call("devbox", &bytes, "a.bin", "extra"))
+            .await,
+        FetchAnswer::Refused(FetchCallRefusal::Busy)
+    );
+    assert_eq!(
+        host.fetching.asks.lock().unwrap().len(),
+        CurrentLease::MAX_ASKED_FETCHES
+    );
+    assert!(!harness.saved_fetches().iter().any(|record| matches!(
+        record,
+        LeaseRecord::FetchAsked { request, .. } if request == "extra"
+    )));
+    caller_gone.send(true).unwrap();
+    for fetch in under_way {
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(5), fetch)
+                .await
+                .unwrap()
+                .unwrap(),
+            FetchAnswer::Refused(FetchCallRefusal::Cancelled)
+        );
+    }
+    *host.fetching.script.lock().unwrap() = FetchScript::Place;
+    assert!(matches!(
+        harness
+            .fetch_file(fetch_call("devbox", &bytes, "a.bin", "extra"))
+            .await,
+        FetchAnswer::Placed { recorded: true, .. }
+    ));
     go.send(()).unwrap();
 }

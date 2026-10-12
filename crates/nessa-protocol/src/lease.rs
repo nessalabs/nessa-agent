@@ -155,11 +155,15 @@ pub const MAX_OPEN_PUBLISHERS: usize = 16;
 /// Longest artifact name, in bytes: a file name, for people only.
 pub const MAX_ARTIFACT_NAME_BYTES: usize =
     nessa_sdk::application::agent_execution::sessions::ArtifactName::MAX_BYTES;
-/// Longest path of a staged artifact on the environment, in bytes.
-pub const MAX_ARTIFACT_PATH_BYTES: usize = 1024;
+/// Longest path of a staged artifact or a fetch's destination on the
+/// environment, in bytes: the longest a conversation records.
+pub const MAX_ARTIFACT_PATH_BYTES: usize =
+    nessa_sdk::application::agent_execution::sessions::EnvironmentPath::MAX_BYTES;
 /// Most fetches one lease may have taken and not yet answered on an
-/// environment; the environment refuses another `busy` until one is.
-pub const MAX_FETCHES_IN_FLIGHT: usize = 4;
+/// environment; the environment refuses another `busy` until one is. The
+/// most a conversation records under way under one lease.
+pub const MAX_FETCHES_IN_FLIGHT: usize =
+    nessa_sdk::application::agent_execution::sessions::CurrentLease::MAX_ASKED_FETCHES;
 
 /// A harness's bytes, base64 on the wire.
 #[derive(Clone, Debug, PartialEq, Eq)]

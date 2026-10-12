@@ -893,7 +893,7 @@ refusals.
 | `run` | Run one command on a named environment with a timeout and bounded output; returns exit status and captured output. It publishes nothing until [#766](https://github.com/nessalabs/nessa-agent/issues/766): `artifacts_publish` acts only under the agent's own lease, so a file a command made on another host is refused `environment_not_leased` | `environment.run`: a lease whose work is a command | Caller's tool policy on the command (allowlist, deny patterns); environment grants `command`; sandbox profile; budgets; everything audited with the caller as initiator |
 | `preview.open`, `preview.close` | Forward a loopback port the agent's own processes listen on to the surface's loopback for the life of the lease; returns the local URL once a request through it succeeds | The forward on the SSH session, or a bounded stream on a paired connection | The port is owned by the lease's process scope; HTTP, WebSocket and SSE only; recorded and shown; closed with the lease |
 | `artifacts_publish` | Attach a file from where the agent runs to the conversation by digest; returns `held` or `alreadyHeld` with its digest, size and name, or a typed refusal (slice D3a, served in process) | The artifact channel, asked by the gateway (`Publish`) | Only under the conversation's Live agent lease, where the agent runs; the turn's person as initiator, the lease as cause; per-lease byte budgets |
-| `artifacts_fetch` | Place a file the conversation holds, named by digest, media type and size, in the workspace where the agent runs; returns `placed` or `alreadyPlaced` with its path, digest and size, or a typed refusal (slice D3b, served in process) | The artifact channel the other way, asked by the gateway (`Fetch`): sftp writes to a part on the host | Only under the conversation's Live agent lease, where the agent runs, on a host that opted in (`envServe.artifactsIn`); every range read from the hold for the turn's person; per-lease byte budget; never replaces anything at the destination |
+| `artifacts_fetch` | Place a file the conversation holds, named by digest, media type and size, in the workspace where the agent runs; returns `placed` or `alreadyPlaced` with its path, digest, size and whether its end is recorded, or a typed refusal, `audit_unavailable` when it could not be recorded (slice D3b, served in process) | The artifact channel the other way, asked by the gateway (`Fetch`): sftp writes to a part on the host | Only under the conversation's Live agent lease, where the agent runs, on a host that opted in (`envServe.artifactsIn`); recorded asked for the turn's person before the host is asked, and ended once; every range read from the hold for the turn's person; per-lease byte budget; never replaces anything at the destination |
 | `conversation.read`, `message.send`, `turn.cancel` | Already planned under 0012: read a thread's records, leave a note, stop a turn | Existing product methods | Existing grants |
 
 The signatures are the same whatever the box: `run({environment:
@@ -1444,10 +1444,13 @@ sequenceDiagram
     participant H as ConversationAttachments::read_held (HeldReads)
     participant L as HostLink (SSH adapter)
     participant E as nessa env serve (LeaseFetches, FileInbox)
+    participant S as SessionManager::record_lease (the conversation's records)
     A->>C: artifacts_fetch{environment, digest, mediaType, size, destination}
-    C->>C: a turn under the Live agent lease? where the agent runs? one file? (no_turn, environment_not_leased, invalid)
-    C->>L: LeaseHold::fetch (here: fetch_unavailable)
+    C->>C: a turn under the Live agent lease? where the agent runs? one file, one destination? (no_turn, environment_not_leased, invalid)
+    C->>L: LeaseHold::fetch, not yet polled (here: fetch_unavailable)
     C->>Q: take(lease, call, size) (duplicate_request, budget_exceeded)
+    C->>S: FetchAsked{lease, call, file, destination, the turn's person} while the lease is the latest and Live (no_turn), with fewer than 4 under way (busy)
+    Note over C,S: not saved: audit_unavailable, its size given back, the environment never asked; FetchEnded{auditUnavailable} kept beside it
     C->>H: its first byte, for the turn's person (not_held, source_unavailable); each range under a server.fetch_reads permit
     L->>E: Fetch{lease, request, destination, digest, mediaType, size} (no bytes)
     E->>E: in flight, size, digest? destination inside the workspace, its directory there, nothing at it?
@@ -1472,15 +1475,17 @@ sequenceDiagram
         E->>E: ledger: fetched(outcome)
         E->>L: Fetched{placed{path} | refused{reason}}
     end
-    L->>C: placed | already placed | the reason
+    L->>C: placed | already placed | the reason (or timed_out, cancelled: the wait or the stop dropped it)
     C->>Q: finish: its size given back unless it may be placed
-    C-->>A: placed | alreadyPlaced {path, digest, size} | refused {code, message}
+    C->>S: FetchEnded{lease, call, outcome}, once for every FetchAsked, while the lease is still the latest (saved once more if not)
+    C-->>A: placed | alreadyPlaced {path, digest, size, recorded} | refused {code, message}
 ```
 
 | Ordering | Holds because | Enforced by |
 | --- | --- | --- |
 | The environment is asked only for a file the turn's person's conversation holds now, and every range is read again for them, so a file let go mid-write stops there and nothing is placed | `fetch_artifact` reads the first byte before `LeaseHold::fetch` is polled; `HeldFile::read` asks `ConversationAttachments::read_held` for every range, which asks `HeldReads` (ownership, then the hold) each time | `a_file_not_held_or_let_go_mid_fetch_is_refused_not_held_and_nothing_is_placed`; `a_hold_let_go_mid_write_stops_it_not_held_and_nothing_is_placed`; `a_held_file_reads_back_for_a_fetch_only_as_its_owner_and_while_held` |
 | A lease's fetches write at most `artifact.fetch_bytes`. A fetch's size is reserved before the environment is asked. It is given back when its answer says this call placed nothing (any refusal, or `alreadyPlaced`), or when no answer came (`unanswered`, `timed_out`, `cancelled`, the call dropped) and `Delivered` was never queued. It stays counted when placed, or when no answer came after `Delivered` was queued, since the host may place it | `FetchRequests::take` before the probe read; `FetchAsk::delivered`, set by the SSH adapter just before it queues `Delivered`; `Taken`'s drop calls `finish` with the answer's `FetchCallRefusal::placed_nothing`, or `!delivered` when the answer says nothing | `a_fetch_past_the_leases_budget_is_refused_before_the_host_is_asked`; `a_fetch_stopped_before_delivery_gives_its_size_back_and_one_after_does_not`; `a_fetched_file_is_written_over_an_artifact_channel_and_placed_verified` (the flag is set); `a_fetch_the_host_refuses_is_answered_by_its_reason_and_replaces_nothing` (it is not) |
+| Every fetch that reaches the environment is first recorded in the conversation's records as `FetchAsked`, naming the lease, the tool call, the file, the destination as asked and the turn's person (principal, surface, the call as request), and is recorded `FetchEnded` once with what it came to, whatever that is: placed, already placed, the host's reason, `not_held`, `source_unavailable`, `channel_unavailable`, `unanswered`, `timed_out` or `cancelled`. An asking that cannot be saved is refused `audit_unavailable`, the environment never asked and its size given back; an end that cannot be saved, even once more, answers a placement `recorded: false` (an error to the agent) and leaves a refusal as it was, logged. A refusal decided before the asking (`no_turn`, `environment_not_leased`, `invalid`, `fetch_unavailable`, `duplicate_request`, `budget_exceeded`, `busy`) records nothing. A lease keeps at most `CurrentLease::MAX_ASKED_FETCHES` askings without an end, the most a host takes in flight, so they never crowd out its own records | `fetch_within` calls `ask_fetch` after `FetchRequests::take` and before `LeaseHold::fetch`'s future is first polled; `ask_fetch` decides under `record_lease`'s lock and marks the end owed as the asking is folded; `fetch_artifact` records the end with `end_fetch` after the wait and the stop, from the outcome `fetch_within` set or, when it was dropped, from which of the two dropped it; `CurrentLease::apply` refuses an asking that is not its asker's request, is asked twice, is past the bound or is under a lease no longer Live, and an end never asked | `a_fetch_is_recorded_asked_for_the_turns_person_before_the_host_is_asked_and_ended_once`; `a_fetch_that_cannot_be_recorded_asked_is_refused_audit_unavailable_and_never_asked`; `a_fetch_timed_out_or_cancelled_is_recorded_ended_timed_out_or_cancelled`; `a_fetch_whose_end_cannot_be_saved_is_placed_unrecorded_or_still_refused`; `a_fetch_past_what_a_lease_may_have_under_way_is_refused_busy_and_never_asked`; `a_fetch_without_this_conversations_lease_or_turn_is_refused_typed` (nothing recorded); `a_fetch_is_kept_while_under_way_and_changes_nothing_the_lease_holds`; `fetch_records_the_lease_rules_refuse_are_corrupt`; `a_fetch_record_past_its_bounds_is_corrupt`; `a_checkpoint_keeps_a_fetch_under_way_and_folds_it_again` |
 | One fetch per tool call at a time; a cancelled call lets its call go | `FetchRequests::take` refuses a held call; `Taken` drops with the call | `a_fetch_for_a_call_already_fetching_is_refused_and_a_cancelled_one_lets_its_call_go` |
 | Every `Fetch` the host answers ends in exactly one terminal ledger entry, `fetched` or `fetch_unanswered`, written before any frame that says it, and every fetch entry (`fetch_accepted` too) carries what was asked (destination, digest, media type, size), so each stands on its own: a refusal at ask time is `fetched(refused)`, `unavailable` on a host that takes no files included; a taken fetch is settled once, by its placing, by `Undelivered` (`fetch_unanswered`, nothing sent), or by the lease's end. Three exceptions write none: a `Fetch` repeating a request the host still holds is logged and dropped, so the first one's entry stays its only one; an acceptance that cannot be recorded is refused `auditUnavailable` with no entry, its part let go; and a last word that cannot be recorded is said `Fetched{refused: auditUnavailable}`, never as it was, a file this fetch placed taken back first (only while its name is still that file, by device and inode) and one already there left | `LeaseFetches::ask` drops a held request before anything is recorded; `settle`, `undelivered`, `answer` and `end` each record before sending, and each removes the fetch from `taken` under the same lock; `settle` calls `ArtifactInbox::take_back` with the `PlacedFile` that `place` answered | `a_fetch_is_taken_into_a_part_and_placed_once_delivered_each_step_recorded_first`; `a_fetch_whose_outcome_cannot_be_recorded_is_answered_audit_unavailable_and_taken_back`; `a_placed_file_is_taken_back_only_while_its_name_is_still_that_file`; `a_fetch_is_refused_with_its_reason_and_takes_nothing` (the repeated request); `a_fetch_that_cannot_be_recorded_is_refused_and_its_part_let_go`; `a_fetch_given_up_while_being_accepted_lets_its_part_go_once_made`; `a_fetch_cut_off_by_a_lost_connection_is_recorded_unanswered` |
 | A fetch the lease's end finds unanswered is answered `leaseEnded` before `Ended`, and every part is let go, whatever ends the lease: the gateway's `End`, or its granted deadline passing. A lease any of whose fetch entries went unrecorded ends `uncertain` | `Served::end`, which `expire` calls too, awaits `LeaseFetches::end` before it records and answers the lease's end; `ArtifactInbox::close`; `LeaseFetches::end` resolves `false` once any fetch entry failed | `a_lease_end_answers_every_fetch_under_way_before_its_ended`; `a_fetch_under_way_when_its_lease_expires_is_answered_lease_ended`; `a_fetch_entry_that_cannot_be_recorded_makes_its_leases_end_uncertain` |
@@ -1497,13 +1502,21 @@ sequenceDiagram
 
 - **Codes.** Decided by the conversation: `no_turn`,
   `environment_not_leased`, `invalid`, `fetch_unavailable`,
-  `duplicate_request`, `budget_exceeded`, `not_held`, `source_unavailable`,
+  `duplicate_request`, `budget_exceeded`, `busy` (as many under way as a
+  lease may have), `audit_unavailable` (it could not be recorded, so the
+  environment was not asked), `not_held`, `source_unavailable`,
   `channel_unavailable`, `unanswered`, `timed_out`, `cancelled`. Otherwise
   the host's reason: `fetch_unavailable` (not opted in), `outside_workspace`,
   `no_directory`, `occupied`, `size`, `invalid`, `busy`, `mismatch`,
   `placing_failed`, `audit_unavailable`, `lease_ended`. `unanswered`,
   `timed_out` and `cancelled` mean not known: the file may be placed, and
   its size stays counted against the lease.
+- **Records.** The gateway records each fetch in the conversation's own
+  records, beside the host's ledger: `fetch_asked` (the lease, the call,
+  the file, the destination as asked, and the turn's person) before the
+  host is asked, and `fetch_ended` (placed or already placed with its path,
+  or the reason) once it is over. A saved lease keeps a `fetch_asked` until
+  its end arrives, so it says which ends are still owed.
 - **Bounds.** One file is at most `artifact.max_file_bytes`; a lease's
   fetches write at most `artifact.fetch_bytes`; a host takes at most
   `artifact.host_fetches_in_flight` unanswered fetches per lease; a call

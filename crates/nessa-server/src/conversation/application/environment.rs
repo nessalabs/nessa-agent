@@ -453,10 +453,12 @@ enum FencePhase {
 
 /// Most dropped events one lease keeps as records: the room
 /// [`CurrentLease::MAX_RECORDS`] leaves after the most records a lease
-/// otherwise takes (issued, ending, interrupted, cleanup reported). More are
-/// counted in the log, not kept, so recording them is never refused for want
-/// of room (`l9_drops_past_the_kept_bound_are_counted_and_not_kept_over_the_whole_lease`).
-const MAX_KEPT_DROPS: u64 = CurrentLease::MAX_RECORDS as u64 - 4;
+/// otherwise takes (issued, ending, interrupted, cleanup reported, and every
+/// fetch still under way, whose end is owed). More are counted in the log,
+/// not kept, so recording them is never refused for want of room
+/// (`l9_drops_past_the_kept_bound_are_counted_and_not_kept_over_the_whole_lease`).
+const MAX_KEPT_DROPS: u64 =
+    (CurrentLease::MAX_RECORDS - 4 - CurrentLease::MAX_ASKED_FETCHES) as u64;
 
 #[derive(Debug)]
 struct FenceState {

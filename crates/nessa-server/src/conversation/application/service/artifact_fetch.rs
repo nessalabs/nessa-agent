@@ -7,25 +7,39 @@
 //! fetch_artifact(conversation, call, stop)
 //!   ──▶ the running turn and its Live agent lease? ── no ──▶ no_turn
 //!   ──▶ `environment` is where the agent runs? ── no ──▶ environment_not_leased
-//!   ──▶ digest, media type and size name one file? ── no ──▶ invalid
+//!   ──▶ digest, media type, size and destination name one file and one
+//!       place? ── no ──▶ invalid
 //!   ──▶ LeaseHold::fetch ── none here ──▶ fetch_unavailable
 //!   ──▶ FetchRequests::take(lease, call, size) ── under way ──▶ duplicate_request
 //!                                              ── past the budget ──▶ budget_exceeded
+//!   ──▶ FetchAsked{lease, call, file, destination, the turn's person}
+//!       while the lease is the latest, Live, with room ── not ──▶ no_turn
+//!       ── as many fetches under way as a lease may have ──▶ busy
+//!       ── unsaved ──▶ audit_unavailable, the environment never asked
 //!   ──▶ its first byte read for the call's person ── not held ──▶ not_held
 //!   ──▶ the environment takes it, its bytes are written range by range,
 //!       each read again from the hold ──▶ placed | alreadyPlaced | refused
 //!   ──▶ within `fetch_wait`, else timed_out; stop ──▶ cancelled
 //!   ──▶ FetchRequests::finish: its size given back unless the answer says it
 //!       is placed, or there is no answer and every byte was delivered
+//!   ──▶ FetchEnded{lease, call, outcome}, for every FetchAsked, whatever
+//!       its answer ── unsaved ──▶ a placement answered `recorded: false`
 //! ```
 //!
 //! Arrows are steps, in order. Nothing is asked of the environment until
-//! the file's bytes were read once for the call's person, and every range
-//! is read again for them, so a file the conversation lets go of while it
-//! is written stops there (`not_held`) and nothing is placed. Stopped before
-//! every byte is written, the environment is told so; stopped after, it may
-//! still place the file, and its size stays counted against the lease.
-use super::ConversationService;
+//! the fetch is recorded asked, naming the person it is for, and the file's
+//! bytes were read once for them; every range is read again for them, so a
+//! file the conversation lets go of while it is written stops there
+//! (`not_held`) and nothing is placed. Stopped before every byte is written,
+//! the environment is told so; stopped after, it may still place the file,
+//! and its size stays counted against the lease.
+//!
+//! A refusal decided before the fetch is recorded asked is answered with no
+//! record, as a command not yet decided is. Every fetch recorded asked is
+//! recorded ended once, with what it came to, while its lease is still the
+//! conversation's latest: timed out and cancelled too, which `fetch_artifact`
+//! records after the wait or the stop dropped the fetch.
+use super::{ConversationService, LiveConversation};
 use crate::conversation::application::ArtifactBudget;
 use crate::conversation::application::{
     ConversationAttachments, EnvironmentFuture, FetchAsk, FetchFailure, FetchPlaced, FetchRequests,
@@ -34,12 +48,15 @@ use crate::conversation::application::{
 use nessa_auth::domain::OrganizationId;
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::lease::FetchRefusal;
-use nessa_sdk::application::agent_execution::sessions::PublishedFile;
-use nessa_sdk::domain::agent_execution::leases::LeaseId;
+use nessa_sdk::application::agent_execution::sessions::{
+    CurrentLease, EnvironmentFetchRefusal, EnvironmentPath, FetchOutcome, FetchRefusalReason,
+    LeaseRecord, PublishedFile,
+};
+use nessa_sdk::domain::agent_execution::leases::{LeaseId, LeasePhase};
 use nessa_sdk::domain::common::value_objects::{MediaType, Sha256Digest};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc,
+    Arc, Mutex, MutexGuard, PoisonError,
 };
 use std::time::Duration;
 use tokio::sync::{watch, Semaphore};
@@ -90,6 +107,10 @@ pub enum FetchAnswer {
         digest: String,
         /// Its length.
         size: u64,
+        /// Whether its end is recorded: false when it could not be saved,
+        /// even once more. The end stays retained and goes with the
+        /// conversation's next save, but the records do not hold it yet.
+        recorded: bool,
     },
     /// It is not placed, or not known to be, with why.
     Refused(FetchCallRefusal),
@@ -115,6 +136,12 @@ pub enum FetchCallRefusal {
     NotHeld,
     /// It would take the lease past what its fetches may write.
     BudgetExceeded,
+    /// The lease has as many fetches under way as it may have at once. The
+    /// environment is not asked.
+    Busy,
+    /// The fetch could not be recorded asked, so the environment was never
+    /// asked. Nothing is placed.
+    AuditUnavailable,
     /// The environment did not place it, with its reason.
     NotPlaced(FetchRefusal),
     /// The file's bytes could not be read here. Nothing is placed.
@@ -148,6 +175,8 @@ impl ConversationService {
     /// gateway's fetch wait for it to be placed. `stop`, once true, stops
     /// the wait as its caller gone. Every step that can wait, the stores'
     /// reads included, is inside both: none holds the call past either.
+    /// Only recording the end of a fetch recorded asked follows them, as a
+    /// command's end follows its run.
     pub async fn fetch_artifact(
         &self,
         id: &ConversationId,
@@ -155,20 +184,60 @@ impl ConversationService {
         mut stop: watch::Receiver<bool>,
     ) -> FetchAnswer {
         let wait = self.inner.environment.fetch_wait();
-        tokio::time::timeout(wait, async {
+        let asked = Mutex::new(None);
+        let answer = tokio::time::timeout(wait, async {
             tokio::select! {
                 biased;
                 () = cancelled(&mut stop) => FetchAnswer::Refused(FetchCallRefusal::Cancelled),
-                answer = self.fetch_within(id, call) => answer,
+                answer = self.fetch_within(id, call, &asked) => answer,
             }
         })
         .await
-        .unwrap_or(FetchAnswer::Refused(FetchCallRefusal::TimedOut))
+        .unwrap_or(FetchAnswer::Refused(FetchCallRefusal::TimedOut));
+        let asked = asked.into_inner().unwrap_or_else(PoisonError::into_inner);
+        let Some(asked) = asked else {
+            return answer;
+        };
+        // An outcome is set once the fetch answered; without one, the wait
+        // or the stop dropped it, and the answer says which.
+        let outcome = match (&asked.outcome, &answer) {
+            (Some(outcome), _) => outcome.clone(),
+            (None, FetchAnswer::Refused(FetchCallRefusal::TimedOut)) => {
+                FetchOutcome::Refused(FetchRefusalReason::TimedOut)
+            }
+            (None, _) => FetchOutcome::Refused(FetchRefusalReason::Cancelled),
+        };
+        let recorded = self.end_fetch(&asked, outcome).await;
+        match answer {
+            FetchAnswer::Placed {
+                already_placed,
+                path,
+                digest,
+                size,
+                ..
+            } => FetchAnswer::Placed {
+                already_placed,
+                path,
+                digest,
+                size,
+                recorded,
+            },
+            refused => refused,
+        }
     }
 
     /// [`Self::fetch_artifact`] without its wait or its stop, which drop
     /// this future: a call reserved by then is let go by [`Taken`]'s drop.
-    async fn fetch_within(&self, id: &ConversationId, call: FetchCall) -> FetchAnswer {
+    /// `asked` is set once the fetch is recorded asked, and its outcome
+    /// once the fetch answered, so its end is recorded however it ends. A
+    /// placement is answered `recorded: false` here: whether its end is
+    /// recorded is for `fetch_artifact` to say.
+    async fn fetch_within(
+        &self,
+        id: &ConversationId,
+        call: FetchCall,
+        asked: &Mutex<Option<Asked>>,
+    ) -> FetchAnswer {
         let refused = FetchAnswer::Refused;
         let Some(live) = self.live(id).await else {
             return refused(FetchCallRefusal::NoTurn);
@@ -202,6 +271,9 @@ impl ConversationService {
         else {
             return refused(FetchCallRefusal::Invalid);
         };
+        let Ok(destination) = EnvironmentPath::new(call.destination.as_str()) else {
+            return refused(FetchCallRefusal::Invalid);
+        };
         let source = Arc::new(HeldFile {
             attachments: self.inner.attachments.clone(),
             reads: self.inner.fetch_reads.clone(),
@@ -214,7 +286,7 @@ impl ConversationService {
         let ask = FetchAsk {
             request: call.call.clone(),
             destination: call.destination,
-            file,
+            file: file.clone(),
             source: source.clone(),
             delivered: delivered.clone(),
         };
@@ -236,30 +308,42 @@ impl ConversationService {
         // delivered, the one point after which the host may place it.
         let mut taken = Taken {
             requests: live.fetches.clone(),
-            lease,
+            lease: lease.clone(),
             call: call.call.clone(),
             size,
             delivered,
             placed_nothing: None,
         };
-        // Read once for the call's person before the environment is asked.
-        let answer = match source.read(0, 1).await {
-            Err(failure) => refused(source_refusal(failure)),
-            Ok(_) => match fetching.await {
-                Err(failure) => refused(failure_refusal(failure)),
-                Ok(placed) => {
-                    let (already_placed, path) = match placed {
-                        FetchPlaced::Placed { path } => (false, path),
-                        FetchPlaced::AlreadyPlaced { path } => (true, path),
-                    };
-                    FetchAnswer::Placed {
-                        already_placed,
-                        path,
-                        digest: call.digest.clone(),
-                        size,
-                    }
-                }
-            },
+        // Recorded asked, for the turn's person, before anything is asked of
+        // the environment: `fetching` is not yet polled, so no frame is
+        // queued.
+        let owed = Asked {
+            live: live.clone(),
+            conversation: id.clone(),
+            lease: lease.clone(),
+            request: call.call.clone(),
+            outcome: None,
+        };
+        let record = LeaseRecord::FetchAsked {
+            lease,
+            request: call.call.clone(),
+            file,
+            destination,
+            actor,
+        };
+        let answer = match self.ask_fetch(record, owed, asked).await {
+            Err(refusal) => refused(refusal),
+            Ok(()) => {
+                // Read once for the call's person before the environment is
+                // asked.
+                let fetched = match source.read(0, 1).await {
+                    Err(failure) => Err(source_failure(failure)),
+                    Ok(_) => fetching.await,
+                };
+                let (answer, outcome) = answered(id, &call.call, &call.digest, size, fetched);
+                set_outcome(asked, outcome);
+                answer
+            }
         };
         taken.placed_nothing = match &answer {
             FetchAnswer::Placed { already_placed, .. } => Some(*already_placed),
@@ -267,8 +351,197 @@ impl ConversationService {
         };
         answer
     }
+
+    /// Record `record`, a fetch's asking, while its lease is the
+    /// conversation's latest, Live, with fewer than
+    /// [`CurrentLease::MAX_ASKED_FETCHES`] fetches under way, and set
+    /// `asked` to `owed` the moment it is folded, so its end is owed from
+    /// then on whatever drops this call. Refused [`FetchCallRefusal::NoTurn`]
+    /// once the lease is not, [`FetchCallRefusal::Busy`] when it has no room,
+    /// and [`FetchCallRefusal::AuditUnavailable`] when the record could not
+    /// be saved; folded but unsaved, its end is recorded beside it, so the
+    /// lease never counts a fetch that was never asked.
+    async fn ask_fetch(
+        &self,
+        record: LeaseRecord,
+        owed: Asked,
+        asked: &Mutex<Option<Asked>>,
+    ) -> Result<(), FetchCallRefusal> {
+        let live = owed.live.clone();
+        let id = owed.conversation.clone();
+        let committed = live
+            .agent
+            .session_manager()
+            .record_lease(|current| {
+                let live_lease = current.filter(|current| {
+                    current.held().is_some_and(|held| {
+                        held.id() == &owed.lease && held.phase() == LeasePhase::Live
+                    })
+                });
+                match live_lease {
+                    None => (Vec::new(), Asking::NotLive),
+                    Some(current) if current.asked_fetches() >= CurrentLease::MAX_ASKED_FETCHES => {
+                        (Vec::new(), Asking::Busy)
+                    }
+                    Some(_) => {
+                        *lock(asked) = Some(owed);
+                        (vec![record], Asking::Asked)
+                    }
+                }
+            })
+            .await;
+        match committed {
+            Ok(commit) if commit.decided == Asking::NotLive => Err(FetchCallRefusal::NoTurn),
+            Ok(commit) if commit.decided == Asking::Busy => Err(FetchCallRefusal::Busy),
+            Ok(commit) => match commit.saved {
+                Ok(()) => Ok(()),
+                Err(error) => {
+                    tracing::error!(%error, conversation_id = %id, "a fetch could not be recorded asked; the environment is not asked");
+                    set_outcome(
+                        asked,
+                        FetchOutcome::Refused(FetchRefusalReason::AuditUnavailable),
+                    );
+                    Err(FetchCallRefusal::AuditUnavailable)
+                }
+            },
+            // Refused before anything was retained: no end is owed.
+            Err(error) => {
+                lock(asked).take();
+                tracing::error!(%error, conversation_id = %id, "a fetch could not be recorded asked; the environment is not asked");
+                Err(FetchCallRefusal::AuditUnavailable)
+            }
+        }
+    }
+
+    /// Record the end of `asked` as `outcome`, while its lease is still the
+    /// conversation's latest; whether the records hold it. An unsaved end is
+    /// saved once more. Once a later lease replaced it, the stream's lease is
+    /// that later one and cannot take it, and the end is logged instead.
+    async fn end_fetch(&self, asked: &Asked, outcome: FetchOutcome) -> bool {
+        let manager = asked.live.agent.session_manager();
+        let refused = match &outcome {
+            FetchOutcome::Refused(reason) => Some(*reason),
+            FetchOutcome::Placed { .. } | FetchOutcome::AlreadyPlaced { .. } => None,
+        };
+        let ended = LeaseRecord::FetchEnded {
+            lease: asked.lease.clone(),
+            request: asked.request.clone(),
+            outcome,
+        };
+        let committed = manager
+            .record_lease(|current| {
+                if current
+                    .and_then(CurrentLease::held)
+                    .is_some_and(|held| held.id() == &asked.lease)
+                {
+                    (vec![ended], true)
+                } else {
+                    (Vec::new(), false)
+                }
+            })
+            .await;
+        let recorded = match &committed {
+            Ok(commit) if !commit.decided => false,
+            Ok(commit) if commit.saved.is_ok() => true,
+            Ok(_) => manager.save_retained_lease_records().await.is_ok(),
+            Err(_) => false,
+        };
+        if !recorded {
+            tracing::error!(
+                conversation_id = %asked.conversation,
+                lease = asked.lease.as_str(),
+                request = asked.request.as_str(),
+                refused = ?refused,
+                replaced = matches!(&committed, Ok(commit) if !commit.decided),
+                error = ?committed.err(),
+                "a fetch's end could not be recorded"
+            );
+        }
+        recorded
+    }
 }
 
+/// A fetch recorded asked, whose end is owed.
+struct Asked {
+    live: Arc<LiveConversation>,
+    conversation: ConversationId,
+    lease: LeaseId,
+    request: String,
+    /// What it came to, once it answered.
+    outcome: Option<FetchOutcome>,
+}
+
+/// What recording a fetch's asking came to, under the lock.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Asking {
+    Asked,
+    /// Its lease has as many fetches under way as it may.
+    Busy,
+    /// Its lease is no longer the latest, or no longer Live.
+    NotLive,
+}
+
+fn lock(asked: &Mutex<Option<Asked>>) -> MutexGuard<'_, Option<Asked>> {
+    asked.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Say what the fetch `asked` names came to, when one is owed.
+fn set_outcome(asked: &Mutex<Option<Asked>>, outcome: FetchOutcome) {
+    if let Some(asked) = lock(asked).as_mut() {
+        asked.outcome = Some(outcome);
+    }
+}
+
+/// The answer to a fetch the environment was asked for, and the outcome its
+/// end records. A path no fetch could name is no answer this gateway can
+/// read: unanswered, since the file may be placed.
+fn answered(
+    id: &ConversationId,
+    request: &str,
+    digest: &str,
+    size: u64,
+    fetched: Result<FetchPlaced, FetchFailure>,
+) -> (FetchAnswer, FetchOutcome) {
+    let failure = match fetched {
+        Err(failure) => failure,
+        Ok(placed) => {
+            let (already_placed, path) = match placed {
+                FetchPlaced::Placed { path } => (false, path),
+                FetchPlaced::AlreadyPlaced { path } => (true, path),
+            };
+            match EnvironmentPath::new(path.as_str()) {
+                Ok(recorded) => {
+                    let outcome = if already_placed {
+                        FetchOutcome::AlreadyPlaced { path: recorded }
+                    } else {
+                        FetchOutcome::Placed { path: recorded }
+                    };
+                    let answer = FetchAnswer::Placed {
+                        already_placed,
+                        path,
+                        digest: digest.to_owned(),
+                        size,
+                        recorded: false,
+                    };
+                    return (answer, outcome);
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        conversation_id = %id,
+                        request,
+                        path_bytes = path.len(),
+                        "an environment placed a fetch at a path no fetch can name; it is answered unanswered"
+                    );
+                    FetchFailure::Unanswered
+                }
+            }
+        }
+    };
+    (
+        FetchAnswer::Refused(failure_refusal(failure)),
+        FetchOutcome::Refused(failure_reason(failure)),
+    )
+}
 /// Resolves once `stop` says the caller is gone, or can no longer say.
 async fn cancelled(stop: &mut watch::Receiver<bool>) {
     while !*stop.borrow_and_update() {
@@ -355,10 +628,10 @@ impl HeldSource for HeldFile {
     }
 }
 
-fn source_refusal(failure: HeldSourceFailure) -> FetchCallRefusal {
+fn source_failure(failure: HeldSourceFailure) -> FetchFailure {
     match failure {
-        HeldSourceFailure::NotHeld => FetchCallRefusal::NotHeld,
-        HeldSourceFailure::Unavailable => FetchCallRefusal::SourceUnavailable,
+        HeldSourceFailure::NotHeld => FetchFailure::NotHeld,
+        HeldSourceFailure::Unavailable => FetchFailure::SourceUnavailable,
     }
 }
 
@@ -369,5 +642,35 @@ fn failure_refusal(failure: FetchFailure) -> FetchCallRefusal {
         FetchFailure::SourceUnavailable => FetchCallRefusal::SourceUnavailable,
         FetchFailure::ChannelUnavailable => FetchCallRefusal::ChannelUnavailable,
         FetchFailure::Unanswered => FetchCallRefusal::Unanswered,
+    }
+}
+
+/// What a fetch's end records for `failure`.
+fn failure_reason(failure: FetchFailure) -> FetchRefusalReason {
+    match failure {
+        FetchFailure::Refused(reason) => {
+            FetchRefusalReason::Environment(environment_refusal(reason))
+        }
+        FetchFailure::NotHeld => FetchRefusalReason::NotHeld,
+        FetchFailure::SourceUnavailable => FetchRefusalReason::SourceUnavailable,
+        FetchFailure::ChannelUnavailable => FetchRefusalReason::ChannelUnavailable,
+        FetchFailure::Unanswered => FetchRefusalReason::Unanswered,
+    }
+}
+
+/// The environment's reason, as a fetch's end records it.
+fn environment_refusal(reason: FetchRefusal) -> EnvironmentFetchRefusal {
+    match reason {
+        FetchRefusal::Unavailable => EnvironmentFetchRefusal::Unavailable,
+        FetchRefusal::OutsideWorkspace => EnvironmentFetchRefusal::OutsideWorkspace,
+        FetchRefusal::NoDirectory => EnvironmentFetchRefusal::NoDirectory,
+        FetchRefusal::Occupied => EnvironmentFetchRefusal::Occupied,
+        FetchRefusal::Size => EnvironmentFetchRefusal::Size,
+        FetchRefusal::Invalid => EnvironmentFetchRefusal::Invalid,
+        FetchRefusal::Busy => EnvironmentFetchRefusal::Busy,
+        FetchRefusal::Mismatch => EnvironmentFetchRefusal::Mismatch,
+        FetchRefusal::PlacingFailed => EnvironmentFetchRefusal::PlacingFailed,
+        FetchRefusal::AuditUnavailable => EnvironmentFetchRefusal::AuditUnavailable,
+        FetchRefusal::LeaseEnded => EnvironmentFetchRefusal::LeaseEnded,
     }
 }

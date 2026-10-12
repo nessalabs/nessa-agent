@@ -187,26 +187,33 @@ fn artifacts_fetch_reads_its_arguments_and_refuses_anything_else() {
 }
 
 #[test]
-fn a_fetch_answer_says_where_the_file_is_and_is_an_error_unless_placed() {
-    let placed = fetched(&FetchAnswer::Placed {
-        already_placed: false,
-        path: "/work/a.png".into(),
-        digest: "ab".repeat(32),
-        size: 20,
-    });
+fn a_fetch_answer_says_where_the_file_is_and_is_an_error_unless_placed_and_recorded() {
+    let placed_as = |already_placed, recorded| {
+        fetched(&FetchAnswer::Placed {
+            already_placed,
+            path: "/work/a.png".into(),
+            digest: "ab".repeat(32),
+            size: 20,
+            recorded,
+        })
+    };
+    let placed = placed_as(false, true);
     assert_eq!(placed["isError"], false);
     assert_eq!(
         placed["structuredContent"],
-        json!({"outcome": "placed", "path": "/work/a.png", "digest": "ab".repeat(32), "size": 20})
+        json!({"outcome": "placed", "path": "/work/a.png", "digest": "ab".repeat(32), "size": 20, "recorded": true})
     );
-    let again = fetched(&FetchAnswer::Placed {
-        already_placed: true,
-        path: "/work/a.png".into(),
-        digest: "ab".repeat(32),
-        size: 20,
-    });
+    let again = placed_as(true, true);
     assert_eq!(again["isError"], false);
     assert_eq!(again["structuredContent"]["outcome"], "alreadyPlaced");
+    // Placed, but its end is not in the records: said, and an error, as a
+    // command whose end could not be saved is.
+    for already_placed in [false, true] {
+        let unrecorded = placed_as(already_placed, false);
+        assert_eq!(unrecorded["isError"], true);
+        assert_eq!(unrecorded["structuredContent"]["recorded"], false);
+        assert_eq!(unrecorded["structuredContent"]["path"], "/work/a.png");
+    }
     let refusals = [
         (FetchCallRefusal::NoTurn, "no_turn"),
         (
@@ -218,6 +225,8 @@ fn a_fetch_answer_says_where_the_file_is_and_is_an_error_unless_placed() {
         (FetchCallRefusal::Invalid, "invalid"),
         (FetchCallRefusal::NotHeld, "not_held"),
         (FetchCallRefusal::BudgetExceeded, "budget_exceeded"),
+        (FetchCallRefusal::Busy, "busy"),
+        (FetchCallRefusal::AuditUnavailable, "audit_unavailable"),
         (FetchCallRefusal::SourceUnavailable, "source_unavailable"),
         (FetchCallRefusal::ChannelUnavailable, "channel_unavailable"),
         (FetchCallRefusal::Unanswered, "unanswered"),

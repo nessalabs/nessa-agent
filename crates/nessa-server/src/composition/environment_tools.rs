@@ -391,7 +391,7 @@ fn fetch_call(arguments: Value, call: String) -> Result<FetchCall, String> {
 }
 
 /// What an `artifacts_fetch` came to: an error unless the file is where
-/// the answer says.
+/// the answer says and its end is recorded here.
 fn fetched(answer: &FetchAnswer) -> Value {
     match answer {
         FetchAnswer::Placed {
@@ -399,14 +399,16 @@ fn fetched(answer: &FetchAnswer) -> Value {
             path,
             digest,
             size,
+            recorded,
         } => result(
             json!({
                 "outcome": if *already_placed { "alreadyPlaced" } else { "placed" },
                 "path": path,
                 "digest": digest,
                 "size": size,
+                "recorded": recorded,
             }),
-            false,
+            !*recorded,
         ),
         FetchAnswer::Refused(refusal) => result(
             json!({
@@ -427,6 +429,8 @@ fn fetch_refusal_code(refusal: FetchCallRefusal) -> &'static str {
         FetchCallRefusal::Invalid => "invalid",
         FetchCallRefusal::NotHeld => "not_held",
         FetchCallRefusal::BudgetExceeded => "budget_exceeded",
+        FetchCallRefusal::Busy => "busy",
+        FetchCallRefusal::AuditUnavailable => "audit_unavailable",
         FetchCallRefusal::SourceUnavailable => "source_unavailable",
         FetchCallRefusal::ChannelUnavailable => "channel_unavailable",
         FetchCallRefusal::Unanswered => "unanswered",
@@ -464,6 +468,10 @@ fn fetch_refusal_message(refusal: FetchCallRefusal) -> &'static str {
         }
         FetchCallRefusal::BudgetExceeded => {
             "as many bytes as this lease may fetch were fetched"
+        }
+        FetchCallRefusal::Busy => "as many files as may be in flight are being fetched",
+        FetchCallRefusal::AuditUnavailable => {
+            "the fetch could not be recorded, so the environment was not asked; nothing was placed"
         }
         FetchCallRefusal::SourceUnavailable => {
             "the file could not be read here; nothing was placed"
