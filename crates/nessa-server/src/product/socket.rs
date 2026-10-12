@@ -1659,7 +1659,10 @@ async fn set_native_hooks(
             },
         ),
         Err(NativeHooksError::Audit) => failure(&frame.id, "audit_unavailable"),
-        Err(NativeHooksError::Storage) => failure(&frame.id, "temporarily_unavailable"),
+        // A crashed save is not a new wire code. The command can be retried.
+        Err(NativeHooksError::Storage | NativeHooksError::Interrupted) => {
+            failure(&frame.id, "temporarily_unavailable")
+        }
     }
 }
 

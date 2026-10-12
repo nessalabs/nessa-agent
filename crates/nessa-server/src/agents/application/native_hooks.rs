@@ -213,6 +213,11 @@ pub enum NativeHooksError {
     /// The choice file could not be written. The running switch is unchanged
     /// when this is returned from the write that would have applied it.
     Storage,
+    /// The blocking save did not finish: its task panicked or was cancelled.
+    /// That is not an audit failure, and it is not a failed write of the
+    /// choice file. Whether the switch moved is whatever the task did before
+    /// it stopped.
+    Interrupted,
 }
 
 impl std::fmt::Display for NativeHooksError {
@@ -220,6 +225,7 @@ impl std::fmt::Display for NativeHooksError {
         formatter.write_str(match self {
             Self::Audit => "native hooks audit failed",
             Self::Storage => "native hooks choice could not be stored",
+            Self::Interrupted => "native hooks save did not finish",
         })
     }
 }

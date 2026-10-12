@@ -113,9 +113,9 @@ impl NativeHooksPreferences {
             set_blocking(directory, claude, codex, audit, change)
         })
         .await
-        // A panicked or cancelled save is not an audit failure. The command
-        // could not finish the write, which is the storage answer.
-        .map_err(|_| NativeHooksError::Storage)?
+        // A panicked or cancelled task did not finish. That is not an audit
+        // failure, and it is not the file write's own error.
+        .map_err(|_| NativeHooksError::Interrupted)?
     }
 }
 
@@ -467,6 +467,26 @@ mod tests {
             selection_from_stored(stored.as_bytes()),
             NativeHooksSelection::new(true, false)
         );
+    }
+
+    struct PanickingAudit;
+    impl NativeHooksAudit for PanickingAudit {
+        fn record(&self, _evidence: &NativeHooksEvidence) -> Result<(), NativeHooksError> {
+            panic!("save task crashed");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_crashed_save_is_not_an_audit_failure() {
+        let root = tempfile::tempdir().unwrap();
+        let preferences =
+            NativeHooksPreferences::open_with(root.path().join("data"), Arc::new(PanickingAudit))
+                .unwrap();
+        let error = preferences
+            .set(change(NativeHooksAgent::Claude, true, "request-crash"))
+            .await
+            .unwrap_err();
+        assert_eq!(error, NativeHooksError::Interrupted);
     }
 
     #[tokio::test]
