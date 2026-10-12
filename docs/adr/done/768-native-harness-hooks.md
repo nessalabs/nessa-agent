@@ -53,7 +53,7 @@ different command. The rows are the orders the store implements.
 `a_reused_request_id_for_a_different_choice_fails`,
 `a_failed_revert_leaves_the_flag_with_the_published_file`,
 `a_choice_renamed_into_place_is_in_effect_when_its_directory_sync_fails`,
-`a_readable_outcome_record_keeps_the_change_it_records`, and
+`a_readable_outcome_record_keeps_the_change_it_records`,
 `a_process_start_reads_the_earlier_choice_until_the_outcome_is_recorded`,
 `a_harness_named_twice_is_off_whichever_value_comes_last`,
 `a_choice_file_larger_than_any_choice_loads_as_off`, and
