@@ -249,7 +249,11 @@ impl FileInbox {
                 Err(_) => Err(FetchRefusal::PlacingFailed),
             }
         })();
-        if let Err(error) = unlink_at(&resolved.directory, &temporary) {
+        // The copy is never the destination and no outcome names it: its
+        // removal is made to last as far as it can, and only logged when not.
+        if let Err(error) =
+            unlink_at(&resolved.directory, &temporary).and_then(|()| resolved.directory.sync_all())
+        {
             tracing::warn!(%error, "a fetch's copy beside its destination could not be removed");
         }
         copied

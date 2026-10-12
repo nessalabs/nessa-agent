@@ -1213,8 +1213,10 @@ impl HostLink {
                 };
             }
         };
+        // The host's last word first: ready with a failed write, it is the
+        // answer that holds.
         let written = tokio::select! {
-            written = write_part(channels.as_ref(), &part, file.size(), source, gone) => written,
+            biased;
             // The host's last word while the bytes are written: the lease
             // ended there, and nothing is placed.
             answer = answers.recv() => {
@@ -1225,6 +1227,7 @@ impl HostLink {
                     _ => Err(FetchFailure::Refused(FetchRefusal::LeaseEnded)),
                 };
             }
+            written = write_part(channels.as_ref(), &part, file.size(), source, gone) => written,
         };
         if let Err(failure) = written {
             // Told on the way out: nothing more is written.
