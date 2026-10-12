@@ -436,11 +436,11 @@ async fn read_batch(
         };
         let read = match (target, service) {
             (Target::Agents, _) => {
+                // Read under the permit, as `agents.list` is: one change
+                // wakes every follower at once.
+                let catalog = state.agents_catalog_now();
                 drop(permit);
-                return state
-                    .agents_catalog_now()
-                    .map(Batch::Agents)
-                    .ok_or_else(not_configured);
+                return catalog.map(Batch::Agents).ok_or_else(not_configured);
             }
             (_, None) => {
                 drop(permit);
