@@ -225,6 +225,9 @@ pub struct Projection {
     revision: u64,
     committed_position: Option<(String, u64, u64, u64)>,
     resolved_permissions: HashSet<(String, String)>,
+    /// Permission ids a request named in this execution. A deadline notice
+    /// whose id is absent here is ignored: nothing in this execution asked.
+    requested_permissions: HashSet<(String, String)>,
     /// Asks that have stopped waiting, so a replayed ask does not reopen one.
     answered_questions: HashSet<(String, String)>,
     terminal_executions: HashSet<String>,
@@ -459,6 +462,7 @@ impl Projection {
             revision: 0,
             committed_position: None,
             resolved_permissions: HashSet::new(),
+            requested_permissions: HashSet::new(),
             answered_questions: HashSet::new(),
             terminal_executions: HashSet::new(),
             tool_parts: HashMap::new(),
@@ -889,6 +893,10 @@ impl Projection {
             return;
         };
         let execution = event.execution_id().as_str();
+        // Recorded before a card is skipped. A later notice still names a
+        // request this execution saw, even when the card could not be shown.
+        self.requested_permissions
+            .insert((execution.to_owned(), permission.as_str().to_owned()));
         if self
             .resolved_permissions
             .contains(&(execution.to_owned(), permission.as_str().to_owned()))
@@ -1057,20 +1065,31 @@ impl Projection {
                     notice_id: String::new(),
                 })
             }
-            ExecutionUpdate::DeadlineAnswered { id, effect, reason } => {
-                let text = deadline_notice(*effect, reason.as_str());
-                let bounded = clipped(&text, available);
-                if bounded.len() != text.len() {
-                    self.view.truncated = true;
+            ExecutionUpdate::DeadlineAnswered {
+                id: permission,
+                effect,
+                reason,
+            } => {
+                if !self
+                    .requested_permissions
+                    .contains(&(id.to_owned(), permission.as_str().to_owned()))
+                {
+                    None
+                } else {
+                    let text = deadline_notice(*effect, reason.as_str());
+                    let bounded = clipped(&text, available);
+                    if bounded.len() != text.len() {
+                        self.view.truncated = true;
+                    }
+                    Some(ConversationPart {
+                        message_id: None,
+                        offset,
+                        kind: "local_notice".into(),
+                        text: bounded,
+                        tool_id: String::new(),
+                        notice_id: permission.as_str().into(),
+                    })
                 }
-                Some(ConversationPart {
-                    message_id: None,
-                    offset,
-                    kind: "local_notice".into(),
-                    text: bounded,
-                    tool_id: String::new(),
-                    notice_id: id.as_str().into(),
-                })
             }
             ExecutionUpdate::ReviewDeclined(observation) => {
                 let notice_id = observation.id().as_str();
@@ -1136,8 +1155,13 @@ impl Projection {
                 self.view.messages[index].status = ConversationMessageStatus::Running;
             }
             ExecutionUpdate::PermissionCancelled(_) | ExecutionUpdate::QuestionClosed { .. } => {}
-            ExecutionUpdate::DeadlineAnswered { .. } => {
-                self.view.messages[index].status = ConversationMessageStatus::Running;
+            ExecutionUpdate::DeadlineAnswered { id: permission, .. } => {
+                if self
+                    .requested_permissions
+                    .contains(&(id.to_owned(), permission.as_str().to_owned()))
+                {
+                    self.view.messages[index].status = ConversationMessageStatus::Running;
+                }
             }
             ExecutionUpdate::ReviewDeclined(observation) => {
                 if observation.decline().outcome() == RefusalOutcome::Continue {

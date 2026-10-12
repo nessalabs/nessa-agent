@@ -254,7 +254,9 @@ impl ExecutionController {
     /// Does not answer the review. The caller answers or cancels first, and
     /// emits this so a surface that was not watching the audit still sees who
     /// decided. A stale execution returns the same error as any other event.
-    pub fn deadline_answered(
+    /// Only the ACP worker emits it: a permission id from that worker shares
+    /// the decimal sequence with a review decline, so it is a valid notice id.
+    pub(crate) fn deadline_answered(
         &self,
         execution: &ExecutionId,
         id: PermissionId,

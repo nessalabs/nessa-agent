@@ -2535,11 +2535,14 @@ fn an_automatic_decision_is_named_allowed_or_denied_in_the_notice() {
     let notice = |effect, sentence: &str| {
         let reason =
             nessa_sdk::domain::agent_execution::permissions::DeadlineReason::new(sentence).unwrap();
-        let snapshot = review_snapshot(vec![event(ExecutionUpdate::DeadlineAnswered {
-            id: PermissionId::new("permission").unwrap(),
-            effect,
-            reason,
-        })]);
+        let snapshot = review_snapshot(vec![
+            review("{}".into()),
+            event(ExecutionUpdate::DeadlineAnswered {
+                id: PermissionId::new("permission").unwrap(),
+                effect,
+                reason,
+            }),
+        ]);
         let mut projection = projection();
         projection.replace_committed(
             &committed("incarnation", 1, 1, 1, Some(&snapshot)),
@@ -2561,6 +2564,50 @@ fn an_automatic_decision_is_named_allowed_or_denied_in_the_notice() {
     assert_eq!(
         notice(PermissionEffect::Deny, STANDARD_STOP_REASON),
         format!("Denied automatically: {STANDARD_STOP_REASON}")
+    );
+}
+
+#[test]
+fn a_deadline_notice_without_an_earlier_request_in_that_execution_is_omitted() {
+    let reason =
+        nessa_sdk::domain::agent_execution::permissions::DeadlineReason::new(STANDARD_DENY_REASON)
+            .unwrap();
+    let notice = |id: &str| {
+        event(ExecutionUpdate::DeadlineAnswered {
+            id: PermissionId::new(id).unwrap(),
+            effect: PermissionEffect::Deny,
+            reason: reason.clone(),
+        })
+    };
+    let texts = |events| {
+        let snapshot = review_snapshot(events);
+        let mut projection = projection();
+        projection.replace_committed(
+            &committed("incarnation", 1, 1, 1, Some(&snapshot)),
+            &[],
+            Some(&ExecutionId::new("execution").unwrap()),
+        );
+        projection.transcript_state(ConversationTranscriptState::Complete);
+        projection
+            .read()
+            .messages
+            .into_iter()
+            .flat_map(|message| message.parts)
+            .filter(|part| part.kind == "local_notice")
+            .map(|part| part.text)
+            .collect::<Vec<_>>()
+    };
+    assert!(
+        texts(vec![notice("permission")]).is_empty(),
+        "a notice with no earlier request is omitted"
+    );
+    assert!(
+        texts(vec![review("{}".into()), notice("other")]).is_empty(),
+        "a notice whose id is not the request's is omitted"
+    );
+    assert_eq!(
+        texts(vec![review("{}".into()), notice("permission")]),
+        vec![format!("Denied automatically: {STANDARD_DENY_REASON}")]
     );
 }
 
