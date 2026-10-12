@@ -8,9 +8,34 @@ use nessa_sdk::application::agent_execution::hooks::{
 use nessa_sdk::domain::agent_execution::permissions::RefusalOutcome;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+/// Set once the provider's execution has admitted its reviews.
+#[derive(Default)]
+struct Started {
+    flag: AtomicBool,
+    signal: tokio::sync::Notify,
+}
+
+impl Started {
+    fn set(&self) {
+        self.flag.store(true, Ordering::SeqCst);
+        self.signal.notify_waiters();
+    }
+
+    async fn wait(&self) {
+        loop {
+            // Register before checking, so a set in between is not lost.
+            let signalled = self.signal.notified();
+            if self.flag.load(Ordering::SeqCst) {
+                return;
+            }
+            signalled.await;
+        }
+    }
+}
+
 struct ScriptedEvents {
     events: Vec<ExecutionEvent>,
-    started: Arc<AtomicBool>,
+    started: Arc<Started>,
     release: Arc<tokio::sync::Notify>,
     index: usize,
 }
@@ -18,9 +43,7 @@ struct ScriptedEvents {
 impl ExecutionEventStream for ScriptedEvents {
     fn next(&mut self) -> ProviderObservationFuture<'_> {
         Box::pin(async move {
-            if !self.started.load(Ordering::SeqCst) {
-                return std::future::pending().await;
-            }
+            self.started.wait().await;
             if self.index >= self.events.len() {
                 self.release.notify_waiters();
                 return Ok(None);
@@ -33,7 +56,7 @@ impl ExecutionEventStream for ScriptedEvents {
 }
 
 struct ScriptedBackend {
-    started: Arc<AtomicBool>,
+    started: Arc<Started>,
     answered: Arc<AtomicUsize>,
     cancelled: Arc<AtomicUsize>,
     turn_cancels: Arc<AtomicUsize>,
@@ -130,9 +153,11 @@ impl ProviderSessionBackend for ScriptedBackend {
         let reviews = self.reviews.clone();
         let release = self.release.clone();
         Box::pin(async move {
+            // Register for release before the stream can run to its end.
+            let released = release.notified();
             admit_reviews(&controller, &input.execution_id, &reviews);
-            started.store(true, Ordering::SeqCst);
-            release.notified().await;
+            started.set();
+            released.await;
             ProviderExecutionReply::Finished(ExecutionReport::new(
                 Some(Ok(ExecutionOutcome::Completed)),
                 None,
@@ -237,7 +262,7 @@ impl ProviderSessionBackend for ScriptedBackend {
 
 struct ScriptedProvider {
     events: Mutex<Option<Vec<ExecutionEvent>>>,
-    started: Arc<AtomicBool>,
+    started: Arc<Started>,
     answered: Arc<AtomicUsize>,
     cancelled: Arc<AtomicUsize>,
     turn_cancels: Arc<AtomicUsize>,
@@ -362,6 +387,8 @@ struct Fixture {
     answers: Arc<Mutex<Vec<PermissionAnswer>>>,
     withdrawals: Arc<Mutex<Vec<PermissionCancellationRequest>>>,
     authority: PermissionAuthoritySource,
+    /// Lets the scripted provider settle its execution.
+    release: Arc<tokio::sync::Notify>,
 }
 
 struct FixtureKnobs {
@@ -406,10 +433,11 @@ async fn open_on_clock(
     let withdrawals = Arc::new(Mutex::new(Vec::new()));
     let controller = ExecutionController::new(ExecutionSessionId::new("context").unwrap());
     let authority = controller.permission_authority_source();
+    let release = Arc::new(tokio::sync::Notify::new());
     let agent = attached_agent(
         Arc::new(ScriptedProvider {
             events: Mutex::new(Some(events)),
-            started: Arc::new(AtomicBool::new(false)),
+            started: Arc::new(Started::default()),
             answered: answered.clone(),
             cancelled: cancelled.clone(),
             turn_cancels: turn_cancels.clone(),
@@ -418,7 +446,7 @@ async fn open_on_clock(
             withdrawals: withdrawals.clone(),
             controller: Arc::new(Mutex::new(controller)),
             authority: authority.clone(),
-            release: Arc::new(tokio::sync::Notify::new()),
+            release: release.clone(),
             turn_cancel: knobs.turn_cancel,
             fail_delivery: knobs.fail_delivery,
             fail_turn_cancel: knobs.fail_turn_cancel,
@@ -443,6 +471,7 @@ async fn open_on_clock(
         answers,
         withdrawals,
         authority,
+        release,
     }
 }
 
@@ -1336,6 +1365,42 @@ async fn a_verdict_first_seen_after_the_deadline_is_a_timeout() {
     let answers = fixture.answers.lock().unwrap();
     assert_eq!(answers.len(), 1, "a late allow was accepted");
     assert_eq!(hook_refusal(&answers[0]).reason(), "hook failed: timeout");
+}
+
+/// Lets the provider settle its execution, waits for that to be seen, then
+/// ends the turn.
+struct SettlingRefuser(Arc<tokio::sync::Notify>);
+
+impl InvocationHook for SettlingRefuser {
+    fn before_permission_review(
+        &self,
+        _: &ProposedToolCall<'_>,
+        _: &InvocationObservationWindow<'_>,
+    ) -> Result<ToolVerdict, HookError> {
+        self.0.notify_waiters();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        Ok(ToolVerdict::refuse("stop", RefusalOutcome::EndTurn))
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_end_turn_after_the_provider_settled_keeps_the_session() {
+    let fixture = agent_with(script(), Vec::new()).await;
+    fixture
+        .agent
+        .add_invocation_hook(Arc::new(SettlingRefuser(fixture.release.clone())));
+    fixture
+        .agent
+        .invoke(request(), close_action())
+        .await
+        .expect("a turn that already ended needs no cancel");
+    assert_eq!(fixture.turn_cancels.load(Ordering::SeqCst), 0);
+    assert!(fixture.closes.lock().unwrap().is_empty());
+    fixture
+        .agent
+        .invoke(second_request(), close_action())
+        .await
+        .expect("the session stays usable");
 }
 
 /// Refuses every review, but says it does not review permissions.

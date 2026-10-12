@@ -75,7 +75,8 @@ when the binding can cancel one turn, is an end-turn: the pending review is
 withdrawn as the hook, then the turn is cancelled. When the binding cannot
 cancel one turn, that refusal is recorded as continue and the review is still
 withdrawn, so the provider is not left waiting. End-turn withdraws the review
-as the hook, naming the outcome, then cancels the turn. An end-turn the binding
+as the hook, naming the outcome, then cancels the turn, unless the provider
+already finished it while the hook ran. An end-turn the binding
 cannot perform is recorded as continue and does not cancel the turn. It does
 not close the session. Close-session withdraws the review as the hook,
 recording the applied outcome, then closes with
