@@ -3606,6 +3606,43 @@ async fn a_fetch_given_up_while_being_accepted_lets_its_part_go_once_made() {
     }
 }
 
+/// A fetch the gateway gave up on while its part was being made, whose
+/// lease then ends before the part is made, keeps the gateway's giving up
+/// as its cause: recorded unanswered, never relabelled lease ended.
+#[tokio::test]
+async fn a_fetch_given_up_before_its_lease_ends_stays_unanswered() {
+    let (mut gateway, inbox) = Gateway::fetching().await;
+    let (go, held) = std::sync::mpsc::channel();
+    *inbox.hold_part.lock().unwrap() = Some(held);
+    gateway.send(fetch_frame(LEASE, "call-1", "a.png")).await;
+    gateway
+        .send(ToEnvironment::Undelivered {
+            lease: LEASE.into(),
+            request: "call-1".into(),
+        })
+        .await;
+    gateway
+        .send(ToEnvironment::End {
+            lease: LEASE.into(),
+        })
+        .await;
+    gateway.settled().await;
+    go.send(()).unwrap();
+    assert!(matches!(
+        gateway.said().await,
+        FromEnvironment::Ended { lease, .. } if lease == LEASE
+    ));
+    assert_eq!(
+        gateway.fetch_entries(),
+        [LedgerEntry::FetchUnanswered {
+            lease: LEASE.into(),
+            request: "call-1".into(),
+            asked: asked("a.png"),
+        }]
+    );
+    assert!(inbox.placed.lock().unwrap().is_empty());
+}
+
 // Row I7: a lease lasts at most what the peer's grant lets it, measured on
 // the serving timer, and this side ends it itself past that.
 

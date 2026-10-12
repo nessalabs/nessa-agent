@@ -427,17 +427,19 @@ impl LeaseFetches {
             for task in tasks {
                 let _ = task.await;
             }
-            let unanswered: Vec<(String, FetchAsked)> = {
+            let unanswered: Vec<(String, FetchAsked, bool)> = {
                 let mut state = lock(&self.state);
                 state
                     .taken
                     .drain()
-                    .map(|(request, taken)| (request, taken.asked))
+                    .map(|(request, taken)| (request, taken.asked, taken.undelivered))
                     .collect()
             };
             let fetches = self.handle();
-            for (request, asked) in unanswered {
-                if lost {
+            for (request, asked, undelivered) in unanswered {
+                // One the gateway already gave up keeps that as its cause,
+                // whatever ended the lease after.
+                if lost || undelivered {
                     let entry = LedgerEntry::FetchUnanswered {
                         lease: self.lease.clone(),
                         request,
@@ -448,7 +450,11 @@ impl LeaseFetches {
                         &self.unrecorded,
                         &self.lease,
                         &entry,
-                        "lost with its lease",
+                        if undelivered {
+                            "undelivered"
+                        } else {
+                            "lost with its lease"
+                        },
                     );
                 } else {
                     let ended = Placement::Refused(FetchRefusal::LeaseEnded);

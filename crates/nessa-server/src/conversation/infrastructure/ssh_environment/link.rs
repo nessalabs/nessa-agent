@@ -1050,11 +1050,14 @@ impl HostLink {
             lease: lease.into(),
             request,
         };
-        // Set before it is queued: from here the host may place it.
-        said_delivered.store(true, std::sync::atomic::Ordering::SeqCst);
-        if self.frames.send(delivered).await.is_err() {
+        // Room for it first, then marked, then queued with nothing awaited
+        // between: marked exactly when the host may place it, so a call
+        // given up while the queue is full keeps no bytes counted.
+        let Ok(permit) = self.frames.reserve().await else {
             return Err(FetchFailure::Unanswered);
-        }
+        };
+        said_delivered.store(true, std::sync::atomic::Ordering::SeqCst);
+        permit.send(delivered);
         fetching.undelivered = false;
         match answers.recv().await {
             Some(FetchAnswer::Fetched(outcome)) => fetched(outcome),
