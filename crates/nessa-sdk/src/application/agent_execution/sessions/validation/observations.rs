@@ -140,6 +140,17 @@ impl Observations {
                 }
                 ObservationUndo::Declined(observation.id().clone(), previous)
             }
+            // A deadline's answer ends its review as a cancellation does, so
+            // a later cancellation of it contradicts the notice. A deadline
+            // that cancelled its review comes after that cancellation and
+            // finds nothing pending.
+            ExecutionUpdate::DeadlineAnswered { id, .. } => match self.reviews.remove_entry(id) {
+                Some((id, previous)) => {
+                    self.identity_bytes -= id.as_str().len();
+                    ObservationUndo::Cancelled(id, previous)
+                }
+                None => ObservationUndo::None,
+            },
             ExecutionUpdate::QuestionAsked { id, .. } => {
                 validate_observation_id(id.as_str()).map_err(corrupt)?;
                 if self.asked_ids.contains(id) {

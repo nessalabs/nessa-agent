@@ -527,7 +527,12 @@ pub fn wait_ms(wait: Duration) -> u64 {
 }
 
 pub(crate) fn checked_deadline_reason(reason: String) -> Result<DeadlineReason, ExecutionError> {
-    if reason.trim().is_empty() {
+    // Blank as the client and the product schema read it: JavaScript's
+    // whitespace also counts U+FEFF, which Rust's does not.
+    if reason
+        .chars()
+        .all(|character| character.is_whitespace() || character == '\u{feff}')
+    {
         return Err(ExecutionError::EmptyValue("permission deadline reason"));
     }
     if reason.len() > MAX_DEADLINE_REASON_BYTES {
@@ -928,10 +933,13 @@ mod tests {
         assert_eq!(AsRef::<str>::as_ref(&reason), "kept");
         assert!(<DeadlineReason as PartialEq<str>>::eq(&reason, "kept"));
         assert!(<DeadlineReason as PartialEq<&str>>::eq(&reason, &"kept"));
-        assert_eq!(
-            DeadlineReason::new(" "),
-            Err(ExecutionError::EmptyValue("permission deadline reason"))
-        );
+        for blank in [" ", "\u{feff}", " \u{feff}\u{3000}"] {
+            assert_eq!(
+                DeadlineReason::new(blank),
+                Err(ExecutionError::EmptyValue("permission deadline reason")),
+                "{blank:?}"
+            );
+        }
         assert_eq!(wait_ms(Duration::MAX), u64::MAX);
         let promised = PermissionReviewDeadline::new(
             PermissionToolClass::Other,
