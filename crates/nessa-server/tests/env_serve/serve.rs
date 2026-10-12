@@ -1,5 +1,7 @@
 //! The environment role's frame loop, driven in process over a pipe: what it
 //! answers, what it records, and what it does when the gateway goes away.
+use super::super::fetches::{Destination, FetchedFile, FileIdentity, PlacedFile, Placement};
+use super::FetchAsked;
 use super::*;
 use crate::env_serve::domain::{AgentName, Agents, CommandGrant, MaxLease};
 use crate::env_serve::{application::timer::manual::ManualTimer, infrastructure::TokioTimer};
@@ -171,6 +173,12 @@ struct MemoryLedger {
     publishing: tokio::sync::Notify,
     /// Refuses only a command's exit, as a disk that went away for one write.
     failing_command_ran: AtomicBool,
+    /// Refuses only a fetch's acceptance.
+    failing_fetch_accepted: AtomicBool,
+    /// Refuses only a fetch's last word.
+    failing_fetched: AtomicBool,
+    /// Refuses only a fetch recorded unanswered.
+    failing_fetch_unanswered: AtomicBool,
     /// Refuses only a lease's expiry, likewise.
     failing_expiring: AtomicBool,
     /// Refuses only a lease's revocation, likewise.
@@ -190,6 +198,12 @@ impl LeaseLedger for MemoryLedger {
         if self.failing.load(Ordering::SeqCst)
             || (matches!(entry, LedgerEntry::CommandRan { .. })
                 && self.failing_command_ran.load(Ordering::SeqCst))
+            || (matches!(entry, LedgerEntry::FetchAccepted { .. })
+                && self.failing_fetch_accepted.load(Ordering::SeqCst))
+            || (matches!(entry, LedgerEntry::Fetched { .. })
+                && self.failing_fetched.load(Ordering::SeqCst))
+            || (matches!(entry, LedgerEntry::FetchUnanswered { .. })
+                && self.failing_fetch_unanswered.load(Ordering::SeqCst))
             || (matches!(entry, LedgerEntry::Expiring { .. })
                 && self.failing_expiring.load(Ordering::SeqCst))
             || (matches!(entry, LedgerEntry::Revoking { .. })
@@ -335,11 +349,13 @@ impl Gateway {
         runs_commands: bool,
         timer: Arc<dyn Timer>,
     ) -> Self {
-        Self::for_peer(
+        Self::through(
+            1 << 20,
             Peer::Ssh,
             MemoryGrants::none(),
             ledger,
             outbox,
+            None,
             runs_commands,
             timer,
         )
@@ -353,16 +369,47 @@ impl Gateway {
         runs_commands: bool,
         timer: Arc<dyn Timer>,
     ) -> Self {
-        Self::through(1 << 20, peer, grants, ledger, outbox, runs_commands, timer)
+        Self::through(
+            1 << 20,
+            peer,
+            grants,
+            ledger,
+            outbox,
+            None,
+            runs_commands,
+            timer,
+        )
     }
-    /// [`Self::for_peer`], over a connection holding at most `buffer` bytes
-    /// each way that are not yet read.
+    /// [`Self::over`], taking fetched files into `inbox` when one is given.
+    fn taking(
+        ledger: Arc<MemoryLedger>,
+        outbox: Arc<dyn ArtifactOutbox>,
+        inbox: Option<Arc<dyn ArtifactInbox>>,
+        runs_commands: bool,
+        timer: Arc<dyn Timer>,
+    ) -> Self {
+        Self::through(
+            1 << 20,
+            Peer::Ssh,
+            MemoryGrants::none(),
+            ledger,
+            outbox,
+            inbox,
+            runs_commands,
+            timer,
+        )
+    }
+    /// Serving `peer`, granted as `grants` say, taking fetched files into
+    /// `inbox` when one is given, over a connection holding at most
+    /// `buffer` bytes each way that are not yet read.
+    #[allow(clippy::too_many_arguments, reason = "a test harness's one builder")]
     fn through(
         buffer: usize,
         peer: Peer,
         grants: Arc<MemoryGrants>,
         ledger: Arc<MemoryLedger>,
         outbox: Arc<dyn ArtifactOutbox>,
+        inbox: Option<Arc<dyn ArtifactInbox>>,
         runs_commands: bool,
         timer: Arc<dyn Timer>,
     ) -> Self {
@@ -395,6 +442,7 @@ impl Gateway {
             },
             ledger.clone(),
             outbox,
+            inbox,
             ServeTimings {
                 grace: Duration::from_millis(10),
                 kill: Duration::from_millis(100),
@@ -2938,6 +2986,7 @@ async fn a_gateway_that_reads_nothing_holds_a_bounded_number_of_answers() {
         MemoryGrants::none(),
         Arc::new(MemoryLedger::default()),
         outbox.clone(),
+        None,
         true,
         real_time(),
     );
@@ -3344,6 +3393,808 @@ async fn a_command_whose_exit_cannot_be_recorded_ends_uncertain_in_the_ledger_to
     );
 }
 
+/// An inbox that says what a test sets of each destination, makes parts by
+/// name only, and remembers what it was asked to place and let go.
+#[derive(Default)]
+struct RecordingInbox {
+    /// What is at a destination, when not nothing.
+    at: Mutex<HashMap<String, Result<Destination, FetchRefusal>>>,
+    /// What placing answers, when not placed.
+    placing: Mutex<Option<Placement>>,
+    /// What was taken back, as placed.
+    taken_back: Mutex<Vec<PlacedFile>>,
+    parts: Mutex<Vec<(String, u32)>>,
+    placed: Mutex<Vec<(String, u32, String, FetchedFile)>>,
+    discarded: Mutex<Vec<(String, u32)>>,
+    closed: Mutex<Vec<String>>,
+    /// When set, making the next part waits for this.
+    hold_part: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+    /// When set, making a part is refused so.
+    refuse_part: Mutex<Option<FetchRefusal>>,
+    /// When set, a placed file cannot be taken back.
+    keeps: AtomicBool,
+}
+
+impl ArtifactInbox for RecordingInbox {
+    fn destination(
+        &self,
+        destination: &str,
+        _file: &FetchedFile,
+    ) -> Result<Destination, FetchRefusal> {
+        self.at
+            .lock()
+            .unwrap()
+            .get(destination)
+            .cloned()
+            .unwrap_or(Ok(Destination::Free {
+                path: format!("/work/{destination}"),
+            }))
+    }
+    fn open_part(&self, lease: &str, fetch: u32) -> Result<String, FetchRefusal> {
+        let held = self.hold_part.lock().unwrap().take();
+        if let Some(go) = held {
+            let _ = go.recv();
+        }
+        if let Some(reason) = *self.refuse_part.lock().unwrap() {
+            return Err(reason);
+        }
+        self.parts.lock().unwrap().push((lease.into(), fetch));
+        Ok(format!("/inbox/{fetch}.part"))
+    }
+    fn place(&self, lease: &str, fetch: u32, destination: &str, file: &FetchedFile) -> Placement {
+        self.placed
+            .lock()
+            .unwrap()
+            .push((lease.into(), fetch, destination.into(), file.clone()));
+        self.discarded.lock().unwrap().push((lease.into(), fetch));
+        self.placing.lock().unwrap().clone().unwrap_or_else(|| {
+            Placement::Placed(PlacedFile {
+                path: format!("/work/{destination}"),
+                identity: FileIdentity {
+                    device: 1,
+                    inode: u64::from(fetch),
+                },
+            })
+        })
+    }
+    fn take_back(&self, placed: &PlacedFile) -> bool {
+        self.taken_back.lock().unwrap().push(placed.clone());
+        !self.keeps.load(Ordering::SeqCst)
+    }
+    fn discard(&self, lease: &str, fetch: u32) {
+        self.discarded.lock().unwrap().push((lease.into(), fetch));
+    }
+    fn close(&self, lease: &str) {
+        self.closed.lock().unwrap().push(lease.into());
+    }
+}
+
+fn fetch_frame(lease: &str, request: &str, destination: &str) -> ToEnvironment {
+    ToEnvironment::Fetch {
+        lease: lease.into(),
+        request: request.into(),
+        destination: destination.into(),
+        digest: "ab".repeat(32),
+        media_type: "image/png".into(),
+        size: 20,
+    }
+}
+
+/// What [`fetch_frame`] asks for, as every fetch entry records it.
+fn asked(destination: &str) -> FetchAsked {
+    FetchAsked {
+        destination: destination.into(),
+        digest: "ab".repeat(32),
+        media_type: "image/png".into(),
+        size: 20,
+    }
+}
+
+fn fetched_file() -> FetchedFile {
+    FetchedFile {
+        digest: "ab".repeat(32),
+        size: 20,
+    }
+}
+
+impl Gateway {
+    /// A gateway whose host takes fetched files, with one lease granted.
+    async fn fetching() -> (Self, Arc<RecordingInbox>) {
+        let inbox = Arc::new(RecordingInbox::default());
+        let mut gateway = Self::taking(
+            Arc::new(MemoryLedger::default()),
+            Arc::new(NoOutbox),
+            Some(inbox.clone()),
+            true,
+            real_time(),
+        );
+        assert_eq!(gateway.next().await, hello());
+        gateway.granted(LEASE).await;
+        (gateway, inbox)
+    }
+    /// The ledger's entries about fetches, in order.
+    fn fetch_entries(&self) -> Vec<LedgerEntry> {
+        self.ledger
+            .entries()
+            .into_iter()
+            .filter(|entry| {
+                matches!(
+                    entry,
+                    LedgerEntry::FetchAccepted { .. }
+                        | LedgerEntry::Fetched { .. }
+                        | LedgerEntry::FetchUnanswered { .. }
+                )
+            })
+            .collect()
+    }
+}
+
+/// Slice D3b: a fetch whose destination is free is taken into a part of its
+/// own, named by the host's number for it, recorded before it is answered;
+/// once the gateway says every byte is delivered the part is checked and
+/// placed, and that outcome recorded before it is said. No frame carries
+/// the file's bytes.
+#[tokio::test]
+async fn a_fetch_is_taken_into_a_part_and_placed_once_delivered_each_step_recorded_first() {
+    let (mut gateway, inbox) = Gateway::fetching().await;
+    gateway
+        .send(fetch_frame(LEASE, "call-1", "assets/cat.png"))
+        .await;
+    assert_eq!(
+        gateway.next().await,
+        FromEnvironment::FetchAccepted {
+            lease: LEASE.into(),
+            request: "call-1".into(),
+            path: "/inbox/0.part".into(),
+        }
+    );
+    assert_eq!(*inbox.parts.lock().unwrap(), [(LEASE.into(), 0)]);
+    assert_eq!(
+        gateway.fetch_entries(),
+        [LedgerEntry::FetchAccepted {
+            lease: LEASE.into(),
+            request: "call-1".into(),
+            fetch: 0,
+            asked: asked("assets/cat.png"),
+        }]
+    );
+    gateway
+        .send(ToEnvironment::Delivered {
+            lease: LEASE.into(),
+            request: "call-1".into(),
+        })
+        .await;
+    let placed = FetchOutcome::Placed {
+        path: "/work/assets/cat.png".into(),
+    };
+    assert_eq!(
+        gateway.next().await,
+        FromEnvironment::Fetched {
+            lease: LEASE.into(),
+            request: "call-1".into(),
+            outcome: placed.clone(),
+        }
+    );
+    assert_eq!(
+        *inbox.placed.lock().unwrap(),
+        [(LEASE.into(), 0, "assets/cat.png".into(), fetched_file())]
+    );
+    assert_eq!(
+        gateway.fetch_entries()[1..],
+        [LedgerEntry::Fetched {
+            lease: LEASE.into(),
+            request: "call-1".into(),
+            asked: asked("assets/cat.png"),
+            outcome: placed,
+        }]
+    );
+    // Answered once: a second delivery names nothing held.
+    gateway
+        .send(ToEnvironment::Delivered {
+            lease: LEASE.into(),
+            request: "call-1".into(),
+        })
+        .await;
+    gateway.settled().await;
+    assert!(gateway.ledger.entries().iter().any(|entry| matches!(
+        entry,
+        LedgerEntry::Dropped { frame, .. } if frame == "delivered"
+    )));
+    // What placing found is said as it is: a part that is not the file.
+    *inbox.placing.lock().unwrap() = Some(Placement::Refused(FetchRefusal::Mismatch));
+    gateway.send(fetch_frame(LEASE, "call-2", "b.png")).await;
+    assert!(matches!(
+        gateway.next().await,
+        FromEnvironment::FetchAccepted { .. }
+    ));
+    gateway
+        .send(ToEnvironment::Delivered {
+            lease: LEASE.into(),
+            request: "call-2".into(),
+        })
+        .await;
+    assert_eq!(
+        gateway.next().await,
+        FromEnvironment::Fetched {
+            lease: LEASE.into(),
+            request: "call-2".into(),
+            outcome: FetchOutcome::Refused {
+                reason: FetchRefusal::Mismatch,
+            },
+        }
+    );
+}
+
+/// A fetch's last word that cannot be recorded is never said as it was: a
+/// file this fetch placed is taken back and the gateway told
+/// `auditUnavailable`; one already there is not this fetch's, and stays.
+#[tokio::test]
+async fn a_fetch_whose_outcome_cannot_be_recorded_is_answered_audit_unavailable_and_taken_back() {
+    let (mut gateway, inbox) = Gateway::fetching().await;
+    gateway.ledger.failing_fetched.store(true, Ordering::SeqCst);
+    let unrecorded = |request: &str| FromEnvironment::Fetched {
+        lease: LEASE.into(),
+        request: request.into(),
+        outcome: FetchOutcome::Refused {
+            reason: FetchRefusal::AuditUnavailable,
+        },
+    };
+    gateway.send(fetch_frame(LEASE, "call-1", "a.png")).await;
+    assert!(matches!(
+        gateway.next().await,
+        FromEnvironment::FetchAccepted { .. }
+    ));
+    gateway
+        .send(ToEnvironment::Delivered {
+            lease: LEASE.into(),
+            request: "call-1".into(),
+        })
+        .await;
+    assert_eq!(gateway.next().await, unrecorded("call-1"));
+    assert_eq!(
+        *inbox.taken_back.lock().unwrap(),
+        [PlacedFile {
+            path: "/work/a.png".into(),
+            identity: FileIdentity {
+                device: 1,
+                inode: 0,
+            },
+        }]
+    );
+    // Already there: said unrecorded, and nothing taken back.
+    inbox.at.lock().unwrap().insert(
+        "b.png".into(),
+        Ok(Destination::AlreadyPlaced {
+            path: "/work/b.png".into(),
+        }),
+    );
+    gateway.send(fetch_frame(LEASE, "call-2", "b.png")).await;
+    assert_eq!(gateway.next().await, unrecorded("call-2"));
+    assert_eq!(inbox.taken_back.lock().unwrap().len(), 1);
+    // Placed once the record can be made again: said as it is.
+    gateway
+        .ledger
+        .failing_fetched
+        .store(false, Ordering::SeqCst);
+    gateway.send(fetch_frame(LEASE, "call-3", "c.png")).await;
+    assert!(matches!(
+        gateway.next().await,
+        FromEnvironment::FetchAccepted { .. }
+    ));
+    gateway
+        .send(ToEnvironment::Delivered {
+            lease: LEASE.into(),
+            request: "call-3".into(),
+        })
+        .await;
+    assert_eq!(
+        gateway.next().await,
+        FromEnvironment::Fetched {
+            lease: LEASE.into(),
+            request: "call-3".into(),
+            outcome: FetchOutcome::Placed {
+                path: "/work/c.png".into(),
+            },
+        }
+    );
+    assert_eq!(inbox.taken_back.lock().unwrap().len(), 1);
+}
+
+/// A destination that already is exactly the file is answered at once, and
+/// no part is made for it.
+#[tokio::test]
+async fn a_fetch_whose_destination_already_is_the_file_is_answered_without_a_part() {
+    let (mut gateway, inbox) = Gateway::fetching().await;
+    inbox.at.lock().unwrap().insert(
+        "a.png".into(),
+        Ok(Destination::AlreadyPlaced {
+            path: "/work/a.png".into(),
+        }),
+    );
+    gateway.send(fetch_frame(LEASE, "call-1", "a.png")).await;
+    let outcome = FetchOutcome::AlreadyPlaced {
+        path: "/work/a.png".into(),
+    };
+    assert_eq!(
+        gateway.next().await,
+        FromEnvironment::Fetched {
+            lease: LEASE.into(),
+            request: "call-1".into(),
+            outcome: outcome.clone(),
+        }
+    );
+    assert!(inbox.parts.lock().unwrap().is_empty());
+    assert_eq!(
+        gateway.fetch_entries(),
+        [LedgerEntry::Fetched {
+            lease: LEASE.into(),
+            request: "call-1".into(),
+            asked: asked("a.png"),
+            outcome,
+        }]
+    );
+}
+
+/// Every refusal is said by name, recorded, and takes nothing: a fetch
+/// refused for its own request leaves the one already taken under that name
+/// as it was.
+#[tokio::test]
+async fn a_fetch_is_refused_with_its_reason_and_takes_nothing() {
+    let (mut gateway, inbox) = Gateway::fetching().await;
+    inbox
+        .at
+        .lock()
+        .unwrap()
+        .insert("notes.txt".into(), Err(FetchRefusal::Occupied));
+    gateway.send(fetch_frame(LEASE, "call-1", "a.png")).await;
+    assert!(matches!(
+        gateway.next().await,
+        FromEnvironment::FetchAccepted { .. }
+    ));
+    let mut empty = fetch_frame(LEASE, "call-2", "a.png");
+    if let ToEnvironment::Fetch { size, .. } = &mut empty {
+        *size = 0;
+    }
+    let mut unreadable = fetch_frame(LEASE, "call-3", "a.png");
+    if let ToEnvironment::Fetch { digest, .. } = &mut unreadable {
+        *digest = "AB".repeat(32);
+    }
+    for (frame, request, reason) in [
+        (
+            fetch_frame(LEASE, "call-0", "notes.txt"),
+            "call-0",
+            FetchRefusal::Occupied,
+        ),
+        (empty, "call-2", FetchRefusal::Size),
+        (unreadable, "call-3", FetchRefusal::Invalid),
+        (
+            fetch_frame("0b7d3a1e-0000-4000-8000-0000000000ff", "call-4", "a.png"),
+            "call-4",
+            FetchRefusal::LeaseEnded,
+        ),
+    ] {
+        gateway.send(frame).await;
+        assert!(
+            matches!(
+                gateway.next().await,
+                FromEnvironment::FetchRefused { request: refused, reason: said, .. }
+                    if refused == request && said == reason
+            ),
+            "{request}"
+        );
+    }
+    // Asked again under a request still held: dropped, nothing said of it
+    // and nothing recorded, so the first's answer stays its only one.
+    let before = gateway.fetch_entries();
+    gateway.send(fetch_frame(LEASE, "call-1", "b.png")).await;
+    gateway.settled().await;
+    assert_eq!(gateway.fetch_entries(), before);
+    // The first is still taken as it was: its delivery places it.
+    gateway
+        .send(ToEnvironment::Delivered {
+            lease: LEASE.into(),
+            request: "call-1".into(),
+        })
+        .await;
+    assert!(matches!(
+        gateway.next().await,
+        FromEnvironment::Fetched { request, outcome: FetchOutcome::Placed { path }, .. }
+            if request == "call-1" && path == "/work/a.png"
+    ));
+    assert_eq!(*inbox.parts.lock().unwrap(), [(LEASE.into(), 0)]);
+    // Past the in-flight bound, busy.
+    for n in 0..nessa_protocol::lease::MAX_FETCHES_IN_FLIGHT {
+        gateway
+            .send(fetch_frame(LEASE, &format!("held-{n}"), "a.png"))
+            .await;
+        assert!(matches!(
+            gateway.next().await,
+            FromEnvironment::FetchAccepted { .. }
+        ));
+    }
+    gateway.send(fetch_frame(LEASE, "call-5", "a.png")).await;
+    assert!(matches!(
+        gateway.next().await,
+        FromEnvironment::FetchRefused {
+            reason: FetchRefusal::Busy,
+            ..
+        }
+    ));
+    // A host that takes no files says so, recorded as any refusal.
+    let mut bare = Gateway::start();
+    assert_eq!(bare.next().await, hello());
+    bare.granted(LEASE).await;
+    bare.send(fetch_frame(LEASE, "call-1", "a.png")).await;
+    assert_eq!(
+        bare.next().await,
+        FromEnvironment::FetchRefused {
+            lease: LEASE.into(),
+            request: "call-1".into(),
+            reason: FetchRefusal::Unavailable,
+        }
+    );
+    assert_eq!(
+        bare.fetch_entries(),
+        [LedgerEntry::Fetched {
+            lease: LEASE.into(),
+            request: "call-1".into(),
+            asked: asked("a.png"),
+            outcome: FetchOutcome::Refused {
+                reason: FetchRefusal::Unavailable,
+            },
+        }]
+    );
+    // Unrecorded, it is said so instead.
+    bare.ledger.failing_fetched.store(true, Ordering::SeqCst);
+    bare.send(fetch_frame(LEASE, "call-2", "a.png")).await;
+    assert_eq!(
+        bare.next().await,
+        FromEnvironment::FetchRefused {
+            lease: LEASE.into(),
+            request: "call-2".into(),
+            reason: FetchRefusal::AuditUnavailable,
+        }
+    );
+}
+
+/// A fetch the gateway gives up on before every byte is delivered lets its
+/// part go and is recorded unanswered; nothing is placed.
+#[tokio::test]
+async fn an_undelivered_fetch_lets_its_part_go_and_places_nothing() {
+    let (mut gateway, inbox) = Gateway::fetching().await;
+    gateway.send(fetch_frame(LEASE, "call-1", "a.png")).await;
+    assert!(matches!(
+        gateway.next().await,
+        FromEnvironment::FetchAccepted { .. }
+    ));
+    gateway
+        .send(ToEnvironment::Undelivered {
+            lease: LEASE.into(),
+            request: "call-1".into(),
+        })
+        .await;
+    gateway
+        .send(ToEnvironment::Delivered {
+            lease: LEASE.into(),
+            request: "call-1".into(),
+        })
+        .await;
+    gateway.settled().await;
+    assert_eq!(*inbox.discarded.lock().unwrap(), [(LEASE.into(), 0)]);
+    assert!(inbox.placed.lock().unwrap().is_empty());
+    assert_eq!(
+        gateway.fetch_entries()[1..],
+        [LedgerEntry::FetchUnanswered {
+            lease: LEASE.into(),
+            request: "call-1".into(),
+            asked: asked("a.png"),
+        }]
+    );
+}
+
+/// A fetch whose entry could not be recorded leaves its lease's end
+/// uncertain: the audit is missing part of what happened under it.
+#[tokio::test]
+async fn a_fetch_entry_that_cannot_be_recorded_makes_its_leases_end_uncertain() {
+    let (mut gateway, inbox) = Gateway::fetching().await;
+    gateway
+        .ledger
+        .failing_fetch_unanswered
+        .store(true, Ordering::SeqCst);
+    gateway.send(fetch_frame(LEASE, "call-1", "a.png")).await;
+    assert!(matches!(
+        gateway.next().await,
+        FromEnvironment::FetchAccepted { .. }
+    ));
+    gateway
+        .send(ToEnvironment::Undelivered {
+            lease: LEASE.into(),
+            request: "call-1".into(),
+        })
+        .await;
+    gateway.settled().await;
+    // Its part is let go all the same.
+    assert_eq!(*inbox.discarded.lock().unwrap(), [(LEASE.into(), 0)]);
+    assert_eq!(
+        gateway.ended(LEASE).await,
+        FromEnvironment::Ended {
+            lease: LEASE.into(),
+            cleanup: Cleanup::Uncertain,
+        }
+    );
+    assert!(gateway.ledger.entries().iter().any(|entry| matches!(
+        entry,
+        LedgerEntry::Ended { lease, cleanup: Cleanup::Uncertain, .. } if lease == LEASE
+    )));
+}
+
+/// A fetch that cannot be recorded is not taken: refused as unrecorded, its
+/// part let go.
+#[tokio::test]
+async fn a_fetch_that_cannot_be_recorded_is_refused_and_its_part_let_go() {
+    let (mut gateway, inbox) = Gateway::fetching().await;
+    gateway
+        .ledger
+        .failing_fetch_accepted
+        .store(true, Ordering::SeqCst);
+    gateway.send(fetch_frame(LEASE, "call-1", "a.png")).await;
+    assert_eq!(
+        gateway.next().await,
+        FromEnvironment::FetchRefused {
+            lease: LEASE.into(),
+            request: "call-1".into(),
+            reason: FetchRefusal::AuditUnavailable,
+        }
+    );
+    assert_eq!(*inbox.discarded.lock().unwrap(), [(LEASE.into(), 0)]);
+}
+
+/// The lease ending answers every fetch it took and never placed, recorded
+/// and said before the lease's own end, and lets every part go.
+#[tokio::test]
+async fn a_lease_end_answers_every_fetch_under_way_before_its_ended() {
+    let (mut gateway, inbox) = Gateway::fetching().await;
+    gateway.send(fetch_frame(LEASE, "call-1", "a.png")).await;
+    assert!(matches!(
+        gateway.next().await,
+        FromEnvironment::FetchAccepted { .. }
+    ));
+    gateway
+        .send(ToEnvironment::End {
+            lease: LEASE.into(),
+        })
+        .await;
+    let ended = FetchOutcome::Refused {
+        reason: FetchRefusal::LeaseEnded,
+    };
+    assert_eq!(
+        gateway.next().await,
+        FromEnvironment::Fetched {
+            lease: LEASE.into(),
+            request: "call-1".into(),
+            outcome: ended.clone(),
+        }
+    );
+    assert!(matches!(
+        gateway.next().await,
+        FromEnvironment::Ended { .. }
+    ));
+    let entries = gateway.ledger.entries();
+    let fetched = entries
+        .iter()
+        .position(|entry| {
+            *entry
+                == LedgerEntry::Fetched {
+                    lease: LEASE.into(),
+                    request: "call-1".into(),
+                    asked: asked("a.png"),
+                    outcome: ended.clone(),
+                }
+        })
+        .expect("recorded as ended");
+    let end = entries
+        .iter()
+        .position(|entry| matches!(entry, LedgerEntry::Ended { .. }))
+        .expect("ended");
+    assert!(fetched < end);
+    assert_eq!(*inbox.closed.lock().unwrap(), [String::from(LEASE)]);
+}
+
+/// The connection lost with a fetch under way records it unanswered: the
+/// gateway is told nothing, and nothing is placed.
+#[tokio::test]
+async fn a_fetch_cut_off_by_a_lost_connection_is_recorded_unanswered() {
+    let (mut gateway, inbox) = Gateway::fetching().await;
+    gateway.send(fetch_frame(LEASE, "call-1", "a.png")).await;
+    assert!(matches!(
+        gateway.next().await,
+        FromEnvironment::FetchAccepted { .. }
+    ));
+    let Gateway {
+        writer,
+        frames,
+        served,
+        ledger,
+        ..
+    } = gateway;
+    drop(writer);
+    drop(frames);
+    tokio::time::timeout(Duration::from_secs(5), served)
+        .await
+        .expect("serving ends with its stream")
+        .unwrap();
+    let entries = ledger.entries();
+    assert!(entries.contains(&LedgerEntry::FetchUnanswered {
+        lease: LEASE.into(),
+        request: "call-1".into(),
+        asked: asked("a.png"),
+    }));
+    assert!(
+        !entries
+            .iter()
+            .any(|entry| matches!(entry, LedgerEntry::Fetched { .. })),
+        "{entries:?}"
+    );
+    assert!(inbox.placed.lock().unwrap().is_empty());
+    assert_eq!(*inbox.closed.lock().unwrap(), [String::from(LEASE)]);
+}
+
+/// A fetch the gateway gives up on while it is still being accepted is let
+/// go once its part is made: never offered, recorded unanswered, and its
+/// place under the in-flight bound freed.
+#[tokio::test]
+async fn a_fetch_given_up_while_being_accepted_lets_its_part_go_once_made() {
+    let (mut gateway, inbox) = Gateway::fetching().await;
+    let (go, held) = std::sync::mpsc::channel();
+    *inbox.hold_part.lock().unwrap() = Some(held);
+    gateway.send(fetch_frame(LEASE, "call-1", "a.png")).await;
+    gateway
+        .send(ToEnvironment::Undelivered {
+            lease: LEASE.into(),
+            request: "call-1".into(),
+        })
+        .await;
+    gateway.settled().await;
+    go.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while inbox.discarded.lock().unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("its part is let go");
+    assert_eq!(*inbox.discarded.lock().unwrap(), [(LEASE.into(), 0)]);
+    assert_eq!(
+        gateway.fetch_entries(),
+        [LedgerEntry::FetchUnanswered {
+            lease: LEASE.into(),
+            request: "call-1".into(),
+            asked: asked("a.png"),
+        }]
+    );
+    // Its place is free: as many as the bound are taken after it.
+    for n in 0..nessa_protocol::lease::MAX_FETCHES_IN_FLIGHT {
+        gateway
+            .send(fetch_frame(LEASE, &format!("held-{n}"), "a.png"))
+            .await;
+        assert!(matches!(
+            gateway.next().await,
+            FromEnvironment::FetchAccepted { request, .. } if request == format!("held-{n}")
+        ));
+    }
+}
+
+/// A fetch the gateway gave up on while it was being accepted is recorded
+/// unanswered whatever the acceptance then finds, a refusal included, and
+/// nothing more is said of it.
+#[tokio::test]
+async fn a_fetch_given_up_while_being_accepted_is_unanswered_even_when_refused() {
+    let (mut gateway, inbox) = Gateway::fetching().await;
+    let (go, held) = std::sync::mpsc::channel();
+    *inbox.hold_part.lock().unwrap() = Some(held);
+    *inbox.refuse_part.lock().unwrap() = Some(FetchRefusal::PlacingFailed);
+    gateway.send(fetch_frame(LEASE, "call-1", "a.png")).await;
+    gateway
+        .send(ToEnvironment::Undelivered {
+            lease: LEASE.into(),
+            request: "call-1".into(),
+        })
+        .await;
+    gateway.settled().await;
+    go.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while gateway.fetch_entries().is_empty() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("it is recorded");
+    assert_eq!(
+        gateway.fetch_entries(),
+        [LedgerEntry::FetchUnanswered {
+            lease: LEASE.into(),
+            request: "call-1".into(),
+            asked: asked("a.png"),
+        }]
+    );
+    // Nothing was said of it: the next frame is the next fetch's.
+    *inbox.refuse_part.lock().unwrap() = None;
+    gateway.send(fetch_frame(LEASE, "call-2", "b.png")).await;
+    assert!(matches!(
+        gateway.next().await,
+        FromEnvironment::FetchAccepted { request, .. } if request == "call-2"
+    ));
+}
+
+/// A placed file whose placing cannot be recorded, and which cannot be
+/// taken back, is still said placed, never refused: the gateway keeps
+/// counting it, and the lease's end is uncertain.
+#[tokio::test]
+async fn a_placed_file_that_cannot_be_taken_back_is_still_said_placed() {
+    let (mut gateway, inbox) = Gateway::fetching().await;
+    gateway.ledger.failing_fetched.store(true, Ordering::SeqCst);
+    inbox.keeps.store(true, Ordering::SeqCst);
+    gateway.send(fetch_frame(LEASE, "call-1", "a.png")).await;
+    assert!(matches!(
+        gateway.next().await,
+        FromEnvironment::FetchAccepted { .. }
+    ));
+    gateway
+        .send(ToEnvironment::Delivered {
+            lease: LEASE.into(),
+            request: "call-1".into(),
+        })
+        .await;
+    assert_eq!(
+        gateway.next().await,
+        FromEnvironment::Fetched {
+            lease: LEASE.into(),
+            request: "call-1".into(),
+            outcome: FetchOutcome::Placed {
+                path: "/work/a.png".into(),
+            },
+        }
+    );
+    assert_eq!(inbox.taken_back.lock().unwrap().len(), 1);
+}
+
+/// A fetch the gateway gave up on while its part was being made, whose
+/// lease then ends before the part is made, keeps the gateway's giving up
+/// as its cause: recorded unanswered, never relabelled lease ended.
+#[tokio::test]
+async fn a_fetch_given_up_before_its_lease_ends_stays_unanswered() {
+    let (mut gateway, inbox) = Gateway::fetching().await;
+    let (go, held) = std::sync::mpsc::channel();
+    *inbox.hold_part.lock().unwrap() = Some(held);
+    gateway.send(fetch_frame(LEASE, "call-1", "a.png")).await;
+    gateway
+        .send(ToEnvironment::Undelivered {
+            lease: LEASE.into(),
+            request: "call-1".into(),
+        })
+        .await;
+    gateway
+        .send(ToEnvironment::End {
+            lease: LEASE.into(),
+        })
+        .await;
+    gateway.settled().await;
+    go.send(()).unwrap();
+    assert!(matches!(
+        gateway.said().await,
+        FromEnvironment::Ended { lease, .. } if lease == LEASE
+    ));
+    assert_eq!(
+        gateway.fetch_entries(),
+        [LedgerEntry::FetchUnanswered {
+            lease: LEASE.into(),
+            request: "call-1".into(),
+            asked: asked("a.png"),
+        }]
+    );
+    assert!(inbox.placed.lock().unwrap().is_empty());
+}
+
 // Row I7: a lease lasts at most what the peer's grant lets it, measured on
 // the serving timer, and this side ends it itself past that.
 
@@ -3363,7 +4214,7 @@ fn expiring_over(
     ledger: Arc<MemoryLedger>,
     outbox: Arc<dyn ArtifactOutbox>,
 ) -> Gateway {
-    expiring_through(1 << 20, timer, ledger, outbox)
+    expiring_through(1 << 20, timer, ledger, outbox, None)
 }
 
 /// As [`expiring_over`], over a connection holding at most `buffer` bytes
@@ -3373,6 +4224,7 @@ fn expiring_through(
     timer: Arc<ManualTimer>,
     ledger: Arc<MemoryLedger>,
     outbox: Arc<dyn ArtifactOutbox>,
+    inbox: Option<Arc<dyn ArtifactInbox>>,
 ) -> Gateway {
     let grants = MemoryGrants::none();
     grants.set(
@@ -3382,7 +4234,16 @@ fn expiring_through(
                 .with_max_lease(MaxLease::new(MAX_LEASE.as_millis() as u64).unwrap()),
         ),
     );
-    Gateway::through(buffer, Peer::Ssh, grants, ledger, outbox, true, timer)
+    Gateway::through(
+        buffer,
+        Peer::Ssh,
+        grants,
+        ledger,
+        outbox,
+        inbox,
+        true,
+        timer,
+    )
 }
 
 impl Gateway {
@@ -3900,6 +4761,7 @@ async fn a_reply_blocked_on_a_full_output_queue_does_not_hold_back_an_expiry() {
         timer.clone(),
         Arc::new(MemoryLedger::default()),
         Arc::new(NoOutbox),
+        None,
     );
     gateway.started_expiring(LEASE).await;
     // The gateway asks far more than the connection and the output queue
@@ -4015,6 +4877,47 @@ impl Gateway {
     }
 }
 
+/// A fetch whose answer cannot be sent, the gateway reading nothing, does
+/// not hold serving open once the gateway is gone: its lease's end records
+/// the fetch's last word, and at the silence bound serving ends.
+#[tokio::test]
+async fn a_fetch_answer_blocked_on_a_full_output_queue_does_not_hold_serving_open() {
+    let timer = Arc::new(ManualTimer::default());
+    let inbox = Arc::new(RecordingInbox::default());
+    let mut gateway = expiring_through(
+        512,
+        timer.clone(),
+        Arc::new(MemoryLedger::default()),
+        Arc::new(NoOutbox),
+        Some(inbox.clone()),
+    );
+    gateway.started_expiring(LEASE).await;
+    let (go, held) = std::sync::mpsc::channel();
+    *inbox.hold_part.lock().unwrap() = Some(held);
+    gateway.send(fetch_frame(LEASE, "call-1", "a.png")).await;
+    gateway.settled().await;
+    let asking = gateway.flood(&timer).await;
+    // Its part made only now: its acceptance finds the queue full.
+    go.send(()).unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let ended = tokio::time::timeout(Duration::from_secs(5), async {
+        while !gateway.served.is_finished() {
+            timer.advance(Duration::from_millis(500));
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await;
+    assert!(ended.is_ok(), "{:?}", gateway.ledger.entries());
+    // Its lease ended under it (expired first, at this pace) and its last
+    // word recorded, whether or not the gateway ever reads it.
+    assert!(gateway.ledger.entries().iter().any(|entry| matches!(
+        entry,
+        LedgerEntry::Fetched { request, .. } | LedgerEntry::FetchUnanswered { request, .. }
+            if request == "call-1"
+    )));
+    asking.abort();
+}
+
 /// Wait until `lease` is recorded ended, moving `timer` on only by the
 /// stops' own short bounds, and never past `by`.
 async fn until_ended(gateway: &Gateway, timer: &ManualTimer, lease: &str, by: Duration) {
@@ -4058,6 +4961,7 @@ async fn k1_a_drain_asked_while_the_gateway_reads_nothing_ends_the_lease_at_once
         timer.clone(),
         Arc::new(MemoryLedger::default()),
         Arc::new(NoOutbox),
+        None,
     );
     gateway.started_expiring(LEASE).await;
     let asking = gateway.flood(&timer).await;
@@ -4098,6 +5002,7 @@ async fn two_leases_due_at_once_both_expire_at_the_deadline() {
         timer.clone(),
         Arc::new(MemoryLedger::default()),
         Arc::new(NoOutbox),
+        None,
     );
     gateway.started_expiring(LEASE).await;
     gateway.also_expiring(OTHER_LEASE).await;
@@ -4124,6 +5029,7 @@ async fn staggered_deadlines_each_expire_at_their_own() {
         timer.clone(),
         Arc::new(MemoryLedger::default()),
         Arc::new(NoOutbox),
+        None,
     );
     gateway.started_expiring(LEASE).await;
     let later = Duration::from_secs(10);
@@ -4179,6 +5085,7 @@ async fn granted_unread(timer: &Arc<ManualTimer>, lease_ms: u64) -> Gateway {
         grants.clone(),
         Arc::new(MemoryLedger::default()),
         Arc::new(NoOutbox),
+        None,
         true,
         timer.clone(),
     );
@@ -4295,6 +5202,70 @@ async fn a_lease_due_as_the_gateway_falls_silent_is_expired_not_lost() {
         LedgerEntry::Ended { lease, cause: EndCause::Lost, .. } if lease == LEASE
     )));
     gateway.served.abort();
+}
+
+/// A fetch under way when its lease expires is answered `leaseEnded` before
+/// the lease's end is recorded, as on any end, and its parts are let go.
+#[tokio::test]
+async fn a_fetch_under_way_when_its_lease_expires_is_answered_lease_ended() {
+    let timer = Arc::new(ManualTimer::default());
+    let inbox = Arc::new(RecordingInbox::default());
+    let mut gateway = expiring_through(
+        1 << 20,
+        timer.clone(),
+        Arc::new(MemoryLedger::default()),
+        Arc::new(NoOutbox),
+        Some(inbox.clone()),
+    );
+    gateway.started_expiring(LEASE).await;
+    gateway.send(fetch_frame(LEASE, "call-1", "a.png")).await;
+    assert!(matches!(
+        gateway.said().await,
+        FromEnvironment::FetchAccepted { .. }
+    ));
+    timer.advance(MAX_LEASE);
+    let ended = FetchOutcome::Refused {
+        reason: FetchRefusal::LeaseEnded,
+    };
+    let (mut ending, mut fetched) = (false, false);
+    while !(ending && fetched) {
+        match gateway.said().await {
+            FromEnvironment::Ending { lease, .. } if lease == LEASE => ending = true,
+            FromEnvironment::Fetched {
+                request, outcome, ..
+            } if request == "call-1" => {
+                assert_eq!(outcome, ended);
+                fetched = true;
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+    assert_eq!(
+        gateway.ended(LEASE).await,
+        FromEnvironment::Ended {
+            lease: LEASE.into(),
+            cleanup: Cleanup::Confirmed { forced: false },
+        }
+    );
+    assert_eq!(*inbox.closed.lock().unwrap(), [String::from(LEASE)]);
+    let entries = gateway.ledger.entries();
+    let fetched_at = entries
+        .iter()
+        .position(|entry| {
+            *entry
+                == LedgerEntry::Fetched {
+                    lease: LEASE.into(),
+                    request: "call-1".into(),
+                    asked: asked("a.png"),
+                    outcome: ended.clone(),
+                }
+        })
+        .expect("its last word is recorded");
+    let ended_at = entries
+        .iter()
+        .position(|entry| matches!(entry, LedgerEntry::Ended { .. }))
+        .expect("the end is recorded");
+    assert!(fetched_at < ended_at, "{entries:?}");
 }
 
 // Row I8 on the host: the gateway says it no longer lets this host serve it.
@@ -4510,6 +5481,7 @@ async fn a_command_whose_end_is_recorded_is_not_revoked_while_its_ran_waits_for_
         grants,
         ledger.clone(),
         Arc::new(NoOutbox),
+        None,
         true,
         timer.clone(),
     );
@@ -4619,6 +5591,7 @@ async fn a_command_stopped_for_a_revocation_never_holds_serving_open_once_the_ga
         grants,
         ledger.clone(),
         Arc::new(NoOutbox),
+        None,
         true,
         timer.clone(),
     );

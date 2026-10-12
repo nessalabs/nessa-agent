@@ -62,6 +62,7 @@ pub use app_sources::UnknownApp;
 mod artifacts;
 pub(crate) mod attachment;
 pub(crate) mod committed_changes;
+mod fetches;
 mod leases;
 mod manager;
 mod message_commit_clock;
@@ -83,6 +84,7 @@ pub use transcript::{
 };
 pub(crate) mod validation;
 pub use artifacts::{ArtifactName, ArtifactRecord, ArtifactValueError, PublishedFile};
+pub use fetches::{EnvironmentFetchRefusal, EnvironmentPath, FetchOutcome, FetchRefusalReason};
 pub use leases::{CurrentLease, CurrentLeaseState, LeaseRecord};
 pub use manager::{ArtifactRecordError, LeaseCommit, LeaseRecordError, SessionManager};
 pub(crate) use manager::{AttachedProvider, AttachmentOpenFailureSource};

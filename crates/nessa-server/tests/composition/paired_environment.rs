@@ -379,6 +379,7 @@ impl Host {
             },
             self.ledger.clone(),
             self.outbox.clone(),
+            None,
             ServeTimings::default(),
             self.timer.clone(),
             self.drain.subscribe(),

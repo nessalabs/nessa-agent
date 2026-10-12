@@ -8,6 +8,7 @@
 //! <data>/environment/leases.jsonl ──▶ FileLedger
 //! <data>/environment/grants.json ──▶ FileGrants (read at every lease)
 //! <data>/environment/outbox/, a private temporary directory ──▶ FileOutbox
+//! config.json "envServe.artifactsIn" ──▶ <data>/environment/inbox/ ──▶ FileInbox, or none
 //! TokioTimer ──▶ what serving's waits are measured on
 //! stdin, stdout ──▶ serve(Peer::Ssh, ...) until the gateway's stream ends
 //! ```
@@ -21,12 +22,13 @@ use crate::{
     env::{Environment, LEASE_PROTOCOL, VERSION},
     env_serve::{
         application::{
-            refuse, serve, CommandRunner, HarnessLauncher, Runners, ServeTimings, Serving, Timer,
+            refuse, serve, ArtifactInbox, CommandRunner, HarnessLauncher, Runners, ServeTimings,
+            Serving, Timer,
         },
         domain::Peer,
         infrastructure::{
-            ConfiguredLauncher, FileGrants, FileLedger, FileOutbox, LaunchSpec, ServeLock,
-            ServeLockError, ShepherdCommands, TokioTimer, COMMAND_VARIABLES,
+            ConfiguredLauncher, FileGrants, FileInbox, FileLedger, FileOutbox, LaunchSpec,
+            ServeLock, ServeLockError, ShepherdCommands, TokioTimer, COMMAND_VARIABLES,
         },
     },
 };
@@ -89,6 +91,8 @@ pub(super) struct Composed {
     /// What this host's owner grants each peer.
     grants: Arc<FileGrants>,
     outbox: Arc<FileOutbox>,
+    /// Where fetched files arrive; `None` when this host takes none.
+    inbox: Option<Arc<FileInbox>>,
     /// The publish points' directory, removed when serving ends.
     sockets: std::path::PathBuf,
     lock: ServeLock,
@@ -127,6 +131,9 @@ impl Composed {
             },
             self.ledger.clone(),
             self.outbox.clone(),
+            self.inbox
+                .clone()
+                .map(|inbox| inbox as Arc<dyn ArtifactInbox>),
             ServeTimings::default(),
             self.timer.clone(),
             drain,
@@ -197,12 +204,20 @@ pub(super) async fn compose() -> Result<Composed, (Unavailability, RunError)> {
         Path::new(launcher.workspace()),
     )
     .map_err(|error| not_configured(RunError::Agent(error.to_string())))?;
+    let inbox = match config.env_serve.artifacts_in {
+        true => Some(Arc::new(
+            FileInbox::open(directory.join("inbox"), Path::new(launcher.workspace()))
+                .map_err(|error| not_configured(RunError::Agent(error.to_string())))?,
+        )),
+        false => None,
+    };
     Ok(Composed {
         launcher: Arc::new(launcher),
         commands,
         ledger: Arc::new(ledger),
         grants: Arc::new(FileGrants::new(&directory)),
         outbox: Arc::new(outbox),
+        inbox,
         sockets,
         lock,
         timer: Arc::new(TokioTimer::new()),

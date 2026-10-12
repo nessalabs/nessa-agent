@@ -33,6 +33,8 @@
 //! the same [`SshEnvironment`]'s. A file the host publishes is read over
 //! the lease frames themselves ([`ArtifactTransport::Frames`]), since a
 //! paired connection carries nothing beside them.
+//! Nothing is fetched into a paired host: with no file channel, the agent's
+//! fetch is refused unavailable before the host is asked.
 //!
 //! Which environments are connected is read from their connections, never
 //! kept here as a list; what is kept is a count of the changes to it
