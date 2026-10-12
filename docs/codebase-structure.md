@@ -1878,7 +1878,9 @@ The `bindgen` binary is optional host tooling, not a native runtime dependency.
 `src/session.rs` coordinates one physically admitted private scope and delegates
 status/purge/binding/read decisions to core. Its clock/socket/entropy inputs are
 injected; `src/native_session.rs` and `src/failures.rs` own immutable foreign
-representations. Admission/failure tests live in `tests/session`; the server's
+representations. Public intent fields delegate to Auth's immutable historical
+correlation, and saved cursor restoration delegates Id validation to sync;
+neither creates authority. Admission/failure/correlation tests live in `tests/session`; the server's
 `tests/composition/read_only_online/native_session.rs` drives the actual paired
 gateway and the optional generated Swift probe under `verification/native-device`.
 Core's `retained/active.rs` validates fresh status against the current immutable
@@ -1888,7 +1890,10 @@ authority from a panel token or an arbitrary saved cache target.
 
 `swift/NativeSessionWorker.swift` is the generated API's dispatch adapter: one
 admission reserved before enqueue, a per-call stop latch and a cancellation-independent
-close task. Verification holds actual private scope locks through physical drain.
+close task. Per-operation capture overloads translate bounded immutable snapshots
+inside that same admission, including serialization/decoding. Verification holds
+actual private scope locks through physical calls and captures until drain.
 `scripts/build-native-device.sh` generates a local Apple Swift package/XCFramework
 from a frozen checkout; generated declarations remain build output, not hand-edited
-source. The package has not yet been wired into Nessa's product repository.
+source. Nessa iOS embeds a reviewed dynamic package; its production native
+profile/enrollment and retained history repository remain unfinished.

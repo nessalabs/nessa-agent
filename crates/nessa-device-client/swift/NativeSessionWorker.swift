@@ -93,26 +93,86 @@ public final class NativeSessionWorker: @unchecked Sendable {
         }
     }
 
+    // Capture receives only immutable results, never the session or its stop.
+    // Keep bounded passive translation in this admission: close/drain and Busy
+    // cover serialization and decoding as well as the underlying native call.
+    // Captures must not synchronously wait for another operation on this owner.
     public func enroll(code: String) async throws -> NativeEnrollmentReceipt {
-        try await perform { session, _ in try session.enroll(code: code) }
+        try await enroll(code: code, capture: { $0 })
+    }
+    /// Capture a bounded passive value off UI before releasing admission.
+    public func enroll<Value: Sendable>(
+        code: String, capture: @escaping @Sendable (NativeEnrollmentReceipt) throws -> Value
+    ) async throws -> Value {
+        try await perform { session, _ in
+            try capture(try session.enroll(code: code))
+        }
     }
     public func retry(code: String) async throws -> NativeRetry {
-        try await perform { session, _ in try session.retry(code: code) }
+        try await retry(code: code, capture: { $0 })
+    }
+    /// Capture a bounded passive value off UI before releasing admission.
+    public func retry<Value: Sendable>(
+        code: String, capture: @escaping @Sendable (NativeRetry) throws -> Value
+    ) async throws -> Value {
+        try await perform { session, _ in
+            try capture(try session.retry(code: code))
+        }
     }
     public func status() async throws -> NativeStatus {
-        try await perform { session, _ in try session.status() }
+        try await status(capture: { $0 })
+    }
+    /// Capture a bounded passive value off UI before releasing admission.
+    public func status<Value: Sendable>(
+        capture: @escaping @Sendable (NativeStatus) throws -> Value
+    ) async throws -> Value {
+        try await perform { session, _ in
+            try capture(try session.status())
+        }
     }
     public func refresh() async throws -> NativeRefresh {
-        try await perform { session, stop in try session.refresh(stop: stop) }
+        try await refresh(capture: { $0 })
+    }
+    /// Capture a bounded passive value off UI before releasing admission.
+    public func refresh<Value: Sendable>(
+        capture: @escaping @Sendable (NativeRefresh) throws -> Value
+    ) async throws -> Value {
+        try await perform { session, stop in
+            try capture(try session.refresh(stop: stop))
+        }
     }
     public func cataloguePage(after: NativeEntryKey?, maximum: UInt32) async throws -> NativeCataloguePage? {
-        try await perform { session, _ in try session.cataloguePage(after: after, maximum: maximum) }
+        try await cataloguePage(after: after, maximum: maximum, capture: { $0 })
+    }
+    /// Capture a bounded passive value off UI before releasing admission.
+    public func cataloguePage<Value: Sendable>(
+        after: NativeEntryKey?, maximum: UInt32, capture: @escaping @Sendable (NativeCataloguePage?) throws -> Value
+    ) async throws -> Value {
+        try await perform { session, _ in
+            try capture(try session.cataloguePage(after: after, maximum: maximum))
+        }
     }
     public func transcript(conversation: String, revision: String) async throws -> NativeTranscript {
-        try await perform { session, _ in try session.transcript(conversation: conversation, revision: revision) }
+        try await transcript(conversation: conversation, revision: revision, capture: { $0 })
+    }
+    /// Capture a bounded passive value off UI before releasing admission.
+    public func transcript<Value: Sendable>(
+        conversation: String, revision: String, capture: @escaping @Sendable (NativeTranscript) throws -> Value
+    ) async throws -> Value {
+        try await perform { session, _ in
+            try capture(try session.transcript(conversation: conversation, revision: revision))
+        }
     }
     public func purgeReceipt(receiver: String) async throws -> NativePurge? {
-        try await perform { session, _ in try session.purgeReceipt(receiver: receiver) }
+        try await purgeReceipt(receiver: receiver, capture: { $0 })
+    }
+    /// Capture a bounded passive value off UI before releasing admission.
+    public func purgeReceipt<Value: Sendable>(
+        receiver: String, capture: @escaping @Sendable (NativePurge?) throws -> Value
+    ) async throws -> Value {
+        try await perform { session, _ in
+            try capture(try session.purgeReceipt(receiver: receiver))
+        }
     }
 
     /// Fence dispatch synchronously, signal the native owner, then share one

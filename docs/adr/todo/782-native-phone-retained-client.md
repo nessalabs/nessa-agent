@@ -93,6 +93,10 @@ invented disclosure.
 | Native buffer/handle lifetime and large progress | Generated ABI linked/executed under Swift 6; owned object/buffer release and UInt64 precision |
 | View serialization exceeds published bound | Explicit serialization failure, no partial view or fabricated NotLoaded |
 | Native fixtures run on Windows versus Unix | Construct private directories through the local-storage owner on both platforms; retain accepted drive-absolute Windows paths instead of producing rejected verbatim paths. CI must exercise the same lifecycle tests, without skipping Windows or weakening storage validation |
+| Passive snapshot capture runs after the native call | Keep translation inside the same serial admission; another call receives Busy while capture is held |
+| Capture waiter cancels, then close starts | Preserve admitted capture result and private lock until translation finishes; close waits for it, then scope can reopen |
+| Passive capture throws | Return its failure without inventing native effects; release admission for a subsequent call |
+| Public receipt correlation and restored catalogue cursor | Delegate exact public intent fields and Id validation to their existing owners; changed retry attempt makes sameIntent false; cursor restoration grants no read authority |
 
 Astra medium reviewed the design and identified these ordering requirements before
 implementation. Actual core linking, Swift queue admission/cancellation, paired
@@ -111,6 +115,16 @@ Release libraries link for arm64 device/simulator; the disposable simulator app
 executes session open, typed refusal, off-UI dispatch and close/reopen. The macOS
 static package executes the paired fixture. Physical phone execution, Nessa's
 repository/authority wiring, remote artifacts and durable deletion are still open.
+
+The phone adapter prerequisites expose immutable public intent correlation and
+validated saved cursor restoration, preserving their original owners. Public
+Swift capture overloads keep passive translation inside the existing admission.
+Actual held captures, cancellation, private lock retention, close/reopen and
+throwing captures are verified with the linked native library; moving capture
+outside admission fails the regression. Rust tests preserve every public field
+across phases/classes and changed retry attempts, and actual paired Swift walks
+continue from a restored saved key. These are adapter prerequisites, not evidence
+that the production phone repository already publishes native retained history.
 
 CI includes the bridge package. Its multi-output library target exposed a test
 runner omission; the runner now recognizes the actual native unit-test executable.

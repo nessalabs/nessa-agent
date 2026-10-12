@@ -10,6 +10,33 @@ import Foundation
                 catch { continuation.resume(throwing: error) }
             }
         }
+        let worker = try await NativeSessionWorker.open(
+            root: arguments[1], directory: arguments[2], address: arguments[3])
+        do {
+            if arguments[0] == "terminal" {
+                let count = try await worker.purgeReceipt(receiver: arguments[5], capture: { receipt in
+                    precondition(!Thread.isMainThread)
+                    return receipt?.records() ?? 0
+                })
+                precondition(count > 0)
+            } else {
+                let progress = try await worker.transcript(
+                    conversation: arguments[4], revision: "00000000-0000-4000-8000-000000000001",
+                    capture: { snapshot in
+                        precondition(!Thread.isMainThread)
+                        let json = try snapshot.viewJson()!
+                        let view = try JSONSerialization.jsonObject(with: Data(json.utf8)) as! [String: Any]
+                        precondition(view["conversationId"] as? String == arguments[4])
+                        return snapshot.downloaded()!
+                    })
+                precondition(progress > 0)
+            }
+            try await worker.close()
+        } catch {
+            try? await worker.close()
+            throw error
+        }
+        print("PASS: Swift \(arguments[0]) owned capture serialization/decoding or historical purge receipt")
     }
     static func check(_ arguments: [String]) throws {
         precondition(!Thread.isMainThread)
@@ -40,6 +67,9 @@ import Foundation
             precondition(status.completionCaptured())
             precondition(status.receipt()?.phase() == .terminal)
             precondition(status.receipt()?.terminalCause() == .credentialRevoked)
+            let intent = status.receipt()!.publicIntent()
+            precondition(intent.invitation().count == 16 && intent.attempt().count == 16)
+            precondition(intent.consent().count == 16 && intent.consentClass() == .deviceRead)
             precondition(status.failure() == nil && status.purgeFailure() == nil)
             precondition(status.purgeAttempted())
             precondition(refresh.read() == nil && refresh.recheck() == nil)
@@ -67,6 +97,12 @@ import Foundation
             precondition(status.completionCaptured() && !status.purgeAttempted())
             precondition(status.receipt()?.phase() == .active && status.failure() == nil)
             precondition(status.receipt()?.receiver() == receiver)
+            let receipt = status.receipt()!
+            let intent = receipt.publicIntent()
+            precondition(intent.invitation().count == 16 && intent.attempt().count == 16)
+            precondition(intent.consent().count == 16 && intent.consentClass() == .deviceRead)
+            precondition(intent.generation() > 0 && intent.expiryMs() > 0)
+            precondition(receipt.sameIntent(other: receipt))
             precondition(status.receipt()?.organization() != nil && status.receipt()?.resource() != nil)
             precondition(refresh.selectionFailure() == nil)
             let read = refresh.read()!
@@ -96,6 +132,11 @@ import Foundation
         precondition(page.scope().sameAs(other: page.scope()))
         precondition(page.generation() > 0 && page.activeBoundary() == nil)
         precondition(page.entries().contains { $0.key().id() == conversation && !$0.deleted() })
+        let key = page.entries().first!.key()
+        let restored = try NativeEntryKey(creation: key.creation(), id: key.id())
+        precondition(restored.creation() == key.creation() && restored.id() == key.id())
+        let following = try native.cataloguePage(after: restored, maximum: 16)!
+        precondition(!following.entries().contains { $0.key().id() == key.id() })
         let snapshot = try native.transcript(conversation: conversation, revision: revision)
         precondition(snapshot.state() == .retained)
         precondition(snapshot.downloaded()! > 0 && snapshot.generation()! > 0)

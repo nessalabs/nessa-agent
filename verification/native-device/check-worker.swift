@@ -1,6 +1,6 @@
 import Foundation
 
-private enum CheckFailure: Error { case deadline }
+private enum CheckFailure: Error { case deadline, capture }
 private final class Counter: @unchecked Sendable {
     private let lock = NSLock()
     private var value = 0
@@ -16,16 +16,18 @@ private final class Counter: @unchecked Sendable {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false,
                                                attributes: [.posixPermissions: 0o700])
         defer { try? FileManager.default.removeItem(at: root) }
-        for directory in ["held", "pre-stop", "pre-close", "drop"] {
+        for directory in ["held", "capture", "capture-throws", "pre-stop", "pre-close", "drop"] {
             try FileManager.default.createDirectory(at: root.appendingPathComponent(directory),
                 withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         }
         let path = root.resolvingSymlinksInPath().path
         try await heldAdmission(path)
+        try await heldCapture(path)
+        try await throwingCapture(path)
         try await stoppedBeforeDispatch(path)
         try await closeBeforeDispatch(path)
         try await abandonedWorker(path)
-        print("PASS: Swift pre-queue Busy, cancellation, shared close, physical scope drain and abandoned-worker cleanup")
+        print("PASS: Swift pre-queue Busy, captured translation, cancellation, shared close, physical scope drain and abandoned-worker cleanup")
     }
 
     static func wait(_ signal: DispatchSemaphore) async throws {
@@ -92,6 +94,55 @@ private final class Counter: @unchecked Sendable {
         try await worker.close()
         let reopened = try await NativeSessionWorker.open(root: root, directory: "held", address: address)
         try await reopened.close()
+    }
+
+    static func heldCapture(_ root: String) async throws {
+        let worker = try await NativeSessionWorker.open(root: root, directory: "capture", address: address)
+        let entered = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
+        let result = Task {
+            try await worker.status(capture: { status -> Int in
+                precondition(!Thread.isMainThread, "Capture ran on the UI thread")
+                precondition(!status.completionCaptured() && status.failure()?.kind() == .io)
+                entered.signal()
+                guard release.wait(timeout: .now() + 5) == .success else { throw CheckFailure.deadline }
+                // The historical result remains valid after close was signalled.
+                precondition(status.failure()?.kind() == .io)
+                return 29
+            })
+        }
+        try await wait(entered)
+        do {
+            _ = try await worker.status()
+            fatalError("Capture released physical admission before translation finished")
+        } catch NativeWorkerError.busy {}
+        result.cancel()
+        let drain = worker.beginClose()
+        let joined = worker.beginClose()
+        do {
+            _ = try await worker.status()
+            fatalError("Closing capture admitted new work")
+        } catch NativeWorkerError.closed {}
+        try await expectLocked(root, "capture")
+        release.signal()
+        let captured = try await result.value
+        precondition(captured == 29, "Cancellation discarded captured evidence")
+        try await drain.value
+        try await joined.value
+        let reopened = try await NativeSessionWorker.open(root: root, directory: "capture", address: address)
+        try await reopened.close()
+    }
+
+    static func throwingCapture(_ root: String) async throws {
+        let worker = try await NativeSessionWorker.open(root: root, directory: "capture-throws", address: address)
+        do {
+            let _: Int = try await worker.status(capture: { _ in throw CheckFailure.capture })
+            fatalError("Capture failure was discarded")
+        } catch CheckFailure.capture {}
+        let restored = try await worker.status(capture: { $0.failure()?.kind() == .io })
+        precondition(restored, "Throwing capture retained admission")
+        let absent = try await worker.purgeReceipt(receiver: "receiver-none", capture: { $0 == nil })
+        precondition(absent, "Optional historical receipt capture was changed")
+        try await worker.close()
     }
 
     static func stoppedBeforeDispatch(_ root: String) async throws {

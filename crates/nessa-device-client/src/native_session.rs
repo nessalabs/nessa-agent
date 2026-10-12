@@ -7,7 +7,7 @@ use crate::{
 };
 use nessa_auth::{
     adapters::pairing::ManualCode,
-    domain::pairing::{AttemptFailure, AttemptOutcome, TerminalCause},
+    domain::pairing::{AttemptFailure, AttemptOutcome, ConsentClass, PublicIntent, TerminalCause},
 };
 use nessa_client_core::{
     pairing::{NativeClientError, NativeRetryOutcome},
@@ -17,7 +17,7 @@ use nessa_client_core::{
     },
 };
 use nessa_protocol::{conversation::domain::ConversationId, pairing::wire::NativePairingStatus};
-use nessa_sync::replication::catalogue::EntryKey;
+use nessa_sync::replication::{catalogue::EntryKey, domain::Id};
 use std::{net::SocketAddr, path::Path, sync::Arc};
 use uuid::Uuid;
 use zeroize::Zeroizing;
@@ -136,6 +136,12 @@ pub struct NativeEnrollmentReceipt {
 }
 #[uniffi::export]
 impl NativeEnrollmentReceipt {
+    /// Exact historical public correlation; this is not claim or read authority.
+    pub fn public_intent(&self) -> Arc<NativePublicIntent> {
+        Arc::new(NativePublicIntent {
+            value: self.value.public(),
+        })
+    }
     /// Original phase.
     pub fn phase(&self) -> NativeEnrollmentPhase {
         match self.value {
@@ -225,6 +231,57 @@ impl NativeEnrollmentReceipt {
             } => Some(value.into()),
             _ => None,
         }
+    }
+}
+/// Existing public consent classes, without manufacturing an enrollment grant.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, uniffi::Enum)]
+pub enum NativeConsentClass {
+    /// One owner's reading device.
+    DeviceRead,
+    /// A peer gateway's reading identity.
+    PeerRead,
+    /// A peer environment-serving identity.
+    PeerEnvironment,
+}
+impl From<ConsentClass> for NativeConsentClass {
+    fn from(value: ConsentClass) -> Self {
+        match value {
+            ConsentClass::DeviceRead => Self::DeviceRead,
+            ConsentClass::PeerRead => Self::PeerRead,
+            ConsentClass::PeerEnvironment => Self::PeerEnvironment,
+        }
+    }
+}
+/// Immutable public correlation from the original native receipt, not private state.
+#[derive(uniffi::Object)]
+pub struct NativePublicIntent {
+    value: PublicIntent,
+}
+#[uniffi::export]
+impl NativePublicIntent {
+    /// Exact public invitation bytes, with the owner's fixed identity width.
+    pub fn invitation(&self) -> Vec<u8> {
+        self.value.invitation().bytes().to_vec()
+    }
+    /// Exact admitted attempt bytes; retries may select another attempt.
+    pub fn attempt(&self) -> Vec<u8> {
+        self.value.attempt().bytes().to_vec()
+    }
+    /// Exact immutable public consent bytes.
+    pub fn consent(&self) -> Vec<u8> {
+        self.value.consent().bytes().to_vec()
+    }
+    /// Original immutable consent generation, without integer narrowing.
+    pub fn generation(&self) -> u64 {
+        self.value.generation()
+    }
+    /// Original exclusive invitation expiry in Unix milliseconds.
+    pub fn expiry_ms(&self) -> u64 {
+        self.value.expiry_ms()
+    }
+    /// Original owner-selected public consent class.
+    pub fn consent_class(&self) -> NativeConsentClass {
+        self.value.class().into()
     }
 }
 /// Immutable original/retried receipt pair from one completed retry operation.
@@ -415,13 +472,22 @@ impl NativeRefresh {
         })
     }
 }
-/// Immutable saved entry cursor. Public foreign code cannot alter its key pair.
+/// Immutable saved entry cursor. Restoration selects order, not read authority.
 #[derive(uniffi::Object)]
 pub struct NativeEntryKey {
     value: EntryKey,
 }
 #[uniffi::export]
 impl NativeEntryKey {
+    /// Restore one saved ordering selector through the existing Id owner.
+    /// Current issued receiver/scope selection still belongs to the native session.
+    #[uniffi::constructor]
+    pub fn new(creation: u64, id: String) -> Result<Self, NativeCallError> {
+        let id = Id::new(id).map_err(|_| NativeCallError::InvalidArgument)?;
+        Ok(Self {
+            value: EntryKey { creation, id },
+        })
+    }
     /// Original creation revision.
     pub fn creation(&self) -> u64 {
         self.value.creation
@@ -665,3 +731,7 @@ impl NativeDeviceSession {
         self.value.close().map_err(Into::into)
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/session/correlation.rs"]
+mod tests;

@@ -29,6 +29,11 @@ phone repository or physical-device behavior.
 private-state locks verify Busy before enqueue, stop before dispatch, preserving a
 physical result after waiter cancellation, close before dispatch, shared close
 despite a canceled waiter, scope release after drain and abandoned-worker cleanup.
+Public capture overloads keep bounded passive translation in that same admission.
+An actual status result is held in its capture while another call is refused,
+the waiter cancels and close retains the private lock; release preserves the
+captured result and permits reopen. A throwing capture releases admission.
+Moving status capture after `perform` returns fails this held-capture regression.
 These are dispatch/private-state experiments, not a claim that a real network socket
 or physical phone was interrupted by Swift cancellation.
 
@@ -56,3 +61,13 @@ The static Swift package has also linked/executed the paired fixture on macOS.
 The compiler rejects an external caller supplying the worker's internal queue,
 including a main-queue target. Raw generated synchronous methods still require
 their documented caller dispatch discipline.
+
+Receipts expose exact historical public intent bytes, generation, expiry and the
+owner's three consent classes. These fields carry no private key, owner principal
+or claimed-key proof. A changed retry attempt makes `sameIntent` false while the
+enrollment's other public correlation remains equal. Saved entry keys can be
+restored through the existing sync Id validator without normalizing identity or
+narrowing creation revisions; invalid arguments do not pretend a cache failed.
+The paired Swift checks restore a real key and continue catalogue paging through
+the current issued receiver/scope owner. Phone profile/enrollment coordination and
+the admitted local claimed-key correlation API remain separate required work.
