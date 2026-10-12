@@ -39,11 +39,11 @@ use nessa_server::{
     agents::application::{AgentProbe, AgentProbeEvidence},
     app::dependencies::RuntimeDependencies,
     conversation::application::{
-        ConversationCaller, ConversationError, ConversationRepository, ReadGrants, RecordReadError,
+        ConversationCaller, ConversationError, ConversationRepository, RecordReadError,
         RecordReadFuture, RecordReadLease, RecordReadOperation, RecordReadResponse,
-        RecordReadSource, ShareConversation,
+        RecordReadSource, ShareConversation, ShareGrants,
     },
-    conversation::domain::Conversation,
+    conversation::domain::{Conversation, ShareRole},
     conversation::infrastructure::{LocalConversationStore, NessaCatalogueReadSource},
     device_pairing::infrastructure::ProtectedSessions,
     product::{DeviceCredentials, NativeSessions, ProductDependencies, ProductRouteState},
@@ -657,7 +657,9 @@ async fn an_environment_is_paired_but_never_shared_with() {
         action_id: "share-environment".into(),
     };
     assert!(matches!(
-        shares.share(caller, id.clone(), credential, 110).await,
+        shares
+            .share(caller, id.clone(), credential, ShareRole::Read, None, 110)
+            .await,
         Err(ConversationError::ShareTargetNotPaired)
     ));
     assert!(!metadata
@@ -868,7 +870,14 @@ async fn a_peer_reads_only_what_it_was_granted() {
         };
         assert!(matches!(
             shares
-                .share(caller(request), id.clone(), peer_credential.clone(), 110)
+                .share(
+                    caller(request),
+                    id.clone(),
+                    peer_credential.clone(),
+                    ShareRole::Read,
+                    None,
+                    110,
+                )
                 .await,
             Err(ConversationError::ShareTargetNotPaired)
         ));
@@ -886,6 +895,8 @@ async fn a_peer_reads_only_what_it_was_granted() {
             caller("share-peer"),
             id.clone(),
             peer_credential.clone(),
+            ShareRole::Read,
+            None,
             110
         )
         .await
@@ -977,6 +988,8 @@ async fn a_peer_reads_only_what_it_was_granted() {
             caller("share-device"),
             ungranted.clone(),
             CredentialId::new(device.credential.clone()).unwrap(),
+            ShareRole::Read,
+            None,
             110,
         )
         .await
