@@ -27,10 +27,11 @@
 //! A crash after the file is published and before the outcome record leaves
 //! the pending marker behind. The marker holds the whole outcome record it
 //! waits for. The next start, or the next command, settles it first: an
-//! outcome record that agrees with it keeps the file once the audit directory
-//! syncs, and anything else puts the file back to the choice before the
-//! command, so the file never runs ahead of the audit across a restart. A
-//! retry of that command finishes it.
+//! outcome record that agrees with it, once the audit directory syncs, has the
+//! file written again to the choice it records. Anything else puts the file
+//! back to the choice before the command, and back on only when that
+//! command's requested record says hooks were on. So the file never runs
+//! ahead of the audit across a restart. A retry of that command finishes it.
 
 use crate::agents::application::{
     selection_from_stored, NativeHooksAgent, NativeHooksAudit, NativeHooksChange, NativeHooksError,
@@ -261,7 +262,12 @@ fn set_blocking(
         return Err(error);
     }
     store(&claude, &codex, change.agent, change.enabled);
-    clear_pending(&directory, sync);
+    // A file whose directory did not sync could still lose its rename in a
+    // crash, so the marker stays until a later settlement writes the
+    // recorded choice again and syncs it.
+    if written.is_ok() {
+        clear_pending(&directory, sync);
+    }
     written.map(|()| selection_of(&claude, &codex))
 }
 
@@ -381,8 +387,10 @@ struct PendingChoice {
 /// `Err` holds the choice to use while the marker stays, and why it stays.
 ///
 /// An outcome record that agrees with the marker settles the change, once its
-/// directory is synced. Any other record, or none, puts the file back to the
-/// choice before the change, so the file never runs ahead of the audit. A
+/// directory is synced and the file is written to the choice it records. Any
+/// other record, or none, puts the file back to the choice before the change,
+/// so the file never runs ahead of the audit. Hooks go back on only when the
+/// command's requested record says they were on. A
 /// marker that cannot be read is treated like a broken choice file:
 /// everything is off, and the file is written off so that the marker can go
 /// and later commands are not refused.
@@ -426,10 +434,50 @@ fn settle_pending(
         if sync(&audit_directory(directory)).is_err() {
             return Err((stored, NativeHooksError::Audit));
         }
-        clear_pending(directory, sync);
-        return Ok(Some(stored));
+        // The file's own rename may not have survived either. The record
+        // decides: the file is written to say what it says, and synced.
+        let recorded = pending.outcome.transition.after.unwrap_or(pending.before);
+        return put_back(directory, stored.with(agent, recorded), sync);
     }
-    put_back(directory, stored.with(agent, pending.before), sync)
+    // Putting hooks back on needs the audit to say they were on: the same
+    // command's requested record must agree with the marker. Off needs no
+    // proof.
+    let before = pending.before && requested_agrees(directory, agent, &pending);
+    put_back(directory, stored.with(agent, before), sync)
+}
+
+/// True when the requested record of the marker's command is stored and says
+/// the choice before it was `pending.before`.
+fn requested_agrees(directory: &Path, agent: NativeHooksAgent, pending: &PendingChoice) -> bool {
+    let outcome = &pending.outcome;
+    let expected = StoredRecord {
+        record_id: record_name(
+            agent,
+            &outcome.initiator.principal_id,
+            &outcome.correlation_id,
+            NativeHooksPhase::Requested,
+        ),
+        kind: outcome.kind.clone(),
+        target: StoredTarget {
+            agent: outcome.target.agent.clone(),
+        },
+        transition: StoredTransition {
+            before: pending.before,
+            requested: outcome.transition.requested,
+            after: None,
+            phase: NativeHooksPhase::Requested.name().into(),
+        },
+        cause: outcome.cause.clone(),
+        initiator: StoredInitiator {
+            kind: outcome.initiator.kind.clone(),
+            principal_id: outcome.initiator.principal_id.clone(),
+            surface_id: outcome.initiator.surface_id.clone(),
+            organization_id: outcome.initiator.organization_id.clone(),
+        },
+        correlation_id: outcome.correlation_id.clone(),
+        observed_at_ms: 0,
+    };
+    agrees(&audit_record(directory, &expected.record_id), &expected).unwrap_or(false)
 }
 
 /// Write `selection` and then remove the marker. The marker stays when the
@@ -992,6 +1040,8 @@ mod tests {
         assert_eq!(error, NativeHooksError::Storage);
         let stored = std::fs::read_to_string(directory.join("native-hooks.json")).unwrap();
         assert!(selection_from_stored(stored.as_bytes()).claude());
+        // The rename could still be lost, so the change stays pending.
+        assert!(directory.join(PENDING).exists());
         // The running switch agrees with the file the next start will load.
         assert!(preferences.selection().claude());
         assert!(preferences.switch(NativeHooksAgent::Claude).allowed());
@@ -1346,6 +1396,95 @@ mod tests {
         // A crash could still undo the rename, so the marker that puts the
         // file back stays.
         assert!(directory.join(PENDING).exists());
+    }
+
+    #[tokio::test]
+    async fn a_recorded_change_whose_file_rename_was_lost_is_written_again() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("data");
+        let preferences =
+            NativeHooksPreferences::open(directory.clone(), Arc::new(FixedClock)).unwrap();
+        preferences
+            .set(change(NativeHooksAgent::Claude, true, "request-on"))
+            .await
+            .unwrap();
+        let off = change(NativeHooksAgent::Claude, false, "request-off");
+        preferences.set(off.clone()).await.unwrap();
+        // A crash undid the rename of the off file and the marker's removal.
+        // The outcome record, which synced, says off.
+        write_choice(
+            &directory,
+            &NativeHooksSelection::new(true, false),
+            sync_directory,
+        )
+        .unwrap();
+        let pending = PendingChoice {
+            outcome: StoredRecord::new(
+                &off.evidence(NativeHooksPhase::Outcome, true, Some(false)),
+                0,
+            ),
+            before: true,
+        };
+        publish(&directory, PENDING, &pending, sync_directory).unwrap();
+        let restarted =
+            NativeHooksPreferences::open(directory.clone(), Arc::new(FixedClock)).unwrap();
+        assert!(!restarted.selection().claude());
+        let stored = std::fs::read_to_string(directory.join(CHOICE)).unwrap();
+        assert!(!selection_from_stored(stored.as_bytes()).claude());
+        assert!(!directory.join(PENDING).exists());
+    }
+
+    #[tokio::test]
+    async fn hooks_turned_off_by_a_crashed_command_go_back_on_only_with_its_requested_record() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("data");
+        let preferences =
+            NativeHooksPreferences::open(directory.clone(), Arc::new(FixedClock)).unwrap();
+        preferences
+            .set(change(NativeHooksAgent::Claude, true, "request-on"))
+            .await
+            .unwrap();
+        drop(preferences);
+        let crashed = NativeHooksPreferences::open_with(
+            directory.clone(),
+            Arc::new(StopsBeforeTheOutcome {
+                inner: DurableNativeHooksAudit::new(
+                    audit_directory(&directory),
+                    Arc::new(FixedClock),
+                )
+                .unwrap(),
+            }),
+        )
+        .unwrap();
+        crashed
+            .set(change(NativeHooksAgent::Claude, false, "request-off"))
+            .await
+            .unwrap_err();
+        // The requested record says hooks were on, so they go back on.
+        let restarted =
+            NativeHooksPreferences::open(directory.clone(), Arc::new(FixedClock)).unwrap();
+        assert!(restarted.selection().claude());
+        // A marker that claims hooks were on, with no requested record behind
+        // it, puts them back off.
+        let forged = change(NativeHooksAgent::Codex, false, "request-forged");
+        publish(
+            &directory,
+            PENDING,
+            &PendingChoice {
+                outcome: StoredRecord::new(
+                    &forged.evidence(NativeHooksPhase::Outcome, true, Some(false)),
+                    0,
+                ),
+                before: true,
+            },
+            sync_directory,
+        )
+        .unwrap();
+        let forged_start =
+            NativeHooksPreferences::open(directory.clone(), Arc::new(FixedClock)).unwrap();
+        assert!(!forged_start.selection().codex());
+        assert!(forged_start.selection().claude());
+        assert!(!directory.join(PENDING).exists());
     }
 
     #[tokio::test]

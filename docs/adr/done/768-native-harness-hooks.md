@@ -66,7 +66,10 @@ different command. The rows are the orders the store implements.
 `an_unreadable_pending_change_loads_as_off`,
 `an_unreadable_outcome_keeps_the_change_pending_and_the_harness_off`,
 `an_outcome_that_cannot_be_read_back_keeps_the_change_pending_and_the_harness_off`, and
-`a_revert_that_does_not_sync_keeps_the_change_pending` are those rows.
+`a_revert_that_does_not_sync_keeps_the_change_pending`,
+`a_recorded_change_whose_file_rename_was_lost_is_written_again`, and
+`hooks_turned_off_by_a_crashed_command_go_back_on_only_with_its_requested_record`
+are those rows.
 The launch row is `claude_native_hook_runs_when_the_launch_omits_suppression`
 and `codex_native_hook_runs_when_the_launch_omits_suppression`. The next start
 of a conversation already open is
@@ -82,9 +85,10 @@ and
 | Requested record written, file on, flag still off | The outcome record fails and the revert write succeeds | The file returns to the choice this call started from, and the flag never moved. The command fails |
 | File published | The revert write fails or does not sync | The flag keeps the recorded choice. The command fails. The outcome record is absent, and the next command or gateway start puts the file back before anything else |
 | Change pending | The outcome record cannot be read, during the command or at settlement | The change stays pending and that harness is off until it settles |
-| Requested record written | The file is renamed into place and its directory sync fails | The outcome is recorded and the flag follows the file. The command reports the storage failure. A retry succeeds once the directory syncs, and reports the storage failure until then |
+| Requested record written | The file is renamed into place and its directory sync fails | The outcome is recorded and the flag follows the file. The change stays pending. The command reports the storage failure. A retry succeeds once the directory syncs, and reports the storage failure until then |
 | File and flag on | The outcome record is readable but reports a failure | Nothing is reverted, because the record says the change took effect. The command fails, and the change stays pending. A retry or the next start syncs the record's directory before the change is settled, and reports the audit failure until then |
-| File written, outcome absent or not the one pending, change pending | The gateway starts, or the next command arrives | The file goes back to the choice before the command. A retry of the command finishes it |
+| File written, outcome absent or not the one pending, change pending | The gateway starts, or the next command arrives | The file goes back to the choice before the command. Hooks go back on only when that command's requested record says they were on. A retry of the command finishes it |
+| Outcome recorded, change pending | The gateway starts, or the next command arrives | The file is written again to the recorded choice and synced, even if a crash lost its first rename |
 | File written and settled, outcome record later lost | The gateway starts | The start loads the file |
 | The file is not one JSON object, names a harness twice, or is larger than any choice | The gateway starts | That file loads as off and the gateway keeps starting |
 | Both records written for this choice | The same caller, harness, and request id | The command succeeds. The records stay as first written, including the observation time |
