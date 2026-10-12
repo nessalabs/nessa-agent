@@ -30,7 +30,12 @@
  * ```
  */
 import type { AttachmentApi, McpAppsApi } from "@nessa/client"
-import { heldFileReader, HeldFileReadError, type HeldFileReader } from "../conversation"
+import {
+  heldFileReader,
+  HeldFileReadError,
+  monotonicWallClock,
+  type HeldFileReader,
+} from "../conversation"
 import {
   linkedDevicesGateway,
   mcpServersGateway,
@@ -122,8 +127,9 @@ export function createDesktopDependencies(
     apps?: AppsOptions
   } = {},
 ): DesktopDependencies {
-  // The real clock and timers; tests pass their own.
-  const now = options.now ?? (() => Date.now())
+  // The real clock and timers; tests pass their own. The clock is a steady
+  // wall timeline, so a countdown does not jump with an OS clock correction.
+  const now = options.now ?? monotonicWallClock()
   const after = (ms: number, run: () => void) => {
     const timer = window.setTimeout(run, ms)
     return () => window.clearTimeout(timer)

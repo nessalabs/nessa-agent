@@ -2917,8 +2917,22 @@ fn a_deadline_notice_is_shown_only_as_the_one_settlement_its_review_published() 
         .unwrap()
     };
     let deadline = |effect, reason| deadline_after(30, effect, reason);
-    assert_eq!(
-        shown(vec![
+    // A cancellation by a deadline the review did not publish never reaches
+    // the projection: the SDK refuses that history.
+    let refused = |events| {
+        CommittedSession::new(
+            SessionId::new("conversation").unwrap(),
+            "incarnation".into(),
+            1,
+            1,
+            1,
+            Some(review_snapshot(events)),
+            CommittedStatus::new(CommittedCompleteness::Complete, CommittedFreshness::Current),
+        )
+        .is_err()
+    };
+    assert!(
+        refused(vec![
             published(),
             deadline_cancelled_review(deadline_after(
                 8,
@@ -2927,17 +2941,15 @@ fn a_deadline_notice_is_shown_only_as_the_one_settlement_its_review_published() 
             )),
             deny(),
         ]),
-        (vec![], 0),
-        "a cancellation by a deadline that shares the outcome but not the wait settles nothing"
+        "a cancellation by a deadline that shares the outcome but not the wait"
     );
-    assert_eq!(
-        shown(vec![
+    assert!(
+        refused(vec![
             published(),
             deadline_cancelled_review(deadline(PermissionEffect::Allow, STANDARD_ALLOW_REASON)),
             deny(),
         ]),
-        (vec![], 0),
-        "a cancellation by a deadline the review did not publish settles nothing"
+        "a cancellation by a deadline the review did not publish"
     );
     assert_eq!(
         shown(vec![

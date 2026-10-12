@@ -31,6 +31,7 @@ export { ClockProvider } from "./ui/clock"
 export { HeldFilesProvider } from "./ui/held-files"
 export { PublishedFiles } from "./ui/published-files"
 export { heldFileReader } from "./adapters/gateway/held-files"
+export { monotonicWallClock } from "./adapters/browser/wall-clock"
 export {
   HeldFileReadError,
   type HeldFileReader,

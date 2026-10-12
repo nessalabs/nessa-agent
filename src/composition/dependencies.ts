@@ -10,6 +10,7 @@ import {
 import type { CredentialSource, GatewayEndpointSource, NessaClient } from "@nessa/client"
 import { loadEnvironment, type Environment } from "../env/environment"
 import { scenarioEffects } from "../conversation/adapters/scenario/effects"
+import { monotonicWallClock } from "../conversation/adapters/browser/wall-clock"
 import { createSessionHandle } from "../session/adapters/client/handle"
 import { connectDevSession } from "../session/adapters/client/dev-session"
 import type { ConversationEffects } from "../conversation/application/ports"
@@ -90,8 +91,9 @@ export function createDependencies(
   const chosenAgent = () => (chosen ??= ask())
   // The wall clock a permission's countdown is read against, and that a
   // view's deadlines are put on as it arrives. Constructed here so neither the
-  // conversation UI nor its gateway adapter reads `Date.now()` itself.
-  const now = options.now ?? (() => Date.now())
+  // conversation UI nor its gateway adapter reads `Date.now()` itself. It is a
+  // steady wall timeline, so a countdown does not jump with an OS clock change.
+  const now = options.now ?? monotonicWallClock()
   return {
     agentInstallations: gatewayAgentInstallations(
       () => session.get()?.agents,
