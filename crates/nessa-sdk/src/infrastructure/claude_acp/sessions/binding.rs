@@ -185,8 +185,8 @@ impl ClaudeAcpProvider {
     }
     /// Let Claude run its own hooks on the next launch this factory opens.
     ///
-    /// Off keeps `disableAllHooks` and empty `settingSources`. On sends
-    /// [`super::profile::CLAUDE_NATIVE_HOOKS_SETTING_SOURCES`] and omits
+    /// Off keeps `disableAllHooks` and empty `settingSources`. On sends the
+    /// Claude CLI's default sources, user, project, and local, and omits
     /// `disableAllHooks`. The other session settings stay. One open reads the
     /// switch once, so a change applies to a conversation that has not opened.
     pub fn with_native_hooks(mut self, native_hooks: NativeHooksSwitch) -> Self {
