@@ -462,8 +462,7 @@ struct Worker<P> {
     closing: bool,
     /// Set only after `session/cancel` for the active turn is written.
     /// A later `Cancelled` prompt result is that turn ending. Any other
-    /// cancelled result tears the session down, unless a review is still
-    /// armed: that deadline is disarmed and the session stays open.
+    /// cancelled result is session teardown, which disarms deadlines.
     turn_cancel_requested: Option<ExecutionId>,
     deferred_outcome: Option<ExecutionOutcome>,
     provider_result: Option<Result<ExecutionOutcome, AgentError>>,
@@ -2243,18 +2242,11 @@ impl<P: AcpProfile> Worker<P> {
                     self.turn_cancel_requested.take().as_ref() == Some(&active_turn);
                 if result == ExecutionOutcome::Cancelled && !turn_cancel_requested {
                     // The provider ended the prompt without a cancel we sent.
-                    // A review that is still armed is not a permission answer
-                    // and not Finished: the session stays open, and the
-                    // deadline is disarmed so it cannot decide a request the
-                    // provider has stopped waiting on. With nothing armed, the
-                    // cancelled result is still session teardown.
-                    let review_still_armed = !self.armed_permissions.is_empty();
-                    self.armed_permissions.clear();
-                    if review_still_armed {
-                        self.provider_result = None;
-                    } else {
-                        self.deferred_outcome = Some(result);
-                    }
+                    // The cancelled result is session teardown. `cancel_wire_requests`,
+                    // called from that teardown, clears armed deadlines before the
+                    // shutdown grace, so none answers a request the provider
+                    // stopped waiting on.
+                    self.deferred_outcome = Some(result);
                 } else {
                     let target = &self
                         .active
@@ -3894,19 +3886,8 @@ impl<P: AcpProfile> Worker<P> {
                 Ok(resolution) => resolution,
                 Err(error) => {
                     tracing::warn!(%error, permission_id = %id.as_str(), "permission deadline found the review already resolved");
-                    // The review was resolved without this deadline being
-                    // disarmed. Answering it again fails, and hiding that
-                    // leaves a timer that still comes due. The decision the
-                    // timer was armed to make is published, so a turn that
-                    // ended or a session that is closing cannot drop it.
-                    // Turn end and close clear the map before they wait.
-                    if let Ok(event) =
-                        execution.deadline_answered(&execution_id, id, effect, reason.clone())
-                    {
-                        self.emit(event).map_err(|error| {
-                            self.record_failure(OperationEffectPhase::EventDelivery, error)
-                        })?;
-                    }
+                    // A review resolved without its deadline being disarmed is
+                    // a bug elsewhere; nothing was decided, so nothing is published.
                     return Ok(());
                 }
             };

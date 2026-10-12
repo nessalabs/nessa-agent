@@ -113,8 +113,7 @@ first row that matches is what happens.
 | Two deadlines are due in one wait | The earlier deadline settles first. The same instant settles in permission-id order. |
 | The turn ends while a review is still pending | The deadline is disarmed and does not answer later. |
 | A turn-end frame and a due deadline are both ready | The deadline answers first. It is the earlier branch of the biased wait, and the turn-end frame is still in the socket. The turn end is read after that answer. |
-| The provider cancels the turn, and a review is still armed | The deadline is disarmed. The session stays open. Finished is not published from that frame, and the deadline is not a permission answer. |
-| The provider cancels the turn, and nothing is armed | That cancel is session teardown, as it was before deadlines. |
+| The provider cancels the turn | The deadline is disarmed, then session teardown with Finished(Cancelled), the same as when nothing is armed. |
 | The session closes, or the person stops the turn, while a review is pending | The deadline is disarmed before the shutdown wait. Stopping the turn holds the next prompt, as 132 does. |
 | The selected-answer audit fails | The provider is still answered. The audit failure is retained and does not stop the turn. |
 | A saved review has no deadline | No automatic decision. The review stays pending until a person answers. |

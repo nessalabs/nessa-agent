@@ -470,8 +470,8 @@ while True:
                     {"optionId": "never-choose", "kind": "allow_always", "name": "Always"}]}})
             if mode == "permission-deadline-provider-cancel":
                 # The provider ends the prompt on its own. The process stays
-                # up, so the session is still open when the deadline would
-                # have fired.
+                # up through the shutdown grace; session/cancel holds until
+                # release-close.
                 stdin_lines.wait_for_file("release-provider-cancel", seconds=30)
                 result(pending, {"stopReason": "cancelled"})
                 record("provider-cancel-sent", "yes")
@@ -817,6 +817,11 @@ while True:
             pending = None
     elif method == "session/cancel":
         (root / "cancel-observed").write_text("yes")
+        if mode == "permission-deadline-provider-cancel":
+            # The cancelled prompt already ended the turn. Stay alive through
+            # the shutdown grace so a deadline still armed can be told from
+            # one that was disarmed.
+            stdin_lines.wait_for_file("release-close", seconds=30)
         if mode == "permission-deadline-close-hold" and pending is not None:
             # Stay alive through the grace. The deadline's remaining wait is
             # shorter than that grace, and answering now would hide whether

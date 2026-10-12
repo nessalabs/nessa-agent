@@ -572,20 +572,6 @@ async fn appeared(path: &std::path::Path) {
     }
 }
 
-async fn assert_session_stays_quiet(opened: &mut OpenedProviderSession) {
-    if let Some(event) = next_while_open(opened).await {
-        assert!(
-            !matches!(event.update(), ExecutionUpdate::Finished(_)),
-            "an unrequested cancel published Finished: {event:?}"
-        );
-        assert!(
-            !matches!(event.update(), ExecutionUpdate::DeadlineAnswered { .. }),
-            "the deadline answered before its wait: {event:?}"
-        );
-        panic!("the open session published {event:?}");
-    }
-}
-
 async fn assert_no_deadline_for(id: &PermissionId, opened: &mut OpenedProviderSession) {
     loop {
         let Some(event) = next_while_open(opened).await else {
@@ -656,25 +642,68 @@ async fn a_turn_that_ends_with_a_request_pending_does_not_answer_it_later() {
 #[tokio::test]
 async fn a_provider_cancelled_turn_forgets_the_armed_deadline() {
     let _slot = process_test_slot().await;
-    let mut review = pending("permission-deadline-provider-cancel").await;
-    let id = review.id.clone();
-    std::fs::write(review.root.path().join("release-provider-cancel"), "yes").unwrap();
-    appeared(&review.root.path().join("provider-cancel-sent")).await;
-    // The provider returned cancelled without being asked. The session is
-    // still open: Finished is not how that cancel is published.
-    assert_session_stays_quiet(&mut review.opened).await;
-    review.clock.advance(Duration::from_secs(30));
-    assert_no_deadline_for(&id, &mut review.opened).await;
+    let audit = Arc::new(RecordingAudit::default());
+    let (root, mut config, model) =
+        test_acp_configuration("permission-deadline-provider-cancel", 16);
+    config.execution_timeout = None;
+    // Longer than the review's 30 second wait, so the grace outlasts it and
+    // the provider is still alive when that wait runs out.
+    config.shutdown_grace = Duration::from_secs(60);
+    let clock = manual_clock(&mut config);
+    let binding = ClaudeAcpProvider::new(
+        config,
+        &model,
+        TokenLimits::new(900, 100).unwrap(),
+        audit.clone(),
+    )
+    .unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
+    let active = start(&opened, "write").await;
+    let id = loop {
+        match next(&mut opened).await {
+            ExecutionUpdate::Tool(_) => {}
+            ExecutionUpdate::PermissionRequested { id, deadline, .. } => {
+                let deadline = deadline.expect("the open review is armed");
+                assert!(deadline.armed());
+                break id;
+            }
+            update => panic!("expected permission, got {update:?}"),
+        }
+    };
+    std::fs::write(root.path().join("release-provider-cancel"), "yes").unwrap();
+    appeared(&root.path().join("provider-cancel-sent")).await;
+    // Teardown has sent session/cancel and is inside the grace. The provider
+    // is held there. Finished(Cancelled) is published when that hold ends.
+    appeared(&root.path().join("cancel-observed")).await;
+    clock.advance(Duration::from_secs(30));
+    assert_no_deadline_for(&id, &mut opened).await;
     assert!(
-        deadline_answers(&review.audit).is_empty(),
+        deadline_answers(&audit).is_empty(),
         "a provider-cancelled turn wrote a deadline audit record"
     );
-    close(&review.clock, &review.opened).await;
+    std::fs::write(root.path().join("release-close"), "yes").unwrap();
+    let updates = until_finished(&mut opened).await;
+    assert!(
+        updates
+            .iter()
+            .all(|update| !matches!(update, ExecutionUpdate::DeadlineAnswered { .. })),
+        "{updates:?}"
+    );
+    assert!(
+        matches!(
+            updates.last(),
+            Some(ExecutionUpdate::Finished(ExecutionOutcome::Cancelled))
+        ),
+        "provider cancel tears the session down: {updates:?}"
+    );
     assert_eq!(
-        promptly(review.active).await.unwrap(),
+        promptly(active).await.unwrap(),
         Ok(ExecutionOutcome::Cancelled)
     );
-    assert_gone(&review.root, "pid");
+    assert_gone(&root, "pid");
 }
 
 #[tokio::test]

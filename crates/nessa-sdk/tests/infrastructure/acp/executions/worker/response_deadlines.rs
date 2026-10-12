@@ -918,12 +918,21 @@ async fn armed_permissions_are_empty_after_the_turn_ends_and_after_provider_canc
     promptly(worker.message(&mut execution, message, None))
         .await
         .unwrap_or_else(|failure| panic!("{:?}", failure.error()));
+    assert_eq!(
+        worker.deferred_outcome,
+        Some(ExecutionOutcome::Cancelled),
+        "a provider-cancelled turn did not tear the session down"
+    );
+    // Disarm is `cancel_wire_requests` during teardown, not this branch.
+    // The map is still armed until that runs; settling it here would be the
+    // deadline answering a turn the provider already stopped.
+    promptly(worker.cancel_wire_requests())
+        .await
+        .unwrap_or_else(|error| panic!("{error:?}"));
     assert!(
         worker.armed_permissions.is_empty(),
-        "a provider-cancelled turn left a deadline armed"
+        "teardown left a provider-cancelled deadline armed"
     );
-    assert!(worker.deferred_outcome.is_none());
-    assert!(worker.provider_result.is_none());
     clock.advance(Duration::from_secs(30));
     promptly(worker.settle_due_permissions(&mut execution))
         .await
