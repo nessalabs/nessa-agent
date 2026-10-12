@@ -406,16 +406,24 @@ impl DeadlineDenyPreference {
                 .copied()
                 .find(|id| id.as_str() == preferred.as_ref())
             {
-                return Some((id.clone(), self.stops(id.as_str())));
+                return Some((id.clone(), self.stops_turn(id.as_str())));
             }
         }
-        if let Some(id) = denies.iter().copied().find(|id| !self.stops(id.as_str())) {
+        if let Some(id) = denies
+            .iter()
+            .copied()
+            .find(|id| !self.stops_turn(id.as_str()))
+        {
             return Some((id.clone(), false));
         }
         denies.first().map(|id| ((*id).clone(), true))
     }
 
-    fn stops(&self, id: &str) -> bool {
+    /// Whether selecting this option id ends the turn.
+    ///
+    /// Codex `cancel` does. A profile built with [`Self::continuing`] has no
+    /// such id, so a `reject_once` does not.
+    pub fn stops_turn(&self, id: &str) -> bool {
         self.stops_turn.iter().any(|stop| stop.as_ref() == id)
     }
 }
@@ -712,6 +720,9 @@ mod tests {
     fn codex_decline_is_preferred_and_a_cancel_only_denial_stops_the_turn() {
         let policy = PermissionDeadlinePolicy::standard();
         let codex = DeadlineDenyPreference::new(["decline"], ["cancel"]);
+        assert!(codex.stops_turn("cancel"));
+        assert!(!codex.stops_turn("decline"));
+        assert!(!DeadlineDenyPreference::continuing().stops_turn("reject_once"));
         let command = named(&[
             ("allow_once", PermissionEffect::Allow),
             ("cancel", PermissionEffect::Deny),

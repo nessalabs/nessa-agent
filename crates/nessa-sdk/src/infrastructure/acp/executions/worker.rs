@@ -460,7 +460,8 @@ struct Worker<P> {
     /// for reporting the state this runtime had not asked for yet.
     configured: bool,
     closing: bool,
-    /// Set only after `session/cancel` for the active turn is written.
+    /// Set when this turn's end was written: `session/cancel`, or a refusal
+    /// that stops the turn (the deadline's, or a person's Codex `cancel`).
     /// A later `Cancelled` prompt result is that turn ending. Any other
     /// cancelled result is session teardown, which disarms deadlines.
     turn_cancel_requested: Option<ExecutionId>,
@@ -1986,6 +1987,7 @@ impl<P: AcpProfile> Worker<P> {
     ) -> Result<(), WorkerFailure> {
         let permission_id = answer.id.clone();
         let option_id = answer.option_id.clone();
+        let answered_execution = answer.execution_id.clone();
         let resolution = match execution.answer_permission(answer) {
             Ok(resolution) => resolution,
             Err(error) => {
@@ -2020,6 +2022,21 @@ impl<P: AcpProfile> Worker<P> {
             .expect("pending wire permission");
         let response = permission_wire::selected(&wire_id, option_id.as_str());
         let result = self.send(response).await;
+        // Codex ends the turn when the person picks `cancel`. The cancelled
+        // result that follows is that turn ending. Without this, it is an
+        // unrequested cancel and the session is torn down.
+        if result.is_ok()
+            && self
+                .profile
+                .deadline_deny_preference()
+                .stops_turn(option_id.as_str())
+            && self
+                .active
+                .as_ref()
+                .is_some_and(|active| active.execution_id == answered_execution)
+        {
+            self.turn_cancel_requested = Some(answered_execution);
+        }
         let delivery_failure = result.as_ref().err().map(|error| {
             WorkerFailure::new(
                 error.clone(),
@@ -3871,6 +3888,7 @@ impl<P: AcpProfile> Worker<P> {
             return Ok(());
         };
         let deadline = armed.settlement.deadline().clone();
+        let stops_turn = deadline.stops_turn();
         let reason = deadline.recorded_reason();
         let effect = deadline.effect();
         let mut delivery_correlation = None;
@@ -3958,6 +3976,12 @@ impl<P: AcpProfile> Worker<P> {
             return Err(
                 self.record_failure(OperationEffectPhase::PermissionDelivery(correlation), error)
             );
+        }
+        // Codex ends the turn when the refusal it was given stops the turn.
+        // The cancelled result that follows is that turn ending. Without this,
+        // it is an unrequested cancel and the session is torn down.
+        if stops_turn {
+            self.turn_cancel_requested = Some(execution_id);
         }
         Ok(())
     }

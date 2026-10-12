@@ -110,6 +110,8 @@ first row that matches is what happens.
 | The configured effect has no offered option, and deny is offered | Deny, with the deny sentence, after the same wait. An allow is never sent as a deny. A missing allow does not reuse the allow sentence. |
 | The configured effect has no offered option, and deny is not offered | Cancel the review with `deadline_exceeded` and origin runtime, after the same wait. The transcript still says the deadline denied it. |
 | The only refusal offered stops the turn | Deny that option. The reason and the notice say the agent stopped. Codex `cancel` is that option. Codex `decline` is not, and is preferred when both are offered. |
+| A deadline's stopping refusal is written, and the provider then reports the turn cancelled | That turn ends with Finished(Cancelled). The session stays open. The cancelled result is the turn ending, because the refusal asked for it. |
+| A person selects a refusal that stops the turn, and that selection is written | That turn ends with Finished(Cancelled). The session stays open. Codex ends the turn when `cancel` is chosen; Nessa does not tear the session down. |
 | Two deadlines are due in one wait | The earlier deadline settles first. The same instant settles in permission-id order. |
 | The turn ends while a review is still pending | The deadline is disarmed and does not answer later. |
 | A turn-end frame and a due deadline are both ready | The deadline answers first. It is the earlier branch of the biased wait, and the turn-end frame is still in the socket. The turn end is read after that answer. |
@@ -182,8 +184,9 @@ limit. The reason is in the audit and the notice.
 
 The pinned Codex harness is answered with `decline` when that option is
 offered, and the turn continues. When it offers only `cancel`, the deadline
-takes `cancel`, the turn stops, and the notice says so. That is a Codex
-limit.
+takes `cancel`, the turn stops, and the notice says so. The session stays
+open, and a later turn can start. A person choosing that `cancel` ends the
+turn the same way. That is a Codex limit.
 
 Remembered approvals, notifications, deferral on the BYOK harness, and
 elicitation questions are not this decision. A restored session does not

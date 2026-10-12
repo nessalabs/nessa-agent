@@ -195,6 +195,13 @@ for line in sys.stdin:
                     "rawOutput": {"formatted_output": "compiling\n2 passed\n", "exit_code": 0},
                     "_meta": {"terminal_exit": {"exit_code": 0, "signal": None, "terminal_id": "command-1"}}})
         elif mode in ("deadline-decline", "deadline-cancel-only"):
+            # A later prompt in the same session, after cancel already ended
+            # the turn. The session is still open.
+            if mode == "deadline-cancel-only" and (root / "permission-outcome").exists():
+                text("turn-2-open")
+                result(pending, {"stopReason": "end_turn"})
+                pending = None
+                continue
             # Real Codex ACP 1.12.0 shapes. Command decisions offer decline
             # then cancel, both reject_once. File edits offer only cancel.
             if mode == "deadline-decline":
