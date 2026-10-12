@@ -39,7 +39,10 @@ use nessa_protocol::{
 };
 use shepherd::{ProcessSupervisor, SupervisorBuilder};
 use std::{collections::HashMap, path::Path, sync::Arc, time::Duration};
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    sync::watch,
+};
 
 /// How long a new serving process waits for the previous one to finish
 /// ending its leases.
@@ -64,8 +67,14 @@ pub(super) async fn execute() -> Result<(), RunError> {
         }
     };
     // Over standard input and output: whoever logged in over SSH.
+    // Over SSH the session's own end is the stop: nothing asks a drain.
     composed
-        .serve(Peer::Ssh, tokio::io::stdin(), tokio::io::stdout())
+        .serve(
+            Peer::Ssh,
+            tokio::io::stdin(),
+            tokio::io::stdout(),
+            watch::channel(false).1,
+        )
         .await;
     composed.finish().await;
     Ok(())
@@ -93,9 +102,14 @@ pub(super) struct Composed {
 
 impl Composed {
     /// Serve one gateway's leases, `peer`'s, on `input` and `output` until
-    /// that stream ends.
-    pub(super) async fn serve<R, W>(&self, peer: Peer, input: R, output: W)
-    where
+    /// that stream ends, or until `drain` has ended every lease.
+    pub(super) async fn serve<R, W>(
+        &self,
+        peer: Peer,
+        input: R,
+        output: W,
+        drain: watch::Receiver<bool>,
+    ) where
         R: AsyncRead + Unpin + Send + 'static,
         W: AsyncWrite + Unpin + Send + 'static,
     {
@@ -123,6 +137,7 @@ impl Composed {
                 .map(|inbox| inbox as Arc<dyn ArtifactInbox>),
             ServeTimings::default(),
             self.timer.clone(),
+            drain,
         )
         .await;
     }

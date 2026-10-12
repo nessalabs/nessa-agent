@@ -135,7 +135,7 @@ async fn record_use_case_admits_before_metadata_and_rechecks_each_request() {
             receivers: &bindings,
             conversations: &conversations,
             grants: &CONVERSATION_READ_GRANT,
-            read_grants: &crate::conversation_test_support::EveryConversationGranted,
+            share_grants: &crate::conversation_test_support::EveryConversationGranted,
         },
         source: &source,
     };
@@ -341,7 +341,7 @@ async fn passive_admission_preserves_unverifiable_authority_failures() {
             receivers: &bindings,
             conversations: &conversations,
             grants: &CONVERSATION_READ_GRANT,
-            read_grants: &crate::conversation_test_support::EveryConversationGranted,
+            share_grants: &crate::conversation_test_support::EveryConversationGranted,
         };
         let calls = AtomicUsize::new(0);
         assert_eq!(
@@ -490,7 +490,7 @@ async fn every_refusal_precedes_source_and_valid_owner_reaches_it() {
         receivers: &bindings,
         conversations: &conversations,
         grants: &CONVERSATION_READ_GRANT,
-        read_grants: &crate::conversation_test_support::EveryConversationGranted,
+        share_grants: &crate::conversation_test_support::EveryConversationGranted,
     };
     let calls = AtomicUsize::new(0);
     let source = |_: ReceiverReadScope| {
@@ -819,7 +819,7 @@ async fn catalogue_use_case_correlates_admitted_selector_and_operation_before_re
             receivers: &bindings,
             conversations: &conversations,
             grants: &CONVERSATION_READ_GRANT,
-            read_grants: &crate::conversation_test_support::EveryConversationGranted,
+            share_grants: &crate::conversation_test_support::EveryConversationGranted,
         },
         source: &source,
     };
@@ -1035,7 +1035,7 @@ async fn each_operation_asks_for_its_own_grant() {
         receivers: &bindings,
         conversations: &conversations,
         grants: &OPERATION_GRANTS,
-        read_grants: &crate::conversation_test_support::EveryConversationGranted,
+        share_grants: &crate::conversation_test_support::EveryConversationGranted,
     };
     let records = RecordSpy::default();
     let read = ReadRecords {
@@ -1096,7 +1096,7 @@ async fn each_operation_asks_for_its_own_grant() {
         receivers: &bindings,
         conversations: &conversations,
         grants: &OPERATION_GRANTS,
-        read_grants: &crate::conversation_test_support::EveryConversationGranted,
+        share_grants: &crate::conversation_test_support::EveryConversationGranted,
     };
     let catalogue = ReadCatalogue {
         admission,
@@ -1230,11 +1230,11 @@ impl GrantFixture {
             id,
         }
     }
-    async fn change(&self, transition: crate::conversation::application::ReadGrantTransition) {
-        use crate::conversation::application::ReadGrants;
+    async fn change(&self, transition: crate::conversation::application::ShareGrantTransition) {
+        use crate::conversation::application::ShareGrants;
         assert!(self
             .store
-            .change(crate::conversation::application::ReadGrantChange {
+            .change(crate::conversation::application::ShareGrantChange {
                 transition,
                 conversation_id: self.id.clone(),
                 receiver_id: Some("receiver".into()),
@@ -1289,7 +1289,7 @@ async fn an_ungranted_conversation_is_refused_before_its_source() {
         receivers: &bindings,
         conversations: &fixture.store,
         grants: &CONVERSATION_READ_GRANT,
-        read_grants: &fixture.store,
+        share_grants: &fixture.store,
     };
     let session = device_session().await;
     let calls = AtomicUsize::new(0);
@@ -1307,7 +1307,11 @@ async fn an_ungranted_conversation_is_refused_before_its_source() {
     }
     assert_eq!(calls.load(Ordering::SeqCst), 0, "no source was touched");
     fixture
-        .change(crate::conversation::application::ReadGrantTransition::Grant)
+        .change(
+            crate::conversation::application::ShareGrantTransition::Grant(
+                crate::conversation::domain::ShareAccess::read(),
+            ),
+        )
         .await;
     for read in [PassiveRead::RecordHead, PassiveRead::RecordPage] {
         assert!(admit
@@ -1317,12 +1321,68 @@ async fn an_ungranted_conversation_is_refused_before_its_source() {
     }
 }
 
+/// Row J1: a Comment or a Drive grant admits a record head and page exactly
+/// as a Read grant does, and a revoke ends them whatever the role was.
+#[tokio::test]
+async fn a_comment_or_drive_grant_reads_records_as_read_does() {
+    use crate::conversation::application::ShareGrantTransition;
+    for role in crate::conversation_test_support::roles_beyond_read() {
+        let fixture = GrantFixture::new().await;
+        let access = access();
+        let policy = CedarPolicyEvaluator::new().unwrap();
+        let gateway = Resource::new(
+            OrganizationId::new("org").unwrap(),
+            ResourceId::new("gateway").unwrap(),
+        );
+        let bindings = Bindings(Mutex::new(Ok(Some(binding()))));
+        let admit = AdmitPassiveRead {
+            authorization: AuthorizeAction {
+                access: &access,
+                clock: &FixedClock,
+                policy: &policy,
+            },
+            gateway: &gateway,
+            receivers: &bindings,
+            conversations: &fixture.store,
+            grants: &CONVERSATION_READ_GRANT,
+            share_grants: &fixture.store,
+        };
+        let session = device_session().await;
+        fixture
+            .change(ShareGrantTransition::Grant(role.clone()))
+            .await;
+        for read in [PassiveRead::RecordHead, PassiveRead::RecordPage] {
+            assert!(
+                admit
+                    .execute(&session, &fixture.id, "receiver", 7, read)
+                    .await
+                    .is_ok(),
+                "{role:?} {read:?}"
+            );
+        }
+        fixture.change(ShareGrantTransition::Revoke).await;
+        for read in [PassiveRead::RecordHead, PassiveRead::RecordPage] {
+            assert_eq!(
+                admit
+                    .execute(&session, &fixture.id, "receiver", 7, read)
+                    .await,
+                Err(ReadRefusal::WrongOwner),
+                "{role:?} {read:?}"
+            );
+        }
+    }
+}
+
 /// Row G4: revocation ends the next read; a read already admitted finishes.
 #[tokio::test]
 async fn a_revoke_ends_the_next_read_and_lets_an_admitted_one_finish() {
     let fixture = GrantFixture::new().await;
     fixture
-        .change(crate::conversation::application::ReadGrantTransition::Grant)
+        .change(
+            crate::conversation::application::ShareGrantTransition::Grant(
+                crate::conversation::domain::ShareAccess::read(),
+            ),
+        )
         .await;
     let access = access();
     let policy = CedarPolicyEvaluator::new().unwrap();
@@ -1341,7 +1401,7 @@ async fn a_revoke_ends_the_next_read_and_lets_an_admitted_one_finish() {
         receivers: &bindings,
         conversations: &fixture.store,
         grants: &CONVERSATION_READ_GRANT,
-        read_grants: &fixture.store,
+        share_grants: &fixture.store,
     };
     let session = device_session().await;
     let finished = admit
@@ -1354,7 +1414,7 @@ async fn a_revoke_ends_the_next_read_and_lets_an_admitted_one_finish() {
             |_: ReceiverReadScope| async {
                 // The owner revokes while this admitted read is running.
                 fixture
-                    .change(crate::conversation::application::ReadGrantTransition::Revoke)
+                    .change(crate::conversation::application::ShareGrantTransition::Revoke)
                     .await;
                 Ok::<_, ()>("page")
             },
@@ -1384,7 +1444,11 @@ async fn metadata_query_target_fences_passive_admission_and_shares() {
     use nessa_sdk::application::agent_execution::sessions::StorageError;
     let fixture = GrantFixture::new().await;
     fixture
-        .change(crate::conversation::application::ReadGrantTransition::Grant)
+        .change(
+            crate::conversation::application::ShareGrantTransition::Grant(
+                crate::conversation::domain::ShareAccess::read(),
+            ),
+        )
         .await;
     let repository = MemoryRepository::default();
     let record = fixture.store.load(&fixture.id).await.unwrap().unwrap();
@@ -1424,7 +1488,7 @@ async fn metadata_query_target_fences_passive_admission_and_shares() {
         receivers: &bindings,
         conversations: &repository,
         grants: &CONVERSATION_READ_GRANT,
-        read_grants: &fixture.store,
+        share_grants: &fixture.store,
     };
     let session = device_session().await;
     let source_reads = AtomicUsize::new(0);

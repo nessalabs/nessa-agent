@@ -60,6 +60,7 @@ lease_protocol!(
     "../env_serve/application/wire.rs",
     "../env_serve/application/redial.rs",
     "../env_serve/application/approval.rs",
+    "../env_serve/application/enrollment.rs",
     "../env_serve/application/grants.rs",
     "../timer/mod.rs",
     "../env_serve/domain/mod.rs",

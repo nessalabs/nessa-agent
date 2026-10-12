@@ -1760,6 +1760,7 @@ impl ConversationService {
             let (operation, prefix) = match cause {
                 LeaseEndCause::Expired => ("environment_expired", "expired"),
                 LeaseEndCause::Revoked => ("environment_revoked", "revoked"),
+                LeaseEndCause::Stopped => ("environment_drained", "drained"),
                 _ => ("environment_lost", "lost"),
             };
             let Ok(actor) =

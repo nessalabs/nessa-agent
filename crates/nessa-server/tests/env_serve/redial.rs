@@ -1,4 +1,4 @@
-use super::{redial, Backoff};
+use super::{redial, stop_past_deadline, Backoff};
 use crate::timer::{manual::ManualTimer, Moment, Timer};
 use std::{
     io,
@@ -69,6 +69,7 @@ async fn failed_dials_wait_twice_as_long_each_time_up_to_the_most() {
                 BACKOFF,
                 &*timer,
                 stopping,
+                watch::channel(false).1,
             )
             .await
         })
@@ -110,6 +111,7 @@ async fn each_connection_is_served_and_a_long_one_starts_the_wait_over() {
                 BACKOFF,
                 &*gateway.timer,
                 stopping,
+                watch::channel(false).1,
             )
             .await
         })
@@ -144,6 +146,7 @@ async fn a_setup_dialing_again_cannot_change_stops_it() {
             BACKOFF,
             &*timer,
             stopping,
+            watch::channel(false).1,
         ))
         .await
         .unwrap_err();
@@ -172,6 +175,7 @@ async fn stop_closes_the_connection_being_served_and_dials_no_more() {
                 BACKOFF,
                 &*gateway.timer,
                 stopping,
+                watch::channel(false).1,
             )
             .await
         })
@@ -196,6 +200,7 @@ async fn stop_asked_while_waiting_ends_the_wait() {
                 BACKOFF,
                 &*timer,
                 stopping,
+                watch::channel(false).1,
             )
             .await
         })
@@ -208,4 +213,99 @@ async fn stop_asked_while_waiting_ends_the_wait() {
     assert!(dialed.unwrap().is_ok());
     assert!(gateway.timer.now() < wait.deadline);
     assert_eq!(gateway.dialed.lock().unwrap().len(), 1);
+}
+
+/// Row K1: a drain lets the connection being served end by itself, then
+/// dials no more.
+#[tokio::test]
+async fn a_drain_lets_the_connection_end_by_itself_and_dials_no_more() {
+    let gateway = Gateway::new(vec![Ok(1), Ok(2)]);
+    let serving = Arc::new(Notify::new());
+    let (_stop, stopping) = watch::channel(false);
+    let (drain, draining) = watch::channel(false);
+    let dialing = {
+        let gateway = gateway.clone();
+        let serving = serving.clone();
+        let drained = draining.clone();
+        tokio::spawn(async move {
+            redial(
+                || gateway.dial(),
+                // Serves until drained, as a drained connection ends.
+                |_, _| {
+                    serving.notify_one();
+                    let mut draining = drained.clone();
+                    async move {
+                        let _ = draining.wait_for(|drain| *drain).await;
+                    }
+                },
+                BACKOFF,
+                &*gateway.timer,
+                stopping,
+                draining,
+            )
+            .await
+        })
+    };
+    serving.notified().await;
+    drain.send(true).unwrap();
+    let dialed = tokio::time::timeout(Duration::from_secs(5), dialing)
+        .await
+        .expect("a drained connection ends dialing");
+    assert!(dialed.unwrap().is_ok());
+    assert_eq!(gateway.dialed.lock().unwrap().len(), 1);
+}
+
+/// A drain asked while waiting to dial again has nothing to drain: the wait
+/// ends and nothing is dialed.
+#[tokio::test]
+async fn a_drain_asked_while_waiting_ends_the_wait() {
+    let gateway = Gateway::new(Vec::new());
+    let (_stop, stopping) = watch::channel(false);
+    let (drain, draining) = watch::channel(false);
+    let dialing = {
+        let gateway = gateway.clone();
+        tokio::spawn(async move {
+            let timer = gateway.timer.clone();
+            redial(
+                || gateway.dial(),
+                |_, _| async {},
+                BACKOFF,
+                &*timer,
+                stopping,
+                draining,
+            )
+            .await
+        })
+    };
+    gateway.timer.nth(0).await;
+    drain.send(true).unwrap();
+    let dialed = tokio::time::timeout(Duration::from_secs(5), dialing)
+        .await
+        .expect("a drain ends the wait");
+    assert!(dialed.unwrap().is_ok());
+    assert_eq!(gateway.dialed.lock().unwrap().len(), 1);
+}
+
+/// A drain that has not ended by its deadline is cut: stop is asked then,
+/// and not a moment before.
+#[tokio::test]
+async fn a_drain_past_its_deadline_asks_stop() {
+    let timer = Arc::new(ManualTimer::default());
+    let (stop, mut stopping) = watch::channel(false);
+    let (drain, draining) = watch::channel(false);
+    let deadline = Duration::from_secs(20);
+    let cutting = {
+        let timer = timer.clone();
+        tokio::spawn(async move { stop_past_deadline(draining, deadline, &*timer, &stop).await })
+    };
+    drain.send(true).unwrap();
+    let wait = timer.nth(0).await;
+    assert_eq!(wait.limit(), deadline);
+    assert!(!*stopping.borrow_and_update());
+    timer.run_out(0).await;
+    tokio::time::timeout(Duration::from_secs(5), cutting)
+        .await
+        .expect("the deadline cuts")
+        .unwrap();
+    assert!(*stopping.borrow());
 }

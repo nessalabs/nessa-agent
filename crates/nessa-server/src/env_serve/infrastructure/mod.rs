@@ -32,4 +32,4 @@ pub(crate) use launcher::{ConfiguredLauncher, LaunchSpec};
 pub(crate) use ledger::FileLedger;
 pub(crate) use lock::{ServeLock, ServeLockError};
 pub(crate) use outbox::FileOutbox;
-pub(crate) use pairing::{Approved, FilePairingEnvironment};
+pub(crate) use pairing::{Approved, FileEnrollmentCode, FilePairingEnvironment};

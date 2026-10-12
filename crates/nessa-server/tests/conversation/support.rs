@@ -1839,20 +1839,20 @@ pub(crate) fn capabilities(image_input: bool) -> EffectiveCapabilities {
 /// grant on every conversation it asks about. It lists no set and takes no
 /// change; a test of read grants uses the store's own table.
 pub(crate) struct EveryConversationGranted;
-impl crate::conversation::application::ReadGrants for EveryConversationGranted {
+impl crate::conversation::application::ShareGrants for EveryConversationGranted {
     fn is_granted<'a>(&'a self, _: &'a ConversationId, _: &'a str) -> ConversationFuture<'a, bool> {
         Box::pin(async { Ok(true) })
     }
     fn change(
         &self,
-        _: crate::conversation::application::ReadGrantChange,
+        _: crate::conversation::application::ShareGrantChange,
     ) -> ConversationFuture<'_, bool> {
         Box::pin(async { Err(ConversationError::Unavailable) })
     }
     fn grants<'a>(
         &'a self,
         _: &'a ConversationId,
-    ) -> ConversationFuture<'a, Vec<crate::conversation::application::ReadGrant>> {
+    ) -> ConversationFuture<'a, Vec<crate::conversation::application::ShareGrant>> {
         Box::pin(async { Err(ConversationError::Unavailable) })
     }
 }
@@ -1865,14 +1865,31 @@ pub(crate) async fn grant_read(
     id: &ConversationId,
     receiver: &str,
 ) {
+    grant_as(
+        store,
+        id,
+        receiver,
+        crate::conversation::domain::ShareAccess::read(),
+    )
+    .await;
+}
+
+/// Grant `receiver` `access` on `id` in a real grant table, as the owner's
+/// `conversation.share` would.
+pub(crate) async fn grant_as(
+    store: &crate::conversation::infrastructure::LocalConversationStore,
+    id: &ConversationId,
+    receiver: &str,
+    access: crate::conversation::domain::ShareAccess,
+) {
     let conversation = ConversationRepository::load(store, id)
         .await
         .unwrap()
         .expect("a conversation to share");
-    crate::conversation::application::ReadGrants::change(
+    crate::conversation::application::ShareGrants::change(
         store,
-        crate::conversation::application::ReadGrantChange {
-            transition: crate::conversation::application::ReadGrantTransition::Grant,
+        crate::conversation::application::ShareGrantChange {
+            transition: crate::conversation::application::ShareGrantTransition::Grant(access),
             conversation_id: id.clone(),
             receiver_id: Some(receiver.to_owned()),
             credential_id: nessa_auth::domain::CredentialId::new(format!("{receiver}-credential"))
@@ -1888,6 +1905,20 @@ pub(crate) async fn grant_read(
     )
     .await
     .unwrap();
+}
+
+/// A Comment grant and a Drive grant under a preset policy: every role
+/// besides Read, for tests that each reads exactly as Read does (row J1).
+pub(crate) fn roles_beyond_read() -> [crate::conversation::domain::ShareAccess; 2] {
+    use crate::conversation::domain::{ShareAccess, ShareRole, ToolPolicy, ToolPreset};
+    [
+        ShareAccess::new(ShareRole::Comment, None).unwrap(),
+        ShareAccess::new(
+            ShareRole::Drive,
+            Some(ToolPolicy::Preset(ToolPreset::NoShell)),
+        )
+        .unwrap(),
+    ]
 }
 
 // Custom repository payload deliberately violates safe destructor behavior.

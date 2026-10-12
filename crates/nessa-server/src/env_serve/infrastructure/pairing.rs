@@ -5,6 +5,7 @@
 //!
 //! ```text
 //! FilePairingEnvironment ──▶ FilePairingState (environment/pairing, locked)
+//!                       ──▶ environment/paired-with (the address enrolled with)
 //!                       ──▶ NativeEnrollmentClient ──▶ TCP to the gateway
 //! ```
 //!
@@ -12,7 +13,9 @@
 //! [`EnvironmentPairing`] port: the pairing client's errors are sorted
 //! into answers here ([`answer_to_failure`]), and what to do with each
 //! answer is decided in `application/approval.rs`.
-use crate::env_serve::application::{Answer, EnvironmentPairing, Saved};
+use crate::env_serve::application::{
+    Answer, EnrollingPairing, EnrollmentCode, EnvironmentPairing, Saved,
+};
 use nessa_auth::{
     adapters::pairing::{FilePairingState, ManualCode, NativeIdentity, OsEntropy},
     application::pairing::{ClientPendingStore, PrivateStateError},
@@ -21,7 +24,7 @@ use nessa_auth::{
 use nessa_client_core::pairing::{NativeClientError, NativeEnrollmentClient};
 use nessa_protocol::{clock::Clock, pairing::wire::NativePairingStatus};
 use std::{
-    io,
+    io::{self, Read, Write},
     net::TcpStream,
     path::{Path, PathBuf},
     sync::Arc,
@@ -30,6 +33,12 @@ use std::{
 
 /// The pairing's directory, beneath `<data>/environment`.
 const PAIRING: &str = "pairing";
+/// Beside the pairing, beneath `<data>/environment`: the address of the
+/// gateway this machine enrolled with. Read only while a pairing exists, so
+/// a code file is never taken as one for a pairing it was not.
+const PAIRED_WITH: &str = "paired-with";
+/// The most a code file or `paired-with` is read of.
+const MAX_READ: u64 = 4096;
 /// How long a TCP connect to the gateway may take when pairing.
 const CONNECT: Duration = Duration::from_secs(5);
 
@@ -41,6 +50,8 @@ pub(crate) type Approved = (Arc<NativeIdentity>, [u8; 44]);
 pub(crate) struct FilePairingEnvironment {
     client: NativeEnrollmentClient,
     store: Arc<FilePairingState>,
+    /// `<data>/environment`, canonical.
+    root: PathBuf,
     directory: PathBuf,
     address: String,
 }
@@ -78,6 +89,7 @@ impl FilePairingEnvironment {
             client,
             store,
             directory: root.join(PAIRING),
+            root,
             address: address.to_owned(),
         })
     }
@@ -112,19 +124,10 @@ impl FilePairingEnvironment {
         }
     }
 
-    /// Pair with the gateway using the owner's `code`.
-    ///
-    /// # Errors
-    /// The gateway could not be reached or did not pair this machine; the
-    /// message says what to do.
-    pub(crate) async fn enroll(&self, code: ManualCode) -> Result<NativePairingStatus, String> {
-        let stream = connect(&self.address)
-            .await
-            .map_err(|error| format!("{}: {error}", self.address))?;
-        self.client
-            .enroll(stream, code, OsEntropy)
-            .await
-            .map_err(|error| self.enroll_failure(error))
+    /// The pairing's own directory, `<data>/environment/pairing`: what to
+    /// remove to pair this machine again.
+    pub(crate) fn directory(&self) -> &Path {
+        &self.directory
     }
 
     /// Let go of the pairing client's worker.
@@ -202,6 +205,75 @@ impl EnvironmentPairing for FilePairingEnvironment {
             Ok(_) => Answer::Waiting,
             Err(error) => answer_to_failure(error, &self.directory),
         }
+    }
+}
+
+impl EnrollingPairing for FilePairingEnvironment {
+    type Code = ManualCode;
+
+    fn address(&self) -> &str {
+        &self.address
+    }
+
+    async fn recorded_address(&self) -> Result<Option<String>, String> {
+        let unreadable = |error: io::Error| format!("{PAIRED_WITH} cannot be read: {error}");
+        let file = match nessa_local_storage::open(
+            &self.root.join(PAIRED_WITH),
+            nessa_local_storage::OpenMode::Read,
+        ) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(unreadable(error)),
+        };
+        let mut address = String::new();
+        file.take(MAX_READ)
+            .read_to_string(&mut address)
+            .map_err(unreadable)?;
+        Ok(Some(address))
+    }
+
+    async fn record_address(&self) -> Result<(), String> {
+        let written = (|| {
+            let mut file = nessa_local_storage::PrivateTempFile::new_in(&self.root)?;
+            file.as_file_mut().write_all(self.address.as_bytes())?;
+            file.as_file().sync_all()?;
+            file.persist(&self.root.join(PAIRED_WITH))?;
+            nessa_local_storage::sync_directory(&self.root)
+        })();
+        written.map_err(|error| format!("{PAIRED_WITH} could not be written: {error}"))
+    }
+
+    async fn send_code(&self, code: ManualCode) -> Result<(), String> {
+        let stream = connect(&self.address)
+            .await
+            .map_err(|error| format!("{}: {error}", self.address))?;
+        self.client
+            .enroll(stream, code, OsEntropy)
+            .await
+            .map(|_| ())
+            .map_err(|error| self.enroll_failure(error))
+    }
+}
+
+/// The owner's code, kept in a file such as a mounted secret.
+pub(crate) struct FileEnrollmentCode(pub(crate) PathBuf);
+
+impl EnrollmentCode<ManualCode> for FileEnrollmentCode {
+    /// One code, with whitespace around it, as a secret mounted as a file
+    /// usually has a line end.
+    fn read(&self) -> Result<ManualCode, String> {
+        let path = &self.0;
+        let unreadable = |error: io::Error| format!("{}: {error}", path.display());
+        let file = std::fs::File::open(path).map_err(unreadable)?;
+        let mut bytes = Vec::with_capacity(MAX_READ as usize);
+        let read = file.take(MAX_READ).read_to_end(&mut bytes);
+        let code = read.map_err(unreadable).and_then(|_| {
+            ManualCode::parse(bytes.trim_ascii())
+                .map_err(|_| format!("{} holds no pairing code", path.display()))
+        });
+        // The code's own copy erases itself; this one is erased here.
+        bytes.fill(0);
+        code
     }
 }
 

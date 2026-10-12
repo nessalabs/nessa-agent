@@ -1,0 +1,37 @@
+# One worker per organization, each paired with that organization's gateway.
+# docs/guides/local-auth.md, on a paired machine in a container, explains
+# each setting. Replace a worker with `docker compose up -d --force-recreate
+# worker-acme`: the old container drains and stops before the new one starts
+# on the same volume.
+services:
+  worker-acme:
+    image: nessa-env-worker
+    # Forwards SIGTERM to nessa and reaps what its commands leave behind.
+    init: true
+    environment:
+      NESSA_GATEWAY: gateway.acme.example:47650
+      NESSA_DRAIN_DEADLINE: 20s
+    # Above the drain deadline, so leases end with their cleanup recorded
+    # before the container is killed.
+    stop_grace_period: 30s
+    secrets:
+      - source: acme_enroll_code
+        target: nessa_enroll_code
+    volumes:
+      - acme-data:/data
+      - acme-workspace:/workspace
+      # Owned by uid 10001 and mode 600 on the host: nessa refuses a
+      # config.json another account could have written.
+      - ./acme/config.json:/data/config.json:ro
+    restart: unless-stopped
+
+secrets:
+  # The code of an environment invitation created on acme's gateway, in a
+  # file readable by uid 10001. Read only while nothing is paired on the
+  # volume.
+  acme_enroll_code:
+    file: ./acme/enroll-code
+
+volumes:
+  acme-data:
+  acme-workspace:
