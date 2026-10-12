@@ -4,12 +4,14 @@ import {
   maxViewCursorIncarnationLength,
 } from "../generated/product.js"
 import type {
+  AgentsListResult,
   ConversationListResult,
   ConversationSubscribeResult,
   ConversationSubscriptionEnded,
   ConversationView,
   ConversationViewCursor,
 } from "../generated/product.js"
+import { agentsList } from "./agents-validate.js"
 import { conversationList, conversationView } from "./conversation-validate.js"
 import { decimal } from "./passive-read-validate.js"
 
@@ -73,6 +75,13 @@ export function listedFrame(value: unknown, archived: boolean): ConversationList
   if (!record(value) || !only(value, ["subscriptionId", "list"]))
     throw new TypeError("Invalid conversation list frame")
   return conversationList(value.list, archived)
+}
+
+/** An `agents.listed` frame, checked as `agents.list` is. */
+export function agentsListedFrame(value: unknown): AgentsListResult {
+  if (!record(value) || !only(value, ["subscriptionId", "catalog"]))
+    throw new TypeError("Invalid agent catalog frame")
+  return agentsList(value.catalog)
 }
 
 /** A `conversation.subscriptionEnded` frame. */
