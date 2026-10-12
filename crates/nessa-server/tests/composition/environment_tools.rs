@@ -229,9 +229,21 @@ fn a_fetch_answer_says_where_the_file_is_and_is_an_error_unless_placed_and_recor
         (FetchCallRefusal::AuditUnavailable, "audit_unavailable"),
         (FetchCallRefusal::SourceUnavailable, "source_unavailable"),
         (FetchCallRefusal::ChannelUnavailable, "channel_unavailable"),
-        (FetchCallRefusal::Unanswered, "unanswered"),
-        (FetchCallRefusal::TimedOut, "timed_out"),
-        (FetchCallRefusal::Cancelled, "cancelled"),
+        (
+            FetchCallRefusal::Unanswered { delivered: true },
+            "unanswered",
+        ),
+        (
+            FetchCallRefusal::Unanswered { delivered: false },
+            "unanswered",
+        ),
+        (FetchCallRefusal::TimedOut { delivered: true }, "timed_out"),
+        (FetchCallRefusal::TimedOut { delivered: false }, "timed_out"),
+        (FetchCallRefusal::Cancelled { delivered: true }, "cancelled"),
+        (
+            FetchCallRefusal::Cancelled { delivered: false },
+            "cancelled",
+        ),
         (
             FetchCallRefusal::NotPlaced(FetchRefusal::Unavailable),
             "fetch_unavailable",
@@ -278,6 +290,32 @@ fn a_fetch_answer_says_where_the_file_is_and_is_an_error_unless_placed_and_recor
         assert_eq!(fetch_refusal_code(refusal), code);
         assert!(answer["structuredContent"]["message"].is_string());
     }
+}
+
+/// With no answer, a fetch says whether every byte was delivered, and only
+/// one that was says the file may yet be placed.
+#[test]
+fn a_fetch_with_no_answer_says_it_may_be_placed_only_once_every_byte_was_delivered() {
+    for delivered in [false, true] {
+        for refusal in [
+            FetchCallRefusal::Unanswered { delivered },
+            FetchCallRefusal::TimedOut { delivered },
+            FetchCallRefusal::Cancelled { delivered },
+        ] {
+            let said = &fetched(&FetchAnswer::Refused(refusal))["structuredContent"];
+            assert_eq!(said["delivered"], delivered, "{refusal:?}");
+            let message = said["message"].as_str().unwrap();
+            assert_eq!(message.contains("may"), delivered, "{message}");
+            assert_eq!(
+                message.contains("nothing was placed"),
+                !delivered,
+                "{message}"
+            );
+        }
+    }
+    // An answer that says what happened carries no such word.
+    let said = &fetched(&FetchAnswer::Refused(FetchCallRefusal::NotHeld))["structuredContent"];
+    assert!(said.get("delivered").is_none());
 }
 
 #[test]

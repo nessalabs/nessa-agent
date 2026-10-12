@@ -19,11 +19,13 @@
 //!   ──▶ its first byte read for the call's person ── not held ──▶ not_held
 //!   ──▶ the environment takes it, its bytes are written range by range,
 //!       each read again from the hold ──▶ placed | alreadyPlaced | refused
-//!   ──▶ within `fetch_wait`, else timed_out; stop ──▶ cancelled
+//!   ──▶ within `fetch_wait`, else timed_out; stop ──▶ cancelled; with no
+//!       answer, either says whether every byte was delivered (`delivered`)
 //!   ──▶ FetchRequests::finish: its size given back unless the answer says it
 //!       is placed, or there is no answer and every byte was delivered
 //!   ──▶ FetchEnded{lease, call, outcome}, for every FetchAsked, whatever
-//!       its answer ── unsaved ──▶ a placement answered `recorded: false`
+//!       its answer, `delivered` with it ── unsaved ──▶ a placement answered
+//!       `recorded: false`
 //! ```
 //!
 //! Arrows are steps, in order. Nothing is asked of the environment until
@@ -38,7 +40,10 @@
 //! record, as a command not yet decided is. Every fetch recorded asked is
 //! recorded ended once, with what it came to, while its lease is still the
 //! conversation's latest: timed out and cancelled too, which `fetch_artifact`
-//! records after the wait or the stop dropped the fetch.
+//! records after the wait or the stop dropped the fetch. An end with no
+//! answer (`unanswered`, `timed_out`, `cancelled`) carries whether every byte
+//! was delivered, the one fact that says whether it may yet be placed: not
+//! delivered, nothing is, the environment perhaps never asked at all.
 use super::{ConversationService, LiveConversation};
 use crate::conversation::application::ArtifactBudget;
 use crate::conversation::application::{
@@ -148,25 +153,46 @@ pub enum FetchCallRefusal {
     SourceUnavailable,
     /// The bytes could not be written to the environment. Nothing is placed.
     ChannelUnavailable,
-    /// No answer came: placed only if every byte was delivered first.
-    Unanswered,
-    /// Not answered within the call's wait: it may still be placed once
-    /// every byte was delivered.
-    TimedOut,
-    /// The call was cancelled while it waited: it may still be placed once
-    /// every byte was delivered.
-    Cancelled,
+    /// No answer came. Only when every byte was `delivered` first may it be
+    /// placed; otherwise nothing is.
+    Unanswered {
+        /// Whether every byte was delivered to the environment.
+        delivered: bool,
+    },
+    /// Not answered within the call's wait. Only when every byte was
+    /// `delivered` first may it still be placed; otherwise nothing is,
+    /// the environment perhaps never asked.
+    TimedOut {
+        /// Whether every byte was delivered to the environment.
+        delivered: bool,
+    },
+    /// The call was cancelled while it waited. Only when every byte was
+    /// `delivered` first may it still be placed; otherwise nothing is,
+    /// the environment perhaps never asked.
+    Cancelled {
+        /// Whether every byte was delivered to the environment.
+        delivered: bool,
+    },
 }
 
 impl FetchCallRefusal {
-    /// Whether this answer itself says the call placed nothing; `None` when
-    /// it says nothing of it, and only whether every byte was delivered can.
-    fn placed_nothing(self) -> Option<bool> {
+    /// Whether this answer says the call placed nothing: every refusal
+    /// does, except one with no answer after every byte was delivered.
+    fn placed_nothing(self) -> bool {
         match self {
-            Self::Unanswered | Self::TimedOut | Self::Cancelled => None,
-            _ => Some(true),
+            Self::Unanswered { delivered }
+            | Self::TimedOut { delivered }
+            | Self::Cancelled { delivered } => !delivered,
+            _ => true,
         }
     }
+}
+
+/// Why a fetch's call stopped waiting before its fetch answered.
+#[derive(Clone, Copy)]
+enum Gone {
+    TimedOut,
+    Cancelled,
 }
 
 impl ConversationService {
@@ -185,27 +211,43 @@ impl ConversationService {
     ) -> FetchAnswer {
         let wait = self.inner.environment.fetch_wait();
         let asked = Mutex::new(None);
-        let answer = tokio::time::timeout(wait, async {
+        let delivered = Arc::new(AtomicBool::new(false));
+        let answered = tokio::time::timeout(wait, async {
             tokio::select! {
                 biased;
-                () = cancelled(&mut stop) => FetchAnswer::Refused(FetchCallRefusal::Cancelled),
-                answer = self.fetch_within(id, call, &asked) => answer,
+                () = cancelled(&mut stop) => Err(Gone::Cancelled),
+                answer = self.fetch_within(id, call, &asked, &delivered) => Ok(answer),
             }
         })
         .await
-        .unwrap_or(FetchAnswer::Refused(FetchCallRefusal::TimedOut));
+        .unwrap_or(Err(Gone::TimedOut));
+        // The fetch is answered or dropped by now, so whether every byte was
+        // delivered is final: it was set, if ever, before `Delivered` was
+        // queued, and a fetch dropped before then told the environment so.
+        let delivered = delivered.load(Ordering::SeqCst);
+        let gone = answered.as_ref().err().copied();
+        let answer = answered.unwrap_or_else(|gone| {
+            FetchAnswer::Refused(match gone {
+                Gone::TimedOut => FetchCallRefusal::TimedOut { delivered },
+                Gone::Cancelled => FetchCallRefusal::Cancelled { delivered },
+            })
+        });
         let asked = asked.into_inner().unwrap_or_else(PoisonError::into_inner);
         let Some(asked) = asked else {
             return answer;
         };
         // An outcome is set once the fetch answered; without one, the wait
-        // or the stop dropped it, and the answer says which.
-        let outcome = match (&asked.outcome, &answer) {
+        // or the stop dropped it, and `gone` says which.
+        let outcome = match (&asked.outcome, gone) {
             (Some(outcome), _) => outcome.clone(),
-            (None, FetchAnswer::Refused(FetchCallRefusal::TimedOut)) => {
-                FetchOutcome::Refused(FetchRefusalReason::TimedOut)
+            (None, Some(Gone::TimedOut)) => {
+                FetchOutcome::Refused(FetchRefusalReason::TimedOut { delivered })
             }
-            (None, _) => FetchOutcome::Refused(FetchRefusalReason::Cancelled),
+            (None, Some(Gone::Cancelled)) => {
+                FetchOutcome::Refused(FetchRefusalReason::Cancelled { delivered })
+            }
+            // Answered with no outcome set: no answer this call can record.
+            (None, None) => FetchOutcome::Refused(FetchRefusalReason::Unanswered { delivered }),
         };
         let recorded = self.end_fetch(&asked, outcome).await;
         match answer {
@@ -237,6 +279,7 @@ impl ConversationService {
         id: &ConversationId,
         call: FetchCall,
         asked: &Mutex<Option<Asked>>,
+        delivered: &Arc<AtomicBool>,
     ) -> FetchAnswer {
         let refused = FetchAnswer::Refused;
         let Some(live) = self.live(id).await else {
@@ -282,7 +325,6 @@ impl ConversationService {
             conversation_id: id.clone(),
             file: file.clone(),
         });
-        let delivered = Arc::new(AtomicBool::new(false));
         let ask = FetchAsk {
             request: call.call.clone(),
             destination: call.destination,
@@ -311,7 +353,7 @@ impl ConversationService {
             lease: lease.clone(),
             call: call.call.clone(),
             size,
-            delivered,
+            delivered: delivered.clone(),
             placed_nothing: None,
         };
         // Recorded asked, for the turn's person, before anything is asked of
@@ -340,14 +382,17 @@ impl ConversationService {
                     Err(failure) => Err(source_failure(failure)),
                     Ok(_) => fetching.await,
                 };
-                let (answer, outcome) = answered(id, &call.call, &call.digest, size, fetched);
+                // Answered, whether every byte was delivered is final.
+                let delivered = delivered.load(Ordering::SeqCst);
+                let (answer, outcome) =
+                    answered(id, &call.call, &call.digest, size, fetched, delivered);
                 set_outcome(asked, outcome);
                 answer
             }
         };
         taken.placed_nothing = match &answer {
             FetchAnswer::Placed { already_placed, .. } => Some(*already_placed),
-            FetchAnswer::Refused(refusal) => refusal.placed_nothing(),
+            FetchAnswer::Refused(refusal) => Some(refusal.placed_nothing()),
         };
         answer
     }
@@ -493,14 +538,15 @@ fn set_outcome(asked: &Mutex<Option<Asked>>, outcome: FetchOutcome) {
 }
 
 /// The answer to a fetch the environment was asked for, and the outcome its
-/// end records. A path no fetch could name is no answer this gateway can
-/// read: unanswered, since the file may be placed.
+/// end records, `delivered` saying whether every byte reached it. A path no
+/// fetch could name is no answer this gateway can read: unanswered.
 fn answered(
     id: &ConversationId,
     request: &str,
     digest: &str,
     size: u64,
     fetched: Result<FetchPlaced, FetchFailure>,
+    delivered: bool,
 ) -> (FetchAnswer, FetchOutcome) {
     let failure = match fetched {
         Err(failure) => failure,
@@ -538,8 +584,8 @@ fn answered(
         }
     };
     (
-        FetchAnswer::Refused(failure_refusal(failure)),
-        FetchOutcome::Refused(failure_reason(failure)),
+        FetchAnswer::Refused(failure_refusal(failure, delivered)),
+        FetchOutcome::Refused(failure_reason(failure, delivered)),
     )
 }
 /// Resolves once `stop` says the caller is gone, or can no longer say.
@@ -635,18 +681,18 @@ fn source_failure(failure: HeldSourceFailure) -> FetchFailure {
     }
 }
 
-fn failure_refusal(failure: FetchFailure) -> FetchCallRefusal {
+fn failure_refusal(failure: FetchFailure, delivered: bool) -> FetchCallRefusal {
     match failure {
         FetchFailure::Refused(reason) => FetchCallRefusal::NotPlaced(reason),
         FetchFailure::NotHeld => FetchCallRefusal::NotHeld,
         FetchFailure::SourceUnavailable => FetchCallRefusal::SourceUnavailable,
         FetchFailure::ChannelUnavailable => FetchCallRefusal::ChannelUnavailable,
-        FetchFailure::Unanswered => FetchCallRefusal::Unanswered,
+        FetchFailure::Unanswered => FetchCallRefusal::Unanswered { delivered },
     }
 }
 
 /// What a fetch's end records for `failure`.
-fn failure_reason(failure: FetchFailure) -> FetchRefusalReason {
+fn failure_reason(failure: FetchFailure, delivered: bool) -> FetchRefusalReason {
     match failure {
         FetchFailure::Refused(reason) => {
             FetchRefusalReason::Environment(environment_refusal(reason))
@@ -654,7 +700,7 @@ fn failure_reason(failure: FetchFailure) -> FetchRefusalReason {
         FetchFailure::NotHeld => FetchRefusalReason::NotHeld,
         FetchFailure::SourceUnavailable => FetchRefusalReason::SourceUnavailable,
         FetchFailure::ChannelUnavailable => FetchRefusalReason::ChannelUnavailable,
-        FetchFailure::Unanswered => FetchRefusalReason::Unanswered,
+        FetchFailure::Unanswered => FetchRefusalReason::Unanswered { delivered },
     }
 }
 

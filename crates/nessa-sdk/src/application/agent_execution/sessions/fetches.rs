@@ -68,15 +68,27 @@ pub enum FetchRefusalReason {
     SourceUnavailable,
     /// The bytes could not be written to the environment. Nothing is placed.
     ChannelUnavailable,
-    /// No answer came once every byte was delivered: whether it is placed
-    /// is not known.
-    Unanswered,
-    /// Not answered within the call's wait: it may still be placed once
-    /// every byte was delivered.
-    TimedOut,
-    /// The call was cancelled while it waited: it may still be placed once
-    /// every byte was delivered.
-    Cancelled,
+    /// No answer came. `delivered` says whether every byte reached the
+    /// environment first: only then may it be placed, and whether it is is
+    /// not known; otherwise nothing is placed.
+    Unanswered {
+        /// Whether every byte was delivered before the answer was lost.
+        delivered: bool,
+    },
+    /// Not answered within the call's wait. `delivered` says whether every
+    /// byte reached the environment first: only then may it still be
+    /// placed. Not delivered covers an environment never asked at all.
+    TimedOut {
+        /// Whether every byte was delivered before the wait ran out.
+        delivered: bool,
+    },
+    /// The call was cancelled while it waited. `delivered` says whether
+    /// every byte reached the environment first: only then may it still be
+    /// placed. Not delivered covers an environment never asked at all.
+    Cancelled {
+        /// Whether every byte was delivered before the call was cancelled.
+        delivered: bool,
+    },
     /// Its asking could not be saved, so the environment was never asked.
     /// Nothing is placed.
     AuditUnavailable,

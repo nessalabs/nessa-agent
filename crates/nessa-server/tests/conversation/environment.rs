@@ -9,6 +9,7 @@ use nessa_sdk::application::agent_execution::permissions::ActionContext;
 use nessa_sdk::application::agent_execution::sessions::{
     EnvironmentPath, PublishedFile, StorageError,
 };
+use nessa_sdk::domain::agent_execution::leases::{CommandTerms, CommandWork, SshDestination};
 use nessa_sdk::domain::agent_execution::{executions::MessageChunk, leases::LeaseRevision};
 use nessa_sdk::domain::common::value_objects::{MediaType, Sha256Digest};
 use std::collections::VecDeque;
@@ -183,6 +184,19 @@ async fn l9_drops_past_the_kept_bound_are_counted_and_not_kept_over_the_whole_le
     // drop kept: none of them is refused when it is recorded.
     let id = || opening.lease.clone();
     let mut records = vec![issued(id().as_str(), 1)];
+    // Every command it may have running, its end owed past the lease's.
+    records.extend(
+        (0..Lease::MAX_LIVE_COMMANDS).map(|n| LeaseRecord::CommandIssued {
+            lease: LeaseId::new(format!("command-{n}")).unwrap(),
+            parent: id(),
+            terms: CommandTerms {
+                environment: EnvironmentRef::Ssh(SshDestination::new("devbox").unwrap()),
+                command: CommandWork::new(vec!["ls".into()], None, 1_000).unwrap(),
+                sandbox: SandboxProfile::None,
+            },
+            actor: ActionContext::new("person", "desktop", format!("run-{n}")).unwrap(),
+        }),
+    );
     // Every fetch it may have under way, never ended.
     records.extend((0..CurrentLease::MAX_ASKED_FETCHES).map(|n| {
         let request = format!("fetch-{n}");

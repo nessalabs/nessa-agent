@@ -313,8 +313,8 @@ fn catalogue() -> &'static [Limit] {
         Limit {
             id: "artifact.host_fetches_in_flight",
             tier: "fixed",
-            owner: "nessa_protocol::lease MAX_FETCHES_IN_FLIGHT",
-            meaning: "a fetch past this many unanswered under one lease is refused busy by the host",
+            owner: "CurrentLease::MAX_ASKED_FETCHES (the gateway), nessa_protocol::lease MAX_FETCHES_IN_FLIGHT (the host)",
+            meaning: "a fetch past this many under way under one lease is refused busy by the gateway before the host is asked, with nothing recorded; the host refuses busy past this many unanswered as well, for any gateway",
         },
         Limit {
             id: "record.discovery_steps",

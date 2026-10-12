@@ -209,9 +209,9 @@ enum FetchRefused {
     NotHeld,
     SourceUnavailable,
     ChannelUnavailable,
-    Unanswered,
-    TimedOut,
-    Cancelled,
+    Unanswered { delivered: bool },
+    TimedOut { delivered: bool },
+    Cancelled { delivered: bool },
     AuditUnavailable,
 }
 #[derive(Serialize, Deserialize)]
@@ -372,9 +372,9 @@ impl From<FetchRefusalReason> for FetchRefused {
             FetchRefusalReason::NotHeld => Self::NotHeld,
             FetchRefusalReason::SourceUnavailable => Self::SourceUnavailable,
             FetchRefusalReason::ChannelUnavailable => Self::ChannelUnavailable,
-            FetchRefusalReason::Unanswered => Self::Unanswered,
-            FetchRefusalReason::TimedOut => Self::TimedOut,
-            FetchRefusalReason::Cancelled => Self::Cancelled,
+            FetchRefusalReason::Unanswered { delivered } => Self::Unanswered { delivered },
+            FetchRefusalReason::TimedOut { delivered } => Self::TimedOut { delivered },
+            FetchRefusalReason::Cancelled { delivered } => Self::Cancelled { delivered },
             FetchRefusalReason::AuditUnavailable => Self::AuditUnavailable,
         }
     }
@@ -386,9 +386,9 @@ impl From<FetchRefused> for FetchRefusalReason {
             FetchRefused::NotHeld => Self::NotHeld,
             FetchRefused::SourceUnavailable => Self::SourceUnavailable,
             FetchRefused::ChannelUnavailable => Self::ChannelUnavailable,
-            FetchRefused::Unanswered => Self::Unanswered,
-            FetchRefused::TimedOut => Self::TimedOut,
-            FetchRefused::Cancelled => Self::Cancelled,
+            FetchRefused::Unanswered { delivered } => Self::Unanswered { delivered },
+            FetchRefused::TimedOut { delivered } => Self::TimedOut { delivered },
+            FetchRefused::Cancelled { delivered } => Self::Cancelled { delivered },
             FetchRefused::AuditUnavailable => Self::AuditUnavailable,
         }
     }
@@ -1172,12 +1172,16 @@ mod tests {
                 FetchRefusalReason::NotHeld,
                 FetchRefusalReason::SourceUnavailable,
                 FetchRefusalReason::ChannelUnavailable,
-                FetchRefusalReason::Unanswered,
-                FetchRefusalReason::TimedOut,
-                FetchRefusalReason::Cancelled,
                 FetchRefusalReason::AuditUnavailable,
             ]
             .into_iter()
+            .chain([false, true].into_iter().flat_map(|delivered| {
+                [
+                    FetchRefusalReason::Unanswered { delivered },
+                    FetchRefusalReason::TimedOut { delivered },
+                    FetchRefusalReason::Cancelled { delivered },
+                ]
+            }))
             .chain(
                 [
                     EnvironmentFetchRefusal::Unavailable,
@@ -1379,6 +1383,18 @@ mod tests {
                 path: EnvironmentPath::new("/srv/a.bin").unwrap(),
             },
         });
+        let timed_out = WireLease::from(&LeaseRecord::FetchEnded {
+            lease: id("lease-1"),
+            request: "call-1".into(),
+            outcome: FetchOutcome::Refused(FetchRefusalReason::TimedOut { delivered: false }),
+        });
+        assert!(
+            timed_out
+                .body
+                .contains(r#"{"TimedOut":{"delivered":false}}"#),
+            "{}",
+            timed_out.body
+        );
         let long = format!(
             r#""destination":"{}""#,
             "a".repeat(EnvironmentPath::MAX_BYTES + 1)
@@ -1415,6 +1431,17 @@ mod tests {
                 ended.body.replace(r#""path":"/srv/a.bin""#, r#""path":"""#),
             ),
             (FETCH_ENDED, ended.body.replace("Placed", "Moved")),
+            // An end with no answer must say whether every byte was delivered.
+            (
+                FETCH_ENDED,
+                timed_out.body.replace(r#"{"delivered":false}"#, "null"),
+            ),
+            (
+                FETCH_ENDED,
+                timed_out
+                    .body
+                    .replace(r#"{"TimedOut":{"delivered":false}}"#, r#""TimedOut""#),
+            ),
             (
                 FETCH_ENDED,
                 ended
@@ -1792,7 +1819,7 @@ mod tests {
         let ended = LeaseRecord::FetchEnded {
             lease: id("lease-1"),
             request: "call-1".into(),
-            outcome: FetchOutcome::Refused(FetchRefusalReason::TimedOut),
+            outcome: FetchOutcome::Refused(FetchRefusalReason::TimedOut { delivered: false }),
         };
         lease = Some(CurrentLease::apply(lease.as_ref(), &ended).unwrap());
         let mut snapshot = history_fixture(1);

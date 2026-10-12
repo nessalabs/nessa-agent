@@ -410,13 +410,21 @@ fn fetched(answer: &FetchAnswer) -> Value {
             }),
             !*recorded,
         ),
-        FetchAnswer::Refused(refusal) => result(
-            json!({
+        FetchAnswer::Refused(refusal) => {
+            let mut said = json!({
                 "refused": fetch_refusal_code(*refusal),
                 "message": fetch_refusal_message(*refusal),
-            }),
-            true,
-        ),
+            });
+            // With no answer, whether every byte was delivered is the one
+            // thing that says whether the file may yet be placed.
+            if let FetchCallRefusal::Unanswered { delivered }
+            | FetchCallRefusal::TimedOut { delivered }
+            | FetchCallRefusal::Cancelled { delivered } = refusal
+            {
+                said["delivered"] = json!(delivered);
+            }
+            result(said, true)
+        }
     }
 }
 
@@ -433,9 +441,9 @@ fn fetch_refusal_code(refusal: FetchCallRefusal) -> &'static str {
         FetchCallRefusal::AuditUnavailable => "audit_unavailable",
         FetchCallRefusal::SourceUnavailable => "source_unavailable",
         FetchCallRefusal::ChannelUnavailable => "channel_unavailable",
-        FetchCallRefusal::Unanswered => "unanswered",
-        FetchCallRefusal::TimedOut => "timed_out",
-        FetchCallRefusal::Cancelled => "cancelled",
+        FetchCallRefusal::Unanswered { .. } => "unanswered",
+        FetchCallRefusal::TimedOut { .. } => "timed_out",
+        FetchCallRefusal::Cancelled { .. } => "cancelled",
         FetchCallRefusal::NotPlaced(reason) => match reason {
             FetchRefusal::Unavailable => "fetch_unavailable",
             FetchRefusal::OutsideWorkspace => "outside_workspace",
@@ -479,13 +487,24 @@ fn fetch_refusal_message(refusal: FetchCallRefusal) -> &'static str {
         FetchCallRefusal::ChannelUnavailable => {
             "the file could not be written to the environment; nothing was placed"
         }
-        FetchCallRefusal::Unanswered => {
+        FetchCallRefusal::Unanswered { delivered: true } => {
             "the environment was lost after the file was written; it may or may not be placed"
         }
-        FetchCallRefusal::TimedOut => {
+        FetchCallRefusal::Unanswered { delivered: false } => {
+            "no answer came before the file was written; nothing was placed"
+        }
+        FetchCallRefusal::TimedOut { delivered: true } => {
             "the file was not placed in time; it may still be placed"
         }
-        FetchCallRefusal::Cancelled => "the call was cancelled; the file may still be placed",
+        FetchCallRefusal::TimedOut { delivered: false } => {
+            "the file was not written in time; nothing was placed"
+        }
+        FetchCallRefusal::Cancelled { delivered: true } => {
+            "the call was cancelled; the file may still be placed"
+        }
+        FetchCallRefusal::Cancelled { delivered: false } => {
+            "the call was cancelled before the file was written; nothing was placed"
+        }
         FetchCallRefusal::NotPlaced(reason) => match reason {
             FetchRefusal::Unavailable => "the environment does not take files",
             FetchRefusal::OutsideWorkspace => {

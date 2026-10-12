@@ -170,11 +170,13 @@ pub(super) type FailingRecords = Arc<Mutex<Option<fn(&LeaseRecord) -> bool>>>;
 /// The record store, refusing the next save that issues or refuses a lease
 /// while `fail_issue` is set, as a disk that went away for a moment would,
 /// and every save holding a record `failing` names while it is set, as a disk
-/// that stays away would.
+/// that stays away would; and stalling, never to return, the next save
+/// holding a record `stall_once` names, as a disk that hangs would.
 struct Records {
     inner: RecordStorage,
     fail_issue: Arc<AtomicBool>,
     failing: FailingRecords,
+    stall_once: FailingRecords,
     /// Every lease record handed to a save, in order.
     saved: SavedRecords,
 }
@@ -191,6 +193,7 @@ impl SessionStorage for Records {
     fn open(&self, id: SessionId) -> StorageFuture<'_, Box<dyn SessionStorageLease>> {
         let fail_issue = self.fail_issue.clone();
         let failing = self.failing.clone();
+        let stall_once = self.stall_once.clone();
         let saved = self.saved.clone();
         Box::pin(async move {
             let inner = self.inner.open(id).await?;
@@ -198,6 +201,7 @@ impl SessionStorage for Records {
                 inner,
                 fail_issue,
                 failing,
+                stall_once,
                 saved,
             }) as Box<dyn SessionStorageLease>)
         })
@@ -208,6 +212,7 @@ impl SessionStorage for Records {
     ) -> StorageFuture<'_, Option<Box<dyn SessionStorageLease>>> {
         let fail_issue = self.fail_issue.clone();
         let failing = self.failing.clone();
+        let stall_once = self.stall_once.clone();
         let saved = self.saved.clone();
         Box::pin(async move {
             Ok(self.inner.open_existing(id).await?.map(|inner| {
@@ -215,6 +220,7 @@ impl SessionStorage for Records {
                     inner,
                     fail_issue,
                     failing,
+                    stall_once,
                     saved,
                 }) as Box<dyn SessionStorageLease>
             }))
@@ -225,6 +231,7 @@ pub(super) struct RecordsLease {
     inner: Box<dyn SessionStorageLease>,
     fail_issue: Arc<AtomicBool>,
     failing: FailingRecords,
+    stall_once: FailingRecords,
     saved: SavedRecords,
 }
 impl RecordsLease {
@@ -235,6 +242,7 @@ impl RecordsLease {
             inner,
             fail_issue: Arc::new(AtomicBool::new(false)),
             failing,
+            stall_once: FailingRecords::default(),
             saved: SavedRecords::default(),
         }
     }
@@ -265,6 +273,22 @@ impl SessionStorageLease for RecordsLease {
                 .flat_map(SessionSaveUnit::changes)
                 .any(|change| matches!(change, SessionChange::Lease(record) if failing(record)))
         });
+        let stalled = {
+            let mut stall = self.stall_once.lock().unwrap();
+            let matched = stall.is_some_and(|stall| {
+                units
+                    .iter()
+                    .flat_map(SessionSaveUnit::changes)
+                    .any(|change| matches!(change, SessionChange::Lease(record) if stall(record)))
+            });
+            if matched {
+                *stall = None;
+            }
+            matched
+        };
+        if stalled {
+            return Box::pin(std::future::pending());
+        }
         if refused || (issues && self.fail_issue.swap(false, Ordering::SeqCst)) {
             return Box::pin(async { Err(StorageError::Io("the disk went away".into())) });
         }
@@ -347,6 +371,7 @@ fn harness_working_in(
         inner: RecordStorage::new(root.join("sessions")).unwrap(),
         fail_issue: Arc::new(AtomicBool::new(false)),
         failing: Arc::new(Mutex::new(None)),
+        stall_once: Arc::new(Mutex::new(None)),
         saved: SavedRecords::default(),
     });
     let service = ConversationService::new(
@@ -4160,7 +4185,7 @@ async fn a_fetch_for_a_call_already_fetching_is_refused_and_a_cancelled_one_lets
             .await
             .unwrap()
             .unwrap(),
-        FetchAnswer::Refused(FetchCallRefusal::Cancelled)
+        FetchAnswer::Refused(FetchCallRefusal::Cancelled { delivered: false })
     );
     *host.fetching.script.lock().unwrap() = FetchScript::Place;
     assert!(matches!(
@@ -4190,7 +4215,7 @@ async fn a_fetch_past_the_leases_budget_is_refused_before_the_host_is_asked() {
             harness
                 .fetch_file(fetch_call("devbox", &bytes, "a.bin", &format!("lost-{n}")))
                 .await,
-            FetchAnswer::Refused(FetchCallRefusal::Unanswered)
+            FetchAnswer::Refused(FetchCallRefusal::Unanswered { delivered: true })
         );
     }
     // Refused: nothing placed, so given back, however often.
@@ -4223,7 +4248,7 @@ async fn a_fetch_past_the_leases_budget_is_refused_before_the_host_is_asked() {
         harness
             .fetch_file(fetch_call("devbox", &bytes, "a.bin", "last"))
             .await,
-        FetchAnswer::Refused(FetchCallRefusal::Unanswered)
+        FetchAnswer::Refused(FetchCallRefusal::Unanswered { delivered: true })
     );
     let asked = host.fetching.asks.lock().unwrap().len();
     assert_eq!(
@@ -4299,7 +4324,7 @@ async fn a_fetch_whose_placement_read_stalls_is_timed_out_or_cancelled() {
         harness
             .fetch_file(fetch_call("devbox", &bytes, "a.bin", "call-1"))
             .await,
-        FetchAnswer::Refused(FetchCallRefusal::TimedOut)
+        FetchAnswer::Refused(FetchCallRefusal::TimedOut { delivered: false })
     );
     let (caller_gone, stop) = tokio::sync::watch::channel(false);
     let cancelled = {
@@ -4314,7 +4339,7 @@ async fn a_fetch_whose_placement_read_stalls_is_timed_out_or_cancelled() {
             .await
             .unwrap()
             .unwrap(),
-        FetchAnswer::Refused(FetchCallRefusal::Cancelled)
+        FetchAnswer::Refused(FetchCallRefusal::Cancelled { delivered: false })
     );
     assert!(host.fetching.asks.lock().unwrap().is_empty());
     // Let the stalled reads go, so nothing is left waiting: a writer
@@ -4343,7 +4368,7 @@ async fn a_fetch_not_answered_within_its_wait_answers_timed_out() {
         harness
             .fetch_file(fetch_call("devbox", &bytes, "a.bin", "call-1"))
             .await,
-        FetchAnswer::Refused(FetchCallRefusal::TimedOut)
+        FetchAnswer::Refused(FetchCallRefusal::TimedOut { delivered: false })
     );
     go.send(()).unwrap();
 }
@@ -4366,7 +4391,7 @@ async fn a_fetch_whose_store_stays_busy_still_ends_on_its_wait_or_its_stop() {
         harness
             .fetch_file(fetch_call("devbox", &bytes, "a.bin", "call-1"))
             .await,
-        FetchAnswer::Refused(FetchCallRefusal::TimedOut)
+        FetchAnswer::Refused(FetchCallRefusal::TimedOut { delivered: false })
     );
     let (caller_gone, stop) = tokio::sync::watch::channel(false);
     let stopped = {
@@ -4382,7 +4407,7 @@ async fn a_fetch_whose_store_stays_busy_still_ends_on_its_wait_or_its_stop() {
             .await
             .unwrap()
             .unwrap(),
-        FetchAnswer::Refused(FetchCallRefusal::Cancelled)
+        FetchAnswer::Refused(FetchCallRefusal::Cancelled { delivered: false })
     );
     assert!(host.fetching.asks.lock().unwrap().is_empty());
     go.send(()).unwrap();
@@ -4406,7 +4431,7 @@ async fn a_fetch_stopped_before_delivery_gives_its_size_back_and_one_after_does_
             harness
                 .fetch_file(fetch_call("devbox", &bytes, "a.bin", &format!("lost-{n}")))
                 .await,
-            FetchAnswer::Refused(FetchCallRefusal::Unanswered)
+            FetchAnswer::Refused(FetchCallRefusal::Unanswered { delivered: true })
         );
     }
     // Timed out and cancelled with nothing delivered: given back.
@@ -4416,7 +4441,7 @@ async fn a_fetch_stopped_before_delivery_gives_its_size_back_and_one_after_does_
             harness
                 .fetch_file(fetch_call("devbox", &bytes, "a.bin", &format!("late-{n}")))
                 .await,
-            FetchAnswer::Refused(FetchCallRefusal::TimedOut)
+            FetchAnswer::Refused(FetchCallRefusal::TimedOut { delivered: false })
         );
     }
     let (caller_gone, stop) = tokio::sync::watch::channel(false);
@@ -4443,7 +4468,7 @@ async fn a_fetch_stopped_before_delivery_gives_its_size_back_and_one_after_does_
     caller_gone.send(true).unwrap();
     assert_eq!(
         cancelled.await.unwrap(),
-        FetchAnswer::Refused(FetchCallRefusal::Cancelled)
+        FetchAnswer::Refused(FetchCallRefusal::Cancelled { delivered: false })
     );
     // Timed out once every byte was delivered: counted, and now full.
     script(FetchScript::DeliveredSilent);
@@ -4451,7 +4476,7 @@ async fn a_fetch_stopped_before_delivery_gives_its_size_back_and_one_after_does_
         harness
             .fetch_file(fetch_call("devbox", &bytes, "a.bin", "delivered"))
             .await,
-        FetchAnswer::Refused(FetchCallRefusal::TimedOut)
+        FetchAnswer::Refused(FetchCallRefusal::TimedOut { delivered: true })
     );
     script(FetchScript::Place);
     assert_eq!(
@@ -4471,7 +4496,9 @@ async fn concurrent_fetches_never_read_more_than_the_gateways_bound_at_once() {
     let bytes: Vec<u8> = (0..100_000u32).map(|i| (i % 17) as u8).collect();
     let (harness, _host, attachments, go) =
         fetching_turn(root.path(), &bytes, FETCH_CALL_WAIT).await;
-    *attachments.range_delay.lock().unwrap() = Some(Duration::from_millis(5));
+    // Long enough that each fetch is still reading when the next one, its
+    // asking saved after the one before's, starts to read.
+    *attachments.range_delay.lock().unwrap() = Some(Duration::from_millis(50));
     // As many as one lease may have under way, more than read at once.
     let fetches: Vec<_> = (0..CurrentLease::MAX_ASKED_FETCHES)
         .map(|n| {
@@ -4682,7 +4709,7 @@ async fn a_fetch_that_cannot_be_recorded_asked_is_refused_audit_unavailable_and_
             harness
                 .fetch_file(fetch_call("devbox", &bytes, "a.bin", &format!("lost-{n}")))
                 .await,
-            FetchAnswer::Refused(FetchCallRefusal::Unanswered)
+            FetchAnswer::Refused(FetchCallRefusal::Unanswered { delivered: true })
         );
     }
     // The first asking is saved now, with the end that says it was never
@@ -4712,7 +4739,7 @@ async fn a_fetch_timed_out_or_cancelled_is_recorded_ended_timed_out_or_cancelled
         harness
             .fetch_file(fetch_call("devbox", &bytes, "a.bin", "call-1"))
             .await,
-        FetchAnswer::Refused(FetchCallRefusal::TimedOut)
+        FetchAnswer::Refused(FetchCallRefusal::TimedOut { delivered: false })
     );
     let (caller_gone, stop) = tokio::sync::watch::channel(false);
     let cancelled = {
@@ -4734,18 +4761,18 @@ async fn a_fetch_timed_out_or_cancelled_is_recorded_ended_timed_out_or_cancelled
             .await
             .unwrap()
             .unwrap(),
-        FetchAnswer::Refused(FetchCallRefusal::Cancelled)
+        FetchAnswer::Refused(FetchCallRefusal::Cancelled { delivered: false })
     );
     assert_eq!(
         harness.saved_fetch_ends(),
         [
             (
                 "call-1".into(),
-                FetchOutcome::Refused(FetchRefusalReason::TimedOut)
+                FetchOutcome::Refused(FetchRefusalReason::TimedOut { delivered: false })
             ),
             (
                 "call-2".into(),
-                FetchOutcome::Refused(FetchRefusalReason::Cancelled)
+                FetchOutcome::Refused(FetchRefusalReason::Cancelled { delivered: false })
             ),
         ]
     );
@@ -4873,7 +4900,7 @@ async fn a_fetch_past_what_a_lease_may_have_under_way_is_refused_busy_and_never_
                 .await
                 .unwrap()
                 .unwrap(),
-            FetchAnswer::Refused(FetchCallRefusal::Cancelled)
+            FetchAnswer::Refused(FetchCallRefusal::Cancelled { delivered: false })
         );
     }
     *host.fetching.script.lock().unwrap() = FetchScript::Place;
@@ -4883,5 +4910,51 @@ async fn a_fetch_past_what_a_lease_may_have_under_way_is_refused_busy_and_never_
             .await,
         FetchAnswer::Placed { recorded: true, .. }
     ));
+    go.send(()).unwrap();
+}
+
+/// A fetch whose asking's save outlasts the call's wait is answered timed
+/// out with nothing delivered: the host was never asked, its size is given
+/// back, and its end says so rather than that it may still be placed.
+#[tokio::test]
+async fn a_fetch_timed_out_while_its_asking_is_saved_ends_undelivered_and_never_asked() {
+    let root = tempfile::tempdir().unwrap();
+    let largest = PublishedFile::MAX_BYTES as usize;
+    let bytes = vec![9u8; largest];
+    let (harness, host, _attachments, go) =
+        fetching_turn(root.path(), &bytes, FETCH_SAVE_WAIT).await;
+    let fits = (ArtifactBudget::LEASE.fetch_bytes / PublishedFile::MAX_BYTES) as usize;
+    *harness.storage.stall_once.lock().unwrap() =
+        Some(|record| matches!(record, LeaseRecord::FetchAsked { .. }));
+    assert_eq!(
+        harness
+            .fetch_file(fetch_call("devbox", &bytes, "a.bin", "stalled"))
+            .await,
+        FetchAnswer::Refused(FetchCallRefusal::TimedOut { delivered: false })
+    );
+    assert!(host.fetching.asks.lock().unwrap().is_empty());
+    // Its asking, kept while its save stalled, is saved with its end.
+    let saved = harness.saved_fetches();
+    assert!(saved.iter().any(|record| matches!(
+        record,
+        LeaseRecord::FetchAsked { request, .. } if request == "stalled"
+    )));
+    assert_eq!(
+        harness.saved_fetch_ends(),
+        [(
+            "stalled".into(),
+            FetchOutcome::Refused(FetchRefusalReason::TimedOut { delivered: false })
+        )]
+    );
+    // Its size was given back: the whole budget can still be fetched.
+    *host.fetching.script.lock().unwrap() = FetchScript::Lost;
+    for n in 0..fits {
+        assert_eq!(
+            harness
+                .fetch_file(fetch_call("devbox", &bytes, "a.bin", &format!("lost-{n}")))
+                .await,
+            FetchAnswer::Refused(FetchCallRefusal::Unanswered { delivered: true })
+        );
+    }
     go.send(()).unwrap();
 }
