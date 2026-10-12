@@ -289,6 +289,12 @@ fn a_fetch_answer_says_where_the_file_is_and_is_an_error_unless_placed_and_recor
         assert_eq!(answer["structuredContent"]["refused"], code);
         assert_eq!(fetch_refusal_code(refusal), code);
         assert!(answer["structuredContent"]["message"].is_string());
+        assert!(answer["structuredContent"].get("recorded").is_none());
+        // Its end not in the records: the same refusal, said unrecorded.
+        let unrecorded = fetched(&FetchAnswer::RefusedUnrecorded(refusal));
+        assert_eq!(unrecorded["isError"], true, "{code}");
+        assert_eq!(unrecorded["structuredContent"]["refused"], code);
+        assert_eq!(unrecorded["structuredContent"]["recorded"], false);
     }
 }
 

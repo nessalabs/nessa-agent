@@ -4737,7 +4737,8 @@ async fn a_fetch_that_cannot_be_recorded_asked_is_refused_audit_unavailable_and_
             harness
                 .fetch_file(fetch_call("devbox", &bytes, "a.bin", &format!("audit-{n}")))
                 .await,
-            FetchAnswer::Refused(FetchCallRefusal::AuditUnavailable)
+            // Its end goes unsaved with its asking: said so as well.
+            FetchAnswer::RefusedUnrecorded(FetchCallRefusal::AuditUnavailable)
         );
     }
     assert!(host.fetching.asks.lock().unwrap().is_empty());
@@ -4820,11 +4821,11 @@ async fn a_fetch_timed_out_or_cancelled_is_recorded_ended_timed_out_or_cancelled
     go.send(()).unwrap();
 }
 
-/// A fetch whose end cannot be saved, even once more, says so on a
-/// placement; a refusal stays that refusal. The end stays retained and
-/// goes with the next save.
+/// A fetch whose end cannot be saved, even once more, says so, placed or
+/// refused: a refusal stays that refusal, said unrecorded. The end stays
+/// retained and goes with the next save.
 #[tokio::test]
-async fn a_fetch_whose_end_cannot_be_saved_is_placed_unrecorded_or_still_refused() {
+async fn a_fetch_whose_end_cannot_be_saved_is_answered_unrecorded() {
     let root = tempfile::tempdir().unwrap();
     let bytes = b"a picture".to_vec();
     let (harness, host, _attachments, go) =
@@ -4840,7 +4841,7 @@ async fn a_fetch_whose_end_cannot_be_saved_is_placed_unrecorded_or_still_refused
         harness
             .fetch_file(fetch_call("devbox", &bytes, "a.bin", "refused"))
             .await,
-        FetchAnswer::Refused(FetchCallRefusal::NotPlaced(FetchRefusal::Occupied))
+        FetchAnswer::RefusedUnrecorded(FetchCallRefusal::NotPlaced(FetchRefusal::Occupied))
     );
     assert!(harness.saved_fetch_ends().is_empty());
     recovered();

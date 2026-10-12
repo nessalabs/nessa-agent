@@ -24,8 +24,8 @@
 //!   ──▶ FetchRequests::finish: its size given back unless the answer says it
 //!       is placed, or there is no answer and every byte was delivered
 //!   ──▶ FetchEnded{lease, call, outcome}, for every FetchAsked, whatever
-//!       its answer, `delivered` with it ── unsaved ──▶ a placement answered
-//!       `recorded: false`
+//!       its answer, `delivered` with it ── unsaved ──▶ answered
+//!       `recorded: false`, a placement or a refusal alike
 //! ```
 //!
 //! Arrows are steps, in order. Nothing is asked of the environment until
@@ -119,6 +119,10 @@ pub enum FetchAnswer {
     },
     /// It is not placed, or not known to be, with why.
     Refused(FetchCallRefusal),
+    /// As [`Self::Refused`], for a fetch recorded asked whose end could not
+    /// be saved, even once more: the end stays retained and goes with the
+    /// conversation's next save, but the records do not hold it yet.
+    RefusedUnrecorded(FetchCallRefusal),
 }
 
 /// Why an `artifacts_fetch` did not place its file, or does not know.
@@ -267,6 +271,7 @@ impl ConversationService {
                 size,
                 recorded,
             },
+            FetchAnswer::Refused(refusal) if !recorded => FetchAnswer::RefusedUnrecorded(refusal),
             refused => refused,
         }
     }
@@ -395,7 +400,9 @@ impl ConversationService {
         };
         taken.placed_nothing = match &answer {
             FetchAnswer::Placed { already_placed, .. } => Some(*already_placed),
-            FetchAnswer::Refused(refusal) => Some(refusal.placed_nothing()),
+            FetchAnswer::Refused(refusal) | FetchAnswer::RefusedUnrecorded(refusal) => {
+                Some(refusal.placed_nothing())
+            }
         };
         answer
     }

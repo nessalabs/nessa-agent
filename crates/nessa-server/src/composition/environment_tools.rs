@@ -410,7 +410,7 @@ fn fetched(answer: &FetchAnswer) -> Value {
             }),
             !*recorded,
         ),
-        FetchAnswer::Refused(refusal) => {
+        FetchAnswer::Refused(refusal) | FetchAnswer::RefusedUnrecorded(refusal) => {
             let mut said = json!({
                 "refused": fetch_refusal_code(*refusal),
                 "message": fetch_refusal_message(*refusal),
@@ -422,6 +422,10 @@ fn fetched(answer: &FetchAnswer) -> Value {
             | FetchCallRefusal::Cancelled { delivered } = refusal
             {
                 said["delivered"] = json!(delivered);
+            }
+            // Its end not saved here: said, as a placement's is.
+            if let FetchAnswer::RefusedUnrecorded(_) = answer {
+                said["recorded"] = json!(false);
             }
             result(said, true)
         }
