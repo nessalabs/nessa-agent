@@ -670,9 +670,9 @@ pub(super) fn conversation_id(value: &str) -> Result<ConversationId, Conversatio
 /// application view owns the committed selection; the wire joins them once.
 ///
 /// It is stamped with the gateway's own time as `serverNowMs`, read from the
-/// injected clock as the view is made, so a client measures each deadline's
-/// `dueAtMs` against this gateway's clock rather than its own
-/// (`a_view_carries_the_gateways_time_from_its_clock`).
+/// view clock as the view is made: the timeline each deadline's `dueAtMs` was
+/// promised on, so a client measures the deadline against that rather than
+/// its own clock (`a_view_carries_the_gateways_time_from_its_clock`).
 fn wire_view(
     state: &ProductRouteState,
     view: ApplicationConversationView,
@@ -708,7 +708,10 @@ fn wire_view(
     let fields = value
         .as_object_mut()
         .ok_or(ConversationError::Unavailable)?;
-    fields.insert("serverNowMs".into(), json!(state.clock.unix_milliseconds()));
+    fields.insert(
+        "serverNowMs".into(),
+        json!(state.view_clock.unix_milliseconds()),
+    );
     fields.insert(
         "approvalMode".into(),
         json!(selection.approval_mode.as_str()),

@@ -58,6 +58,15 @@ pub(crate) struct ConnectedEnvironments {
     pub(crate) changes: watch::Receiver<u64>,
 }
 
+/// The process's one wall timeline, the one every agent's `dueAtMs` is
+/// promised on (`nessa_sdk::infrastructure::clock::process_unix_ms`).
+struct ProcessTimeline;
+impl Clock for ProcessTimeline {
+    fn unix_milliseconds(&self) -> u64 {
+        nessa_sdk::infrastructure::clock::process_unix_ms()
+    }
+}
+
 /// Dependencies and trusted gateway selectors for the product route.
 ///
 /// This state is constructed only in composition.
@@ -144,6 +153,11 @@ pub struct ProductRouteState {
     /// `peer_not_configured`.
     pub(crate) peers: Option<Arc<PeerCommands>>,
     pub(crate) uptime_clock: Arc<dyn UptimeClock>,
+    /// The time a conversation view tells a client, which it measures every
+    /// deadline's `dueAtMs` against. It reads the timeline the agents' review
+    /// deadlines are promised on, not [`Self::clock`]: the two answer the
+    /// same question only until the operating system corrects its wall clock.
+    pub(crate) view_clock: Arc<dyn Clock>,
     pub(crate) agent_readiness: Arc<SharedAgentReadiness>,
 }
 
@@ -273,6 +287,7 @@ impl ProductRouteState {
             held_reads: None,
             resource_tickets: None,
             uptime_clock: dependencies.uptime_clock,
+            view_clock: Arc::new(ProcessTimeline),
             agent_readiness: Arc::new(SharedAgentReadiness::new(dependencies.agent_probe)),
         }
     }
@@ -392,6 +407,14 @@ impl ProductRouteState {
     }
 
     /// Publish the validated choices composed for this gateway.
+    /// Replace the clock a conversation view's `serverNowMs` is read from.
+    /// Composition keeps the default, the agents' own timeline; a test
+    /// injects a clock it controls.
+    pub fn with_view_clock(mut self, clock: Arc<dyn Clock>) -> Self {
+        self.view_clock = clock;
+        self
+    }
+
     pub fn with_agents_catalog(mut self, catalog: AgentsListResult) -> Self {
         self.agents_catalog = Some(Arc::new(catalog));
         self

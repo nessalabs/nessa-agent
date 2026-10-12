@@ -166,10 +166,15 @@ automatically." When the only refusal stops the turn, that line says the
 agent stops. A reloaded client counts down from `dueAtMs` rather than
 starting `waitMs` again. `dueAtMs` is on the gateway's clock, and the client
 is often another machine whose clock is ahead or behind. So every view also
-carries `serverNowMs`, the gateway's wall time read from its injected clock
-as the view is made, and each client puts `dueAtMs` on its own clock as the view
+carries `serverNowMs`, the gateway's time as the view is made, and each client puts `dueAtMs` on its own clock as the view
 arrives: as long after its own time then as `dueAtMs` is after `serverNowMs`
-(`clientDueAtMs`). The card counts down from the gateway's time left, and a
+(`clientDueAtMs`). Both numbers are read from one timeline: the process
+reads the wall clock once and follows the monotonic clock from there
+(`process_unix_ms`), and every agent's clock and the view's stamp read it.
+Were the stamp a fresh wall clock read, a correction to the operating
+system's clock after an agent opened would move `serverNowMs` and not
+`dueAtMs`, and the count would end early or run long by the correction.
+The card counts down from the gateway's time left, and a
 difference between the two machines' clocks does not move it; only the time
 the view took to arrive is left over. The desktop approval card and the floating
 conversation card both read that time again each second, so the count goes

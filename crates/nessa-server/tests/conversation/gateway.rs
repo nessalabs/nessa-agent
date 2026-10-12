@@ -548,7 +548,13 @@ mod gateway {
         )
         .unwrap();
         bind_command_store(&service);
-        let state = chat_state().with_conversations(Arc::new(service));
+        // The sample's `serverNowMs` is the test's fixed time, not the
+        // process timeline the gateway stamps by default.
+        let state = chat_state();
+        let state = state
+            .clone()
+            .with_view_clock(state.clock.clone())
+            .with_conversations(Arc::new(service));
         let owner = chat_session(&state, "owner-phone").await;
         let id = "00000000-0000-4000-8000-000000000010";
         assert!(chat_request(

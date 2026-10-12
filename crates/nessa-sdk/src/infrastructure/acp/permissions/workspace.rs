@@ -8,7 +8,10 @@ use crate::domain::agent_execution::{
     permissions::PermissionToolClass,
     tools::{FileLocation, ToolKind},
 };
-use crate::infrastructure::workspace_paths::WorkspacePaths;
+use crate::infrastructure::{
+    clock::{within, Clock},
+    workspace_paths::WorkspacePaths,
+};
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
@@ -71,13 +74,16 @@ pub(crate) fn review_class_with(
 }
 
 /// Classify off the worker task through the injected `paths`. A filesystem
-/// read that outlasts [`PATH_RESOLUTION_BOUND`] is the deny class.
+/// read that outlasts [`PATH_RESOLUTION_BOUND`] on `clock`, the clock the
+/// worker's other waits are measured on, is the deny class
+/// (`a_stuck_filesystem_gives_up_on_the_injected_clock`).
 ///
 /// `in_flight` is this worker's one classification. The permit stays with the
 /// read until the read returns, including after the wait has given up, so a
 /// later review does not start another
 /// (`a_classification_still_running_is_not_started_again`).
 pub(crate) async fn bounded_review_class(
+    clock: &dyn Clock,
     in_flight: &Arc<Semaphore>,
     kind: Option<ToolKind>,
     locations: Option<Vec<FileLocation>>,
@@ -93,8 +99,9 @@ pub(crate) async fn bounded_review_class(
             paths.resolve(path)
         })
     };
-    match tokio::time::timeout(PATH_RESOLUTION_BOUND, tokio::task::spawn_blocking(work)).await {
-        Ok(Ok(class)) => class,
+    let deadline = clock.now() + PATH_RESOLUTION_BOUND;
+    match within(clock, deadline, tokio::task::spawn_blocking(work)).await {
+        Some(Ok(class)) => class,
         _ => PermissionToolClass::Other,
     }
 }
@@ -120,6 +127,7 @@ fn path_inside(
 mod tests {
     use super::*;
     use crate::domain::agent_execution::tools::FilePath;
+    use crate::infrastructure::clock::RuntimeClock;
     use std::fs;
     use std::sync::{
         atomic::{AtomicBool, Ordering},
@@ -234,9 +242,11 @@ mod tests {
         let workspace = root.path().join("absent-workspace");
         let elsewhere = root.path().join("elsewhere");
         let budget = Arc::new(Semaphore::new(1));
+        let clock = RuntimeClock::new();
         let read = |name: &str| {
             let elsewhere = elsewhere.clone();
             super::bounded_review_class(
+                &clock,
                 &budget,
                 Some(ToolKind::Read),
                 Some(vec![location(&workspace.join(name))]),
@@ -267,6 +277,7 @@ mod tests {
         let stop_for_read = Arc::clone(&stop);
         let started = std::time::Instant::now();
         let class = super::bounded_review_class(
+            &RuntimeClock::new(),
             &budget,
             Some(ToolKind::Read),
             locations,
@@ -307,6 +318,7 @@ mod tests {
             let workspace = workspace.clone();
             tokio::spawn(async move {
                 super::bounded_review_class(
+                    &RuntimeClock::new(),
                     &budget,
                     Some(ToolKind::Read),
                     locations,
@@ -333,6 +345,7 @@ mod tests {
         .expect("the first classification never took its permit");
         let started = std::time::Instant::now();
         let second = super::bounded_review_class(
+            &RuntimeClock::new(),
             &budget,
             Some(ToolKind::Read),
             Some(vec![location(&inside)]),
@@ -352,6 +365,59 @@ mod tests {
                 .await
                 .expect("the first classification did not finish")
                 .expect("the first classification panicked"),
+            PermissionToolClass::Other
+        );
+    }
+
+    // The bound is measured on the worker's clock, not the runtime's: a read
+    // still stuck after the runtime's own 250 ms has not timed out until the
+    // injected clock passes the bound, and then gives up at once.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_stuck_filesystem_gives_up_on_the_injected_clock() {
+        use crate::infrastructure::clock::manual::ManualClock;
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("workspace");
+        fs::create_dir(&workspace).unwrap();
+        let inside = at(&workspace, "notes.txt");
+        let budget = Arc::new(Semaphore::new(1));
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_for_read = Arc::clone(&stop);
+        // Ends the stuck read even when an assertion fails, so the runtime
+        // is not left waiting on it as the test unwinds.
+        struct Release(Arc<AtomicBool>);
+        impl Drop for Release {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Relaxed);
+            }
+        }
+        let _release = Release(stop);
+        let clock = ManualClock::default();
+        let mut classifying = Box::pin(super::bounded_review_class(
+            &clock,
+            &budget,
+            Some(ToolKind::Read),
+            Some(vec![location(&inside)]),
+            workspace,
+            Arc::new(move |_: &Path| {
+                while !stop_for_read.load(Ordering::Relaxed) {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                None
+            }),
+        ));
+        assert!(
+            timeout(PATH_RESOLUTION_BOUND * 4, &mut classifying)
+                .await
+                .is_err(),
+            "classification gave up before the injected clock moved"
+        );
+        let wait = clock.run_out(|_| true).await;
+        assert_eq!(wait.limit(), PATH_RESOLUTION_BOUND);
+        assert_eq!(
+            timeout(Duration::from_secs(1), classifying)
+                .await
+                .expect("classification outlived the injected bound"),
             PermissionToolClass::Other
         );
     }

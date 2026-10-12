@@ -16,7 +16,7 @@
 //! not the agent.
 #![deny(missing_docs)]
 
-use std::{future::Future, ops::Add, pin::Pin, time::Duration};
+use std::{future::Future, ops::Add, pin::Pin, sync::OnceLock, time::Duration};
 
 /// A moment on one [`Clock`]'s timeline: how long after that clock's origin.
 /// Moments from different clocks are not comparable.
@@ -55,9 +55,10 @@ pub trait Clock: Send + Sync {
     /// Unix milliseconds at [`Self::now`].
     ///
     /// A permission's `dueAtMs` is this plus the wait, so a client counts down
-    /// on the same clock that decides the review. [`RuntimeClock`] anchors it
-    /// once, when the clock is created, and then follows this clock's elapsed
-    /// time. A later read of the wall clock is not a second opinion.
+    /// on the same clock that decides the review. [`RuntimeClock`] reads the
+    /// process's one wall timeline, [`process_unix_ms`], which a gateway also
+    /// stamps its views from. A later read of the wall clock is not a second
+    /// opinion.
     fn unix_ms(&self) -> u64;
     /// Resolves once [`Self::now`] has reached `deadline`, at once if it
     /// already has. It is not polled again after it resolves.
@@ -68,17 +69,31 @@ pub trait Clock: Send + Sync {
 #[derive(Clone, Copy, Debug)]
 pub struct RuntimeClock {
     origin: tokio::time::Instant,
-    /// Unix milliseconds at `origin`, sampled once.
-    unix_origin_ms: u64,
 }
 impl RuntimeClock {
     /// A clock whose origin is now.
     pub fn new() -> Self {
         Self {
             origin: tokio::time::Instant::now(),
-            unix_origin_ms: unix_epoch_ms(),
         }
     }
+}
+
+/// Unix milliseconds on this process's one wall timeline: the wall clock read
+/// once, the first time anything asks, then followed by the monotonic clock.
+///
+/// Every [`RuntimeClock`] reports it, and a gateway stamps the time it tells a
+/// client from it, so a deadline's `dueAtMs` and the gateway's "now" stay one
+/// timeline when the operating system later corrects its wall clock. Read
+/// separately, a correction made after an agent opened moved one and not the
+/// other, and a countdown ended early or ran long by the correction
+/// (`a_view_carries_the_gateways_time_from_its_clock` in `nessa-server`).
+pub fn process_unix_ms() -> u64 {
+    static ANCHOR: OnceLock<(std::time::Instant, u64)> = OnceLock::new();
+    let (origin, unix_origin_ms) =
+        *ANCHOR.get_or_init(|| (std::time::Instant::now(), unix_epoch_ms()));
+    let elapsed = u64::try_from(origin.elapsed().as_millis()).unwrap_or(u64::MAX);
+    unix_origin_ms.saturating_add(elapsed)
 }
 fn unix_epoch_ms() -> u64 {
     std::time::SystemTime::now()
@@ -96,8 +111,7 @@ impl Clock for RuntimeClock {
         ClockInstant(self.origin.elapsed())
     }
     fn unix_ms(&self) -> u64 {
-        let elapsed = u64::try_from(self.origin.elapsed().as_millis()).unwrap_or(u64::MAX);
-        self.unix_origin_ms.saturating_add(elapsed)
+        process_unix_ms()
     }
     fn sleep_until(&self, deadline: ClockInstant) -> ClockSleep {
         match self.origin.checked_add(deadline.0) {
@@ -119,6 +133,25 @@ pub(crate) async fn within<T>(
     tokio::select! { biased;
         finished = operation => Some(finished),
         () = clock.sleep_until(deadline) => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_runtime_clock_reads_the_one_process_timeline() {
+        let first = process_unix_ms();
+        let earlier = RuntimeClock::new();
+        std::thread::sleep(Duration::from_millis(5));
+        let later = RuntimeClock::new();
+        // Clocks made at different moments still agree on what time it is,
+        // and that time is the process timeline's, which only moves forward.
+        let (a, b) = (earlier.unix_ms(), later.unix_ms());
+        let last = process_unix_ms();
+        assert!(first <= a && a <= b && b <= last, "{first} {a} {b} {last}");
+        assert!(last - first < 60_000);
     }
 }
 

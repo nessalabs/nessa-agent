@@ -687,27 +687,51 @@ async fn subscribe_replies_after_the_first_read_then_sends_the_view() {
     client.close().await;
 }
 
-/// A view says what time it is on the gateway, read from the injected clock
-/// as the view is made, on a one-shot read and on each subscription frame: a
+/// A view says what time it is on the gateway, read from the view clock as
+/// the view is made, on a one-shot read and on each subscription frame: a
 /// client measures a deadline's `dueAtMs` against it, not against its own
-/// clock (ADR 141).
+/// clock (ADR 141). By default that clock is the process timeline the agents
+/// promise `dueAtMs` on, not the gateway's credential clock, which a wall
+/// clock correction moves on its own.
 #[tokio::test]
 async fn a_view_carries_the_gateways_time_from_its_clock() {
-    let fixture = SubscriptionFixture::new().await;
+    struct ViewClock(AtomicU64);
+    impl Clock for ViewClock {
+        fn unix_milliseconds(&self) -> u64 {
+            self.0.load(Ordering::SeqCst)
+        }
+    }
+    let mut fixture = SubscriptionFixture::new().await;
     fixture.authority.now.store(123, Ordering::SeqCst);
+    let before = nessa_sdk::infrastructure::clock::process_unix_ms();
     let read = fixture
         .call(
             "conversation.read",
             json!({"conversationId": fixture.id.to_string()}),
         )
         .await;
-    assert_eq!(read["payload"]["serverNowMs"], 123_000, "{read}");
+    let after = nessa_sdk::infrastructure::clock::process_unix_ms();
+    let stamped = read["payload"]["serverNowMs"].as_u64().unwrap();
+    assert!(
+        (before..=after).contains(&stamped),
+        "{stamped} is not on the process timeline [{before}, {after}]"
+    );
+
+    let clock = Arc::new(ViewClock(AtomicU64::new(7_000)));
+    fixture.state = fixture.state.clone().with_view_clock(clock.clone());
+    let read = fixture
+        .call(
+            "conversation.read",
+            json!({"conversationId": fixture.id.to_string()}),
+        )
+        .await;
+    assert_eq!(read["payload"]["serverNowMs"], 7_000, "{read}");
     let mut client = fixture.connect();
     let id = client.subscribe("subscribe", &fixture.id).await;
     let first = client.next().await;
-    assert_eq!(view(&first)["serverNowMs"], 123_000);
+    assert_eq!(view(&first)["serverNowMs"], 7_000);
     // A later frame is stamped when it is read, not when the follow began.
-    fixture.authority.now.store(150, Ordering::SeqCst);
+    clock.0.store(9_000, Ordering::SeqCst);
     let changed = fixture
         .call(
             "conversation.setApprovalMode",
@@ -718,7 +742,7 @@ async fn a_view_carries_the_gateways_time_from_its_clock() {
     let frames = client
         .until(&id, |frame| view(frame)["approvalMode"] == "auto")
         .await;
-    assert_eq!(view(frames.last().unwrap())["serverNowMs"], 150_000);
+    assert_eq!(view(frames.last().unwrap())["serverNowMs"], 9_000);
     client.close().await;
 }
 

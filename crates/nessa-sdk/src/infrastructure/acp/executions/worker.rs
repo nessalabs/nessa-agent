@@ -2585,6 +2585,7 @@ impl<P: AcpProfile> Worker<P> {
             .expect("validated active prompt")
             .execution_id;
         let class = bounded_review_class(
+            &*self.config.clock,
             &self.path_classification,
             *tool.kind(),
             tool.locations().clone(),
