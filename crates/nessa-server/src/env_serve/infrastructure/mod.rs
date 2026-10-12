@@ -10,9 +10,9 @@
 //! and `pairing.rs` is that machine's pairing (`environment/pairing`),
 //! enrolled and asked whether the owner approved it. `grants.rs` is what
 //! this host's owner grants each gateway (`environment/grants.json`), and
-//! `grant_audit.rs` the journal of every change made to it;
-//! `timer.rs` is the runtime's clock, which every wait in the application is
-//! measured on.
+//! `grant_audit.rs` the journal of every change made to it. The runtime's
+//! clock every wait in the application is measured on is
+//! `crate::timer::TokioTimer`, shared with the relay.
 mod commands;
 mod dial;
 mod grant_audit;
