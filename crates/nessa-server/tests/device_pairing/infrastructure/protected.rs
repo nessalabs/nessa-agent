@@ -722,6 +722,8 @@ async fn k3_a_worker_reads_nothing_on_the_gateway_it_serves() {
             caller,
             id.clone(),
             CredentialId::new(device.credential.clone()).unwrap(),
+            ShareRole::Read,
+            None,
             110
         )
         .await
