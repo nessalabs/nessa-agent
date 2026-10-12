@@ -62,12 +62,13 @@ fn under(lease: Option<CurrentLease>) -> SessionSnapshot {
     snapshot.lease = lease;
     snapshot
 }
-fn known(snapshot: &SessionSnapshot) -> impl Fn(&ExecutionId) -> bool + '_ {
+fn known(snapshot: &SessionSnapshot) -> impl Fn(&ExecutionId) -> Option<ActionContext> + '_ {
     |turn| {
         snapshot
             .invocations
             .iter()
-            .any(|invocation| &invocation.request.execution_id == turn)
+            .find(|invocation| &invocation.request.execution_id == turn)
+            .map(|invocation| invocation.actor.clone())
     }
 }
 
@@ -122,6 +123,41 @@ fn a_record_under_the_live_lease_its_issuer_asked_for_is_admitted() {
     ] {
         assert_eq!(record.admit(&snapshot, known(&snapshot)), Ok(()));
         assert_eq!(record.admit_saved(&snapshot, known(&snapshot)), Ok(()));
+    }
+}
+
+/// The person `turn-1` was for, asking with a request of their own: a file
+/// the agent asked to publish during their turn.
+fn asked_in_turn(turn: Option<&str>, principal: &str, surface: &str) -> ArtifactRecord {
+    ArtifactRecord {
+        actor: ActionContext::new(principal, surface, "call-7").unwrap(),
+        ..artifact("lease-1", turn)
+    }
+}
+
+#[test]
+fn a_record_its_turns_person_asked_for_under_the_live_lease_is_admitted_and_nobody_elses() {
+    let mut snapshot = under(fold(&[issued("lease-1")]));
+    let theirs = asked_in_turn(Some("turn-1"), "user", "test");
+    assert_eq!(theirs.admit(&snapshot, known(&snapshot)), Ok(()));
+    assert_eq!(theirs.admit_saved(&snapshot, known(&snapshot)), Ok(()));
+    snapshot.artifacts = vec![theirs];
+    assert_eq!(validate_saved(&snapshot), Ok(()));
+
+    for record in [
+        // Named for no turn: only the issuer may be its actor.
+        asked_in_turn(None, "user", "test"),
+        asked_in_turn(Some("turn-1"), "someone", "test"),
+        asked_in_turn(Some("turn-1"), "user", "elsewhere"),
+    ] {
+        let mut snapshot = under(fold(&[issued("lease-1")]));
+        assert_eq!(
+            record.admit(&snapshot, known(&snapshot)),
+            Err(ArtifactRefusal::NotThisLease),
+            "{record:?}"
+        );
+        snapshot.artifacts = vec![record];
+        assert!(validate_saved(&snapshot).is_err());
     }
 }
 

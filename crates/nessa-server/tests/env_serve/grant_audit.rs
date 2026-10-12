@@ -3,7 +3,7 @@
 //! it takes effect; one that cannot be audited is not made.
 use super::*;
 use crate::env_serve::application::{change_grant, ChangeFailed, PeerGrants};
-use crate::env_serve::domain::{AgentName, CommandGrant, Peer, PeerGrant};
+use crate::env_serve::domain::{AgentName, CommandGrant, MaxLease, Peer, PeerGrant};
 use crate::env_serve::infrastructure::grants::Replace;
 use crate::env_serve::infrastructure::FileGrants;
 use nessa_auth::application::ports::Clock;
@@ -83,6 +83,7 @@ fn a_grant_writes_intended_then_written() {
         GrantOperation::Grant {
             agents: Some(claude()),
             commands: Some(CommandGrant::new(60_000).unwrap()),
+            max_lease: Some(MaxLease::new(3_600_000).unwrap()),
         },
     )
     .unwrap();
@@ -105,11 +106,21 @@ fn a_grant_writes_intended_then_written() {
         GrantOperation::UngrantCommands,
     )
     .unwrap();
-    let full = json!({"agents": ["claude"], "commands": {"maxTimeoutMs": 60_000}});
+    let full = json!({
+        "agents": ["claude"],
+        "commands": {"maxTimeoutMs": 60_000},
+        "maxLeaseMs": 3_600_000,
+    });
+    let kept = json!({"agents": ["claude"], "maxLeaseMs": 3_600_000});
     let grant = record(
         1_000,
         &gateway,
-        json!({"op": "grant", "agents": ["claude"], "maxTimeoutMs": 60_000}),
+        json!({
+            "op": "grant",
+            "agents": ["claude"],
+            "maxTimeoutMs": 60_000,
+            "maxLeaseMs": 3_600_000,
+        }),
         json!({}),
         full.clone(),
     );
@@ -119,15 +130,15 @@ fn a_grant_writes_intended_then_written() {
             &gateway,
             json!({"op": "ungrant", "commands": true}),
             full.clone(),
-            json!({"agents": ["claude"]}),
+            kept.clone(),
         )
     };
     let unchanged = record(
         3_000,
         &gateway,
         json!({"op": "ungrant", "commands": true}),
-        json!({"agents": ["claude"]}),
-        json!({"agents": ["claude"]}),
+        kept.clone(),
+        kept.clone(),
     );
     assert_eq!(
         records(directory.path()),
@@ -141,7 +152,9 @@ fn a_grant_writes_intended_then_written() {
     );
     assert_eq!(
         grants.entry(&gateway),
-        Ok(Some(PeerGrant::new(claude(), None)))
+        Ok(Some(
+            PeerGrant::new(claude(), None).with_max_lease(MaxLease::new(3_600_000).unwrap())
+        ))
     );
     let mode = std::fs::metadata(directory.path().join(FILE))
         .unwrap()
@@ -297,6 +310,7 @@ fn a_change_that_cannot_be_audited_leaves_the_grants_unchanged() {
         GrantOperation::Grant {
             agents: Some(Agents::All),
             commands: None,
+            max_lease: None,
         },
     )
     .unwrap_err();
@@ -329,6 +343,7 @@ fn a_change_that_cannot_be_audited_leaves_the_grants_unchanged() {
         GrantOperation::Grant {
             agents: Some(Agents::All),
             commands: None,
+            max_lease: None,
         },
     )
     .unwrap();

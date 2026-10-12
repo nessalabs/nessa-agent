@@ -18,9 +18,11 @@
 //! LiveLease::close ──▶ SshHold::end ──▶ End ──▶ Ended{cleanup}
 //!   connection lost? ──▶ a new connection ──▶ Account ──▶ what the host recorded
 //! account(lease) ──▶ Account ──▶ Accounted{cleanup}
-//! Published{lease, artifact, file} ──▶ LeaseHold::artifacts ──▶ ArtifactOffer
+//! Published{lease, artifact, request, file} ──▶ LeaseHold::artifacts ──▶ ArtifactOffer
 //!   its bytes ──▶ SftpBytes, over an artifact channel, only when pulled
 //!   its answer ──▶ Collected{lease, artifact, outcome}
+//! LeaseHold::publish(ask) ──▶ Publish{lease, request, path} ──▶ offered on the
+//!   same offers as above, naming `request` | NotPublished{reason}
 //! a command: grant ──▶ link.grant_command ──▶ SshCommand, the terms the host granted
 //!   SshCommand::run ──▶ Run ──▶ Ran{end, output, cleanup}
 //!   stop said ──▶ End (not waited for) ──▶ Ran{Stopped} ──▶ Ended
@@ -47,11 +49,12 @@ use super::{
 use crate::conversation::application::{
     ArtifactAnswer, ArtifactOffer, CommandEnvironment, CommandHold, CommandResult, Environment,
     EnvironmentDeclaration, EnvironmentFuture, EnvironmentLease, GrantedCommand, GrantedTerms,
-    LeaseHold, LeaseRelease,
+    LeaseHold, LeaseRelease, PublishAsk, PublishFailure,
 };
 use nessa_auth::application::pairing::DeviceConnectionProof;
 use nessa_protocol::lease::{
-    self, Cleanup, CommandEnd, GrantRefusal, COMMAND_STOP_WAIT, KEEPALIVE_INTERVAL, SILENCE_LIMIT,
+    self, Cleanup, CommandEnd, EndingCause, GrantRefusal, COMMAND_STOP_WAIT, KEEPALIVE_INTERVAL,
+    SILENCE_LIMIT,
 };
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
@@ -408,6 +411,7 @@ impl Environment for SshEnvironment {
             let Granted {
                 terms,
                 gone,
+                ending,
                 published,
             } = link
                 .grant(
@@ -427,6 +431,7 @@ impl Environment for SshEnvironment {
                     link,
                     lease: lease.as_str().into(),
                     gone,
+                    ending,
                     published: std::sync::Mutex::new(Some(published)),
                 }),
             })
@@ -499,6 +504,7 @@ fn granted(terms: lease::GrantedTerms) -> GrantedTerms {
     GrantedTerms {
         sandbox: terms.sandbox.into(),
         timeout_ms: terms.timeout_ms,
+        lease_ms: terms.lease_ms,
     }
 }
 
@@ -632,18 +638,26 @@ struct SshHold {
     /// Closed once the lease is no longer routed on its connection: taken
     /// at its grant, so a loss before anyone asks is still seen.
     gone: watch::Receiver<()>,
+    /// Why the host is ending it unasked, once it says so.
+    ending: watch::Receiver<Option<EndingCause>>,
     /// The files published under it, until [`LeaseHold::artifacts`] takes
     /// them.
     published: std::sync::Mutex<Option<mpsc::Receiver<Published>>>,
 }
 
 impl LeaseHold for SshHold {
-    fn lost(&self) -> Option<EnvironmentFuture<'static, ()>> {
-        let mut gone = self.gone.clone();
+    fn ends(&self) -> Option<EnvironmentFuture<'static, LeaseEndCause>> {
+        let mut ending = self.ending.clone();
         Some(Box::pin(async move {
-            // Only the route's end is waited for: it is never sent to, and
-            // a route already gone answers at once.
-            while gone.changed().await.is_ok() {}
+            // The host saying it is ending the lease, or the route's end; a
+            // route already gone answers at once. An `Ending` read before
+            // the route went is still what ended it.
+            let _ = ending.wait_for(Option::is_some).await;
+            let said = *ending.borrow();
+            match said {
+                Some(EndingCause::Expired) => LeaseEndCause::Expired,
+                None => LeaseEndCause::Lost,
+            }
         }))
     }
 
@@ -662,6 +676,7 @@ impl LeaseHold for SshHold {
             while let Some(Published {
                 artifact,
                 file,
+                request,
                 unanswered,
             }) = published.recv().await
             {
@@ -676,8 +691,9 @@ impl LeaseHold for SshHold {
                     )),
                     file,
                     answer: ArtifactAnswer::new(move |outcome| {
-                        answering.collected(&answered, artifact, outcome, unanswered);
+                        answering.collected(&answered, artifact, outcome, unanswered)
                     }),
+                    request,
                 };
                 // Nobody takes them any more: its answer's drop says so.
                 if offers.send(offer).await.is_err() {
@@ -686,6 +702,20 @@ impl LeaseHold for SshHold {
             }
         });
         Some(taken)
+    }
+
+    /// Asked over the lease's own connection; its file is offered on the
+    /// receiver [`Self::artifacts`] handed out, with every other.
+    fn publish(
+        &self,
+        ask: PublishAsk,
+    ) -> Option<EnvironmentFuture<'static, Result<(), PublishFailure>>> {
+        let link = self.link.clone();
+        let lease = self.lease.clone();
+        Some(Box::pin(async move {
+            link.publish(&lease, ask.request, ask.path, ask.media_type)
+                .await
+        }))
     }
 
     fn end(&self, _cause: LeaseEndCause) -> EnvironmentFuture<'_, LeaseRelease> {

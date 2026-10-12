@@ -129,7 +129,16 @@ impl CompositionRoot {
                 peer,
                 agents,
                 max_timeout_ms,
-            } => super::env_grant_command::grant(peer.as_deref(), agents, max_timeout_ms).await,
+                max_lease_ms,
+            } => {
+                super::env_grant_command::grant(
+                    peer.as_deref(),
+                    agents,
+                    max_timeout_ms,
+                    max_lease_ms,
+                )
+                .await
+            }
             #[cfg(unix)]
             Command::EnvUngrant { peer, what } => {
                 super::env_grant_command::ungrant(peer.as_deref(), what).await

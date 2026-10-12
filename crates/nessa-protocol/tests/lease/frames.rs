@@ -2,8 +2,8 @@
 //! and the bounds on a frame and the bytes it carries.
 use super::{
     decode, encode, fingerprint, read_hello, Cleanup, Collection, CollectionRefusal, CommandEnd,
-    Data, FromEnvironment, GrantRefusal, GrantedTerms, Hello, Sandbox, StagedArtifact,
-    ToEnvironment, MAX_DATA_BYTES, MAX_FRAME_BYTES,
+    Data, EndingCause, FromEnvironment, GrantRefusal, GrantedTerms, Hello, PublishRefusal, Sandbox,
+    StagedArtifact, ToEnvironment, MAX_DATA_BYTES, MAX_FRAME_BYTES,
 };
 use crate::pairing::FrameReader;
 use std::collections::BTreeMap;
@@ -68,6 +68,12 @@ fn every_frame_round_trips_and_names_its_lease() {
             timeout_ms: 120_000,
         },
         ToEnvironment::Run { lease: "l".into() },
+        ToEnvironment::Publish {
+            lease: "l".into(),
+            request: "call-1".into(),
+            path: "build/Nessa.dmg".into(),
+            media_type: Some("application/x-apple-diskimage".into()),
+        },
     ];
     for frame in to {
         let decoded: ToEnvironment = decode(&body(&encode(&frame).unwrap())).unwrap();
@@ -84,6 +90,7 @@ fn every_frame_round_trips_and_names_its_lease() {
             terms: GrantedTerms {
                 sandbox: Sandbox::HarnessDefault,
                 timeout_ms: None,
+                lease_ms: None,
             },
         },
         FromEnvironment::Granted {
@@ -91,6 +98,7 @@ fn every_frame_round_trips_and_names_its_lease() {
             terms: GrantedTerms {
                 sandbox: Sandbox::None,
                 timeout_ms: Some(30_000),
+                lease_ms: None,
             },
         },
         FromEnvironment::Refused {
@@ -105,6 +113,18 @@ fn every_frame_round_trips_and_names_its_lease() {
             lease: "l".into(),
             channel: 2,
             cleanup: Cleanup::Confirmed { forced: true },
+        },
+        FromEnvironment::Granted {
+            lease: "l".into(),
+            terms: GrantedTerms {
+                sandbox: Sandbox::HarnessDefault,
+                timeout_ms: None,
+                lease_ms: Some(3_600_000),
+            },
+        },
+        FromEnvironment::Ending {
+            lease: "l".into(),
+            cause: EndingCause::Expired,
         },
         FromEnvironment::Ended {
             lease: "l".into(),
@@ -122,7 +142,19 @@ fn every_frame_round_trips_and_names_its_lease() {
         FromEnvironment::Published {
             lease: "l".into(),
             artifact: 3,
+            request: None,
             file: staged(),
+        },
+        FromEnvironment::Published {
+            lease: "l".into(),
+            artifact: 4,
+            request: Some("call-1".into()),
+            file: staged(),
+        },
+        FromEnvironment::NotPublished {
+            lease: "l".into(),
+            request: "call-2".into(),
+            reason: PublishRefusal::OutsideWorkspace,
         },
         FromEnvironment::Ran {
             lease: "l".into(),
@@ -159,6 +191,7 @@ fn a_grant_names_its_sandbox_and_its_answer_the_granted_terms() {
         terms: GrantedTerms {
             sandbox: Sandbox::HarnessDefault,
             timeout_ms: None,
+            lease_ms: None,
         },
     })
     .unwrap();
@@ -171,12 +204,36 @@ fn a_grant_names_its_sandbox_and_its_answer_the_granted_terms() {
         terms: GrantedTerms {
             sandbox: Sandbox::None,
             timeout_ms: Some(5_000),
+            lease_ms: None,
         },
     })
     .unwrap();
     assert_eq!(
         command,
         serde_json::json!({"type": "granted", "lease": "l", "terms": {"sandbox": "none", "timeoutMs": 5000}})
+    );
+    // A harness's lease may be granted a duration, which the environment
+    // ends it past, and says so.
+    let limited = serde_json::to_value(FromEnvironment::Granted {
+        lease: "l".into(),
+        terms: GrantedTerms {
+            sandbox: Sandbox::HarnessDefault,
+            timeout_ms: None,
+            lease_ms: Some(60_000),
+        },
+    })
+    .unwrap();
+    assert_eq!(
+        limited,
+        serde_json::json!({"type": "granted", "lease": "l", "terms": {"sandbox": "harnessDefault", "leaseMs": 60000}})
+    );
+    assert_eq!(
+        serde_json::to_value(FromEnvironment::Ending {
+            lease: "l".into(),
+            cause: EndingCause::Expired,
+        })
+        .unwrap(),
+        serde_json::json!({"type": "ending", "lease": "l", "cause": "expired"})
     );
     // A grant without a sandbox is another build's: it is not read as one.
     assert!(decode::<ToEnvironment>(br#"{"type":"grant","lease":"l","agent":"claude"}"#).is_err());
@@ -204,6 +261,7 @@ fn a_publish_carries_no_bytes_and_its_collection_is_named() {
         serde_json::to_vec(&FromEnvironment::Published {
             lease: "l".into(),
             artifact: 3,
+            request: None,
             file: staged(),
         })
         .unwrap(),
@@ -212,7 +270,7 @@ fn a_publish_carries_no_bytes_and_its_collection_is_named() {
     assert_eq!(
         text,
         format!(
-            r#"{{"type":"published","lease":"l","artifact":3,"file":{{"name":"Nessa.dmg","mediaType":"application/x-apple-diskimage","size":7,"digest":"{}","path":"/home/me/.local/share/nessa/environment/outbox/l/3"}}}}"#,
+            r#"{{"type":"published","lease":"l","artifact":3,"request":null,"file":{{"name":"Nessa.dmg","mediaType":"application/x-apple-diskimage","size":7,"digest":"{}","path":"/home/me/.local/share/nessa/environment/outbox/l/3"}}}}"#,
             "ab".repeat(32)
         )
     );
@@ -230,6 +288,39 @@ fn a_publish_carries_no_bytes_and_its_collection_is_named() {
     assert_eq!(
         text,
         r#"{"type":"collected","lease":"l","artifact":3,"outcome":{"outcome":"refused","reason":"channelUnavailable"}}"#
+    );
+}
+
+/// Gate: a publish the gateway asks for names its request and the path
+/// only; its refusal answers that request by name.
+#[test]
+fn a_gateway_asked_publish_names_its_request_and_its_refusal_answers_it() {
+    let text = String::from_utf8(
+        serde_json::to_vec(&ToEnvironment::Publish {
+            lease: "l".into(),
+            request: "call-1".into(),
+            path: "out/report.pdf".into(),
+            media_type: None,
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        text,
+        r#"{"type":"publish","lease":"l","request":"call-1","path":"out/report.pdf","mediaType":null}"#
+    );
+    let text = String::from_utf8(
+        serde_json::to_vec(&FromEnvironment::NotPublished {
+            lease: "l".into(),
+            request: "call-1".into(),
+            reason: PublishRefusal::Busy,
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        text,
+        r#"{"type":"notPublished","lease":"l","request":"call-1","reason":"busy"}"#
     );
 }
 

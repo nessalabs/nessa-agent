@@ -2,9 +2,9 @@ use super::{
     app_sources, artifacts::ArtifactRefusal, attachment::AttachmentLease,
     steering_position::SteeringPosition, ArtifactRecord, CurrentLease, InvocationCancellationEvent,
     InvocationRecord, InvocationSchedulingEvent, LeaseRecord, MessageCommitClock, ProviderContext,
-    PublishedFile, QueueHistoryRecord, SessionChange, SessionLoadState, SessionSaveGeneration,
-    SessionSaveUnit, SessionSnapshot, SessionStorage, SessionStorageLease, StorageError,
-    StorageFuture, SubmissionAcknowledgement,
+    QueueHistoryRecord, SessionChange, SessionLoadState, SessionSaveGeneration, SessionSaveUnit,
+    SessionSnapshot, SessionStorage, SessionStorageLease, StorageError, StorageFuture,
+    SubmissionAcknowledgement,
 };
 use crate::application::agent_execution::{
     agents::AgentError,
@@ -26,7 +26,6 @@ use crate::domain::agent_execution::{
         ExecutionId, ExecutionOutcome, InvocationHistory, InvocationKind, InvocationObservation,
         QueueMutation, QueueOrderChange, SchedulingCause,
     },
-    leases::LeaseId,
     permissions::PermissionRequest,
     sessions::SessionId,
 };
@@ -1124,24 +1123,41 @@ impl SessionManager {
             ArtifactRecord::MAX_PER_CONVERSATION.saturating_sub(snapshot.artifacts.len())
         })
     }
-    /// Whether the conversation has room to record `file` under `lease`:
-    /// room for one more, or `file` already recorded under `lease`, which
-    /// [`Self::record_artifact`] answers without a new record. `None` as
-    /// for [`Self::artifact_room`], and like it, only what was seen.
-    pub async fn has_artifact_room(&self, lease: &LeaseId, file: &PublishedFile) -> Option<bool> {
+    /// Whether the conversation, as observed, accepted turn `turn`: the
+    /// turns a record may name ([`ArtifactRecordError::UnknownTurn`]
+    /// otherwise). `false` before it is loaded. Once accepted, a turn stays
+    /// accepted.
+    pub async fn accepts_turn(&self, turn: &ExecutionId) -> bool {
+        let evidence = self.evidence.lock().await;
+        evidence.observed.as_ref().is_some_and(|snapshot| {
+            snapshot
+                .invocations
+                .iter()
+                .any(|invocation| &invocation.request.execution_id == turn)
+        })
+    }
+    /// Whether the conversation has room to record `record`: room for one
+    /// more, or the same record already recorded
+    /// ([`ArtifactRecord::is_same_record`]), which [`Self::record_artifact`]
+    /// answers without a new one. `None` as for [`Self::artifact_room`], and
+    /// like it, only what was seen.
+    pub async fn has_artifact_room(&self, record: &ArtifactRecord) -> Option<bool> {
         let evidence = self.evidence.lock().await;
         evidence.observed.as_ref().map(|snapshot| {
             snapshot.artifacts.len() < ArtifactRecord::MAX_PER_CONVERSATION
                 || snapshot
                     .artifacts
                     .iter()
-                    .any(|recorded| &recorded.lease == lease && &recorded.file == file)
+                    .any(|recorded| recorded.is_same_record(record))
         })
     }
     /// Record that the conversation holds an artifact, under the same lock as
     /// [`Self::record_lease`], so a lease cannot end between the check and the
-    /// record (row L5). A file the conversation already records under the
-    /// same lease is answered `Ok` and recorded once.
+    /// record (row L5). The same record already recorded
+    /// ([`ArtifactRecord::is_same_record`]: one person, one turn, whatever
+    /// request) is answered `Ok` and recorded once; the same file asked for
+    /// by another person, or in another turn, is recorded again, within
+    /// [`ArtifactRecord::MAX_PER_CONVERSATION`].
     ///
     /// The record is checked against the conversation's current lease as
     /// observed, including facts retained but not yet durable: `record.lease`
@@ -1170,15 +1186,17 @@ impl SessionManager {
             snapshot
                 .invocations
                 .iter()
-                .any(|invocation| &invocation.request.execution_id == turn)
+                .find(|invocation| &invocation.request.execution_id == turn)
+                .map(|invocation| invocation.actor.clone())
         };
-        // The same file recorded again under the same lease is already
-        // recorded: nothing is added, so publishing one file over and over
-        // never fills the conversation, and a full one still answers it.
+        // The same record again, by the same person in the same turn under
+        // any request, is already recorded: nothing is added, so one turn
+        // publishing one file over and over never fills the conversation,
+        // and a full one still answers it.
         let already = snapshot
             .artifacts
             .iter()
-            .any(|recorded| recorded.lease == record.lease && recorded.file == record.file);
+            .any(|recorded| recorded.is_same_record(&record));
         match record.admit(snapshot, accepted) {
             Ok(()) if already => return Ok(()),
             Err(ArtifactRefusal::Full) if already => return Ok(()),

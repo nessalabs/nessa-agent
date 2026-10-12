@@ -4,5 +4,5 @@
 mod grants;
 pub(crate) use grants::{
     admit_agent, admit_command, granted_to, AgentName, Agents, AllAgents, CommandGrant,
-    GrantOperation, Peer, PeerGrant,
+    GrantOperation, MaxLease, Peer, PeerGrant,
 };

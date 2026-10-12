@@ -440,6 +440,82 @@ sequenceDiagram
     A-->>O: every entry printed
 ```
 
+- **A lease lasts at most what the owner grants (row I7).** An entry may
+  carry `maxLeaseMs`, set with `env grant --max-lease 8h`: the longest one
+  of the peer's agent leases may last from its grant. Without it a lease
+  lasts until it is ended, so `ssh` with no entry is unchanged. A command
+  lease is bounded by its own narrowed timeout instead. The environment is
+  the one authority on the deadline: it says the duration in `Granted`
+  (`leaseMs`, which the Grant frame does not ask for), measures it on its
+  serving timer, and, once it passes, records `expiring`, stops every
+  harness under the lease as an end does, records `ended` with cause
+  `expired`, and says `Ending{expired}`. A passed deadline is acted on
+  even while a frame's answer is held up, the gateway reading nothing:
+  handling a frame waits for nothing, its answers queued, and the queue is
+  handed to the writer, before the next frame is read, by a wait for room
+  that is given up on at the earliest deadline as it stands then, a lease
+  the frame itself granted included. An answer leaves the queue only once
+  the writer has room for it, so a wait given up on loses nothing, and the
+  answers still waiting go before the `Ending`. Ending a lease waits for
+  nothing either: its `Ending` is queued, so one lease's expiry never holds
+  another's back, whether they fall due together or one after the other.
+  However serving ends, at the silence bound above all, a lease whose
+  deadline has come is expired first; only what is left is lost. A passed deadline is also acted on
+  before another frame is read or handled, so a gateway that sends without
+  pause cannot put it off, and a Start read after it starts nothing. A file
+  still in flight is left unanswered, as on a lost connection: the gateway
+  may already have kept it, and only its own end says it took none. A
+  deadline passing is not the gateway heard from: the silence bound still
+  runs from its last frame.
+  The gateway keeps no timer of its own. It accepts any `leaseMs` on an
+  agent lease, since a limit is narrower than none, and records it as the
+  lease's deadline from its own wall clock read before it sent `Grant`:
+  the earliest the environment's deadline can be, never after it, so an
+  expiry the environment decides never comes before what the gateway
+  recorded. That record is the gateway's observation; the environment's
+  timer is the authority. An
+  `Ending` stops the conversation as the system (`environment_expired`,
+  never a person), recording the lease ending for that cause, and asks the
+  lease's `End`, which the environment answers with what its own end took:
+  `ended` with that cleanup, or `interrupted` past the cleanup bound.
+  Commands run under the lease end with it, as they do with any end of
+  their parent. An `Ending` naming a lease the gateway does not hold is
+  dropped and recorded (row L9), as is one naming a command's lease, which
+  only its timeout bounds; a command answer carrying `leaseMs` is refused. An `expiring` that cannot be recorded
+  still stops everything, and the lease's end then answers `uncertain`. A
+  file with a `maxLeaseMs` is written as schema version 2, and as version 1
+  otherwise; both are read, and a build that reads only version 1 refuses
+  a version 2 file rather than serving leases without the limit. If the
+  connection drops between `expiring` and the gateway reading `Ending`,
+  the gateway records the lease lost while the environment's ledger says
+  expired; both keep the cleanup evidence, which `Account` reads.
+
+```mermaid
+sequenceDiagram
+    participant C as Conversation service (G)
+    participant G as Gateway link (G)
+    participant E as env serve (E)
+    participant L as E's ledger
+    C->>C: read the wall clock, before the ask
+    G->>E: Grant(lease, agent, sandbox)
+    E->>E: the peer's grant admits it, maxLeaseMs read now
+    E->>L: granted with leaseMs
+    E-->>G: Granted(terms with leaseMs)
+    G->>C: granted terms
+    C->>C: record issued, deadline At(that reading plus leaseMs)
+    G->>E: Start(lease, channel)
+    Note over E: the serving timer reaches the grant moment plus leaseMs
+    E->>L: expiring(lease, leaseMs)
+    E->>E: stop every harness, then L records stopped and ended(expired, cleanup)
+    E-->>G: Ending(lease, expired)
+    G->>C: the hold ends as Expired
+    C->>C: record ending(Expired), actor environment_expired
+    C->>G: End(lease)
+    G->>E: End(lease)
+    E-->>G: Ended(lease, cleanup), the expiry's own end
+    C->>C: record ended(cleanup), or interrupted past the bound
+```
+
 - **Known limits.** The product shows a lease the machine did not grant as
   the environment being unavailable; the run tool names it
   `environment_not_granted`, with a message saying the environment's owner
@@ -467,6 +543,7 @@ Each row has at least one test.
 | I4 | A gateway asks a lease of an agent, or a command, that the environment's owner did not grant it, or a sandbox the host cannot enforce; the owner changes the grant | A dialed gateway with no entry, or one leaving the agent or commands out, is refused `NotGranted`, recorded as refused, nothing run, before anything about what the host runs is said, and the gateway answers `EnvironmentNotGranted` as the environment's refusal; `ssh` with no file or no entry keeps everything the host runs; grants that cannot be read refuse every lease; a sandbox the host cannot enforce is refused `SandboxUnavailable`, mapped as such; a change applies from the next lease, the running ones go on | `i4_a_dialed_gateway_without_a_grant_is_refused_and_nothing_runs`; `ssh_without_grants_keeps_everything_the_host_runs`; `grants_that_cannot_be_read_refuse_every_lease`; `a_sandbox_the_host_cannot_enforce_is_refused`; `a_sandbox_the_host_cannot_enforce_is_refused_as_such`; `what_the_hosts_owner_did_not_grant_is_refused_and_a_narrowed_timeout_is_answered`; `a_dialed_gateway_runs_only_what_the_environment_granted_it`; `an_agent_is_admitted_only_when_granted`; `a_peer_without_an_entry_has_its_defaults`; `an_ungranted_gateway_learns_nothing_of_what_the_host_runs`; `grants_and_refusals_name_their_peer_and_old_lines_still_read` |
 | I5 | A gateway asks a command longer than the grant's `maxTimeoutMs`; or an environment answers terms wider than, or other than, asked | The environment records the narrowed timeout and the timeout asked, answers the terms it granted, and runs the command with the narrowed timeout; the gateway records the granted terms and waits for the command that long; a wider or other answer is refused as the environment's `EnvironmentNotGranted` and its hold dropped, nothing run | `i5_a_command_timeout_is_narrowed_recorded_and_run_with`; `a_command_timeout_is_narrowed_and_never_widened`; `i5_a_narrowed_command_is_recorded_as_granted_and_a_wider_one_is_refused`; `l1_an_environment_granting_other_terms_than_asked_is_refused_and_nothing_runs`; `a_grant_names_its_sandbox_and_its_answer_the_granted_terms` |
 | I6 | The owner runs `env grant`, `env ungrant` and `env grants`; the file is another version, too large, not private or not this shape | Each change is written whole and private under a lock and read back as given, an entry equal to the defaults removed; an unreadable file is refused, never taken as no grants, and no change is made over it; a change past the size bound is refused, nothing written; a peer named twice is unreadable in either order; each grant and ungrant appends a private `intended` record of who, when, which peer, the operation and the grant before and after, and then `written` (durable or not) or `not_written`, both under the lock; one whose intent cannot be recorded leaves grants.json unchanged, a sync failure after the rename is `written`, not durable, and fails the command, and an outcome that cannot be recorded fails it as unconfirmed; an ungrant applies to the next lease while the leases running go on | `a_change_is_written_privately_and_read_back`; `every_agent_and_missing_fields_are_read_as_written`; `a_file_this_build_cannot_read_is_refused`; `a_change_past_the_bound_is_refused_and_writes_nothing`; `a_peer_is_spelled_one_way_and_read_back`; `an_absent_file_is_no_entries`; `granting_adds_and_ungranting_takes_away`; `i6_an_ungrant_applies_to_the_next_lease_and_running_leases_stay`; `env_grant_names_agents_or_every_agent_and_commands_with_their_longest_run`; `env_ungrant_takes_one_thing_back_and_env_grants_lists_them`; `a_peer_named_twice_is_refused_in_either_order`; `a_grant_writes_intended_then_written`; `a_rename_failure_writes_intended_then_not_written`; `a_sync_failure_after_the_rename_writes_written_and_is_not_durable`; `an_outcome_that_cannot_be_recorded_leaves_the_change_unconfirmed`; `a_change_that_cannot_be_audited_leaves_the_grants_unchanged` |
+| I7 | The environment's owner grants a peer `maxLeaseMs`; one of its agent leases outlives it, or is ended as the deadline passes, or its expiry cannot be recorded, or its connection is lost first; a command lease under the same grant; a host says it is ending a lease the gateway does not hold | E grants the lease with `leaseMs`, records it, and at the deadline (not a moment before, and however continuously the gateway sends) records `expiring`, stops the harness, records `ended` with cause `expired` and says `Ending`; the silence bound still runs from the gateway's last frame; a Start read after the deadline starts nothing; an answer held up on a full output queue does not hold the expiry back, nor does one lease's `Ending` waiting for room hold another lease's expiry back, due at once or later, nor a lease's own `Granted` waiting for room hold back its expiry; a lease due as the gateway is taken as gone is expired, not lost; a file still in flight is recorded unanswered, never refused as the lease ending; the gateway's End is answered with that cleanup; an End and the deadline at once end the lease once; without a limit nothing expires and the wait is only the silence bound; an expiry that cannot be recorded still stops and answers `uncertain`; after the connection is lost nothing more is recorded; a command is bounded by its own timeout, granted no `leaseMs`; G records the deadline as its clock read before the Grant plus `leaseMs` (the earliest E's can be), and on `Ending` records the lease ending as expired by the system and then ended with the cleanup, or interrupted with none; an `Ending` for a lease not held, or for a command's lease, is dropped and recorded; a command answer carrying `leaseMs` is refused as the environment's `EnvironmentNotGranted`; `--max-lease` writes grants.json as version 2, version 1 still reads, and the audit's operation, before and after carry it | `a_lease_past_its_granted_duration_is_stopped_recorded_expired_and_said`; `an_end_and_a_deadline_at_once_end_the_lease_once`; `a_lease_with_no_max_never_expires`; `an_expiry_that_cannot_be_recorded_still_stops_and_answers_uncertain`; `a_deadline_after_the_connection_is_lost_records_nothing_more`; `a_command_is_bounded_by_its_timeout_not_the_max_lease`; `max_lease_is_written_as_version_2_and_version_1_still_reads`; `a_granted_duration_is_recorded_as_the_deadline`; `an_environment_expiry_is_recorded_ending_then_ended_with_its_cleanup`; `an_expiry_whose_end_goes_unanswered_is_interrupted`; `an_ending_for_a_lease_not_held_is_dropped_with_evidence`; `an_ending_for_a_command_lease_is_dropped_with_evidence`; `a_gateway_sending_without_pause_cannot_put_off_an_expiry`; `a_reply_blocked_on_a_full_output_queue_does_not_hold_back_an_expiry`; `two_leases_due_at_once_both_expire_at_the_deadline`; `staggered_deadlines_each_expire_at_their_own`; `a_lease_granted_while_the_gateway_reads_nothing_expires_at_its_deadline`; `a_lease_due_as_the_gateway_falls_silent_is_expired_not_lost`; `a_granted_duration_is_recorded_on_the_issued_lease`; `a_file_in_flight_when_its_lease_expires_is_left_unanswered`; `i5_a_narrowed_command_is_recorded_as_granted_and_a_wider_one_is_refused`; `a_paired_environment_expires_a_lease_and_both_sides_record_it`; `a_grant_writes_intended_then_written`; `env_grant_names_agents_or_every_agent_and_commands_with_their_longest_run`; `a_grant_names_its_sandbox_and_its_answer_the_granted_terms` |
 | H10 | A registry whose owner membership is disabled or not an admin | Refused on open (`owner_membership`). The pairing initiator's membership is what keeps a grantor live; the owner's is the one the registry pins | `a_registry_whose_owner_is_not_an_active_admin_does_not_open` |
 
 ## The dialing side

@@ -16,8 +16,8 @@ use crate::conversation::application::{Environment, GrantedTerms, LeaseRelease};
 use crate::env::{LEASE_PROTOCOL, VERSION};
 use crate::env_serve::application::FrameStream;
 use crate::env_serve::application::{
-    serve, CommandRan, CommandRunner, CommandStop, HarnessLauncher, LeaseLedger, LedgerEntry,
-    PeerGrants, Runners, ServeTimings, Serving,
+    serve, CommandRan, CommandRunner, CommandStop, EndCause, HarnessLauncher, LeaseLedger,
+    LedgerEntry, PeerGrants, Runners, ServeTimings, Serving,
 };
 use crate::env_serve::domain::{Agents, CommandGrant, Peer, PeerGrant};
 use crate::env_serve::infrastructure::TokioTimer;
@@ -183,6 +183,9 @@ enum Reach {
     /// A host that grants the first lease it is asked for, then stops
     /// reading until `gate` opens, and then keeps every frame it reads.
     Stalling(tokio::sync::watch::Receiver<bool>),
+    /// A host that grants the first command lease it is asked for, then
+    /// says it is ending it, as no host may, and keeps reading.
+    EndsItsCommand,
     /// `ssh` cannot be started.
     Unreachable,
     /// The stream ends at once with nothing said on it: no copy of this
@@ -317,6 +320,7 @@ impl LeaseConnector for Connector {
                                 terms: WireTerms {
                                     sandbox: Sandbox::HarnessDefault,
                                     timeout_ms: None,
+                                    lease_ms: None,
                                 },
                             })
                             .unwrap();
@@ -333,6 +337,42 @@ impl LeaseConnector for Connector {
                         tokio::time::sleep(Duration::from_millis(1)).await;
                     }
                     drop(host_out);
+                });
+            }
+            Reach::EndsItsCommand => {
+                tokio::spawn(async move {
+                    let (host_in, mut host_out) = split(host);
+                    let mut stream = FrameStream::new(host_in);
+                    let hello = encode(&FromEnvironment::Hello {
+                        build: VERSION.into(),
+                        protocol: LEASE_PROTOCOL.into(),
+                        workspace: "/srv/work".into(),
+                    })
+                    .unwrap();
+                    host_out.write_all(&hello).await.unwrap();
+                    while let Ok(Some(body)) = stream.next().await {
+                        if let Ok(ToEnvironment::GrantCommand {
+                            lease, timeout_ms, ..
+                        }) = decode(&body)
+                        {
+                            for frame in [
+                                FromEnvironment::Granted {
+                                    lease: lease.clone(),
+                                    terms: WireTerms {
+                                        sandbox: Sandbox::None,
+                                        timeout_ms: Some(timeout_ms),
+                                        lease_ms: None,
+                                    },
+                                },
+                                FromEnvironment::Ending {
+                                    lease,
+                                    cause: nessa_protocol::lease::EndingCause::Expired,
+                                },
+                            ] {
+                                host_out.write_all(&encode(&frame).unwrap()).await.unwrap();
+                            }
+                        }
+                    }
                 });
             }
             Reach::Scripted(bodies) => {
@@ -560,18 +600,12 @@ async fn a_lease_runs_its_harness_on_the_host_and_ends_with_the_hosts_evidence()
     assert!(entries.contains(&LedgerEntry::Ended {
         lease: id.as_str().into(),
         cleanup: Cleanup::Confirmed { forced: false },
-        lost: false,
+        cause: EndCause::Asked,
     }));
     // The lease's end resolves its watch: nothing is left waiting on it.
     tokio::time::timeout(
         Duration::from_secs(5),
-        opened.hold.lost().map_or_else(
-            || {
-                Box::pin(async {})
-                    as crate::conversation::application::EnvironmentFuture<'static, ()>
-            },
-            |lost| lost,
-        ),
+        opened.hold.ends().expect("a host's lease can end there"),
     )
     .await
     .expect("an ended lease's watch resolves");
@@ -714,11 +748,12 @@ async fn a_lost_connection_is_seen_and_the_end_is_accounted_on_a_new_one() {
     let mut process = host.start(HarnessLaunch::default()).unwrap();
     process.input.write_all(b"x").await.unwrap();
     assert_eq!(read_some(process.output.as_mut()).await, b"x");
-    let lost = opened.hold.lost().expect("a host's lease can be lost");
+    let lost = opened.hold.ends().expect("a host's lease can be lost");
     connector.cut();
-    tokio::time::timeout(Duration::from_secs(5), lost)
+    let cause = tokio::time::timeout(Duration::from_secs(5), lost)
         .await
         .expect("the loss is seen");
+    assert_eq!(cause, LeaseEndCause::Lost);
     assert!(matches!(
         host.start(HarnessLaunch::default()),
         Err(AgentError::Closed)
@@ -755,7 +790,7 @@ async fn a_lost_connection_is_seen_and_the_end_is_accounted_on_a_new_one() {
         .contains(&LedgerEntry::Ended {
             lease: id.as_str().into(),
             cleanup: Cleanup::Confirmed { forced: false },
-            lost: true,
+            cause: EndCause::Lost,
         }));
 }
 
@@ -770,7 +805,7 @@ async fn with_the_host_unreachable_a_lost_lease_has_no_evidence() {
         .open(&id, &terms("claude"), binding_only())
         .await
         .unwrap_or_else(|_| panic!("granted"));
-    let lost = opened.hold.lost().unwrap();
+    let lost = opened.hold.ends().unwrap();
     *connector.reach.lock().unwrap() = Reach::Unreachable;
     connector.cut();
     lost.await;
@@ -796,6 +831,7 @@ async fn frames_naming_nothing_held_are_dropped_with_evidence() {
         terms: WireTerms {
             sandbox: Sandbox::HarnessDefault,
             timeout_ms: None,
+            lease_ms: None,
         },
     })
     .unwrap();
@@ -841,6 +877,74 @@ async fn frames_naming_nothing_held_are_dropped_with_evidence() {
         ]
     );
     opening.abort();
+}
+
+/// Row I7 and L9: a host saying it is ending a lease this gateway does not
+/// hold is dropped and recorded, never applied to another lease.
+#[tokio::test]
+async fn an_ending_for_a_lease_not_held_is_dropped_with_evidence() {
+    let ending = serde_json::to_vec(&FromEnvironment::Ending {
+        lease: "never-granted".into(),
+        cause: nessa_protocol::lease::EndingCause::Expired,
+    })
+    .unwrap();
+    let connector = Connector::new(Reach::Scripted(vec![hello_body(LEASE_PROTOCOL), ending]));
+    let audit = Arc::new(Audit::default());
+    let environment = environment(connector, audit.clone());
+    // The grant is never answered by this host; the opening is bounded.
+    let opening = tokio::spawn(async move {
+        environment
+            .open(&lease(), &terms("claude"), binding_only())
+            .await
+            .err()
+    });
+    let drop = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let drop = audit.events().into_iter().find_map(|event| match event {
+                EnvironmentEvent::FrameDropped { lease, frame, .. } => Some((lease, frame)),
+                _ => None,
+            });
+            if let Some(drop) = drop {
+                break drop;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the drop recorded");
+    assert_eq!(drop, (Some("never-granted".into()), "ending".into()));
+    opening.abort();
+}
+
+/// Row I7: a command's lease is bounded by its timeout alone, so a host
+/// saying it is ending one is dropped and recorded, never applied to it.
+#[tokio::test]
+async fn an_ending_for_a_command_lease_is_dropped_with_evidence() {
+    let audit = Arc::new(Audit::default());
+    let host = environment(Connector::new(Reach::EndsItsCommand), audit.clone());
+    let id = lease();
+    let _hold = host
+        .commands()
+        .unwrap()
+        .grant(&id, &work(&["ls"]))
+        .await
+        .expect("granted")
+        .hold;
+    let drop = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let drop = audit.events().into_iter().find_map(|event| match event {
+                EnvironmentEvent::FrameDropped { lease, frame, .. } => Some((lease, frame)),
+                _ => None,
+            });
+            if let Some(drop) = drop {
+                break drop;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the drop recorded");
+    assert_eq!(drop, (Some(id.as_str().to_owned()), "ending".into()));
 }
 
 /// A binding that stops reading its harness's output does not grow the
@@ -1064,7 +1168,7 @@ async fn a_connection_lost_before_its_watch_is_asked_for_is_still_seen() {
     .expect("the loss is recorded");
     let lost = opened
         .hold
-        .lost()
+        .ends()
         .expect("a lease on a host can be lost, and this one was");
     tokio::time::timeout(Duration::from_secs(5), lost)
         .await
@@ -1463,7 +1567,7 @@ async fn a_loss_whose_audit_fails_leaves_the_lease_unanswered() {
         .open(&lease(), &terms("claude"), binding_only())
         .await
         .unwrap_or_else(|_| panic!("granted"));
-    let lost = opened.hold.lost().unwrap();
+    let lost = opened.hold.ends().unwrap();
     audit.1.store(true, Ordering::SeqCst);
     connector.cut();
     tokio::time::timeout(Duration::from_secs(5), lost)
@@ -1488,9 +1592,8 @@ impl crate::env_serve::application::ArtifactOutbox for NoOutbox {
         _lease: &str,
         _artifact: u32,
         _request: &crate::env_serve::application::PublishRequest,
-    ) -> Result<nessa_protocol::lease::StagedArtifact, crate::env_serve::application::PublishRefusal>
-    {
-        Err(crate::env_serve::application::PublishRefusal::StagingFailed)
+    ) -> Result<nessa_protocol::lease::StagedArtifact, nessa_protocol::lease::PublishRefusal> {
+        Err(nessa_protocol::lease::PublishRefusal::StagingFailed)
     }
     fn discard(&self, _lease: &str, _artifact: u32) {}
     fn close(&self, _lease: &str) {}
@@ -1682,6 +1785,7 @@ async fn what_the_hosts_owner_did_not_grant_is_refused_and_a_narrowed_timeout_is
         GrantedTerms {
             sandbox: SandboxProfile::None,
             timeout_ms: Some(2_000),
+            lease_ms: None,
         }
     );
     drop(granted);
