@@ -96,6 +96,23 @@ async fn claude_native_hook_runs_when_the_launch_omits_suppression() {
     assert_gone(&root, "pid");
 }
 
+#[tokio::test]
+async fn a_direct_open_records_no_attachment_as_its_cause() {
+    let _process_slot = process_test_slot().await;
+    let audit = Arc::new(RecordingAudit::default());
+    let (_root, binding) = test_acp_binding_with_audit("hooks-record", 16, audit.clone());
+    let binding = binding.with_native_hooks(NativeHooksSwitch::on());
+    open_and_prompt(&binding).await;
+    let causes: Vec<_> = audit
+        .launches
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|launch| launch.cause())
+        .collect();
+    assert_eq!(causes, [NativeHooksLaunchCause::DirectOpen]);
+}
+
 fn hooks_launch(root: &Path, pid: i32) -> serde_json::Value {
     let path = root.join(format!("hooks-launch-{pid}"));
     serde_json::from_str(

@@ -860,4 +860,17 @@ fn audit_maps_why_a_hooks_launch_happened() {
     assert_eq!(restart["initiator"], serde_json::json!({"kind": "runtime"}));
     assert_eq!(restart["restoredContext"], true);
     assert_eq!(restart["nativeHooks"], "off");
+    // An open with no session has no attachment to point at.
+    let direct = record_value(&ExecutionAuditRecord::NativeHooksLaunch(
+        NativeHooksLaunchRecord::new(
+            None,
+            9,
+            "codex",
+            true,
+            NativeHooksLaunchCause::DirectOpen,
+            false,
+        ),
+    ));
+    assert_eq!(direct["cause"], "open");
+    assert_eq!(direct["initiator"], serde_json::json!({"kind": "direct"}));
 }

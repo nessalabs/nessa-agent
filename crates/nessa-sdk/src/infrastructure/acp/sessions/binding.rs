@@ -99,7 +99,13 @@ pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
         question_sequence: Arc::new(AtomicU64::new(0)),
         _stand_in_grant: stand_in_grant,
     };
-    let (mut generation, initial_events) = factory.start(restore, NativeHooksLaunchCause::Open)?;
+    // Only an open for a named session belongs to an attachment.
+    let cause = if factory.session_key.is_some() {
+        NativeHooksLaunchCause::Open
+    } else {
+        NativeHooksLaunchCause::DirectOpen
+    };
+    let (mut generation, initial_events) = factory.start(restore, cause)?;
     let (ready, stop_selected) = generation.ready_during_open(&mut open_control).await;
     let session_id = match ready {
         Ok(id) => id,

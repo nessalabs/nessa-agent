@@ -702,6 +702,9 @@ pub enum NativeHooksLaunchCause {
     /// open belongs to an attachment, and the attachment record for the same
     /// session names its cause and caller.
     Open,
+    /// The first process of a provider opened directly, with no SDK session
+    /// and so no attachment. Nothing else records who asked for this open.
+    DirectOpen,
     /// The runtime started a replacement after the session's process had
     /// stopped, to run work already admitted. No caller asked for this start.
     Restart,

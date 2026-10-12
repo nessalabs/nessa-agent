@@ -296,15 +296,24 @@ fn audit_record(directory: &Path, name: &str) -> PathBuf {
     audit_directory(directory).join(format!("{name}.json"))
 }
 
+/// A record holds a caller id and a request id, each bounded by the protocol,
+/// plus a few fixed fields. Reading stops past this, so a damaged or replaced
+/// record fails the command instead of being held in memory whole.
+const MAX_RECORD_BYTES: u64 = 64 * 1024;
+
 fn read_record(path: &Path) -> Result<Option<Value>, NativeHooksError> {
-    let mut file = match open(path, OpenMode::Read) {
+    let file = match open(path, OpenMode::Read) {
         Ok(file) => file,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
         Err(_) => return Err(NativeHooksError::Audit),
     };
     let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)
+    file.take(MAX_RECORD_BYTES + 1)
+        .read_to_end(&mut bytes)
         .map_err(|_| NativeHooksError::Audit)?;
+    if bytes.len() as u64 > MAX_RECORD_BYTES {
+        return Err(NativeHooksError::Audit);
+    }
     serde_json::from_slice(&bytes)
         .map(Some)
         .map_err(|_| NativeHooksError::Audit)
@@ -758,6 +767,25 @@ mod tests {
             .await
             .unwrap();
         assert!(selection.codex());
+    }
+
+    #[tokio::test]
+    async fn an_audit_record_larger_than_any_record_fails_the_retry() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("data");
+        let preferences =
+            NativeHooksPreferences::open(directory.clone(), Arc::new(FixedClock)).unwrap();
+        let retry = change(NativeHooksAgent::Claude, true, "request-oversized");
+        preferences.set(retry.clone()).await.unwrap();
+        let outcome = record_path(&directory, &retry, NativeHooksPhase::Outcome);
+        // Still the same valid record, padded past what any record needs.
+        let text = std::fs::read_to_string(&outcome).unwrap();
+        let padded = format!("{}{}", " ".repeat(MAX_RECORD_BYTES as usize), text);
+        std::fs::write(&outcome, padded).unwrap();
+        assert_eq!(
+            preferences.set(retry).await.unwrap_err(),
+            NativeHooksError::Audit
+        );
     }
 
     fn audit_unsynced(path: &Path) -> std::io::Result<()> {

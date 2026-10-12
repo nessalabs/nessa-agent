@@ -49,15 +49,16 @@ different command. The rows are the orders the store implements.
 `a_failed_requested_record_leaves_the_choice_off`,
 `a_failed_outcome_record_reverts_the_choice`,
 `a_file_without_an_outcome_loads_as_written`,
-`a_retry_after_a_failed_outcome_keeps_the_first_observation`, and
+`a_retry_after_a_failed_outcome_keeps_the_first_observation`,
 `a_reused_request_id_for_a_different_choice_fails`,
 `a_failed_revert_leaves_the_flag_with_the_published_file`,
 `a_choice_renamed_into_place_is_in_effect_when_its_directory_sync_fails`,
 `a_readable_outcome_record_keeps_the_change_it_records`,
 `a_process_start_reads_the_earlier_choice_until_the_outcome_is_recorded`,
 `a_harness_named_twice_is_off_whichever_value_comes_last`,
-`a_choice_file_larger_than_any_choice_loads_as_off`, and
-`a_retry_is_not_acknowledged_until_the_outcome_records_directory_syncs` are those rows.
+`a_choice_file_larger_than_any_choice_loads_as_off`,
+`a_retry_is_not_acknowledged_until_the_outcome_records_directory_syncs`, and
+`an_audit_record_larger_than_any_record_fails_the_retry` are those rows.
 The launch row is `claude_native_hook_runs_when_the_launch_omits_suppression`
 and `codex_native_hook_runs_when_the_launch_omits_suppression`. The next start
 of a conversation already open is
@@ -80,7 +81,7 @@ and
 | Outcome written for a different choice | The same request id | The command fails. The file is unchanged |
 | The choice is on | That harness's process starts | Claude sends setting sources user, project, and local and omits `disableAllHooks`. Codex omits `features.hooks` and `notify`. A process already running is not restarted |
 | The choice is on | A session is deleted | The deletion process keeps hooks suppressed. Deleting is Nessa's housekeeping, not a run of the agent |
-| Claude or Codex starts a process | Before any request reaches it | The launch record is written with the choice, the cause (open or the runtime's restart), and whether saved context was resumed. No hook can run before it: the earliest hook, SessionStart, needs a session, and no session is requested until the record is durable |
+| Claude or Codex starts a process | Before any request reaches it | The launch record is written with the choice, the cause (an open for a session's attachment, a direct open with no session, or the runtime's restart), and whether saved context was resumed. No hook can run before it: the earliest hook, SessionStart, needs a session, and no session is requested until the record is durable |
 | A process start runs a tool call | The call's events are saved | Each tool event carries that start's choice, so a reader after a restart shows the choice the call ran under. An event saved without one shows none |
 
 ## Alternatives considered
