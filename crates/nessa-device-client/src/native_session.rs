@@ -3,7 +3,10 @@
 use crate::{
     failures::{NativeCallError, NativeEnrollmentFailure, NativeReadFailure},
     saved::{NativeScope, NativeTranscript},
-    session::{NativeSession, SessionFailure, SessionRead, SessionRefresh},
+    session::{
+        LocalEnrollment, LocalIssuedEnrollment, NativeSession, SessionFailure, SessionRead,
+        SessionRefresh,
+    },
 };
 use nessa_auth::{
     adapters::pairing::ManualCode,
@@ -626,6 +629,53 @@ impl NativeCataloguePage {
             .map(|value| Arc::new(NativeEntryKey { value }))
     }
 }
+/// Locally saved issued selectors. This historical pair is not read authority.
+#[derive(uniffi::Object)]
+pub struct NativeLocalIssuedEnrollment {
+    value: LocalIssuedEnrollment,
+}
+#[uniffi::export]
+impl NativeLocalIssuedEnrollment {
+    /// Original saved issued credential identity.
+    pub fn credential(&self) -> String {
+        self.value.credential().as_str().to_owned()
+    }
+    /// Original saved receiver associated with that credential.
+    pub fn receiver(&self) -> String {
+        self.value.receiver().as_str().to_owned()
+    }
+}
+/// Locally saved public correlation, to be checked against authenticated owner status.
+#[derive(uniffi::Object)]
+pub struct NativeLocalEnrollment {
+    value: LocalEnrollment,
+}
+#[uniffi::export]
+impl NativeLocalEnrollment {
+    /// Saved invitation/attempt/consent metadata, not an approval claim.
+    pub fn public_intent(&self) -> Arc<NativePublicIntent> {
+        Arc::new(NativePublicIntent {
+            value: self.value.intent(),
+        })
+    }
+    /// Public DeviceKey bytes in the existing pairing owner's representation.
+    pub fn device_key(&self) -> Vec<u8> {
+        self.value.device_key().bytes().to_vec()
+    }
+    /// Saved gateway SPKI authenticated by enrollment.
+    pub fn gateway_pin(&self) -> Vec<u8> {
+        self.value.gateway_pin().to_vec()
+    }
+    /// Issued selectors together, absent while the private record is pending.
+    pub fn issued(&self) -> Option<Arc<NativeLocalIssuedEnrollment>> {
+        self.value.issued().map(|value| {
+            Arc::new(NativeLocalIssuedEnrollment {
+                value: value.clone(),
+            })
+        })
+    }
+}
+
 /// The generated native session handle. Blocking calls run on the caller's
 /// dedicated worker; close must drain there before releasing/replacing scope.
 #[derive(uniffi::Object)]
@@ -673,6 +723,13 @@ impl NativeDeviceSession {
         self.value
             .status()
             .map(|value| Arc::new(NativeStatus { value }))
+            .map_err(Into::into)
+    }
+    /// Capture current local public correlation under the same physical admission.
+    pub fn local_enrollment(&self) -> Result<Option<Arc<NativeLocalEnrollment>>, NativeCallError> {
+        self.value
+            .local_enrollment()
+            .map(|value| value.map(|value| Arc::new(NativeLocalEnrollment { value })))
             .map_err(Into::into)
     }
     /// Run status, binding, bounded read and refusal recheck under one admission.

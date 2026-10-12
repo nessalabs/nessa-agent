@@ -122,6 +122,17 @@ public final class NativeSessionWorker: @unchecked Sendable {
     public func status() async throws -> NativeStatus {
         try await status(capture: { $0 })
     }
+    public func localEnrollment() async throws -> NativeLocalEnrollment? {
+        try await localEnrollment(capture: { $0 })
+    }
+    /// Capture locally saved public correlation off UI before releasing admission.
+    public func localEnrollment<Value: Sendable>(
+        capture: @escaping @Sendable (NativeLocalEnrollment?) throws -> Value
+    ) async throws -> Value {
+        try await perform { session, _ in
+            try capture(try session.localEnrollment())
+        }
+    }
     /// Capture a bounded passive value off UI before releasing admission.
     public func status<Value: Sendable>(
         capture: @escaping @Sendable (NativeStatus) throws -> Value

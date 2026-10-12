@@ -16,13 +16,14 @@ private final class Counter: @unchecked Sendable {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false,
                                                attributes: [.posixPermissions: 0o700])
         defer { try? FileManager.default.removeItem(at: root) }
-        for directory in ["held", "capture", "capture-throws", "pre-stop", "pre-close", "drop"] {
+        for directory in ["held", "capture", "local-capture", "capture-throws", "pre-stop", "pre-close", "drop"] {
             try FileManager.default.createDirectory(at: root.appendingPathComponent(directory),
                 withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         }
         let path = root.resolvingSymlinksInPath().path
         try await heldAdmission(path)
         try await heldCapture(path)
+        try await heldCapture(path, local: true)
         try await throwingCapture(path)
         try await stoppedBeforeDispatch(path)
         try await closeBeforeDispatch(path)
@@ -96,39 +97,49 @@ private final class Counter: @unchecked Sendable {
         try await reopened.close()
     }
 
-    static func heldCapture(_ root: String) async throws {
-        let worker = try await NativeSessionWorker.open(root: root, directory: "capture", address: address)
+    static func heldCapture(_ root: String, local: Bool = false) async throws {
+        let directory = local ? "local-capture" : "capture"
+        let worker = try await NativeSessionWorker.open(root: root, directory: directory, address: address)
         let entered = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
+        let translation: @Sendable () throws -> Int = {
+            precondition(!Thread.isMainThread, "Capture ran on the UI thread")
+            entered.signal()
+            guard release.wait(timeout: .now() + 5) == .success else { throw CheckFailure.deadline }
+            return 29
+        }
         let result = Task {
-            try await worker.status(capture: { status -> Int in
-                precondition(!Thread.isMainThread, "Capture ran on the UI thread")
+            if local {
+                return try await worker.localEnrollment(capture: { value in
+                    precondition(value == nil)
+                    return try translation()
+                })
+            }
+            return try await worker.status(capture: { status -> Int in
                 precondition(!status.completionCaptured() && status.failure()?.kind() == .io)
-                entered.signal()
-                guard release.wait(timeout: .now() + 5) == .success else { throw CheckFailure.deadline }
-                // The historical result remains valid after close was signalled.
+                let result = try translation()
                 precondition(status.failure()?.kind() == .io)
-                return 29
+                return result
             })
         }
         try await wait(entered)
         do {
-            _ = try await worker.status()
+            _ = try await worker.localEnrollment()
             fatalError("Capture released physical admission before translation finished")
         } catch NativeWorkerError.busy {}
         result.cancel()
         let drain = worker.beginClose()
         let joined = worker.beginClose()
         do {
-            _ = try await worker.status()
+            _ = try await worker.localEnrollment()
             fatalError("Closing capture admitted new work")
         } catch NativeWorkerError.closed {}
-        try await expectLocked(root, "capture")
+        try await expectLocked(root, directory)
         release.signal()
         let captured = try await result.value
         precondition(captured == 29, "Cancellation discarded captured evidence")
         try await drain.value
         try await joined.value
-        let reopened = try await NativeSessionWorker.open(root: root, directory: "capture", address: address)
+        let reopened = try await NativeSessionWorker.open(root: root, directory: directory, address: address)
         try await reopened.close()
     }
 
@@ -142,6 +153,11 @@ private final class Counter: @unchecked Sendable {
         precondition(restored, "Throwing capture retained admission")
         let absent = try await worker.purgeReceipt(receiver: "receiver-none", capture: { $0 == nil })
         precondition(absent, "Optional historical receipt capture was changed")
+        let localAbsent = try await worker.localEnrollment(capture: { local in
+            precondition(!Thread.isMainThread)
+            return local == nil
+        })
+        precondition(localAbsent, "Absent local enrollment was changed")
         try await worker.close()
     }
 

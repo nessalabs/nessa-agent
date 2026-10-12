@@ -1880,7 +1880,12 @@ status/purge/binding/read decisions to core. Its clock/socket/entropy inputs are
 injected; `src/native_session.rs` and `src/failures.rs` own immutable foreign
 representations. Public intent fields delegate to Auth's immutable historical
 correlation, and saved cursor restoration delegates Id validation to sync;
-neither creates authority. Admission/failure/correlation tests live in `tests/session`; the server's
+neither creates authority. Admission/failure/correlation tests live in `tests/session`.
+The admitted `local_enrollment` publication transfers an owned private-record seed to
+the Auth native identity adapter and returns only public key/pin/intent and optional
+issued selectors. `tests/session/local_enrollment.rs` covers records, failures,
+reopen/retry and private admission/drain; Auth's TLS adapter owns the shared key
+representation conversion. The server's
 `tests/composition/read_only_online/native_session.rs` drives the actual paired
 gateway and the optional generated Swift probe under `verification/native-device`.
 Core's `retained/active.rs` validates fresh status against the current immutable

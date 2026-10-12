@@ -13,6 +13,16 @@ import Foundation
         let worker = try await NativeSessionWorker.open(
             root: arguments[1], directory: arguments[2], address: arguments[3])
         do {
+            let localMatches = try await worker.localEnrollment(capture: { local in
+                precondition(!Thread.isMainThread)
+                if arguments[0] == "terminal" { return local == nil }
+                guard let local = local, let issued = local.issued() else { return false }
+                return local.deviceKey() == expectedDeviceKey()
+                    && local.gatewayPin().count == 44 && issued.receiver() == arguments[5]
+                    && issued.credential() == ProcessInfo.processInfo.environment["NESSA_NATIVE_EXPECTED_CREDENTIAL_ID"]!
+                    && local.publicIntent().consentClass() == .deviceRead
+            })
+            precondition(localMatches)
             if arguments[0] == "terminal" {
                 let count = try await worker.purgeReceipt(receiver: arguments[5], capture: { receipt in
                     precondition(!Thread.isMainThread)
@@ -72,6 +82,8 @@ import Foundation
             precondition(intent.consent().count == 16 && intent.consentClass() == .deviceRead)
             precondition(status.failure() == nil && status.purgeFailure() == nil)
             precondition(status.purgeAttempted())
+            let local = try native.localEnrollment()
+            precondition(local == nil)
             precondition(refresh.read() == nil && refresh.recheck() == nil)
             let purge = status.purge()!
             precondition(purge.receiver() == receiver && purge.records() > 0)
@@ -122,6 +134,11 @@ import Foundation
             if mode == "resumed" { precondition(read.moved() == false) }
         }
         let page = try native.cataloguePage(after: nil, maximum: 16)!
+        let local = try native.localEnrollment()!
+        precondition(local.deviceKey() == expectedDeviceKey())
+        precondition(local.issued()?.receiver() == receiver)
+        precondition(local.issued()?.credential() == ProcessInfo.processInfo.environment["NESSA_NATIVE_EXPECTED_CREDENTIAL_ID"]!)
+        precondition(local.gatewayPin().count == 44)
         do {
             _ = try native.cataloguePage(after: nil, maximum: UInt32.max)
             fatalError("Core catalogue bound was bypassed")
@@ -178,5 +195,17 @@ import Foundation
         }
         try reopened.close()
         print("PASS: Swift \(mode) actual paired cache, scope, UInt64 progress, owned snapshots and closed-session error")
+    }
+    static func expectedDeviceKey() -> Data {
+        let text = ProcessInfo.processInfo.environment["NESSA_NATIVE_EXPECTED_DEVICE_KEY"]!
+        precondition(text.utf8.count == 64)
+        var result = Data()
+        var start = text.startIndex
+        while start != text.endIndex {
+            let end = text.index(start, offsetBy: 2)
+            result.append(UInt8(text[start..<end], radix: 16)!)
+            start = end
+        }
+        return result
     }
 }

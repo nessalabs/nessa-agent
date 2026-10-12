@@ -18,6 +18,6 @@ pub use saved::{
     NativeSavedCache, NativeScope, NativeTranscript, NativeTranscriptState, NativeViewError,
 };
 pub use session::{
-    EnrollmentConnector, EnrollmentEntropy, EnrollmentEntropyFactory, NativeSession,
-    SessionFailure, SessionRead, SessionRefresh,
+    EnrollmentConnector, EnrollmentEntropy, EnrollmentEntropyFactory, LocalEnrollment,
+    LocalIssuedEnrollment, NativeSession, SessionFailure, SessionRead, SessionRefresh,
 };

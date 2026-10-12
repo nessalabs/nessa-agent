@@ -97,6 +97,32 @@ invented disclosure.
 | Capture waiter cancels, then close starts | Preserve admitted capture result and private lock until translation finishes; close waits for it, then scope can reopen |
 | Passive capture throws | Return its failure without inventing native effects; release admission for a subsequent call |
 | Public receipt correlation and restored catalogue cursor | Delegate exact public intent fields and Id validation to their existing owners; changed retry attempt makes sameIntent false; cursor restoration grants no read authority |
+| Local private record empty, online or offline | Return None without connection/cache/entropy/write; locally saved correlation is not current authority |
+| Local pending record versus issued record | Preserve exact public intent, Auth-derived DeviceKey and pinned gateway SPKI; only issued has its original credential/receiver together |
+| Substituted private store reports pending and issued, or load fails | Original typed private failure or Conflict; no winner/fallback/false absence |
+| Local read held, then second call or close | Existing admission returns Busy, close excludes future calls and waits for physical store read/capture before private scope reuse |
+| Retry changes saved attempt, then issued replacement and offline reopen | New attempt, same saved key/pin, exact issued selectors; no new entropy or enrollment authority |
+| Terminal removes private record | Subsequent local read None; prior snapshot stays immutable historical evidence |
+
+Local enrollment correlation uses the existing admitted driver and single-record
+ClientPendingStore contract. Sequential pending/credential reads do not establish
+an atomic snapshot against out-of-band writers. Auth's pairing adapter owns
+SPKI-to-DeviceKey conversion for local identity, TLS proof, OPAQUE confirmation
+and gateway audit. Known-seed ring derivation and actual authenticated gateway
+claim bytes are the independent correlation expectations. The phone still needs
+owner-status corroboration and persisted principal/membership binding.
+
+The local-correlation slice passes 20 native tests and the exact seven-package
+CI selection locally, strict Clippy and SDK/architecture checks. Linked Swift 6
+checks cover locally saved correlation and held local capture through Busy,
+cancellation and close/drain. The paired fixture publishes its device key from
+authenticated owner status; Swift compares that independent key and issued
+credential/receiver with the native publication across first/offline/resumed and
+epoch stages, and checks absence after terminal removal. Revert probes detect
+wrong Auth key derivation, contradictory-record fallback, transport contact,
+closed admission bypass, truncated foreign key bytes and capture outside admission.
+Apple package refresh and the app-owned port mapping must use the reviewed
+published revision; production enrollment/account coordination remains open.
 
 Astra medium reviewed the design and identified these ordering requirements before
 implementation. Actual core linking, Swift queue admission/cancellation, paired

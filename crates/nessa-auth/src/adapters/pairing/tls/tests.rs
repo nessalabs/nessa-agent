@@ -1,9 +1,8 @@
 use super::*;
+use ring::signature::{Ed25519KeyPair, KeyPair};
+
 #[cfg(unix)]
-use ring::{
-    rand::SystemRandom,
-    signature::{Ed25519KeyPair, KeyPair},
-};
+use ring::rand::SystemRandom;
 #[cfg(unix)]
 use rustls::{
     sign::{Signer, SigningKey},
@@ -15,6 +14,20 @@ use std::{
 };
 #[cfg(unix)]
 use std::{os::unix::net::UnixStream, thread, time::Duration};
+
+#[test]
+fn local_device_key_matches_independent_ed25519_public_bytes() {
+    for seed in [[0; 32], [7; 32], [255; 32]] {
+        let expected = Ed25519KeyPair::from_seed_unchecked(&seed).unwrap();
+        let identity =
+            NativeIdentity::restore(PrivateKeyMaterial::new(Zeroizing::new(seed))).unwrap();
+        assert_eq!(
+            identity.device_key().bytes(),
+            expected.public_key().as_ref()
+        );
+        assert_eq!(identity.device_key(), device_key(&identity.public_spki()));
+    }
+}
 
 #[cfg(unix)]
 #[derive(Debug)]

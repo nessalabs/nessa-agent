@@ -24,6 +24,14 @@ dispatch, invalid code, excessive page bounds and closed-session errors cross th
 generated error ABI. Counts are actual fixture records; this does not prove the
 phone repository or physical-device behavior.
 
+The paired fixture also supplies `NESSA_NATIVE_EXPECTED_DEVICE_KEY` as hex and
+`NESSA_NATIVE_EXPECTED_CREDENTIAL_ID` from its authenticated owner claim/approval,
+not from the native client publication. The generated local enrollment getters
+must match that key and credential/receiver, retain the saved intent and 44-byte
+pinned gateway SPKI, and return no current local record after terminal removal.
+Auth's known-seed ring test independently checks DeviceKey derivation. These
+are locally saved correlations; they do not establish current read authority.
+
 `check-worker.swift` compiles with the generated declarations and the production
 `crates/nessa-device-client/swift/NativeSessionWorker.swift`. Held calls and real
 private-state locks verify Busy before enqueue, stop before dispatch, preserving a
@@ -34,6 +42,8 @@ An actual status result is held in its capture while another call is refused,
 the waiter cancels and close retains the private lock; release preserves the
 captured result and permits reopen. A throwing capture releases admission.
 Moving status capture after `perform` returns fails this held-capture regression.
+The same held-capture case exercises the local-enrollment optional publication;
+moving that capture after `perform` also fails, before private scope release.
 These are dispatch/private-state experiments, not a claim that a real network socket
 or physical phone was interrupted by Swift cancellation.
 

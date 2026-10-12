@@ -25,6 +25,8 @@ pub(super) struct Setup {
     pub(super) owner: String,
     /// The paired device's issued credential id.
     pub(super) credential: String,
+    /// Public key captured from authenticated owner status after the native claim.
+    pub(super) claimed_device_key: [u8; 32],
     pub(super) receiver: String,
     pub(super) epoch: u64,
     pub(super) conversation: String,

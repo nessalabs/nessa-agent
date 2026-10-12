@@ -3,13 +3,17 @@
 use crate::infrastructure::{Monotonic, Wall};
 use nessa_auth::{
     adapters::pairing::{
-        rand::Error as EntropyError, CryptoRng, FilePairingState, ManualCode, OsEntropy, RngCore,
+        rand::Error as EntropyError, CryptoRng, FilePairingState, ManualCode, NativeIdentity,
+        OsEntropy, RngCore,
     },
     application::{
         pairing::{ClientPendingStore, PrivateStateError},
         ports::Clock as WallClock,
     },
-    domain::pairing::DisclosedConsent,
+    domain::{
+        pairing::{DeviceKey, DisclosedConsent, PublicIntent},
+        CredentialId, ResourceId,
+    },
 };
 use nessa_client_core::{
     pairing::{NativeClientError, NativeRetryOutcome},
@@ -155,6 +159,51 @@ impl SessionRefresh {
     }
 }
 
+/// Issued selectors saved together by the existing private record owner.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocalIssuedEnrollment {
+    credential: CredentialId,
+    receiver: ResourceId,
+}
+impl LocalIssuedEnrollment {
+    /// Historical issued credential identity, not a bearer secret or fresh authority.
+    pub fn credential(&self) -> &CredentialId {
+        &self.credential
+    }
+    /// Historical receiver identity associated with that credential.
+    pub fn receiver(&self) -> &ResourceId {
+        &self.receiver
+    }
+}
+
+/// Immutable local correlation. Remote claimed/approved status must corroborate it.
+/// It holds public bytes only; the restored native identity owns the zeroizing seed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocalEnrollment {
+    intent: PublicIntent,
+    device_key: DeviceKey,
+    gateway_pin: [u8; 44],
+    issued: Option<LocalIssuedEnrollment>,
+}
+impl LocalEnrollment {
+    /// Exact invitation/attempt/consent metadata from the saved record.
+    pub fn intent(&self) -> PublicIntent {
+        self.intent
+    }
+    /// Saved device's public key, derived by the Auth identity owner.
+    pub fn device_key(&self) -> DeviceKey {
+        self.device_key
+    }
+    /// Gateway SPKI authenticated by the enrollment that saved this record.
+    pub fn gateway_pin(&self) -> [u8; 44] {
+        self.gateway_pin
+    }
+    /// Issued selectors, absent for a pending record.
+    pub fn issued(&self) -> Option<&LocalIssuedEnrollment> {
+        self.issued.as_ref()
+    }
+}
+
 struct Gate {
     closed: bool,
     read: Option<Arc<ReadStop>>,
@@ -184,6 +233,41 @@ struct Dependencies {
     runtime: Runtime,
 }
 impl Driver {
+    fn local_enrollment(&self) -> Result<Option<LocalEnrollment>, SessionFailure> {
+        // Single-record store contract and driver admission serialize native writes;
+        // these reads do not claim an atomic snapshot against out-of-band writers.
+        let pending = self
+            .state
+            .load_pending()
+            .map_err(SessionFailure::PrivateState)?;
+        let issued = self
+            .state
+            .load_credential()
+            .map_err(SessionFailure::PrivateState)?;
+        let (saved, issued) = match (pending, issued) {
+            (None, None) => return Ok(None),
+            (Some(_), Some(_)) => {
+                return Err(SessionFailure::PrivateState(PrivateStateError::Conflict))
+            }
+            (Some(pending), None) => (pending, None),
+            (None, Some(issued)) => {
+                let selectors = LocalIssuedEnrollment {
+                    credential: issued.credential().clone(),
+                    receiver: issued.receiver().clone(),
+                };
+                (issued.into_enrollment(), Some(selectors))
+            }
+        };
+        let (key, gateway_pin, intent) = saved.into_parts();
+        let identity = NativeIdentity::restore(key)
+            .map_err(|error| SessionFailure::Enrollment(NativeClientError::Crypto(error)))?;
+        Ok(Some(LocalEnrollment {
+            intent,
+            device_key: identity.device_key(),
+            gateway_pin,
+            issued,
+        }))
+    }
     fn cache(&mut self) -> Result<&mut RetainedCache, ReadFailure> {
         if self.cache.is_none() {
             self.cache = Some(RetainedCache::open(
@@ -460,6 +544,11 @@ impl NativeSession {
         self.enter(None)
             .map(|mut operation| operation.driver().status())
     }
+    /// Read current local correlation without dialing or granting read authority.
+    /// `local_enrollment` tests cover absence, records, failures and held admission.
+    pub fn local_enrollment(&self) -> Result<Option<LocalEnrollment>, SessionFailure> {
+        self.enter(None)?.driver().local_enrollment()
+    }
     /// One admitted status/binding/read/refusal-recheck. A caller can stop this
     /// handle before dispatch; no status is then asked (`stopped_before_dispatch`).
     pub fn refresh(&self, stop: Arc<ReadStop>) -> Result<SessionRefresh, SessionFailure> {
@@ -556,6 +645,9 @@ impl Drop for NativeSession {
     }
 }
 
+#[cfg(test)]
+#[path = "../tests/session/local_enrollment.rs"]
+mod local_enrollment_tests;
 #[cfg(test)]
 #[path = "../tests/session/lifecycle.rs"]
 mod tests;

@@ -1,4 +1,6 @@
-use super::{context::DOMAIN, ManualCode, PairingContext, MAX_ENROLLMENT_MESSAGE_BYTES};
+use super::{
+    context::DOMAIN, tls::device_key, ManualCode, PairingContext, MAX_ENROLLMENT_MESSAGE_BYTES,
+};
 use crate::application::pairing::ConfirmedClaim;
 use crate::domain::pairing::{DeviceKey, InvitationId};
 use opaque_ke::{
@@ -177,9 +179,7 @@ impl ConfirmedAttempt {
     }
     /// Permanent device key whose proof and transcript came from the native TLS owner.
     pub fn device(&self) -> DeviceKey {
-        let mut key = [0; 32];
-        key.copy_from_slice(&self.context.device[12..]);
-        DeviceKey::new(key)
+        device_key(&self.context.device)
     }
 }
 impl ServerAttempt {
@@ -208,15 +208,13 @@ impl ServerAttempt {
             .map_err(|_| PairingCryptoError::InvalidProof)?;
         result.session_key.zeroize();
         let public = self.context.public;
-        let mut key = [0; 32];
-        key.copy_from_slice(&self.context.device[12..]);
         let proof = ConfirmedClaim::from_pake(
             public.invitation(),
             public.attempt(),
             public.consent(),
             public.generation(),
             public.expiry_ms(),
-            DeviceKey::new(key),
+            device_key(&self.context.device),
             self.input,
         );
         Ok(ConfirmedAttempt {

@@ -47,6 +47,15 @@ fn generated_swift_runs_paired_native_lifecycle() {
 
 fn run_swift(binary: &OsStr, mode: &str, profile: &Value, setup: &Setup) {
     let output = Command::new(binary)
+        .env("NESSA_NATIVE_EXPECTED_CREDENTIAL_ID", &setup.credential)
+        .env(
+            "NESSA_NATIVE_EXPECTED_DEVICE_KEY",
+            setup
+                .claimed_device_key
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>(),
+        )
         .args([
             mode,
             profile["stateRoot"].as_str().unwrap(),

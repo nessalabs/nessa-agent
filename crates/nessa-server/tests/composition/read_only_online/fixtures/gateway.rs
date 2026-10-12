@@ -355,12 +355,12 @@ async fn gateway_child() {
             .execute(&evidence, &AudienceId::new(gateway.clone()).unwrap())
             .await
             .unwrap();
-            let (receiver, epoch, credential) =
+            let (receiver, epoch, credential, claimed_device_key) =
                 pair_device(&commands, &session, root, native, "device").await;
             // Live mode follows two devices on this one gateway (L8); only
             // it pays for the second pairing.
             let (second_receiver, second_credential) = if mode == "live" {
-                let (receiver, _, credential) =
+                let (receiver, _, credential, _) =
                     pair_device(&commands, &session, root, native, "device-b").await;
                 private_write(
                     &root.join("profile-b.json"),
@@ -378,6 +378,7 @@ async fn gateway_child() {
                 organization: organization.clone(),
                 owner: owner.clone(),
                 credential,
+                claimed_device_key,
                 receiver,
                 epoch,
                 second_receiver,
@@ -597,7 +598,7 @@ async fn pair_device(
     root: &Path,
     native: SocketAddr,
     directory: &str,
-) -> (String, u64, String) {
+) -> (String, u64, String, [u8; 32]) {
     let created = commands
         .create(session, ConsentClass::DeviceRead)
         .await
@@ -633,7 +634,12 @@ async fn pair_device(
     ));
     assert!(active.purge().is_none());
     client.shutdown().await;
-    (receiver.as_str().to_owned(), epoch, credential)
+    (
+        receiver.as_str().to_owned(),
+        epoch,
+        credential,
+        *key.bytes(),
+    )
 }
 
 /// The owner shares a fixture conversation with every device the fixture
