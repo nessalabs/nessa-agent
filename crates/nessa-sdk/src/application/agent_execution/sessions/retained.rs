@@ -1,8 +1,8 @@
 //! Conservatively account owned continuation allocations, using payload owners' byte accounting.
 use super::{
-    ArtifactRecord, CurrentLease, CurrentLeaseState, InvocationCancellationEvent, InvocationRecord,
-    InvocationSchedulingEvent, LeaseRecord, QueueHistoryRecord, SessionChange, SessionSnapshot,
-    StorageError, SubmissionAcknowledgement,
+    ArtifactRecord, CurrentLease, CurrentLeaseState, FetchOutcome, InvocationCancellationEvent,
+    InvocationRecord, InvocationSchedulingEvent, LeaseRecord, QueueHistoryRecord, SessionChange,
+    SessionSnapshot, StorageError, SubmissionAcknowledgement,
 };
 use crate::{
     application::agent_execution::{
@@ -145,6 +145,33 @@ fn lease_record(record: &LeaseRecord) -> usize {
             .saturating_add(parent.as_str().len())
             .saturating_add(output.stdout_tail().len())
             .saturating_add(output.stderr_tail().len()),
+        LeaseRecord::FetchAsked {
+            lease,
+            request,
+            file,
+            destination,
+            actor: who,
+        } => lease
+            .as_str()
+            .len()
+            .saturating_add(request.len())
+            .saturating_add(file.media_type().as_str().len())
+            .saturating_add(destination.as_str().len())
+            .saturating_add(actor(who)),
+        LeaseRecord::FetchEnded {
+            lease,
+            request,
+            outcome,
+        } => lease
+            .as_str()
+            .len()
+            .saturating_add(request.len())
+            .saturating_add(match outcome {
+                FetchOutcome::Placed { path } | FetchOutcome::AlreadyPlaced { path } => {
+                    path.as_str().len()
+                }
+                FetchOutcome::Refused(_) => 0,
+            }),
         LeaseRecord::Unreadable { kind, body } => kind.len().saturating_add(body.len()),
     })
 }

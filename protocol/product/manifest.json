@@ -118,6 +118,14 @@
       "params": "AgentsSetNativeHooksParams",
       "grant": "credential.manage"
     },
+    "agents.subscribe": {
+      "params": null,
+      "grant": "server.read"
+    },
+    "agents.unsubscribe": {
+      "params": "ConversationUnsubscribeParams",
+      "grant": "server.read"
+    },
     "conversation.setApprovalMode": {
       "params": "ConversationSetApprovalModeParams",
       "grant": "conversation.write"
@@ -265,6 +273,7 @@
     "conversation.watchEnded": "ConversationWatchEnded",
     "conversation.view": "ConversationViewed",
     "conversation.listed": "ConversationListed",
+    "agents.listed": "AgentsListed",
     "conversation.subscriptionEnded": "ConversationSubscriptionEnded"
   },
   "handshakeMethod": "session.authenticate"

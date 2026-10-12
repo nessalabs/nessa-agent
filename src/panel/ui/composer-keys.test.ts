@@ -29,7 +29,7 @@ import { sessionReady } from "../../session/adapters/store/slice"
 import { setSelection } from "../../conversation/adapters/store/slice"
 import { createAttachmentResources } from "../adapters/attachment-resources"
 import { App } from "./app"
-import type { ConversationChoices } from "./use-agent-choices"
+import type { ConversationChoices } from "../adapters/agent-choices"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -115,14 +115,17 @@ function panel(choices?: ConversationChoices) {
         attachmentResources,
         canChoosePaths: false,
         digest: async () => "digest",
-        loadConversationChoices: async () => ({
-          catalog: choices?.catalog ?? {
-            agents: [],
-            environments: [],
-            nativeHooks: { claude: "off", codex: "off" },
-          },
-          chosenAgent: choices?.chosenAgent,
-        }),
+        followConversationChoices: (show) => {
+          show({
+            catalog: choices?.catalog ?? {
+              agents: [],
+              environments: [],
+              nativeHooks: { claude: "off", codex: "off" },
+            },
+            chosenAgent: choices?.chosenAgent,
+          })
+          return () => undefined
+        },
       }),
     }),
   )

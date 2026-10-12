@@ -227,6 +227,49 @@ describe("subscription API", () => {
     expect(handlers.ended).toHaveBeenCalledExactlyOnceWith({ reason: "invalid_frame" })
   })
 
+  it("follows the agent catalog, checked as agents.list is, and stops it with agents.unsubscribe", async () => {
+    const wire = port()
+    const handlers = { catalog: vi.fn(), ended: vi.fn() }
+    const subscription = await createSubscriptionApi(wire.session).agents(handlers)
+    expect(wire.request).toHaveBeenCalledWith(
+      ProductMethod.AgentsSubscribe,
+      {},
+      { atLeastMs: passiveReadTiming.minRequestTimeoutMs },
+    )
+    const catalog = {
+      agents: [],
+      environments: ["build.example", `peer:${"ab".repeat(32)}`],
+      nativeHooks: { claude: "off", codex: "on" },
+    }
+    wire.emit(ProductEvent.AgentsListed, { subscriptionId: "1", catalog })
+    expect(handlers.catalog).toHaveBeenCalledExactlyOnceWith(catalog)
+    await subscription.close()
+    expect(wire.request).toHaveBeenLastCalledWith(ProductMethod.AgentsUnsubscribe, {
+      subscriptionId: "1",
+    })
+    wire.emit(ProductEvent.AgentsListed, { subscriptionId: "1", catalog })
+    expect(handlers.catalog).toHaveBeenCalledOnce()
+  })
+
+  it("ends an agent catalog whose frame fails the catalog's checks, stopping it with its own unsubscribe", async () => {
+    const wire = port()
+    const handlers = { catalog: vi.fn(), ended: vi.fn() }
+    await createSubscriptionApi(wire.session).agents(handlers)
+    wire.emit(ProductEvent.AgentsListed, {
+      subscriptionId: "1",
+      catalog: {
+        agents: [],
+        environments: ["same", "same"],
+        nativeHooks: { claude: "off", codex: "off" },
+      },
+    })
+    expect(handlers.catalog).not.toHaveBeenCalled()
+    expect(handlers.ended).toHaveBeenCalledExactlyOnceWith({ reason: "invalid_frame" })
+    expect(wire.request).toHaveBeenLastCalledWith(ProductMethod.AgentsUnsubscribe, {
+      subscriptionId: "1",
+    })
+  })
+
   it("closes an open given up on its way once answered, and sends the next open of that conversation only after", async () => {
     // The gateway refuses a second live subscription to one conversation, so a
     // follower that stops and follows again must not race its own first open.

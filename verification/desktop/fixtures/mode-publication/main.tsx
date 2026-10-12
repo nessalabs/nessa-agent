@@ -167,14 +167,17 @@ function Panel() {
         attachmentResources={attachments}
         canChoosePaths={false}
         digest={async () => "unused"}
-        loadConversationChoices={async () => ({
-          chosenAgent: undefined,
-          catalog: {
-            agents: [],
-            environments: [],
-            nativeHooks: { claude: "off", codex: "off" },
-          },
-        })}
+        followConversationChoices={(show) => {
+          show({
+            chosenAgent: undefined,
+            catalog: {
+              agents: [],
+              environments: [],
+              nativeHooks: { claude: "off", codex: "off" },
+            },
+          })
+          return () => undefined
+        }}
       />
     </main>
   )

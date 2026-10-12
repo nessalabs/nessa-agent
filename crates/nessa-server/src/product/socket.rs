@@ -50,7 +50,7 @@ use nessa_protocol::protocol::{
     health_check_message, unique_envelope, EventFrame, OutgoingMessage, RequestFrame,
     ResponseFrame, MAX_PAYLOAD_BYTES,
 };
-use serde_json::{json, Value};
+use serde_json::json;
 use std::collections::{HashMap, VecDeque};
 use std::future::{poll_fn, Future};
 use std::pin::Pin;
@@ -1535,70 +1535,6 @@ async fn authorize(
     .await
 }
 
-fn agent_catalog_value(
-    state: &ProductRouteState,
-    catalog: &nessa_protocol::product::generated::AgentsListResult,
-) -> Value {
-    let selection = state
-        .native_hooks
-        .as_ref()
-        .map(|hooks| hooks.selection())
-        .unwrap_or_else(crate::agents::application::NativeHooksSelection::off);
-    json!(catalog_with_hooks(catalog, selection))
-}
-
-fn catalog_with_hooks(
-    catalog: &nessa_protocol::product::generated::AgentsListResult,
-    selection: crate::agents::application::NativeHooksSelection,
-) -> nessa_protocol::product::generated::AgentsListResult {
-    use nessa_protocol::product::generated::{
-        AgentModelOption, AgentOption, AgentsListResult, AgentsNativeHooks, ApprovalModeChoice,
-        NativeHooksChoice,
-    };
-    let choice = |enabled| {
-        if enabled {
-            NativeHooksChoice::On
-        } else {
-            NativeHooksChoice::Off
-        }
-    };
-    AgentsListResult {
-        agents: catalog
-            .agents
-            .iter()
-            .map(|agent| AgentOption {
-                agent: agent.agent.clone(),
-                default_model: agent.default_model.clone(),
-                models: agent
-                    .models
-                    .iter()
-                    .map(|model| AgentModelOption {
-                        model_id: model.model_id.clone(),
-                        display_name: model.display_name.clone(),
-                        max_context_window_tokens: model.max_context_window_tokens,
-                        reasoning: model.reasoning,
-                        image_input: model.image_input,
-                        approval_modes: model
-                            .approval_modes
-                            .iter()
-                            .map(|mode| ApprovalModeChoice {
-                                id: mode.id,
-                                name: mode.name.clone(),
-                                description: mode.description.clone(),
-                            })
-                            .collect(),
-                    })
-                    .collect(),
-            })
-            .collect(),
-        environments: catalog.environments.clone(),
-        native_hooks: AgentsNativeHooks {
-            claude: choice(selection.claude()),
-            codex: choice(selection.codex()),
-        },
-    }
-}
-
 async fn set_native_hooks(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
@@ -1683,23 +1619,9 @@ async fn dispatch_authorized(
             if frame.params != json!({}) {
                 return failure(&frame.id, "invalid_request");
             }
-            match (
-                state.agents_catalog.as_ref(),
-                state.connected_environments.as_ref(),
-            ) {
-                (Some(catalog), None) => {
-                    success(&frame.id, &agent_catalog_value(state, catalog.as_ref()))
-                }
-                // The SSH hosts are fixed at startup; a paired environment is
-                // a place only while it is connected, so it is added as asked.
-                (Some(catalog), Some(connected)) => {
-                    let mut catalog = agent_catalog_value(state, catalog.as_ref());
-                    if let Some(places) = catalog["environments"].as_array_mut() {
-                        places.extend(connected().into_iter().map(Value::String));
-                    }
-                    success(&frame.id, &catalog)
-                }
-                (None, _) => failure(&frame.id, "conversations_not_configured"),
+            match state.agents_catalog_now() {
+                Some(catalog) => success(&frame.id, &catalog),
+                None => failure(&frame.id, "conversations_not_configured"),
             }
         }
         "agents.setNativeHooks" => set_native_hooks(state, session, frame).await,

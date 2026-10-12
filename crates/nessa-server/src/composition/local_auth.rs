@@ -1307,17 +1307,21 @@ fn environments(
     }
     let paired = peers.map(|peers| {
         let connected = peers.clone();
+        let changes = peers.connections();
         (
             Arc::new(ListenerEnvironments(peers))
                 as Arc<dyn crate::device_pairing::infrastructure::EnvironmentPeers>,
-            Arc::new(move || {
-                use crate::conversation::application::PairedEnvironments;
-                connected
-                    .connected()
-                    .iter()
-                    .map(nessa_sdk::domain::agent_execution::leases::PeerEnvironment::name)
-                    .collect()
-            }) as crate::product::ConnectedEnvironments,
+            crate::product::ConnectedEnvironments {
+                changes,
+                names: Arc::new(move || {
+                    use crate::conversation::application::PairedEnvironments;
+                    connected
+                        .connected()
+                        .iter()
+                        .map(nessa_sdk::domain::agent_execution::leases::PeerEnvironment::name)
+                        .collect()
+                }),
+            },
         )
     });
     Ok((environments, paired))

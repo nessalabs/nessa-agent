@@ -6,6 +6,9 @@ use crate::{core::log_file, env::Environment};
 
 /// Bootstrap logging, runtime, and the HTTP/WebSocket server.
 pub fn run() -> std::process::ExitCode {
+    // Read while this is the only thread: reading the umask sets it.
+    #[cfg(unix)]
+    crate::env_serve::infrastructure::note_umask();
     logging::init();
     #[cfg(unix)]
     bound_log();

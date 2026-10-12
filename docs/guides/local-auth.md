@@ -394,6 +394,25 @@ On the host:
 }
 ```
 
+To let the agent place a file the conversation holds in the host's workspace
+with its `artifacts_fetch` tool, set `envServe.artifactsIn` in the host's
+`config.json`. It is off until set, and every fetch is refused until it is. A
+fetched file is written as the host's account into a private part beside the
+host's outbox, checked against its size and SHA-256 there, and then linked at
+its destination inside the workspace, in a directory that already exists and
+only where nothing is: an existing file is never replaced. It gets the mode the
+account's other new files get (0666 less its umask). The agent fetches
+only under its own lease, on the host where it runs, and only files its
+conversation holds for the person whose turn asked. Limits are in
+[docs/limits.md](../limits.md) (`artifact.fetch_bytes`,
+`artifact.fetch_call_wait`, `artifact.host_fetches_in_flight`).
+
+```json
+{
+  "envServe": { "commands": true, "artifactsIn": true }
+}
+```
+
 Omitted fields use defaults. Restart the gateway after editing; offline auth
 commands read the same settings on each invocation. Positive integers are required;
 unknown fields, malformed files, and unrepresentable sizes or deadlines fail startup.

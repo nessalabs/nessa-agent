@@ -5,8 +5,13 @@ use super::*;
 use crate::conversation::infrastructure::in_process_environment;
 use crate::conversation_test_support::{Provider, ProviderFactory};
 use nessa_sdk::application::agent_execution::executions::{ExecutionEvent, ExecutionUpdate};
-use nessa_sdk::application::agent_execution::sessions::StorageError;
+use nessa_sdk::application::agent_execution::permissions::ActionContext;
+use nessa_sdk::application::agent_execution::sessions::{
+    EnvironmentPath, PublishedFile, StorageError,
+};
+use nessa_sdk::domain::agent_execution::leases::{CommandTerms, CommandWork, SshDestination};
 use nessa_sdk::domain::agent_execution::{executions::MessageChunk, leases::LeaseRevision};
+use nessa_sdk::domain::common::value_objects::{MediaType, Sha256Digest};
 use std::collections::VecDeque;
 
 /// A wall clock stopped at one moment.
@@ -178,15 +183,44 @@ async fn l9_drops_past_the_kept_bound_are_counted_and_not_kept_over_the_whole_le
     // The lease that takes the most other records still has room for every
     // drop kept: none of them is refused when it is recorded.
     let id = || opening.lease.clone();
-    let mut records = vec![
-        issued(id().as_str(), 1),
+    let mut records = vec![issued(id().as_str(), 1)];
+    // Every command it may have running, its end owed past the lease's.
+    records.extend(
+        (0..Lease::MAX_LIVE_COMMANDS).map(|n| LeaseRecord::CommandIssued {
+            lease: LeaseId::new(format!("command-{n}")).unwrap(),
+            parent: id(),
+            terms: CommandTerms {
+                environment: EnvironmentRef::Ssh(SshDestination::new("devbox").unwrap()),
+                command: CommandWork::new(vec!["ls".into()], None, 1_000).unwrap(),
+                sandbox: SandboxProfile::None,
+            },
+            actor: ActionContext::new("person", "desktop", format!("run-{n}")).unwrap(),
+        }),
+    );
+    // Every fetch it may have under way, never ended.
+    records.extend((0..CurrentLease::MAX_ASKED_FETCHES).map(|n| {
+        let request = format!("fetch-{n}");
+        LeaseRecord::FetchAsked {
+            lease: id(),
+            request: request.clone(),
+            file: PublishedFile::new(
+                Sha256Digest::parse(&format!("sha256:{}", "ab".repeat(32))).unwrap(),
+                MediaType::parse("text/plain").unwrap(),
+                1,
+            )
+            .unwrap(),
+            destination: EnvironmentPath::new("a.txt").unwrap(),
+            actor: ActionContext::new("person", "desktop", request).unwrap(),
+        }
+    }));
+    records.extend([
         LeaseRecord::Ending {
             lease: id(),
             cause: LeaseEndCause::Closed,
             actor: None,
         },
         LeaseRecord::Interrupted { lease: id() },
-    ];
+    ]);
     records.extend(first);
     records.push(LeaseRecord::CleanupReported {
         lease: id(),

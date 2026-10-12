@@ -88,14 +88,17 @@ createRoot(root).render(
       attachmentResources={resources}
       canChoosePaths
       digest={async () => `sha256:${"ab".repeat(32)}`}
-      loadConversationChoices={async () => ({
-        catalog: {
-          agents: [],
-          environments: [],
-          nativeHooks: { claude: "off", codex: "off" },
-        },
-        chosenAgent: undefined,
-      })}
+      followConversationChoices={(show) => {
+        show({
+          catalog: {
+            agents: [],
+            environments: [],
+            nativeHooks: { claude: "off", codex: "off" },
+          },
+          chosenAgent: undefined,
+        })
+        return () => undefined
+      }}
     />
   </Provider>,
 )

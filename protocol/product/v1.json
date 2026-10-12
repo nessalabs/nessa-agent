@@ -216,7 +216,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 63,
+          "maxItems": 65,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -4037,11 +4037,11 @@
             "x-utf8MaxBytes": 253
           },
           "maxItems": 24,
-          "description": "Places a new conversation may run besides this gateway: the SSH destinations config.json names, in the order it names them, then each paired environment connected when the catalog is asked, as `peer:` and its key in lowercase hex. At most 16 of the first and 8 of the second."
+          "description": "Places a new conversation may run besides this gateway: the SSH destinations config.json names, in the order it names them, then each paired environment connected when the catalog is read, as `peer:` and its key in lowercase hex. At most 16 of the first and 8 of the second. agents.list reads it once; agents.subscribe reads it again each time a paired environment connects, disconnects or is revoked."
         },
         "nativeHooks": {
           "$ref": "#/$defs/AgentsNativeHooks",
-          "description": "The stored choice the next process start of Claude and Codex reads, whether or not that agent is in this catalog. This is the catalog's only copy of it: agent rows do not repeat it. OpenCode has no entry and stays suppressed."
+          "description": "The stored choice the next process start of Claude and Codex reads, whether or not that agent is in this catalog. This is the catalog's only copy of it: agent rows do not repeat it. OpenCode has no entry and stays suppressed. agents.subscribe reads the catalog again each time this choice changes."
         }
       },
       "required": ["agents", "environments", "nativeHooks"]
@@ -4061,6 +4061,19 @@
         }
       },
       "required": ["claude", "codex"]
+    },
+    "AgentsListed": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "subscriptionId": { "$ref": "#/$defs/ConversationSubscriptionId" },
+        "catalog": {
+          "$ref": "#/$defs/AgentsListResult",
+          "description": "The same catalog agents.list returns, read again now."
+        }
+      },
+      "required": ["subscriptionId", "catalog"],
+      "description": "The agent catalog as it is now, read after a paired environment connected, disconnected or was revoked, and sent only when it differs from the last one sent. Replace what was held with it. The subscription ends with conversation.subscriptionEnded, as a conversation subscription does."
     },
     "ConversationSetApprovalModeParams": {
       "type": "object",
@@ -5356,7 +5369,7 @@
         "subscriptionId": { "$ref": "#/$defs/ConversationSubscriptionId" }
       },
       "required": ["subscriptionId"],
-      "description": "Stop one subscription of this connection. A frame already being written may arrive before the reply; none arrives after it."
+      "description": "Stop one subscription of this connection: conversation.unsubscribe stops one made by conversation.subscribe or conversation.subscribeList, agents.unsubscribe one made by agents.subscribe, and either answers unknown_subscription for the other's. A frame already being written may arrive before the reply; none arrives after it."
     },
     "ConversationViewed": {
       "type": "object",
@@ -5418,7 +5431,7 @@
         "unknown_subscription",
         "cursor_ahead"
       ],
-      "description": "Refusals of subscribe and unsubscribe beside the conversation error codes a refused first read carries. subscription_capacity: the connection's published limit, or the gateway's watch capacity, is full. subscription_duplicate: this connection already follows that target. unknown_subscription: no such live subscription on this connection. cursor_ahead: after names a position past the stored history."
+      "description": "Refusals of subscribe and unsubscribe beside the conversation error codes a refused first read carries. subscription_capacity: the connection's published limit, or the gateway's watch capacity, is full. subscription_duplicate: this connection already follows that target; the agent catalog is one target, so a connection follows it at most once. unknown_subscription: no such live subscription on this connection, or one the other unsubscribe stops. cursor_ahead: after names a position past the stored history."
     }
   }
 }

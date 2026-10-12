@@ -18,7 +18,7 @@ use super::{
     ConversationFileLinkState, ConversationListing, ConversationModeApplication,
     ConversationModeAudit, ConversationModeAuditPhase, ConversationModeRequest,
     ConversationModeRequestState, ConversationOwnershipState, ConversationRepository,
-    ConversationSummaries, DeletionFailures, ListedConversation, ObservationCursor,
+    ConversationSummaries, DeletionFailures, FetchRequests, ListedConversation, ObservationCursor,
     ObservedConversations, PublishRequests, RuntimeReadiness, StopFailure, SubmittedMessage,
     UnfinishedDeletions,
 };
@@ -587,6 +587,10 @@ struct LiveConversation {
     /// The publishes its agent asked for under its lease and not yet
     /// offered (`artifacts_publish`), shared with its lease's collector.
     publishes: Arc<PublishRequests>,
+    /// The fetches its agent asked for under its lease (`artifacts_fetch`).
+    fetches: Arc<FetchRequests>,
+    /// Whose organization the conversation is, as its record says.
+    organization_id: OrganizationId,
 }
 enum AttachmentOwner {
     Running(JoinHandle<()>),
@@ -712,6 +716,10 @@ struct Inner {
     /// on its own task until that task ends, so a caller that goes and comes
     /// back cannot leave calls running past the bound.
     app_calls: Arc<Semaphore>,
+    /// Held-file ranges `artifacts_fetch` reads at once, across every
+    /// conversation: apart from the product socket's own reads, so fetches
+    /// never lock a surface out of reading.
+    fetch_reads: Arc<Semaphore>,
     /// Principal command receipts. Composition binds the shared record runtime.
     /// Absent storage refuses command admission rather than skipping the receipt.
     commands: Arc<OnceLock<Arc<dyn CreationStorage>>>,
@@ -999,6 +1007,7 @@ impl ConversationService {
                 apps: std::sync::Mutex::default(),
                 live_changes: Arc::default(),
                 app_calls: Arc::new(Semaphore::new(app_calls::MAX_APP_CALLS)),
+                fetch_reads: Arc::new(Semaphore::new(artifact_fetch::FETCH_READS)),
                 commands: Arc::new(OnceLock::new()),
             }),
         })
@@ -1665,6 +1674,8 @@ impl ConversationService {
                                 app_reviews,
                                 app_epoch,
                                 publishes: Arc::default(),
+                                fetches: Arc::default(),
+                                organization_id: record.organization().clone(),
                             });
                             // What the host publishes under the lease is
                             // kept for as long as the lease is held.
@@ -1749,6 +1760,7 @@ impl ConversationService {
             let (operation, prefix) = match cause {
                 LeaseEndCause::Expired => ("environment_expired", "expired"),
                 LeaseEndCause::Revoked => ("environment_revoked", "revoked"),
+                LeaseEndCause::Stopped => ("environment_drained", "drained"),
                 _ => ("environment_lost", "lost"),
             };
             let Ok(actor) =
@@ -5416,6 +5428,10 @@ fn awaits_images(snapshot: Option<&SessionSnapshot>) -> bool {
     })
 }
 
+mod artifact_fetch;
+pub use artifact_fetch::{
+    FetchAnswer, FetchCall, FetchCallRefusal, FETCH_BUSY_BACKOFF, FETCH_READS,
+};
 mod artifact_publish;
 pub use artifact_publish::{PublishAnswer, PublishCall, PublishCallRefusal};
 mod environment_tools;

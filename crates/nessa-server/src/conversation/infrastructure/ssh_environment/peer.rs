@@ -11,6 +11,8 @@
 //!               (that one closed: its leases lost) ──▶ held until it ends
 //!               every keepalive interval: ServingCredentials::serves(proof)?
 //!                 no ──▶ HostLink::revoke
+//! admitted, ended, or HostLink::revoke ──▶ connections moved
+//!   ──▶ every PeerEnvironments::connections receiver wakes once
 //! open / grant / account ──▶ that environment's current connection
 //!   ──▶ ServingCredentials::serves(the proof it was opened with)?
 //!         no ──▶ HostLink::revoke, the lease refused unreachable
@@ -31,6 +33,15 @@
 //! the same [`SshEnvironment`]'s. A file the host publishes is read over
 //! the lease frames themselves ([`ArtifactTransport::Frames`]), since a
 //! paired connection carries nothing beside them.
+//! Nothing is fetched into a paired host: with no file channel, the agent's
+//! fetch is refused unavailable before the host is asked.
+//!
+//! Which environments are connected is read from their connections, never
+//! kept here as a list; what is kept is a count of the changes to it
+//! ([`PeerEnvironments::connections`]), moved where each change is made, so
+//! the agent catalogue's subscribers (`agents.subscribe`) read the list
+//! again when it may differ. It is its own change source: the conversation
+//! catalogue's head does not move for it.
 use super::{
     audit::EnvironmentAudit,
     connector::{ArtifactTransport, LeaseConnection},
@@ -43,7 +54,10 @@ use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex, PoisonError},
 };
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    sync::watch,
+};
 
 /// Whether a key holds a credential to serve this gateway's leases now.
 /// Implemented over the registry and the policy in composition.
@@ -63,6 +77,10 @@ pub(crate) struct PeerEnvironments {
     audit: Arc<dyn EnvironmentAudit>,
     timings: SshTimings,
     peers: Mutex<BTreeMap<PeerEnvironment, Arc<SshEnvironment>>>,
+    /// How many times which of them are connected has changed. Each
+    /// environment moves it as its connection is admitted, ends, or is
+    /// revoked.
+    connections: watch::Sender<u64>,
 }
 
 impl PeerEnvironments {
@@ -76,7 +94,18 @@ impl PeerEnvironments {
             audit,
             timings,
             peers: Mutex::new(BTreeMap::new()),
+            connections: watch::Sender::new(0),
         }
+    }
+
+    /// Wakes each time which paired environments are connected may have
+    /// changed: one connected, one's connection ended, or one was revoked.
+    /// A receiver that has fallen behind wakes once, not once per change,
+    /// and reads [`PairedEnvironments::connected`] for the list as it is
+    /// then. The count is a wake-up and nothing more: it is not a position
+    /// anything resumes from.
+    pub(crate) fn connections(&self) -> watch::Receiver<u64> {
+        self.connections.subscribe()
     }
 
     /// Whether the key `proof` carries may serve now: asked before its
@@ -116,6 +145,7 @@ impl PeerEnvironments {
                     self.credentials.clone(),
                     self.audit.clone(),
                     self.timings,
+                    self.connections.clone(),
                 ))
             })
             .clone()
@@ -140,6 +170,7 @@ impl PairedEnvironments for PeerEnvironments {
                 self.credentials.clone(),
                 self.audit.clone(),
                 self.timings,
+                self.connections.clone(),
             )),
         }
     }

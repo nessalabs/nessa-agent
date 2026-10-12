@@ -60,6 +60,9 @@ pub struct NativeHooksPreferences {
     gate: Arc<Mutex<()>>,
     audit: Arc<dyn NativeHooksAudit>,
     sync: DirectorySync,
+    /// Moves after every command, so a reader of the agent catalog reads
+    /// the choice again.
+    changes: Arc<tokio::sync::watch::Sender<u64>>,
 }
 
 /// How the choice file's directory is made durable after a rename.
@@ -107,7 +110,14 @@ impl NativeHooksPreferences {
             gate: Arc::new(Mutex::new(())),
             audit,
             sync,
+            changes: Arc::new(tokio::sync::watch::Sender::new(0)),
         }))
+    }
+
+    /// Wakes after each command, whatever its result: a failed command can
+    /// still have moved a flag. A wake with the choice unchanged is allowed.
+    pub fn changes(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.changes.subscribe()
     }
 
     /// The choice in effect now.
@@ -147,9 +157,14 @@ impl NativeHooksPreferences {
         let audit = self.audit.clone();
         let gate = self.gate.clone();
         let sync = self.sync;
+        let changes = self.changes.clone();
         tokio::task::spawn_blocking(move || {
             let _guard = gate.lock().unwrap_or_else(|error| error.into_inner());
-            set_blocking(directory, claude, codex, audit, sync, change)
+            let result = set_blocking(directory, claude, codex, audit, sync, change);
+            // Inside the task, so a caller that stops waiting still wakes
+            // the readers of a flag this command moved.
+            changes.send_modify(|count| *count += 1);
+            result
         })
         .await
         // A panicked or cancelled task did not finish. That is not an audit
