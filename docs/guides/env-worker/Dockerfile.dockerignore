@@ -1,6 +1,14 @@
-# Only what `cargo build -p nessa-server` reads goes into the build context.
+# An allow-list: only what `cargo build -p nessa-server --bin nessa` reads goes
+# into the build context, so nothing else in a checkout (a local .env, other
+# secrets, build output) is ever sent to the builder.
+*
+!Cargo.toml
+!Cargo.lock
+!rust-toolchain.toml
+!crates/
+!protocol/
+!src-tauri/
 **/target
-**/node_modules
-.git
-dist
-src-tauri/target
+src-tauri/gen
+**/.env
+**/.env.*
