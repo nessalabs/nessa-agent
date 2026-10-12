@@ -2808,10 +2808,22 @@ async fn read_said(said: &mut tokio::sync::mpsc::UnboundedReceiver<()>, what: &s
 }
 
 /// A copy let go while it was being read, the gateway having answered it
-/// already, is answered not staged rather than unreadable: it is gone, not
+/// already, is answered not staged, whatever the read made of it: the
+/// bytes of a copy no longer staged are not sent, and a copy gone is not
 /// damaged.
 #[tokio::test]
 async fn a_copy_let_go_while_it_is_read_is_answered_not_staged() {
+    copy_let_go_while_read(false).await;
+}
+
+/// [`a_copy_let_go_while_it_is_read_is_answered_not_staged`], for a read
+/// that failed: still not staged, not unreadable.
+#[tokio::test]
+async fn a_copy_let_go_while_it_is_read_and_failing_is_answered_not_staged() {
+    copy_let_go_while_read(true).await;
+}
+
+async fn copy_let_go_while_read(unreadable: bool) {
     use nessa_protocol::lease::ArtifactReadRefusal;
     let (mut gateway, outbox) = Gateway::publishing();
     gateway.started(LEASE).await;
@@ -2832,7 +2844,7 @@ async fn a_copy_let_go_while_it_is_read_is_answered_not_staged() {
         })
         .await;
     gateway.settled().await;
-    *outbox.unreadable.lock().unwrap() = true;
+    *outbox.unreadable.lock().unwrap() = unreadable;
     drop(held);
     assert_eq!(
         gateway.said().await,
@@ -2842,7 +2854,9 @@ async fn a_copy_let_go_while_it_is_read_is_answered_not_staged() {
 
 /// A lease ended while reads of its files are under way stops them: no
 /// answer of theirs follows its `Ended`, so the gateway, which lets the
-/// lease go at `Ended`, never gets one for a lease it no longer holds.
+/// lease go at `Ended`, never gets one for a lease it no longer holds. A
+/// read already on the disk cannot be stopped there, so `Ended` waits for
+/// it to return: no read holds a file of a lease said ended.
 ///
 /// On the runtime's paused clock, which moves only once every task waits
 /// and no read is on the disk: what the reads would do once returned is
@@ -2868,6 +2882,13 @@ async fn no_read_answers_after_its_lease_ended() {
             lease: LEASE.into(),
         })
         .await;
+    // The reads are let go from outside the runtime a little later, so an
+    // `Ended` that did not wait for them would be said while they are held.
+    let releasing = outbox.clone();
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        releasing.hold_reads(false);
+    });
     loop {
         match gateway.said().await {
             FromEnvironment::Stopped { .. } => continue,
@@ -2878,12 +2899,12 @@ async fn no_read_answers_after_its_lease_ended() {
             other => panic!("the lease's end, got {other:?}"),
         }
     }
-    // The reads finish on disk now, and nothing of them is said: an answer
-    // of theirs would be on its way ahead of the account, asked once both
-    // returned and everything stands still.
+    // Both reads had returned from the disk before it was said.
+    assert!(done.try_recv().is_ok() && done.try_recv().is_ok());
+    release.join().unwrap();
     drop(held);
-    read_said(&mut done, "returned").await;
-    read_said(&mut done, "returned").await;
+    // Nothing of theirs is said: an answer would be on its way ahead of the
+    // account, asked once everything stands still.
     tokio::time::sleep(Duration::from_secs(1)).await;
     gateway.settled().await;
 }

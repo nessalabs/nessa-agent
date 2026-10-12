@@ -243,7 +243,8 @@ pub(crate) struct LeaseArtifacts {
     /// Turns true once the gateway is gone: an answer to a read still
     /// waiting for room is given up on.
     gone: watch::Receiver<bool>,
-    /// Each read's task not yet done: stopped, and waited for, when the
+    /// Each read's tasks not yet done, its disk read and its answer's:
+    /// stopped, or for a disk read already started, waited for, when the
     /// lease ends, so no answer of its follows the lease's end.
     reads: Mutex<Vec<JoinHandle<()>>>,
 }
@@ -363,44 +364,49 @@ impl LeaseArtifacts {
         let frames = self.publisher.frames.clone();
         let lease = self.lease.clone();
         let mut gone = self.gone.clone();
+        // The disk read is not stopped by stopping its answer's task, so it
+        // is kept and waited for on its own: the lease's end waits for both.
+        let reading_lease = lease.clone();
+        let (read_done, read) = oneshot::channel();
+        let disk = tokio::task::spawn_blocking(move || {
+            let _ = read_done.send(outbox.read(&reading_lease, artifact, offset, length));
+        });
         let task = tokio::spawn(async move {
             let _slot = slot;
-            let reading_lease = lease.clone();
-            let read = tokio::task::spawn_blocking(move || {
-                outbox.read(&reading_lease, artifact, offset, length)
-            })
-            .await;
-            // A copy that went while it was read (answered, or its lease
-            // ended) is no longer staged, which is why it could not be read.
+            let read = read.await;
+            // A copy let go while it was read (answered, or its lease ended)
+            // is no longer staged: what was read of it is not sent.
             let staged = {
                 let in_flight = lock(&in_flight);
                 !in_flight.ended && in_flight.waiting.contains_key(&artifact)
             };
-            let unread = match staged {
-                true => ArtifactReadRefusal::Unreadable,
-                false => ArtifactReadRefusal::NotStaged,
-            };
-            let frame = match read {
-                Ok(Ok(data)) => FromEnvironment::ArtifactRead {
+            let frame = match (staged, read) {
+                (true, Ok(Ok(data))) => FromEnvironment::ArtifactRead {
                     lease,
                     artifact,
                     offset,
                     data: Data(data),
                 },
-                Ok(Err(error)) => {
-                    tracing::warn!(lease, artifact, offset, %error, ?unread, "a staged artifact could not be read for the gateway");
+                (true, Ok(Err(error))) => {
+                    tracing::warn!(lease, artifact, offset, %error, "a staged artifact could not be read for the gateway");
                     FromEnvironment::ArtifactNotRead {
                         lease,
                         artifact,
                         offset,
-                        reason: unread,
+                        reason: ArtifactReadRefusal::Unreadable,
                     }
                 }
-                Err(_) => FromEnvironment::ArtifactNotRead {
+                (true, Err(_)) => FromEnvironment::ArtifactNotRead {
                     lease,
                     artifact,
                     offset,
-                    reason: unread,
+                    reason: ArtifactReadRefusal::Unreadable,
+                },
+                (false, _) => FromEnvironment::ArtifactNotRead {
+                    lease,
+                    artifact,
+                    offset,
+                    reason: ArtifactReadRefusal::NotStaged,
                 },
             };
             // Its slot is let go only once the writer has the answer, or
@@ -413,6 +419,7 @@ impl LeaseArtifacts {
         let mut reads = self.reads.lock().unwrap_or_else(PoisonError::into_inner);
         reads.retain(|read| !read.is_finished());
         reads.push(task);
+        reads.push(disk);
         Ok(())
     }
 
@@ -448,11 +455,14 @@ impl LeaseArtifacts {
     /// expired here), it is left unanswered, as the gateway may have kept it.
     ///
     /// Every read still under way is stopped, its answer not sent: what it
-    /// returns is their tasks, for the end to wait for before it says the
-    /// lease ended, so no read's answer reaches the gateway after that.
+    /// returns is their tasks, and the disk reads already started, for the
+    /// end to wait for before it says the lease ended, so no read's answer
+    /// reaches the gateway, and no read holds a file, after that.
     pub(crate) fn end(self, unasked: bool) -> Vec<JoinHandle<()>> {
         self.dispatcher.abort();
         let reads = std::mem::take(&mut *self.reads.lock().unwrap_or_else(PoisonError::into_inner));
+        // A disk read already under way runs to its end: aborting it only
+        // keeps it from starting. Its answer's task is stopped outright.
         for read in &reads {
             read.abort();
         }

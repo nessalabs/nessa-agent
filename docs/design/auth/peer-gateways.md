@@ -301,9 +301,10 @@ sequenceDiagram
   artifact's number and a range, never a path. The environment answers
   only for a copy it staged under that lease that is still waiting for its
   `Collected`; anything else, an artifact answered already, one never
-  published, or a lease ended or not held there, is `notStaged`. So a
-  gateway can read nothing on the machine but what was published to it,
-  and only until it answers.
+  published, or a lease ended or not held there, is `notStaged`. That
+  holds for a read under way when the answer comes too: what it read is
+  not sent. So a gateway can read nothing on the machine but what was
+  published to it, and only until it answers.
 - **Bounded on both sides.** Each range is at most 64 KiB, one frame's
   data. The gateway keeps at most four ranges of one file unanswered
   (`MAX_ARTIFACT_READS_IN_FLIGHT`). The environment does not rely on that:
@@ -315,9 +316,11 @@ sequenceDiagram
   publish deadline are the SSH path's.
 - **No answer after the end.** When a lease ends on the environment, its
   reads still under way are stopped, their answers not sent, and the end
-  waits for them before it says `Ended`. So the gateway never gets a read's
-  answer for a lease it has let go, which it would record as a frame
-  naming nothing it holds.
+  waits for them before it says `Ended`, a read already on the disk until
+  it returns, since it cannot be stopped there. So the gateway never gets
+  a read's answer for a lease it has let go, which it would record as a
+  frame naming nothing it holds, and no read holds a file of a lease said
+  ended.
 - **What a read failing means.** The bytes are checked where they are
   kept, by size and digest, as over SSH: a copy cut short, or one answered
   with other bytes, is refused `mismatch`, nothing held. A copy the
