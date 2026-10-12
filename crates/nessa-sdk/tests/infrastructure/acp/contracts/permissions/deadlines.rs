@@ -1357,3 +1357,69 @@ async fn a_person_choosing_codex_decline_then_an_unasked_cancel_ends_the_session
     assert_eq!(wire["outcome"]["optionId"], "decline");
     assert_gone(&root, "pid");
 }
+
+// Only a refusal stops the turn. An allow that carries Codex's stopping id
+// is still an allow, so the cancel after it was not asked for.
+#[tokio::test]
+async fn an_allow_named_cancel_then_an_unasked_cancel_ends_the_session() {
+    let _slot = process_test_slot().await;
+    let (root, mut config, model) = codex_configuration("deadline-allow-named-cancel", 16);
+    config.execution_timeout = None;
+    let binding = CodexAcpProvider::new(
+        config,
+        &model,
+        TokenLimits::new(900, 100).unwrap(),
+        Arc::new(RecordingAudit::default()),
+    )
+    .unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
+    let active = start(&opened, "write").await;
+    let id = loop {
+        match next(&mut opened).await {
+            ExecutionUpdate::Tool(_) => {}
+            ExecutionUpdate::PermissionRequested { id, .. } => break id,
+            update => panic!("expected permission, got {update:?}"),
+        }
+    };
+    opened
+        .session
+        .answer_permission(PermissionAnswer {
+            attribution: ApprovalAttribution::new(
+                ActionContext::new("reviewer", "nessa.panel", "human-answer").unwrap(),
+                ApprovalBasis::Explicit,
+            ),
+            execution_id: ExecutionId::new("write").unwrap(),
+            id,
+            option_id: PermissionOptionId::new("cancel").unwrap(),
+        })
+        .await
+        .map_err(|failure| failure.into_error())
+        .unwrap();
+    let updates = until_finished(&mut opened).await;
+    assert!(
+        matches!(
+            updates.last(),
+            Some(ExecutionUpdate::Finished(ExecutionOutcome::Cancelled))
+        ),
+        "an unasked cancel after an allow named cancel ends the session: {updates:?}"
+    );
+    assert_eq!(
+        promptly(active).await.unwrap(),
+        Ok(ExecutionOutcome::Cancelled)
+    );
+    match timeout(Duration::from_secs(3), opened.events.next()).await {
+        Ok(Ok(None)) | Ok(Err(_)) => {}
+        other => panic!(
+            "an unasked cancel after an allow named cancel ended the session: the session stayed open: {other:?}"
+        ),
+    }
+    let wire: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(root.path().join("permission-outcome")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(wire["outcome"]["optionId"], "cancel");
+    assert_gone(&root, "pid");
+}

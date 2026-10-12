@@ -194,7 +194,8 @@ for line in sys.stdin:
             update({"sessionUpdate": "tool_call_update", "toolCallId": "command-1", "status": "completed",
                     "rawOutput": {"formatted_output": "compiling\n2 passed\n", "exit_code": 0},
                     "_meta": {"terminal_exit": {"exit_code": 0, "signal": None, "terminal_id": "command-1"}}})
-        elif mode in ("deadline-decline", "deadline-cancel-only", "deadline-decline-unasked-cancel"):
+        elif mode in ("deadline-decline", "deadline-cancel-only", "deadline-decline-unasked-cancel",
+                      "deadline-allow-named-cancel"):
             # A later prompt in the same session, after cancel already ended
             # the turn. The session is still open.
             if mode == "deadline-cancel-only" and (root / "permission-outcome").exists():
@@ -209,6 +210,15 @@ for line in sys.stdin:
                     {"optionId": "allow_once", "kind": "allow_once", "name": "Yes"},
                     {"optionId": "cancel", "kind": "reject_once", "name": "No, and tell Codex what to do differently"},
                     {"optionId": "decline", "kind": "reject_once", "name": "No, continue without running it"},
+                ]
+                call = {"toolCallId": "command-1", "kind": "execute", "status": "pending", "title": "Run tests",
+                        "rawInput": {"command": "cargo test"}}
+            elif mode == "deadline-allow-named-cancel":
+                # Malformed: Codex's stopping id on an allow. Picking it is an
+                # allow, so it does not stop the turn.
+                options = [
+                    {"optionId": "cancel", "kind": "allow_once", "name": "Yes"},
+                    {"optionId": "decline", "kind": "reject_once", "name": "No"},
                 ]
                 call = {"toolCallId": "command-1", "kind": "execute", "status": "pending", "title": "Run tests",
                         "rawInput": {"command": "cargo test"}}
@@ -255,7 +265,8 @@ for line in sys.stdin:
             result(pending, {"stopReason": "cancelled"})
             pending = None
     elif msg.get("id") == "file-review":
-        if mode in ("deadline-decline", "deadline-cancel-only", "deadline-decline-unasked-cancel"):
+        if mode in ("deadline-decline", "deadline-cancel-only", "deadline-decline-unasked-cancel",
+                    "deadline-allow-named-cancel"):
             (root / "permission-outcome").write_text(json.dumps(msg["result"]))
         else:
             outcome = msg["result"]["outcome"]
@@ -266,10 +277,10 @@ for line in sys.stdin:
             result(pending, {"stopReason": "cancelled"})
             pending = None
             continue
-        if mode == "deadline-decline-unasked-cancel":
-            # Decline does not stop the turn. The prompt then ends on its
-            # own: no session/cancel was sent.
-            assert msg["result"]["outcome"]["optionId"] == "decline"
+        if mode in ("deadline-decline-unasked-cancel", "deadline-allow-named-cancel"):
+            # Neither decline nor an allow stops the turn. The prompt then
+            # ends on its own: no session/cancel was sent.
+            assert msg["result"]["outcome"]["optionId"] in ("decline", "cancel")
             result(pending, {"stopReason": "cancelled"})
             pending = None
             continue

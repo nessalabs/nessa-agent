@@ -49,8 +49,8 @@ use crate::domain::agent_execution::executions::{
 use crate::domain::agent_execution::permissions::{
     PermissionCancellationReason, PermissionCancellationReasonView, PermissionDeadlineSettlement,
     PermissionDecision, PermissionEffect, PermissionId, PermissionOfferPolicy, PermissionOptionId,
-    PermissionScope, RefusalOutcome, ReviewDecline, ReviewDeclineId, ReviewDeclineObservation,
-    ReviewDeclineReason, ReviewDeclineStage,
+    PermissionScope, PermissionStateView, RefusalOutcome, ReviewDecline, ReviewDeclineId,
+    ReviewDeclineObservation, ReviewDeclineReason, ReviewDeclineStage,
 };
 use crate::domain::agent_execution::prompts::UserMessage;
 use crate::domain::agent_execution::questions::{
@@ -2065,8 +2065,16 @@ impl<P: AcpProfile> Worker<P> {
         // result that follows is that turn ending. `decline` does not stop
         // the turn, so the same cancelled result after it is unrequested and
         // the session is torn down. Without the stop check, every answer
-        // would be treated as that turn ending.
+        // would be treated as that turn ending. Only a refusal stops a turn:
+        // an allow that carries the stopping id is still an allow
+        // (`an_allow_named_cancel_then_an_unasked_cancel_ends_the_session`).
+        let refused = matches!(
+            resolution.request().state(),
+            PermissionStateView::Answered { decision, .. }
+                if decision.effect() == PermissionEffect::Deny
+        );
         if result.is_ok()
+            && refused
             && self
                 .profile
                 .deadline_deny_preference()
