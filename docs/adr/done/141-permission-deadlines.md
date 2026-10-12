@@ -3,8 +3,10 @@
 ## Purpose
 
 An agent that is waiting on a person who is not there should keep working.
-This decision gives every pending permission a deadline and a default outcome,
-so the turn ends that wait on its own and the model is told what happened.
+This decision gives each tool review the live worker is holding a deadline and
+a default outcome, so the turn ends that wait on its own and the model is told
+what happened. An app review has no deadline, and a review restored after a
+restart is not re-armed.
 It is the bounded-decision slice of
 [0014](../todo/0014-nessa-owned-policy-hooks.md) and of issue 141. Remembered approvals,
 notifications, true deferral, and elicitation questions stay on that issue.
