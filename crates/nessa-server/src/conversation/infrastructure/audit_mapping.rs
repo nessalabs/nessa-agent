@@ -2,8 +2,8 @@
 use nessa_sdk::application::agent_execution::{
     executions::{
         AdmissionAuditCause, AdmissionAuditStage, AttachmentAuditCause, AttachmentAuditStage,
-        EffortChangeStage, ExecutionAuditRecord, QueueOrderCause, SteeringAuditCause,
-        SteeringAuditStage,
+        EffortChangeStage, ExecutionAuditRecord, NativeHooksLaunchCause, QueueOrderCause,
+        SteeringAuditCause, SteeringAuditStage,
     },
     permissions::{
         ActionContext, ApprovalBasis, CancellationOrigin, PermissionAnswerDelivery,
@@ -147,6 +147,17 @@ pub(super) fn record_value(record: &ExecutionAuditRecord) -> Value {
             "launchId": record.launch_id(),
             "harness": record.harness(),
             "nativeHooks": if record.allowed() { "on" } else { "off" },
+            // An open belongs to an attachment, whose record for the same
+            // session names the cause and caller. A restart is the runtime's.
+            "cause": match record.cause() {
+                NativeHooksLaunchCause::Open => "open",
+                NativeHooksLaunchCause::Restart => "restart",
+            },
+            "initiator": match record.cause() {
+                NativeHooksLaunchCause::Open => json!({"kind": "attachment", "sessionId": record.session_id()}),
+                NativeHooksLaunchCause::Restart => json!({"kind": "runtime"}),
+            },
+            "restoredContext": record.restored(),
         }),
         ExecutionAuditRecord::LateProviderResult(record) => json!({
             "kind":"late_provider_result",

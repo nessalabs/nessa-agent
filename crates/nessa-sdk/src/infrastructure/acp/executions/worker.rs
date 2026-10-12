@@ -28,8 +28,8 @@ use crate::application::agent_execution::agents::{
 };
 use crate::application::agent_execution::executions::{
     AdmittedQuestion, ExecutionAudit, ExecutionAuditRecord, ExecutionController, ExecutionEvent,
-    ExecutionRequest, ExecutionUpdate, LateProviderResultRecord, NativeHooksLaunchRecord,
-    PermissionAuthoritySource,
+    ExecutionRequest, ExecutionUpdate, LateProviderResultRecord, NativeHooksLaunchCause,
+    NativeHooksLaunchRecord, PermissionAuthoritySource,
 };
 
 use crate::application::agent_execution::permissions::{
@@ -464,6 +464,8 @@ struct Worker<P> {
     /// Assigned when this process was started. Claude and Codex record it
     /// with the hooks choice of this launch.
     launch_id: u64,
+    /// Why this process was started, recorded with its hooks choice.
+    launch_cause: NativeHooksLaunchCause,
     /// The conversation this process was opened for, when the open named one.
     session_key: Option<String>,
 }
@@ -487,6 +489,7 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
     permission_authority: PermissionAuthoritySource,
     recovery: Arc<ProcessCleanup>,
     launch_id: u64,
+    launch_cause: NativeHooksLaunchCause,
     session_key: Option<String>,
 ) {
     let reader = Reader::new(
@@ -532,6 +535,7 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
         correlation_sequence: 0,
         failure_cause: ObservationFailureCause::ExecutionFailed,
         launch_id,
+        launch_cause,
         session_key,
     };
     let mut execution = None;
@@ -1103,6 +1107,8 @@ impl<P: AcpProfile> Worker<P> {
                     self.launch_id,
                     harness,
                     allowed,
+                    self.launch_cause,
+                    restore.is_some(),
                 )),
                 AuditEffectPhase::Lifecycle,
             )

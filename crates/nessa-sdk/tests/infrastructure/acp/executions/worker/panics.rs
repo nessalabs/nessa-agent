@@ -120,6 +120,7 @@ fn spawn_worker<P: AcpProfile>(
         PermissionAuthoritySource::default(),
         recovery.clone(),
         0,
+        crate::application::agent_execution::executions::NativeHooksLaunchCause::Open,
         None,
     ));
     (

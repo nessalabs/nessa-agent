@@ -695,6 +695,18 @@ pub enum ExecutionAuditRecord {
     NativeHooksLaunch(NativeHooksLaunchRecord),
 }
 
+/// Why a Claude or Codex process was started.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeHooksLaunchCause {
+    /// The first process of a provider session, started by its open. The
+    /// open belongs to an attachment, and the attachment record for the same
+    /// session names its cause and caller.
+    Open,
+    /// The runtime started a replacement after the session's process had
+    /// stopped, to run work already admitted. No caller asked for this start.
+    Restart,
+}
+
 /// The hooks choice recorded when a Claude or Codex process starts.
 ///
 /// `allowed` is the choice that launch used. A later change to the stored
@@ -705,22 +717,39 @@ pub struct NativeHooksLaunchRecord {
     launch_id: u64,
     harness: &'static str,
     allowed: bool,
+    cause: NativeHooksLaunchCause,
+    restored: bool,
 }
 
 impl NativeHooksLaunchRecord {
     /// `session_id` is the conversation this launch opened, when the open named one.
+    /// `restored` is whether the start resumed saved provider context.
     pub fn new(
         session_id: Option<String>,
         launch_id: u64,
         harness: &'static str,
         allowed: bool,
+        cause: NativeHooksLaunchCause,
+        restored: bool,
     ) -> Self {
         Self {
             session_id,
             launch_id,
             harness,
             allowed,
+            cause,
+            restored,
         }
+    }
+
+    /// Why this process was started.
+    pub fn cause(&self) -> NativeHooksLaunchCause {
+        self.cause
+    }
+
+    /// Whether this start resumed saved provider context.
+    pub fn restored(&self) -> bool {
+        self.restored
     }
 
     /// The conversation, when this launch was for one.

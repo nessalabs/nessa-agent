@@ -153,7 +153,8 @@ async fn relaunch_after_turning_hooks_off(
 #[tokio::test]
 async fn turning_hooks_off_suppresses_an_existing_claude_conversations_next_launch() {
     let _process_slot = process_test_slot().await;
-    let (root, binding) = test_acp_binding("hooks-record", 16);
+    let audit = Arc::new(RecordingAudit::default());
+    let (root, binding) = test_acp_binding_with_audit("hooks-record", 16, audit.clone());
     let flag = Arc::new(AtomicBool::new(true));
     let binding = binding.with_native_hooks(NativeHooksSwitch::from_shared(flag.clone()));
     let opened = relaunch_after_turning_hooks_off(binding, &flag).await;
@@ -165,6 +166,22 @@ async fn turning_hooks_off_suppresses_an_existing_claude_conversations_next_laun
     let second = hooks_launch(root.path(), pids[1]);
     assert_eq!(second["settingSources"], json!([]));
     assert_eq!(second["disableAllHooks"], true);
+    // Each start says why it happened: the open, then the runtime's restart
+    // of the same session, which resumes its saved context.
+    let launches: Vec<_> = audit
+        .launches
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|launch| (launch.cause(), launch.restored(), launch.allowed()))
+        .collect();
+    assert_eq!(
+        launches,
+        [
+            (NativeHooksLaunchCause::Open, false, true),
+            (NativeHooksLaunchCause::Restart, true, false),
+        ]
+    );
     opened
         .session
         .shutdown(SessionCloseRequest::Explicit(close_action()))

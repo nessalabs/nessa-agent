@@ -12,7 +12,8 @@ use super::super::{
 use super::{cleanup::ProcessCleanup, AcpConfig, StandInGrant};
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::{
-    ExecutionAudit, ExecutionEvent, ExecutionRequest, PermissionAuthoritySource,
+    ExecutionAudit, ExecutionEvent, ExecutionRequest, NativeHooksLaunchCause,
+    PermissionAuthoritySource,
 };
 use crate::domain::agent_execution::permissions::{PermissionAuthority, PermissionAuthorityError};
 
@@ -98,7 +99,7 @@ pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
         question_sequence: Arc::new(AtomicU64::new(0)),
         _stand_in_grant: stand_in_grant,
     };
-    let (mut generation, initial_events) = factory.start(restore)?;
+    let (mut generation, initial_events) = factory.start(restore, NativeHooksLaunchCause::Open)?;
     let (ready, stop_selected) = generation.ready_during_open(&mut open_control).await;
     let session_id = match ready {
         Ok(id) => id,
@@ -182,6 +183,7 @@ impl<P: AcpProfile + Clone> WorkerFactory<P> {
     fn start(
         &self,
         restore: Option<ExecutionSessionId>,
+        cause: NativeHooksLaunchCause,
     ) -> Result<(Generation, EventStream), ProviderOpenError> {
         let launch_id = NEXT_LAUNCH_ID.fetch_add(1, Ordering::Relaxed);
         let span = tracing::info_span!(target: "nessa_sdk::timing", "agent_launch",
@@ -288,6 +290,7 @@ impl<P: AcpProfile + Clone> WorkerFactory<P> {
                 self.permission_authority.clone(),
                 recovery.clone(),
                 launch_id,
+                cause,
                 self.session_key.clone(),
             )
             .in_current_span(),
@@ -630,7 +633,10 @@ impl<P: AcpProfile + Clone> AcpSession<P> {
                 if close_activity.has_changed().unwrap_or(true) {
                     return Err(AgentError::Closed.into());
                 }
-                let (next, events) = match self.factory.start(Some(self.id.clone())) {
+                let (next, events) = match self
+                    .factory
+                    .start(Some(self.id.clone()), NativeHooksLaunchCause::Restart)
+                {
                     Ok(started) => started,
                     Err(failure) => {
                         let (cause, cleanup, source) = failure.into_parts();

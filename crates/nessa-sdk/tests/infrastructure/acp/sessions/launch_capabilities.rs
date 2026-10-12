@@ -174,7 +174,10 @@ fn published_when_start_fails(allowed: bool) -> ProviderOperationCapabilities {
         question_sequence: Arc::new(AtomicU64::new(0)),
         _stand_in_grant: None,
     };
-    let Err(error) = factory.start(None) else {
+    let Err(error) = factory.start(
+        None,
+        crate::application::agent_execution::executions::NativeHooksLaunchCause::Open,
+    ) else {
         panic!("the process is refused before it exists");
     };
     assert!(matches!(error.into_parts().0, AgentError::Configuration(_)));

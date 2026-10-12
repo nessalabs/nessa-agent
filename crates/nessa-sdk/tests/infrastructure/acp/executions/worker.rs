@@ -254,6 +254,8 @@ async fn worker_initial_and_fallback_cancellation_share_grace_with_a_full_pipe()
             correlation_sequence: 0,
             failure_cause: ObservationFailureCause::ExecutionFailed,
             launch_id: 0,
+            launch_cause:
+                crate::application::agent_execution::executions::NativeHooksLaunchCause::Open,
             session_key: None,
         };
         if pending_permission {

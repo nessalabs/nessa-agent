@@ -1,17 +1,20 @@
 //! The native-hooks choice file and its audit records.
 //!
 //! ```text
-//! set -> requested record -> native-hooks.json -> atomic flag -> outcome record
+//! set -> requested record -> native-hooks.json -> outcome record -> atomic flag
 //! open -> native-hooks.json -> flags (unreadable or invalid documents load as off)
 //! process start -> switch.allowed() once -> that start's profile and environment
 //! ```
 //!
 //! Arrows are the order of one change, of one startup read, and of one
-//! process start. A failed requested record writes nothing. A failed
-//! outcome record reverts the file and the flag, unless the outcome record
-//! can be read back: then the change stands, because the record says it
-//! took effect. A file that was renamed into place and then failed its
-//! directory sync is the new choice, so the flag follows it. A retry of the same
+//! process start. The flag moves last, so a process start never runs under
+//! a choice the audit has not recorded. A failed requested record writes
+//! nothing. A failed outcome record reverts the file, unless the outcome
+//! record can be read back: then the change stands and the flag follows,
+//! because the record says it took effect. A file that was renamed into
+//! place and then failed its directory sync is the new choice: its outcome
+//! is recorded and the flag follows, and the command still reports the
+//! storage failure. A retry of the same
 //! principal, harness, and request id keeps the record already written,
 //! including its observation time, when the choice matches, and fails when
 //! that id was used for a different choice. The adapter assigns the record id
@@ -112,10 +115,10 @@ impl NativeHooksPreferences {
     ///
     /// A retry of the same request id keeps the records already written when
     /// they are for this choice. Failure of either record, or of the file,
-    /// returns an error. The flag always ends equal to the file on disk: a
-    /// file renamed into place counts as written even when its directory sync
-    /// failed. An outcome-record failure puts the file and the flag back,
-    /// unless the outcome record can be read back.
+    /// returns an error. The flag moves only after the outcome record, and
+    /// always ends equal to the file on disk: a file renamed into place counts
+    /// as written even when its directory sync failed. An outcome-record
+    /// failure puts the file back, unless the outcome record can be read back.
     pub async fn set(
         &self,
         change: NativeHooksChange,
@@ -158,28 +161,34 @@ fn set_blocking(
         return Ok(selection_of(&claude, &codex));
     }
     let updated = selection_of(&claude, &codex).with(change.agent, change.enabled);
-    if let Err(stage) = write_choice(&directory, &updated, sync) {
-        if stage == Publication::Unconfirmed {
-            store(&claude, &codex, change.agent, change.enabled);
-        }
-        return Err(NativeHooksError::Storage);
-    }
-    store(&claude, &codex, change.agent, change.enabled);
+    // Process starts keep reading the earlier choice until the outcome record
+    // is durable: the flag moves last, so no start runs under a choice the
+    // audit has not recorded.
+    let written = match write_choice(&directory, &updated, sync) {
+        Ok(()) => Ok(()),
+        // Readers already see this file, so it is the choice to record. Its
+        // durability is not confirmed, and the command says so.
+        Err(Publication::Unconfirmed) => Err(NativeHooksError::Storage),
+        Err(Publication::Unpublished) => return Err(NativeHooksError::Storage),
+    };
     if let Err(error) =
         audit.record(&change.evidence(NativeHooksPhase::Outcome, before, Some(change.enabled)))
     {
         // An outcome record that reads back says the change took effect. A
         // rollback now would contradict it, and a retry would stop at it.
         if already_recorded(&directory, &change).unwrap_or(false) {
+            store(&claude, &codex, change.agent, change.enabled);
             return Err(error);
         }
         let reverted = updated.with(change.agent, current);
-        if write_choice(&directory, &reverted, sync) != Err(Publication::Unpublished) {
-            store(&claude, &codex, change.agent, current);
+        if write_choice(&directory, &reverted, sync) == Err(Publication::Unpublished) {
+            // The new file is still in place, so the flag follows it.
+            store(&claude, &codex, change.agent, change.enabled);
         }
         return Err(error);
     }
-    Ok(selection_of(&claude, &codex))
+    store(&claude, &codex, change.agent, change.enabled);
+    written.map(|()| selection_of(&claude, &codex))
 }
 
 /// How far a failed publication got.
@@ -725,6 +734,46 @@ mod tests {
             .await
             .unwrap();
         assert!(selection.codex());
+    }
+
+    /// Notes what a process start would read while the outcome is recorded.
+    struct SeesTheSwitch {
+        switch: Mutex<Option<NativeHooksSwitch>>,
+        seen: Mutex<Option<bool>>,
+        fail: bool,
+    }
+    impl NativeHooksAudit for SeesTheSwitch {
+        fn record(&self, evidence: &NativeHooksEvidence) -> Result<(), NativeHooksError> {
+            if evidence.phase == NativeHooksPhase::Outcome {
+                let allowed = self.switch.lock().unwrap().as_ref().unwrap().allowed();
+                *self.seen.lock().unwrap() = Some(allowed);
+                if self.fail {
+                    return Err(NativeHooksError::Audit);
+                }
+            }
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn a_process_start_reads_the_earlier_choice_until_the_outcome_is_recorded() {
+        for fail in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let audit = Arc::new(SeesTheSwitch {
+                switch: Mutex::new(None),
+                seen: Mutex::new(None),
+                fail,
+            });
+            let preferences =
+                NativeHooksPreferences::open_with(root.path().join("data"), audit.clone()).unwrap();
+            *audit.switch.lock().unwrap() = Some(preferences.switch(NativeHooksAgent::Codex));
+            let result = preferences
+                .set(change(NativeHooksAgent::Codex, true, "request-ordered"))
+                .await;
+            assert_eq!(*audit.seen.lock().unwrap(), Some(false));
+            assert_eq!(result.is_ok(), !fail);
+            assert_eq!(preferences.selection().codex(), !fail);
+        }
     }
 
     #[tokio::test]

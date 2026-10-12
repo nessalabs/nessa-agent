@@ -131,6 +131,7 @@ async fn blocked_worker(
         correlation_sequence: 0,
         failure_cause: ObservationFailureCause::ExecutionFailed,
         launch_id: 0,
+        launch_cause: crate::application::agent_execution::executions::NativeHooksLaunchCause::Open,
         session_key: None,
     };
     (worker, execution, receiver, recovery, clock)
