@@ -439,11 +439,7 @@ pub(crate) async fn serve<R, W>(
         // read: the read wins `within`'s race, so a gateway that sends
         // without pause would otherwise put an expiry off for good. Saying
         // a lease is ending is bounded as any answer is.
-        if within(&*timer, silent, served.expire_and_flush())
-            .await
-            .is_err()
-            || timer.now() >= silent
-        {
+        if !served.settle(silent).await || timer.now() >= silent {
             served.silent(timings.silence);
             break;
         }
@@ -467,10 +463,7 @@ pub(crate) async fn serve<R, W>(
         heard = timer.now();
         // A frame read as a deadline passed acts on what is left after it:
         // a Start under a lease that has expired starts nothing.
-        if within(&*timer, heard + timings.silence, served.expire_and_flush())
-            .await
-            .is_err()
-        {
+        if !served.settle(heard + timings.silence).await {
             served.silent(timings.silence);
             break;
         }
@@ -814,11 +807,25 @@ impl Served {
         }
     }
 
-    /// End every lease whose deadline has passed, then hand the writer what
-    /// is still waiting.
-    async fn expire_and_flush(&mut self) {
-        self.expire_passed().await;
-        self.flush().await;
+    /// End every lease whose deadline has passed, and hand the writer what
+    /// is waiting, until nothing is or `silent` passes: `false` then. A wait
+    /// for room is given up on at the next lease deadline, which is acted
+    /// on at once, so a gateway reading nothing holds no expiry back.
+    async fn settle(&mut self, silent: Moment) -> bool {
+        let timer = self.timer.clone();
+        loop {
+            // Ends each due lease without waiting: its `Ending` is queued.
+            self.expire_passed();
+            if self.outgoing.is_empty() {
+                return true;
+            }
+            let wake = self
+                .next_deadline()
+                .map_or(silent, |deadline| deadline.min(silent));
+            if within(&*timer, wake, self.flush()).await.is_err() && timer.now() >= silent {
+                return false;
+            }
+        }
     }
 
     fn accounted(&self, lease: &str) -> Cleanup {
@@ -1168,8 +1175,9 @@ impl Served {
     }
 
     /// End every held lease that has lasted as long as it was granted, if
-    /// any has.
-    async fn expire_passed(&mut self) {
+    /// any has. Nothing here waits, so one lease's expiry never holds
+    /// another's back.
+    fn expire_passed(&mut self) {
         let now = self.timer.now();
         let mut due: Vec<_> = self
             .leases
@@ -1182,17 +1190,17 @@ impl Served {
         due.sort();
         for (_, lease, lease_ms) in due {
             if let Some(held) = self.leases.remove(&lease) {
-                self.expire(lease, held, lease_ms).await;
+                self.expire(lease, held, lease_ms);
             }
         }
     }
 
     /// End `lease`, which has lasted the `lease_ms` it was granted: the
     /// cause recorded first, then everything under it stopped as an end
-    /// does, and the gateway told. Its `End` is answered with what that
-    /// took. Every state change comes before the frame, so a gateway not
-    /// reading it leaves nothing half-done.
-    async fn expire(&mut self, lease: String, held: Held, lease_ms: u64) {
+    /// does (on tasks of their own), and the gateway's `Ending` queued
+    /// behind the answers already waiting, for [`Self::settle`] to send.
+    /// Its `End` is answered with what that took. Nothing here waits.
+    fn expire(&mut self, lease: String, held: Held, lease_ms: u64) {
         let recorded = match self.ledger.record(&LedgerEntry::Expiring {
             lease: lease.clone(),
             lease_ms,
@@ -1204,11 +1212,10 @@ impl Served {
             }
         };
         self.end(lease.clone(), held, EndCause::Expired, recorded);
-        self.send(FromEnvironment::Ending {
+        self.outgoing.push_back(FromEnvironment::Ending {
             lease,
             cause: EndingCause::Expired,
-        })
-        .await;
+        });
     }
 
     /// End `lease` on a task of its own: stop every harness still running

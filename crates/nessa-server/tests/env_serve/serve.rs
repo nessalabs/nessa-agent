@@ -3261,3 +3261,151 @@ async fn a_reply_blocked_on_a_full_output_queue_does_not_hold_back_an_expiry() {
     asking.abort();
     gateway.served.abort();
 }
+
+const OTHER_LEASE: &str = "0b7d3a1e-0000-4000-8000-000000000002";
+
+impl Gateway {
+    /// Another lease granted for at most [`MAX_LEASE`] from now, with one
+    /// harness started under it.
+    async fn also_expiring(&mut self, lease: &str) {
+        self.send(ToEnvironment::Grant {
+            lease: lease.into(),
+            agent: "claude".into(),
+            sandbox: Sandbox::HarnessDefault,
+        })
+        .await;
+        assert!(matches!(self.next().await, FromEnvironment::Granted { .. }));
+        self.send(ToEnvironment::Start {
+            lease: lease.into(),
+            channel: 1,
+            environment: BTreeMap::new(),
+        })
+        .await;
+        self.settled().await;
+    }
+
+    /// Ask far more than the connection and the output queue hold, reading
+    /// none of it, until the host is held up answering: then it starts no
+    /// more waits on `timer`, as every frame it reads and answers starts one.
+    async fn flood(&mut self, timer: &ManualTimer) -> JoinHandle<()> {
+        let (spare, _) = duplex(1);
+        let mut writer = std::mem::replace(&mut self.writer, split(spare).1);
+        let asking = tokio::spawn(async move {
+            for _ in 0..2_000 {
+                let ask = ToEnvironment::Account {
+                    lease: "settled".into(),
+                };
+                if write_frame(&mut writer, &ask).await.is_err() {
+                    break;
+                }
+            }
+        });
+        let mut seen = timer.waits().len();
+        loop {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            let now = timer.waits().len();
+            if now == seen {
+                break;
+            }
+            seen = now;
+        }
+        assert!(!asking.is_finished(), "the host is held up answering");
+        asking
+    }
+}
+
+/// Wait until `lease` is recorded ended, moving `timer` on only by the
+/// stops' own short bounds, and never past `by`.
+async fn until_ended(gateway: &Gateway, timer: &ManualTimer, lease: &str, by: Duration) {
+    let ended = tokio::time::timeout(Duration::from_secs(5), async {
+        while ended_entries(&gateway.ledger, lease) == 0 {
+            if timer.elapsed() + Duration::from_millis(10) <= by {
+                timer.advance(Duration::from_millis(10));
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await;
+    assert!(ended.is_ok(), "{lease}: {:?}", gateway.ledger.entries());
+}
+
+fn expired(gateway: &Gateway, lease: &str) -> bool {
+    let entries = gateway.ledger.entries();
+    entries.contains(&LedgerEntry::Expiring {
+        lease: lease.into(),
+        lease_ms: 30_000,
+    }) && entries.iter().any(|entry| {
+        matches!(
+            entry,
+            LedgerEntry::Ended {
+                lease: id,
+                cause: EndCause::Expired,
+                ..
+            } if id == lease
+        )
+    })
+}
+
+/// Two leases due at once, the gateway reading nothing: saying the first
+/// is ending waits for room, and the second is ended at the deadline all
+/// the same.
+#[tokio::test]
+async fn two_leases_due_at_once_both_expire_at_the_deadline() {
+    let timer = Arc::new(ManualTimer::default());
+    let mut gateway = expiring_through(
+        512,
+        timer.clone(),
+        Arc::new(MemoryLedger::default()),
+        Arc::new(NoOutbox),
+    );
+    gateway.started_expiring(LEASE).await;
+    gateway.also_expiring(OTHER_LEASE).await;
+    let asking = gateway.flood(&timer).await;
+    timer.advance(MAX_LEASE);
+    let by = MAX_LEASE + Duration::from_secs(1);
+    until_ended(&gateway, &timer, LEASE, by).await;
+    until_ended(&gateway, &timer, OTHER_LEASE, by).await;
+    assert!(expired(&gateway, LEASE) && expired(&gateway, OTHER_LEASE));
+    assert_eq!(gateway.stopped.load(Ordering::SeqCst), 2);
+    assert!(timer.elapsed() < SILENCE_LIMIT);
+    asking.abort();
+    gateway.served.abort();
+}
+
+/// Two leases due one after the other, both before the silence bound, the
+/// gateway reading nothing: each is ended at its own deadline, the second
+/// while saying the first is ending still waits for room.
+#[tokio::test]
+async fn staggered_deadlines_each_expire_at_their_own() {
+    let timer = Arc::new(ManualTimer::default());
+    let mut gateway = expiring_through(
+        512,
+        timer.clone(),
+        Arc::new(MemoryLedger::default()),
+        Arc::new(NoOutbox),
+    );
+    gateway.started_expiring(LEASE).await;
+    let later = Duration::from_secs(10);
+    timer.advance(later);
+    gateway.also_expiring(OTHER_LEASE).await;
+    let asking = gateway.flood(&timer).await;
+    // The first deadline: only the first lease ends.
+    timer.advance_to(Moment::from_origin(MAX_LEASE));
+    until_ended(&gateway, &timer, LEASE, MAX_LEASE + Duration::from_secs(1)).await;
+    assert!(expired(&gateway, LEASE));
+    assert_eq!(ended_entries(&gateway.ledger, OTHER_LEASE), 0);
+    // The second, while the first's `Ending` still waits for room.
+    timer.advance_to(Moment::from_origin(later + MAX_LEASE));
+    until_ended(
+        &gateway,
+        &timer,
+        OTHER_LEASE,
+        later + MAX_LEASE + Duration::from_secs(1),
+    )
+    .await;
+    assert!(expired(&gateway, OTHER_LEASE));
+    assert_eq!(gateway.stopped.load(Ordering::SeqCst), 2);
+    assert!(timer.elapsed() < later + SILENCE_LIMIT);
+    asking.abort();
+    gateway.served.abort();
+}
