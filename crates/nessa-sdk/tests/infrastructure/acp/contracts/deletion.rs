@@ -212,6 +212,31 @@ async fn codex_archives_on_delete_so_a_successful_delete_is_reported_archived() 
 }
 
 #[tokio::test]
+async fn a_codex_deletion_launch_keeps_hooks_suppressed_when_the_switch_is_on() {
+    let _process_slot = process_test_slot().await;
+    let (root, mut config, model) = codex_configuration("advertised", 16);
+    handler(&mut config, "advertised", "codex");
+    let provider = CodexAcpProvider::new(
+        config,
+        &model,
+        TokenLimits::new(900, 100).unwrap(),
+        Arc::new(RecordingAudit::default()),
+    )
+    .unwrap()
+    .with_native_hooks(NativeHooksSwitch::on());
+    assert_eq!(
+        provider.delete_session(session()).await.unwrap(),
+        ProviderSessionDeletion::Archived
+    );
+    let launched: Value =
+        serde_json::from_str(&std::fs::read_to_string(root.path().join("codex-config")).unwrap())
+            .unwrap();
+    assert_eq!(launched["features"], json!({"hooks": false}));
+    assert_eq!(launched["notify"], json!([]));
+    assert_gone(&root, "pid");
+}
+
+#[tokio::test]
 async fn opencode_claims_nothing_about_a_successful_delete_but_that_it_was_acknowledged() {
     let _process_slot = process_test_slot().await;
     let (root, mut config, model) = opencode_configuration("advertised", 16);

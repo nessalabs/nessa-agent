@@ -67,8 +67,8 @@ use nessa_protocol::clock::Clock as ServerClock;
 use nessa_protocol::product::generated::AgentsListResult;
 #[cfg(unix)]
 use nessa_protocol::product::generated::{
-    AgentModelOption, AgentOption, ApprovalMode as WireApprovalMode,
-    ApprovalModeChoice as WireApprovalModeChoice,
+    AgentModelOption, AgentOption, AgentsNativeHooks, ApprovalMode as WireApprovalMode,
+    ApprovalModeChoice as WireApprovalModeChoice, NativeHooksChoice,
 };
 #[cfg(unix)]
 use nessa_protocol::{
@@ -299,6 +299,7 @@ pub(super) async fn product_state(
                         built.mcp_authorization,
                         built.record_watches,
                         built.catalogue_watches,
+                        built.native_hooks,
                     )),
                     built.agent_probe,
                     built.warm_ups,
@@ -320,6 +321,7 @@ pub(super) async fn product_state(
     let admin = Arc::new(LocalAdmin {
         store: store.clone(),
     });
+    let caller_kinds = store.clone();
     let mut product = ProductRouteState::new(
         gateway,
         organization,
@@ -333,6 +335,7 @@ pub(super) async fn product_state(
             agent_probe,
         },
     )
+    .with_caller_kinds(caller_kinds)
     .with_admin(admin)
     .with_settings(settings.session()?)
     .with_limits(limits)
@@ -379,6 +382,7 @@ pub(super) async fn product_state(
         mcp_authorization,
         record_watches,
         catalogue_watches,
+        native_hooks,
     )) = conversations
     {
         record_reader = Some(reader.clone());
@@ -390,7 +394,8 @@ pub(super) async fn product_state(
             .with_record_source(reader)
             .with_catalogue_source(catalogue)
             .with_attachments(attachments.0, attachments.1)
-            .with_agents_catalog(agents_catalog);
+            .with_agents_catalog(agents_catalog)
+            .with_native_hooks(native_hooks);
         if let Some(connected) = connected_environments {
             product = product.with_connected_environments(connected);
         }
@@ -473,6 +478,7 @@ struct BuiltConversations {
     share_grants: Arc<dyn ShareGrants>,
     attachments: (AttachmentService, HeldReads),
     agents_catalog: AgentsListResult,
+    native_hooks: Arc<crate::agents::infrastructure::NativeHooksPreferences>,
     /// Which configured agents this run cannot start even though they are
     /// installed. Known only once every provider has been built, and needed
     /// before the readiness probe is, which is why this is a function rather
@@ -1122,6 +1128,7 @@ async fn conversations(
         provider_directory: root.clone(),
         clock: clock.clone(),
         images: attachments.images.clone(),
+        native_hooks: built.native_hooks.clone(),
         warm_up: CurrentOpenCodeWarmUp::new(records.clone(), warm_up_audit.clone(), clock.clone()),
     }));
     let selected = resolver.default_agent()?;
@@ -1203,6 +1210,7 @@ async fn conversations(
         metadata,
         attachments: (attachments.service, attachments.reads),
         agents_catalog,
+        native_hooks: built.native_hooks,
         record_reader,
         catalogue_reader,
         record_watches,
@@ -1386,6 +1394,10 @@ fn agent_catalog(
     Ok(AgentsListResult {
         agents,
         environments: hosts.iter().map(|host| host.as_str().to_owned()).collect(),
+        native_hooks: AgentsNativeHooks {
+            claude: NativeHooksChoice::Off,
+            codex: NativeHooksChoice::Off,
+        },
     })
 }
 
@@ -1443,6 +1455,20 @@ impl CredentialAdmin for LocalAdmin {
                 .map_err(|_| CredentialAdminError::Unavailable)?
                 .map_err(CredentialAdminError::from)
         })
+    }
+}
+
+impl crate::agents::application::CallerKindSource
+    for nessa_auth::adapters::local::LocalCredentialStore
+{
+    fn caller_kind(&self, principal_id: &str) -> &'static str {
+        match self.principal_kind(principal_id) {
+            Ok(Some(nessa_auth::domain::PrincipalKind::Human)) => "person",
+            Ok(Some(nessa_auth::domain::PrincipalKind::Agent)) => "agent",
+            Ok(Some(nessa_auth::domain::PrincipalKind::Integration)) => "integration",
+            Ok(Some(nessa_auth::domain::PrincipalKind::Gateway)) => "gateway",
+            _ => "unknown",
+        }
     }
 }
 

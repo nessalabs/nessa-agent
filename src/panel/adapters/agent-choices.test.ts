@@ -38,6 +38,7 @@ function retries() {
 const catalog = (...environments: string[]): AgentsListResult => ({
   agents: [],
   environments,
+  nativeHooks: { claude: "off", codex: "off" },
 })
 
 const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0))

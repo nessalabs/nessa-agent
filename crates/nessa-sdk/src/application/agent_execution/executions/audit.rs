@@ -691,6 +691,89 @@ pub enum ExecutionAuditRecord {
     QuestionRefused(QuestionRefusalRecord),
     /// A provider terminal result observed after a refusal had already stopped the invocation.
     LateProviderResult(LateProviderResultRecord),
+    /// The hooks choice a Claude or Codex process was started with.
+    NativeHooksLaunch(NativeHooksLaunchRecord),
+}
+
+/// Why a Claude or Codex process was started.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeHooksLaunchCause {
+    /// The first process of a provider session, started by its open. The
+    /// open belongs to an attachment, and the attachment record for the same
+    /// session names its cause and caller.
+    Open,
+    /// The first process of a provider opened directly, with no SDK session
+    /// and so no attachment. Nothing else records who asked for this open.
+    DirectOpen,
+    /// The runtime started a replacement after the session's process had
+    /// stopped, to run work already admitted. No caller asked for this start.
+    Restart,
+}
+
+/// The hooks choice recorded when a Claude or Codex process starts.
+///
+/// `allowed` is the choice that launch used. A later change to the stored
+/// setting does not rewrite this record. Other harnesses do not record one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NativeHooksLaunchRecord {
+    session_id: Option<String>,
+    launch_id: u64,
+    harness: &'static str,
+    allowed: bool,
+    cause: NativeHooksLaunchCause,
+    restored: bool,
+}
+
+impl NativeHooksLaunchRecord {
+    /// `session_id` is the conversation this launch opened, when the open named one.
+    /// `restored` is whether the start resumed saved provider context.
+    pub fn new(
+        session_id: Option<String>,
+        launch_id: u64,
+        harness: &'static str,
+        allowed: bool,
+        cause: NativeHooksLaunchCause,
+        restored: bool,
+    ) -> Self {
+        Self {
+            session_id,
+            launch_id,
+            harness,
+            allowed,
+            cause,
+            restored,
+        }
+    }
+
+    /// Why this process was started.
+    pub fn cause(&self) -> NativeHooksLaunchCause {
+        self.cause
+    }
+
+    /// Whether this start resumed saved provider context.
+    pub fn restored(&self) -> bool {
+        self.restored
+    }
+
+    /// The conversation, when this launch was for one.
+    pub fn session_id(&self) -> Option<&str> {
+        self.session_id.as_deref()
+    }
+
+    /// The id assigned to this process start.
+    pub fn launch_id(&self) -> u64 {
+        self.launch_id
+    }
+
+    /// `claude` or `codex`.
+    pub fn harness(&self) -> &'static str {
+        self.harness
+    }
+
+    /// Whether this launch allowed the harness's own hooks.
+    pub fn allowed(&self) -> bool {
+        self.allowed
+    }
 }
 
 /// Required audit boundary, independent of bounded UI streams and caller waits.

@@ -307,6 +307,10 @@ async fn worker_with_ready_frames_boundary(
             settlement_facts: SettlementFacts::new(),
             correlation_sequence: 0,
             failure_cause: ObservationFailureCause::ExecutionFailed,
+            launch_id: 0,
+            launch_cause:
+                crate::application::agent_execution::executions::NativeHooksLaunchCause::Open,
+            session_key: None,
         },
         sender,
         close,

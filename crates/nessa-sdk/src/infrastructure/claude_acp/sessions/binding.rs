@@ -4,8 +4,8 @@ use super::profile::ClaudeProfile;
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::ExecutionAudit;
 use crate::application::agent_execution::providers::{
-    AgentProvider, ApprovalMode, HarnessHost, HarnessLaunch, ProviderIdentity, ProviderOpenFuture,
-    ProviderOpenRequest,
+    AgentProvider, ApprovalMode, HarnessHost, HarnessLaunch, NativeHooksSwitch, ProviderIdentity,
+    ProviderOpenFuture, ProviderOpenRequest,
 };
 use crate::domain::agent_execution::permissions::PermissionScope;
 use crate::domain::agent_execution::prompts::SystemPrompt;
@@ -32,6 +32,8 @@ pub struct ClaudeAcpProvider {
     system_prompt: Option<SystemPrompt>,
     approval_mode: ApprovalMode,
     effort_level: Option<EffortLevel>,
+    /// Read at each launch. Off sends today's suppression request.
+    native_hooks: NativeHooksSwitch,
     audit: Arc<dyn ExecutionAudit>,
     /// Deletions this binding started that are still stopping their process.
     deletions: DeletionCleanups,
@@ -126,6 +128,7 @@ impl ClaudeAcpProvider {
             system_prompt: None,
             approval_mode: ApprovalMode::Ask,
             effort_level: None,
+            native_hooks: NativeHooksSwitch::off(),
             audit,
             deletions: DeletionCleanups::default(),
             host: None,
@@ -180,6 +183,17 @@ impl ClaudeAcpProvider {
         self.effort_level = Some(level);
         Ok(self)
     }
+    /// Let Claude run its own hooks when a process this factory starts reads the switch on.
+    ///
+    /// Off keeps `disableAllHooks` and empty `settingSources`. On sends the
+    /// Claude CLI's default sources, user, project, and local, and omits
+    /// `disableAllHooks`. The other session settings stay. Each process start
+    /// reads the switch once, including the next start of a conversation
+    /// already open.
+    pub fn with_native_hooks(mut self, native_hooks: NativeHooksSwitch) -> Self {
+        self.native_hooks = native_hooks;
+        self
+    }
     /// Borrow the configured override and its contribution provenance, or None
     /// when opening should retain the harness default prompt.
     pub fn system_prompt(&self) -> Option<&SystemPrompt> {
@@ -221,6 +235,9 @@ impl AgentProvider for ClaudeAcpProvider {
     fn approval_mode(&self) -> Option<ApprovalMode> {
         Some(self.approval_mode)
     }
+    fn native_hooks_allowed(&self) -> bool {
+        self.native_hooks.allowed()
+    }
     fn effort_level(&self) -> Option<EffortLevel> {
         self.effort_level.clone()
     }
@@ -249,12 +266,14 @@ impl AgentProvider for ClaudeAcpProvider {
         }))
     }
     fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
+        // The process start reads the switch. This open does not snapshot it.
+        let profile = self.launch_profile();
         Box::pin(async move {
             acp_binding::open(
                 self.process_factory(),
                 self.config.clone(),
                 self.capabilities.clone(),
-                self.profile(),
+                profile,
                 self.audit.clone(),
                 request,
             )
@@ -293,11 +312,27 @@ impl ClaudeAcpProvider {
             }
         }
     }
-    pub(crate) fn profile(&self) -> ClaudeProfile {
+    /// The profile a process start captures from the live switch.
+    fn launch_profile(&self) -> ClaudeProfile {
         ClaudeProfile::new(
             self.system_prompt.clone(),
             self.approval_mode,
             self.effort_level.clone(),
         )
+        .following(self.native_hooks.clone())
+    }
+
+    /// The profile a launch speaks when native hooks are `allowed`.
+    ///
+    /// Deletion passes `false`. A conversation's process start does not use
+    /// this: it reads the switch once inside the start, on the profile `open`
+    /// builds. Claude's process factory does not read the switch.
+    pub(crate) fn profile_allowing(&self, allowed: bool) -> ClaudeProfile {
+        ClaudeProfile::new(
+            self.system_prompt.clone(),
+            self.approval_mode,
+            self.effort_level.clone(),
+        )
+        .allowing_native_hooks(allowed)
     }
 }

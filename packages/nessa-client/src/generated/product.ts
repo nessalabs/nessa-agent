@@ -306,6 +306,12 @@ export const NativeHookSuppressionSupport = {
 } as const
 export type NativeHookSuppressionSupport =
   (typeof NativeHookSuppressionSupport)[keyof typeof NativeHookSuppressionSupport]
+/** Whether this launch allows the harness's own hooks. Off asks the harness to leave them off. On means hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts. On does not prove a hook ran, and it does not change nativeHookSuppression. */
+export const NativeHooksChoice = { Off: "off", On: "on" } as const
+export type NativeHooksChoice = (typeof NativeHooksChoice)[keyof typeof NativeHooksChoice]
+/** A harness whose own hooks the caller can allow. OpenCode is not in this set and stays suppressed. */
+export const NativeHooksAgent = { Claude: "claude", Codex: "codex" } as const
+export type NativeHooksAgent = (typeof NativeHooksAgent)[keyof typeof NativeHooksAgent]
 /** Whether Nessa reports provider compaction with invocation correlation. */
 export const CompactionReportingSupport = {
   UnsupportedNotImplemented: "unsupported_not_implemented",
@@ -373,6 +379,8 @@ export interface ConversationAgentFeatures {
   permissionDenial: PermissionDenialSupport
   /** Verified suppression state for user-configured provider hooks. */
   nativeHookSuppression: NativeHookSuppressionSupport
+  /** The hooks choice this conversation was started with. When on, hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts. For Claude, on also applies the repo's .claude settings, including its allow rules and startup hooks. */
+  nativeHooks: NativeHooksChoice
   /** Effective Nessa support for correlated compaction reporting. */
   compactionReporting: CompactionReportingSupport
   /** Effective Nessa support for validated model-switch reporting. */
@@ -590,6 +598,8 @@ export interface ConversationTool {
   mcp?: ConversationMcpTool
   /** The call's structured result (MCP structuredContent) as JSON text, when the harness passed it on and it fits; absent otherwise. The result's text stays in details either way. */
   structuredContent?: string
+  /** The hooks choice of the process start this tool call ran under, saved with the call so it survives a gateway restart. Absent when that start recorded none: a harness without the choice, or a call saved before it was recorded. Recorded input and output are what the model proposed or the tool returned, and a hook may have changed or approved them when this is on. */
+  nativeHooks?: NativeHooksChoice
 }
 /** An MCP tool's identity: the server by the name it was configured under, and the tool on it; the UI the tool declared, when known; and the arguments the gateway's connection saw for the call, when it could match them. */
 export interface ConversationMcpTool {
@@ -1673,12 +1683,39 @@ export interface AgentOption {
   /** Models runnable by this agent. */
   models: AgentModelOption[]
 }
+/** Allow or stop allowing one harness to run its own hooks. The next launch of that harness omits Nessa's suppression request when enabled is true. OpenCode is not a value of agent. */
+export interface AgentsSetNativeHooksParams {
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** Claude or Codex. */
+  agent: NativeHooksAgent
+  /** True omits the suppression request the next time that harness's agent starts. False restores it. */
+  enabled: boolean
+}
+/** The choice now in effect for the named harness. When enabled is true, hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts. Applies the next time each conversation's agent starts. */
+export interface AgentsSetNativeHooksResult {
+  /** Original action identifier. */
+  requestId: string
+  /** The harness this command changed. */
+  agent: NativeHooksAgent
+  /** The choice now in effect. */
+  enabled: boolean
+}
 /** Configured agents and their model-specific choices. */
 export interface AgentsListResult {
   /** Configured agents. */
   agents: AgentOption[]
   /** Places a new conversation may run besides this gateway: the SSH destinations config.json names, in the order it names them, then each paired environment connected when the catalog is read, as `peer:` and its key in lowercase hex. At most 16 of the first and 8 of the second. agents.list reads it once; agents.subscribe reads it again each time a paired environment connects, disconnects or is revoked. */
   environments: string[]
+  /** The stored choice the next process start of Claude and Codex reads, whether or not that agent is in this catalog. This is the catalog's only copy of it: agent rows do not repeat it. OpenCode has no entry and stays suppressed. agents.subscribe reads the catalog again each time this choice changes. */
+  nativeHooks: AgentsNativeHooks
+}
+/** The choice in effect for the next process start of each harness. Off keeps Nessa's request to leave that harness's hooks off. On means hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts. For Claude, on also applies the repo's .claude settings, including its allow rules and startup hooks, so turn it on only for projects you trust. Applies the next time each conversation's agent starts. */
+export interface AgentsNativeHooks {
+  /** Claude's stored choice. */
+  claude: NativeHooksChoice
+  /** Codex's stored choice. */
+  codex: NativeHooksChoice
 }
 /** The agent catalog as it is now, read after a paired environment connected, disconnected or was revoked, and sent only when it differs from the last one sent. Replace what was held with it. The subscription ends with conversation.subscriptionEnded, as a conversation subscription does. */
 export interface AgentsListed {
@@ -2353,7 +2390,7 @@ export const mcpServerRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 64,
+  maxReadyMethods: 65,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -2363,6 +2400,8 @@ export const bounds = {
   maxRecordResponseBytes: 131072,
   minAgentInstallRequestIdCharacters: 1,
   maxAgentInstallRequestIdBytes: 256,
+  minNativeHooksRequestIdCharacters: 1,
+  maxNativeHooksRequestIdBytes: 256,
   maxConfiguredAgents: 3,
   maxAgentInstallVersionBytes: 128,
   maxImageBytes: 5242880,
@@ -2439,6 +2478,7 @@ export const ProductMethod = {
   ArtifactRead: "artifact.read",
   AttachmentBegin: "attachment.begin",
   AgentsList: "agents.list",
+  AgentsSetNativeHooks: "agents.setNativeHooks",
   AgentsSubscribe: "agents.subscribe",
   AgentsUnsubscribe: "agents.unsubscribe",
   ConversationSetApprovalMode: "conversation.setApprovalMode",
@@ -2515,6 +2555,7 @@ export const productReadyMethods = [
   "artifact.read",
   "attachment.begin",
   "agents.list",
+  "agents.setNativeHooks",
   "agents.subscribe",
   "agents.unsubscribe",
   "conversation.setApprovalMode",
@@ -2583,6 +2624,7 @@ export const productMethodGrants = {
   "artifact.read": "conversation.read",
   "attachment.begin": "conversation.write",
   "agents.list": "server.read",
+  "agents.setNativeHooks": "credential.manage",
   "agents.subscribe": "server.read",
   "agents.unsubscribe": "server.read",
   "conversation.setApprovalMode": "conversation.write",

@@ -118,6 +118,13 @@ pub struct ProviderOperationCapabilities {
     pub permission_denial: PermissionDenialCapability,
     /// Effective suppression of user-configured provider hooks.
     pub native_hook_suppression: NativeHookSuppressionCapability,
+    /// Whether this launch omits the suppression request.
+    ///
+    /// A binding reads this when it starts the harness. It is the caller's
+    /// choice, not a fact negotiated with the provider, so an unnegotiated
+    /// reset leaves it as the binding published it. False keeps today's
+    /// suppression request. True omits that request.
+    pub native_hooks_allowed: bool,
     /// Correlated provider compaction reporting.
     pub compaction_reporting: ProviderCompactionReportingCapability,
     /// Validated provider model-switch reporting.
@@ -329,6 +336,14 @@ impl OperationCapabilities {
     /// Return the effective native executable-hook suppression fact.
     pub fn native_hook_suppression(self) -> NativeHookSuppressionCapability {
         self.provider.native_hook_suppression
+    }
+
+    /// Whether this launch omits the harness suppression request.
+    ///
+    /// Unchanged while provider facts are reset during restoration: the choice
+    /// belongs to the binding that starts the process, not to negotiation.
+    pub fn native_hooks_allowed(self) -> bool {
+        self.provider.native_hooks_allowed
     }
 
     /// Return effective correlated compaction reporting support.

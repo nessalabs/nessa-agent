@@ -49,6 +49,7 @@ function attached(
       agentFeatures: {
         permissionDenial: "supported_for_offered_permission_reviews",
         nativeHookSuppression: "unknown",
+        nativeHooks: "off",
         compactionReporting: "unsupported_not_implemented",
         modelSwitchReporting: "unsupported_not_implemented",
         permissionDeferral: "unsupported_not_implemented",
@@ -78,6 +79,21 @@ function show(item: ReturnType<typeof conversation>) {
   })
 }
 
+/** A conversation whose agent process has started, as the gateway reports it. */
+function started() {
+  return attached({
+    runtime: {
+      model: "claude-sonnet-5",
+      provider: "claude-acp",
+      workspace: "/work/nessa",
+      agent: "claude",
+      modelName: "Sonnet 5",
+      contextWindowTokens: 200_000,
+      reasoning: true,
+    },
+  })
+}
+
 function group(title: string) {
   const section = [...document.body.querySelectorAll("section")].find(
     (item) =>
@@ -104,6 +120,176 @@ it("says in a word whether approvals work here, without the capability jargon", 
   )
   expect(group("Model")).toBe("ModelImagesNot supported")
   expect(document.body.textContent).not.toContain("turn correlation")
+})
+
+it("claims no run's hooks before an agent process has started", () => {
+  // A conversation followed after a restart has no process, and its default
+  // capabilities read off whatever its last run used.
+  show(attached())
+  expect(group("Approvals")).not.toContain("Native hooks")
+
+  show(started())
+  expect(group("Approvals")).toContain(
+    "Native hooksFor this run, Nessa asks this agent to leave its own hooks off.",
+  )
+})
+
+it("says a hook can change a tool call when native hooks are on", () => {
+  const item = attached()
+  const features = item.remote?.capabilities.agentFeatures
+  if (!features) throw new Error("missing features")
+  features.nativeHooks = "on"
+  if (!item.remote) throw new Error("missing remote")
+  item.remote.runtime = {
+    model: "claude-sonnet-5",
+    provider: "claude-acp",
+    workspace: "/work/nessa",
+    agent: "claude",
+    modelName: "Sonnet 5",
+    contextWindowTokens: 200_000,
+    reasoning: true,
+  }
+  show(item)
+  expect(group("Approvals")).toContain(
+    "For this run, hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts.",
+  )
+  expect(group("Approvals")).toContain("only for projects you trust")
+  expect(group("Approvals")).not.toContain("The next time this agent starts")
+})
+
+it("says the current switch applies at the next start when this run differs", async () => {
+  const item = attached()
+  const features = item.remote?.capabilities.agentFeatures
+  if (!features) throw new Error("missing features")
+  features.nativeHooks = "on"
+  if (!item.remote) throw new Error("missing remote")
+  item.remote.runtime = {
+    model: "claude-sonnet-5",
+    provider: "claude-acp",
+    workspace: "/work/nessa",
+    agent: "claude",
+    modelName: "Sonnet 5",
+    contextWindowTokens: 200_000,
+    reasoning: true,
+  }
+  await act(async () => {
+    root.render(
+      <ConversationDetails
+        conversation={item}
+        rename={false}
+        onClose={() => {}}
+        onRename={() => {}}
+        readNativeHooks={async () => "off"}
+      />,
+    )
+  })
+  expect(group("Approvals")).toContain(
+    "The next time this agent starts, Nessa asks it to leave its own hooks off.",
+  )
+  expect(group("Approvals")).not.toContain("so they can run")
+})
+
+it("names hooks on, and warns about the repo's settings, when Claude's next start turns them on", async () => {
+  const item = attached()
+  if (!item.remote) throw new Error("missing remote")
+  item.remote.runtime = {
+    model: "claude-sonnet-5",
+    provider: "claude-acp",
+    workspace: "/work/nessa",
+    agent: "claude",
+    modelName: "Sonnet 5",
+    contextWindowTokens: 200_000,
+    reasoning: true,
+  }
+  await act(async () => {
+    root.render(
+      <ConversationDetails
+        conversation={item}
+        rename={false}
+        onClose={() => {}}
+        onRename={() => {}}
+        readNativeHooks={async () => "on"}
+      />,
+    )
+  })
+  expect(group("Approvals")).toContain(
+    "For this run, Nessa asks this agent to leave its own hooks off. The next time this agent starts, Nessa no longer asks it to leave its own hooks off, so they can run.",
+  )
+  expect(group("Approvals")).toContain("only for projects you trust")
+})
+
+it("reads the switch again when the window is focused", async () => {
+  const item = started()
+  let choice: "off" | "on" = "on"
+  await act(async () => {
+    root.render(
+      <ConversationDetails
+        conversation={item}
+        rename={false}
+        onClose={() => {}}
+        onRename={() => {}}
+        readNativeHooks={async () => choice}
+      />,
+    )
+  })
+  expect(group("Approvals")).toContain(
+    "The next time this agent starts, Nessa no longer asks it to leave its own hooks off, so they can run.",
+  )
+  choice = "off"
+  await act(async () => {
+    window.dispatchEvent(new Event("focus"))
+  })
+  expect(group("Approvals")).toContain(
+    "For this run, Nessa asks this agent to leave its own hooks off.",
+  )
+  expect(group("Approvals")).not.toContain("The next time this agent starts")
+})
+
+it("keeps the newest read when an older one settles last", async () => {
+  const item = started()
+  const pending: Array<(choice: "off" | "on") => void> = []
+  await act(async () => {
+    root.render(
+      <ConversationDetails
+        conversation={item}
+        rename={false}
+        onClose={() => {}}
+        onRename={() => {}}
+        readNativeHooks={() => new Promise((resolve) => pending.push(resolve))}
+      />,
+    )
+  })
+  await act(async () => pending[0]("off"))
+  await act(async () => {
+    window.dispatchEvent(new Event("focus"))
+    window.dispatchEvent(new Event("focus"))
+  })
+  // The newer read answers first, then the older one with an outdated switch.
+  await act(async () => pending[2]("off"))
+  await act(async () => pending[1]("on"))
+  expect(group("Approvals")).toContain(
+    "For this run, Nessa asks this agent to leave its own hooks off.",
+  )
+  expect(group("Approvals")).not.toContain("The next time this agent starts")
+})
+
+it("keeps this run's sentence when the switch still matches", async () => {
+  const item = started()
+  await act(async () => {
+    root.render(
+      <ConversationDetails
+        conversation={item}
+        rename={false}
+        onClose={() => {}}
+        onRename={() => {}}
+        readNativeHooks={async () => "off"}
+      />,
+    )
+  })
+  expect(group("Approvals")).toContain(
+    "For this run, Nessa asks this agent to leave its own hooks off.",
+  )
+  expect(group("Approvals")).not.toContain("The next time this agent starts")
 })
 
 it("names the model and its agent once the gateway reports them", () => {

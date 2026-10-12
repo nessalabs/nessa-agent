@@ -1,0 +1,131 @@
+# 768. Native harness hooks are a per-harness choice
+
+## Purpose
+
+A person can let Claude Code or Codex run its own hooks. The choice is off
+by default, so today's suppression request stays unless they turn it on.
+OpenCode is out of this decision and stays suppressed.
+
+- **Date:** Oct 11, 2026
+- **Status:** accepted
+
+## Context
+
+Nessa does not import or re-run a third-party harness's hooks (#135). Those
+harnesses may run their own hooks when the person chooses, and Nessa-owned
+hooks are for Nessa's own agent later. Claude and Codex suppress differently,
+and each still has a residual path Nessa cannot close: Claude managed hooks
+fire even with `disableAllHooks`, and Codex legacy managed configuration and
+MDM can override `features.hooks: false` and an empty `notify`. A conversation
+runs one harness (#142).
+
+## Decision
+
+The setting is per harness, for Claude and Codex only. Off, the default,
+keeps today's suppression request. On, that harness's process start omits the
+suppression request. Claude then loads the setting sources the Claude CLI
+loads: user, project, and local. That also applies the repo's `.claude`
+settings, including its allow rules and startup hooks, so turn it on only for
+projects you trust. Codex omits `features.hooks` and `notify` and does not
+send `features.hooks: true`. It does not send an enable flag. The negotiated
+suppression fact stays what it is today. The choice is stored beside the
+gateway, recorded with the caller, and shown on the conversation and in
+Settings. Each Claude or Codex process start reads the current switch once
+and uses that value for the profile and, for Codex, the launch environment.
+Applies the next time each conversation's agent starts, including a
+conversation that is already open. A process already running keeps the choice
+it started with. The conversation view shows that start's value, and when it
+differs from the current switch says the new value applies at the next start.
+With no process started, it states no run's value.
+Hooks can approve, deny, or change a tool call and its result without Nessa
+asking, and can run commands when the agent starts. With hooks on, recorded
+input and output are what the model proposed or the tool returned, and a hook
+may have changed or approved them.
+
+## Ordering
+
+One command is one harness and one request id. The other harness is a
+different command. The rows are the orders the store implements.
+`a_change_records_the_caller_and_a_retry_keeps_one_record_per_phase`,
+`a_failed_requested_record_leaves_the_choice_off`,
+`a_failed_outcome_record_reverts_the_choice`,
+`a_file_without_an_outcome_loads_as_written`,
+`a_retry_after_a_failed_outcome_keeps_the_first_observation`,
+`a_reused_request_id_for_a_different_choice_fails`,
+`a_failed_revert_keeps_the_recorded_flag_and_the_next_command_puts_the_file_back`,
+`a_choice_renamed_into_place_is_in_effect_when_its_directory_sync_fails`,
+`a_readable_outcome_record_keeps_the_change_it_records`,
+`a_process_start_reads_the_earlier_choice_until_the_outcome_is_recorded`,
+`a_harness_named_twice_is_off_whichever_value_comes_last`,
+`a_choice_file_larger_than_any_choice_loads_as_off`,
+`a_retry_is_not_acknowledged_until_the_outcome_records_directory_syncs`,
+`an_audit_record_larger_than_any_record_fails_the_retry`,
+`a_choice_published_without_its_outcome_is_put_back_at_the_next_start`,
+`a_pending_change_whose_outcome_was_recorded_is_kept_at_the_next_start`,
+`a_pending_change_whose_outcome_record_contradicts_it_is_put_back`,
+`a_failed_revert_keeps_the_recorded_flag_and_the_next_command_puts_the_file_back`,
+`an_unreadable_pending_change_loads_as_off`,
+`an_unreadable_outcome_keeps_the_change_pending_and_the_harness_off`,
+`an_outcome_that_cannot_be_read_back_keeps_the_change_pending_and_the_harness_off`,
+`a_revert_that_does_not_sync_keeps_the_change_pending`,
+`a_marker_path_that_is_a_directory_is_moved_aside_and_loads_as_off`,
+`a_marker_that_names_a_requested_record_loads_as_off`,
+`a_recorded_change_whose_marker_cannot_be_removed_fails_the_command`,
+`a_readable_outcome_whose_directory_does_not_sync_keeps_the_harness_off`,
+`a_retry_after_the_switch_moved_does_not_reapply_its_choice`,
+`a_recorded_change_whose_file_rename_was_lost_is_written_again`, and
+`hooks_turned_off_by_a_crashed_command_go_back_on_only_with_its_requested_record`
+are those rows.
+The launch row is `claude_native_hook_runs_when_the_launch_omits_suppression`
+and `codex_native_hook_runs_when_the_launch_omits_suppression`. The next start
+of a conversation already open is
+`turning_hooks_off_suppresses_an_existing_claude_conversations_next_launch`
+and
+`turning_hooks_off_suppresses_an_existing_codex_conversations_next_launch`.
+
+| Now | What arrives | What follows |
+| --- | --- | --- |
+| Off, no records | The caller asks for on | Requested record, then the file, then the outcome record, then the flag. A process start reads the earlier choice until the outcome is recorded |
+| No requested record | The requested record fails | The file is not written. The flag stays. The command fails |
+| Requested record written, file still off | The outcome record fails | The file and the flag stay off. The command fails |
+| Requested record written, file on, flag still off | The outcome record fails and the revert write succeeds | The file returns to the choice this call started from, and the flag never moved. The command fails |
+| File published | The revert write fails or does not sync | The flag keeps the recorded choice. The command fails. The outcome record is absent, and the next command or gateway start puts the file back before anything else |
+| Change pending | The outcome record cannot be read, during the command or at settlement | The change stays pending and that harness is off until it settles |
+| Requested record written | The file is renamed into place and its directory sync fails | The outcome is recorded and the flag follows the file. The change stays pending. The command reports the storage failure. A retry succeeds once the directory syncs, and reports the storage failure until then |
+| File written | The outcome record is written and readable, but the audit reports a failure, such as its directory sync failing | Nothing is reverted, because the record says the change took effect. The command fails, and the change stays pending. The flag follows the record only once the record's directory syncs; until then that harness is off. A retry or the next start syncs the record's directory before the change is settled, and reports the audit failure until then |
+| A conversation response | Two tool rows of one execution name different hooks choices | The client refuses the response. One execution runs in one process start |
+| File written, outcome absent or not the one pending, change pending | The gateway starts, or the next command arrives | The file goes back to the choice before the command. Hooks go back on only when that command's requested record says they were on. A retry of the command finishes it |
+| Outcome recorded | The pending marker cannot be removed | The flag follows the recorded choice. The command reports the storage failure, and the marker stays for the next settlement |
+| Outcome recorded, change pending | The gateway starts, or the next command arrives | The file is written again to the recorded choice and synced, even if a crash lost its first rename |
+| File written and settled, outcome record later lost | The gateway starts | The start loads the file |
+| The pending marker cannot be read, is not a file, or does not name an outcome record for the choice it asked for | The gateway starts, or the next command arrives | The file is written off and the marker is removed, or moved aside when it is not a file. The settlement fails, and the next command is refused, until the marker is gone |
+| The file is not one JSON object, names a harness twice, or is larger than any choice | The gateway starts | That file loads as off and the gateway keeps starting |
+| Both records written for this choice | The same caller, harness, and request id | The command succeeds. The records stay as first written, including the observation time |
+| Requested record written, outcome absent, the switch moved since | The same request id is retried | The command fails with an audit failure and changes nothing. A retry finishes only the change its first attempt started; a new request makes a new change |
+| Outcome written for a different choice | The same request id | The command fails. The file is unchanged |
+| Another client changes the choice | Settings › Access is open and the window regains focus or becomes visible | The rows read the choice again. Only the latest read answers, and a read never overrides a change in progress |
+| The choice is on | That harness's process starts | Claude sends setting sources user, project, and local and omits `disableAllHooks`. Codex omits `features.hooks` and `notify`. A process already running is not restarted |
+| A process start fails before the process exists | The conversation is read | It keeps the hooks choice the last process ran with. The failed attempt's value is never shown as the run's choice |
+| The choice is on | A session is deleted | The deletion process keeps hooks suppressed. Deleting is Nessa's housekeeping, not a run of the agent |
+| Claude or Codex starts a process | Before any request reaches it | The launch record is written with the choice, the cause (an open for a session's attachment, a direct open with no session, or the runtime's restart), and whether saved context was resumed. No hook can run before it: the earliest hook, SessionStart, needs a session, and no session is requested until the record is durable |
+| A process start runs a tool call | The call's events are saved | Each tool event carries that start's choice, so a reader after a restart shows the choice the call ran under. An event saved without one shows none, and so does every call of an execution whose saved choices disagree |
+
+## Alternatives considered
+
+One global switch lost because OpenCode must stay suppressed, and because
+Claude and Codex do not share a suppression request or a residual risk. A
+global on would either start OpenCode's hooks or hide that it cannot. Leaving
+the choice inside each provider, with no shared store, lost because a
+credentialed Claude provider is rebuilt on every open and the details panel
+needs one current value.
+
+## Consequences
+
+Each process start of Claude or Codex follows the stored choice, including
+the next start of a conversation already open. A process already running is
+unchanged. OpenCode's launch environment is untouched. The agent catalog
+holds the choice once, at its top level; agent rows do not repeat it.
+Managed and MDM hooks can still run when the choice is off, and allowing
+hooks does not prove a hook ran. A crash after the file is written and before
+the outcome record is written is put back at the next gateway start or
+command, so the file never runs ahead of the audit across a restart.

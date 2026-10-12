@@ -226,6 +226,12 @@ pub trait AgentProvider: Send + Sync {
     fn effort_level(&self) -> Option<crate::domain::model_metadata::value_objects::EffortLevel> {
         None
     }
+    /// Whether the next conversation this factory has not opened yet omits
+    /// native-hook suppression. Claude and Codex read the switch they were
+    /// given. Every other provider stays off.
+    fn native_hooks_allowed(&self) -> bool {
+        false
+    }
     /// Exact provider/model/context configuration used to validate restoration.
     fn identity(&self) -> ProviderIdentity;
     /// Immutable configured model and binding capabilities available before open.
