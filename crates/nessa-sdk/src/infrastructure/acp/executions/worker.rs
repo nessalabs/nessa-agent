@@ -75,7 +75,7 @@ use std::{
     },
     task::Poll,
 };
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{mpsc, oneshot, watch, Semaphore};
 
 /// What this client says about itself in `initialize`, on every connection
 /// it opens to an agent, whatever the connection is for.
@@ -406,6 +406,10 @@ struct Worker<P> {
     permissions: HashMap<PermissionId, RpcId>,
     /// Reviews waiting on a person, and the moment the deadline answers them.
     armed_permissions: HashMap<PermissionId, ArmedPermission>,
+    /// One path classification at a time. A read that outlasts its wait keeps
+    /// the permit until the read returns, so the next review does not start
+    /// another (`a_classification_still_running_is_not_started_again`).
+    path_classification: Arc<Semaphore>,
     /// One session identity claimed by advisory updates racing session startup.
     /// Advisory payloads are not retained and conflicting identities fail startup.
     startup_advisory_session: Option<ExecutionSessionId>,
@@ -517,6 +521,7 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
         permission_authority,
         permissions: HashMap::new(),
         armed_permissions: HashMap::new(),
+        path_classification: Arc::new(Semaphore::new(1)),
         startup_advisory_session: None,
         questions: HashMap::new(),
         declined: None,
@@ -2574,6 +2579,7 @@ impl<P: AcpProfile> Worker<P> {
             .expect("validated active prompt")
             .execution_id;
         let class = bounded_review_class(
+            &self.path_classification,
             *tool.kind(),
             tool.locations().clone(),
             self.config.workspace.clone(),

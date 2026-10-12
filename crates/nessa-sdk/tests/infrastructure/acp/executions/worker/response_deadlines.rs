@@ -114,6 +114,7 @@ async fn blocked_worker(
         operation_capabilities,
         permissions: HashMap::new(),
         armed_permissions: HashMap::new(),
+        path_classification: std::sync::Arc::new(tokio::sync::Semaphore::new(1)),
         startup_advisory_session: None,
         questions: HashMap::new(),
         declined: None,

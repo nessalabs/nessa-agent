@@ -59,7 +59,11 @@ remaining on the machine.
 The path is checked when the request arrives. The tool reads those bytes
 later, as much as eight seconds later when the deadline allows the read. A
 path that was inside the workspace at the check can be replaced before that
-read.
+read. The check runs off the worker and gives up after 250 milliseconds. That
+read keeps the worker's one classification permit until it returns, so a later
+review on the same worker does not start a second read
+(`a_classification_still_running_is_not_started_again`). That review is the
+deny class.
 
 The standard policy, owned by `PermissionDeadlinePolicy::standard`:
 

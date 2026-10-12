@@ -10,8 +10,10 @@ use crate::domain::agent_execution::{
 };
 use std::{
     path::{Path, PathBuf},
+    sync::Arc,
     time::Duration,
 };
+use tokio::sync::Semaphore;
 
 /// How long path classification may wait on the filesystem. A canonicalize
 /// that has not returned by then is the deny class, so a stuck mount cannot
@@ -68,14 +70,25 @@ pub(crate) fn review_class_with(
 
 /// Classify off the worker task. A filesystem read that outlasts
 /// [`PATH_RESOLUTION_BOUND`] is the deny class.
+///
+/// `in_flight` is this worker's one classification. The permit stays with the
+/// read until the read returns, including after the wait has given up, so a
+/// later review does not start another
+/// (`a_classification_still_running_is_not_started_again`).
 pub(crate) async fn bounded_review_class(
+    in_flight: &Arc<Semaphore>,
     kind: Option<ToolKind>,
     locations: Option<Vec<FileLocation>>,
     workspace: PathBuf,
     canonicalize: impl Fn(&Path) -> Option<PathBuf> + Send + 'static,
 ) -> PermissionToolClass {
-    let work =
-        move || review_class_with(kind, &locations, &workspace, &mut |path| canonicalize(path));
+    let Ok(permit) = Arc::clone(in_flight).try_acquire_owned() else {
+        return PermissionToolClass::Other;
+    };
+    let work = move || {
+        let _permit = permit;
+        review_class_with(kind, &locations, &workspace, &mut |path| canonicalize(path))
+    };
     match tokio::time::timeout(PATH_RESOLUTION_BOUND, tokio::task::spawn_blocking(work)).await {
         Ok(Ok(class)) => class,
         _ => PermissionToolClass::Other,
@@ -104,6 +117,11 @@ mod tests {
     use super::*;
     use crate::domain::agent_execution::tools::FilePath;
     use std::fs;
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+    use tokio::time::timeout;
 
     fn location(path: &Path) -> FileLocation {
         FileLocation::new(FilePath::new(path.to_str().unwrap()).unwrap(), None)
@@ -212,17 +230,97 @@ mod tests {
         fs::create_dir(&workspace).unwrap();
         let inside = at(&workspace, "notes.txt");
         let locations = Some(vec![location(&inside)]);
+        let budget = Arc::new(Semaphore::new(1));
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_for_read = Arc::clone(&stop);
         let started = std::time::Instant::now();
-        let class = super::bounded_review_class(Some(ToolKind::Read), locations, workspace, |_| {
-            std::thread::sleep(Duration::from_secs(5));
-            None
-        })
+        let class = super::bounded_review_class(
+            &budget,
+            Some(ToolKind::Read),
+            locations,
+            workspace,
+            move |_| {
+                let began = std::time::Instant::now();
+                while began.elapsed() < Duration::from_secs(5) {
+                    if stop_for_read.load(Ordering::Relaxed) {
+                        return None;
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                None
+            },
+        )
         .await;
         assert_eq!(class, PermissionToolClass::Other);
         assert!(
             started.elapsed() < Duration::from_secs(2),
             "classification waited on the filesystem for {:?}",
             started.elapsed()
+        );
+        stop.store(true, Ordering::Relaxed);
+    }
+
+    #[tokio::test]
+    async fn a_classification_still_running_is_not_started_again() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("workspace");
+        fs::create_dir(&workspace).unwrap();
+        let inside = at(&workspace, "notes.txt");
+        let budget = Arc::new(Semaphore::new(1));
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_for_read = Arc::clone(&stop);
+        let first = {
+            let budget = Arc::clone(&budget);
+            let locations = Some(vec![location(&inside)]);
+            let workspace = workspace.clone();
+            tokio::spawn(async move {
+                super::bounded_review_class(
+                    &budget,
+                    Some(ToolKind::Read),
+                    locations,
+                    workspace,
+                    move |_| {
+                        while !stop_for_read.load(Ordering::Relaxed) {
+                            std::thread::sleep(Duration::from_millis(20));
+                        }
+                        None
+                    },
+                )
+                .await
+            })
+        };
+        timeout(Duration::from_secs(1), async {
+            loop {
+                if budget.available_permits() == 0 {
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the first classification never took its permit");
+        let started = std::time::Instant::now();
+        let second = super::bounded_review_class(
+            &budget,
+            Some(ToolKind::Read),
+            Some(vec![location(&inside)]),
+            workspace,
+            |_| Some(std::path::PathBuf::from("/")),
+        )
+        .await;
+        assert_eq!(second, PermissionToolClass::Other);
+        assert!(
+            started.elapsed() < Duration::from_millis(100),
+            "a second classification waited {:?}",
+            started.elapsed()
+        );
+        stop.store(true, Ordering::Relaxed);
+        assert_eq!(
+            timeout(Duration::from_secs(2), first)
+                .await
+                .expect("the first classification did not finish")
+                .expect("the first classification panicked"),
+            PermissionToolClass::Other
         );
     }
 }
