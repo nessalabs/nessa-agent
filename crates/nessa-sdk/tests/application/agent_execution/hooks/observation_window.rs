@@ -1913,6 +1913,37 @@ async fn a_withdrawal_that_needs_the_execution_polled_completes() {
     assert_eq!(fixture.turn_cancels.load(Ordering::SeqCst), 1);
 }
 
+#[tokio::test]
+async fn a_caller_cannot_record_a_terminal_hook_withdrawal() {
+    let fixture = agent_with(script(), Vec::new()).await;
+    let withdrawal = |code: &str| PermissionCancellationRequest {
+        execution_id: ExecutionId::new("turn").unwrap(),
+        id: PermissionId::new("review").unwrap(),
+        reason: PermissionCancellationReason::custom(
+            CustomPermissionCancellationReason::new(code, "withdrawn").unwrap(),
+        ),
+        actor: ActionContext::new("permission-review-hook", "0", "review").unwrap(),
+    };
+    for code in ["hook-refusal.end_turn", "hook-refusal.close_session"] {
+        let refused = fixture.agent.cancel_permission(withdrawal(code)).await;
+        assert!(
+            matches!(refused, Err(AgentError::InvalidInput(_))),
+            "{code} was accepted from a caller: {refused:?}"
+        );
+    }
+    assert_eq!(
+        fixture.cancelled.load(Ordering::SeqCst),
+        0,
+        "nothing was sent"
+    );
+    // A continue records nothing the caller did not do, so it still goes through.
+    let _ = fixture
+        .agent
+        .cancel_permission(withdrawal("hook-refusal.continue"))
+        .await;
+    assert_eq!(fixture.cancelled.load(Ordering::SeqCst), 1);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_second_review_does_not_start_another_hook_thread() {
     let entered = Arc::new(AtomicBool::new(false));

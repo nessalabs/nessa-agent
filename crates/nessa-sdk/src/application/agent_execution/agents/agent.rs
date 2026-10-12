@@ -42,7 +42,8 @@ use crate::application::agent_execution::sessions::{
 use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::domain::agent_execution::permissions::{
     CustomPermissionCancellationReason, PermissionAuthorityError, PermissionCancellationReason,
-    PermissionEffect, PermissionId, PermissionOptionId, PermissionScope, RefusalOutcome,
+    PermissionCancellationReasonView, PermissionEffect, PermissionId, PermissionOptionId,
+    PermissionScope, RefusalOutcome,
 };
 use crate::domain::agent_execution::tools::ToolCallId;
 use crate::domain::model_metadata::value_objects::{EffortLevel, EffortLevels};
@@ -262,6 +263,17 @@ fn hook_withdrawal_code(outcome: RefusalOutcome) -> &'static str {
         RefusalOutcome::EndTurn => "hook-refusal.end_turn",
         RefusalOutcome::CloseSession => "hook-refusal.close_session",
     }
+}
+
+/// Whether `reason` records a terminal hook outcome, which only the runner,
+/// having ended the turn or closed the session itself, may record.
+fn records_terminal_hook_outcome(reason: &PermissionCancellationReason) -> bool {
+    let PermissionCancellationReasonView::Custom(custom) = reason.view() else {
+        return false;
+    };
+    [RefusalOutcome::EndTurn, RefusalOutcome::CloseSession]
+        .into_iter()
+        .any(|outcome| custom.code() == hook_withdrawal_code(outcome))
 }
 
 fn deny_option(event: &ExecutionEvent) -> Option<PermissionOptionId> {
@@ -2120,7 +2132,7 @@ impl Agent {
         let custom =
             CustomPermissionCancellationReason::new(hook_withdrawal_code(outcome), explanation)
                 .map_err(|error| AgentError::InvalidInput(error.to_string()))?;
-        self.cancel_permission(PermissionCancellationRequest {
+        self.withdraw_permission(PermissionCancellationRequest {
             execution_id: event.execution_id().clone(),
             id,
             reason: PermissionCancellationReason::custom(custom),
@@ -2299,7 +2311,26 @@ impl Agent {
     /// The caller's `Waker` is woken when the operation's own task finishes;
     /// a panic from it is logged and does not affect the operation. See
     /// "Caller wakers" in docs/agent_execution/lifecycle.md.
+    ///
+    /// A caller cannot record a terminal hook outcome: a custom reason coded
+    /// `hook-refusal.end_turn` or `hook-refusal.close_session` is rejected
+    /// with [`AgentError::InvalidInput`] before anything is sent, because only
+    /// the runner ends the turn or closes the session that code records.
     pub fn cancel_permission(
+        &self,
+        request: PermissionCancellationRequest,
+    ) -> AgentFuture<'_, PermissionCancellation> {
+        if records_terminal_hook_outcome(&request.reason) {
+            return Box::pin(async {
+                Err(AgentError::InvalidInput(
+                    "a terminal hook outcome is recorded only by the runner".into(),
+                ))
+            });
+        }
+        self.withdraw_permission(request)
+    }
+
+    fn withdraw_permission(
         &self,
         request: PermissionCancellationRequest,
     ) -> AgentFuture<'_, PermissionCancellation> {
