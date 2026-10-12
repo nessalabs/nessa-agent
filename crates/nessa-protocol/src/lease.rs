@@ -14,9 +14,13 @@
 //! gateway ── Account{lease} ──▶ environment ── Accounted{cleanup} ──▶ gateway
 //! gateway ── Keepalive ──▶ environment   (every KEEPALIVE_INTERVAL, always)
 //! environment ── Keepalive ──▶ gateway   (when idle KEEPALIVE_INTERVAL)
-//! environment ── Published{lease, artifact, file} ──▶ gateway   (no bytes)
+//! environment ── Published{lease, artifact, request: None, file} ──▶ gateway   (no bytes)
 //!   gateway ── sftp read of the file's outbox path ──▶ environment   (the artifact channel)
 //! gateway ── Collected{lease, artifact, outcome} ──▶ environment
+//! gateway ── Publish{lease, request, path, mediaType} ──▶ environment
+//!   staged as the lease's publish point stages ──▶ Published{lease, artifact, request, file}
+//!   ──▶ (read, kept, as above) ──▶ Collected{lease, artifact, outcome}
+//!   not staged ──▶ NotPublished{lease, request, reason}
 //!
 //! a command lease (one bounded command, no harness):
 //! gateway ── GrantCommand{lease, argv, cwd, timeoutMs} ──▶ environment ── Granted{terms} | Refused ──▶ gateway
@@ -62,6 +66,13 @@
 //! this stream (sftp on the same SSH connection) and verifies what it read
 //! against the digest, then answers [`ToEnvironment::Collected`], after which
 //! the environment lets the staged copy go.
+//!
+//! A file is published two ways, which meet at [`FromEnvironment::Published`]:
+//! a harness asks the lease's publish point on its host, and that frame names
+//! no request; or the gateway asks with [`ToEnvironment::Publish`], for the
+//! agent's own tool call, and the frame names that call's `request`, so the
+//! gateway knows whose call the file answers. A gateway's ask that is not
+//! staged is answered [`FromEnvironment::NotPublished`] instead.
 //!
 //! The hello is read by [`read_hello`], which looks only at its `type`,
 //! `build` and `protocol`: an environment speaking another protocol is
@@ -341,6 +352,33 @@ pub enum CollectionRefusal {
     LeaseEnded,
 }
 
+/// Why an environment did not publish a file at all: nothing of it reached
+/// the gateway. A harness is told it by its publish point; the gateway, for
+/// a publish it asked, by [`FromEnvironment::NotPublished`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PublishRefusal {
+    /// The path is not a regular file inside the workspace, after every
+    /// link in it is followed.
+    OutsideWorkspace,
+    /// No such file, or not one that can be read.
+    Unreadable,
+    /// Empty, or larger than [`MAX_ARTIFACT_BYTES`].
+    Size,
+    /// A media type that is not lowercase `type/subtype`, or a file name
+    /// that cannot be shown.
+    Invalid,
+    /// This lease already has as many artifacts in flight as it may
+    /// ([`MAX_ARTIFACTS_IN_FLIGHT`]).
+    Busy,
+    /// The copy could not be staged.
+    StagingFailed,
+    /// The publish could not be recorded in the environment's audit.
+    AuditUnavailable,
+    /// The lease ended, or is not held there, before the file was offered.
+    LeaseEnded,
+}
+
 /// The first frame an environment sends.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -453,6 +491,21 @@ pub enum ToEnvironment {
         /// What became of it.
         outcome: Collection,
     },
+    /// Publish the file at `path` under the lease, as its publish point
+    /// would for a harness: staged by digest and offered with a
+    /// [`FromEnvironment::Published`] naming `request`, or answered
+    /// [`FromEnvironment::NotPublished`].
+    Publish {
+        /// The lease's id.
+        lease: String,
+        /// The gateway's name for this ask: the agent's tool call.
+        request: String,
+        /// The file: absolute, or relative to the workspace.
+        path: String,
+        /// Its media type, when the agent named one; else it is read from
+        /// the file's extension.
+        media_type: Option<String>,
+    },
 }
 
 /// What an environment sends a gateway after its [`Hello`].
@@ -543,15 +596,28 @@ pub enum FromEnvironment {
         /// Its cleanup, as the environment recorded it.
         cleanup: Cleanup,
     },
-    /// The lease's harness published a file, staged for the gateway to
+    /// A file was published under the lease, staged for the gateway to
     /// collect over the artifact channel.
     Published {
         /// The lease's id.
         lease: String,
         /// The environment's number for the artifact under the lease.
         artifact: u32,
+        /// The gateway's [`ToEnvironment::Publish`] it answers; `None` for a
+        /// file a harness published through the lease's publish point.
+        request: Option<String>,
         /// What it is and where it is staged.
         file: StagedArtifact,
+    },
+    /// The gateway's [`ToEnvironment::Publish`] was not staged: nothing of
+    /// the file is offered.
+    NotPublished {
+        /// The lease's id.
+        lease: String,
+        /// The ask it answers.
+        request: String,
+        /// Why.
+        reason: PublishRefusal,
     },
     /// A command lease's command ended, and the lease with it.
     Ran {
@@ -584,6 +650,7 @@ impl FromEnvironment {
             | Self::Ended { lease, .. }
             | Self::Accounted { lease, .. }
             | Self::Published { lease, .. }
+            | Self::NotPublished { lease, .. }
             | Self::Ran { lease, .. } => Some(lease),
         }
     }
@@ -602,6 +669,7 @@ impl ToEnvironment {
             | Self::End { lease }
             | Self::Account { lease }
             | Self::Collected { lease, .. }
+            | Self::Publish { lease, .. }
             | Self::GrantCommand { lease, .. }
             | Self::Run { lease } => Some(lease),
         }

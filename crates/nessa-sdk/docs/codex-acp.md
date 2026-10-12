@@ -143,6 +143,30 @@ listing is also limited to Codex's current model provider and its usual thread
 sources, so a thread Codex keeps under another provider is not listed either,
 and is asked to be deleted the same way.
 
+## Web search observation ordering
+
+The pinned 1.12.0 harness sends `webSearch` identity at announcement and fills
+`query`/`action` in the completed `tool_call_update`. These two fields describe
+the completed search observation; they do not replace the original input retained
+for permission review. The adapter owns this normalization in
+`infrastructure/codex_acp/tools/wire.rs`. Tests below live in
+`tests/infrastructure/codex_acp/tools/wire.rs`.
+
+| Prior observation and arriving frame | Result | Regression |
+| --- | --- | --- |
+| No observation → search announcement | Retain original input and charge encoded bytes | `web_search_completion_can_supply_search_details_without_changing_review_input` |
+| Unnamed, non-MCP search → completed update with same `webSearch` type, call ID, and stable fields, with query/action filled | Accept observation; original review input stays unchanged | `web_search_completion_can_supply_search_details_without_changing_review_input` |
+| Completed search → duplicate matching completion | Accept without another input charge | `web_search_completion_can_supply_search_details_without_changing_review_input` |
+| Search → changed input on an in-progress update, or changed identity on completion | Reject | `web_search_completion_exception_keeps_identity_and_command_inputs_strict` |
+| Command, named tool, or MCP observation → changed input on completion | Reject | `web_search_completion_exception_keeps_identity_and_command_inputs_strict`; `web_search_completion_does_not_exempt_named_mcp_or_unknown_input_fields` |
+| Search → changed type or additional stable field on completion | Reject | `web_search_completion_does_not_exempt_named_mcp_or_unknown_input_fields` |
+| Search → permission request with changed input | Reject through the original exact-input comparison | `web_search_completion_can_supply_search_details_without_changing_review_input` |
+
+This exception does not authorize a tool, expand its permissions, or change
+retention accounting. Completion normalization and permission review have
+separate owners: an observed completed search can gain metadata while an approval
+must still describe the original request.
+
 ## Install and run
 
 The local harness manifest and lockfile pin `@agentclientprotocol/codex-acp`
@@ -160,14 +184,26 @@ is incomplete. Linux service registration and release packaging remain disabled.
 
 ## Verification
 
-**A live Codex run reaches this binding's authentication boundary and no
-further.** Against the pinned adapter the gateway starts Codex, `initialize`
-negotiates, and `session/new` is refused on a machine with no OpenAI sign-in.
-Nothing past that point has been observed against the real provider, so no
-dated live table is claimed here; the [Claude guide](claude-acp.md#verification)
-has one and this guide gains its own when somebody runs it, not before.
+On **October 11, 2026**, a source-built macOS gateway at upstream `fde8f6c`
+plus the Web search fix in [#774](https://github.com/nessalabs/nessa-agent/pull/774)
+ran the pinned 1.12.0 harness with an existing OpenAI sign-in and catalog model
+`gpt-5.6-terra`. A native Swift product client used a non-admin panel credential
+against an isolated loopback namespace. No credentials are part of this evidence.
 
-What exists is deterministic: unit tests over the configuration and wire
+| Live check | Observed result |
+| --- | --- |
+| Product authentication, conversation list, and agent discovery | Passed |
+| Create, send, and read a text conversation | Completed turn and agent reply |
+| Web search before this fix | `Protocol("tool input changed")` after the Running observation |
+| Web search after this fix | Running and Completed observations for the same tool ID, then a completed turn and reply |
+
+The checks inspect the gateway's durable provider observations as well as the
+client's completed turn. They do not establish live permission approve/deny,
+uploads, restoration, or every tool kind; those remain deterministic coverage
+unless separately exercised. A machine without provider sign-in still stops at
+the authentication boundary.
+
+Deterministic coverage also includes: unit tests over the configuration and wire
 mapping, and contract tests that drive a real subprocess speaking ACP —
 `tests/infrastructure/acp/contracts/fixtures/codex_acp_test_handler.py` —
 through the same shared runtime the Claude binding uses. Those cover the ordered

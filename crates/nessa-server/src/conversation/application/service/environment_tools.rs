@@ -31,7 +31,7 @@ use nessa_sdk::application::agent_execution::{
     permissions::ActionContext,
     sessions::{CurrentLease, LeaseRecord, SessionSnapshot},
 };
-use nessa_sdk::domain::agent_execution::executions::InvocationStage;
+use nessa_sdk::domain::agent_execution::executions::{ExecutionId, InvocationStage};
 use nessa_sdk::domain::agent_execution::leases::{
     CommandExit, CommandOutput, CommandRefusal, CommandTerms, CommandWork, EnvironmentRef, Lease,
     LeaseEndCause, LeaseId, LeasePhase, LeaseRefusal, SandboxProfile, SandboxProfiles,
@@ -168,7 +168,7 @@ impl ConversationService {
         let live = self.live(id).await.ok_or(CommandCallError::NoTurn)?;
         let manager = live.agent.session_manager();
         let snapshot = manager.snapshot().await.ok_or(CommandCallError::NoTurn)?;
-        let (parent, actor) =
+        let (parent, _, actor) =
             running_turn(&snapshot, &call.call).ok_or(CommandCallError::NoTurn)?;
         let lease = LeaseId::new(uuid::Uuid::new_v4().to_string())
             .expect("a UUID is a portable lease identity");
@@ -460,7 +460,7 @@ impl ConversationService {
     }
 
     /// Conversation `id`, open here now; `None` when it is not.
-    async fn live(&self, id: &ConversationId) -> Option<Arc<LiveConversation>> {
+    pub(super) async fn live(&self, id: &ConversationId) -> Option<Arc<LiveConversation>> {
         let slot = self.inner.conversations.lock().await.get(id).cloned()?;
         slot.value.get()?.as_ref().ok().cloned()
     }
@@ -496,10 +496,13 @@ struct Refused<'a> {
     actor: &'a ActionContext,
 }
 
-/// The conversation's Live agent lease and the person the running turn is
-/// for, with `call` as their request; `None` with no turn running or no
-/// Live lease to run under.
-fn running_turn(snapshot: &SessionSnapshot, call: &str) -> Option<(LeaseId, ActionContext)> {
+/// The conversation's Live agent lease, the running turn, and the person
+/// it is for with `call` as their request; `None` with no turn running or
+/// no Live lease to run under.
+pub(super) fn running_turn(
+    snapshot: &SessionSnapshot,
+    call: &str,
+) -> Option<(LeaseId, ExecutionId, ActionContext)> {
     let parent = snapshot
         .lease
         .as_ref()
@@ -516,7 +519,7 @@ fn running_turn(snapshot: &SessionSnapshot, call: &str) -> Option<(LeaseId, Acti
     })?;
     let actor = &turn.actor;
     let actor = ActionContext::new(actor.principal_id(), actor.surface_id(), call).ok()?;
-    Some((parent, actor))
+    Some((parent, turn.request.execution_id.clone(), actor))
 }
 
 /// What issuing a granted command came to, under the lock.
