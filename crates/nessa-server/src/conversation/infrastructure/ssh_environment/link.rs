@@ -484,7 +484,7 @@ impl HostLink {
     /// is admitted on this connection any more, nor a harness started or a
     /// file asked for (a command's `Run` still goes, and the host answers
     /// it as never started); the revocation is recorded with every lease the host
-    /// granted on it; the host is told (`Revoked`), and ends
+    /// granted on it, and a lease it grants after, on its own; the host is told (`Revoked`), and ends
     /// each lease itself with that cause; then each harness lease's ending
     /// cause becomes revoked, unless the host already said why it is ending
     /// it, so whoever watches it ends it as the system's stop; and the
@@ -502,7 +502,8 @@ impl HostLink {
             }
             routes.revoked = true;
             // A lease whose grant is still being answered is not one the
-            // host granted: it is not listed. Granted after all, it ends
+            // host granted: it is not listed. Granted after all, it is
+            // recorded revoked on its own when its grant comes, and ends
             // as revoked as the others do; refused, its route goes.
             let mut granted: Vec<String> = routes
                 .leases
@@ -1224,6 +1225,23 @@ impl Shared {
                     self.routes().unaudited.insert(lease);
                 }
             }
+            Routed::GrantedRevoked(lease) => {
+                // Granted after the revocation was recorded, so not named
+                // in it: it is recorded on its own, as every lease the host
+                // granted is, before the host's next frame (its end) is
+                // read. Unrecorded, it settles nothing as confirmed, unless
+                // it was let go meanwhile.
+                let recorded = self.record(EnvironmentEvent::Revoked {
+                    host: self.host.as_str().into(),
+                    leases: vec![lease.clone()],
+                });
+                if !recorded {
+                    let mut routes = self.routes();
+                    if routes.leases.contains_key(&lease) {
+                        routes.unaudited.insert(lease);
+                    }
+                }
+            }
         }
     }
 }
@@ -1245,6 +1263,9 @@ enum Routed {
         lease: String,
         channel: u32,
     },
+    /// The host granted a lease whose admission was still pending when its
+    /// connection was revoked.
+    GrantedRevoked(String),
 }
 
 fn route_frame(routes: &mut Routes, frame: FromEnvironment) -> Routed {
@@ -1270,7 +1291,11 @@ fn route_frame(routes: &mut Routes, frame: FromEnvironment) -> Routed {
             {
                 Some(waiter) => {
                     let _ = waiter.send(Ok(terms));
-                    Routed::Done
+                    if routes.revoked {
+                        Routed::GrantedRevoked(lease)
+                    } else {
+                        Routed::Done
+                    }
                 }
                 None => Routed::Dropped,
             }

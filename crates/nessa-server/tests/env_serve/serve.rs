@@ -3989,6 +3989,116 @@ async fn a_revocation_after_an_expiry_ends_the_lease_once_as_expired() {
     );
 }
 
+/// A command that ended by itself, its end recorded, while its `Ran` still
+/// waits for room on a gateway reading nothing, is not blamed on a
+/// revocation that comes then: the host records no revoking of it, and its
+/// end stays the one it recorded.
+#[tokio::test]
+async fn a_command_whose_end_is_recorded_is_not_revoked_while_its_ran_waits_for_room() {
+    let timer = Arc::new(ManualTimer::default());
+    let grants = MemoryGrants::none();
+    grants.set(DIALED, Some(PeerGrant::everything()));
+    let ledger = Arc::new(MemoryLedger::default());
+    let mut gateway = Gateway::through(
+        4096,
+        DIALED,
+        grants,
+        ledger.clone(),
+        Arc::new(NoOutbox),
+        true,
+        timer.clone(),
+    );
+    gateway.started(LEASE).await;
+    gateway
+        .send(grant_command(COMMAND, &["echo", "done"], None))
+        .await;
+    gateway.next().await;
+    gateway.settled().await;
+    // The gateway reads nothing from here, until the harness, unread,
+    // overflows its input: every place a `Ran` could go is full.
+    let mut sent = 0;
+    while !ledger
+        .entries()
+        .iter()
+        .any(|entry| matches!(entry, LedgerEntry::InputOverflow { lease, .. } if lease == LEASE))
+    {
+        assert!(sent < 5000, "the harness never stopped reading its input");
+        gateway
+            .send(ToEnvironment::Input {
+                lease: LEASE.into(),
+                channel: 1,
+                data: Data(vec![b'x'; 4000]),
+            })
+            .await;
+        sent += 1;
+        tokio::task::yield_now().await;
+    }
+    gateway
+        .send(ToEnvironment::Run {
+            lease: COMMAND.into(),
+        })
+        .await;
+    let ended = LedgerEntry::Ended {
+        lease: COMMAND.into(),
+        cleanup: Cleanup::Confirmed { forced: false },
+        cause: EndCause::Asked,
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !ledger.entries().contains(&ended) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the command ends by itself");
+    gateway.send(ToEnvironment::Revoked).await;
+    // The revocation is handled at once, every lease in one go: the
+    // harness lease's revoking is recorded once it was.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !ledger
+            .entries()
+            .iter()
+            .any(|entry| matches!(entry, LedgerEntry::Revoking { lease, .. } if lease == LEASE))
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the revocation is handled");
+    let entries = ledger.entries();
+    assert!(
+        !entries.iter().any(|entry| matches!(
+            entry,
+            LedgerEntry::Revoking { lease, .. } if lease == COMMAND
+        )),
+        "{entries:?}"
+    );
+    let ends: Vec<_> = entries
+        .iter()
+        .filter(|entry| matches!(entry, LedgerEntry::Ended { lease, .. } if lease == COMMAND))
+        .collect();
+    assert_eq!(ends, vec![&ended], "{entries:?}");
+    // Nothing is left running: the gateway goes, and serving ends.
+    let Gateway {
+        writer,
+        frames: _unread,
+        mut served,
+        ..
+    } = gateway;
+    drop(writer);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            tokio::select! {
+                _ = &mut served => break,
+                () = tokio::time::sleep(Duration::from_millis(10)) => {
+                    timer.advance(Duration::from_secs(1));
+                }
+            }
+        }
+    })
+    .await
+    .expect("serving ends once the gateway is gone");
+}
+
 /// A gateway that goes away half-open, reading nothing, while a command it
 /// had revoked still waits for room to say its `Ran`: serving still ends,
 /// the command's end recorded, rather than waiting on the gateway for good.

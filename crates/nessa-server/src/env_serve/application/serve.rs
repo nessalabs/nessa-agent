@@ -106,7 +106,7 @@ use std::{
     io,
     path::Path,
     pin::Pin,
-    sync::Arc,
+    sync::{Arc, Mutex, PoisonError},
     time::Duration,
 };
 use tokio::{
@@ -609,10 +609,14 @@ enum HeldCommand {
     /// Granted, its command not yet run.
     Granted(CommandWork),
     /// Its command started: `stop` stops it, and `ran` is its cleanup once
-    /// its end is recorded.
+    /// its end is recorded and its `Ran` handed on. `ending` turns true,
+    /// under its lock, once the command's own task has taken what ended it:
+    /// from then on its end is what that task records, and a revocation
+    /// coming after it records nothing of this lease.
     Running {
         stop: watch::Sender<Option<CommandStop>>,
         ran: watch::Receiver<Option<Cleanup>>,
+        ending: Arc<Mutex<bool>>,
     },
 }
 
@@ -1491,6 +1495,7 @@ impl Served {
         };
         let (stop, stopped) = watch::channel(None);
         let (done, ran_receiver) = watch::channel(None);
+        let ending = Arc::new(Mutex::new(false));
         let entry = LedgerEntry::CommandStarted {
             lease: lease.clone(),
         };
@@ -1506,6 +1511,7 @@ impl Served {
             HeldCommand::Running {
                 stop,
                 ran: ran_receiver,
+                ending: ending.clone(),
             },
         );
         let ledger = self.ledger.clone();
@@ -1516,7 +1522,14 @@ impl Served {
                 Some(running) => running.await,
                 None => CommandRan::not_started(),
             };
-            let stop = *stopped.borrow();
+            // What ended it is taken once, under the lock a revocation
+            // decides under: a revocation either came first, and is this
+            // end's cause, or comes after, and records nothing of it.
+            let stop = {
+                let mut ending = ending.lock().unwrap_or_else(PoisonError::into_inner);
+                *ending = true;
+                *stopped.borrow()
+            };
             let lost = stop == Some(CommandStop::Lost);
             let cause = match stop {
                 Some(CommandStop::Lost) => EndCause::Lost,
@@ -1573,7 +1586,7 @@ impl Served {
     /// once that is recorded; one never run ends holding nothing.
     fn end_command(&mut self, lease: String) {
         match self.commands.remove(&lease) {
-            Some(HeldCommand::Running { stop, ran }) => {
+            Some(HeldCommand::Running { stop, ran, .. }) => {
                 ask_stop(&stop, CommandStop::Ended);
                 self.ends.retain(|_, ended| ended.borrow().is_none());
                 self.ends.insert(lease.clone(), ran);
@@ -1640,13 +1653,14 @@ impl Served {
         for lease in commands {
             match self.commands.get(&lease) {
                 // Its own `Ran` answers, and the gateway's `End` of it waits
-                // for that; one already asked to stop ends as it was asked,
-                // and one whose end is recorded has ended already.
-                Some(running @ HeldCommand::Running { stop, .. })
-                    if running.runs() && stop.borrow().is_none() =>
-                {
-                    let recorded = self.revoking(&lease);
-                    if let Some(HeldCommand::Running { stop, .. }) = self.commands.get(&lease) {
+                // for that; one already asked to stop ends as it was asked.
+                // Decided under its task's lock: one whose task already took
+                // what ended it (its end recorded, or about to be, while its
+                // `Ran` may still wait for room) is not blamed on this.
+                Some(HeldCommand::Running { stop, ending, .. }) if stop.borrow().is_none() => {
+                    let ending = ending.lock().unwrap_or_else(PoisonError::into_inner);
+                    if !*ending {
+                        let recorded = self.revoking(&lease);
                         ask_stop(stop, CommandStop::Revoked { recorded });
                     }
                 }
@@ -1694,7 +1708,7 @@ impl Served {
         let commands: Vec<_> = self.commands.drain().collect();
         for (lease, held) in commands {
             match held {
-                HeldCommand::Running { stop, ran } => {
+                HeldCommand::Running { stop, ran, .. } => {
                     ask_stop(&stop, CommandStop::Lost);
                     self.ends.insert(lease, ran);
                 }
