@@ -12,9 +12,19 @@
 //! demux: frame ──▶ lease route? ──▶ grant / channel output / stopped / ended
 //!                   published ──▶ the lease's offers ──▶ (taken) Collected
 //!                     no room, or nobody takes them ──▶ Collected refused
+//!                     naming a request ──▶ that publish's waiter: offered, or refused
+//!                   not published ──▶ that publish's waiter: the host's reason
+//!                   ending ──▶ the lease's `ending` watch: the host is ending it
 //!                   none ──▶ FrameDropped, never applied elsewhere (row L9)
 //! end of stream ──▶ every route dropped: waiters unanswered, outputs ended,
 //!                   each lease's `gone` closed ──▶ ConnectionLost
+//! revoke(drain) ──▶ no lease admitted any more ──▶ Revoked{leases} recorded
+//!   ──▶ Revoked to the host ──▶ each harness lease's ending cause: revoked
+//!   ──▶ every lease let go (each End answered), or `drain` ──▶ close
+//! publish(lease, request) ──▶ waiter by request ──▶ Publish ──▶ Published | NotPublished
+//! read_artifact(lease, artifact, offset) ──▶ waiter by artifact and offset
+//!   ──▶ ReadArtifact ──▶ ArtifactRead | ArtifactNotRead (a paired connection's
+//!   file bytes, which have no artifact channel beside it)
 //! a command lease: grant_command ──▶ GrantCommand ──▶ Granted{terms} | Refused
 //!                  run ──▶ Run ──▶ Ran (routed to its waiter; the lease is done
 //!                  there unless its End is asked, whose Ended follows)
@@ -47,18 +57,20 @@
 //! lease's end has no evidence, so it is Interrupted. A dropped frame's
 //! record failing is logged only: it records no transition of any lease.
 use super::audit::{EnvironmentAudit, EnvironmentEvent};
-use super::connector::{ArtifactChannels, LeaseConnection, LeaseConnector};
+use super::connector::{ArtifactTransport, LeaseConnection, LeaseConnector};
+use crate::conversation::application::{ArtifactAnswering, PublishFailure};
 use crate::env::LEASE_PROTOCOL;
 use crate::env_serve::application::FrameStream;
 use futures_util::FutureExt;
 use nessa_protocol::lease::{
-    decode, encode, read_hello, stop_steps, Cleanup, Collection, CollectionRefusal, CommandEnd,
-    Data, FromEnvironment, GrantRefusal, GrantedTerms, Sandbox, StagedArtifact, ToEnvironment,
-    Unavailability, MAX_ARTIFACTS_IN_FLIGHT, MAX_DATA_BYTES,
+    decode, encode, read_hello, stop_steps, ArtifactReadRefusal, Cleanup, Collection,
+    CollectionRefusal, CommandEnd, Data, EndingCause, FromEnvironment, GrantRefusal, GrantedTerms,
+    PublishRefusal, Sandbox, StagedArtifact, ToEnvironment, Unavailability,
+    MAX_ARTIFACTS_IN_FLIGHT, MAX_DATA_BYTES,
 };
-use nessa_sdk::domain::agent_execution::leases::{LeaseRefusal, SshDestination};
+use nessa_sdk::domain::agent_execution::leases::{LeaseEndCause, LeaseRefusal, SshDestination};
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{hash_map::Entry, BTreeMap, HashMap, HashSet},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, MutexGuard, PoisonError},
     time::Duration,
@@ -158,7 +170,8 @@ fn lease_refusal(refused: AdmissionRefused) -> LeaseRefusal {
             GrantRefusal::Duplicate
             | GrantRefusal::AuditUnavailable
             | GrantRefusal::CommandsUnavailable
-            | GrantRefusal::InvalidCommand,
+            | GrantRefusal::InvalidCommand
+            | GrantRefusal::Revoked,
         )
         | AdmissionRefused::Unreachable => LeaseRefusal::EnvironmentUnreachable,
     }
@@ -169,6 +182,9 @@ struct LeaseRoute {
     grant: Option<oneshot::Sender<Result<GrantedTerms, GrantRefusal>>>,
     /// A command lease's run, waiting for its `Ran`.
     ran: Option<oneshot::Sender<CommandAnswer>>,
+    /// A command lease's: its `Ran` ends it, and the host never ends it
+    /// unasked.
+    command: bool,
     ended: Option<oneshot::Sender<Cleanup>>,
     /// Its End was asked: no harness starts under it and none is asked to
     /// stop, as its `Ended` answers their stops.
@@ -183,14 +199,34 @@ struct LeaseRoute {
     /// Where the files the host publishes under it are offered: `None`
     /// once whoever takes them let go, and for a command lease.
     published: Option<mpsc::Sender<Published>>,
+    /// Why the lease is ending unasked, once known: the host said it is
+    /// (`Ending`), or this gateway revoked the host. The first cause known
+    /// is the one kept.
+    ending_cause: watch::Sender<Option<LeaseEndCause>>,
+    /// Each publish this gateway asked under it, by request, waiting for
+    /// the host to offer the file or say why not. Dropped with the route,
+    /// which answers each unanswered.
+    publishes: HashMap<String, oneshot::Sender<Result<(), PublishFailure>>>,
+    /// Each read of a published file this gateway asked under it, by
+    /// artifact and offset, waiting for the host's bytes or why not.
+    /// Dropped with the route, which ends each wait.
+    reads: HashMap<(u32, u64), oneshot::Sender<ArtifactReadAnswer>>,
     /// Dropped with the route: the lease is no longer routed here.
-    _gone: watch::Sender<()>,
+    gone: watch::Sender<()>,
 }
+
+/// What the host answered one read of a published file: its bytes, or why
+/// not.
+pub(crate) type ArtifactReadAnswer = Result<Vec<u8>, ArtifactReadRefusal>;
 
 #[derive(Default)]
 struct Routes {
     /// The connection ended: nothing more is routed or asked.
     closed: bool,
+    /// The host no longer holds a credential to serve this gateway: no
+    /// lease is admitted any more, and the connection closes once the
+    /// leases on it are let go.
+    revoked: bool,
     leases: HashMap<String, LeaseRoute>,
     accounts: HashMap<String, Vec<oneshot::Sender<Cleanup>>>,
     drops: u32,
@@ -203,6 +239,8 @@ struct Routes {
 pub(crate) struct Published {
     pub(crate) artifact: u32,
     pub(crate) file: StagedArtifact,
+    /// The gateway's publish it answers; `None` for a harness's.
+    pub(crate) request: Option<String>,
     /// Held, as a pump holds it, until its answer is queued: the lease's
     /// End waits for it, so a file answered before the End is told before it.
     pub(crate) unanswered: OwnedRwLockReadGuard<()>,
@@ -216,6 +254,9 @@ pub(crate) struct Granted {
     pub(crate) terms: GrantedTerms,
     /// Closes once the lease is no longer routed here.
     pub(crate) gone: watch::Receiver<()>,
+    /// Why the lease is ending unasked, once known: the host said so
+    /// (`Ending`), or this gateway revoked the host; closes with `gone`.
+    pub(crate) ending: watch::Receiver<Option<LeaseEndCause>>,
     /// Ends once the lease is no longer routed here.
     pub(crate) published: mpsc::Receiver<Published>,
 }
@@ -230,8 +271,8 @@ pub(crate) struct HostLink {
     routes: Arc<Mutex<Routes>>,
     audit: Arc<dyn EnvironmentAudit>,
     keep: Mutex<Box<dyn Send>>,
-    /// Opens artifact channels on this same connection.
-    artifacts: Arc<dyn ArtifactChannels>,
+    /// How a published file's bytes are read off the host.
+    artifacts: ArtifactTransport,
     /// Closes once the demux ends: the connection is over.
     ended: watch::Receiver<()>,
 }
@@ -430,14 +471,142 @@ impl HostLink {
         &self.workspace
     }
 
-    /// How artifact channels are opened on this connection.
-    pub(crate) fn artifact_channels(&self) -> Arc<dyn ArtifactChannels> {
+    /// How a published file's bytes are read off the host.
+    pub(crate) fn artifact_transport(&self) -> ArtifactTransport {
         self.artifacts.clone()
     }
 
-    /// Whether the connection still serves leases.
+    /// Whether the connection still carries leases: those on it may still
+    /// be asked to end, revoked or not.
     pub(crate) fn is_open(&self) -> bool {
         !self.routes().closed && !self.frames.is_closed()
+    }
+
+    /// Whether a new lease may be asked on it: open, and not revoked.
+    pub(crate) fn is_serving(&self) -> bool {
+        self.is_open() && !self.routes().revoked
+    }
+
+    /// Whether the host was revoked on this connection.
+    pub(crate) fn revoked(&self) -> bool {
+        self.routes().revoked
+    }
+
+    /// The host no longer holds a credential to serve this gateway. No lease
+    /// is admitted on this connection any more, nor a harness started or a
+    /// file asked for (a command's `Run` still goes, and the host answers
+    /// it as never started); the revocation is recorded with every lease the host
+    /// granted on it, and a lease it grants after, on its own; the host is told (`Revoked`), and ends
+    /// each lease itself with that cause; then each harness lease's ending
+    /// cause becomes revoked, unless the host already said why it is ending
+    /// it, so whoever watches it ends it as the system's stop; and the
+    /// connection is closed once every lease on it is let go — each End
+    /// answered with the host's cleanup — or once `drain` passes from now,
+    /// whichever comes first. A revocation that cannot be recorded still
+    /// ends and closes everything, but settles none of those leases as
+    /// confirmed. Asked again, or of a closed connection, nothing more
+    /// happens.
+    pub(crate) fn revoke(self: &Arc<Self>, drain: Duration) {
+        let (granted, carried) = {
+            let mut routes = self.routes();
+            if routes.closed || routes.revoked {
+                return;
+            }
+            routes.revoked = true;
+            // A lease whose grant is still being answered is not one the
+            // host granted: it is not listed. Granted after all, it is
+            // recorded revoked on its own when its grant comes, and ends
+            // as revoked as the others do; refused, its route goes.
+            let mut granted: Vec<String> = routes
+                .leases
+                .iter()
+                .filter(|(_, route)| route.grant.is_none())
+                .map(|(lease, _)| lease.clone())
+                .collect();
+            granted.sort();
+            let carried: Vec<String> = routes.leases.keys().cloned().collect();
+            (granted, carried)
+        };
+        let leases = granted;
+        tracing::warn!(
+            host = self.host.as_str(),
+            leases = leases.len(),
+            "the host no longer holds a credential to serve this gateway; its leases end and its connection closes"
+        );
+        let recorded = match self.audit.record(&EnvironmentEvent::Revoked {
+            host: self.host.clone(),
+            leases: leases.clone(),
+        }) {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::error!(%error, "a host's revocation could not be recorded; its leases end unconfirmed");
+                false
+            }
+        };
+        if !recorded {
+            // A grant still being answered is included: granted after all,
+            // its end settles nothing either. Only leases still routed are
+            // added, under the same lock: one refused or let go meanwhile
+            // was already forgotten, and is not brought back.
+            let mut routes = self.routes();
+            let still: Vec<String> = carried
+                .into_iter()
+                .filter(|lease| routes.leases.contains_key(lease))
+                .collect();
+            routes.unaudited.extend(still);
+        }
+        let link = self.clone();
+        tokio::spawn(async move {
+            let deadline = tokio::time::Instant::now() + drain;
+            // The host is told before any lease is seen ending as revoked,
+            // so an End asked for one reaches it after `Revoked`, and it
+            // records the revocation as that end's cause. A host reading
+            // nothing is waited on no longer than the bound.
+            let told =
+                tokio::time::timeout_at(deadline, link.frames.send(ToEnvironment::Revoked)).await;
+            if !matches!(told, Ok(Ok(()))) {
+                tracing::warn!(
+                    host = link.host.as_str(),
+                    "a revoked host could not be told; its connection closes"
+                );
+            }
+            let let_go = async {
+                for mut lease in link.end_as_revoked() {
+                    while lease.changed().await.is_ok() {}
+                }
+            };
+            if tokio::time::timeout_at(deadline, let_go).await.is_err() {
+                tracing::warn!(
+                    host = link.host.as_str(),
+                    "a revoked host's leases were not all let go in time; its connection closes"
+                );
+            }
+            link.close();
+        });
+    }
+
+    /// Each harness lease on this revoked connection ends as revoked,
+    /// unless the host already said why it is ending it: whoever watches it
+    /// ends it as the system's stop. Answers each lease's watch, which
+    /// closes once it is let go. No lease is admitted once revoked, so these
+    /// are every lease it carries still.
+    fn end_as_revoked(&self) -> Vec<watch::Receiver<()>> {
+        self.routes()
+            .leases
+            .values()
+            .map(|route| {
+                if !route.command {
+                    route.ending_cause.send_if_modified(|cause| {
+                        let unknown = cause.is_none();
+                        if unknown {
+                            *cause = Some(LeaseEndCause::Revoked);
+                        }
+                        unknown
+                    });
+                }
+                route.gone.subscribe()
+            })
+            .collect()
     }
 
     /// End the connection from this side: what keeps it open is let go, so
@@ -477,13 +646,18 @@ impl HostLink {
             agent: agent.into(),
             sandbox,
         };
-        let (gone, terms) = self
+        let Admitted {
+            gone,
+            ending,
+            terms,
+        } = self
             .admit(lease, frame, Some(offers), deadline)
             .await
             .map_err(lease_refusal)?;
         Ok(Granted {
             terms,
             gone,
+            ending,
             published,
         })
     }
@@ -508,7 +682,8 @@ impl HostLink {
             timeout_ms,
         };
         // A command publishes nothing: no file is offered under its lease.
-        self.admit(lease, frame, None, deadline).await
+        let admitted = self.admit(lease, frame, None, deadline).await?;
+        Ok((admitted.gone, admitted.terms))
     }
 
     /// Run a granted command lease's command and wait for its `Ran`. The
@@ -543,19 +718,22 @@ impl HostLink {
         frame: ToEnvironment,
         published: Option<mpsc::Sender<Published>>,
         deadline: Duration,
-    ) -> Result<(watch::Receiver<()>, GrantedTerms), AdmissionRefused> {
+    ) -> Result<Admitted, AdmissionRefused> {
         let (answer, answered) = oneshot::channel();
-        let gone = {
+        let (gone, ending) = {
             let mut routes = self.routes();
-            if routes.closed || routes.leases.contains_key(lease) {
+            if routes.closed || routes.revoked || routes.leases.contains_key(lease) {
                 return Err(AdmissionRefused::Unreachable);
             }
             let (gone_sender, gone) = watch::channel(());
+            let (ending_sender, ending) = watch::channel(None);
             routes.leases.insert(
                 lease.into(),
                 LeaseRoute {
                     grant: Some(answer),
                     ran: None,
+                    // Only a harness's lease publishes.
+                    command: published.is_none(),
                     ended: None,
                     ending: false,
                     end_sent: false,
@@ -563,20 +741,27 @@ impl HostLink {
                     channels: HashMap::new(),
                     next_channel: 1,
                     published,
-                    _gone: gone_sender,
+                    ending_cause: ending_sender,
+                    publishes: HashMap::new(),
+                    reads: HashMap::new(),
+                    gone: gone_sender,
                 },
             );
-            gone
+            (gone, ending)
         };
         let sent = self.frames.send(frame).await;
         if sent.is_err() {
-            self.routes().leases.remove(lease);
+            self.drop_admission(lease);
             return Err(AdmissionRefused::Unreachable);
         }
         match tokio::time::timeout(deadline, answered).await {
-            Ok(Ok(Ok(terms))) => Ok((gone, terms)),
+            Ok(Ok(Ok(terms))) => Ok(Admitted {
+                gone,
+                ending,
+                terms,
+            }),
             refused => {
-                self.routes().leases.remove(lease);
+                self.drop_admission(lease);
                 if refused.is_err() {
                     // No answer in time: the host may still admit it, so it
                     // is ended there rather than held for nobody.
@@ -590,11 +775,22 @@ impl HostLink {
                     );
                 }
                 Err(match refused {
+                    // A host told it is revoked refuses what it is asked
+                    // after: that is the revocation, not its owner's grant.
+                    Ok(Ok(Err(_))) if self.revoked() => AdmissionRefused::Unreachable,
                     Ok(Ok(Err(reason))) => AdmissionRefused::Host(reason),
                     _ => AdmissionRefused::Unreachable,
                 })
             }
         }
+    }
+
+    /// Let go of a lease that was never admitted: its route, and whether
+    /// its transitions were recorded, as no hold will ever forget it.
+    fn drop_admission(&self, lease: &str) {
+        let mut routes = self.routes();
+        routes.leases.remove(lease);
+        routes.unaudited.remove(lease);
     }
 
     /// Start a harness under `lease` with the binding's `environment`.
@@ -611,7 +807,8 @@ impl HostLink {
         let (stop, stop_asked) = oneshot::channel();
         let channel = {
             let mut routes = self.routes();
-            if routes.closed {
+            // Once revoked, the host ends every lease: nothing starts.
+            if routes.closed || routes.revoked {
                 return Err(StartError::Closed);
             }
             let Some(route) = routes.leases.get_mut(lease).filter(|route| !route.ending) else {
@@ -823,40 +1020,132 @@ impl HostLink {
         }
     }
 
+    /// Ask the host to publish the file at `path` under `lease` for
+    /// `request`, and wait for it to be offered on the lease's offers, or
+    /// for why not. A lease no longer held here, or one whose End is asked,
+    /// is answered as ended; the connection's loss, or the lease's route
+    /// ending, before the host answers, as unanswered, so the wait never
+    /// outlives the route.
+    pub(crate) async fn publish(
+        &self,
+        lease: &str,
+        request: String,
+        path: String,
+        media_type: Option<String>,
+    ) -> Result<(), PublishFailure> {
+        let frame = ToEnvironment::Publish {
+            lease: lease.into(),
+            request: request.clone(),
+            path,
+            media_type,
+        };
+        // Larger than a frame carries: never queued, so never answered.
+        if encode(&frame).is_err() {
+            return Err(PublishFailure::NotPublished(PublishRefusal::Invalid));
+        }
+        let answered = {
+            let mut routes = self.routes();
+            if routes.closed {
+                return Err(PublishFailure::Unanswered);
+            }
+            // Once revoked, the host is ending every lease on it.
+            if routes.revoked {
+                return Err(PublishFailure::NotPublished(PublishRefusal::LeaseEnded));
+            }
+            let Some(route) = routes
+                .leases
+                .get_mut(lease)
+                .filter(|route| !route.ending && route.published.is_some())
+            else {
+                return Err(PublishFailure::NotPublished(PublishRefusal::LeaseEnded));
+            };
+            // One ask per request: the caller holds each until answered.
+            if route.publishes.contains_key(&request) {
+                return Err(PublishFailure::Unanswered);
+            }
+            let (answer, answered) = oneshot::channel();
+            route.publishes.insert(request.clone(), answer);
+            answered
+        };
+        if self.frames.send(frame).await.is_err() {
+            if let Some(route) = self.routes().leases.get_mut(lease) {
+                route.publishes.remove(&request);
+            }
+            return Err(PublishFailure::Unanswered);
+        }
+        answered.await.unwrap_or(Err(PublishFailure::Unanswered))
+    }
+
     /// Tell the host what became of a file it published under `lease`,
-    /// unless the lease is no longer held here. `unanswered` is let go only
-    /// once the answer is queued, so the lease's End, which waits for it,
-    /// always goes after: the host never answers as ended a file this
-    /// gateway kept.
+    /// unless the lease is no longer held here: done once the answer is
+    /// queued. `unanswered` is let go only then, so the lease's End, which
+    /// waits for it, always goes after: the host never answers as ended a
+    /// file this gateway kept.
     pub(crate) fn collected(
         &self,
         lease: &str,
         artifact: u32,
         outcome: Collection,
         unanswered: OwnedRwLockReadGuard<()>,
-    ) {
-        if !self.routes().leases.contains_key(lease) {
-            return;
-        }
+    ) -> ArtifactAnswering {
+        let held = self.routes().leases.contains_key(lease);
+        let frames = self.frames.clone();
         let frame = ToEnvironment::Collected {
             lease: lease.into(),
             artifact,
             outcome,
         };
-        match tokio::runtime::Handle::try_current() {
-            Ok(runtime) => {
-                let frames = self.frames.clone();
-                runtime.spawn(async move {
-                    let _ = frames.send(frame).await;
-                    drop(unanswered);
-                });
+        Box::pin(async move {
+            if held {
+                let _ = frames.send(frame).await;
             }
-            Err(_) => {
-                if self.frames.try_send(frame).is_err() {
-                    tracing::error!("an artifact's answer found no room; it is not sent");
-                }
+            drop(unanswered);
+        })
+    }
+
+    /// Ask the host for `length` bytes of the file it published under
+    /// `lease` as `artifact`, from `offset`, over this connection's own
+    /// frames: where its answer arrives. `None` when it is not asked: the
+    /// lease is not held here, the connection is gone, or that range is
+    /// already asked. Whether the file may still be read is the host's to
+    /// say: it answers only for a staged copy still waiting for its answer,
+    /// so once revoked, which ends every lease there, a read is answered
+    /// not staged. The answer's wait ends with the
+    /// lease's route, so it never outlives the lease here. Only for a
+    /// connection whose transport is [`ArtifactTransport::Frames`].
+    pub(crate) async fn read_artifact(
+        &self,
+        lease: &str,
+        artifact: u32,
+        offset: u64,
+        length: u32,
+    ) -> Option<oneshot::Receiver<ArtifactReadAnswer>> {
+        let answered = {
+            let mut routes = self.routes();
+            if routes.closed {
+                return None;
             }
+            let route = routes.leases.get_mut(lease)?;
+            let Entry::Vacant(waiting) = route.reads.entry((artifact, offset)) else {
+                return None;
+            };
+            let (answer, answered) = oneshot::channel();
+            waiting.insert(answer);
+            answered
+        };
+        let frame = ToEnvironment::ReadArtifact {
+            lease: lease.into(),
+            artifact,
+            offset,
+            length,
+        };
+        if self.frames.send(frame).await.is_err() {
+            if let Some(route) = self.routes().leases.get_mut(lease) {
+                route.reads.remove(&(artifact, offset));
+            }
+            return None;
         }
+        Some(answered)
     }
 
     /// What the host recorded of `lease`; `None` when it cannot be had. The
@@ -994,8 +1283,32 @@ impl Shared {
                     self.routes().unaudited.insert(lease);
                 }
             }
+            Routed::GrantedRevoked(lease) => {
+                // Granted after the revocation was recorded, so not named
+                // in it: it is recorded on its own, as every lease the host
+                // granted is, before the host's next frame (its end) is
+                // read. Unrecorded, it settles nothing as confirmed, unless
+                // it was let go meanwhile.
+                let recorded = self.record(EnvironmentEvent::Revoked {
+                    host: self.host.as_str().into(),
+                    leases: vec![lease.clone()],
+                });
+                if !recorded {
+                    let mut routes = self.routes();
+                    if routes.leases.contains_key(&lease) {
+                        routes.unaudited.insert(lease);
+                    }
+                }
+            }
         }
     }
+}
+
+/// A lease the host admitted: its watches, and the terms it granted.
+struct Admitted {
+    gone: watch::Receiver<()>,
+    ending: watch::Receiver<Option<LeaseEndCause>>,
+    terms: GrantedTerms,
 }
 
 enum Routed {
@@ -1008,6 +1321,9 @@ enum Routed {
         lease: String,
         channel: u32,
     },
+    /// The host granted a lease whose admission was still pending when its
+    /// connection was revoked.
+    GrantedRevoked(String),
 }
 
 fn route_frame(routes: &mut Routes, frame: FromEnvironment) -> Routed {
@@ -1033,7 +1349,11 @@ fn route_frame(routes: &mut Routes, frame: FromEnvironment) -> Routed {
             {
                 Some(waiter) => {
                     let _ = waiter.send(Ok(terms));
-                    Routed::Done
+                    if routes.revoked {
+                        Routed::GrantedRevoked(lease)
+                    } else {
+                        Routed::Done
+                    }
                 }
                 None => Routed::Dropped,
             }
@@ -1055,55 +1375,85 @@ fn route_frame(routes: &mut Routes, frame: FromEnvironment) -> Routed {
         FromEnvironment::Published {
             lease,
             artifact,
+            request,
             file,
         } => {
             let Some(route) = routes.leases.get_mut(&lease) else {
                 return Routed::Dropped;
             };
-            let refused = |reason, unanswered| {
-                Routed::Answer(
+            // The publish it answers learns what came of the offer: taken
+            // to be kept, or refused here before anyone could take it.
+            let waiter = request
+                .as_ref()
+                .and_then(|request| route.publishes.remove(request));
+            let offered = offer_published(route, artifact, file, request);
+            if let Some(waiter) = waiter {
+                let _ = waiter.send(
+                    offered
+                        .as_ref()
+                        .copied()
+                        .map_err(|(reason, _)| PublishFailure::Refused(*reason)),
+                );
+            }
+            match offered {
+                Ok(()) => Routed::Done,
+                Err((reason, unanswered)) => Routed::Answer(
                     ToEnvironment::Collected {
-                        lease: lease.clone(),
+                        lease,
                         artifact,
                         outcome: Collection::Refused { reason },
                     },
                     unanswered,
-                )
-            };
-            // Once its End is asked, nothing more is taken under it.
-            if route.ending {
-                return refused(CollectionRefusal::LeaseEnded, None);
-            }
-            let Ok(unanswered) = route.pumps.clone().try_read_owned() else {
-                return refused(CollectionRefusal::LeaseEnded, None);
-            };
-            let offer = Published {
-                artifact,
-                file,
-                unanswered,
-            };
-            // A refusal keeps the offer's fence until it is queued, so an End
-            // asked meanwhile still goes after it.
-            let sent = match route.published.as_ref() {
-                Some(offers) => offers.try_send(offer).map_err(|error| match error {
-                    mpsc::error::TrySendError::Full(offer) => (true, offer.unanswered),
-                    mpsc::error::TrySendError::Closed(offer) => (false, offer.unanswered),
-                }),
-                None => Err((false, offer.unanswered)),
-            };
-            match sent {
-                Ok(()) => Routed::Done,
-                // The host keeps at most as many in flight as there is room
-                // for: one past it is not this gateway's to take.
-                Err((true, unanswered)) => {
-                    refused(CollectionRefusal::BudgetExceeded, Some(unanswered))
-                }
-                Err((false, unanswered)) => {
-                    route.published = None;
-                    refused(CollectionRefusal::ChannelUnavailable, Some(unanswered))
-                }
+                ),
             }
         }
+        FromEnvironment::ArtifactRead {
+            lease,
+            artifact,
+            offset,
+            data,
+        } => answer_read(routes, &lease, artifact, offset, Ok(data.0)),
+        FromEnvironment::ArtifactNotRead {
+            lease,
+            artifact,
+            offset,
+            reason,
+        } => answer_read(routes, &lease, artifact, offset, Err(reason)),
+        // The host is ending a lease unasked: said to whoever watches it,
+        // who asks its End, which the host answers with what that took.
+        // A command's lease is bounded by its timeout, never ended so. A
+        // lease already ending as revoked keeps that cause.
+        FromEnvironment::Ending { lease, cause } => match routes.leases.get(&lease) {
+            Some(route) if !route.command => {
+                let cause = match cause {
+                    EndingCause::Expired => LeaseEndCause::Expired,
+                };
+                route.ending_cause.send_if_modified(|known| {
+                    let unknown = known.is_none();
+                    if unknown {
+                        *known = Some(cause);
+                    }
+                    unknown
+                });
+                Routed::Done
+            }
+            _ => Routed::Dropped,
+        },
+        FromEnvironment::NotPublished {
+            lease,
+            request,
+            reason,
+        } => match routes
+            .leases
+            .get_mut(&lease)
+            .and_then(|route| route.publishes.remove(&request))
+        {
+            Some(waiter) => {
+                let _ = waiter.send(Err(PublishFailure::NotPublished(reason)));
+                Routed::Done
+            }
+            None => Routed::Dropped,
+        },
         FromEnvironment::Ended { lease, cleanup } => match routes.leases.remove(&lease) {
             Some(mut route) => {
                 if let Some(waiter) = route.ended.take() {
@@ -1229,6 +1579,71 @@ fn route_frame(routes: &mut Routes, frame: FromEnvironment) -> Routed {
     }
 }
 
+/// Offer a file the host published under `route` to whoever takes them,
+/// or say why it is refused here, with the fence a refusal keeps until its
+/// answer is queued.
+fn offer_published(
+    route: &mut LeaseRoute,
+    artifact: u32,
+    file: StagedArtifact,
+    request: Option<String>,
+) -> Result<(), (CollectionRefusal, Option<OwnedRwLockReadGuard<()>>)> {
+    // Once its End is asked, nothing more is taken under it.
+    if route.ending {
+        return Err((CollectionRefusal::LeaseEnded, None));
+    }
+    let Ok(unanswered) = route.pumps.clone().try_read_owned() else {
+        return Err((CollectionRefusal::LeaseEnded, None));
+    };
+    let offer = Published {
+        artifact,
+        file,
+        request,
+        unanswered,
+    };
+    // A refusal keeps the offer's fence until it is queued, so an End
+    // asked meanwhile still goes after it.
+    let sent = match route.published.as_ref() {
+        Some(offers) => offers.try_send(offer).map_err(|error| match error {
+            mpsc::error::TrySendError::Full(offer) => (true, offer.unanswered),
+            mpsc::error::TrySendError::Closed(offer) => (false, offer.unanswered),
+        }),
+        None => Err((false, offer.unanswered)),
+    };
+    match sent {
+        Ok(()) => Ok(()),
+        // The host keeps at most as many in flight as there is room for:
+        // one past it is not this gateway's to take.
+        Err((true, unanswered)) => Err((CollectionRefusal::BudgetExceeded, Some(unanswered))),
+        Err((false, unanswered)) => {
+            route.published = None;
+            Err((CollectionRefusal::ChannelUnavailable, Some(unanswered)))
+        }
+    }
+}
+
+/// Hand a read's answer to whoever asked it; a read nobody asked is dropped.
+/// One asked by bytes whose reader let go is answered to nobody.
+fn answer_read(
+    routes: &mut Routes,
+    lease: &str,
+    artifact: u32,
+    offset: u64,
+    answer: ArtifactReadAnswer,
+) -> Routed {
+    match routes
+        .leases
+        .get_mut(lease)
+        .and_then(|route| route.reads.remove(&(artifact, offset)))
+    {
+        Some(waiter) => {
+            let _ = waiter.send(answer);
+            Routed::Done
+        }
+        None => Routed::Dropped,
+    }
+}
+
 fn channel_route<'a>(
     routes: &'a mut Routes,
     lease: &str,
@@ -1248,9 +1663,13 @@ fn frame_name(frame: &FromEnvironment) -> &'static str {
         FromEnvironment::Output { .. } => "output",
         FromEnvironment::OutputClosed { .. } => "output_closed",
         FromEnvironment::Stopped { .. } => "stopped",
+        FromEnvironment::Ending { .. } => "ending",
         FromEnvironment::Ended { .. } => "ended",
         FromEnvironment::Accounted { .. } => "accounted",
         FromEnvironment::Published { .. } => "published",
+        FromEnvironment::NotPublished { .. } => "not_published",
+        FromEnvironment::ArtifactRead { .. } => "artifact_read",
+        FromEnvironment::ArtifactNotRead { .. } => "artifact_not_read",
         FromEnvironment::Ran { .. } => "ran",
     }
 }

@@ -1,12 +1,14 @@
 //! The agent's environment tools as a server the gateway serves itself
-//! (issue #700): `environments_list` and `run`, over the conversation
-//! service, offered to a conversation's harness beside its configured MCP
-//! servers and reached through the same relay.
+//! (issues #700, #701): `environments_list`, `run` and `artifacts_publish`,
+//! over the conversation service, offered to a conversation's harness beside
+//! its configured MCP servers and reached through the same relay.
 //!
 //! ```text
 //! harness ──tools/call──▶ stand-in ──▶ Relay ──▶ EnvironmentTools::call
 //!   environments_list ──▶ ConversationService::list_environments
 //!   run ──▶ its arguments read ──▶ ConversationService::run_command ──▶ its record
+//!   artifacts_publish ──▶ its arguments read ──▶ ConversationService::publish_artifact
+//!     ──▶ held | alreadyHeld, or refused by code
 //! ```
 //!
 //! Arrows are calls, in order. A tool's answer is MCP's `CallToolResult`:
@@ -15,11 +17,12 @@
 //! relay that needs this server; a call before then is answered as an error.
 use crate::conversation::application::{
     CommandAnswer, CommandCall, CommandCallError, CommandResult, ConversationService,
-    EnvironmentListing,
+    EnvironmentListing, PublishAnswer, PublishCall, PublishCallRefusal,
 };
 use crate::conversation::domain::CommandPolicy;
 use crate::mcp_servers::application::{BuiltInFuture, BuiltInServer};
 use nessa_protocol::conversation::domain::ConversationId;
+use nessa_protocol::lease::{CollectionRefusal, PublishRefusal, MAX_ARTIFACT_BYTES};
 use nessa_sdk::domain::agent_execution::leases::{
     CommandExit, CommandRefusal, CommandWork, LeaseCleanup, LeaseEndCause, LeaseRefusal,
     SandboxProfile,
@@ -33,9 +36,10 @@ use tokio::sync::watch;
 /// The server's name, as the harness sees it.
 pub(super) const SERVER_NAME: &str = "nessa-environments";
 /// What changes when the tools' names, arguments or meaning do.
-const TOOLS_REVISION: &str = "environment-tools/1";
+const TOOLS_REVISION: &str = "environment-tools/2";
 
-/// `environments_list` and `run`, served over a conversation service.
+/// `environments_list`, `run` and `artifacts_publish`, served over a
+/// conversation service.
 pub(super) struct EnvironmentTools {
     policy: Vec<String>,
     service: OnceLock<ConversationService>,
@@ -114,6 +118,24 @@ impl BuiltInServer for EnvironmentTools {
                 },
                 "annotations": {"destructiveHint": true, "openWorldHint": true},
             }),
+            json!({
+                "name": "artifacts_publish",
+                "title": "Publish a file to the conversation",
+                "description": format!(
+                    "Publish one file from the workspace where this conversation's agent runs, so the person can see and save it in the conversation. `environment` must be where the agent runs now: the environment environments_list marks current. The file is copied as it is now, checked by its digest, and kept; at most {MAX_ARTIFACT_BYTES} bytes. Answers whether it is held, with its digest and size, or why it is not."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "environment": {"type": "string", "description": "Where the agent runs, as environments_list names it."},
+                        "path": {"type": "string", "description": "The file: absolute, or relative to that environment's workspace. It must be inside the workspace."},
+                        "mediaType": {"type": "string", "description": "Its media type, lowercase type/subtype; read from its extension when absent."},
+                    },
+                    "required": ["environment", "path"],
+                    "additionalProperties": false,
+                },
+                "annotations": {"readOnlyHint": false, "destructiveHint": false, "openWorldHint": false},
+            }),
         ]
     }
 
@@ -145,6 +167,13 @@ impl BuiltInServer for EnvironmentTools {
                         Ok(answer) => answered(&answer),
                         Err(error) => failed(call_error(&error)),
                     }
+                }
+                "artifacts_publish" => {
+                    let call = match publish_call(arguments, call) {
+                        Ok(call) => call,
+                        Err(problem) => return failed(&problem),
+                    };
+                    published(&service.publish_artifact(&conversation, call, stop).await)
                 }
                 _ => failed("no such tool"),
             }
@@ -184,6 +213,127 @@ fn command_call(arguments: Value, call: String) -> Result<CommandCall, String> {
         sandbox,
         call,
     })
+}
+
+/// `artifacts_publish`'s arguments, as its input schema says them.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct PublishArguments {
+    environment: String,
+    path: String,
+    #[serde(default)]
+    media_type: Option<String>,
+}
+
+fn publish_call(arguments: Value, call: String) -> Result<PublishCall, String> {
+    let arguments: PublishArguments = serde_json::from_value(arguments)
+        .map_err(|error| format!("artifacts_publish's arguments: {error}"))?;
+    Ok(PublishCall {
+        environment: arguments.environment,
+        path: arguments.path,
+        media_type: arguments.media_type,
+        call,
+    })
+}
+
+/// What an `artifacts_publish` came to, as `PublishAnswer` says it on the
+/// host: an error unless the conversation holds the file.
+fn published(answer: &PublishAnswer) -> Value {
+    match answer {
+        PublishAnswer::Kept {
+            already_held,
+            name,
+            digest,
+            size,
+        } => result(
+            json!({
+                "outcome": if *already_held { "alreadyHeld" } else { "held" },
+                "digest": digest,
+                "size": size,
+                "name": name,
+            }),
+            false,
+        ),
+        PublishAnswer::Refused(refusal) => result(
+            json!({
+                "refused": publish_refusal_code(*refusal),
+                "message": publish_refusal_message(*refusal),
+            }),
+            true,
+        ),
+    }
+}
+
+fn publish_refusal_code(refusal: PublishCallRefusal) -> &'static str {
+    match refusal {
+        PublishCallRefusal::NoTurn => "no_turn",
+        PublishCallRefusal::EnvironmentNotLeased => "environment_not_leased",
+        PublishCallRefusal::DuplicateRequest => "duplicate_request",
+        PublishCallRefusal::PublishUnavailable => "publish_unavailable",
+        PublishCallRefusal::Unanswered => "unanswered",
+        PublishCallRefusal::TimedOut => "timed_out",
+        PublishCallRefusal::Cancelled => "cancelled",
+        PublishCallRefusal::NotPublished(reason) => match reason {
+            PublishRefusal::OutsideWorkspace => "outside_workspace",
+            PublishRefusal::Unreadable => "unreadable",
+            PublishRefusal::Size => "size",
+            PublishRefusal::Invalid => "invalid",
+            PublishRefusal::Busy => "busy",
+            PublishRefusal::StagingFailed => "staging_failed",
+            PublishRefusal::AuditUnavailable => "audit_unavailable",
+            PublishRefusal::LeaseEnded => "lease_ended",
+        },
+        PublishCallRefusal::NotKept(reason) => match reason {
+            CollectionRefusal::BudgetExceeded => "budget_exceeded",
+            CollectionRefusal::Invalid => "invalid",
+            CollectionRefusal::ChannelUnavailable => "channel_unavailable",
+            CollectionRefusal::Mismatch => "mismatch",
+            CollectionRefusal::NotKept => "not_kept",
+            CollectionRefusal::LeaseEnded => "lease_ended",
+        },
+    }
+}
+
+fn publish_refusal_message(refusal: PublishCallRefusal) -> &'static str {
+    match refusal {
+        PublishCallRefusal::NoTurn => "no turn of this conversation is running to publish it for",
+        PublishCallRefusal::EnvironmentNotLeased => {
+            "the agent does not run there; publish from the environment environments_list marks current"
+        }
+        PublishCallRefusal::DuplicateRequest => "this call is already publishing a file",
+        PublishCallRefusal::PublishUnavailable => {
+            "where the agent runs publishes no files yet"
+        }
+        PublishCallRefusal::Unanswered => {
+            "the environment was lost before it answered; the file may or may not be held"
+        }
+        PublishCallRefusal::TimedOut => {
+            "the file was not kept in time; it may still be held once it is read"
+        }
+        PublishCallRefusal::Cancelled => "the call was cancelled",
+        PublishCallRefusal::NotPublished(reason) => match reason {
+            PublishRefusal::OutsideWorkspace => {
+                "the path is not a regular file inside the workspace"
+            }
+            PublishRefusal::Unreadable => "no such file, or it cannot be read",
+            PublishRefusal::Size => "the file is empty or larger than a file may be",
+            PublishRefusal::Invalid => "the media type or file name cannot be used",
+            PublishRefusal::Busy => "as many files as may be in flight are being published",
+            PublishRefusal::StagingFailed => "the environment could not copy the file",
+            PublishRefusal::AuditUnavailable => "the environment could not record the publish",
+            PublishRefusal::LeaseEnded => "the agent's lease ended first",
+        },
+        PublishCallRefusal::NotKept(reason) => match reason {
+            CollectionRefusal::BudgetExceeded => {
+                "as many files or bytes as this lease may publish are held"
+            }
+            CollectionRefusal::Invalid => "what the environment said of the file cannot be kept",
+            CollectionRefusal::ChannelUnavailable => "the file could not be read from the environment",
+            CollectionRefusal::Mismatch => "the bytes read were not the file published",
+            CollectionRefusal::NotKept => "the conversation could not keep the file",
+            CollectionRefusal::LeaseEnded => "the agent's lease ended before the file was kept",
+        },
+    }
 }
 
 fn listing(listed: &[EnvironmentListing]) -> Value {

@@ -7,7 +7,7 @@
 //! test beside this module refuses a copy that has drifted.
 use crate::attachments::application::{AttachmentLimits, HeldReads};
 use crate::conversation::application::{
-    ArtifactBudget, ARTIFACT_READ_RESUMES, MAX_READ_GRANTS_PER_CONVERSATION,
+    ArtifactBudget, ARTIFACT_READ_RESUMES, MAX_READ_GRANTS_PER_CONVERSATION, PUBLISH_CALL_WAIT,
 };
 use crate::conversation::infrastructure::{DISCOVERY_STEPS_PER_READ, MAX_CATALOGUE_CHANGE_WATCHES};
 use crate::mcp_servers::infrastructure::{MAX_BUILT_IN_CALLS, MAX_BUILT_IN_LINE_BYTES};
@@ -17,8 +17,8 @@ use crate::peer_gateways::infrastructure::{
 use crate::product::passive_read::deadlines::RECORD_SEND_TIMEOUT;
 use crate::product::{OperationalLimits, SessionSettings, RECORD_LANE, RECORD_SLOT, REFUSAL_LANE};
 use nessa_protocol::lease::{
-    COMMAND_STOP_WAIT, MAX_ARTIFACTS_IN_FLIGHT, MAX_ARTIFACT_BYTES, MAX_DATA_BYTES,
-    MAX_OPEN_PUBLISHERS,
+    COMMAND_STOP_WAIT, MAX_ARTIFACTS_IN_FLIGHT, MAX_ARTIFACT_BYTES, MAX_ARTIFACT_READS_IN_FLIGHT,
+    MAX_DATA_BYTES, MAX_OPEN_PUBLISHERS,
 };
 use nessa_protocol::product::generated::{
     MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS, MAX_CONNECTION_LIST_SUBSCRIPTIONS,
@@ -226,6 +226,12 @@ fn catalogue() -> &'static [Limit] {
             meaning: "a publish past this many unanswered under one lease is answered busy",
         },
         Limit {
+            id: "artifact.paired_reads_in_flight",
+            tier: "fixed",
+            owner: "nessa_protocol::lease MAX_ARTIFACT_READS_IN_FLIGHT",
+            meaning: "the reads of one published file an environment holds over a paired connection until each answer is handed to its writer; one more is refused busy",
+        },
+        Limit {
             id: "artifact.host_open_publishers",
             tier: "fixed",
             owner: "nessa_protocol::lease MAX_OPEN_PUBLISHERS",
@@ -278,6 +284,12 @@ fn catalogue() -> &'static [Limit] {
             tier: "fixed",
             owner: "attachments AttachmentLimits::publish_deadline",
             meaning: "a published file not read and checked by then is refused, and nothing held",
+        },
+        Limit {
+            id: "artifact.publish_call_wait",
+            tier: "fixed",
+            owner: "conversation PUBLISH_CALL_WAIT",
+            meaning: "an artifacts_publish call whose file is not kept this long after it asked answers timed_out; counted from the ask, so it covers staging and any wait behind files already offered under the lease as well as the read; a timed_out file may still be kept, named for the call's person",
         },
         Limit {
             id: "record.discovery_steps",
@@ -469,6 +481,10 @@ pub(crate) fn effective_json(
     put("record.discovery_steps", count(DISCOVERY_STEPS_PER_READ));
     put("artifact.max_file_bytes", MAX_ARTIFACT_BYTES);
     put("artifact.host_in_flight", count(MAX_ARTIFACTS_IN_FLIGHT));
+    put(
+        "artifact.paired_reads_in_flight",
+        count(MAX_ARTIFACT_READS_IN_FLIGHT),
+    );
     put("artifact.host_open_publishers", count(MAX_OPEN_PUBLISHERS));
     put(
         "artifact.environment_files",
@@ -490,6 +506,7 @@ pub(crate) fn effective_json(
         "artifact.publish_deadline",
         millis(AttachmentLimits::default().publish_deadline),
     );
+    put("artifact.publish_call_wait", millis(PUBLISH_CALL_WAIT));
     put("peer.poll_interval", millis(POLL_INTERVAL));
     put("peer.poll_backoff_cap", millis(POLL_BACKOFF_CAP));
     put("peer.read_budget", millis(READ_BUDGET));

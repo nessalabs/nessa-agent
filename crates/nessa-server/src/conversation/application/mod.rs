@@ -171,13 +171,14 @@ pub use command_environment::CommandResult;
 pub(crate) use command_environment::CommandHold;
 #[cfg(any(unix, test))]
 pub(crate) use command_environment::GrantedCommand;
-pub(crate) use environment::{Environment, EnvironmentFuture};
+pub(crate) use environment::{Environment, EnvironmentFuture, PublishAsk, PublishFailure};
 // For the adapters, which only the Unix gateway composes (`infrastructure`).
+pub use artifacts::PublishedOutcome;
 pub use artifacts::{
-    ArtifactAnswer, ArtifactBytes, ArtifactChunk, ArtifactOffer, ArtifactReadFailure,
-    ARTIFACT_READ_RESUMES,
+    ArtifactAnswer, ArtifactAnswering, ArtifactBytes, ArtifactChunk, ArtifactOffer,
+    ArtifactReadFailure, ARTIFACT_READ_RESUMES,
 };
-pub(crate) use artifacts::{ArtifactBudget, ArtifactCollector};
+pub(crate) use artifacts::{ArtifactBudget, ArtifactCollector, PublishRequests};
 #[cfg(any(unix, test))]
 pub(crate) use environment::{
     EnvironmentDeclaration, EnvironmentLease, GrantedTerms, LeaseHold, LeaseRelease,
@@ -201,6 +202,7 @@ pub(crate) use placement::{ConversationPlacements, PlacementError};
 // For the paired environment adapter, which lives with the Unix-only SSH one.
 #[cfg(unix)]
 pub(crate) use placement::PairedEnvironments;
+pub use placement::PUBLISH_CALL_WAIT;
 pub use ports::{
     ArtifactKept, ArtifactRecordGate, AttachmentRelease, AttachmentReleaseCause,
     ConversationAttachments, ConversationCreation, ConversationCreationAudit,
@@ -233,6 +235,7 @@ pub use service::{
     McpAppResource, QuestionChoiceInput, ReadOpening, RequestedAgent, RequestedConversation,
     SubmissionMode, MAX_APP_CALLS, MAX_LISTED_CONVERSATIONS, MAX_RESOURCE_META_BYTES,
 };
+pub use service::{PublishAnswer, PublishCall, PublishCallRefusal};
 pub(crate) use session_key::conversation_session;
 
 #[cfg(test)]

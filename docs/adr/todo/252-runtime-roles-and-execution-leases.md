@@ -87,6 +87,8 @@ What this decides for the rest, each settled in the map:
   ([Sharing a conversation](../../design/runtime-architecture.md#sharing-a-conversation)).
 - **Files move only as artifacts.** Bytes by digest, held by the
   conversation, on an artifact channel beside the lease's control channel
+  over SSH, and on a paired connection, which has nothing beside it, in
+  bounded ranges on that channel, asked by the gateway
   ([Artifacts across devices](../../design/runtime-architecture.md#artifacts-across-devices)).
 - **The agent gets names, not plumbing.** `environments.list`,
   `thread.create`, `run` and `artifacts.*` through `nessa-mcp`, thin over
@@ -170,8 +172,13 @@ Environments lane, in order:
     transcript, and the phone. The route is `artifact.read`, a range read
     of any held file over the surface's own connection
     ([Reading a held file back](../../design/runtime-architecture.md#reading-a-held-file-back-slice-d2)).
-  - [ ] **D3.** `artifacts.publish` and `artifacts.fetch` in `nessa-mcp`
-    once C lands, and a gateway-initiated publish.
+  - [ ] **D3.** The agent's own tools, in two parts:
+    - [x] **D3a.** `artifacts_publish` beside `run`: a gateway-initiated
+      publish under the agent's Live lease, for the turn's person
+      ([The agent publishes a file](../../design/runtime-architecture.md#the-agent-publishes-a-file-slice-d3a)).
+      Command leases publish from [#766](https://github.com/nessalabs/nessa-agent/issues/766).
+    - [ ] **D3b.** `artifacts.fetch`, a held file into the environment by
+      digest, to follow.
 - [x] **E. Record subscriptions; desktop off polling** ([#702](https://github.com/nessalabs/nessa-agent/issues/702);
   bounded reads #296 and the one fold #277 are done and are its
   foundation; merged in [#715](https://github.com/nessalabs/nessa-agent/pull/715)). *Gate:*

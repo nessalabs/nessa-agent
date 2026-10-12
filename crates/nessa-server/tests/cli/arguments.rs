@@ -240,6 +240,7 @@ fn env_grant_names_agents_or_every_agent_and_commands_with_their_longest_run() {
             peer: None,
             agents: Some(GrantedAgents::Named(vec!["claude".into(), "codex".into()])),
             max_timeout_ms: None,
+            max_lease_ms: None,
         }
     );
     assert_eq!(
@@ -258,6 +259,7 @@ fn env_grant_names_agents_or_every_agent_and_commands_with_their_longest_run() {
             peer: Some("ssh".into()),
             agents: Some(GrantedAgents::All),
             max_timeout_ms: Some(600_000),
+            max_lease_ms: None,
         }
     );
     assert_eq!(
@@ -273,6 +275,7 @@ fn env_grant_names_agents_or_every_agent_and_commands_with_their_longest_run() {
             peer: None,
             agents: None,
             max_timeout_ms: Some(90_000),
+            max_lease_ms: None,
         }
     );
     assert_eq!(
@@ -288,10 +291,41 @@ fn env_grant_names_agents_or_every_agent_and_commands_with_their_longest_run() {
             peer: None,
             agents: None,
             max_timeout_ms: Some(3_600_000),
+            max_lease_ms: None,
+        }
+    );
+    assert_eq!(
+        parse(&args(&["env", "grant", "--max-lease", "8h"])).unwrap(),
+        Command::EnvGrant {
+            peer: None,
+            agents: None,
+            max_timeout_ms: None,
+            max_lease_ms: Some(28_800_000),
+        }
+    );
+    assert_eq!(
+        parse(&args(&[
+            "env",
+            "grant",
+            "--agent",
+            "claude",
+            "--max-lease",
+            "30m"
+        ]))
+        .unwrap(),
+        Command::EnvGrant {
+            peer: None,
+            agents: Some(GrantedAgents::Named(vec!["claude".into()])),
+            max_timeout_ms: None,
+            max_lease_ms: Some(1_800_000),
         }
     );
     for refused in [
         vec!["env", "grant"],
+        vec!["env", "grant", "--max-lease"],
+        vec!["env", "grant", "--max-lease", "0s"],
+        vec!["env", "grant", "--max-lease", "8"],
+        vec!["env", "grant", "--max-lease", "1h", "--max-lease", "2h"],
         vec!["env", "grant", "--agent"],
         vec!["env", "grant", "--agent", "--all-agents"],
         vec!["env", "grant", "--agent", "claude", "--all-agents"],
@@ -316,7 +350,7 @@ fn env_grant_names_agents_or_every_agent_and_commands_with_their_longest_run() {
         assert!(parse(&args(&refused)).is_err(), "{refused:?}");
     }
     assert!(crate::cli::entrypoint::HELP.contains(
-        "nessa env grant [--peer ssh|PIN] [--agent NAME... | --all-agents] [--commands --max-timeout 10m]"
+        "nessa env grant [--peer ssh|PIN] [--agent NAME... | --all-agents] [--commands --max-timeout 10m] [--max-lease 8h]"
     ));
 }
 

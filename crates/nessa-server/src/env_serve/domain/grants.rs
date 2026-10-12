@@ -5,7 +5,7 @@
 //! Peer (ssh, or a dialed gateway's pin) ──▶ its PeerGrant, or none
 //!   none ──▶ granted_to: ssh keeps everything, a dialed gateway nothing
 //! GrantOperation::apply(grant)     ──▶ the grant after an owner's change
-//! admit_agent(grant, agent)        ──▶ Ok, or NotGranted
+//! admit_agent(grant, agent)        ──▶ Ok(the lease's longest, maxLeaseMs), or NotGranted
 //! admit_command(grant, timeout_ms) ──▶ min(asked, maxTimeoutMs), or NotGranted
 //! ```
 //!
@@ -53,6 +53,8 @@ pub(crate) enum InvalidGrant {
     AgentName,
     /// A command timeout of zero, or longer than any command may run.
     MaxTimeout,
+    /// A lease duration of zero, or longer than [`MaxLease::MOST_MS`].
+    MaxLease,
 }
 
 impl AgentName {
@@ -96,17 +98,52 @@ impl CommandGrant {
     }
 }
 
+/// How long a harness's lease may last from its grant: past it, the host
+/// ends the lease itself. A command lease is bounded by its own timeout
+/// instead.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct MaxLease {
+    ms: u64,
+}
+
+impl MaxLease {
+    /// The longest a grant may let a lease last: thirty days.
+    pub(crate) const MOST_MS: u64 = 30 * 24 * 60 * 60 * 1_000;
+
+    /// Leases of at most `ms` each.
+    ///
+    /// # Errors
+    /// [`InvalidGrant::MaxLease`] for zero, or past [`Self::MOST_MS`].
+    pub(crate) fn new(ms: u64) -> Result<Self, InvalidGrant> {
+        if ms == 0 || ms > Self::MOST_MS {
+            return Err(InvalidGrant::MaxLease);
+        }
+        Ok(Self { ms })
+    }
+
+    pub(crate) fn ms(self) -> u64 {
+        self.ms
+    }
+}
+
 /// Everything one peer is granted here.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PeerGrant {
     agents: Agents,
     /// `None`: no commands.
     commands: Option<CommandGrant>,
+    /// `None`: a harness's lease lasts until it is ended.
+    max_lease: Option<MaxLease>,
 }
 
 impl PeerGrant {
+    /// `agents` and `commands`, its leases lasting until ended.
     pub(crate) fn new(agents: Agents, commands: Option<CommandGrant>) -> Self {
-        Self { agents, commands }
+        Self {
+            agents,
+            commands,
+            max_lease: None,
+        }
     }
 
     /// No agent and no commands.
@@ -131,6 +168,19 @@ impl PeerGrant {
 
     pub(crate) fn commands(&self) -> Option<CommandGrant> {
         self.commands
+    }
+
+    pub(crate) fn max_lease(&self) -> Option<MaxLease> {
+        self.max_lease
+    }
+
+    /// This grant with its harnesses' leases lasting at most `max_lease`,
+    /// in place of what it had before.
+    pub(crate) fn with_max_lease(self, max_lease: MaxLease) -> Self {
+        Self {
+            max_lease: Some(max_lease),
+            ..self
+        }
     }
 
     /// This grant and `agents` too: named ones join those already named,
@@ -184,11 +234,13 @@ impl PeerGrant {
 /// grant` and `nessa env ungrant` ask it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum GrantOperation {
-    /// `agents` beside those granted, and commands of at most `commands`
-    /// each in place of the longest granted before.
+    /// `agents` beside those granted, commands of at most `commands` each
+    /// in place of the longest granted before, and harnesses' leases of at
+    /// most `max_lease` each in place of the limit before.
     Grant {
         agents: Option<Agents>,
         commands: Option<CommandGrant>,
+        max_lease: Option<MaxLease>,
     },
     /// One agent taken back.
     UngrantAgent(AgentName),
@@ -206,13 +258,21 @@ impl GrantOperation {
     /// agent.
     pub(crate) fn apply(&self, grant: PeerGrant) -> Result<PeerGrant, AllAgents> {
         Ok(match self {
-            Self::Grant { agents, commands } => {
+            Self::Grant {
+                agents,
+                commands,
+                max_lease,
+            } => {
                 let grant = match agents {
                     Some(agents) => grant.with_agents(agents.clone()),
                     None => grant,
                 };
-                match commands {
+                let grant = match commands {
                     Some(commands) => grant.with_commands(*commands),
+                    None => grant,
+                };
+                match max_lease {
+                    Some(max_lease) => grant.with_max_lease(*max_lease),
                     None => grant,
                 }
             }
@@ -242,16 +302,19 @@ pub(crate) fn granted_to(peer: &Peer, entry: Option<PeerGrant>) -> PeerGrant {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct NotGranted;
 
-/// Whether `grant` covers a lease of `agent`'s harness.
+/// Whether `grant` covers a lease of `agent`'s harness, and if so how long
+/// that lease may last: `None` until it is ended.
 ///
 /// # Errors
 /// [`NotGranted`] when it does not.
-pub(crate) fn admit_agent(grant: &PeerGrant, agent: &str) -> Result<(), NotGranted> {
-    match &grant.agents {
-        Agents::All => Ok(()),
-        Agents::Named(named) if named.iter().any(|name| name.as_str() == agent) => Ok(()),
-        Agents::Named(_) => Err(NotGranted),
-    }
+pub(crate) fn admit_agent(grant: &PeerGrant, agent: &str) -> Result<Option<u64>, NotGranted> {
+    let covered = match &grant.agents {
+        Agents::All => true,
+        Agents::Named(named) => named.iter().any(|name| name.as_str() == agent),
+    };
+    covered
+        .then(|| grant.max_lease.map(MaxLease::ms))
+        .ok_or(NotGranted)
 }
 
 /// The timeout a command asking `timeout_ms` is granted under `grant`: the

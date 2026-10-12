@@ -26,6 +26,77 @@ fn terminal_command(id: &str) -> Value {
     })
 }
 
+#[test]
+fn web_search_completion_can_supply_search_details_without_changing_review_input() {
+    let mut tools = ObservedTools::default();
+    let input = json!({"type":"webSearch","id":"search-1"});
+    tool_call(&json!({"sessionUpdate":"tool_call","toolCallId":"search-1","kind":"search","status":"in_progress","rawInput":input}), &mut tools).unwrap();
+    let charged = tools.input_bytes;
+    let complete = json!({"sessionUpdate":"tool_call_update","toolCallId":"search-1","status":"completed","rawInput":{"type":"webSearch","id":"search-1","query":"OpenAI models","action":{"type":"search","query":"OpenAI models"}}});
+    tool_call(&complete, &mut tools).unwrap();
+    tool_call(&complete, &mut tools).unwrap();
+    assert_eq!(tools.input_bytes, charged);
+    let request = permission(
+        json!({"toolCallId":"search-1","kind":"search","rawInput":complete["rawInput"]}),
+        None,
+    );
+    assert!(matches!(
+        permission_input(&request, &tools),
+        Err(AgentError::Protocol(_))
+    ));
+}
+
+#[test]
+fn web_search_completion_exception_keeps_identity_and_command_inputs_strict() {
+    for kind in ["search", "execute"] {
+        for status in ["in_progress", "completed"] {
+            let mut tools = ObservedTools::default();
+            tool_call(&json!({"sessionUpdate":"tool_call","toolCallId":"search-1","kind":kind,"rawInput":{"type":"webSearch","id":"search-1"}}), &mut tools).unwrap();
+            let mut complete = json!({"sessionUpdate":"tool_call_update","toolCallId":"search-1","status":status,"rawInput":{"type":"webSearch","id":"search-1","query":"query"}});
+            if kind != "search" || status != "completed" {
+                assert!(matches!(
+                    tool_call(&complete, &mut tools),
+                    Err(AgentError::Protocol(_))
+                ));
+            }
+            complete["rawInput"]["id"] = json!("different");
+            assert!(matches!(
+                tool_call(&complete, &mut tools),
+                Err(AgentError::Protocol(_))
+            ));
+        }
+    }
+}
+
+#[test]
+fn web_search_completion_does_not_exempt_named_mcp_or_unknown_input_fields() {
+    for variant in ["named", "mcp", "extra", "type"] {
+        let mut tools = ObservedTools::default();
+        let mut start = json!({"sessionUpdate":"tool_call","toolCallId":"search-1","kind":"search","rawInput":{"type":"webSearch","id":"search-1"}});
+        if variant == "named" {
+            start["name"] = json!("exec_command");
+        }
+        if variant == "mcp" {
+            start["_meta"] = json!({"is_mcp_tool_call":true});
+        }
+        tool_call(&start, &mut tools).unwrap();
+        let mut complete = json!({"sessionUpdate":"tool_call_update","toolCallId":"search-1","status":"completed","rawInput":{"type":"webSearch","id":"search-1","query":"query"}});
+        if variant == "extra" {
+            complete["rawInput"]["command"] = json!("changed");
+        }
+        if variant == "type" {
+            complete["rawInput"]["type"] = json!("commandExecution");
+        }
+        assert!(
+            matches!(
+                tool_call(&complete, &mut tools),
+                Err(AgentError::Protocol(_))
+            ),
+            "{variant}"
+        );
+    }
+}
+
 fn permission(tool: Value, meta: Option<Value>) -> Value {
     let mut request = json!({"sessionId": "session-1", "toolCall": tool});
     if let Some(meta) = meta {

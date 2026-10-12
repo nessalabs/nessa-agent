@@ -94,6 +94,7 @@ fn new_input(
     value: &Value,
     retained: Option<&str>,
     used: usize,
+    search_completion: bool,
 ) -> Result<Option<Box<str>>, AgentError> {
     let input = match value.get("rawInput") {
         None | Some(Value::Null) => return Ok(None),
@@ -101,6 +102,11 @@ fn new_input(
         Some(_) => return Err(protocol("invalid tool input")),
     };
     if let Some(retained) = retained {
+        if search_completion
+            && same_search_identity(retained, input, identifier(value, "toolCallId")?)?
+        {
+            return Ok(None);
+        }
         same_input(retained, input)?;
         return Ok(None);
     }
@@ -111,6 +117,33 @@ fn new_input(
     }
     let encoded = serde_json::to_string(input).map_err(|_| protocol("invalid tool input"))?;
     Ok(Some(encoded.into_boxed_str()))
+}
+
+// codex-acp 1.12.0 fills query/action on webSearch completion. These are
+// observation metadata; permission_input still compares the original input.
+fn same_search_identity(retained: &str, incoming: &Value, id: &str) -> Result<bool, AgentError> {
+    let original: Value =
+        serde_json::from_str(retained).map_err(|_| protocol("invalid retained tool input"))?;
+    let Some(original) = original.as_object() else {
+        return Ok(false);
+    };
+    let Some(incoming) = incoming.as_object() else {
+        return Ok(false);
+    };
+    if original.get("type").and_then(Value::as_str) != Some("webSearch")
+        || incoming.get("type").and_then(Value::as_str) != Some("webSearch")
+        || original.get("id").and_then(Value::as_str) != Some(id)
+        || incoming.get("id").and_then(Value::as_str) != Some(id)
+    {
+        return Ok(false);
+    }
+    let stable = |key: &str| key != "query" && key != "action";
+    Ok(original
+        .iter()
+        .all(|(key, value)| !stable(key) || incoming.get(key) == Some(value))
+        && incoming
+            .keys()
+            .all(|key| !stable(key) || original.contains_key(key)))
 }
 
 /// The last `bytes` bytes of `text`, moved forward to the next character
@@ -415,7 +448,18 @@ pub(in crate::infrastructure::codex_acp) fn tool_call(
         .entries
         .get(&id)
         .and_then(|tool| tool.input.as_deref());
-    let input = new_input(value, retained, tools.input_bytes)?;
+    let search_completion = value.get("sessionUpdate").and_then(Value::as_str)
+        == Some("tool_call_update")
+        && value.get("status").and_then(Value::as_str) == Some("completed")
+        && tools.entries.get(&id).is_some_and(|tool| {
+            tool.kind.as_deref() == Some("search") && tool.name.is_none() && !tool.mcp
+        })
+        && declared_name(value)?.is_none()
+        && !is_mcp_call(value)
+        && value
+            .get("kind")
+            .is_none_or(|kind| kind.is_null() || kind.as_str() == Some("search"));
+    let input = new_input(value, retained, tools.input_bytes, search_completion)?;
     let added_bytes = input.as_ref().map_or(0, |input| input.len());
     let streamed = tools
         .entries

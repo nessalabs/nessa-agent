@@ -7,10 +7,15 @@
 //! are verified by digest and held with the lease as their cause; the
 //! lease's own stream carries none of their bytes; a channel that fails is
 //! resumed, and one that keeps failing, or a lease lost mid-read, is
-//! refused by name with nothing held.
+//! refused by name with nothing held. On a paired connection, which has
+//! no artifact channel, the same files travel on the lease frames
+//! themselves, and a lease lost or a file changed mid-read is refused by
+//! name the same way.
 use super::{
     audit::{EnvironmentAudit, EnvironmentEvent},
-    connector::{ArtifactChannel, ArtifactChannels, LeaseConnection, LeaseConnector},
+    connector::{
+        ArtifactChannel, ArtifactChannels, ArtifactTransport, LeaseConnection, LeaseConnector,
+    },
     environment::{SshEnvironment, SshTimings},
     install::{Build, BuildSource, HostInstaller, InstallTimings, RemoteShell, ShellFuture},
     sftp::tests::scripted::{ScriptedSftp, SftpScript},
@@ -20,17 +25,17 @@ use crate::attachments::infrastructure::ConversationHolds;
 use crate::attachments_test_support::{self as attachments, Fixture, CONVERSATION};
 use crate::conversation::application::{
     ArtifactKept, ArtifactOffer, ConversationAttachments, Environment, EnvironmentLease,
-    PublishedArtifact,
+    PublishAsk, PublishFailure, PublishedArtifact,
 };
 use crate::env::{LEASE_PROTOCOL, VERSION};
 use crate::env_serve::application::{
-    serve, HarnessLauncher, PeerGrants, PublishAnswer, PublishRefusal, PublishRequest, Runners,
-    ServeTimings, Serving,
+    serve, HarnessLauncher, PeerGrants, PublishAnswer, PublishRequest, Runners, ServeTimings,
+    Serving,
 };
 use crate::env_serve::domain::{Peer, PeerGrant};
 use crate::env_serve::infrastructure::{FileLedger, FileOutbox, TokioTimer};
 use crate::env_serve::install::Platform;
-use nessa_protocol::lease::{Collection, CollectionRefusal};
+use nessa_protocol::lease::{Collection, CollectionRefusal, PublishRefusal};
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
     permissions::ActionContext,
@@ -60,7 +65,7 @@ use std::{
 use tokio::{
     io::{duplex, split, AsyncBufReadExt, AsyncWriteExt, BufReader, DuplexStream},
     net::UnixStream,
-    sync::Notify,
+    sync::{watch, Notify},
     task::JoinHandle,
 };
 
@@ -72,6 +77,8 @@ use tokio::{
 struct Publisher {
     point: Arc<Mutex<Option<String>>>,
     launched: Arc<Notify>,
+    /// The workspace it reports, where a relative path is resolved.
+    workspace: String,
 }
 struct Idle {
     _pipes: (DuplexStream, DuplexStream),
@@ -83,7 +90,7 @@ impl HarnessControl for Idle {
 }
 impl HarnessLauncher for Publisher {
     fn workspace(&self) -> &str {
-        "/unused"
+        &self.workspace
     }
     fn runs(&self, _agent: &str) -> bool {
         true
@@ -196,21 +203,37 @@ struct Host {
     channels: Arc<Channels>,
     /// Bytes of lease frames the host sent the gateway.
     carried: Arc<AtomicU64>,
+    /// The most of them relayed to the gateway: past it, the relay holds
+    /// what it read until this is raised.
+    relay_limit: watch::Sender<u64>,
     relays: Mutex<Vec<JoinHandle<()>>>,
+    /// The connection is a paired one: published files travel on the lease
+    /// frames, with no artifact channel beside them.
+    paired: bool,
 }
 
 impl Host {
     fn new() -> Arc<Self> {
+        Self::with(false)
+    }
+
+    /// A host reached over a paired connection.
+    fn paired() -> Arc<Self> {
+        Self::with(true)
+    }
+
+    fn with(paired: bool) -> Arc<Self> {
         let root = tempfile::tempdir().unwrap();
         let workspace = root.path().join("work");
         std::fs::create_dir(&workspace).unwrap();
         let workspace = std::fs::canonicalize(workspace).unwrap();
         let outbox = root.path().join("outbox");
         Arc::new(Self {
-            workspace,
+            workspace: workspace.clone(),
             launcher: Arc::new(Publisher {
                 point: Arc::default(),
                 launched: Arc::default(),
+                workspace: workspace.to_str().unwrap().to_owned(),
             }),
             channels: Arc::new(Channels {
                 outbox,
@@ -219,7 +242,9 @@ impl Host {
                 sent: Mutex::default(),
             }),
             carried: Arc::default(),
+            relay_limit: watch::channel(u64::MAX).0,
             relays: Mutex::default(),
+            paired,
             root,
             sockets: tempfile::Builder::new().prefix("ns").tempdir().unwrap(),
         })
@@ -346,7 +371,12 @@ impl LeaseConnector for Connector {
         let (gateway_read, gateway_write) = split(gateway_end);
         let (host_read, host_write) = split(host_end);
         let carried = host.carried.clone();
-        let toward_gateway = tokio::spawn(count_copy(host_read, gateway_write, carried));
+        let toward_gateway = tokio::spawn(count_copy(
+            host_read,
+            gateway_write,
+            carried,
+            host.relay_limit.subscribe(),
+        ));
         let toward_host = tokio::spawn(async move {
             let (mut from, mut to) = (gateway_read, host_write);
             let _ = tokio::io::copy(&mut from, &mut to).await;
@@ -361,7 +391,10 @@ impl LeaseConnector for Connector {
             from_environment: Box::new(from_environment),
             to_environment: Box::new(to_environment),
             keep: Box::new(()),
-            artifacts: host.channels.clone(),
+            artifacts: match host.paired {
+                true => ArtifactTransport::Frames,
+                false => ArtifactTransport::Channels(host.channels.clone()),
+            },
         })
     }
 }
@@ -370,6 +403,7 @@ async fn count_copy(
     mut from: tokio::io::ReadHalf<DuplexStream>,
     mut to: tokio::io::WriteHalf<DuplexStream>,
     carried: Arc<AtomicU64>,
+    mut limit: watch::Receiver<u64>,
 ) {
     let mut buffer = vec![0; 64 * 1024];
     loop {
@@ -377,7 +411,11 @@ async fn count_copy(
             Ok(0) | Err(_) => break,
             Ok(read) => read,
         };
-        carried.fetch_add(read as u64, Ordering::SeqCst);
+        let total = carried.fetch_add(read as u64, Ordering::SeqCst) + read as u64;
+        // Held until the limit allows it, or the relay is cut.
+        if limit.wait_for(|limit| total <= *limit).await.is_err() {
+            break;
+        }
         if to.write_all(&buffer[..read]).await.is_err() {
             break;
         }
@@ -442,6 +480,8 @@ struct Leased {
     held: EnvironmentLease,
     _process: HarnessProcess,
     kept: tokio::sync::mpsc::UnboundedReceiver<Result<ArtifactKept, CollectionRefusal>>,
+    /// The request each offer named, in the order offered.
+    requests: tokio::sync::mpsc::UnboundedReceiver<Option<String>>,
 }
 
 async fn leased(host: &Arc<Host>, fixture: &Fixture) -> Leased {
@@ -501,14 +541,17 @@ async fn leased_pausing(
     assert!(held.hold.artifacts().is_none(), "handed out once");
     let keeper = ConversationHolds::new(fixture.service.clone());
     let (results, kept) = tokio::sync::mpsc::unbounded_channel();
+    let (named, requests) = tokio::sync::mpsc::unbounded_channel();
     let id = lease.as_str().to_owned();
     tokio::spawn(async move {
         while let Some(ArtifactOffer {
             file,
             bytes,
             answer,
+            request,
         }) = offers.recv().await
         {
+            let _ = named.send(request);
             let result = keeper
                 .keep_published(PublishedArtifact {
                     organization_id: attachments::organization("org"),
@@ -531,11 +574,13 @@ async fn leased_pausing(
                     },
                 })
                 .await;
-            answer.answer(match result {
-                Ok(ArtifactKept::Held) => Collection::Held,
-                Ok(ArtifactKept::AlreadyHeld) => Collection::AlreadyHeld,
-                Err(reason) => Collection::Refused { reason },
-            });
+            answer
+                .answer(match result {
+                    Ok(ArtifactKept::Held) => Collection::Held,
+                    Ok(ArtifactKept::AlreadyHeld) => Collection::AlreadyHeld,
+                    Err(reason) => Collection::Refused { reason },
+                })
+                .await;
             let _ = results.send(result);
         }
     });
@@ -544,6 +589,7 @@ async fn leased_pausing(
         held,
         _process: process,
         kept,
+        requests,
     }
 }
 
@@ -825,4 +871,305 @@ async fn a_file_outside_the_workspace_never_reaches_the_gateway() {
     );
     assert_eq!(host.channels.opens.load(Ordering::SeqCst), 0);
     assert!(fixture.store.held().is_empty());
+}
+
+fn ask(request: &str, path: &str) -> PublishAsk {
+    PublishAsk {
+        request: request.into(),
+        path: path.into(),
+        media_type: None,
+    }
+}
+
+/// Slice D3a: a publish the gateway asks for on the agent's behalf is
+/// offered on the lease's one offers receiver, naming its request, read
+/// over the artifact channel and verified like any; the lease's own stream
+/// carries its path and digest, never its bytes.
+#[tokio::test]
+async fn a_gateway_asked_publish_travels_the_same_channel_and_the_control_stream_carries_no_bytes()
+{
+    let host = Host::new();
+    let fixture = Fixture::new(AttachmentLimits::default());
+    let mut leased = leased(&host, &fixture).await;
+    let image = pattern(2 * 1024 * 1024 + 5, 9);
+    host.file("Nessa.dmg", &image);
+    let before = host.carried.load(Ordering::SeqCst);
+    let publish = leased
+        .held
+        .hold
+        .publish(ask("call-1", "Nessa.dmg"))
+        .expect("a host's lease publishes");
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(10), publish)
+            .await
+            .expect("offered in time"),
+        Ok(())
+    );
+    assert_eq!(leased.requests.recv().await, Some(Some("call-1".into())));
+    assert_eq!(leased.kept.recv().await, Some(Ok(ArtifactKept::Held)));
+    let carried = host.carried.load(Ordering::SeqCst) - before;
+    assert!(carried < 4096, "the lease stream carried {carried} bytes");
+    assert_eq!(host.channels.opens.load(Ordering::SeqCst), 1);
+    let held = fixture.store.held();
+    let [hold] = held.as_slice() else {
+        panic!("one hold, got {}", held.len())
+    };
+    assert_eq!(hold.lease(), Some(leased.lease.as_str()));
+    assert_eq!(
+        fixture
+            .store
+            .blob(attachments::digest_of(&image))
+            .as_deref(),
+        Some(image.as_slice())
+    );
+    // A harness's own publish on the same lease names no request.
+    let png = host.file("simulator.png", &pattern(1000, 3));
+    assert!(matches!(
+        host.publish(&png).await,
+        PublishAnswer::Held { .. }
+    ));
+    assert_eq!(leased.requests.recv().await, Some(None));
+    assert_eq!(staged(&host), 0);
+}
+
+/// A file the host will not stage is answered by its reason, and nothing
+/// is offered.
+#[tokio::test]
+async fn a_gateway_asked_publish_the_host_refuses_is_answered_by_its_reason() {
+    let host = Host::new();
+    let fixture = Fixture::new(AttachmentLimits::default());
+    let mut leased = leased(&host, &fixture).await;
+    let outside = host.root.path().join("secret");
+    std::fs::write(&outside, b"not the agent's").unwrap();
+    for (path, reason) in [
+        (outside.to_str().unwrap(), PublishRefusal::OutsideWorkspace),
+        ("../secret", PublishRefusal::OutsideWorkspace),
+        ("missing.png", PublishRefusal::Unreadable),
+    ] {
+        let publish = leased.held.hold.publish(ask(path, path)).unwrap();
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(10), publish)
+                .await
+                .unwrap(),
+            Err(PublishFailure::NotPublished(reason)),
+            "{path}"
+        );
+    }
+    assert!(leased.requests.try_recv().is_err());
+    assert_eq!(host.channels.opens.load(Ordering::SeqCst), 0);
+}
+
+/// A publish asked once the lease ended, or once its connection was lost,
+/// is answered so at once, and nothing is offered.
+#[tokio::test]
+async fn a_gateway_asked_publish_after_the_lease_ended_or_was_lost_is_answered_so() {
+    let host = Host::new();
+    let fixture = Fixture::new(AttachmentLimits::default());
+    let ended = leased(&host, &fixture).await;
+    host.file("a.png", &pattern(100, 1));
+    ended.held.hold.end(LeaseEndCause::Stopped).await;
+    assert_eq!(
+        ended
+            .held
+            .hold
+            .publish(ask("call-1", "a.png"))
+            .unwrap()
+            .await,
+        Err(PublishFailure::NotPublished(PublishRefusal::LeaseEnded))
+    );
+
+    let host = Host::new();
+    let lost = leased(&host, &fixture).await;
+    host.file("a.png", &pattern(100, 1));
+    host.cut();
+    let cause = tokio::time::timeout(Duration::from_secs(10), lost.held.hold.ends().unwrap())
+        .await
+        .expect("the loss is seen");
+    assert_eq!(
+        cause,
+        nessa_sdk::domain::agent_execution::leases::LeaseEndCause::Lost
+    );
+    assert_eq!(
+        lost.held
+            .hold
+            .publish(ask("call-1", "a.png"))
+            .unwrap()
+            .await,
+        Err(PublishFailure::Unanswered)
+    );
+    assert_eq!(host.channels.opens.load(Ordering::SeqCst), 0);
+}
+
+// ---- a paired connection: the lease frames carry the bytes ----
+
+/// Row I9: on a paired connection, which has no artifact channel, a file a
+/// harness publishes and one the gateway asks for travel on the lease
+/// frames themselves, are verified by their digest and held under the
+/// lease; no channel is ever opened, and the host lets go of its copies.
+#[tokio::test]
+async fn a_paired_connection_carries_a_published_file_on_its_lease_frames_and_it_verifies() {
+    let host = Host::paired();
+    let fixture = Fixture::new(AttachmentLimits::default());
+    let mut leased = leased(&host, &fixture).await;
+    let image = pattern(3 * 1024 * 1024 + 17, 1);
+    let dmg = host.file("Nessa.dmg", &image);
+    let before = host.carried.load(Ordering::SeqCst);
+    assert_eq!(
+        host.publish(&dmg).await,
+        PublishAnswer::Held {
+            digest: hex(&image),
+            size: image.len() as u64,
+        }
+    );
+    assert_eq!(leased.kept.recv().await, Some(Ok(ArtifactKept::Held)));
+    // Its bytes came over the lease stream: no channel was opened.
+    let carried = host.carried.load(Ordering::SeqCst) - before;
+    assert!(
+        carried >= image.len() as u64,
+        "the lease stream carried {carried} bytes of a file of {}",
+        image.len()
+    );
+    assert_eq!(host.channels.opens.load(Ordering::SeqCst), 0);
+    // One the gateway asks for, ending short of a whole range, too.
+    let report = pattern(70_000, 2);
+    host.file("report.pdf", &report);
+    let publish = leased
+        .held
+        .hold
+        .publish(ask("call-1", "report.pdf"))
+        .expect("a paired lease publishes");
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(10), publish)
+            .await
+            .expect("offered in time"),
+        Ok(())
+    );
+    assert_eq!(leased.kept.recv().await, Some(Ok(ArtifactKept::Held)));
+    assert_eq!(host.channels.opens.load(Ordering::SeqCst), 0);
+    let held = fixture.store.held();
+    assert_eq!(held.len(), 2);
+    for bytes in [&image, &report] {
+        let hold = held
+            .iter()
+            .find(|hold| hold.stored().digest() == attachments::digest_of(bytes))
+            .expect("held");
+        assert_eq!(hold.lease(), Some(leased.lease.as_str()));
+        assert_eq!(
+            fixture.store.blob(attachments::digest_of(bytes)).as_deref(),
+            Some(bytes.as_slice())
+        );
+    }
+    // The host recorded each publish and the gateway's answer to it.
+    let ledger = std::fs::read_to_string(host.root.path().join("leases.jsonl")).unwrap();
+    let kinds: Vec<(String, serde_json::Value)> = ledger
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .filter(|entry| entry["lease"] == leased.lease.as_str())
+        .filter(|entry| entry["kind"] == "published" || entry["kind"] == "collected")
+        .map(|entry| {
+            (
+                entry["kind"].as_str().unwrap().to_owned(),
+                entry["outcome"].clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            ("published".into(), serde_json::Value::Null),
+            ("collected".into(), serde_json::json!({"outcome": "held"})),
+            ("published".into(), serde_json::Value::Null),
+            ("collected".into(), serde_json::json!({"outcome": "held"})),
+        ],
+        "{ledger}"
+    );
+    assert_eq!(staged(&host), 0);
+}
+
+/// A paired connection lost mid-read ends the lease, and the read with it:
+/// the file is refused as ended, with nothing held, and the host, who can
+/// no longer hear that, records its publish unanswered.
+#[tokio::test]
+async fn a_paired_lease_lost_mid_read_fails_as_ended_and_leaves_no_partial_hold() {
+    let host = Host::paired();
+    let fixture = Fixture::new(AttachmentLimits::default());
+    let mut leased = leased(&host, &fixture).await;
+    let file = host.file("Nessa.dmg", &pattern(1024 * 1024, 5));
+    let limit = host.carried.load(Ordering::SeqCst) + 100_000;
+    host.relay_limit.send_replace(limit);
+    let publisher = {
+        let host = host.clone();
+        tokio::spawn(async move { host.publish(&file).await })
+    };
+    // Wait until the read is under way, its bytes held back by the relay.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while host.carried.load(Ordering::SeqCst) <= limit {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the read started");
+    host.cut();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(10), leased.kept.recv())
+            .await
+            .expect("an outcome in time"),
+        Some(Err(CollectionRefusal::LeaseEnded))
+    );
+    assert_eq!(publisher.await.unwrap(), PublishAnswer::Unanswered);
+    assert!(fixture.store.held().is_empty());
+    assert_eq!(fixture.store.pending(), 0);
+    assert_eq!(staged(&host), 0);
+}
+
+/// A staged copy that is cut short while the gateway reads it is not the
+/// file published: refused as a mismatch, nothing held, and the host told.
+#[tokio::test]
+async fn a_staged_copy_cut_short_mid_read_on_a_paired_connection_is_a_mismatch() {
+    let host = Host::paired();
+    let fixture = Fixture::new(AttachmentLimits::default());
+    let mut leased = leased(&host, &fixture).await;
+    let file = host.file("Nessa.dmg", &pattern(1024 * 1024, 6));
+    // The gateway asks at most a few ranges past what reached it, so with
+    // what reaches it held under this, nothing past half the file is read
+    // before the copy is cut there.
+    let limit = host.carried.load(Ordering::SeqCst) + 100_000;
+    host.relay_limit.send_replace(limit);
+    let publisher = {
+        let host = host.clone();
+        tokio::spawn(async move { host.publish(&file).await })
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while host.carried.load(Ordering::SeqCst) <= limit {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the read started");
+    let copies = files_under(&host.root.path().join("outbox"));
+    let [copy] = copies.keys().collect::<Vec<_>>()[..] else {
+        panic!("one staged copy, got {copies:?}")
+    };
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(copy)
+        .unwrap()
+        .set_len(512 * 1024)
+        .unwrap();
+    host.relay_limit.send_replace(u64::MAX);
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(10), leased.kept.recv())
+            .await
+            .expect("an outcome in time"),
+        Some(Err(CollectionRefusal::Mismatch))
+    );
+    assert_eq!(
+        publisher.await.unwrap(),
+        PublishAnswer::Refused {
+            reason: CollectionRefusal::Mismatch
+        }
+    );
+    assert!(fixture.store.held().is_empty());
+    assert_eq!(fixture.store.pending(), 0);
+    assert_eq!(staged(&host), 0);
 }

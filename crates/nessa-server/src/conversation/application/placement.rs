@@ -25,7 +25,16 @@ use super::{ConversationError, Environment, EnvironmentFuture};
 use crate::conversation::domain::CommandPolicy;
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::domain::agent_execution::leases::{EnvironmentRef, PeerEnvironment};
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
+
+/// How long an `artifacts_publish` call waits, from its ask, for its file
+/// to be staged, read, checked and kept before it answers that it does not
+/// know (`timed_out`). It is longer than one read's own bound (row
+/// `artifact.publish_deadline`), but the collector takes a lease's files one
+/// at a time, so a file queued behind others may still be read after its
+/// call stopped waiting; it is then kept for the call's person all the same.
+/// Row `artifact.publish_call_wait` in `docs/limits.md`.
+pub const PUBLISH_CALL_WAIT: Duration = Duration::from_secs(16 * 60);
 
 /// Why a placement could not be read or written.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -92,6 +101,8 @@ pub(crate) struct Environments {
     /// Which commands an agent may run, and on which hosts; `None` when this
     /// gateway grants none, and the environment tools are absent.
     commands: Option<CommandPolicy>,
+    /// How long an `artifacts_publish` call waits for its file to be kept.
+    publish_wait: Duration,
 }
 
 impl From<Arc<dyn Environment>> for Environments {
@@ -104,6 +115,7 @@ impl From<Arc<dyn Environment>> for Environments {
             peers: None,
             placements: None,
             commands: None,
+            publish_wait: PUBLISH_CALL_WAIT,
         }
     }
 }
@@ -123,6 +135,7 @@ impl Environments {
             peers: None,
             placements: Some(placements),
             commands: None,
+            publish_wait: PUBLISH_CALL_WAIT,
         }
     }
 
@@ -138,6 +151,19 @@ impl Environments {
     pub(crate) fn with_commands(mut self, policy: CommandPolicy) -> Self {
         self.commands = Some(policy);
         self
+    }
+
+    /// These environments, whose `artifacts_publish` calls wait `wait`
+    /// rather than [`PUBLISH_CALL_WAIT`]. For tests.
+    #[cfg(test)]
+    pub(crate) fn with_publish_wait(mut self, wait: Duration) -> Self {
+        self.publish_wait = wait;
+        self
+    }
+
+    /// How long an `artifacts_publish` call waits for its file to be kept.
+    pub(crate) fn publish_wait(&self) -> Duration {
+        self.publish_wait
     }
 
     /// Which commands an agent may run, and where; `None` when none.

@@ -661,7 +661,11 @@ impl continuation::Continuation {
                 let snapshot = candidate
                     .as_mut()
                     .ok_or_else(|| corrupt("artifact record precedes session open"))?;
-                record.admit_saved(snapshot, |turn| positions.contains_key(turn))?;
+                let turn_actor = |turn: &ExecutionId| {
+                    let index = *positions.get(turn)?;
+                    Some(snapshot.invocations.get(index)?.actor.clone())
+                };
+                record.admit_saved(snapshot, turn_actor)?;
                 snapshot.artifacts.push(record.clone());
                 undo.push(ChangeUndo::Artifact);
             }
