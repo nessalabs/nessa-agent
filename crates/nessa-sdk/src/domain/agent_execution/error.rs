@@ -144,6 +144,9 @@ pub enum ExecutionError {
     ControlCharacterInPermissionReason,
     /// A class deadline was installed in the other class's slot.
     MismatchedPermissionDeadline,
+    /// An allow deadline records that it stops the turn. Only a refusal can
+    /// stop the turn, so this combination is not a deadline.
+    AllowDeadlineStopsTurn,
 }
 impl fmt::Display for ExecutionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

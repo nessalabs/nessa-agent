@@ -216,10 +216,17 @@ impl PermissionResolution {
         input: ToolReviewInput,
         attribution: ApprovalAttribution,
     ) -> Result<Self, AgentError> {
-        if !matches!(request.state(), PermissionStateView::Answered { .. }) {
+        let PermissionStateView::Answered { decision, .. } = request.state() else {
             return Err(AgentError::InvalidInput(
                 "permission must be answered before attribution is recorded".into(),
             ));
+        };
+        if let ApprovalBasis::Deadline(deadline) = attribution.basis() {
+            if deadline.effect() != decision.effect() {
+                return Err(AgentError::InvalidInput(
+                    "a deadline attribution must match the selected decision".into(),
+                ));
+            }
         }
         Ok(Self {
             session_id,
@@ -244,5 +251,83 @@ impl PermissionResolution {
     /// Host-verified actor and evaluated decision basis.
     pub fn attribution(&self) -> &ApprovalAttribution {
         &self.attribution
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::application::agent_execution::tools::ToolReviewInput;
+    use crate::domain::agent_execution::executions::ExecutionId;
+    use crate::domain::agent_execution::permissions::{
+        PermissionDecision, PermissionEffect, PermissionOfferPolicy, PermissionOption,
+        PermissionOptionId, PermissionOptions, PermissionScope, PermissionToolClass,
+    };
+    use crate::domain::agent_execution::sessions::ExecutionSessionId;
+    use crate::domain::agent_execution::tools::ToolCallId;
+    use std::time::Duration;
+
+    fn answered(effect: PermissionEffect) -> PermissionRequest {
+        let execution = ExecutionId::new("execution").unwrap();
+        let option_id = PermissionOptionId::new(effect.as_str()).unwrap();
+        let options = PermissionOptions::new(
+            vec![PermissionOption::new(
+                option_id.clone(),
+                effect.as_str(),
+                PermissionDecision::new(effect, PermissionScope::request()),
+            )
+            .unwrap()],
+            &PermissionOfferPolicy::once_only(),
+        )
+        .unwrap();
+        let mut request = PermissionRequest::new(
+            PermissionId::new("permission").unwrap(),
+            execution.clone(),
+            ToolCallId::new("tool").unwrap(),
+            options,
+        );
+        request.answer(&execution, &option_id).unwrap();
+        request
+    }
+
+    fn resolution(
+        selected: PermissionEffect,
+        deadline_effect: PermissionEffect,
+    ) -> Result<PermissionResolution, AgentError> {
+        let deadline = PermissionReviewDeadline::new(
+            PermissionToolClass::Other,
+            Duration::from_secs(30),
+            deadline_effect,
+            "No human answered in time.",
+        )
+        .unwrap();
+        let request = answered(selected);
+        let attribution = ApprovalAttribution::deadline(request.id(), deadline).unwrap();
+        PermissionResolution::new(
+            ExecutionSessionId::new("session").unwrap(),
+            request,
+            ToolReviewInput {
+                name: "Write".into(),
+                arguments_json: "{}".into(),
+            },
+            attribution,
+        )
+    }
+
+    #[test]
+    fn a_deadline_attribution_matches_the_selected_decision() {
+        assert!(resolution(PermissionEffect::Deny, PermissionEffect::Deny).is_ok());
+        assert!(resolution(PermissionEffect::Allow, PermissionEffect::Allow).is_ok());
+        for (selected, deadline_effect) in [
+            (PermissionEffect::Allow, PermissionEffect::Deny),
+            (PermissionEffect::Deny, PermissionEffect::Allow),
+        ] {
+            assert_eq!(
+                resolution(selected, deadline_effect),
+                Err(AgentError::InvalidInput(
+                    "a deadline attribution must match the selected decision".into(),
+                ))
+            );
+        }
     }
 }

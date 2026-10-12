@@ -439,7 +439,7 @@ fn restore_deadline(saved: SavedDeadline) -> Option<PermissionReviewDeadline> {
         saved.reason,
     )
     .ok()
-    .map(|deadline| deadline.restored(saved.stops_turn, saved.due_at_ms))
+    .and_then(|deadline| deadline.restored(saved.stops_turn, saved.due_at_ms).ok())
 }
 
 impl<'a> From<&'a ExecutionEvent> for Event<&'a str> {
@@ -811,7 +811,8 @@ mod borrowed_event_tests {
         use crate::domain::agent_execution::permissions::{
             PermissionDecision, PermissionEffect, PermissionId, PermissionOfferPolicy,
             PermissionOption, PermissionOptionId, PermissionOptions, PermissionReviewDeadline,
-            PermissionScope, PermissionToolClass, STANDARD_DENY_REASON, STANDARD_STOP_REASON,
+            PermissionScope, PermissionToolClass, STANDARD_ALLOW_REASON, STANDARD_DENY_REASON,
+            STANDARD_STOP_REASON,
         };
         use crate::domain::agent_execution::tools::{ToolCallId, ToolObservation};
         use std::time::Duration;
@@ -915,6 +916,15 @@ mod borrowed_event_tests {
             due_at_ms: None,
         };
         assert!(restore_deadline(zero).is_none());
+        let stopping_allow = SavedDeadline {
+            class: SavedClass::ReadOnly,
+            wait_ms: 8_000,
+            effect: SavedEffect::Allow,
+            reason: STANDARD_ALLOW_REASON.into(),
+            stops_turn: true,
+            due_at_ms: Some(1),
+        };
+        assert!(restore_deadline(stopping_allow).is_none());
         let kept = restore_deadline(saved_deadline(&deadline)).unwrap();
         assert_eq!(kept.reason(), STANDARD_STOP_REASON);
         assert!(!kept.armed());

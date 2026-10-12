@@ -59,11 +59,14 @@ function deadlineOf(value: unknown) {
   const dueAtMs = deadline.dueAtMs
   if (typeof dueAtMs !== "number" || !Number.isSafeInteger(dueAtMs) || dueAtMs < 1)
     throw new Error("Invalid conversation dueAtMs")
-  oneOf(text(deadline, "effect", 16), Object.values(ConversationPermissionOptionEffect))
+  const effect = text(deadline, "effect", 16)
+  oneOf(effect, Object.values(ConversationPermissionOptionEffect))
   const reason = text(deadline, "reason", 512, false)
   if (!reason.trim() || /\p{Cc}/u.test(reason))
     throw new Error("Invalid conversation reason")
   flag(deadline, "stopsTurn")
+  if (effect === ConversationPermissionOptionEffect.Allow && deadline.stopsTurn === true)
+    throw new Error("Invalid conversation stopsTurn")
 }
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value))

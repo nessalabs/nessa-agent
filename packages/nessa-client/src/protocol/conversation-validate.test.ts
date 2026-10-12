@@ -455,6 +455,14 @@ describe("conversation view agreement", () => {
     }
     const read = conversationView(withDeadline(deadline), "conversation")
     expect(read.permissions[0]!.deadline).toEqual(deadline)
+    expect(
+      conversationView(withDeadline({ ...deadline, stopsTurn: true }), "conversation")
+        .permissions[0]!.deadline?.stopsTurn,
+    ).toBe(true)
+    const allowed = { ...deadline, effect: "allow" as const, stopsTurn: false }
+    expect(
+      conversationView(withDeadline(allowed), "conversation").permissions[0]!.deadline,
+    ).toEqual(allowed)
     for (const broken of [
       { waitMs: 0, dueAtMs: deadline.dueAtMs, effect: "deny", reason, stopsTurn: false },
       {
@@ -496,6 +504,7 @@ describe("conversation view agreement", () => {
         reason,
         stopsTurn: "no",
       },
+      { ...deadline, effect: "allow", stopsTurn: true },
       { ...deadline, later: true },
     ])
       expect(() => conversationView(withDeadline(broken), "conversation")).toThrow()

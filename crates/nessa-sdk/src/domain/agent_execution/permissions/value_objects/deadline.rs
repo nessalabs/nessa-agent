@@ -211,13 +211,23 @@ impl PermissionReviewDeadline {
     }
 
     /// The facts saved with a review, not a promise that this process will decide it.
-    pub fn restored(self, stops_turn: bool, due_at_ms: Option<u64>) -> Self {
-        Self {
+    ///
+    /// An allow deadline cannot record that it stops the turn. That combination
+    /// is [`ExecutionError::AllowDeadlineStopsTurn`].
+    pub fn restored(
+        self,
+        stops_turn: bool,
+        due_at_ms: Option<u64>,
+    ) -> Result<Self, ExecutionError> {
+        if stops_turn && self.effect == PermissionEffect::Allow {
+            return Err(ExecutionError::AllowDeadlineStopsTurn);
+        }
+        Ok(Self {
             stops_turn,
             due_at_ms,
             armed: false,
             ..self
-        }
+        })
     }
 }
 
@@ -635,6 +645,7 @@ mod tests {
             ExecutionError::PermissionDeadlineTooLong,
             ExecutionError::ControlCharacterInPermissionReason,
             ExecutionError::MismatchedPermissionDeadline,
+            ExecutionError::AllowDeadlineStopsTurn,
         ] {
             assert!(error.to_string().starts_with("agent execution: "));
         }
@@ -809,7 +820,10 @@ mod tests {
         assert!(promised.armed());
         assert_eq!(promised.due_at_ms(), Some(1_700_000_030_000));
         assert_eq!(promised.recorded_reason().as_str(), STANDARD_STOP_REASON);
-        let restored = promised.clone().restored(true, Some(1_700_000_030_000));
+        let restored = promised
+            .clone()
+            .restored(true, Some(1_700_000_030_000))
+            .unwrap();
         assert!(!restored.armed());
         assert!(restored.stops_turn());
         assert_eq!(restored.due_at_ms(), Some(1_700_000_030_000));
@@ -822,20 +836,25 @@ mod tests {
             STANDARD_STOP_REASON,
         )
         .unwrap()
-        .restored(true, Some(due));
+        .restored(true, Some(due))
+        .unwrap();
         assert_ne!(promised, different_class);
         let different_wait =
             PermissionReviewDeadline::stopping(PermissionToolClass::Other, Duration::from_secs(8))
                 .promise(due);
         assert_ne!(promised, different_wait);
-        let different_effect = PermissionReviewDeadline::new(
+        let allow = PermissionReviewDeadline::new(
             PermissionToolClass::Other,
             Duration::from_secs(30),
             PermissionEffect::Allow,
             STANDARD_STOP_REASON,
         )
-        .unwrap()
-        .restored(true, Some(due));
+        .unwrap();
+        assert_eq!(
+            allow.clone().restored(true, Some(due)),
+            Err(ExecutionError::AllowDeadlineStopsTurn)
+        );
+        let different_effect = allow.restored(false, Some(due)).unwrap();
         assert_ne!(promised, different_effect);
         let different_reason = PermissionReviewDeadline::new(
             PermissionToolClass::Other,
@@ -844,7 +863,8 @@ mod tests {
             STANDARD_DENY_REASON,
         )
         .unwrap()
-        .restored(true, Some(due));
+        .restored(true, Some(due))
+        .unwrap();
         assert_ne!(promised, different_reason);
         let different_stop = PermissionReviewDeadline::new(
             PermissionToolClass::Other,
@@ -853,9 +873,10 @@ mod tests {
             STANDARD_STOP_REASON,
         )
         .unwrap()
-        .restored(false, Some(due));
+        .restored(false, Some(due))
+        .unwrap();
         assert_ne!(promised, different_stop);
-        let different_due = promised.clone().restored(true, None);
+        let different_due = promised.clone().restored(true, None).unwrap();
         assert_ne!(promised, different_due);
     }
 }
