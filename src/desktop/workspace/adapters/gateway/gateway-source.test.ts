@@ -2282,6 +2282,7 @@ describe("MCP Apps (#384)", () => {
     status: "running" as const,
     details: "",
     input: "",
+    nativeHooks: "off" as const,
     mcp: { server: "mcptest", tool: "show_chart", resourceUri: "ui://t/chart.html" },
   }
 

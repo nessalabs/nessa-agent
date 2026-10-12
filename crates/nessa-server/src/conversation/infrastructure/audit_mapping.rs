@@ -2,8 +2,8 @@
 use nessa_sdk::application::agent_execution::{
     executions::{
         AdmissionAuditCause, AdmissionAuditStage, AttachmentAuditCause, AttachmentAuditStage,
-        EffortChangeStage, ExecutionAuditRecord, QueueOrderCause, SteeringAuditCause,
-        SteeringAuditStage,
+        EffortChangeStage, ExecutionAuditRecord, NativeHooksLaunchCause, QueueOrderCause,
+        SteeringAuditCause, SteeringAuditStage,
     },
     permissions::{
         ActionContext, ApprovalBasis, CancellationOrigin, PermissionAnswerDelivery,
@@ -151,6 +151,27 @@ pub(super) fn record_value(record: &ExecutionAuditRecord) -> Value {
         }
         ExecutionAuditRecord::ReviewDeclined(record) => declined(record),
         ExecutionAuditRecord::QuestionRefused(record) => refused(record),
+        ExecutionAuditRecord::NativeHooksLaunch(record) => json!({
+            "kind": "native_hooks_launch",
+            "sessionId": record.session_id(),
+            "launchId": record.launch_id(),
+            "harness": record.harness(),
+            "nativeHooks": if record.allowed() { "on" } else { "off" },
+            // An open for a session belongs to an attachment, whose record
+            // for the same session names the cause and caller. A direct open
+            // has no attachment, so no record names its caller. A restart is
+            // the runtime's.
+            "cause": match record.cause() {
+                NativeHooksLaunchCause::Open | NativeHooksLaunchCause::DirectOpen => "open",
+                NativeHooksLaunchCause::Restart => "restart",
+            },
+            "initiator": match record.cause() {
+                NativeHooksLaunchCause::Open => json!({"kind": "attachment", "sessionId": record.session_id()}),
+                NativeHooksLaunchCause::DirectOpen => json!({"kind": "direct"}),
+                NativeHooksLaunchCause::Restart => json!({"kind": "runtime"}),
+            },
+            "restoredContext": record.restored(),
+        }),
         ExecutionAuditRecord::LateProviderResult(record) => json!({
             "kind":"late_provider_result",
             "sessionId":record.session_id().as_str(),

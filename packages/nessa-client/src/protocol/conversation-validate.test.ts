@@ -70,6 +70,7 @@ function view() {
         status: "running",
         details: "",
         input: "{}",
+        nativeHooks: "off",
       },
     ],
     capabilities: {
@@ -81,6 +82,7 @@ function view() {
       agentFeatures: {
         permissionDenial: "unknown",
         nativeHookSuppression: "unknown",
+        nativeHooks: "off",
         compactionReporting: "unsupported_not_implemented",
         modelSwitchReporting: "unsupported_not_implemented",
         permissionDeferral: "unsupported_not_implemented",
@@ -96,6 +98,48 @@ function view() {
 }
 
 describe("conversation view agreement", () => {
+  it("accepts a tool with no recorded hooks choice and refuses an unknown one", () => {
+    const base = view() as { tools: Record<string, unknown>[] }
+    const { nativeHooks: _, ...unmarked } = base.tools[0]
+    expect(
+      conversationView({ ...base, tools: [unmarked] }, "conversation").tools[0]
+        .nativeHooks,
+    ).toBeUndefined()
+    expect(() =>
+      conversationView(
+        { ...base, tools: [{ ...base.tools[0], nativeHooks: "yes" }] },
+        "conversation",
+      ),
+    ).toThrow("Invalid native hooks choice")
+  })
+
+  it("refuses two hooks choices for one execution", () => {
+    const base = view() as {
+      tools: Record<string, unknown>[]
+      messages: { parts: Record<string, unknown>[] }[]
+    }
+    base.messages[1].parts.push({
+      offset: 1,
+      kind: "tool",
+      text: "",
+      toolId: "second",
+      noticeId: "",
+    })
+    const second = { ...base.tools[0], toolId: "second" }
+    expect(
+      conversationView(
+        { ...base, tools: [base.tools[0], { ...second, nativeHooks: "off" }] },
+        "conversation",
+      ).tools,
+    ).toHaveLength(2)
+    expect(() =>
+      conversationView(
+        { ...base, tools: [base.tools[0], { ...second, nativeHooks: "on" }] },
+        "conversation",
+      ),
+    ).toThrow("An execution names two native hooks choices")
+  })
+
   it("requires a current transcript state and refuses unconfirmed controls", () => {
     const missing: Record<string, unknown> = view()
     delete missing.transcriptState

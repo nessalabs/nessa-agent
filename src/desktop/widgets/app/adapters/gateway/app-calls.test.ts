@@ -23,6 +23,7 @@ function tool(overrides: Partial<ConversationTool> = {}): ConversationTool {
     status: "running",
     details: "",
     input: "",
+    nativeHooks: "off",
     mcp: {
       server: "mcptest",
       tool: "show_chart",
