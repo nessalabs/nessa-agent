@@ -244,6 +244,16 @@ impl SshEnvironment {
         }
     }
 
+    /// Revoke the connection it holds now, as a paired environment's is
+    /// revoked: for tests of what a revocation does to leases on it.
+    #[cfg(test)]
+    pub(super) async fn revoke_connection(&self) {
+        let held = self.inner.link.lock().await.clone();
+        if let Some(link) = held {
+            self.inner.revoke(&link);
+        }
+    }
+
     /// Whether a connection to it serves leases now.
     pub(super) fn is_connected(&self) -> bool {
         self.reachable() == Some(true)
@@ -570,7 +580,8 @@ fn command_refusal(host: &str, refused: AdmissionRefused) -> CommandRefusal {
         AdmissionRefused::Host(
             GrantRefusal::AgentUnavailable
             | GrantRefusal::Duplicate
-            | GrantRefusal::AuditUnavailable,
+            | GrantRefusal::AuditUnavailable
+            | GrantRefusal::Revoked,
         )
         | AdmissionRefused::Unreachable => {
             CommandRefusal::Environment(LeaseRefusal::EnvironmentUnreachable)
@@ -631,13 +642,19 @@ impl CommandHold for SshCommand {
             .flatten();
             // The host stops a command itself once told it is revoked.
             let stopped = stopped.or(self.link.revoked().then_some(LeaseEndCause::Revoked));
-            match answer {
+            let mut result = match answer {
                 Some(answer) => command_result(answer, stopped),
                 None => CommandResult {
                     cleanup: self.inner.account(&self.lease).await,
                     ..CommandResult::unanswered()
                 },
+            };
+            // A transition of its lease that went unrecorded (its
+            // revocation, its connection's loss) settles nothing.
+            if self.link.unaudited(&self.lease) {
+                result.cleanup = None;
             }
+            result
         })
     }
 }

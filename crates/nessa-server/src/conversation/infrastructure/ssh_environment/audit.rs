@@ -32,8 +32,9 @@ pub(crate) enum EnvironmentEvent {
     /// A connection ended, ending every lease it carried.
     ConnectionLost { host: String, leases: Vec<String> },
     /// A paired host no longer holds a credential to serve this gateway:
-    /// every lease its connection carried, `leases`, ends as revoked, and
-    /// the connection is closed once they are let go.
+    /// every lease the host had granted on its connection, `leases`, ends
+    /// as revoked, and the connection is closed once they are let go. A
+    /// grant still being answered then is not listed.
     Revoked { host: String, leases: Vec<String> },
     /// A frame named a lease or harness this connection does not hold, or
     /// was not one this build reads, and was dropped.

@@ -3835,9 +3835,14 @@ async fn a_revoked_gateway_has_every_lease_ended_recorded_revoked_and_its_ends_a
             sandbox: Sandbox::HarnessDefault,
         })
         .await;
-    let (mut refused, mut ran) = (None, None);
-    while refused.is_none() || ran.is_none() {
+    const CROSSED: &str = "0b7d3a1e-0000-4000-8000-0000000000c4";
+    gateway.send(grant_command(CROSSED, &["echo"], None)).await;
+    let (mut refused, mut crossed, mut ran) = (None, None, None);
+    while refused.is_none() || crossed.is_none() || ran.is_none() {
         match gateway.said().await {
+            FromEnvironment::Refused { lease, reason } if lease == CROSSED => {
+                crossed = Some(reason)
+            }
             frame @ FromEnvironment::Refused { .. } => refused = Some(frame),
             frame @ FromEnvironment::Ran { .. } => ran = Some(frame),
             other => panic!("unexpected {other:?}"),
@@ -3847,9 +3852,10 @@ async fn a_revoked_gateway_has_every_lease_ended_recorded_revoked_and_its_ends_a
         refused,
         Some(FromEnvironment::Refused {
             lease: OTHER_LEASE.into(),
-            reason: GrantRefusal::NotGranted,
+            reason: GrantRefusal::Revoked,
         })
     );
+    assert_eq!(crossed, Some(GrantRefusal::Revoked));
     // The running command is stopped and answers with its `Ran`.
     assert!(matches!(
         ran,
@@ -3903,10 +3909,11 @@ async fn a_revoked_gateway_has_every_lease_ended_recorded_revoked_and_its_ends_a
         assert!(at(&revoking) < at(&ended), "{entries:?}");
         assert_eq!(ended_entries(&gateway.ledger, lease), 1, "{entries:?}");
     }
+    // Recorded as the revocation it crossed, never as the owner's grant.
     assert!(entries.contains(&LedgerEntry::Refused {
         lease: OTHER_LEASE.into(),
         peer: DIALED,
-        reason: GrantRefusal::NotGranted,
+        reason: GrantRefusal::Revoked,
         asked: Asked::Agent {
             agent: "claude".into(),
             sandbox: Sandbox::HarnessDefault,
@@ -3980,4 +3987,84 @@ async fn a_revocation_after_an_expiry_ends_the_lease_once_as_expired() {
             cause: EndCause::Expired,
         })
     );
+}
+
+/// A gateway that goes away half-open, reading nothing, while a command it
+/// had revoked still waits for room to say its `Ran`: serving still ends,
+/// the command's end recorded, rather than waiting on the gateway for good.
+#[tokio::test]
+async fn a_command_stopped_for_a_revocation_never_holds_serving_open_once_the_gateway_is_gone() {
+    let timer = Arc::new(ManualTimer::default());
+    let grants = MemoryGrants::none();
+    grants.set(DIALED, Some(PeerGrant::everything()));
+    let ledger = Arc::new(MemoryLedger::default());
+    let mut gateway = Gateway::through(
+        4096,
+        DIALED,
+        grants,
+        ledger.clone(),
+        Arc::new(NoOutbox),
+        true,
+        timer.clone(),
+    );
+    gateway.started(LEASE).await;
+    gateway.send(grant_command(COMMAND, &["wait"], None)).await;
+    gateway.next().await;
+    gateway
+        .send(ToEnvironment::Run {
+            lease: COMMAND.into(),
+        })
+        .await;
+    gateway.settled().await;
+    // From here the gateway reads nothing: the harness's echoes fill what
+    // the connection and the host's queue hold.
+    for _ in 0..200 {
+        gateway
+            .send(ToEnvironment::Input {
+                lease: LEASE.into(),
+                channel: 1,
+                data: Data(vec![b'x'; 4000]),
+            })
+            .await;
+    }
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    gateway.send(ToEnvironment::Revoked).await;
+    // The command is stopped and its end recorded; its `Ran` waits for room.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !ledger
+            .entries()
+            .iter()
+            .any(|entry| matches!(entry, LedgerEntry::CommandRan { lease, .. } if lease == COMMAND))
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the command is stopped");
+    // Half-open: the gateway's side stops sending, and its reading half
+    // stays, unread.
+    let Gateway {
+        writer,
+        frames: _unread,
+        mut served,
+        ..
+    } = gateway;
+    drop(writer);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            tokio::select! {
+                _ = &mut served => break,
+                () = tokio::time::sleep(Duration::from_millis(10)) => {
+                    timer.advance(Duration::from_secs(1));
+                }
+            }
+        }
+    })
+    .await
+    .expect("serving ends once the gateway is gone");
+    assert!(ledger.entries().contains(&LedgerEntry::Ended {
+        lease: COMMAND.into(),
+        cleanup: Cleanup::Confirmed { forced: true },
+        cause: EndCause::Revoked,
+    }));
 }

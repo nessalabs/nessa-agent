@@ -219,6 +219,10 @@ pub enum GrantRefusal {
     /// The environment cannot enforce the sandbox asked for, and never
     /// substitutes another.
     SandboxUnavailable,
+    /// The gateway already said `Revoked` on this connection: nothing more
+    /// is admitted on it. Not the owner's grant: the gateway's own
+    /// revocation, which the ask crossed.
+    Revoked,
 }
 
 /// A sandbox profile on the wire: what encloses a lease's work on the

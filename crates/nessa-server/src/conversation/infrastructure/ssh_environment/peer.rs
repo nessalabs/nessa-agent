@@ -14,8 +14,9 @@
 //! open / grant / account ──▶ that environment's current connection
 //!   ──▶ ServingCredentials::serves(the proof it was opened with)?
 //!         no ──▶ HostLink::revoke, the lease refused unreachable
-//! HostLink::revoke ──▶ no lease admitted ──▶ each lease ending as revoked
-//!   ──▶ Revoked to the host ──▶ each End answered ──▶ the connection closed
+//! HostLink::revoke ──▶ no lease admitted ──▶ Revoked queued to the host first
+//!   ──▶ then each lease ending as revoked (so its End goes after Revoked)
+//!   ──▶ each End answered ──▶ the connection closed
 //! ```
 //!
 //! Arrows are calls, in order. A paired environment is one key: its name is

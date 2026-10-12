@@ -446,6 +446,7 @@ pub(crate) async fn serve<R, W>(
         ends: HashMap::new(),
         commands: HashMap::new(),
         revoked: false,
+        gone: watch::channel(false).0,
         runner: commands,
         serving,
         frames,
@@ -636,6 +637,9 @@ struct Served {
     commands: HashMap<String, HeldCommand>,
     /// The gateway said `Revoked`: nothing more is admitted here.
     revoked: bool,
+    /// Set once the gateway is gone: an answer still waiting for room is
+    /// given up on, whatever stopped what it answers.
+    gone: watch::Sender<bool>,
     /// How this host runs commands; `None` when it is not configured to.
     runner: Option<Arc<dyn CommandRunner>>,
     serving: Serving,
@@ -959,8 +963,9 @@ impl Served {
         } else if let Some(refusal) = self.recorded_before(&lease) {
             Some(refusal)
         } else if self.revoked {
-            // The gateway said it no longer lets this host serve it.
-            Some(GrantRefusal::NotGranted)
+            // The gateway said it no longer lets this host serve it: the
+            // ask crossed that, and the owner's grant has no part in it.
+            Some(GrantRefusal::Revoked)
         } else if admit_agent(&self.grant_now(), &agent)
             .map(|admitted| lease_ms = admitted)
             .is_err()
@@ -1397,7 +1402,7 @@ impl Served {
         } else if let Some(refusal) = self.recorded_before(&lease) {
             Err(refusal)
         } else if self.revoked {
-            Err(GrantRefusal::NotGranted)
+            Err(GrantRefusal::Revoked)
         } else {
             // The peer's grant first: a peer granted no commands learns
             // nothing of whether the host runs any.
@@ -1505,6 +1510,7 @@ impl Served {
         );
         let ledger = self.ledger.clone();
         let frames = self.frames.clone();
+        let mut gone = self.gone.subscribe();
         tokio::spawn(async move {
             let mut outcome = match started {
                 Some(running) => running.await,
@@ -1549,22 +1555,14 @@ impl Served {
             // gateway's `End` of it is answered after its `Ran`.
             if !lost {
                 // A gateway taken as gone while this waits for room to say
-                // it is not waited on: its end is recorded either way. Only
-                // that stop abandons the send: a stop channel whose sender
-                // went with an ended lease says nothing about the gateway.
-                let mut gone = stopped.clone();
-                let lost = async move {
-                    if gone
-                        .wait_for(|stop| *stop == Some(CommandStop::Lost))
-                        .await
-                        .is_err()
-                    {
-                        std::future::pending::<()>().await;
-                    }
-                };
+                // it is not waited on: its end is recorded either way. The
+                // gateway's going is its own signal, apart from why the
+                // command was stopped, so a command stopped first for
+                // another cause (an end, a revocation) is not waited on
+                // either.
                 tokio::select! {
                     _ = frames.send(ran(lease, outcome)) => {}
-                    () = lost => {}
+                    _ = gone.wait_for(|gone| *gone) => {}
                 }
             }
             done.send_replace(Some(cleanup));
@@ -1686,6 +1684,8 @@ impl Served {
     /// The gateway is gone: end every lease it held as lost, and wait for
     /// every end under way.
     async fn lose_all(&mut self) {
+        // Said first: nothing waits for room to answer a gateway that is gone.
+        self.gone.send_replace(true);
         let leases: Vec<_> = self.leases.drain().collect();
         for (lease, held) in leases {
             tracing::warn!(lease, "the gateway's connection ended; its lease is lost");

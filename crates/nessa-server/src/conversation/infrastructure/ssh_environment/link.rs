@@ -166,7 +166,8 @@ fn lease_refusal(refused: AdmissionRefused) -> LeaseRefusal {
             GrantRefusal::Duplicate
             | GrantRefusal::AuditUnavailable
             | GrantRefusal::CommandsUnavailable
-            | GrantRefusal::InvalidCommand,
+            | GrantRefusal::InvalidCommand
+            | GrantRefusal::Revoked,
         )
         | AdmissionRefused::Unreachable => LeaseRefusal::EnvironmentUnreachable,
     }
@@ -480,8 +481,9 @@ impl HostLink {
     }
 
     /// The host no longer holds a credential to serve this gateway. No lease
-    /// is admitted on this connection any more; the revocation is recorded
-    /// with every lease it carries; the host is told (`Revoked`), and ends
+    /// is admitted on this connection any more, nor a harness started or a
+    /// file asked for; the revocation is recorded with every lease the host
+    /// granted on it; the host is told (`Revoked`), and ends
     /// each lease itself with that cause; then each harness lease's ending
     /// cause becomes revoked, unless the host already said why it is ending
     /// it, so whoever watches it ends it as the system's stop; and the
@@ -492,16 +494,26 @@ impl HostLink {
     /// confirmed. Asked again, or of a closed connection, nothing more
     /// happens.
     pub(crate) fn revoke(self: &Arc<Self>, drain: Duration) {
-        let leases = {
+        let (granted, carried) = {
             let mut routes = self.routes();
             if routes.closed || routes.revoked {
                 return;
             }
             routes.revoked = true;
-            let mut leases: Vec<String> = routes.leases.keys().cloned().collect();
-            leases.sort();
-            leases
+            // A lease whose grant is still being answered is not one the
+            // host granted: it is not listed. Granted after all, it ends
+            // as revoked as the others do; refused, its route goes.
+            let mut granted: Vec<String> = routes
+                .leases
+                .iter()
+                .filter(|(_, route)| route.grant.is_none())
+                .map(|(lease, _)| lease.clone())
+                .collect();
+            granted.sort();
+            let carried: Vec<String> = routes.leases.keys().cloned().collect();
+            (granted, carried)
         };
+        let leases = granted;
         tracing::warn!(
             host = self.host.as_str(),
             leases = leases.len(),
@@ -518,7 +530,10 @@ impl HostLink {
             }
         };
         if !recorded {
-            self.routes().unaudited.extend(leases);
+            // A grant still being answered is included: granted after all,
+            // its end settles nothing either. Refused, it is forgotten
+            // with its route.
+            self.routes().unaudited.extend(carried);
         }
         let link = self.clone();
         tokio::spawn(async move {
@@ -659,6 +674,10 @@ impl HostLink {
         let (answer, answered) = oneshot::channel();
         {
             let mut routes = self.routes();
+            // Once revoked, the host ends the command lease unrun.
+            if routes.revoked {
+                return None;
+            }
             let route = routes
                 .leases
                 .get_mut(lease)
@@ -715,7 +734,7 @@ impl HostLink {
         };
         let sent = self.frames.send(frame).await;
         if sent.is_err() {
-            self.routes().leases.remove(lease);
+            self.drop_admission(lease);
             return Err(AdmissionRefused::Unreachable);
         }
         match tokio::time::timeout(deadline, answered).await {
@@ -725,7 +744,7 @@ impl HostLink {
                 terms,
             }),
             refused => {
-                self.routes().leases.remove(lease);
+                self.drop_admission(lease);
                 if refused.is_err() {
                     // No answer in time: the host may still admit it, so it
                     // is ended there rather than held for nobody.
@@ -749,6 +768,14 @@ impl HostLink {
         }
     }
 
+    /// Let go of a lease that was never admitted: its route, and whether
+    /// its transitions were recorded, as no hold will ever forget it.
+    fn drop_admission(&self, lease: &str) {
+        let mut routes = self.routes();
+        routes.leases.remove(lease);
+        routes.unaudited.remove(lease);
+    }
+
     /// Start a harness under `lease` with the binding's `environment`.
     /// Answers at once.
     ///
@@ -763,7 +790,8 @@ impl HostLink {
         let (stop, stop_asked) = oneshot::channel();
         let channel = {
             let mut routes = self.routes();
-            if routes.closed {
+            // Once revoked, the host ends every lease: nothing starts.
+            if routes.closed || routes.revoked {
                 return Err(StartError::Closed);
             }
             let Some(route) = routes.leases.get_mut(lease).filter(|route| !route.ending) else {
@@ -1002,6 +1030,10 @@ impl HostLink {
             let mut routes = self.routes();
             if routes.closed {
                 return Err(PublishFailure::Unanswered);
+            }
+            // Once revoked, the host is ending every lease on it.
+            if routes.revoked {
+                return Err(PublishFailure::NotPublished(PublishRefusal::LeaseEnded));
             }
             let Some(route) = routes
                 .leases

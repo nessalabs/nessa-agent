@@ -2699,6 +2699,23 @@ async fn a_revoked_link_ends_each_lease_as_revoked_and_closes_once_they_are_ende
     assert_eq!(read_some(&mut harness.output).await, b"ping");
     link.revoke(Duration::from_secs(30));
     link.revoke(Duration::from_secs(30));
+    // From the moment it is revoked, nothing more is started, published or
+    // run on it: the host is ending every lease.
+    assert_eq!(
+        link.start(id.as_str(), BTreeMap::new()).err(),
+        Some(super::link::StartError::Closed)
+    );
+    assert_eq!(
+        link.publish(id.as_str(), "call".into(), "out.txt".into(), None)
+            .await
+            .err(),
+        Some(
+            crate::conversation::application::PublishFailure::NotPublished(
+                nessa_protocol::lease::PublishRefusal::LeaseEnded
+            )
+        )
+    );
+    assert_eq!(link.run(id.as_str()).await, None);
     assert_eq!(
         *granted.ending.wait_for(Option::is_some).await.unwrap(),
         Some(LeaseEndCause::Revoked)
@@ -2790,9 +2807,42 @@ async fn a_revoked_link_closes_at_its_bound_when_a_lease_is_never_ended() {
 }
 
 /// A revocation that cannot be recorded still ends and closes everything,
-/// but settles none of its leases as confirmed.
+/// but settles none of its leases as confirmed: a command the host stops
+/// for it answers no cleanup, where a recorded revocation answers the
+/// host's.
 #[tokio::test]
 async fn a_revocation_whose_audit_fails_leaves_its_leases_unconfirmed() {
+    for failing in [false, true] {
+        let audit = Arc::new(Audit::default());
+        let host = environment(serving_commands(), audit.clone());
+        let commands = host.commands().unwrap();
+        let hold = commands
+            .grant(&lease(), &work(&["sleep", "60"]))
+            .await
+            .unwrap()
+            .hold;
+        let (_stop, stopped) = tokio::sync::watch::channel(None);
+        let running = tokio::spawn(hold.run(10_000, stopped));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        audit.1.store(failing, Ordering::SeqCst);
+        host.revoke_connection().await;
+        let result = tokio::time::timeout(Duration::from_secs(5), running)
+            .await
+            .expect("the host stops it and answers")
+            .unwrap();
+        assert_eq!(
+            result.exit,
+            CommandExit::Stopped {
+                cause: LeaseEndCause::Revoked
+            }
+        );
+        assert_eq!(
+            result.cleanup,
+            (!failing).then_some(LeaseCleanup::Confirmed { forced: true }),
+            "audit failing: {failing}"
+        );
+    }
+
     let connector = Connector::new(Reach::Serving);
     let audit = Arc::new(Audit::default());
     let link = dialed_link(&connector, audit.clone()).await;
