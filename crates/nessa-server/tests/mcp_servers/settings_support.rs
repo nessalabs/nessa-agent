@@ -165,6 +165,9 @@ impl Clock for LeapingClock {
     fn now(&self) -> ClockInstant {
         ClockInstant::from_origin(*self.0.lock().unwrap())
     }
+    fn unix_ms(&self) -> u64 {
+        u64::try_from(self.now().since_origin().as_millis()).unwrap_or(u64::MAX)
+    }
     fn sleep_until(&self, deadline: ClockInstant) -> ClockSleep {
         let mut now = self.0.lock().unwrap();
         *now = (*now).max(deadline.since_origin());
@@ -192,6 +195,9 @@ impl ManualClock {
 impl Clock for ManualClock {
     fn now(&self) -> ClockInstant {
         ClockInstant::from_origin(*self.0.borrow())
+    }
+    fn unix_ms(&self) -> u64 {
+        u64::try_from(self.now().since_origin().as_millis()).unwrap_or(u64::MAX)
     }
     fn sleep_until(&self, deadline: ClockInstant) -> ClockSleep {
         let mut now = self.0.subscribe();

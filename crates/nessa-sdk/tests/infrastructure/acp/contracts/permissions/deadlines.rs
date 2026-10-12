@@ -621,14 +621,9 @@ async fn a_turn_that_ends_with_a_request_pending_does_not_answer_it_later() {
     // Turn 2 starts at once, while turn 1's deadline is still in the future,
     // and stays open. Advancing past that deadline must not answer turn 1.
     let second = start(&review.opened, "second").await;
-    loop {
-        match next(&mut review.opened).await {
-            ExecutionUpdate::Message(chunk) if chunk.as_str() == "turn-2-open" => break,
-            ExecutionUpdate::DeadlineAnswered { id, .. } if id == first_id => {
-                panic!("turn 1's deadline answered before its wait")
-            }
-            update => panic!("expected turn 2 to be open, got {update:?}"),
-        }
+    match next(&mut review.opened).await {
+        ExecutionUpdate::Message(chunk) if chunk.as_str() == "turn-2-open" => {}
+        update => panic!("expected turn 2 to be open, got {update:?}"),
     }
     review.clock.advance(Duration::from_secs(30));
     assert_no_deadline_for(&first_id, &mut review.opened).await;
@@ -743,7 +738,7 @@ async fn close_during_a_pending_request_forgets_the_deadline() {
         "close wrote a deadline audit record during the grace"
     );
     std::fs::write(root.path().join("release-close"), "yes").unwrap();
-    let closed = promptly(async { closing.await }).await;
+    let closed = promptly(closing).await;
     closed.into_result().unwrap();
     assert_eq!(
         promptly(active).await.unwrap(),

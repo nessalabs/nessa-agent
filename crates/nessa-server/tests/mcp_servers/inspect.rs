@@ -540,6 +540,9 @@ impl nessa_sdk::infrastructure::clock::Clock for StopOnRead {
         }
         nessa_sdk::infrastructure::clock::ClockInstant::from_origin(Duration::ZERO)
     }
+    fn unix_ms(&self) -> u64 {
+        0
+    }
     fn sleep_until(
         &self,
         _: nessa_sdk::infrastructure::clock::ClockInstant,
