@@ -24,6 +24,8 @@
 //!                          ──Collected▶ the lease's artifact answered (artifacts.rs)
 //!                          ──Publish──▶ ledger: publish_asked ──▶ as a harness's publish
 //!                                       ──▶ Published{request} | NotPublished{request}
+//!                          ──ReadArtifact──▶ a staged copy waiting for its Collected?
+//!                                            ──▶ ArtifactRead | ArtifactNotRead (artifacts.rs)
 //! a harness publishes ──▶ staged copy ──▶ ledger: published ──▶ Published
 //! a lease lasts its granted leaseMs ──▶ ledger: expiring ──▶ stop every harness
 //!     ──▶ ledger: ended(expired) ──▶ Ending{expired}; the gateway's End is
@@ -90,9 +92,10 @@ use super::timer::{timeout, within, Moment, Timer};
 use super::wire::{write_frame, FrameStream};
 use crate::env_serve::domain::{admit_agent, admit_command, Peer, PeerGrant};
 use nessa_protocol::lease::{
-    decode, Cleanup, Collection, CommandEnd, Data, EndingCause, FromEnvironment, GrantRefusal,
-    GrantedTerms, Hello, PublishRefusal, Sandbox, StartFailure, ToEnvironment, Unavailability,
-    KEEPALIVE_INTERVAL, MAX_DATA_BYTES, MAX_STOP_WAIT, SILENCE_LIMIT,
+    decode, ArtifactReadRefusal, Cleanup, Collection, CommandEnd, Data, EndingCause,
+    FromEnvironment, GrantRefusal, GrantedTerms, Hello, PublishRefusal, Sandbox, StartFailure,
+    ToEnvironment, Unavailability, KEEPALIVE_INTERVAL, MAX_DATA_BYTES, MAX_STOP_WAIT,
+    SILENCE_LIMIT,
 };
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
@@ -804,6 +807,33 @@ impl Served {
                 path,
                 media_type,
             } => self.publish(lease, request, path, media_type),
+            ToEnvironment::ReadArtifact {
+                lease,
+                artifact,
+                offset,
+                length,
+            } => {
+                let read = match self
+                    .leases
+                    .get(&lease)
+                    .and_then(|held| held.artifacts.as_ref())
+                {
+                    Some(artifacts) => artifacts.read(artifact, offset, length),
+                    None => {
+                        self.dropped(Some(&lease), None, "read_artifact");
+                        Err(ArtifactReadRefusal::NotStaged)
+                    }
+                };
+                // Said, so the gateway does not wait for bytes that never come.
+                if let Err(reason) = read {
+                    self.send(FromEnvironment::ArtifactNotRead {
+                        lease,
+                        artifact,
+                        offset,
+                        reason,
+                    });
+                }
+            }
         }
     }
 

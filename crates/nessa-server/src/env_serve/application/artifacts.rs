@@ -16,15 +16,27 @@
 //! Publish{request, path} from the gateway ──▶ LeaseArtifacts::ask
 //!   ──▶ the same publish, bound and ledger ──▶ Published{.., request, ..}
 //!   not published ──▶ NotPublished{lease, request, reason}
+//! ReadArtifact{artifact, offset, length} (a connection with no artifact
+//!   channel beside it) ──▶ LeaseArtifacts::read
+//!   ──▶ waiting for its Collected? no ──▶ ArtifactNotRead{notStaged}
+//!   ──▶ fewer than MAX_ARTIFACT_READS_IN_FLIGHT of it unanswered? no ──▶ busy
+//!   ──▶ ArtifactOutbox::read (the staged copy, on a thread that may block)
+//!   ──▶ ArtifactRead{offset, data} | ArtifactNotRead{unreadable}, or
+//!       {notStaged} when the copy went while it was read
 //! ```
 //!
 //! Arrows are calls and frames, in order. The bytes the gateway reads are
 //! the staged copy, never the workspace file: what was hashed is what is
-//! read, whatever the harness does to its file afterwards. The control
-//! stream carries only where the copy is and what it hashes to.
+//! read, whatever the harness does to its file afterwards. Over SSH the
+//! control stream carries only where the copy is and what it hashes to; a
+//! connection with nothing beside it carries the copy's bytes too, as the
+//! gateway asks for them, but only of a copy staged under that lease and
+//! still waiting for its answer: the gateway names an artifact, never a
+//! path.
 use super::serve::{LeaseLedger, LedgerEntry};
 use nessa_protocol::lease::{
-    Collection, CollectionRefusal, FromEnvironment, PublishRefusal, StagedArtifact,
+    ArtifactReadRefusal, Collection, CollectionRefusal, Data, FromEnvironment, PublishRefusal,
+    StagedArtifact, MAX_ARTIFACT_READS_IN_FLIGHT, MAX_DATA_BYTES,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -128,6 +140,19 @@ pub(crate) trait ArtifactOutbox: Send + Sync {
         artifact: u32,
         request: &PublishRequest,
     ) -> Result<StagedArtifact, PublishRefusal>;
+    /// At most `length` bytes of `artifact`'s staged copy from `offset`:
+    /// as many as asked unless the copy ends first. Blocking: called on a
+    /// thread that may block.
+    ///
+    /// # Errors
+    /// The copy could not be opened or read.
+    fn read(
+        &self,
+        lease: &str,
+        artifact: u32,
+        offset: u64,
+        length: usize,
+    ) -> std::io::Result<Vec<u8>>;
     /// Let go of `artifact`'s staged copy.
     fn discard(&self, lease: &str, artifact: u32);
     /// Close `lease`'s publish point and let go of everything it staged.
@@ -142,6 +167,9 @@ struct InFlight {
     reserved: usize,
     /// Each published artifact's wait for how it was settled.
     waiting: HashMap<u32, oneshot::Sender<Settled>>,
+    /// Reads of each artifact the gateway asked and that are not yet
+    /// read; an artifact none are of is not here.
+    reading: HashMap<u32, usize>,
     /// The lease ended: nothing more is published under it.
     ended: bool,
 }
@@ -264,6 +292,88 @@ impl LeaseArtifacts {
                 let _ = publisher.frames.send(frame).await;
             }
         });
+    }
+
+    /// Read what the gateway asked of `artifact`'s staged copy, on a task
+    /// of its own, which answers `ArtifactRead`, or `ArtifactNotRead
+    /// {unreadable}` (`{notStaged}` when the copy was let go meanwhile). Refused at once, for the caller to answer, when no
+    /// such artifact waits for its answer (`notStaged`), or when the
+    /// gateway already has as many reads of it unanswered as it may
+    /// (`busy`).
+    pub(crate) fn read(
+        &self,
+        artifact: u32,
+        offset: u64,
+        length: u32,
+    ) -> Result<(), ArtifactReadRefusal> {
+        {
+            let mut in_flight = lock(&self.in_flight);
+            if !in_flight.waiting.contains_key(&artifact) {
+                return Err(ArtifactReadRefusal::NotStaged);
+            }
+            let reading = in_flight.reading.entry(artifact).or_default();
+            if *reading >= MAX_ARTIFACT_READS_IN_FLIGHT {
+                return Err(ArtifactReadRefusal::Busy);
+            }
+            *reading += 1;
+        }
+        let length = usize::try_from(length)
+            .unwrap_or(MAX_DATA_BYTES)
+            .min(MAX_DATA_BYTES);
+        let outbox = self.outbox.clone();
+        let in_flight = self.in_flight.clone();
+        let frames = self.publisher.frames.clone();
+        let lease = self.lease.clone();
+        tokio::spawn(async move {
+            let reading_lease = lease.clone();
+            let read = tokio::task::spawn_blocking(move || {
+                outbox.read(&reading_lease, artifact, offset, length)
+            })
+            .await;
+            // Read: the next may be asked, before this one is answered, as
+            // the gateway asks it only once this answer reaches it. A copy
+            // that went while it was read (answered, or its lease ended) is
+            // no longer staged, which is why it could not be read.
+            let staged = {
+                let mut in_flight = lock(&in_flight);
+                if let Some(reading) = in_flight.reading.get_mut(&artifact) {
+                    *reading -= 1;
+                    if *reading == 0 {
+                        in_flight.reading.remove(&artifact);
+                    }
+                }
+                !in_flight.ended && in_flight.waiting.contains_key(&artifact)
+            };
+            let unread = match staged {
+                true => ArtifactReadRefusal::Unreadable,
+                false => ArtifactReadRefusal::NotStaged,
+            };
+            let frame = match read {
+                Ok(Ok(data)) => FromEnvironment::ArtifactRead {
+                    lease,
+                    artifact,
+                    offset,
+                    data: Data(data),
+                },
+                Ok(Err(error)) => {
+                    tracing::warn!(lease, artifact, offset, %error, ?unread, "a staged artifact could not be read for the gateway");
+                    FromEnvironment::ArtifactNotRead {
+                        lease,
+                        artifact,
+                        offset,
+                        reason: unread,
+                    }
+                }
+                Err(_) => FromEnvironment::ArtifactNotRead {
+                    lease,
+                    artifact,
+                    offset,
+                    reason: unread,
+                },
+            };
+            let _ = frames.send(frame).await;
+        });
+        Ok(())
     }
 
     /// What a harness under this lease is told: the publish point.

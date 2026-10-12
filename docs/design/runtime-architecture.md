@@ -1409,6 +1409,13 @@ sequenceDiagram
   first call's record stands; asked in another turn, or for
   another person, it is held once (`alreadyHeld`) and recorded again for
   them, within the conversation's record bound.
+- **Over a paired connection** there is no second channel to open, so the
+  gateway reads the staged copy over the lease frames, by artifact and
+  range, at most four 64 KiB ranges of one file unanswered; the
+  environment answers only for a copy still waiting for its `Collected`.
+  The budgets, records and refusals above hold unchanged, but nothing is
+  resumed: when the connection goes, the lease goes with it (row I9 in
+  [peer gateways](auth/peer-gateways.md#reading-a-published-file-over-the-connection-row-i9)).
 - **`here` is not served yet.** In process there is no artifact channel, so
   a conversation not placed on a host is refused `publish_unavailable`;
   staging a copy for `here` is a follow-up.
@@ -1551,7 +1558,7 @@ locally.
 | Phone commands | None | Durable intent outbox, receipt lookup before retry, exact-turn Stop | `nessa-client-core`; gateway receipts | #267 |
 | Where agents run | In process only: gateway composes the SDK `Agent` and its ACP binding per conversation; Nessa advertises no ACP client filesystem or terminal | An `Environment` port in the conversation application with the in-process adapter first; a lease recorded for every run | Gateway `conversation` composition | A [#698](https://github.com/nessalabs/nessa-agent/issues/698) |
 | SSH environments | None | `nessa env serve` on the remote host, installed on first use; lease frames over SSH stdio | Gateway environment adapter; `nessa-server` CLI | B [#699](https://github.com/nessalabs/nessa-agent/issues/699), F [#703](https://github.com/nessalabs/nessa-agent/issues/703) |
-| Peer gateways and hosted workers | A gateway invites a peer with the device enrollment under its own consent class; the credential names a `gateway` principal that can hold only reads (H, first part: [peer gateways](auth/peer-gateways.md)). A paired environment holding `environment.serve` dials the native listener and serves leases over that connection as an SSH host does (I, parts 1a and 1b: [environment peers](auth/peer-gateways.md#environment-peers)) | Gateway-to-gateway pairing under a `gateway` principal kind; outbound connection from the environment side; relay fallback; environment-only gateways as workers | Gateway `device_pairing`, environment role; `nessa-auth` | H [#705](https://github.com/nessalabs/nessa-agent/issues/705), I [#706](https://github.com/nessalabs/nessa-agent/issues/706), K [#708](https://github.com/nessalabs/nessa-agent/issues/708) |
+| Peer gateways and hosted workers | A gateway invites a peer with the device enrollment under its own consent class; the credential names a `gateway` principal that can hold only reads (H, first part: [peer gateways](auth/peer-gateways.md)). A paired environment holding `environment.serve` dials the native listener and serves leases over that connection as an SSH host does (I, parts 1a and 1b: [environment peers](auth/peer-gateways.md#environment-peers)), and the files it publishes are read over that same connection (I-2b) | Gateway-to-gateway pairing under a `gateway` principal kind; outbound connection from the environment side; relay fallback; environment-only gateways as workers | Gateway `device_pairing`, environment role; `nessa-auth` | H [#705](https://github.com/nessalabs/nessa-agent/issues/705), I [#706](https://github.com/nessalabs/nessa-agent/issues/706), K [#708](https://github.com/nessalabs/nessa-agent/issues/708) |
 | Sandboxes | Whatever the harness does by default | Sandbox profiles in the lease, declared per binding and per environment, refused when unenforceable | SDK bindings; environment adapters | A [#698](https://github.com/nessalabs/nessa-agent/issues/698) declares; later profiles per binding |
 | Policy hooks | Capability reporting merged (#142); no configured pre-tool runtime | Verdicts at the gateway; pre-tool verdicts enforced by the environment's SDK from the snapshot the lease carries, with evidence | SDK application owner (0014) | #130 slices |
 | Extensions | MCP Apps in a sandboxed iframe; one MCP connection per harness session; remote MCP with gateway-owned OAuth | Unchanged; an extension holds only the opening's token | Gateway `mcp_servers`, `mcp_authorization` | 344, 392 |

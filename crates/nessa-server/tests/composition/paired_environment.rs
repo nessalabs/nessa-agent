@@ -1184,3 +1184,238 @@ async fn a_paired_environment_revoked_mid_lease_ends_it_on_both_sides_and_closes
         .expect("a revoked environment is refused");
     assert_eq!(refused.kind(), ErrorKind::PermissionDenied);
 }
+
+/// Every bytes of `bytes`, pulled in order until the end.
+async fn read_all(bytes: &mut Box<dyn crate::conversation::application::ArtifactBytes>) -> Vec<u8> {
+    let mut read = Vec::new();
+    while let Some(chunk) = tokio::time::timeout(WAIT, bytes.next())
+        .await
+        .expect("each chunk in time")
+        .expect("the file reads to its end")
+    {
+        read.extend_from_slice(&chunk);
+    }
+    read
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// Row I9 end to end: E runs a harness for A under a lease over the
+/// connection E dialed. The harness publishes a file on its lease's
+/// publish point, and A asks E to publish another for the agent; A reads
+/// each over that same connection's lease frames, finds the bytes are
+/// what E published, and answers held. The harness is told the
+/// conversation holds its file, and E records each publish and A's answer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_paired_environment_publishes_a_file_and_the_gateway_reads_it_back() {
+    use crate::conversation::application::{ArtifactOffer, PublishAsk};
+    use crate::env_serve::application::{PublishAnswer, PublishRequest};
+    use nessa_protocol::lease::Collection;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+    let directory = tempfile::tempdir().unwrap();
+    let a = Gateway::start(&directory.path().join("a")).await;
+    let e = a
+        .pair(
+            &directory.path().join("e-state"),
+            ConsentClass::PeerEnvironment,
+        )
+        .await;
+    let stream = dial(a.native, e.identity.clone(), e.pin, clock())
+        .await
+        .unwrap();
+    // E runs `claude` as a shell that notes its publish point where the
+    // test can find it, then runs as `cat` until it is stopped.
+    let harness = LaunchSpec {
+        executable: "/bin/sh".into(),
+        args: vec![
+            "-c".into(),
+            r#"printf %s "$NESSA_ARTIFACTS" > point.part && mv point.part point && exec cat"#
+                .into(),
+        ],
+        environment: Default::default(),
+    };
+    let host = Arc::new(Host::running(
+        &directory.path().join("e"),
+        e.pin,
+        HashMap::from([(nessa_protocol::agents::AgentId::Claude, harness)]),
+    ));
+    host.grants
+        .change(&host.peer, |_| {
+            Ok::<_, ()>(Some(PeerGrant::nothing().with_agents(Agents::All)))
+        })
+        .unwrap();
+    let workspace = host.ledger_path.parent().unwrap().to_path_buf();
+    let (from_gateway, to_gateway) = tokio::io::split(stream);
+    let _serving = {
+        let host = host.clone();
+        tokio::spawn(async move { host.serve(from_gateway, to_gateway).await })
+    };
+    a.until_connected(e.peer, true).await;
+
+    let environment = a.peers.environment(&e.peer);
+    let lease = LeaseId::new(uuid()).unwrap();
+    let terms = LeaseTerms {
+        environment: environment.declaration().environment,
+        work: LeaseWork::Agent(AgentWork::new("claude", "model").unwrap()),
+        sandbox: SandboxProfile::HarnessDefault,
+        grants: LeaseGrants::Opening,
+        deadline: LeaseDeadline::UntilEnded,
+    };
+    let given = Arc::new(std::sync::Mutex::new(None));
+    let binding = Arc::new(OnHost {
+        capabilities: crate::conversation_test_support::Provider::new(Arc::new(
+            crate::conversation_test_support::ProviderFactory::default(),
+        ))
+        .capabilities()
+        .clone(),
+        host: given.clone(),
+    });
+    let opened = tokio::time::timeout(WAIT, environment.open(&lease, &terms, binding))
+        .await
+        .unwrap()
+        .unwrap_or_else(|refusal| panic!("granted: {refusal:?}"));
+    let mut offers = opened
+        .hold
+        .artifacts()
+        .expect("a paired environment's lease publishes");
+    let harness_host = given.lock().unwrap().clone().unwrap();
+    let _harness = harness_host.start(HarnessLaunch::default()).unwrap();
+    let point_file = workspace.join("point");
+    let point = tokio::time::timeout(WAIT, async {
+        loop {
+            match std::fs::read_to_string(&point_file) {
+                Ok(point) if !point.is_empty() => break point,
+                _ => tokio::time::sleep(Duration::from_millis(10)).await,
+            }
+        }
+    })
+    .await
+    .expect("the harness is told its publish point");
+
+    // The harness publishes a file larger than many ranges, as
+    // `nessa artifact publish` would.
+    let image: Vec<u8> = (0..300_017u32).map(|index| (index % 251) as u8).collect();
+    let image_path = workspace.join("Nessa.dmg");
+    std::fs::write(&image_path, &image).unwrap();
+    let publisher = tokio::spawn(async move {
+        let mut socket = tokio::net::UnixStream::connect(point).await.unwrap();
+        let mut line = serde_json::to_vec(&PublishRequest {
+            path: image_path.to_str().unwrap().to_owned(),
+            media_type: None,
+        })
+        .unwrap();
+        line.push(b'\n');
+        socket.write_all(&line).await.unwrap();
+        let mut answer = String::new();
+        tokio::io::BufReader::new(socket)
+            .read_line(&mut answer)
+            .await
+            .unwrap();
+        serde_json::from_str::<PublishAnswer>(&answer).unwrap()
+    });
+    let ArtifactOffer {
+        file,
+        mut bytes,
+        answer,
+        request,
+    } = tokio::time::timeout(WAIT, offers.recv())
+        .await
+        .expect("offered in time")
+        .expect("an offer");
+    assert_eq!(request, None);
+    assert_eq!(file.name, "Nessa.dmg");
+    assert_eq!(file.size, image.len() as u64);
+    let read = read_all(&mut bytes).await;
+    assert_eq!(read, image);
+    assert_eq!(sha256_hex(&read), file.digest);
+    answer.answer(Collection::Held).await;
+    assert_eq!(
+        tokio::time::timeout(WAIT, publisher)
+            .await
+            .expect("the harness is answered")
+            .unwrap(),
+        PublishAnswer::Held {
+            digest: sha256_hex(&image),
+            size: image.len() as u64,
+        }
+    );
+
+    // The gateway asks for one on the agent's behalf.
+    let report = b"a report the agent asked to keep".to_vec();
+    std::fs::write(workspace.join("report.txt"), &report).unwrap();
+    let publish = opened
+        .hold
+        .publish(PublishAsk {
+            request: "call-1".into(),
+            path: "report.txt".into(),
+            media_type: None,
+        })
+        .expect("a paired environment's lease publishes");
+    assert_eq!(tokio::time::timeout(WAIT, publish).await.unwrap(), Ok(()));
+    let ArtifactOffer {
+        file,
+        mut bytes,
+        answer,
+        request,
+    } = tokio::time::timeout(WAIT, offers.recv())
+        .await
+        .expect("offered in time")
+        .expect("an offer");
+    assert_eq!(request.as_deref(), Some("call-1"));
+    assert_eq!(read_all(&mut bytes).await, report);
+    assert_eq!(sha256_hex(&report), file.digest);
+    answer.answer(Collection::Held).await;
+
+    let released = tokio::time::timeout(WAIT, opened.hold.end(LeaseEndCause::Stopped))
+        .await
+        .unwrap();
+    assert!(
+        matches!(
+            released,
+            LeaseRelease::Released(LeaseCleanup::Confirmed { .. })
+        ),
+        "{released:?}"
+    );
+    // E recorded each publish and A's answer to it, before the lease ended.
+    let entries: Vec<serde_json::Value> = std::fs::read_to_string(&host.ledger_path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .filter(|entry: &serde_json::Value| entry["lease"] == lease.as_str())
+        .collect();
+    let kinds: Vec<_> = entries
+        .iter()
+        .map(|entry| entry["kind"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "granted",
+            "started",
+            "published",
+            "collected",
+            "publish_asked",
+            "published",
+            "collected",
+            "stopped",
+            "ended",
+        ],
+        "{entries:?}"
+    );
+    assert_eq!(entries[2]["digest"], sha256_hex(&image));
+    assert_eq!(entries[3]["outcome"]["outcome"], "held");
+    assert_eq!(entries[5]["request"], "call-1");
+    assert_eq!(entries[6]["outcome"]["outcome"], "held");
+    // Nothing is left staged on E.
+    let staged = std::fs::read_dir(workspace.join("outbox"))
+        .map(|entries| entries.count())
+        .unwrap_or(0);
+    assert_eq!(staged, 0);
+}

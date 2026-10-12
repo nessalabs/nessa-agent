@@ -1,9 +1,9 @@
 //! Lease frames: their wire shape, the hello another build is recognised by,
 //! and the bounds on a frame and the bytes it carries.
 use super::{
-    decode, encode, fingerprint, read_hello, Cleanup, Collection, CollectionRefusal, CommandEnd,
-    Data, EndingCause, FromEnvironment, GrantRefusal, GrantedTerms, Hello, PublishRefusal, Sandbox,
-    StagedArtifact, ToEnvironment, MAX_DATA_BYTES, MAX_FRAME_BYTES,
+    decode, encode, fingerprint, read_hello, ArtifactReadRefusal, Cleanup, Collection,
+    CollectionRefusal, CommandEnd, Data, EndingCause, FromEnvironment, GrantRefusal, GrantedTerms,
+    Hello, PublishRefusal, Sandbox, StagedArtifact, ToEnvironment, MAX_DATA_BYTES, MAX_FRAME_BYTES,
 };
 use crate::pairing::FrameReader;
 use std::collections::BTreeMap;
@@ -73,6 +73,12 @@ fn every_frame_round_trips_and_names_its_lease() {
             request: "call-1".into(),
             path: "build/Nessa.dmg".into(),
             media_type: Some("application/x-apple-diskimage".into()),
+        },
+        ToEnvironment::ReadArtifact {
+            lease: "l".into(),
+            artifact: 3,
+            offset: 65_536,
+            length: 65_536,
         },
     ];
     for frame in to {
@@ -170,6 +176,18 @@ fn every_frame_round_trips_and_names_its_lease() {
             stderr: Data(Vec::new()),
             dropped_bytes: 7,
             cleanup: Cleanup::Confirmed { forced: false },
+        },
+        FromEnvironment::ArtifactRead {
+            lease: "l".into(),
+            artifact: 3,
+            offset: 65_536,
+            data: Data(vec![1, 2, 3]),
+        },
+        FromEnvironment::ArtifactNotRead {
+            lease: "l".into(),
+            artifact: 3,
+            offset: 0,
+            reason: ArtifactReadRefusal::NotStaged,
         },
     ];
     for frame in from {
@@ -455,6 +473,68 @@ fn unknown_fields_and_frames_are_refused() {
     assert!(decode::<ToEnvironment>(br#"{"type":"end","lease":"l","more":1}"#).is_err());
     assert!(decode::<ToEnvironment>(br#"{"type":"exec","lease":"l"}"#).is_err());
     assert!(decode::<FromEnvironment>(br#"{"type":"output","channel":1,"data":""}"#).is_err());
+}
+
+/// A read over the lease stream names its artifact and range, and its
+/// answer carries the bytes base64, or why not, by name.
+#[test]
+fn an_artifact_read_names_its_range_and_its_answer_the_bytes_or_why_not() {
+    assert_eq!(
+        String::from_utf8(
+            serde_json::to_vec(&ToEnvironment::ReadArtifact {
+                lease: "l".into(),
+                artifact: 2,
+                offset: 10,
+                length: 4,
+            })
+            .unwrap()
+        )
+        .unwrap(),
+        r#"{"type":"readArtifact","lease":"l","artifact":2,"offset":10,"length":4}"#
+    );
+    assert_eq!(
+        String::from_utf8(
+            serde_json::to_vec(&FromEnvironment::ArtifactRead {
+                lease: "l".into(),
+                artifact: 2,
+                offset: 10,
+                data: Data(b"abcd".to_vec()),
+            })
+            .unwrap()
+        )
+        .unwrap(),
+        r#"{"type":"artifactRead","lease":"l","artifact":2,"offset":10,"data":"YWJjZA=="}"#
+    );
+    for (reason, name) in [
+        (ArtifactReadRefusal::NotStaged, "notStaged"),
+        (ArtifactReadRefusal::Unreadable, "unreadable"),
+        (ArtifactReadRefusal::Busy, "busy"),
+    ] {
+        assert_eq!(
+            serde_json::to_value(FromEnvironment::ArtifactNotRead {
+                lease: "l".into(),
+                artifact: 2,
+                offset: 10,
+                reason,
+            })
+            .unwrap(),
+            serde_json::json!({
+                "type": "artifactNotRead",
+                "lease": "l",
+                "artifact": 2,
+                "offset": 10,
+                "reason": name,
+            })
+        );
+    }
+    // The largest range one answer carries fits in a frame.
+    let largest = FromEnvironment::ArtifactRead {
+        lease: "l".repeat(256),
+        artifact: u32::MAX,
+        offset: u64::MAX,
+        data: Data(vec![0xff; MAX_DATA_BYTES]),
+    };
+    assert!(encode(&largest).is_ok());
 }
 
 #[test]
