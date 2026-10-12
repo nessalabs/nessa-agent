@@ -47,10 +47,19 @@ export function approvalModeChoices(value: unknown): ApprovalModeChoice[] {
   return value as ApprovalModeChoice[]
 }
 
+function hooksChoice(value: unknown): "off" | "on" {
+  if (value !== "off" && value !== "on") throw new Error("Invalid native hooks choice")
+  return value
+}
+
 /** Validate one authenticated gateway catalog before it reaches a picker. */
 export function agentsList(value: unknown): AgentsListResult {
   const result = object(value)
-  exact(result, ["agents", "environments"])
+  exact(result, ["agents", "environments", "nativeHooks"])
+  const hooks = object(result.nativeHooks)
+  exact(hooks, ["claude", "codex"])
+  hooksChoice(hooks.claude)
+  hooksChoice(hooks.codex)
   // The places a new conversation may run on: at most 16 SSH destinations
   // and 8 connected paired environments, each named once.
   if (!Array.isArray(result.environments) || result.environments.length > 24)
@@ -68,8 +77,7 @@ export function agentsList(value: unknown): AgentsListResult {
   for (const entry of result.agents) {
     const agent = object(entry)
     exact(agent, ["agent", "defaultModel", "models", "nativeHooks"])
-    if (Object.hasOwn(agent, "nativeHooks") && typeof agent.nativeHooks !== "boolean")
-      throw new Error("Invalid native hooks choice")
+    if (Object.hasOwn(agent, "nativeHooks")) hooksChoice(agent.nativeHooks)
     const name = text(agent, "agent", 32)
     if (agents.has(name)) throw new Error("Repeated configured agent")
     agents.add(name)

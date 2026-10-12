@@ -83,7 +83,7 @@ pub(super) struct CodexProfile {
     tools: ObservedTools,
     /// When true, the launch omits the suppression keys. The fact below stays
     /// unsupported: this flag is the caller's choice, not proof.
-    native_hooks: bool,
+    native_hooks_allowed: bool,
 }
 impl CodexProfile {
     pub(super) fn new(
@@ -96,7 +96,7 @@ impl CodexProfile {
             approval_mode,
             effort_level,
             tools: ObservedTools::default(),
-            native_hooks: false,
+            native_hooks_allowed: false,
         }
     }
 
@@ -105,7 +105,7 @@ impl CodexProfile {
     /// The suppression fact stays unsupported. Omitting the request does not
     /// prove the effective configuration, and sending it did not either.
     pub(super) fn allowing_native_hooks(mut self, allowed: bool) -> Self {
-        self.native_hooks = allowed;
+        self.native_hooks_allowed = allowed;
         self
     }
 }
@@ -157,8 +157,12 @@ impl AcpProfile for CodexProfile {
         NativeHookSuppressionCapability::Unsupported
     }
 
-    fn native_hooks(&self) -> bool {
-        self.native_hooks
+    fn native_hooks_allowed(&self) -> bool {
+        self.native_hooks_allowed
+    }
+
+    fn native_hooks_launch(&self) -> Option<(&'static str, bool)> {
+        Some(("codex", self.native_hooks_allowed))
     }
 
     fn validate_initialize(&self, result: &Value) -> Result<(), AgentError> {

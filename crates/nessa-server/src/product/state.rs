@@ -106,6 +106,9 @@ pub struct ProductRouteState {
     /// Claude and Codex native-hook choices. None when this route has no
     /// conversation directory. OpenCode is not in the store.
     pub(crate) native_hooks: Option<Arc<NativeHooksPreferences>>,
+    /// The registry's principal kinds, for the native-hooks audit. None in a
+    /// route that has no registry; a change then records `unknown`.
+    pub(crate) caller_kinds: Option<Arc<dyn crate::agents::application::CallerKindSource>>,
     /// The paired environments connected now, by name: added to the
     /// catalog's places each time it is asked, since they come and go.
     pub(crate) connected_environments: Option<ConnectedEnvironments>,
@@ -260,6 +263,7 @@ impl ProductRouteState {
             catalogue_source: None,
             agents_catalog: None,
             native_hooks: None,
+            caller_kinds: None,
             connected_environments: None,
             agent_installations: None,
             installs: Arc::new(Semaphore::new(1)),
@@ -394,6 +398,15 @@ impl ProductRouteState {
     /// The native-hook choices Claude and Codex launches read.
     pub fn with_native_hooks(mut self, native_hooks: Arc<NativeHooksPreferences>) -> Self {
         self.native_hooks = Some(native_hooks);
+        self
+    }
+
+    /// Where a native-hooks change reads the caller's kind.
+    pub fn with_caller_kinds(
+        mut self,
+        caller_kinds: Arc<dyn crate::agents::application::CallerKindSource>,
+    ) -> Self {
+        self.caller_kinds = Some(caller_kinds);
         self
     }
 

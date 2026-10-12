@@ -6,31 +6,34 @@ function client(agents: Pick<AgentsApi, "list" | "setNativeHooks">): NativeHooks
   return { agents }
 }
 
-function listed(
-  agents: { agent: string; nativeHooks?: boolean }[],
-): Promise<AgentsListResult> {
-  return Promise.resolve({ environments: [], agents } as unknown as AgentsListResult)
+function listed(value: AgentsListResult): Promise<AgentsListResult> {
+  return Promise.resolve(value)
 }
 
 describe("nativeHooksGateway", () => {
-  it("reads Claude and Codex, and treats a missing flag as off", async () => {
+  it("reads the stored choice even when Claude is not in the catalog", async () => {
     const gateway = nativeHooksGateway({
       connected: () =>
         Promise.resolve(
           client({
             list: () =>
-              listed([
-                { agent: "claude", nativeHooks: true },
-                { agent: "codex" },
-                { agent: "opencode" },
-              ]),
+              listed({
+                environments: [],
+                nativeHooks: { claude: "on", codex: "off" },
+                agents: [],
+              }),
             setNativeHooks: () => Promise.reject(new Error("unused")),
           }),
         ),
     })
     await expect(gateway.read()).resolves.toEqual({
       ok: true,
-      choice: { claude: true, codex: false },
+      choice: {
+        claude: true,
+        codex: false,
+        claudeConfigured: false,
+        codexConfigured: false,
+      },
     })
   })
 

@@ -18,6 +18,7 @@
 use super::support::*;
 use serde_json::json;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 fn plant(root: &Path) -> PathBuf {
     let log = root.join("native-hook.jsonl");
@@ -76,7 +77,7 @@ async fn claude_native_hook_runs_when_the_launch_omits_suppression() {
     let binding = binding.with_native_hooks(NativeHooksSwitch::on());
     let capabilities = open_and_prompt(&binding).await;
     assert!(capabilities.negotiated());
-    assert!(capabilities.native_hooks());
+    assert!(capabilities.native_hooks_allowed());
     assert_eq!(
         capabilities.native_hook_suppression(),
         NativeHookSuppressionCapability::Unknown
@@ -91,6 +92,30 @@ async fn claude_native_hook_runs_when_the_launch_omits_suppression() {
     assert_gone(&root, "pid");
 }
 
+#[test]
+fn a_codex_open_keeps_the_hooks_choice_it_read() {
+    let (_root, config, model) = codex_configuration("native-hooks", 16);
+    let flag = Arc::new(AtomicBool::new(true));
+    let binding = CodexAcpProvider::new(
+        config,
+        &model,
+        TokenLimits::new(900, 100).unwrap(),
+        Arc::new(RecordingAudit::default()),
+    )
+    .unwrap()
+    .with_native_hooks(NativeHooksSwitch::from_shared(flag.clone()));
+    let allowed = binding.read_native_hooks(Some("conversation"));
+    let profile = binding.profile_allows_native_hooks(allowed);
+    flag.store(false, Ordering::Relaxed);
+    let config = binding.session_config_for(allowed);
+    assert!(profile);
+    assert!(allowed);
+    assert!(!config.contains("\"hooks\":false"));
+    assert!(!config.contains("\"notify\""));
+    let reread = binding.session_config_for(binding.native_hooks_allowed());
+    assert!(reread.contains("\"hooks\":false"));
+}
+
 #[tokio::test]
 async fn codex_native_hook_runs_when_the_launch_omits_suppression() {
     let _process_slot = process_test_slot().await;
@@ -99,7 +124,7 @@ async fn codex_native_hook_runs_when_the_launch_omits_suppression() {
     let binding = binding.with_native_hooks(NativeHooksSwitch::on());
     let capabilities = open_and_prompt(&binding).await;
     assert!(capabilities.negotiated());
-    assert!(capabilities.native_hooks());
+    assert!(capabilities.native_hooks_allowed());
     assert_eq!(
         capabilities.native_hook_suppression(),
         NativeHookSuppressionCapability::Unsupported

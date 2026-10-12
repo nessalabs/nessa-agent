@@ -8,16 +8,15 @@
 //!
 //! ```text
 //! stored bytes -> native_hooks::selection_from_stored
-//! agents.list JSON -> native_hooks::overlay_native_hooks
+//! agents.list -> the live choice, filled on the typed catalog
 //! ```
 //!
 //! Arrows are pure reads. The file and the audit adapter are infrastructure.
 mod native_hooks;
 mod ports;
 pub use native_hooks::{
-    overlay_native_hooks, selection_from_stored, NativeHooksAgent, NativeHooksAudit,
-    NativeHooksChange, NativeHooksError, NativeHooksEvidence, NativeHooksPhase,
-    NativeHooksSelection,
+    selection_from_stored, CallerKindSource, NativeHooksAgent, NativeHooksAudit, NativeHooksChange,
+    NativeHooksError, NativeHooksEvidence, NativeHooksPhase, NativeHooksSelection,
 };
 pub use ports::{
     AgentCredential, AgentCredentialFailure, AgentCredentialKind, AgentCredentialSource,

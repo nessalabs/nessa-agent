@@ -254,7 +254,7 @@ while True:
         assert "ask" not in options["settings"]["permissions"]
         if mode == "native-hooks":
             assert "disableAllHooks" not in options["settings"]
-            assert "settingSources" not in options
+            assert options["settingSources"] == ["user", "project", "local"]
             run_planted_hook(root)
         else:
             assert options["settingSources"] == []

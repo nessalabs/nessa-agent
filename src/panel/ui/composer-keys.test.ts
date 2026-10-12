@@ -116,7 +116,11 @@ function panel(choices?: ConversationChoices) {
         canChoosePaths: false,
         digest: async () => "digest",
         loadConversationChoices: async () => ({
-          catalog: choices?.catalog ?? { agents: [], environments: [] },
+          catalog: choices?.catalog ?? {
+            agents: [],
+            environments: [],
+            nativeHooks: { claude: "off", codex: "off" },
+          },
           chosenAgent: choices?.chosenAgent,
         }),
       }),
@@ -132,6 +136,7 @@ it("shows the catalog model beside the voice control on a new draft", async () =
     chosenAgent: "claude",
     catalog: {
       environments: [],
+      nativeHooks: { claude: "off", codex: "off" },
       agents: [
         {
           agent: "claude",
@@ -200,6 +205,7 @@ it("binds the displayed catalog fallback when the host choice is stale", async (
     chosenAgent: "removed-agent",
     catalog: {
       environments: [],
+      nativeHooks: { claude: "off", codex: "off" },
       agents: [
         {
           agent: "codex",

@@ -28,7 +28,8 @@ use crate::application::agent_execution::agents::{
 };
 use crate::application::agent_execution::executions::{
     AdmittedQuestion, ExecutionAudit, ExecutionAuditRecord, ExecutionController, ExecutionEvent,
-    ExecutionRequest, ExecutionUpdate, LateProviderResultRecord, PermissionAuthoritySource,
+    ExecutionRequest, ExecutionUpdate, LateProviderResultRecord, NativeHooksLaunchRecord,
+    PermissionAuthoritySource,
 };
 
 use crate::application::agent_execution::permissions::{
@@ -460,6 +461,11 @@ struct Worker<P> {
     settlement_facts: SettlementFacts,
     correlation_sequence: u64,
     failure_cause: ObservationFailureCause,
+    /// Assigned when this process was started. Claude and Codex record it
+    /// with the hooks choice of this launch.
+    launch_id: u64,
+    /// The conversation this process was opened for, when the open named one.
+    session_key: Option<String>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -480,6 +486,8 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
     operation_capabilities: watch::Sender<ProviderOperationCapabilities>,
     permission_authority: PermissionAuthoritySource,
     recovery: Arc<ProcessCleanup>,
+    launch_id: u64,
+    session_key: Option<String>,
 ) {
     let reader = Reader::new(
         scope.stdout.take().expect("owned stdout"),
@@ -523,6 +531,8 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
         settlement_facts: SettlementFacts::new(),
         correlation_sequence: 0,
         failure_cause: ObservationFailureCause::ExecutionFailed,
+        launch_id,
+        session_key,
     };
     let mut execution = None;
     let startup_started = worker.config.clock.now();
@@ -1086,6 +1096,18 @@ impl<P: AcpProfile> Worker<P> {
         // and it is generous. Protocol work afterwards is the provider
         // answering questions it is already running to answer, and keeps the
         // tighter `startup_timeout`.
+        if let Some((harness, allowed)) = self.profile.native_hooks_launch() {
+            self.record_audit(
+                ExecutionAuditRecord::NativeHooksLaunch(NativeHooksLaunchRecord::new(
+                    self.session_key.clone(),
+                    self.launch_id,
+                    harness,
+                    allowed,
+                )),
+                AuditEffectPhase::Lifecycle,
+            )
+            .await?;
+        }
         let spawn_deadline = self.config.clock.now() + self.config.launch_timeout;
         // Whether saved context is being restored is decided before any step
         // runs, so every step's deadline reports it. Reading it off the step

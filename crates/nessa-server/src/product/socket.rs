@@ -1535,12 +1535,73 @@ async fn authorize(
     .await
 }
 
-fn agent_catalog_value(state: &ProductRouteState, catalog: &impl serde::Serialize) -> Value {
-    let mut value = json!(catalog);
-    if let Some(hooks) = state.native_hooks.as_ref() {
-        crate::agents::application::overlay_native_hooks(&mut value, hooks.selection());
+fn agent_catalog_value(
+    state: &ProductRouteState,
+    catalog: &nessa_protocol::product::generated::AgentsListResult,
+) -> Value {
+    let selection = state
+        .native_hooks
+        .as_ref()
+        .map(|hooks| hooks.selection())
+        .unwrap_or_else(crate::agents::application::NativeHooksSelection::off);
+    json!(catalog_with_hooks(catalog, selection))
+}
+
+fn catalog_with_hooks(
+    catalog: &nessa_protocol::product::generated::AgentsListResult,
+    selection: crate::agents::application::NativeHooksSelection,
+) -> nessa_protocol::product::generated::AgentsListResult {
+    use nessa_protocol::product::generated::{
+        AgentModelOption, AgentOption, AgentsListResult, AgentsNativeHooks, ApprovalModeChoice,
+        NativeHooksChoice,
+    };
+    let choice = |enabled| {
+        if enabled {
+            NativeHooksChoice::On
+        } else {
+            NativeHooksChoice::Off
+        }
+    };
+    AgentsListResult {
+        agents: catalog
+            .agents
+            .iter()
+            .map(|agent| AgentOption {
+                agent: agent.agent.clone(),
+                default_model: agent.default_model.clone(),
+                models: agent
+                    .models
+                    .iter()
+                    .map(|model| AgentModelOption {
+                        model_id: model.model_id.clone(),
+                        display_name: model.display_name.clone(),
+                        max_context_window_tokens: model.max_context_window_tokens,
+                        reasoning: model.reasoning,
+                        image_input: model.image_input,
+                        approval_modes: model
+                            .approval_modes
+                            .iter()
+                            .map(|mode| ApprovalModeChoice {
+                                id: mode.id,
+                                name: mode.name.clone(),
+                                description: mode.description.clone(),
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+                native_hooks: match agent.agent.as_str() {
+                    "claude" => Some(choice(selection.claude())),
+                    "codex" => Some(choice(selection.codex())),
+                    _ => None,
+                },
+            })
+            .collect(),
+        environments: catalog.environments.clone(),
+        native_hooks: AgentsNativeHooks {
+            claude: choice(selection.claude()),
+            codex: choice(selection.codex()),
+        },
     }
-    value
 }
 
 async fn set_native_hooks(
@@ -1552,7 +1613,7 @@ async fn set_native_hooks(
         NativeHooksAgent as Choice, NativeHooksChange, NativeHooksError,
     };
     use nessa_protocol::product::generated::{
-        AgentsSetNativeHooksParams, AgentsSetNativeHooksResult, NativeHooksAgent as WireAgent,
+        AgentsSetNativeHooksParams, AgentsSetNativeHooksResult,
     };
     let Some(hooks) = state.native_hooks.as_ref() else {
         return failure(&frame.id, "conversations_not_configured");
@@ -1566,13 +1627,19 @@ async fn set_native_hooks(
     {
         return failure(&frame.id, "invalid_request");
     }
-    let agent = match params.agent {
-        WireAgent::Claude => Choice::Claude,
-        WireAgent::Codex => Choice::Codex,
-    };
+    let agent = Choice::from(params.agent);
     let context = session.context();
     let enabled = params.enabled;
     let request_id = params.request_id.clone();
+    let caller_kind = state
+        .caller_kinds
+        .as_ref()
+        .map(|source| {
+            source
+                .caller_kind(context.principal_id().as_str())
+                .to_owned()
+        })
+        .unwrap_or_else(|| "unknown".to_owned());
     let change = NativeHooksChange {
         agent,
         enabled,
@@ -1580,6 +1647,7 @@ async fn set_native_hooks(
         organization_id: context.organization_id().as_str().to_owned(),
         principal_id: context.principal_id().as_str().to_owned(),
         surface_id: context.credential_id().as_str().to_owned(),
+        caller_kind,
     };
     match hooks.set(change).await {
         Ok(selection) => success(
@@ -1592,6 +1660,18 @@ async fn set_native_hooks(
         ),
         Err(NativeHooksError::Audit) => failure(&frame.id, "audit_unavailable"),
         Err(NativeHooksError::Storage) => failure(&frame.id, "temporarily_unavailable"),
+    }
+}
+
+impl From<nessa_protocol::product::generated::NativeHooksAgent>
+    for crate::agents::application::NativeHooksAgent
+{
+    fn from(agent: nessa_protocol::product::generated::NativeHooksAgent) -> Self {
+        use nessa_protocol::product::generated::NativeHooksAgent as WireAgent;
+        match agent {
+            WireAgent::Claude => Self::Claude,
+            WireAgent::Codex => Self::Codex,
+        }
     }
 }
 
@@ -3106,6 +3186,92 @@ mod tests {
         assert!(audit.records().is_empty());
         assert_eq!(files.locks.load(std::sync::atomic::Ordering::SeqCst), 0);
         assert_eq!(files.publishes.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    struct HooksClock;
+    impl nessa_auth::application::ports::Clock for HooksClock {
+        fn unix_milliseconds(&self) -> u64 {
+            1
+        }
+    }
+
+    struct AgentCaller;
+    impl crate::agents::application::CallerKindSource for AgentCaller {
+        fn caller_kind(&self, _: &str) -> &'static str {
+            "agent"
+        }
+    }
+
+    /// A member is refused before params are read, and nothing is written.
+    #[tokio::test]
+    async fn review_setting_native_hooks_needs_the_owner_grant() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("data");
+        let preferences = crate::agents::infrastructure::NativeHooksPreferences::open(
+            directory.clone(),
+            Arc::new(HooksClock),
+        )
+        .unwrap();
+        let (state, _) = fixture(MembershipRole::Member);
+        let state = state.with_native_hooks(preferences);
+        let session = authenticate(&state).await;
+        assert_eq!(
+            action_for_method("agents.setNativeHooks"),
+            Some("credential.manage")
+        );
+        let (ok, answer) = mcp_servers_call(
+            &state,
+            &session,
+            "agents.setNativeHooks",
+            json!({"not": "params"}),
+        )
+        .await;
+        assert!(!ok);
+        assert_eq!(answer["code"], "forbidden");
+        assert!(!directory.join("native-hooks.json").exists());
+        let audit = directory.join("audit").join("native-hooks");
+        let records = std::fs::read_dir(&audit)
+            .unwrap()
+            .filter(|entry| {
+                entry
+                    .as_ref()
+                    .ok()
+                    .and_then(|entry| entry.path().extension().map(|ext| ext == "json"))
+                    .unwrap_or(false)
+            })
+            .count();
+        assert_eq!(records, 0);
+    }
+
+    #[tokio::test]
+    async fn an_agent_caller_is_recorded_as_an_agent() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("data");
+        let preferences = crate::agents::infrastructure::NativeHooksPreferences::open(
+            directory.clone(),
+            Arc::new(HooksClock),
+        )
+        .unwrap();
+        let (state, _) = fixture(MembershipRole::Admin);
+        let state = state
+            .with_native_hooks(preferences)
+            .with_caller_kinds(Arc::new(AgentCaller));
+        let session = authenticate(&state).await;
+        let (ok, _) = mcp_servers_call(
+            &state,
+            &session,
+            "agents.setNativeHooks",
+            json!({"requestId": "turn", "agent": "claude", "enabled": true}),
+        )
+        .await;
+        assert!(ok);
+        let recorded = std::fs::read_dir(directory.join("audit").join("native-hooks"))
+            .unwrap()
+            .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
+            .find(|text| text.contains("\"phase\":\"requested\""))
+            .unwrap();
+        let value: Value = serde_json::from_str(&recorded).unwrap();
+        assert_eq!(value["initiator"]["kind"], "agent");
     }
 
     /// The MCP server methods on the wire: `kind: "stdio"`, variable names in

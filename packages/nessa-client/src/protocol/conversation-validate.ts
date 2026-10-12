@@ -505,7 +505,11 @@ export function conversationView(value: unknown, expected: string): Conversation
       "input",
       "mcp",
       "structuredContent",
+      "nativeHooks",
     ])
+    const nativeHooks = text(tool, "nativeHooks", 3)
+    if (nativeHooks !== "off" && nativeHooks !== "on")
+      throw new Error("Invalid native hooks choice")
     identity(tool, "executionId")
     identity(tool, "toolId")
     const toolKey = JSON.stringify([tool.executionId, tool.toolId])

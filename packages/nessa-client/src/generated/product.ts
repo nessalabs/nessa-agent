@@ -306,7 +306,7 @@ export const NativeHookSuppressionSupport = {
 } as const
 export type NativeHookSuppressionSupport =
   (typeof NativeHookSuppressionSupport)[keyof typeof NativeHookSuppressionSupport]
-/** Whether the next launch of this conversation's harness omits Nessa's request to leave the harness's own hooks off. Off is the default. On does not prove the harness ran a hook, and it does not change nativeHookSuppression. */
+/** Whether this launch allows the harness's own hooks. Off asks the harness to leave them off. On means hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts. On does not prove a hook ran, and it does not change nativeHookSuppression. */
 export const NativeHooksChoice = { Off: "off", On: "on" } as const
 export type NativeHooksChoice = (typeof NativeHooksChoice)[keyof typeof NativeHooksChoice]
 /** A harness whose own hooks the caller can allow. OpenCode is not in this set and stays suppressed. */
@@ -379,7 +379,7 @@ export interface ConversationAgentFeatures {
   permissionDenial: PermissionDenialSupport
   /** Verified suppression state for user-configured provider hooks. */
   nativeHookSuppression: NativeHookSuppressionSupport
-  /** Whether this launch omits the request to leave the harness's own hooks off. When on, a hook can deny or change a tool call before Nessa asks. */
+  /** The hooks choice this conversation was started with. When on, hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts. For Claude, on also applies the repo's .claude settings, including its allow rules and startup hooks. */
   nativeHooks: NativeHooksChoice
   /** Effective Nessa support for correlated compaction reporting. */
   compactionReporting: CompactionReportingSupport
@@ -598,6 +598,8 @@ export interface ConversationTool {
   mcp?: ConversationMcpTool
   /** The call's structured result (MCP structuredContent) as JSON text, when the harness passed it on and it fits; absent otherwise. The result's text stays in details either way. */
   structuredContent?: string
+  /** The hooks choice of the launch this tool call ran under. Recorded input and output are what the model proposed or the tool returned, and a hook may have changed or approved them when this is on. */
+  nativeHooks: NativeHooksChoice
 }
 /** An MCP tool's identity: the server by the name it was configured under, and the tool on it; the UI the tool declared, when known; and the arguments the gateway's connection saw for the call, when it could match them. */
 export interface ConversationMcpTool {
@@ -1637,8 +1639,8 @@ export interface AgentOption {
   defaultModel: string
   /** Models runnable by this agent. */
   models: AgentModelOption[]
-  /** Whether the next launch of this agent omits Nessa's request to leave its own hooks off. Present for Claude and Codex. Absent for OpenCode, which stays suppressed. */
-  nativeHooks?: boolean
+  /** The stored choice for this agent's next new conversation. Present for Claude and Codex. Absent for OpenCode, which stays suppressed. Hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts. For Claude, on also applies the repo's .claude settings, including its allow rules and startup hooks, so turn it on only for projects you trust. */
+  nativeHooks?: NativeHooksChoice
 }
 /** Allow or stop allowing one harness to run its own hooks. The next launch of that harness omits Nessa's suppression request when enabled is true. OpenCode is not a value of agent. */
 export interface AgentsSetNativeHooksParams {
@@ -1649,7 +1651,7 @@ export interface AgentsSetNativeHooksParams {
   /** True omits the suppression request on the next launch. False restores it. */
   enabled: boolean
 }
-/** The choice now in effect for the named harness. A hook can deny or change a tool call before Nessa asks when enabled is true. */
+/** The choice now in effect for the named harness. When enabled is true, hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts. A change applies to newly started conversations. Conversations already running keep their setting. */
 export interface AgentsSetNativeHooksResult {
   /** Original action identifier. */
   requestId: string
@@ -1664,6 +1666,15 @@ export interface AgentsListResult {
   agents: AgentOption[]
   /** Places a new conversation may run besides this gateway: the SSH destinations config.json names, in the order it names them, then each paired environment connected when the catalog is asked, as `peer:` and its key in lowercase hex. At most 16 of the first and 8 of the second. */
   environments: string[]
+  /** The stored choice for the next new Claude and Codex conversation, whether or not that agent is in this catalog. */
+  nativeHooks: AgentsNativeHooks
+}
+/** The choice in effect for the next new conversation of each harness. Off keeps Nessa's request to leave that harness's hooks off. On means hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts. For Claude, on also applies the repo's .claude settings, including its allow rules and startup hooks, so turn it on only for projects you trust. A change applies to newly started conversations. Conversations already running keep their setting. */
+export interface AgentsNativeHooks {
+  /** Claude's stored choice. */
+  claude: NativeHooksChoice
+  /** Codex's stored choice. */
+  codex: NativeHooksChoice
 }
 /** Change a conversation approval preset while no turn runs. */
 export interface ConversationSetApprovalModeParams {
@@ -2561,7 +2572,7 @@ export const productMethodGrants = {
   "artifact.read": "conversation.read",
   "attachment.begin": "conversation.write",
   "agents.list": "server.read",
-  "agents.setNativeHooks": "conversation.write",
+  "agents.setNativeHooks": "credential.manage",
   "conversation.setApprovalMode": "conversation.write",
   "agents.installOptions": "server.read",
   "agents.install": "conversation.write",

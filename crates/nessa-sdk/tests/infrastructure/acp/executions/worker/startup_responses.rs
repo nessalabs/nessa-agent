@@ -188,6 +188,8 @@ async fn nested_startup_response_writes_observe_remaining_rpc_deadline() {
                     settlement_facts: SettlementFacts::new(),
                     correlation_sequence: 0,
                     failure_cause: ObservationFailureCause::ExecutionFailed,
+                    launch_id: 0,
+                    session_key: None,
                 };
                 let mut execution = (method == "session/set_config_option").then(|| {
                     ExecutionController::new(ExecutionSessionId::new("restored-context").unwrap())

@@ -101,7 +101,7 @@ it("says in a word whether approvals work here, without the capability jargon", 
   show(attached())
 
   expect(group("Approvals")).toBe(
-    "ApprovalsTool callsProvider asksDeny a requestSupportedAnswer laterNot yet in NessaNative hooksNessa asks this agent to leave its own hooks off.",
+    "ApprovalsTool callsProvider asksDeny a requestSupportedAnswer laterNot yet in NessaNative hooksFor this run, Nessa asks this agent to leave its own hooks off.",
   )
   expect(group("Model")).toBe("ModelImagesNot supported")
   expect(document.body.textContent).not.toContain("turn correlation")
@@ -112,10 +112,21 @@ it("says a hook can change a tool call when native hooks are on", () => {
   const features = item.remote?.capabilities.agentFeatures
   if (!features) throw new Error("missing features")
   features.nativeHooks = "on"
+  if (!item.remote) throw new Error("missing remote")
+  item.remote.runtime = {
+    model: "claude-sonnet-5",
+    provider: "claude-acp",
+    workspace: "/work/nessa",
+    agent: "claude",
+    modelName: "Sonnet 5",
+    contextWindowTokens: 200_000,
+    reasoning: true,
+  }
   show(item)
   expect(group("Approvals")).toContain(
-    "Native hooksA hook can deny or change a tool call before Nessa asks.",
+    "For this run, hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts.",
   )
+  expect(group("Approvals")).toContain("only for projects you trust")
 })
 
 it("names the model and its agent once the gateway reports them", () => {

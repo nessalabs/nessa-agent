@@ -169,7 +169,11 @@ function Panel() {
         digest={async () => "unused"}
         loadConversationChoices={async () => ({
           chosenAgent: undefined,
-          catalog: { agents: [], environments: [] },
+          catalog: {
+            agents: [],
+            environments: [],
+            nativeHooks: { claude: "off", codex: "off" },
+          },
         })}
       />
     </main>

@@ -143,7 +143,8 @@ mod gateway {
                             "description": "The provider requests approval where required."
                         }]
                     }]
-                }]
+                }],
+                "nativeHooks": {"claude": "off", "codex": "off"}
             }))
             .unwrap(),
         )

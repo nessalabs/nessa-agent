@@ -13,10 +13,13 @@ export interface NativeHooksClient {
 /** The choice for one harness the caller can change. */
 export type NativeHooksAgentName = NativeHooksAgent
 
-/** What the next launch of Claude and Codex will do. True omits suppression. */
+/** What the next new conversation of Claude and Codex will do. True allows hooks. */
 export interface NativeHooksChoice {
   readonly claude: boolean
   readonly codex: boolean
+  /** False when that agent is not in the catalog. Absent means it is. */
+  readonly claudeConfigured?: boolean
+  readonly codexConfigured?: boolean
 }
 
 /** A read, or the word that it could not be done. */
@@ -30,7 +33,7 @@ export type NativeHooksWrite =
 
 /** The two switches, as Settings › Access manages them. */
 export interface NativeHooksGateway {
-  /** The choice in effect. A catalog row that omits the flag is off. */
+  /** The stored choice. A missing catalog row does not change it. */
   read(): Promise<NativeHooksRead>
   /**
    * Change one harness. `requestId` names this attempt. A refusal leaves the
@@ -43,13 +46,26 @@ export interface NativeHooksGateway {
   ): Promise<NativeHooksWrite>
 }
 
-/** The choice a catalog row publishes. Absent is off. */
-function flag(
-  agents: Awaited<ReturnType<AgentsApi["list"]>>,
-  name: NativeHooksAgentName,
-): boolean {
-  const row = agents.agents.find((agent) => agent.agent === name)
-  return row?.nativeHooks === true
+/** The stored choice, and whether each harness is in the catalog. */
+function selection(
+  listed: Awaited<ReturnType<AgentsApi["list"]>>,
+): NativeHooksChoice | undefined {
+  const hooks = listed.nativeHooks
+  if (
+    !hooks ||
+    !Object.hasOwn(hooks, "claude") ||
+    !Object.hasOwn(hooks, "codex") ||
+    (hooks.claude !== "off" && hooks.claude !== "on") ||
+    (hooks.codex !== "off" && hooks.codex !== "on")
+  )
+    return undefined
+  const names = new Set(listed.agents.map((agent) => agent.agent))
+  return {
+    claude: hooks.claude === "on",
+    codex: hooks.codex === "on",
+    claudeConfigured: names.has("claude"),
+    codexConfigured: names.has("codex"),
+  }
 }
 
 export function nativeHooksGateway(options: {
@@ -60,10 +76,9 @@ export function nativeHooksGateway(options: {
     read: async () => {
       try {
         const listed = await agents().then((api) => api.list())
-        return {
-          ok: true,
-          choice: { claude: flag(listed, "claude"), codex: flag(listed, "codex") },
-        }
+        const choice = selection(listed)
+        if (!choice) return { ok: false }
+        return { ok: true, choice }
       } catch {
         return { ok: false }
       }

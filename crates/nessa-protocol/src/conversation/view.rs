@@ -364,6 +364,8 @@ pub struct ConversationTool {
     /// in [`MAX_STRUCTURED_CONTENT_BYTES`]; its text stays in `details`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub structured_content: Option<String>,
+    /// The hooks choice of the launch this call ran under.
+    pub native_hooks: NativeHooksChoice,
 }
 /// The most bytes of a tool's structured result a view carries. The schema
 /// states it again; `nessa-server/tests/conversation/agreement.rs` holds the two together.
@@ -497,7 +499,7 @@ impl From<OperationCapabilities> for ConversationAgentFeatures {
                     PermissionDenialSupport::SupportedForOfferedPermissionReviews
                 }
             },
-            native_hooks: if value.native_hooks() {
+            native_hooks: if value.native_hooks_allowed() {
                 NativeHooksChoice::On
             } else {
                 NativeHooksChoice::Off

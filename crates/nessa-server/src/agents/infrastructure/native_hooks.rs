@@ -2,7 +2,8 @@
 //!
 //! ```text
 //! set -> requested record -> native-hooks.json -> atomic flag -> outcome record
-//! open -> native-hooks.json -> flags (invalid documents load as off)
+//! open -> native-hooks.json -> flags (unreadable or invalid documents load as off)
+//! open -> claude-launch-hooks.json and codex-launch-hooks.json -> the choice each conversation opened with
 //! ```
 //!
 //! Arrows are the order of one change and of one startup read. A failed
@@ -28,6 +29,7 @@ use nessa_sdk::application::agent_execution::providers::NativeHooksSwitch;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::HashMap,
     io::{ErrorKind, Read, Write},
     path::{Path, PathBuf},
     sync::{
@@ -41,6 +43,8 @@ pub struct NativeHooksPreferences {
     directory: PathBuf,
     claude: Arc<AtomicBool>,
     codex: Arc<AtomicBool>,
+    claude_launches: Arc<Mutex<HashMap<String, bool>>>,
+    codex_launches: Arc<Mutex<HashMap<String, bool>>>,
     gate: Arc<Mutex<()>>,
     audit: Arc<dyn NativeHooksAudit>,
 }
@@ -62,11 +66,17 @@ impl NativeHooksPreferences {
         audit: Arc<dyn NativeHooksAudit>,
     ) -> Result<Arc<Self>, NativeHooksError> {
         create_directory(&directory).map_err(|_| NativeHooksError::Storage)?;
-        let stored = read_choice(&directory.join("native-hooks.json"))?;
+        let stored = read_choice(&directory.join("native-hooks.json"));
         Ok(Arc::new(Self {
-            directory,
+            directory: directory.clone(),
             claude: Arc::new(AtomicBool::new(stored.claude())),
             codex: Arc::new(AtomicBool::new(stored.codex())),
+            claude_launches: Arc::new(Mutex::new(read_launches(
+                &directory.join("claude-launch-hooks.json"),
+            ))),
+            codex_launches: Arc::new(Mutex::new(read_launches(
+                &directory.join("codex-launch-hooks.json"),
+            ))),
             gate: Arc::new(Mutex::new(())),
             audit,
         }))
@@ -80,12 +90,34 @@ impl NativeHooksPreferences {
         )
     }
 
-    /// The flag a Claude or Codex launch reads. OpenCode is not represented.
+    /// The flag a Claude or Codex launch reads, and the choice each
+    /// conversation of that harness already opened with. OpenCode is not
+    /// represented. A new conversation records its choice beside the flag.
     pub fn switch(&self, agent: NativeHooksAgent) -> NativeHooksSwitch {
-        NativeHooksSwitch::from_shared(match agent {
-            NativeHooksAgent::Claude => self.claude.clone(),
-            NativeHooksAgent::Codex => self.codex.clone(),
-        })
+        let (flag, launches, name) = match agent {
+            NativeHooksAgent::Claude => (
+                self.claude.clone(),
+                self.claude_launches.clone(),
+                "claude-launch-hooks.json",
+            ),
+            NativeHooksAgent::Codex => (
+                self.codex.clone(),
+                self.codex_launches.clone(),
+                "codex-launch-hooks.json",
+            ),
+        };
+        let directory = self.directory.clone();
+        let memory = launches.clone();
+        let persist: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let sessions = memory
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .clone();
+            if let Err(error) = write_launches(&directory, name, &sessions) {
+                tracing::warn!(%error, "native hooks launch memory could not be written");
+            }
+        });
+        NativeHooksSwitch::sharing(flag, launches, persist)
     }
 
     /// Record the request, write the file, then record the outcome.
@@ -127,24 +159,17 @@ fn set_blocking(
     }
     let current = flag(&claude, &codex, change.agent);
     let before = recorded_before(&directory, &change)?.unwrap_or(current);
-    record(
-        &audit,
-        &change.evidence(NativeHooksPhase::Requested, before, None),
-    )?;
+    audit.record(&change.evidence(NativeHooksPhase::Requested, before, None))?;
     if current == change.enabled {
-        record(
-            &audit,
-            &change.evidence(NativeHooksPhase::Outcome, before, Some(current)),
-        )?;
+        audit.record(&change.evidence(NativeHooksPhase::Outcome, before, Some(current)))?;
         return Ok(selection_of(&claude, &codex));
     }
     let updated = selection_of(&claude, &codex).with(change.agent, change.enabled);
     write_choice(&directory, &updated)?;
     store(&claude, &codex, change.agent, change.enabled);
-    if let Err(error) = record(
-        &audit,
-        &change.evidence(NativeHooksPhase::Outcome, before, Some(change.enabled)),
-    ) {
+    if let Err(error) =
+        audit.record(&change.evidence(NativeHooksPhase::Outcome, before, Some(change.enabled)))
+    {
         store(&claude, &codex, change.agent, current);
         let reverted = selection_of(&claude, &codex);
         if write_choice(&directory, &reverted).is_err() {
@@ -176,40 +201,89 @@ fn selection_of(claude: &AtomicBool, codex: &AtomicBool) -> NativeHooksSelection
     )
 }
 
-fn read_choice(path: &Path) -> Result<NativeHooksSelection, NativeHooksError> {
+/// A choice file that cannot be opened or read is off. A missing file is the
+/// first start and stays quiet. Every other failure is logged: off is the
+/// safe direction, and it must not stop the gateway.
+fn read_choice(path: &Path) -> NativeHooksSelection {
     let mut file = match open(path, OpenMode::Read) {
         Ok(file) => file,
-        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(NativeHooksSelection::off()),
-        Err(_) => return Err(NativeHooksError::Storage),
+        Err(error) if error.kind() == ErrorKind::NotFound => return NativeHooksSelection::off(),
+        Err(error) => {
+            tracing::warn!(%error, path = %path.display(), "native hooks choice file could not be opened; loading as off");
+            return NativeHooksSelection::off();
+        }
     };
     let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)
-        .map_err(|_| NativeHooksError::Storage)?;
-    Ok(selection_from_stored(&bytes))
+    if let Err(error) = file.read_to_end(&mut bytes) {
+        tracing::warn!(%error, path = %path.display(), "native hooks choice file could not be read; loading as off");
+        return NativeHooksSelection::off();
+    }
+    selection_from_stored(&bytes)
+}
+
+fn read_launches(path: &Path) -> HashMap<String, bool> {
+    let mut file = match open(path, OpenMode::Read) {
+        Ok(file) => file,
+        Err(error) if error.kind() == ErrorKind::NotFound => return HashMap::new(),
+        Err(error) => {
+            tracing::warn!(%error, path = %path.display(), "native hooks launch memory could not be opened; starting empty");
+            return HashMap::new();
+        }
+    };
+    let mut bytes = Vec::new();
+    if let Err(error) = file.read_to_end(&mut bytes) {
+        tracing::warn!(%error, path = %path.display(), "native hooks launch memory could not be read; starting empty");
+        return HashMap::new();
+    }
+    let Ok(value) = serde_json::from_slice::<Value>(&bytes) else {
+        tracing::warn!(path = %path.display(), "native hooks launch memory is not JSON; starting empty");
+        return HashMap::new();
+    };
+    let Some(object) = value.as_object() else {
+        tracing::warn!(path = %path.display(), "native hooks launch memory is not an object; starting empty");
+        return HashMap::new();
+    };
+    object
+        .iter()
+        .filter_map(|(session, allowed)| {
+            allowed.as_bool().map(|allowed| (session.clone(), allowed))
+        })
+        .collect()
 }
 
 fn write_choice(
     directory: &Path,
     selection: &NativeHooksSelection,
 ) -> Result<(), NativeHooksError> {
-    let destination = directory.join("native-hooks.json");
-    let value = json!({"claude": selection.claude(), "codex": selection.codex()});
+    publish_json(
+        directory,
+        &directory.join("native-hooks.json"),
+        &json!({"claude": selection.claude(), "codex": selection.codex()}),
+    )
+}
+
+fn write_launches(
+    directory: &Path,
+    name: &str,
+    sessions: &HashMap<String, bool>,
+) -> Result<(), NativeHooksError> {
+    publish_json(directory, &directory.join(name), &json!(sessions))
+}
+
+fn publish_json(
+    directory: &Path,
+    destination: &Path,
+    value: &Value,
+) -> Result<(), NativeHooksError> {
     let mut file = PrivateTempFile::new_in(directory).map_err(|_| NativeHooksError::Storage)?;
-    serde_json::to_writer(file.as_file_mut(), &value).map_err(|_| NativeHooksError::Storage)?;
+    serde_json::to_writer(file.as_file_mut(), value).map_err(|_| NativeHooksError::Storage)?;
     file.as_file_mut()
         .write_all(b"\n")
         .and_then(|_| file.as_file().sync_all())
         .map_err(|_| NativeHooksError::Storage)?;
-    file.persist(&destination)
+    file.persist(destination)
         .map_err(|_| NativeHooksError::Storage)?;
     sync_directory(directory).map_err(|_| NativeHooksError::Storage)
-}
-
-fn record(
-    audit: &Arc<dyn NativeHooksAudit>,
-    evidence: &NativeHooksEvidence,
-) -> Result<(), NativeHooksError> {
-    audit.record(evidence)
 }
 
 /// The file name of one phase. The same caller, harness, and request id
@@ -232,7 +306,7 @@ fn audit_record(directory: &Path, name: &str) -> PathBuf {
         .join(format!("{name}.json"))
 }
 
-fn read_json(path: &Path) -> Result<Option<Value>, NativeHooksError> {
+fn read_record(path: &Path) -> Result<Option<Value>, NativeHooksError> {
     let mut file = match open(path, OpenMode::Read) {
         Ok(file) => file,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
@@ -246,22 +320,26 @@ fn read_json(path: &Path) -> Result<Option<Value>, NativeHooksError> {
         .map_err(|_| NativeHooksError::Audit)
 }
 
+fn record_path(directory: &Path, change: &NativeHooksChange, phase: NativeHooksPhase) -> PathBuf {
+    audit_record(
+        directory,
+        &record_name(
+            change.agent,
+            &change.principal_id,
+            &change.request_id,
+            phase,
+        ),
+    )
+}
+
 /// True when this request id already has an outcome for the same choice.
 /// A stored outcome for a different choice is an audit failure: the id was reused.
 fn already_recorded(
     directory: &Path,
     change: &NativeHooksChange,
 ) -> Result<bool, NativeHooksError> {
-    let path = audit_record(
-        directory,
-        &record_name(
-            change.agent,
-            &change.principal_id,
-            &change.request_id,
-            NativeHooksPhase::Outcome,
-        ),
-    );
-    let Some(value) = read_json(&path)? else {
+    let path = record_path(directory, change, NativeHooksPhase::Outcome);
+    let Some(value) = read_record(&path)? else {
         return Ok(false);
     };
     let same = value["target"]["agent"].as_str() == Some(change.agent.name())
@@ -281,16 +359,8 @@ fn recorded_before(
     directory: &Path,
     change: &NativeHooksChange,
 ) -> Result<Option<bool>, NativeHooksError> {
-    let path = audit_record(
-        directory,
-        &record_name(
-            change.agent,
-            &change.principal_id,
-            &change.request_id,
-            NativeHooksPhase::Requested,
-        ),
-    );
-    let Some(value) = read_json(&path)? else {
+    let path = record_path(directory, change, NativeHooksPhase::Requested);
+    let Some(value) = read_record(&path)? else {
         return Ok(None);
     };
     if value["transition"]["requested"].as_bool() != Some(change.enabled) {
@@ -334,7 +404,7 @@ impl NativeHooksAudit for DurableNativeHooksAudit {
             },
             "cause": "caller_requested",
             "initiator": {
-                "kind": "person",
+                "kind": evidence.caller_kind,
                 "principalId": evidence.principal_id,
                 "surfaceId": evidence.surface_id,
                 "organizationId": evidence.organization_id,
@@ -363,17 +433,8 @@ impl NativeHooksAudit for DurableNativeHooksAudit {
 }
 
 fn agrees(destination: &Path, expected: &Value) -> Result<bool, NativeHooksError> {
-    let mut file = match open(destination, OpenMode::Read) {
-        Ok(file) => file,
-        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
-        Err(_) => return Err(NativeHooksError::Audit),
-    };
-    let mut bytes = Vec::new();
-    Read::by_ref(&mut file)
-        .read_to_end(&mut bytes)
-        .map_err(|_| NativeHooksError::Audit)?;
-    let Ok(stored) = serde_json::from_slice::<Value>(&bytes) else {
-        return Err(NativeHooksError::Audit);
+    let Some(stored) = read_record(destination)? else {
+        return Ok(false);
     };
     // The observation time is assigned when the record is first written. A
     // retry builds a new time and still matches that record.
@@ -406,6 +467,7 @@ mod tests {
             organization_id: "organization".into(),
             principal_id: "principal".into(),
             surface_id: "credential".into(),
+            caller_kind: "person".into(),
         }
     }
 
@@ -525,8 +587,8 @@ mod tests {
             .await
             .unwrap();
         let path = directory.join("native-hooks.json");
-        // Keep the private mode the store gave the file. Replacing the file
-        // with a public write would make the next read a storage failure.
+        // Keep the private mode the store gave the file. A public mode is a
+        // different case: it loads as off, and it does not stop startup.
         std::fs::OpenOptions::new()
             .write(true)
             .truncate(true)
@@ -649,6 +711,92 @@ mod tests {
         let loaded = NativeHooksPreferences::open(directory, Arc::new(FixedClock)).unwrap();
         assert!(loaded.selection().claude());
         assert!(!loaded.selection().codex());
+    }
+
+    #[tokio::test]
+    async fn an_agent_caller_is_recorded_as_an_agent() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("data");
+        let preferences =
+            NativeHooksPreferences::open(directory.clone(), Arc::new(FixedClock)).unwrap();
+        let mut requested = change(NativeHooksAgent::Codex, true, "request-agent");
+        requested.caller_kind = "agent".into();
+        preferences.set(requested).await.unwrap();
+        let audit = directory.join("audit").join("native-hooks");
+        let recorded = std::fs::read_dir(&audit)
+            .unwrap()
+            .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
+            .find(|text| text.contains("\"phase\":\"requested\""))
+            .unwrap();
+        let value: Value = serde_json::from_str(&recorded).unwrap();
+        assert_eq!(value["initiator"]["kind"], "agent");
+    }
+
+    #[tokio::test]
+    async fn a_conversation_keeps_the_choice_it_opened_with() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("data");
+        let preferences =
+            NativeHooksPreferences::open(directory.clone(), Arc::new(FixedClock)).unwrap();
+        preferences
+            .set(change(NativeHooksAgent::Claude, true, "request-launch"))
+            .await
+            .unwrap();
+        let switch = preferences.switch(NativeHooksAgent::Claude);
+        assert!(switch.choice_for(Some("conversation-1")));
+        preferences
+            .set(change(
+                NativeHooksAgent::Claude,
+                false,
+                "request-launch-off",
+            ))
+            .await
+            .unwrap();
+        assert!(switch.choice_for(Some("conversation-1")));
+        assert!(!switch.choice_for(Some("conversation-2")));
+        let reopened = NativeHooksPreferences::open(directory, Arc::new(FixedClock)).unwrap();
+        let again = reopened.switch(NativeHooksAgent::Claude);
+        assert!(again.choice_for(Some("conversation-1")));
+        assert!(!again.choice_for(Some("conversation-2")));
+        assert!(!again.allowed());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn review_a_public_mode_choice_file_loads_as_off() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("data");
+        NativeHooksPreferences::open(directory.clone(), Arc::new(FixedClock)).unwrap();
+        let path = directory.join("native-hooks.json");
+        std::fs::write(&path, br#"{"claude":true,"codex":true}"#).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let loaded = NativeHooksPreferences::open(directory, Arc::new(FixedClock)).unwrap();
+        assert_eq!(loaded.selection(), NativeHooksSelection::off());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn review_a_symlinked_choice_file_loads_as_off() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("data");
+        NativeHooksPreferences::open(directory.clone(), Arc::new(FixedClock)).unwrap();
+        let real = directory.join("elsewhere.json");
+        std::fs::write(&real, br#"{"claude":true,"codex":true}"#).unwrap();
+        std::os::unix::fs::symlink(&real, directory.join("native-hooks.json")).unwrap();
+        let loaded = NativeHooksPreferences::open(directory, Arc::new(FixedClock)).unwrap();
+        assert_eq!(loaded.selection(), NativeHooksSelection::off());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn review_a_directory_in_place_of_the_choice_file_loads_as_off() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("data");
+        NativeHooksPreferences::open(directory.clone(), Arc::new(FixedClock)).unwrap();
+        std::fs::create_dir(directory.join("native-hooks.json")).unwrap();
+        let loaded = NativeHooksPreferences::open(directory, Arc::new(FixedClock)).unwrap();
+        assert_eq!(loaded.selection(), NativeHooksSelection::off());
     }
 
     #[cfg(unix)]

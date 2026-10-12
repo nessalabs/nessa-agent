@@ -1124,6 +1124,7 @@ impl Projection {
                         status: "pending".into(),
                         mcp: None,
                         structured_content: None,
+                        native_hooks: self.view.capabilities.agent_features.native_hooks,
                     });
                     self.view.tools.last_mut().unwrap()
                 };

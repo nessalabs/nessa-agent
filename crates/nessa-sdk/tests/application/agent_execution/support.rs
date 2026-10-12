@@ -344,6 +344,9 @@ impl ProviderSessionBackend for InMemoryPermissionBackend {
                             ExecutionAuditRecord::LateProviderResult(_) => {
                                 panic!("close cannot record a late provider result")
                             }
+                            ExecutionAuditRecord::NativeHooksLaunch(_) => {
+                                panic!("close cannot record a hooks launch")
+                            }
                         }
                     }
                     Ok(CloseOutcome { forced: false })

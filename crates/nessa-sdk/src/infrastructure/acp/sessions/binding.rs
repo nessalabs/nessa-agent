@@ -60,6 +60,7 @@ pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
     audit: Arc<dyn ExecutionAudit>,
     request: ProviderOpenRequest,
 ) -> Result<OpenedProviderSession, ProviderOpenError> {
+    let session_key = request.session_key().map(str::to_owned);
     let (session, restore, mut open_control) = request.into_parts();
     // This open's MCP servers, read once and kept for as long as the provider
     // session lives — through every restart of its process — so a harness
@@ -92,6 +93,7 @@ pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
         capabilities: capabilities.clone(),
         profile: ControlMutex::new(profile),
         audit,
+        session_key,
         permission_sequence: Arc::new(AtomicU64::new(0)),
         question_sequence: Arc::new(AtomicU64::new(0)),
         _stand_in_grant: stand_in_grant,
@@ -165,6 +167,8 @@ struct WorkerFactory<P> {
     capabilities: EffectiveCapabilities,
     profile: ControlMutex<P>,
     audit: Arc<dyn ExecutionAudit>,
+    /// The conversation this factory was opened for, when the request named one.
+    session_key: Option<String>,
     permission_sequence: Arc<AtomicU64>,
     /// Question identities, minted here for the same reason review identities
     /// are: they outlive any one provider request, including across restarts
@@ -179,8 +183,9 @@ impl<P: AcpProfile + Clone> WorkerFactory<P> {
         &self,
         restore: Option<ExecutionSessionId>,
     ) -> Result<(Generation, EventStream), ProviderOpenError> {
+        let launch_id = NEXT_LAUNCH_ID.fetch_add(1, Ordering::Relaxed);
         let span = tracing::info_span!(target: "nessa_sdk::timing", "agent_launch",
-            launch_id = NEXT_LAUNCH_ID.fetch_add(1, Ordering::Relaxed),
+            launch_id,
             restored = restore.is_some());
         let _entered = span.enter();
         let started = self.config.clock.now();
@@ -268,6 +273,8 @@ impl<P: AcpProfile + Clone> WorkerFactory<P> {
                 self.operation_capabilities.clone(),
                 self.permission_authority.clone(),
                 recovery.clone(),
+                launch_id,
+                self.session_key.clone(),
             )
             .in_current_span(),
         );

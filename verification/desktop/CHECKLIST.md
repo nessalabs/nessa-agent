@@ -853,8 +853,9 @@ phone's scanner is not this screen.
   controls (not a fill). _Check:_ `settings-page.mjs --only focus-ring`
   (WebKit walks with ⌥Tab, as Safari does).
 - [ ] **Claude and Codex native hooks rest without a gateway.** Access shows
-  both rows disabled, with no switch, and says a hook can deny or change a
-  tool call before Nessa asks. OpenCode has no row. _Check:_
+  both rows disabled, with no switch, and says hooks can approve, deny, or
+  change a tool call and its result without Nessa asking, and can run
+  commands when the agent starts. OpenCode has no row. _Check:_
   `settings-page.mjs --only native-hooks`; unit tests
   `native-hooks-rows.test.tsx`, `native-hooks-gateway.test.ts`.
 

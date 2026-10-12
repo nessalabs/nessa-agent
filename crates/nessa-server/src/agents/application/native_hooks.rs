@@ -99,27 +99,13 @@ fn bool_field(object: &Map<String, Value>, key: &str) -> bool {
     object.get(key).and_then(Value::as_bool).unwrap_or(false)
 }
 
-/// Put the live choice on Claude and Codex catalog rows. Other agents, including
-/// OpenCode, are left without the key.
-pub fn overlay_native_hooks(catalog: &mut Value, selection: NativeHooksSelection) {
-    let Some(agents) = catalog.get_mut("agents").and_then(Value::as_array_mut) else {
-        return;
-    };
-    for agent in agents {
-        let Some(name) = agent.get("agent").and_then(Value::as_str) else {
-            continue;
-        };
-        let enabled = match name {
-            "claude" => Some(selection.claude()),
-            "codex" => Some(selection.codex()),
-            _ => None,
-        };
-        if let Some(enabled) = enabled {
-            if let Some(object) = agent.as_object_mut() {
-                object.insert("nativeHooks".to_owned(), Value::Bool(enabled));
-            }
-        }
-    }
+/// Where a settings change learns whether the caller is a person, an agent,
+/// an integration, or a gateway. Missing and unreadable principals are not a
+/// kind this port invents.
+pub trait CallerKindSource: Send + Sync {
+    /// The audit word for `principal_id`, or `"unknown"` when this source
+    /// cannot say.
+    fn caller_kind(&self, principal_id: &str) -> &'static str;
 }
 
 /// Which evidence record this is.
@@ -166,6 +152,8 @@ pub struct NativeHooksEvidence {
     pub principal_id: String,
     /// The credential the caller presented. This is the surface.
     pub surface_id: String,
+    /// `person`, `agent`, `integration`, `gateway`, or `unknown`.
+    pub caller_kind: String,
 }
 
 /// One command to change one harness.
@@ -183,6 +171,8 @@ pub struct NativeHooksChange {
     pub principal_id: String,
     /// Credential id of the caller.
     pub surface_id: String,
+    /// `person`, `agent`, `integration`, `gateway`, or `unknown`.
+    pub caller_kind: String,
 }
 
 impl NativeHooksChange {
@@ -203,6 +193,7 @@ impl NativeHooksChange {
             organization_id: self.organization_id.clone(),
             principal_id: self.principal_id.clone(),
             surface_id: self.surface_id.clone(),
+            caller_kind: self.caller_kind.clone(),
         }
     }
 }
@@ -249,20 +240,5 @@ mod tests {
             selection_from_stored(br#"{"claude":true,"codex":false}"#),
             NativeHooksSelection::new(true, false)
         );
-    }
-
-    #[test]
-    fn the_catalog_overlay_sets_claude_and_codex_only() {
-        let mut catalog = serde_json::json!({
-            "agents": [
-                {"agent": "claude"},
-                {"agent": "codex"},
-                {"agent": "opencode"}
-            ]
-        });
-        overlay_native_hooks(&mut catalog, NativeHooksSelection::new(true, false));
-        assert_eq!(catalog["agents"][0]["nativeHooks"], true);
-        assert_eq!(catalog["agents"][1]["nativeHooks"], false);
-        assert!(catalog["agents"][2].get("nativeHooks").is_none());
     }
 }

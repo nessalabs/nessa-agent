@@ -8,7 +8,8 @@
 //!           -> hooks: Claude and OpenCode report unknown across open, prompt,
 //!              and restoration. Codex's unsupported fact is in `codex`
 //!           -> native_hooks: Claude and Codex, when the switch is on, omit
-//!              suppression and the fixture runs a planted command hook.
+//!              suppression. Claude sends setting sources user, project, and
+//!              local. The fixture then runs a planted command hook.
 //!              OpenCode has no switch
 //!           -> images (advertised prompt capability, byte source, content blocks)
 //!           -> deletion (a connection of its own: initialize, session/delete)

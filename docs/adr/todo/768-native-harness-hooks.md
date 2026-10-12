@@ -22,12 +22,20 @@ runs one harness (#142).
 ## Decision
 
 The setting is per harness, for Claude and Codex only. Off, the default,
-keeps today's suppression request. On, the next launch of that harness omits
-the request. It does not send an enable flag. The negotiated suppression fact
-stays what it is today. The choice is stored beside the gateway, recorded
-with the caller, and shown on the conversation and in Settings. When it is
-on, a hook can deny or change a tool call before Nessa's permission flow
-sees it.
+keeps today's suppression request. On, the next new conversation of that
+harness omits the suppression request. Claude then loads the setting sources
+the Claude CLI loads: user, project, and local. That also applies the repo's
+`.claude` settings, including its allow rules and startup hooks, so turn it
+on only for projects you trust. Codex omits `features.hooks` and `notify` and
+does not send `features.hooks: true`. It does not send an enable flag. The
+negotiated suppression fact stays what it is today. The choice is stored
+beside the gateway, recorded with the caller, and shown on the conversation
+and in Settings. A change applies to newly started conversations.
+Conversations already running keep their setting. Hooks can approve, deny,
+or change a tool call and its result without Nessa asking, and can run
+commands when the agent starts. With hooks on, recorded input and output are
+what the model proposed or the tool returned, and a hook may have changed or
+approved them.
 
 ## Ordering
 
@@ -53,7 +61,7 @@ and `codex_native_hook_runs_when_the_launch_omits_suppression`.
 | File written, outcome absent | The process starts | The start loads the file |
 | Both records written for this choice | The same caller, harness, and request id | The command succeeds. The records stay as first written, including the observation time |
 | Outcome written for a different choice | The same request id | The command fails. The file is unchanged |
-| The choice is on | That harness launches | The suppression keys are omitted. A process already running is not restarted |
+| The choice is on | That harness launches | Claude sends setting sources user, project, and local and omits `disableAllHooks`. Codex omits `features.hooks` and `notify`. A process already running is not restarted |
 
 ## Alternatives considered
 

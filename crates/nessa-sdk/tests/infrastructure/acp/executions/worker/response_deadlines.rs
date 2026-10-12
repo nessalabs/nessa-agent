@@ -130,6 +130,8 @@ async fn blocked_worker(
         settlement_facts: SettlementFacts::new(),
         correlation_sequence: 0,
         failure_cause: ObservationFailureCause::ExecutionFailed,
+        launch_id: 0,
+        session_key: None,
     };
     (worker, execution, receiver, recovery, clock)
 }

@@ -124,7 +124,7 @@ pub struct ProviderOperationCapabilities {
     /// choice, not a fact negotiated with the provider, so an unnegotiated
     /// reset leaves it as the binding published it. False keeps today's
     /// suppression request. True omits that request.
-    pub native_hooks: bool,
+    pub native_hooks_allowed: bool,
     /// Correlated provider compaction reporting.
     pub compaction_reporting: ProviderCompactionReportingCapability,
     /// Validated provider model-switch reporting.
@@ -342,8 +342,8 @@ impl OperationCapabilities {
     ///
     /// Unchanged while provider facts are reset during restoration: the choice
     /// belongs to the binding that starts the process, not to negotiation.
-    pub fn native_hooks(self) -> bool {
-        self.provider.native_hooks
+    pub fn native_hooks_allowed(self) -> bool {
+        self.provider.native_hooks_allowed
     }
 
     /// Return effective correlated compaction reporting support.

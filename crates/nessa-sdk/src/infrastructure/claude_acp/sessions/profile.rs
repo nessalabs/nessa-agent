@@ -55,6 +55,12 @@ pub(super) fn native_mode(mode: ApprovalMode) -> &'static str {
 /// The id Claude's adapter gives its `thought_level` option.
 const EFFORT: &str = "effort";
 
+/// Setting sources Claude loads when native hooks are allowed.
+///
+/// This is the set the Claude CLI loads by default: user, project, and local.
+/// Adding or removing a source is a change to this list alone.
+pub(crate) const CLAUDE_NATIVE_HOOKS_SETTING_SOURCES: &[&str] = &["user", "project", "local"];
+
 /// The pinned Claude harness's configuration contract and built-in tool schemas.
 #[derive(Clone)]
 pub(crate) struct ClaudeProfile {
@@ -64,8 +70,9 @@ pub(crate) struct ClaudeProfile {
     tool_names: HashMap<String, wire::ObservedTool>,
     system_prompt: Option<SystemPrompt>,
     mcp_prefixes: Vec<String>,
-    /// When true, the session parameters omit the suppression request.
-    native_hooks: bool,
+    /// When true, this launch allows Claude's own hooks and loads
+    /// [`CLAUDE_NATIVE_HOOKS_SETTING_SOURCES`].
+    native_hooks_allowed: bool,
 }
 impl ClaudeProfile {
     pub(crate) fn new(
@@ -79,17 +86,19 @@ impl ClaudeProfile {
             tool_names: HashMap::new(),
             system_prompt,
             mcp_prefixes: Vec::new(),
-            native_hooks: false,
+            native_hooks_allowed: false,
         }
     }
 
-    /// Omit `disableAllHooks` and `settingSources` on the next session.
+    /// Allow Claude's own hooks on this launch.
     ///
-    /// The default sends both, which is how project and user hooks stay off.
-    /// Managed hooks still cannot be suppressed by that request. The
+    /// The default sends `disableAllHooks` and empty `settingSources`, which
+    /// is how project and user hooks stay off. Allowed sends
+    /// [`CLAUDE_NATIVE_HOOKS_SETTING_SOURCES`] and omits `disableAllHooks`.
+    /// Managed hooks still cannot be suppressed by the default request. The
     /// negotiated suppression fact stays unknown either way.
     pub(crate) fn allowing_native_hooks(mut self, allowed: bool) -> Self {
-        self.native_hooks = allowed;
+        self.native_hooks_allowed = allowed;
         self
     }
 }
@@ -117,8 +126,12 @@ impl AcpProfile for ClaudeProfile {
             == Some(true)
     }
 
-    fn native_hooks(&self) -> bool {
-        self.native_hooks
+    fn native_hooks_allowed(&self) -> bool {
+        self.native_hooks_allowed
+    }
+
+    fn native_hooks_launch(&self) -> Option<(&'static str, bool)> {
+        Some(("claude", self.native_hooks_allowed))
     }
 
     fn supports_questions(&self) -> bool {
@@ -157,14 +170,17 @@ impl AcpProfile for ClaudeProfile {
             "settings":{"disableAllHooks":true,"allowedMcpServers":allowed_servers,"disableClaudeAiConnectors":true,
                 "permissions":{"defaultMode":native_mode(self.approval_mode),"deny":wire::DISALLOWED_TOOLS}}
         }}}});
-        if self.native_hooks {
-            // Empty settingSources is itself suppression. Omit the key, and
-            // omit disableAllHooks. The other settings stay.
+        if self.native_hooks_allowed {
+            // Empty settingSources is itself suppression. Send the sources the
+            // Claude CLI loads, and omit disableAllHooks. The other settings stay.
             let options = params
                 .pointer_mut("/_meta/claudeCode/options")
                 .and_then(Value::as_object_mut)
                 .expect("claude session options are an object");
-            options.remove("settingSources");
+            options.insert(
+                "settingSources".to_owned(),
+                json!(CLAUDE_NATIVE_HOOKS_SETTING_SOURCES),
+            );
             options
                 .get_mut("settings")
                 .and_then(Value::as_object_mut)

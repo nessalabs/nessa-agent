@@ -151,8 +151,10 @@ function ConversationFacts({ conversation }: { conversation: Conversation }) {
                 label="Native hooks"
                 value={
                   features.nativeHooks === "on"
-                    ? "A hook can deny or change a tool call before Nessa asks."
-                    : "Nessa asks this agent to leave its own hooks off."
+                    ? runtime?.agent === "claude"
+                      ? "For this run, hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts. This also applies the repo's .claude settings, including its allow rules and startup hooks, so turn it on only for projects you trust."
+                      : "For this run, hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts."
+                    : "For this run, Nessa asks this agent to leave its own hooks off."
                 }
               />
             </>

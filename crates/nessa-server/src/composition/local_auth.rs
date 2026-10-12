@@ -67,8 +67,8 @@ use nessa_protocol::clock::Clock as ServerClock;
 use nessa_protocol::product::generated::AgentsListResult;
 #[cfg(unix)]
 use nessa_protocol::product::generated::{
-    AgentModelOption, AgentOption, ApprovalMode as WireApprovalMode,
-    ApprovalModeChoice as WireApprovalModeChoice,
+    AgentModelOption, AgentOption, AgentsNativeHooks, ApprovalMode as WireApprovalMode,
+    ApprovalModeChoice as WireApprovalModeChoice, NativeHooksChoice,
 };
 #[cfg(unix)]
 use nessa_protocol::{
@@ -321,6 +321,7 @@ pub(super) async fn product_state(
     let admin = Arc::new(LocalAdmin {
         store: store.clone(),
     });
+    let caller_kinds = store.clone();
     let mut product = ProductRouteState::new(
         gateway,
         organization,
@@ -334,6 +335,7 @@ pub(super) async fn product_state(
             agent_probe,
         },
     )
+    .with_caller_kinds(caller_kinds)
     .with_admin(admin)
     .with_settings(settings.session()?)
     .with_limits(limits)
@@ -1389,6 +1391,10 @@ fn agent_catalog(
     Ok(AgentsListResult {
         agents,
         environments: hosts.iter().map(|host| host.as_str().to_owned()).collect(),
+        native_hooks: AgentsNativeHooks {
+            claude: NativeHooksChoice::Off,
+            codex: NativeHooksChoice::Off,
+        },
     })
 }
 
@@ -1446,6 +1452,20 @@ impl CredentialAdmin for LocalAdmin {
                 .map_err(|_| CredentialAdminError::Unavailable)?
                 .map_err(CredentialAdminError::from)
         })
+    }
+}
+
+impl crate::agents::application::CallerKindSource
+    for nessa_auth::adapters::local::LocalCredentialStore
+{
+    fn caller_kind(&self, principal_id: &str) -> &'static str {
+        match self.principal_kind(principal_id) {
+            Ok(Some(nessa_auth::domain::PrincipalKind::Human)) => "person",
+            Ok(Some(nessa_auth::domain::PrincipalKind::Agent)) => "agent",
+            Ok(Some(nessa_auth::domain::PrincipalKind::Integration)) => "integration",
+            Ok(Some(nessa_auth::domain::PrincipalKind::Gateway)) => "gateway",
+            _ => "unknown",
+        }
     }
 }
 

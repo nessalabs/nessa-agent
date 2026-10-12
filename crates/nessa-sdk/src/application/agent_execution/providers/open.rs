@@ -51,6 +51,14 @@ impl ProviderOpenRequest {
         }
     }
 
+    /// The SDK session this open is for, when the request names one.
+    ///
+    /// A launch choice is remembered under this id so a later open of the
+    /// same conversation uses the choice from the first open.
+    pub fn session_key(&self) -> Option<&str> {
+        self.session.as_ref().map(|session| session.as_str())
+    }
+
     /// Split the request into the SDK session it opens for (when it names
     /// one), the requested restoration identity, and startup stop observation.
     ///

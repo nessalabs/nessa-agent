@@ -132,6 +132,7 @@ function viewWith(revision: number, review?: ConversationPermission): Conversati
         status: "completed",
         details: "",
         input: "{}",
+        nativeHooks: "off",
         mcp: { server, tool: appTool, resourceUri: "ui://mcptest/rows.html" },
       },
     ],

@@ -157,6 +157,10 @@ impl AgentProvider for CredentialedClaudeProvider {
         Some(self.approval_mode)
     }
 
+    fn native_hooks_allowed(&self) -> bool {
+        self.native_hooks.allowed()
+    }
+
     fn identity(&self) -> ProviderIdentity {
         self.identity.clone()
     }

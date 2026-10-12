@@ -307,6 +307,8 @@ async fn worker_with_ready_frames_boundary(
             settlement_facts: SettlementFacts::new(),
             correlation_sequence: 0,
             failure_cause: ObservationFailureCause::ExecutionFailed,
+            launch_id: 0,
+            session_key: None,
         },
         sender,
         close,

@@ -219,11 +219,11 @@ impl CodexAcpProvider {
     /// value, so the profile reports native hook suppression as unsupported.
     /// When the caller has allowed native hooks, both keys are omitted and
     /// the fact stays unsupported.
-    fn session_config(&self) -> String {
+    fn session_config(&self, allowed: bool) -> String {
         let mut config = json!({
             "model": self.capabilities.model().model_id(),
         });
-        if !self.native_hooks.allowed() {
+        if !allowed {
             // Ordinary configured handlers stop when the feature is false.
             // Provider builtin cleanup is a separate lifecycle path and is
             // not disabled here. Legacy notify is constructed independently
@@ -239,9 +239,9 @@ impl CodexAcpProvider {
     /// What this binding sets for every launch of its harness, wherever it
     /// runs: its session configuration, the preset it starts in, and no
     /// browser sign-in. Never a credential or a path.
-    fn launch_environment(&self) -> BTreeMap<OsString, OsString> {
+    fn launch_environment(&self, allowed: bool) -> BTreeMap<OsString, OsString> {
         [
-            ("CODEX_CONFIG", self.session_config()),
+            ("CODEX_CONFIG", self.session_config(allowed)),
             // The preset every session is then explicitly selected into. Setting
             // it here as well means the session is never briefly open in a more
             // permissive one.
@@ -258,7 +258,7 @@ impl CodexAcpProvider {
         .map(|(key, value)| (key.into(), value.into()))
         .collect()
     }
-    fn launch_command(&self) -> Command {
+    fn launch_command(&self, allowed: bool) -> Command {
         let mut command = Command::new(self.config.executable.executable());
         command
             .args(&self.config.arguments)
@@ -266,13 +266,16 @@ impl CodexAcpProvider {
             .env_clear()
             .envs(&self.config.environment)
             .envs(&self.config.credential_environment)
-            .envs(self.launch_environment());
+            .envs(self.launch_environment(allowed));
         command
     }
 }
 impl AgentProvider for CodexAcpProvider {
     fn approval_mode(&self) -> Option<ApprovalMode> {
         Some(self.approval_mode)
+    }
+    fn native_hooks_allowed(&self) -> bool {
+        self.native_hooks.allowed()
     }
     fn effort_level(&self) -> Option<EffortLevel> {
         self.effort_level.clone()
@@ -302,12 +305,15 @@ impl AgentProvider for CodexAcpProvider {
         }))
     }
     fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
+        let allowed = self.native_hooks.choice_for(request.session_key());
+        let profile = self.profile_allowing(allowed);
+        let process = self.process_factory_allowing(allowed);
         Box::pin(async move {
             acp_binding::open(
-                self.process_factory(),
+                process,
                 self.config.clone(),
                 self.capabilities.clone(),
-                self.profile(),
+                profile,
                 self.audit.clone(),
                 request,
             )
@@ -324,31 +330,91 @@ impl CodexAcpProvider {
     pub(super) fn deletions(&self) -> &DeletionCleanups {
         &self.deletions
     }
-    /// The profile every connection this provider opens speaks.
+    /// The profile for the flag as it stands now.
+    ///
+    /// [`open`](AgentProvider::open) and deletion do not use this. Each reads
+    /// the switch once and passes that value to
+    /// [`profile_allowing`](Self::profile_allowing).
+    #[cfg(test)]
+    #[expect(
+        dead_code,
+        reason = "the live read beside the one-shot snapshot, for a caller that asks once"
+    )]
     pub(super) fn profile(&self) -> CodexProfile {
+        self.profile_allowing(self.native_hooks.allowed())
+    }
+    /// How a process is launched for the flag as it stands now.
+    ///
+    /// [`open`](AgentProvider::open) and deletion do not use this. Each reads
+    /// the switch once and passes that value to
+    /// [`process_factory_allowing`](Self::process_factory_allowing).
+    #[cfg(test)]
+    #[expect(
+        dead_code,
+        reason = "the live read beside the one-shot snapshot, for a caller that asks once"
+    )]
+    pub(super) fn process_factory(&self) -> acp_binding::ProcessFactory {
+        self.process_factory_allowing(self.native_hooks.allowed())
+    }
+    /// The hooks choice for a launch that is not a conversation open.
+    ///
+    /// Deletion names no conversation session, so this reads the current flag
+    /// and records nothing.
+    pub(super) fn current_native_hooks(&self) -> bool {
+        self.native_hooks.choice_for(None)
+    }
+
+    /// The profile a launch speaks when native hooks are `allowed`.
+    ///
+    /// `open` reads the switch once and passes that value here and to
+    /// [`process_factory_allowing`](Self::process_factory_allowing).
+    pub(super) fn profile_allowing(&self, allowed: bool) -> CodexProfile {
         CodexProfile::new(
             self.capabilities.model().model_id(),
             self.approval_mode,
             self.effort_level.clone(),
         )
-        .allowing_native_hooks(self.native_hooks.allowed())
+        .allowing_native_hooks(allowed)
     }
-    /// How every connection this provider opens is launched.
-    pub(super) fn process_factory(&self) -> acp_binding::ProcessFactory {
+    /// The one read `open` makes. The profile and the process use the bool it
+    /// returns; they do not read the switch again.
+    #[cfg(test)]
+    pub fn read_native_hooks(&self, session: Option<&str>) -> bool {
+        self.native_hooks.choice_for(session)
+    }
+
+    /// Whether the profile for `allowed` reports hooks allowed.
+    #[cfg(test)]
+    pub fn profile_allows_native_hooks(&self, allowed: bool) -> bool {
+        use crate::infrastructure::acp::profile::AcpProfile;
+        self.profile_allowing(allowed).native_hooks_allowed()
+    }
+
+    /// The `CODEX_CONFIG` `open`'s process closure builds for `allowed`.
+    #[cfg(test)]
+    pub fn session_config_for(&self, allowed: bool) -> String {
+        self.session_config(allowed)
+    }
+
+    /// How a launch is started for the choice `open` already read.
+    ///
+    /// The closure keeps `allowed`. It does not read the switch again, so a
+    /// change after this open does not alter this process.
+    pub(super) fn process_factory_allowing(&self, allowed: bool) -> acp_binding::ProcessFactory {
         let factory = self.clone();
         match &self.host {
             Some(host) => {
                 let host = host.clone();
                 Arc::new(move || {
                     let launch = HarnessLaunch {
-                        environment: factory.launch_environment(),
+                        environment: factory.launch_environment(allowed),
                     };
                     Ok(ProcessScope::remote(host.start(launch)?))
                 })
             }
-            None => {
-                Arc::new(move || ProcessScope::spawn(factory.launch_command()).map_err(Into::into))
-            }
+            None => Arc::new(move || {
+                ProcessScope::spawn(factory.launch_command(allowed)).map_err(Into::into)
+            }),
         }
     }
 }

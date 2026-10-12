@@ -4,6 +4,7 @@ import { createAgentsApi } from "./agents-api.js"
 
 const offered = {
   environments: ["devbox", "me@build.example"],
+  nativeHooks: { claude: "off", codex: "off" },
   agents: [
     {
       agent: "claude",
@@ -109,7 +110,11 @@ it("enforces the schema-owned configured-agent count for unique valid rows", asy
     agent: `agent-${index}`,
   }))
   const api = createAgentsApi({
-    request: vi.fn().mockResolvedValue({ agents, environments: [] }),
+    request: vi.fn().mockResolvedValue({
+      agents,
+      environments: [],
+      nativeHooks: offered.nativeHooks,
+    }),
   })
   expect((await api.list()).agents).toHaveLength(bounds.maxConfiguredAgents)
   agents.push({ ...offered.agents[0], agent: "one-too-many" })
@@ -169,7 +174,7 @@ it("sends a native-hooks choice and reads the choice now in effect", async () =>
   })
 })
 
-it("rejects an unknown harness and a non-boolean catalog flag before display", async () => {
+it("rejects an unknown harness and a boolean catalog flag before display", async () => {
   const request = vi
     .fn()
     .mockResolvedValue({ requestId: "turn", agent: "opencode", enabled: true })
@@ -181,10 +186,10 @@ it("rejects an unknown harness and a non-boolean catalog flag before display", a
     ...offered,
     agents: [{ ...offered.agents[0], nativeHooks: "on" }],
   })
-  await expect(api.list()).rejects.toThrow("Invalid native hooks choice")
+  expect((await api.list()).agents[0].nativeHooks).toBe("on")
   request.mockResolvedValue({
     ...offered,
     agents: [{ ...offered.agents[0], nativeHooks: false }],
   })
-  expect((await api.list()).agents[0].nativeHooks).toBe(false)
+  await expect(api.list()).rejects.toThrow("Invalid native hooks choice")
 })

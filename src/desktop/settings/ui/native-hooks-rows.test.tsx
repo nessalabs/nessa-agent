@@ -36,7 +36,7 @@ it("rests both rows when this window has no gateway", async () => {
     expect(toggle(id)).toBeNull()
   }
   expect(host.textContent).toContain(
-    "A hook can deny or change a tool call before Nessa asks.",
+    "Hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts.",
   )
 })
 
@@ -104,4 +104,31 @@ it("shows the choice a lost response left in effect", async () => {
   await act(async () => toggle("codex-native-hooks")?.click())
   expect(toggle("codex-native-hooks")?.getAttribute("aria-checked")).toBe("true")
   expect(row("codex-native-hooks")?.textContent).toContain("Could not change this.")
+})
+
+it("keeps the stored choice when the agent is not in the catalog", async () => {
+  const gateway: NativeHooksGateway = {
+    read: () =>
+      Promise.resolve({
+        ok: true,
+        choice: {
+          claude: true,
+          codex: false,
+          claudeConfigured: false,
+          codexConfigured: true,
+        },
+      }),
+    set: () => Promise.resolve({ ok: false }),
+  }
+  await act(async () =>
+    root.render(
+      <NativeHooksProvider gateway={gateway}>
+        <NativeHooksRows />
+      </NativeHooksProvider>,
+    ),
+  )
+  await act(async () => {})
+  expect(toggle("claude-native-hooks")?.getAttribute("aria-checked")).toBe("true")
+  expect(row("claude-native-hooks")?.textContent).toContain("This agent isn't set up.")
+  expect(row("claude-native-hooks")?.textContent).toContain("only for projects you trust")
 })

@@ -305,6 +305,7 @@ function gatewayWithApp() {
           status: "running",
           details: "",
           input: "",
+          nativeHooks: "off",
           mcp: {
             server: "mcptest",
             tool: "show_chart",

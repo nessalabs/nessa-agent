@@ -322,7 +322,7 @@ const checks = {
 
   /**
    * Privacy & Permissions › Access, with no gateway: Claude and Codex hook
-   * rows rest, and the page says a hook can deny or change a tool call.
+   * rows rest, and the page says hooks can approve, deny, or change a tool call.
    */
   "native-hooks": async (page, { engine }) => {
     const failures = []
@@ -340,8 +340,12 @@ const checks = {
         })),
     )
     const note = await page.$eval("#settings-panel", (panel) => panel.textContent ?? "")
-    if (!note.includes("A hook can deny or change a tool call before Nessa asks."))
-      failures.push("the page does not say a hook can deny or change a tool call")
+    if (
+      !note.includes(
+        "Hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts.",
+      )
+    )
+      failures.push("the page does not say what hooks can do")
     for (const id of ["claude-native-hooks", "codex-native-hooks"]) {
       const row = read.find((item) => item.id === id)
       if (!row) failures.push(`${id} is missing`)

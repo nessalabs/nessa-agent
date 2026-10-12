@@ -17,10 +17,11 @@ use std::{future::Future, pin::Pin};
 impl ProviderSessionDeleter for CodexAcpProvider {
     fn delete_session(&self, session: ExecutionSessionId) -> ProviderSessionDeletionFuture<'_> {
         Box::pin(async move {
+            let allowed = self.current_native_hooks();
             let answer = acp_deletion::delete_session(
-                self.process_factory(),
+                self.process_factory_allowing(allowed),
                 self.config().clone(),
-                &self.profile(),
+                &self.profile_allowing(allowed),
                 &session,
                 self.deletions(),
             )

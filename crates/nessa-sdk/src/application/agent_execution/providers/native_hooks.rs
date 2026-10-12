@@ -1,27 +1,46 @@
 //! Whether a launch lets the harness run its own hooks.
 //!
 //! ```text
-//! caller -> NativeHooksSwitch -> launch reads allowed()
+//! caller -> NativeHooksSwitch -> one open reads choice_for(session)
+//!                             -> later opens of that session reuse it
 //! ```
 //!
-//! The arrow is a read at process start. The switch defaults off. Off keeps
-//! today's suppression request. On omits that request. It is not a negotiated
-//! fact and not a test-only environment variable.
+//! The arrow is one read for one conversation open. The switch defaults off.
+//! Off keeps today's suppression request. On omits that request and, for
+//! Claude, loads the same setting sources the Claude CLI loads. It is not a
+//! negotiated fact. A conversation that has already opened keeps the choice
+//! from that open; a later change applies to a conversation that has not.
 
 #![deny(missing_docs)]
 
+use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc,
+    Arc, Mutex,
 };
 
-/// Shared launch choice for one harness.
+/// Shared launch choice for one harness, and the choice each conversation
+/// already opened with.
 ///
-/// Clones share the flag. A change is visible to the next launch without
-/// rebuilding the provider. The flag is read when the process is started.
-#[derive(Clone, Debug)]
+/// Clones share the flag and the per-conversation memory. A change to the
+/// flag is visible to the next conversation that has not opened yet. A
+/// conversation that has opened keeps the value recorded for its session.
+#[derive(Clone)]
 pub struct NativeHooksSwitch {
     allowed: Arc<AtomicBool>,
+    launches: Arc<Mutex<HashMap<String, bool>>>,
+    /// Writes the remembered choices after a new session is recorded.
+    /// The lock is not held. The default does nothing.
+    persist: Arc<dyn Fn() + Send + Sync>,
+}
+
+impl std::fmt::Debug for NativeHooksSwitch {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("NativeHooksSwitch")
+            .field("allowed", &self.allowed())
+            .finish()
+    }
 }
 
 impl Default for NativeHooksSwitch {
@@ -33,30 +52,65 @@ impl Default for NativeHooksSwitch {
 impl NativeHooksSwitch {
     /// Suppression stays on. This is the launch every binding starts with.
     pub fn off() -> Self {
-        Self {
-            allowed: Arc::new(AtomicBool::new(false)),
-        }
+        Self::from_shared(Arc::new(AtomicBool::new(false)))
     }
 
-    /// The next launch omits the suppression request.
+    /// The next new conversation omits the suppression request.
+    #[cfg(test)]
     pub fn on() -> Self {
-        Self {
-            allowed: Arc::new(AtomicBool::new(true)),
-        }
+        Self::from_shared(Arc::new(AtomicBool::new(true)))
     }
 
     /// Share a flag the settings store already owns.
     pub fn from_shared(allowed: Arc<AtomicBool>) -> Self {
-        Self { allowed }
+        Self::sharing(
+            allowed,
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(|| {}),
+        )
     }
 
-    /// Whether the next launch should omit suppression.
+    /// Share the flag, the conversations already opened, and how a new
+    /// memory is written down.
+    pub fn sharing(
+        allowed: Arc<AtomicBool>,
+        launches: Arc<Mutex<HashMap<String, bool>>>,
+        persist: Arc<dyn Fn() + Send + Sync>,
+    ) -> Self {
+        Self {
+            allowed,
+            launches,
+            persist,
+        }
+    }
+
+    /// Whether a conversation that has not opened yet should omit suppression.
     pub fn allowed(&self) -> bool {
         self.allowed.load(Ordering::Relaxed)
     }
 
-    /// Change what the next launch does. A process already running is unchanged.
-    pub fn set(&self, allowed: bool) {
-        self.allowed.store(allowed, Ordering::Relaxed);
+    /// The choice for this conversation open.
+    ///
+    /// `session` is the conversation's session id. The first open records the
+    /// flag's value then. A later open of the same session returns that
+    /// record, including after the flag changes. No session id reads the flag
+    /// and records nothing: a launch that names no conversation cannot be
+    /// told apart from the next one.
+    pub fn choice_for(&self, session: Option<&str>) -> bool {
+        let Some(session) = session.filter(|session| !session.is_empty()) else {
+            return self.allowed();
+        };
+        let mut launches = self
+            .launches
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(stored) = launches.get(session).copied() {
+            return stored;
+        }
+        let allowed = self.allowed();
+        launches.insert(session.to_owned(), allowed);
+        drop(launches);
+        (self.persist)();
+        allowed
     }
 }

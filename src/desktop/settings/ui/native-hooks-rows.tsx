@@ -26,7 +26,8 @@ export function NativeHooksProvider({
   )
 }
 
-const warning = "A hook can deny or change a tool call before Nessa asks."
+const warning =
+  "Hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts."
 
 const rows = [
   { id: "claude-native-hooks", agent: "claude" },
@@ -123,11 +124,20 @@ function HookRow({
     return <ItemRow setting={id} label={entry.label} detail={detail} unavailable />
   }
   const failed = phase.failed === agent
+  const configured =
+    agent === "claude"
+      ? phase.choice.claudeConfigured !== false
+      : phase.choice.codexConfigured !== false
+  const detail = failed
+    ? "Could not change this."
+    : configured
+      ? entry.detail
+      : `${entry.detail} This agent isn't set up.`
   return (
     <ItemRow
       setting={id}
       label={entry.label}
-      detail={failed ? "Could not change this." : entry.detail}
+      detail={detail}
       control={
         <Toggle
           checked={phase.choice[agent]}

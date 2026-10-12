@@ -134,15 +134,15 @@ fn proven_turn_cleanup_is_the_only_fact_that_supports_ending_the_turn() {
 fn native_hooks_is_a_launch_choice_and_survives_an_unnegotiated_reset() {
     let allowed = OperationCapabilities::resolve(ProviderOperationCapabilities {
         negotiated: false,
-        native_hooks: true,
+        native_hooks_allowed: true,
         ..ProviderOperationCapabilities::default()
     });
-    assert!(allowed.native_hooks());
+    assert!(allowed.native_hooks_allowed());
     assert_eq!(
         allowed.native_hook_suppression(),
         NativeHookSuppressionCapability::Unknown
     );
-    assert!(!OperationCapabilities::default().native_hooks());
+    assert!(!OperationCapabilities::default().native_hooks_allowed());
 }
 
 #[test]

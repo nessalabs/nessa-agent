@@ -127,6 +127,7 @@ impl ExecutionAudit for RecordingAudit {
                 ExecutionAuditRecord::QuestionRefused(record) => {
                     self.refused_questions.lock().unwrap().push(record)
                 }
+                ExecutionAuditRecord::NativeHooksLaunch(_) => {}
             }
             Ok(())
         })

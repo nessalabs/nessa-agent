@@ -691,6 +691,57 @@ pub enum ExecutionAuditRecord {
     QuestionRefused(QuestionRefusalRecord),
     /// A provider terminal result observed after a refusal had already stopped the invocation.
     LateProviderResult(LateProviderResultRecord),
+    /// The hooks choice a Claude or Codex process was started with.
+    NativeHooksLaunch(NativeHooksLaunchRecord),
+}
+
+/// The hooks choice recorded when a Claude or Codex process starts.
+///
+/// `allowed` is the choice that launch used. A later change to the stored
+/// setting does not rewrite this record. Other harnesses do not record one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NativeHooksLaunchRecord {
+    session_id: Option<String>,
+    launch_id: u64,
+    harness: &'static str,
+    allowed: bool,
+}
+
+impl NativeHooksLaunchRecord {
+    /// `session_id` is the conversation this launch opened, when the open named one.
+    pub fn new(
+        session_id: Option<String>,
+        launch_id: u64,
+        harness: &'static str,
+        allowed: bool,
+    ) -> Self {
+        Self {
+            session_id,
+            launch_id,
+            harness,
+            allowed,
+        }
+    }
+
+    /// The conversation, when this launch was for one.
+    pub fn session_id(&self) -> Option<&str> {
+        self.session_id.as_deref()
+    }
+
+    /// The id assigned to this process start.
+    pub fn launch_id(&self) -> u64 {
+        self.launch_id
+    }
+
+    /// `claude` or `codex`.
+    pub fn harness(&self) -> &'static str {
+        self.harness
+    }
+
+    /// Whether this launch allowed the harness's own hooks.
+    pub fn allowed(&self) -> bool {
+        self.allowed
+    }
 }
 
 /// Required audit boundary, independent of bounded UI streams and caller waits.

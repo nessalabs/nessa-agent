@@ -141,6 +141,13 @@ pub(super) fn record_value(record: &ExecutionAuditRecord) -> Value {
         }
         ExecutionAuditRecord::ReviewDeclined(record) => declined(record),
         ExecutionAuditRecord::QuestionRefused(record) => refused(record),
+        ExecutionAuditRecord::NativeHooksLaunch(record) => json!({
+            "kind": "native_hooks_launch",
+            "sessionId": record.session_id(),
+            "launchId": record.launch_id(),
+            "harness": record.harness(),
+            "nativeHooks": if record.allowed() { "on" } else { "off" },
+        }),
         ExecutionAuditRecord::LateProviderResult(record) => json!({
             "kind":"late_provider_result",
             "sessionId":record.session_id().as_str(),

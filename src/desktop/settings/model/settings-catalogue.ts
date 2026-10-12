@@ -383,14 +383,16 @@ export const settingsEntries = [
     id: "claude-native-hooks",
     tab: "access",
     label: "Claude Code hooks",
-    detail: "A hook can deny or change a tool call before Nessa asks.",
+    detail:
+      "Hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts. A change applies to newly started conversations. Conversations already running keep their setting. This also applies the repo's .claude settings, including its allow rules and startup hooks, so turn it on only for projects you trust.",
     keywords: "native hooks claude",
   },
   {
     id: "codex-native-hooks",
     tab: "access",
     label: "Codex hooks",
-    detail: "A hook can deny or change a tool call before Nessa asks.",
+    detail:
+      "Hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts. A change applies to newly started conversations. Conversations already running keep their setting.",
     keywords: "native hooks codex",
   },
   // Privacy & Permissions › Data

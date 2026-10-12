@@ -688,6 +688,7 @@ fn a_tool_without_an_mcp_identity_is_written_as_before() {
             "executionId",
             "input",
             "kind",
+            "nativeHooks",
             "status",
             "title",
             "toolId"

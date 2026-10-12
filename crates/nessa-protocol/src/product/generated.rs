@@ -627,6 +627,7 @@ pub struct ConversationTool {
     pub mcp: Option<ConversationMcpTool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub structured_content: Option<String>,
+    pub native_hooks: NativeHooksChoice,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1615,7 +1616,7 @@ pub struct AgentOption {
     pub default_model: String,
     pub models: Vec<AgentModelOption>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub native_hooks: Option<bool>,
+    pub native_hooks: Option<NativeHooksChoice>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1636,6 +1637,13 @@ pub struct AgentsSetNativeHooksResult {
 pub struct AgentsListResult {
     pub agents: Vec<AgentOption>,
     pub environments: Vec<String>,
+    pub native_hooks: AgentsNativeHooks,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentsNativeHooks {
+    pub claude: NativeHooksChoice,
+    pub codex: NativeHooksChoice,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -2662,6 +2670,7 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         "credential.issue"
         | "credential.list"
         | "credential.revoke"
+        | "agents.setNativeHooks"
         | "mcpServers.list"
         | "mcpServers.save"
         | "mcpServers.remove"
@@ -2698,7 +2707,6 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "conversation.delete"
         | "conversation.reorder"
         | "attachment.begin"
-        | "agents.setNativeHooks"
         | "conversation.setApprovalMode"
         | "agents.install"
         | "mcp.callTool"

@@ -116,7 +116,7 @@
     },
     "agents.setNativeHooks": {
       "params": "AgentsSetNativeHooksParams",
-      "grant": "conversation.write"
+      "grant": "credential.manage"
     },
     "conversation.setApprovalMode": {
       "params": "ConversationSetApprovalModeParams",

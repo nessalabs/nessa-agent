@@ -20,7 +20,7 @@ pub(crate) trait AcpProfile: Send + Sync + 'static {
             permission_denial: PermissionDenialCapability::SupportedForOfferedPermissionReviews,
             permission_deferral: ProviderPermissionDeferralCapability::Unsupported,
             native_hook_suppression: self.native_hook_suppression(),
-            native_hooks: self.native_hooks(),
+            native_hooks_allowed: self.native_hooks_allowed(),
             ..ProviderOperationCapabilities::default()
         }
     }
@@ -30,8 +30,13 @@ pub(crate) trait AcpProfile: Send + Sync + 'static {
     /// binding's launch choice. It does not change
     /// [`native_hook_suppression`](Self::native_hook_suppression), which stays
     /// a statement about proof.
-    fn native_hooks(&self) -> bool {
+    fn native_hooks_allowed(&self) -> bool {
         false
+    }
+    /// The harness name and the launch choice, when this profile is Claude or
+    /// Codex. Other profiles have no such launch and record nothing.
+    fn native_hooks_launch(&self) -> Option<(&'static str, bool)> {
+        None
     }
     /// Whether user-configured executable hooks are proven disabled.
     ///

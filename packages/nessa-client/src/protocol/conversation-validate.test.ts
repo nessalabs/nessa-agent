@@ -70,6 +70,7 @@ function view() {
         status: "running",
         details: "",
         input: "{}",
+        nativeHooks: "off",
       },
     ],
     capabilities: {

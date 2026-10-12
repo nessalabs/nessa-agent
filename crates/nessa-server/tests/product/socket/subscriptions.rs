@@ -391,7 +391,8 @@ impl SubscriptionFixture {
                                 "description": "The provider decides."
                             }]
                         }]
-                    }]
+                    }],
+                    "nativeHooks": {"claude": "off", "codex": "off"}
                 }))
                 .unwrap(),
             );
