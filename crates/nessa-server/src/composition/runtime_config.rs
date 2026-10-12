@@ -65,6 +65,11 @@ pub(super) struct EnvServeConfig {
     /// nothing enclosing it.
     #[cfg_attr(not(unix), allow(dead_code))]
     pub commands: bool,
+    /// Whether a gateway may place files its conversation holds in this
+    /// host's workspace, for its agent's `artifacts_fetch` (issue #701).
+    /// Off unless set: a fetched file is written as this account.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    pub artifacts_in: bool,
 }
 
 /// Most SSH hosts the configuration may name: what `agents.list` carries.

@@ -39,7 +39,7 @@
 //! `product/` names either.
 use futures_util::FutureExt;
 use nessa_auth::application::ports::Clock;
-use nessa_protocol::lease::{CollectionRefusal, PublishRefusal};
+use nessa_protocol::lease::{CollectionRefusal, FetchRefusal, PublishRefusal};
 use nessa_sdk::application::agent_execution::{
     agents::{Agent, AgentError},
     permissions::ActionContext,
@@ -49,7 +49,8 @@ use nessa_sdk::application::agent_execution::{
         ProviderOpenRequest,
     },
     sessions::{
-        CurrentLease, CurrentLeaseState, LeaseCommit, LeaseRecord, LeaseRecordError, SessionManager,
+        CurrentLease, CurrentLeaseState, LeaseCommit, LeaseRecord, LeaseRecordError, PublishedFile,
+        SessionManager,
     },
 };
 use nessa_sdk::domain::{
@@ -177,6 +178,101 @@ pub(crate) trait LeaseHold: Send + Sync {
     ) -> Option<EnvironmentFuture<'static, Result<(), PublishFailure>>> {
         None
     }
+    /// Ask the environment to place a file the conversation holds in its
+    /// workspace under the lease, for the agent's own tool call (issue
+    /// #701, slice D3b). `None` for an environment that takes no files, as
+    /// in process; nothing is asked or read until the future is polled.
+    /// Its bytes are read from `ask.source` only once the environment takes
+    /// the fetch. It resolves once the environment says what became of it,
+    /// or as [`FetchFailure::Unanswered`] once the lease is no longer held
+    /// there, so it never outlives the lease; dropped before then, the
+    /// environment is told nothing more will be written.
+    fn fetch(
+        &self,
+        _ask: FetchAsk,
+    ) -> Option<EnvironmentFuture<'static, Result<FetchPlaced, FetchFailure>>> {
+        None
+    }
+}
+
+/// A file the conversation holds, asked into the environment's workspace.
+#[derive(Clone)]
+#[cfg_attr(
+    not(unix),
+    allow(dead_code, reason = "read by the Unix gateway's SSH adapter")
+)]
+pub(crate) struct FetchAsk {
+    /// The tool call it is for.
+    pub(crate) request: String,
+    /// Where it goes: absolute, or relative to the environment's workspace,
+    /// which the environment resolves and holds it to.
+    pub(crate) destination: String,
+    /// Exactly which file: its digest, media type and size.
+    pub(crate) file: PublishedFile,
+    /// Where its bytes are read from.
+    pub(crate) source: Arc<dyn HeldSource>,
+    /// Set by the environment's adapter before it says every byte is
+    /// delivered. Until then nothing can be placed: an answer never had, or
+    /// a call that stopped waiting, with this unset placed nothing.
+    pub(crate) delivered: Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// A fetched file's bytes, read from the conversation's hold of exactly
+/// that file, one range at a time.
+pub(crate) trait HeldSource: Send + Sync {
+    /// The file's bytes from `offset`, before its end: at least one, at most
+    /// `max` and at most one of the hold's ranges, and only while the
+    /// conversation still holds exactly that file, asked again for every
+    /// range.
+    fn read(
+        &self,
+        offset: u64,
+        max: usize,
+    ) -> EnvironmentFuture<'_, Result<Vec<u8>, HeldSourceFailure>>;
+}
+
+/// Why a fetched file's bytes could not be read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HeldSourceFailure {
+    /// The conversation no longer holds exactly that file.
+    NotHeld,
+    /// The store could not read it now.
+    Unavailable,
+}
+
+/// Where a fetched file is, once the environment placed it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    not(unix),
+    allow(dead_code, reason = "answered by the Unix gateway's SSH adapter")
+)]
+pub(crate) enum FetchPlaced {
+    /// Verified and linked at `path`, where nothing was before.
+    Placed { path: String },
+    /// `path` already was exactly this file.
+    AlreadyPlaced { path: String },
+}
+
+/// Why a fetched file was not placed, or is not known to be.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    not(unix),
+    allow(dead_code, reason = "answered by the Unix gateway's SSH adapter")
+)]
+pub(crate) enum FetchFailure {
+    /// The environment did not place it, with its reason; nothing is at the
+    /// destination that was not there before.
+    Refused(FetchRefusal),
+    /// The conversation let go of the file while it was being written.
+    NotHeld,
+    /// The file's bytes could not be read here.
+    SourceUnavailable,
+    /// The bytes could not be written to the environment, past every resume.
+    ChannelUnavailable,
+    /// No answer could be had once every byte was delivered: the connection
+    /// was lost, or the lease is no longer held there. Whether the file was
+    /// placed is not known here.
+    Unanswered,
 }
 
 /// A file the agent asked to publish, as the environment is asked for it.
@@ -357,10 +453,14 @@ enum FencePhase {
 
 /// Most dropped events one lease keeps as records: the room
 /// [`CurrentLease::MAX_RECORDS`] leaves after the most records a lease
-/// otherwise takes (issued, ending, interrupted, cleanup reported). More are
-/// counted in the log, not kept, so recording them is never refused for want
-/// of room (`l9_drops_past_the_kept_bound_are_counted_and_not_kept_over_the_whole_lease`).
-const MAX_KEPT_DROPS: u64 = CurrentLease::MAX_RECORDS as u64 - 4;
+/// otherwise takes (issued, ending, interrupted, cleanup reported, and every
+/// command and fetch still under way, whose end is owed past the lease's
+/// own). More are counted in the log, not kept, so recording them is never
+/// refused for want of room
+/// (`l9_drops_past_the_kept_bound_are_counted_and_not_kept_over_the_whole_lease`).
+const MAX_KEPT_DROPS: u64 =
+    (CurrentLease::MAX_RECORDS - 4 - Lease::MAX_LIVE_COMMANDS - CurrentLease::MAX_ASKED_FETCHES)
+        as u64;
 
 #[derive(Debug)]
 struct FenceState {
@@ -770,6 +870,15 @@ impl LiveLease {
         ask: PublishAsk,
     ) -> Option<EnvironmentFuture<'static, Result<(), PublishFailure>>> {
         self.hold.as_ref().and_then(|hold| hold.publish(ask))
+    }
+
+    /// Ask the environment to place a held file under this lease; see
+    /// [`LeaseHold::fetch`].
+    pub(crate) fn fetch(
+        &self,
+        ask: FetchAsk,
+    ) -> Option<EnvironmentFuture<'static, Result<FetchPlaced, FetchFailure>>> {
+        self.hold.as_ref().and_then(|hold| hold.fetch(ask))
     }
 
     /// The files published under this lease, handed out once; see

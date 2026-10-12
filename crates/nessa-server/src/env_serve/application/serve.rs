@@ -24,6 +24,10 @@
 //!                          ──Collected▶ the lease's artifact answered (artifacts.rs)
 //!                          ──Publish──▶ ledger: publish_asked ──▶ as a harness's publish
 //!                                       ──▶ Published{request} | NotPublished{request}
+//!                          ──Fetch──▶ the lease's fetches (fetches.rs; a host
+//!                                     taking no files refuses each, recorded)
+//!                                     ──▶ FetchAccepted | FetchRefused | Fetched
+//!                          ──Delivered / Undelivered──▶ the lease's fetches
 //!                          ──ReadArtifact──▶ a staged copy waiting for its Collected?
 //!                                            ──▶ ArtifactRead | ArtifactNotRead (artifacts.rs)
 //! a harness publishes ──▶ staged copy ──▶ ledger: published ──▶ Published
@@ -87,14 +91,15 @@
 //! `End`, of a lease whose end is still under way waits for it, rather than
 //! reading a ledger that does not hold it yet.
 use super::artifacts::{ArtifactOutbox, LeaseArtifacts, PublishRequest};
+use super::fetches::{ArtifactInbox, LeaseFetches, NoInbox};
 use super::grants::{grant_for, PeerGrants};
 use super::timer::{timeout, within, Moment, Timer};
 use super::wire::{write_frame, FrameStream};
 use crate::env_serve::domain::{admit_agent, admit_command, Peer, PeerGrant};
 use nessa_protocol::lease::{
-    decode, ArtifactReadRefusal, Cleanup, Collection, CommandEnd, Data, EndingCause,
-    FromEnvironment, GrantRefusal, GrantedTerms, Hello, PublishRefusal, Sandbox, StartFailure,
-    ToEnvironment, Unavailability, KEEPALIVE_INTERVAL, MAX_DATA_BYTES, MAX_STOP_WAIT,
+    decode, ArtifactReadRefusal, Cleanup, Collection, CommandEnd, Data, EndingCause, FetchOutcome,
+    FetchRefusal, FromEnvironment, GrantRefusal, GrantedTerms, Hello, PublishRefusal, Sandbox,
+    StartFailure, ToEnvironment, Unavailability, KEEPALIVE_INTERVAL, MAX_DATA_BYTES, MAX_STOP_WAIT,
     SILENCE_LIMIT,
 };
 use nessa_sdk::application::agent_execution::{
@@ -193,6 +198,19 @@ impl CommandRan {
     }
 }
 
+/// What the gateway's `Fetch` asked for, as it said it: every fetch entry
+/// carries it, so each stands on its own.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FetchAsked {
+    /// Where it goes: absolute, or relative to the workspace.
+    pub(crate) destination: String,
+    /// Its SHA-256, as the gateway named it.
+    pub(crate) digest: String,
+    pub(crate) media_type: String,
+    pub(crate) size: u64,
+}
+
 /// What a refused lease asked for, in the fields its grant would have been
 /// recorded with.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -286,6 +304,33 @@ pub(crate) enum LedgerEntry {
     /// The connection to the gateway was lost before it answered a
     /// published file: what the gateway made of it is not known here.
     Unanswered { lease: String, artifact: u32 },
+    /// The gateway's fetch `request` was taken: its bytes go to part
+    /// `fetch` of the lease's inbox, to be placed as `asked`.
+    FetchAccepted {
+        lease: String,
+        request: String,
+        fetch: u32,
+        #[serde(flatten)]
+        asked: FetchAsked,
+    },
+    /// The last word on the gateway's fetch `request`, which asked for
+    /// `asked`: placed, already placed, or refused, as the gateway is told.
+    /// The only entry of a fetch refused or already placed when asked.
+    Fetched {
+        lease: String,
+        request: String,
+        #[serde(flatten)]
+        asked: FetchAsked,
+        outcome: FetchOutcome,
+    },
+    /// A fetch taken whose bytes never came: the gateway gave up on it, or
+    /// was lost with the lease. Nothing was placed; its part is let go.
+    FetchUnanswered {
+        lease: String,
+        request: String,
+        #[serde(flatten)]
+        asked: FetchAsked,
+    },
     /// A command lease was admitted for `peer` to run `argv` once, for at
     /// most `timeout_ms`: the `asked_timeout_ms`, or shorter as the peer's
     /// grant has it. Nothing encloses it (`sandbox`).
@@ -425,6 +470,7 @@ pub(crate) async fn serve<R, W>(
     runners: Runners,
     ledger: Arc<dyn LeaseLedger>,
     outbox: Arc<dyn ArtifactOutbox>,
+    inbox: Option<Arc<dyn ArtifactInbox>>,
     timings: ServeTimings,
     timer: Arc<dyn Timer>,
 ) where
@@ -456,6 +502,7 @@ pub(crate) async fn serve<R, W>(
         launcher,
         ledger,
         outbox,
+        inbox: inbox.unwrap_or_else(|| Arc::new(NoInbox)),
         timings,
         timer: timer.clone(),
         drops: 0,
@@ -602,6 +649,8 @@ struct Held {
     /// Its publish point and the artifacts in flight under it; `None` when
     /// the point could not be opened.
     artifacts: Option<LeaseArtifacts>,
+    /// The files fetched into its workspace; taken once its end begins.
+    fetches: Option<LeaseFetches>,
     /// When it ends by itself, and how long it was granted for; `None` when
     /// it lasts until ended.
     deadline: Option<(Moment, u64)>,
@@ -644,8 +693,9 @@ struct Served {
     commands: HashMap<String, HeldCommand>,
     /// The gateway said `Revoked`: nothing more is admitted here.
     revoked: bool,
-    /// Set once the gateway is gone: an answer still waiting for room is
-    /// given up on, whatever stopped what it answers.
+    /// Set once the gateway is gone: an answer still waiting for room, a
+    /// command's or a fetch's, is given up on, whatever stopped what it
+    /// answers, so nothing that ends a lease waits on a full queue.
     gone: watch::Sender<bool>,
     /// How this host runs commands; `None` when it is not configured to.
     runner: Option<Arc<dyn CommandRunner>>,
@@ -654,6 +704,9 @@ struct Served {
     launcher: Arc<dyn HarnessLauncher>,
     ledger: Arc<dyn LeaseLedger>,
     outbox: Arc<dyn ArtifactOutbox>,
+    /// Where fetched files arrive; [`NoInbox`] when this host takes none
+    /// (`envServe.artifactsIn` off).
+    inbox: Arc<dyn ArtifactInbox>,
     timings: ServeTimings,
     /// What every wait, the stops' own included, is measured on.
     timer: Arc<dyn Timer>,
@@ -807,6 +860,58 @@ impl Served {
                 path,
                 media_type,
             } => self.publish(lease, request, path, media_type),
+            ToEnvironment::Fetch {
+                lease,
+                request,
+                destination,
+                digest,
+                media_type,
+                size,
+            } => {
+                let asked = FetchAsked {
+                    destination,
+                    digest,
+                    media_type,
+                    size,
+                };
+                match self
+                    .leases
+                    .get(&lease)
+                    .and_then(|held| held.fetches.as_ref())
+                {
+                    Some(fetches) => fetches.ask(request, asked),
+                    // Taken by no lease here: refused, so the gateway does
+                    // not wait for an answer that never comes.
+                    None => {
+                        self.dropped(Some(&lease), None, "fetch");
+                        self.send(FromEnvironment::FetchRefused {
+                            lease,
+                            request,
+                            reason: FetchRefusal::LeaseEnded,
+                        });
+                    }
+                }
+            }
+            ToEnvironment::Delivered { lease, request } => {
+                let placed = self
+                    .leases
+                    .get(&lease)
+                    .and_then(|held| held.fetches.as_ref())
+                    .is_some_and(|fetches| fetches.delivered(&request));
+                if !placed {
+                    self.dropped(Some(&lease), None, "delivered");
+                }
+            }
+            ToEnvironment::Undelivered { lease, request } => {
+                let let_go = self
+                    .leases
+                    .get(&lease)
+                    .and_then(|held| held.fetches.as_ref())
+                    .is_some_and(|fetches| fetches.undelivered(&request));
+                if !let_go {
+                    self.dropped(Some(&lease), None, "undelivered");
+                }
+            }
             ToEnvironment::ReadArtifact {
                 lease,
                 artifact,
@@ -1036,6 +1141,13 @@ impl Served {
                     self.frames.clone(),
                     self.gone.subscribe(),
                 );
+                let fetches = Some(LeaseFetches::new(
+                    &lease,
+                    self.inbox.clone(),
+                    self.ledger.clone(),
+                    self.frames.clone(),
+                    self.gone.subscribe(),
+                ));
                 self.leases.insert(
                     lease.clone(),
                     Held {
@@ -1044,6 +1156,7 @@ impl Served {
                         stopped: HashMap::new(),
                         stops: Vec::new(),
                         artifacts,
+                        fetches,
                         deadline: lease_ms
                             .map(|ms| (self.timer.now() + Duration::from_millis(ms), ms)),
                     },
@@ -1362,6 +1475,12 @@ impl Served {
             .take()
             .map(|artifacts| artifacts.end(cause != EndCause::Asked))
             .unwrap_or_default();
+        // Nothing more is taken or placed under it from here; what is under
+        // way finishes and is answered before its end is.
+        let fetches = held
+            .fetches
+            .take()
+            .map(|fetches| fetches.end(cause == EndCause::Lost));
         let (done, ended) = watch::channel(None);
         // Ends already recorded are the audit's to answer from.
         self.ends.retain(|_, ended| ended.borrow().is_none());
@@ -1387,11 +1506,17 @@ impl Served {
             for read in reads {
                 let _ = read.await;
             }
-            let mut cleanup = if recorded {
+            // A fetch whose entry went unrecorded leaves its end unknown.
+            let fetches_recorded = match fetches {
+                Some(fetches) => fetches.await,
+                None => true,
+            };
+            let mut cleanup = if recorded && fetches_recorded {
                 Cleanup::Confirmed { forced: false }
             } else {
                 Cleanup::Uncertain
             };
+
             for stop in &mut stops {
                 // A stop whose task failed before recording is not known done.
                 let stopped = match stop.cleanup.wait_for(Option::is_some).await {
@@ -1735,7 +1860,8 @@ impl Served {
     /// The gateway is gone: end every lease it held as lost, and wait for
     /// every end under way.
     async fn lose_all(&mut self) {
-        // Said first: nothing waits for room to answer a gateway that is gone.
+        // Said first: nothing waits for room to answer a gateway that is
+        // gone, an end already under way (an expiry's among them) included.
         self.gone.send_replace(true);
         let leases: Vec<_> = self.leases.drain().collect();
         for (lease, held) in leases {
