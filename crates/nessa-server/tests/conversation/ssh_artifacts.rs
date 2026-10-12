@@ -522,11 +522,13 @@ async fn leased_pausing(
                     },
                 })
                 .await;
-            answer.answer(match result {
-                Ok(ArtifactKept::Held) => Collection::Held,
-                Ok(ArtifactKept::AlreadyHeld) => Collection::AlreadyHeld,
-                Err(reason) => Collection::Refused { reason },
-            });
+            answer
+                .answer(match result {
+                    Ok(ArtifactKept::Held) => Collection::Held,
+                    Ok(ArtifactKept::AlreadyHeld) => Collection::AlreadyHeld,
+                    Err(reason) => Collection::Refused { reason },
+                })
+                .await;
             let _ = results.send(result);
         }
     });

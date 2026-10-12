@@ -103,32 +103,58 @@ impl ArtifactReadFailure {
     }
 }
 
+/// Sending one answer to the host: done once the answer is queued for it.
+pub type ArtifactAnswering = Pin<Box<dyn Future<Output = ()> + Send>>;
+
 /// The one answer the host is given about an offer. Dropped unanswered, it
 /// answers that the file was not kept, so the host never waits on nobody.
 pub struct ArtifactAnswer {
-    send: Option<Box<dyn FnOnce(Collection) + Send>>,
+    send: Option<Box<dyn FnOnce(Collection) -> ArtifactAnswering + Send>>,
 }
 
 impl ArtifactAnswer {
-    pub fn new(send: impl FnOnce(Collection) + Send + 'static) -> Self {
+    /// `send` starts sending an outcome; what it returns is done once the
+    /// outcome is queued for the host.
+    pub fn new(send: impl FnOnce(Collection) -> ArtifactAnswering + Send + 'static) -> Self {
         Self {
             send: Some(Box::new(send)),
         }
     }
 
-    pub fn answer(mut self, outcome: Collection) {
+    /// Answer `outcome`, and wait until it is queued for the host. The send
+    /// runs on a task of its own, so it completes even when this wait is
+    /// given up.
+    pub async fn answer(mut self, outcome: Collection) {
         if let Some(send) = self.send.take() {
-            send(outcome);
+            let sending = send(outcome);
+            match tokio::runtime::Handle::try_current() {
+                Ok(runtime) => {
+                    let _ = runtime.spawn(sending).await;
+                }
+                Err(_) => sending.await,
+            }
         }
     }
 }
 
 impl Drop for ArtifactAnswer {
+    /// Not kept: sent on a task of its own, or, outside a runtime, as far
+    /// as it goes at once.
     fn drop(&mut self) {
         if let Some(send) = self.send.take() {
-            send(Collection::Refused {
+            let sending = send(Collection::Refused {
                 reason: CollectionRefusal::NotKept,
             });
+            match tokio::runtime::Handle::try_current() {
+                Ok(runtime) => {
+                    runtime.spawn(sending);
+                }
+                Err(_) => {
+                    if futures_util::FutureExt::now_or_never(sending).is_none() {
+                        tracing::error!("an artifact's answer found no room; it is not sent");
+                    }
+                }
+            }
         }
     }
 }
@@ -168,19 +194,32 @@ pub struct PublishedOutcome {
     pub size: u64,
 }
 
-/// One publish the agent asked for and whose offer has not arrived.
+/// One publish the agent asked for whose outcome has not settled.
 struct Asked {
     /// The turn the call was made in: the one its record names.
     turn: ExecutionId,
     /// The tool call's person, with the call as the request.
     actor: ActionContext,
-    /// Where its outcome goes; `None` once its call stopped waiting.
+    /// Where its outcome goes; `None` once its call stopped waiting, or
+    /// once its offer is being kept, which then holds it.
+    answer: Option<oneshot::Sender<PublishedOutcome>>,
+    /// Whether its offer arrived and is being kept: a second offer naming
+    /// it is not this request's.
+    collecting: bool,
+}
+
+/// Who asked for an offer being kept, taken from [`PublishRequests`].
+struct Asking {
+    turn: ExecutionId,
+    actor: ActionContext,
     answer: Option<oneshot::Sender<PublishedOutcome>>,
 }
 
 /// The publishes a live conversation's agent asked for under its lease,
 /// by lease and tool call, from before the environment is asked until the
-/// offer answering each arrives or the environment says it offers none.
+/// outcome of the offer answering each settles, or the environment says it
+/// offers none. While a request is held, asking it again is a duplicate,
+/// its offer being read included; once it settles, it may be asked again.
 /// Who asked outlives the call's wait: a call that stops waiting still
 /// leaves its person named on a file that arrives after.
 #[derive(Default)]
@@ -215,14 +254,20 @@ impl PublishRequests {
                 turn,
                 actor,
                 answer: Some(answer),
+                collecting: false,
             },
         );
         Some(answered)
     }
 
-    /// The environment offers nothing for `request`: it is let go.
+    /// The environment offers nothing for `request`: it is let go, unless
+    /// its offer is already being kept, whose outcome settles it.
     pub(crate) fn forget(&self, lease: &LeaseId, request: &str) {
-        self.asked().remove(&(lease.clone(), request.to_owned()));
+        let mut asked = self.asked();
+        let key = (lease.clone(), request.to_owned());
+        if asked.get(&key).is_some_and(|asked| !asked.collecting) {
+            asked.remove(&key);
+        }
     }
 
     /// Its call stopped waiting: nobody is told the outcome, and who asked
@@ -233,8 +278,25 @@ impl PublishRequests {
         }
     }
 
-    fn take(&self, lease: &LeaseId, request: &str) -> Option<Asked> {
-        self.asked().remove(&(lease.clone(), request.to_owned()))
+    /// Who asked for `request`, its offer now being kept; `None` when
+    /// nobody here asked, or its first offer is already being kept. It
+    /// stays held, so asking again is a duplicate, until [`Self::settle`].
+    fn take(&self, lease: &LeaseId, request: &str) -> Option<Asking> {
+        let mut asked = self.asked();
+        let asked = asked
+            .get_mut(&(lease.clone(), request.to_owned()))
+            .filter(|asked| !asked.collecting)?;
+        asked.collecting = true;
+        Some(Asking {
+            turn: asked.turn.clone(),
+            actor: asked.actor.clone(),
+            answer: asked.answer.take(),
+        })
+    }
+
+    /// The outcome of `request`'s offer is answered: it is let go.
+    fn settle(&self, lease: &LeaseId, request: &str) {
+        self.asked().remove(&(lease.clone(), request.to_owned()));
     }
 }
 
@@ -310,7 +372,10 @@ impl ArtifactCollector {
             answer,
             request,
         } = offer;
-        let asked = request.map(|request| requests.take(&self.lease, &request));
+        let asked = request
+            .as_ref()
+            .map(|request| requests.take(&self.lease, request));
+        let settles = matches!(asked, Some(Some(_)));
         let (asker, waiter) = match asked {
             None => (Some(Asker::Issuer(self.issuer.clone())), None),
             Some(Some(asked)) => (Some(Asker::Turn(asked.turn, asked.actor)), asked.answer),
@@ -328,7 +393,14 @@ impl ArtifactCollector {
             Ok(ArtifactKept::AlreadyHeld) => Collection::AlreadyHeld,
             Err(reason) => Collection::Refused { reason },
         };
-        answer.answer(outcome);
+        // The host is answered, its answer queued, before the call is; and
+        // the request let go first, so the call answered is free to ask it
+        // again. Only this offer's own outcome settles its request: one
+        // refused as not this request's leaves it held.
+        answer.answer(outcome).await;
+        if let Some(request) = request.filter(|_| settles) {
+            requests.settle(&self.lease, &request);
+        }
         if let Some(waiter) = waiter {
             let (name, digest, size) = described;
             let _ = waiter.send(PublishedOutcome {

@@ -8,11 +8,11 @@
 //! service.close / stop ─▶ LiveLease::close ─▶ Ending ─▶ Agent::close ─▶ Ended | Interrupted
 //! ```
 use super::{
-    ArtifactAnswer, ArtifactBytes, ArtifactChunk, ArtifactOffer, ConversationAgent,
-    ConversationAgents, ConversationAttachments, ConversationCaller, ConversationDeletionBudgets,
-    ConversationDependencies, ConversationError, ConversationLimits, ConversationService,
-    Environment, EnvironmentDeclaration, EnvironmentFuture, EnvironmentLease, Environments,
-    LeaseHold, LeaseRelease, RequestedConversation, SubmissionMode, SubmittedFile,
+    ArtifactAnswer, ArtifactAnswering, ArtifactBytes, ArtifactChunk, ArtifactOffer,
+    ConversationAgent, ConversationAgents, ConversationAttachments, ConversationCaller,
+    ConversationDeletionBudgets, ConversationDependencies, ConversationError, ConversationLimits,
+    ConversationService, Environment, EnvironmentDeclaration, EnvironmentFuture, EnvironmentLease,
+    Environments, LeaseHold, LeaseRelease, RequestedConversation, SubmissionMode, SubmittedFile,
     SubmittedMessage,
 };
 use super::{
@@ -1433,6 +1433,10 @@ struct Asked {
     /// returns (on a multi-threaded runtime): whatever the service must
     /// hold before it asks is proven held by then.
     settled_before_return: AtomicBool,
+    /// When set, the host's answer to an offer is queued only once this
+    /// opens; [`Self::answering`] is said when it begins.
+    answer_gate: Mutex<Option<oneshot::Receiver<()>>>,
+    answering: tokio::sync::Notify,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -1528,10 +1532,22 @@ impl LeaseHold for HostHold {
             // anything it holds for the offer must already be held.
             let name = ask.path.rsplit('/').next().unwrap().to_owned();
             let (kept, settled) = std::sync::mpsc::channel();
+            let gate = asked.answer_gate.lock().unwrap().take();
+            let answering = asked.clone();
             let offered = to
-                .try_send(offer(&name, Some(ask.request), move |outcome| {
-                    let _ = kept.send(outcome);
-                }))
+                .try_send(offer_answered(
+                    &name,
+                    Some(ask.request),
+                    Box::new(move |outcome| {
+                        Box::pin(async move {
+                            answering.answering.notify_one();
+                            if let Some(gate) = gate {
+                                let _ = gate.await;
+                            }
+                            let _ = kept.send(outcome);
+                        })
+                    }),
+                ))
                 .map_err(|_| PublishFailure::Unanswered);
             if offered.is_ok() && asked.settled_before_return.load(Ordering::SeqCst) {
                 tokio::task::block_in_place(|| {
@@ -1696,8 +1712,23 @@ fn offer(
             path: format!("/srv/work/.nessa/{name}"),
         },
         bytes: Box::new(Published(Some(bytes))),
-        answer: ArtifactAnswer::new(answered),
+        answer: ArtifactAnswer::new(move |outcome| {
+            answered(outcome);
+            Box::pin(async {})
+        }),
         request,
+    }
+}
+
+/// As [`offer`], its answer queued only once `answering` is done.
+fn offer_answered(
+    name: &str,
+    request: Option<String>,
+    answering: Box<dyn FnOnce(Collection) -> ArtifactAnswering + Send>,
+) -> ArtifactOffer {
+    ArtifactOffer {
+        answer: ArtifactAnswer::new(answering),
+        ..offer(name, request, |_| {})
     }
 }
 
@@ -2906,6 +2937,112 @@ async fn a_publish_asked_by_the_turns_person_is_held_with_the_call_as_initiator_
         attachments.published.lock().unwrap()[0].0,
         lease.id().as_str()
     );
+}
+
+/// The call is answered only once the host's answer is queued: a host
+/// still being told keeps the call waiting.
+#[tokio::test]
+async fn a_publish_is_answered_only_after_the_hosts_answer_is_queued() {
+    let root = tempfile::tempdir().unwrap();
+    let (host, _publisher) = Host::publishing();
+    let (queue, gate) = oneshot::channel();
+    *host.asked.answer_gate.lock().unwrap() = Some(gate);
+    let host = Arc::new(host);
+    let attachments = Arc::new(MemoryAttachments::default());
+    let (harness, go) = publishing_turn(
+        root.path(),
+        host.clone(),
+        attachments.clone(),
+        PUBLISH_CALL_WAIT,
+    )
+    .await;
+    let mut publishing = {
+        let service = harness.service.clone();
+        let id = harness.id.clone();
+        tokio::spawn(async move {
+            let (_caller, stop) = tokio::sync::watch::channel(false);
+            service
+                .publish_artifact(&id, publish_call("devbox", "a.dmg", "call-1"), stop)
+                .await
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(5), host.asked.answering.notified())
+        .await
+        .expect("the host is being answered");
+    // Kept, but the host's answer is not queued: the call still waits.
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), &mut publishing)
+            .await
+            .is_err()
+    );
+    queue.send(()).unwrap();
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(5), publishing)
+            .await
+            .unwrap()
+            .unwrap(),
+        PublishAnswer::Kept { .. }
+    ));
+    go.send(()).unwrap();
+}
+
+/// A call asked again while its file is being kept is a duplicate; once
+/// that settles, it may be asked again.
+#[tokio::test]
+async fn a_publish_asked_again_while_its_file_is_kept_is_a_duplicate_until_it_settles() {
+    let root = tempfile::tempdir().unwrap();
+    let (host, _publisher) = Host::publishing();
+    let host = Arc::new(host);
+    let attachments = Arc::new(MemoryAttachments::default());
+    let (release, hold) = oneshot::channel();
+    *attachments.hold_record.lock().unwrap() = Some(hold);
+    let (harness, go) = publishing_turn(
+        root.path(),
+        host.clone(),
+        attachments.clone(),
+        PUBLISH_CALL_WAIT,
+    )
+    .await;
+    let first = {
+        let service = harness.service.clone();
+        let id = harness.id.clone();
+        tokio::spawn(async move {
+            let (_caller, stop) = tokio::sync::watch::channel(false);
+            service
+                .publish_artifact(&id, publish_call("devbox", "a.dmg", "call-1"), stop)
+                .await
+        })
+    };
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        attachments.record_entered.notified(),
+    )
+    .await
+    .expect("the file is being kept");
+    assert_eq!(
+        harness
+            .publish_file(publish_call("devbox", "a.dmg", "call-1"))
+            .await,
+        PublishAnswer::Refused(PublishCallRefusal::DuplicateRequest)
+    );
+    assert_eq!(host.asked.asks.lock().unwrap().len(), 1);
+    release.send(()).unwrap();
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(5), first)
+            .await
+            .unwrap()
+            .unwrap(),
+        PublishAnswer::Kept { .. }
+    ));
+    // Settled: the same call may ask again.
+    assert!(matches!(
+        harness
+            .publish_file(publish_call("devbox", "a.dmg", "call-1"))
+            .await,
+        PublishAnswer::Kept { .. }
+    ));
+    assert_eq!(host.asked.asks.lock().unwrap().len(), 2);
+    go.send(()).unwrap();
 }
 
 /// One turn asking for the same file twice, under two calls, leaves one

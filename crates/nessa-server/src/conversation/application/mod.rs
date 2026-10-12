@@ -173,8 +173,8 @@ pub(crate) use environment::{Environment, EnvironmentFuture, PublishAsk, Publish
 // For the adapters, which only the Unix gateway composes (`infrastructure`).
 pub use artifacts::PublishedOutcome;
 pub use artifacts::{
-    ArtifactAnswer, ArtifactBytes, ArtifactChunk, ArtifactOffer, ArtifactReadFailure,
-    ARTIFACT_READ_RESUMES,
+    ArtifactAnswer, ArtifactAnswering, ArtifactBytes, ArtifactChunk, ArtifactOffer,
+    ArtifactReadFailure, ARTIFACT_READ_RESUMES,
 };
 pub(crate) use artifacts::{ArtifactBudget, ArtifactCollector, PublishRequests};
 #[cfg(any(unix, test))]

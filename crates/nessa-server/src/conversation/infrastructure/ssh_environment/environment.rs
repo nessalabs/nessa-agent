@@ -646,7 +646,7 @@ impl LeaseHold for SshHold {
                     )),
                     file,
                     answer: ArtifactAnswer::new(move |outcome| {
-                        answering.collected(&answered, artifact, outcome, unanswered);
+                        answering.collected(&answered, artifact, outcome, unanswered)
                     }),
                     request,
                 };

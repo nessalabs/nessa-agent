@@ -51,7 +51,7 @@
 //! record failing is logged only: it records no transition of any lease.
 use super::audit::{EnvironmentAudit, EnvironmentEvent};
 use super::connector::{ArtifactChannels, LeaseConnection, LeaseConnector};
-use crate::conversation::application::PublishFailure;
+use crate::conversation::application::{ArtifactAnswering, PublishFailure};
 use crate::env::LEASE_PROTOCOL;
 use crate::env_serve::application::FrameStream;
 use futures_util::FutureExt;
@@ -861,39 +861,30 @@ impl HostLink {
     }
 
     /// Tell the host what became of a file it published under `lease`,
-    /// unless the lease is no longer held here. `unanswered` is let go only
-    /// once the answer is queued, so the lease's End, which waits for it,
-    /// always goes after: the host never answers as ended a file this
-    /// gateway kept.
+    /// unless the lease is no longer held here: done once the answer is
+    /// queued. `unanswered` is let go only then, so the lease's End, which
+    /// waits for it, always goes after: the host never answers as ended a
+    /// file this gateway kept.
     pub(crate) fn collected(
         &self,
         lease: &str,
         artifact: u32,
         outcome: Collection,
         unanswered: OwnedRwLockReadGuard<()>,
-    ) {
-        if !self.routes().leases.contains_key(lease) {
-            return;
-        }
+    ) -> ArtifactAnswering {
+        let held = self.routes().leases.contains_key(lease);
+        let frames = self.frames.clone();
         let frame = ToEnvironment::Collected {
             lease: lease.into(),
             artifact,
             outcome,
         };
-        match tokio::runtime::Handle::try_current() {
-            Ok(runtime) => {
-                let frames = self.frames.clone();
-                runtime.spawn(async move {
-                    let _ = frames.send(frame).await;
-                    drop(unanswered);
-                });
+        Box::pin(async move {
+            if held {
+                let _ = frames.send(frame).await;
             }
-            Err(_) => {
-                if self.frames.try_send(frame).is_err() {
-                    tracing::error!("an artifact's answer found no room; it is not sent");
-                }
-            }
-        }
+            drop(unanswered);
+        })
     }
 
     /// What the host recorded of `lease`; `None` when it cannot be had. The
