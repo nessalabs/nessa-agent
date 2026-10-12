@@ -1,5 +1,6 @@
 import type { AgentInstallations } from "../../onboarding"
 import { ComposerDeliveryMode } from "@nessa-ui/react/composer-queue"
+import type { FollowConversationChoices } from "../adapters/agent-choices"
 import type { AttachmentResources } from "../adapters/attachment-resources"
 import * as React from "react"
 import { CircleArrowUp, Download, KeyRound, Link2Off, Square } from "lucide-react"
@@ -67,11 +68,7 @@ import { ChatAttachmentTile } from "@nessa-ui/react/chat-bubbles"
 
 import { approvalLabel, ComposerTray } from "./composer-tray"
 import { ComposerModelPicker } from "./composer-model-picker"
-import {
-  useBindCatalogFallback,
-  useConversationChoices,
-  type ConversationChoices,
-} from "./use-agent-choices"
+import { useBindCatalogFallback, useConversationChoices } from "./use-agent-choices"
 import { AttachmentDropZone } from "./attachment-drop-zone"
 import { AttachmentNotices, AttachmentReadingStatus } from "./attachment-notices"
 import { AttachmentTile } from "./attachment-tile"
@@ -114,7 +111,7 @@ export function App({
   digest,
   onSignOut,
   sessionError,
-  loadConversationChoices,
+  followConversationChoices,
   agentInstallations,
   onProviderSignIn,
   canSignInToProvider,
@@ -136,7 +133,7 @@ export function App({
   digest: (bytes: Blob) => Promise<string>
   onSignOut?: () => void
   sessionError?: string
-  loadConversationChoices: () => Promise<ConversationChoices>
+  followConversationChoices: FollowConversationChoices
   onProviderSignIn?: (provider: "claude" | "codex") => Promise<void>
   canSignInToProvider?: () => Promise<boolean>
   agentInstallations?: AgentInstallations
@@ -146,7 +143,7 @@ export function App({
   const [surface, toggleSurface] = useSurface()
   const edge = useEdgeReveal()
   const chat = useConversation()
-  const choices = useConversationChoices(chat.gatewayAvailable, loadConversationChoices)
+  const choices = useConversationChoices(chat.gatewayAvailable, followConversationChoices)
   const selectedAgent =
     choices?.catalog.agents.find(
       (agent) => agent.agent === chat.active.selection?.agent,

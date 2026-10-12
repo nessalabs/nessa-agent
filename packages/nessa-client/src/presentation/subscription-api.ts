@@ -2,6 +2,7 @@ import type { RpcRequester } from "../application/session-port.js"
 import type { ConnectionState } from "../application/managed-session.js"
 import { passiveReadTiming, ProductEvent, ProductMethod } from "../generated/product.js"
 import type {
+  AgentsListResult,
   ConversationListResult,
   ConversationSubscriptionEnded,
   ConversationView,
@@ -9,6 +10,7 @@ import type {
 } from "../generated/product.js"
 import { conversationIdPattern } from "../protocol/conversation-validate.js"
 import {
+  agentsListedFrame,
   endedFrame,
   framedSubscription,
   listedFrame,
@@ -46,6 +48,13 @@ export type ListSubscriptionHandlers = {
   ended(end: SubscriptionEnd): void
 }
 
+export type AgentsSubscriptionHandlers = {
+  /** Replace what is held with this catalog. */
+  catalog(catalog: AgentsListResult): void
+  /** Called once; nothing of the subscription follows. */
+  ended(end: SubscriptionEnd): void
+}
+
 /** A live subscription on this connection. */
 export interface Subscription {
   readonly id: string
@@ -53,7 +62,7 @@ export interface Subscription {
   close(): Promise<void>
 }
 
-/** Replay-to-live views and lists. Each lives on the connection it was made on;
+/** Replay-to-live views and lists, and the agent catalog. Each lives on the connection it was made on;
  * when that connection is lost it ends `disconnected`, and the caller subscribes
  * again — a view from the last cursor it applied.
  *
@@ -74,6 +83,13 @@ export interface SubscriptionApi {
     handlers: ListSubscriptionHandlers,
     options?: { archived?: boolean; signal?: AbortSignal },
   ): Promise<Subscription>
+  /** Follow the gateway's agent catalog: the catalog `agents.list` answers,
+   * sent first and again whenever a paired environment connects,
+   * disconnects or is revoked. Asks the same grant `agents.list` does. */
+  agents(
+    handlers: AgentsSubscriptionHandlers,
+    options?: { signal?: AbortSignal },
+  ): Promise<Subscription>
 }
 
 /** What the API needs of the managed session: requests, events, and its state. */
@@ -84,6 +100,8 @@ export interface SubscriptionPort extends RpcRequester {
 
 type Live = {
   event: string
+  /** The method that stops it: the one beside the method that made it. */
+  stop: string
   /** Check a frame; the returned delivery hands it to the caller. */
   check(payload: unknown): () => void
   ended(end: SubscriptionEnd): void
@@ -127,8 +145,8 @@ export function createSubscriptionApi(session: SubscriptionPort): SubscriptionAp
     live.delete(id)
     entry.ended(end)
   }
-  const unsubscribe = (id: string) =>
-    session.request(ProductMethod.ConversationUnsubscribe, { subscriptionId: id }).then(
+  const unsubscribe = (id: string, stop: string) =>
+    session.request(stop, { subscriptionId: id }).then(
       () => undefined,
       // Already ended, or the connection is gone with it.
       () => undefined,
@@ -148,7 +166,7 @@ export function createSubscriptionApi(session: SubscriptionPort): SubscriptionAp
       deliver = entry.check(payload)
     } catch {
       live.delete(id)
-      void unsubscribe(id)
+      void unsubscribe(id, entry.stop)
       entry.ended({ reason: "invalid_frame" })
       return
     }
@@ -159,6 +177,9 @@ export function createSubscriptionApi(session: SubscriptionPort): SubscriptionAp
   )
   session.onEvent(ProductEvent.ConversationListed, (payload) =>
     route(ProductEvent.ConversationListed, payload),
+  )
+  session.onEvent(ProductEvent.AgentsListed, (payload) =>
+    route(ProductEvent.AgentsListed, payload),
   )
   session.onEvent(ProductEvent.ConversationSubscriptionEnded, (payload) => {
     let ended: ConversationSubscriptionEnded
@@ -214,7 +235,7 @@ export function createSubscriptionApi(session: SubscriptionPort): SubscriptionAp
       close: async () => {
         if (live.get(subscriptionId) !== entry) return
         live.delete(subscriptionId)
-        await unsubscribe(subscriptionId)
+        await unsubscribe(subscriptionId, entry.stop)
       },
     }
   }
@@ -233,6 +254,7 @@ export function createSubscriptionApi(session: SubscriptionPort): SubscriptionAp
             : { conversationId, after: options.after },
           {
             event: ProductEvent.ConversationView,
+            stop: ProductMethod.ConversationUnsubscribe,
             check: (payload) => {
               const frame = viewedFrame(payload, conversationId)
               return () => handlers.view(frame)
@@ -251,6 +273,7 @@ export function createSubscriptionApi(session: SubscriptionPort): SubscriptionAp
           options.archived === undefined ? {} : { archived },
           {
             event: ProductEvent.ConversationListed,
+            stop: ProductMethod.ConversationUnsubscribe,
             check: (payload) => {
               const list = listedFrame(payload, archived)
               return () => handlers.list(list)
@@ -261,5 +284,22 @@ export function createSubscriptionApi(session: SubscriptionPort): SubscriptionAp
         ),
       )
     },
+    agents: (handlers, options = {}) =>
+      gated("agents", options.signal, () =>
+        open(
+          ProductMethod.AgentsSubscribe,
+          {},
+          {
+            event: ProductEvent.AgentsListed,
+            stop: ProductMethod.AgentsUnsubscribe,
+            check: (payload) => {
+              const catalog = agentsListedFrame(payload)
+              return () => handlers.catalog(catalog)
+            },
+            ended: (end) => handlers.ended(end),
+          },
+          options.signal,
+        ),
+      ),
   }
 }

@@ -505,12 +505,12 @@ impl HostLink {
     /// whichever comes first. A revocation that cannot be recorded still
     /// ends and closes everything, but settles none of those leases as
     /// confirmed. Asked again, or of a closed connection, nothing more
-    /// happens.
-    pub(crate) fn revoke(self: &Arc<Self>, drain: Duration) {
+    /// happens. Answers whether this call revoked it.
+    pub(crate) fn revoke(self: &Arc<Self>, drain: Duration) -> bool {
         let (granted, carried) = {
             let mut routes = self.routes();
             if routes.closed || routes.revoked {
-                return;
+                return false;
             }
             routes.revoked = true;
             // A lease whose grant is still being answered is not one the
@@ -583,6 +583,7 @@ impl HostLink {
             }
             link.close();
         });
+        true
     }
 
     /// Each harness lease on this revoked connection ends as revoked,

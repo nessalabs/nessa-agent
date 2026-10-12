@@ -438,6 +438,79 @@ sequenceDiagram
   those leases as confirmed; one the environment cannot record still
   stops everything and answers `uncertain`.
 
+### The agent catalogue follows the connected environments (row I10)
+
+Part I-3. `agents.list` names the paired environments connected when it is
+asked, so it is right when read, but a surface that read it once kept
+offering an environment that had gone and never offered one that came. The
+catalogue now has a subscription, with a change source of its own.
+
+- **The count of changes is the environments' fact.** `PeerEnvironments`
+  publishes it (`connections()`, a `watch` counter), and each paired
+  environment moves it where its connection changes, after the change is
+  made: when a connection is admitted (it takes its place in `serving`),
+  when one ends (`serve` sees it ended), and when one is revoked
+  (`HostLink::revoke`, which says whether this call revoked it, so a
+  revocation asked twice moves it once). Which environments are connected is
+  still read from their connections; nothing keeps a second list. A
+  revoked environment moves it twice, once when revoked and once when its
+  connection ends; a connection that takes another's place moves it with the
+  list unchanged.
+- **The socket only watches it.** `agents.subscribe` is one more target of
+  the [record subscriptions](../record-subscriptions.md) machinery (rows
+  AC1–AC8 there). Its first frame follows the reply, as every subscription's
+  does; then each move of the count reads the catalogue again, the same
+  function `agents.list` answers through (`agents_catalog_now`), and sends
+  `agents.listed {subscriptionId, catalog}` when it differs from the last
+  one sent. Moves while a frame waits for the writer are one read after it,
+  since a `watch` receiver wakes once however many moves it missed.
+- **The conversation catalogue does not move.** Its head and watches are
+  about conversations, and moving them for an environment would move every
+  paired reader's head for a fact it was never granted (row H9). The agent
+  catalogue's subscription registers no conversation source, and nothing in
+  `PeerEnvironments` writes the conversation store.
+- **Who may follow it** is who may read it: the method asks the gateway's
+  read grant (`server.read`), as `agents.list` does, before it registers
+  anything and again before every read, so a grant lost while it is followed
+  ends it `refused` before its next frame. A peer gateway's credential holds
+  `conversation.read` or `environment.serve` and never `server.read`, so a
+  peer cannot learn which environments are connected.
+- **Bounds and ending.** The catalogue is one target, so a connection
+  follows it at most once (a second is `subscription_duplicate`).
+  `agents.unsubscribe` stops it, asking the same grant; it and
+  `conversation.unsubscribe` each answer `unknown_subscription` for the
+  other's. It ends with its connection, and `source_closed` if the
+  environments' source closes. A gateway that pairs no environments has no
+  source, and its first frame is its last.
+- **The panel holds it.** The pickers' choices follow the catalogue
+  (`followAgentChoices`) while the gateway is available, and stop it on
+  unmount; a follow that ends is opened again at the pace the panel's other
+  follows keep, at once after `lagging`.
+
+```mermaid
+sequenceDiagram
+    participant E as Paired environment
+    participant P as PeerEnvironments (serve, HostLink::revoke)
+    participant S as Socket subscription (agents.subscribe)
+    participant UI as Panel (followAgentChoices)
+    UI->>S: agents.subscribe
+    S->>S: admit server.read, register connections()
+    S->>S: read agents_catalog_now
+    S-->>UI: reply {subscriptionId}
+    S-->>UI: agents.listed {catalog}
+    E->>P: openEnvironment, hello
+    P->>P: connection in serving, then count moved
+    P-->>S: wake
+    S->>S: admit server.read, read agents_catalog_now
+    S-->>UI: agents.listed {catalog with peer:#lt;key#gt;}
+    P->>P: revoked: no longer serving, then count moved
+    P-->>S: wake
+    S-->>UI: agents.listed {catalog without it}
+    P->>P: its connection ended, count moved
+    P-->>S: wake
+    S->>S: the same catalog: nothing sent
+```
+
 ### Staying dialed in
 
 Part 1c is the environment's own side: two commands on the machine that
@@ -720,6 +793,7 @@ Each row has at least one test.
 | I7 | The environment's owner grants a peer `maxLeaseMs`; one of its agent leases outlives it, or is ended as the deadline passes, or its expiry cannot be recorded, or its connection is lost first; a command lease under the same grant; a host says it is ending a lease the gateway does not hold | E grants the lease with `leaseMs`, records it, and at the deadline (not a moment before, and however continuously the gateway sends) records `expiring`, stops the harness, records `ended` with cause `expired` and says `Ending`; the silence bound still runs from the gateway's last frame; a Start read after the deadline starts nothing; an answer held up on a full output queue does not hold the expiry back, nor does one lease's `Ending` waiting for room hold another lease's expiry back, due at once or later, nor a lease's own `Granted` waiting for room hold back its expiry; a lease due as the gateway is taken as gone is expired, not lost; a file still in flight is recorded unanswered, never refused as the lease ending; the gateway's End is answered with that cleanup; an End and the deadline at once end the lease once; without a limit nothing expires and the wait is only the silence bound; an expiry that cannot be recorded still stops and answers `uncertain`; after the connection is lost nothing more is recorded; a command is bounded by its own timeout, granted no `leaseMs`; G records the deadline as its clock read before the Grant plus `leaseMs` (the earliest E's can be), and on `Ending` records the lease ending as expired by the system and then ended with the cleanup, or interrupted with none; an `Ending` for a lease not held, or for a command's lease, is dropped and recorded; a command answer carrying `leaseMs` is refused as the environment's `EnvironmentNotGranted`; `--max-lease` writes grants.json as version 2, version 1 still reads, and the audit's operation, before and after carry it | `a_lease_past_its_granted_duration_is_stopped_recorded_expired_and_said`; `an_end_and_a_deadline_at_once_end_the_lease_once`; `a_lease_with_no_max_never_expires`; `an_expiry_that_cannot_be_recorded_still_stops_and_answers_uncertain`; `a_deadline_after_the_connection_is_lost_records_nothing_more`; `a_command_is_bounded_by_its_timeout_not_the_max_lease`; `max_lease_is_written_as_version_2_and_version_1_still_reads`; `a_granted_duration_is_recorded_as_the_deadline`; `an_environment_expiry_is_recorded_ending_then_ended_with_its_cleanup`; `an_expiry_whose_end_goes_unanswered_is_interrupted`; `an_ending_for_a_lease_not_held_is_dropped_with_evidence`; `an_ending_for_a_command_lease_is_dropped_with_evidence`; `a_gateway_sending_without_pause_cannot_put_off_an_expiry`; `a_reply_blocked_on_a_full_output_queue_does_not_hold_back_an_expiry`; `two_leases_due_at_once_both_expire_at_the_deadline`; `staggered_deadlines_each_expire_at_their_own`; `a_lease_granted_while_the_gateway_reads_nothing_expires_at_its_deadline`; `a_lease_due_as_the_gateway_falls_silent_is_expired_not_lost`; `a_granted_duration_is_recorded_on_the_issued_lease`; `a_file_in_flight_when_its_lease_expires_is_left_unanswered`; `i5_a_narrowed_command_is_recorded_as_granted_and_a_wider_one_is_refused`; `a_paired_environment_expires_a_lease_and_both_sides_record_it`; `a_grant_writes_intended_then_written`; `env_grant_names_agents_or_every_agent_and_commands_with_their_longest_run`; `a_grant_names_its_sandbox_and_its_answer_the_granted_terms` |
 | I8 | The owner revokes a paired environment's credential while it is connected, idle or running a lease; the revocation races an expiry or a grant; either side cannot record it | Without a lease being asked, the gateway sees it at its next check (each keepalive interval), refuses new leases, harness starts and publishes there (a command run after it is answered never started, holding nothing) and drops the environment from the connected list, records `revoked` with the leases the host granted (and one more `revoked` for a lease granted after, its Grant sent before), queues `Revoked` before any lease is seen ending so every End follows it, ends each harness lease as revoked by the system (`environment_revoked`), and says `Revoked`; the environment records `revoking` naming the gateway, stops everything, records `ended` with cause `revoked`, stops a running command (its `Ran` answers), never writing `revoking` after a command's own recorded end, and ends an unrun one holding nothing, refuses anything more as `revoked` (never `not_granted`), never waits on a gone gateway to say a command's `Ran` whatever stopped it, and answers each `End` with that cleanup; the gateway records the lease ending (revoked) then ended with that cleanup, or interrupted with none; the connection closes once every lease is let go, or at the silence bound when one is never ended; the first cause known is kept on each side, and the environment ends an expired lease once; said or asked twice, it acts once; an unrecordable revocation still ends everything, harness and command leases unconfirmed on the gateway and `uncertain` on the environment; the next dial is refused | `a_paired_environment_revoked_mid_lease_ends_it_on_both_sides_and_closes`; `an_idle_paired_environment_is_closed_once_revoked`; `a_paired_environment_dials_in_serves_and_stops_at_revocation`; `a_revoked_link_ends_each_lease_as_revoked_and_closes_once_they_are_ended`; `a_revoked_link_closes_at_its_bound_when_a_lease_is_never_ended`; `a_revocation_whose_audit_fails_leaves_its_leases_unconfirmed`; `a_lease_granted_after_its_revocation_is_recorded_revoked_on_its_own`; `a_command_run_after_its_revocation_is_answered_never_started`; `a_command_whose_end_is_recorded_is_not_revoked_while_its_ran_waits_for_room`; `a_lease_ending_for_one_cause_keeps_it_when_the_other_comes`; `a_revoked_gateway_has_every_lease_ended_recorded_revoked_and_its_ends_answered`; `a_revocation_that_cannot_be_recorded_still_stops_and_answers_uncertain`; `a_revocation_after_an_expiry_ends_the_lease_once_as_expired`; `an_environment_revocation_is_recorded_ending_then_ended_with_its_cleanup`; `a_revocation_whose_end_goes_unanswered_is_interrupted`; `every_frame_round_trips_and_names_its_lease` |
 | I9 | A paired environment's harness publishes a file, or the gateway asks it to publish one for the agent; the gateway reads it over the connection; the connection is lost mid-read, or the staged copy is cut short; the gateway reads a range of an artifact not waiting for its answer, or more ranges than the bound | The file's bytes come over the lease frames, at most four 64 KiB ranges of one file unanswered, no artifact channel opened; verified by digest and held with the lease as cause; E records `published` then `collected` (held) and answers the harness `held`, and lets the copy go. A loss mid-read refuses the file `leaseEnded` with nothing held, E records it `unanswered`; a copy cut short is refused `mismatch`. E answers only a copy staged under that lease and still unanswered (else `notStaged`, and a lease not held is a recorded drop), clamps a range to 64 KiB, answers short or empty at the copy's end, refuses a fifth read of one artifact `busy` while four are read or wait for the writer (a gateway reading nothing holds no more), stops a lease's reads at its end so none answers after `Ended`, an unreadable copy `unreadable`, and one let go while it was read `notStaged`; after `Revoked`, a read of a file it had offered is `notStaged` | `a_paired_environment_publishes_a_file_and_the_gateway_reads_it_back`; `a_paired_connection_carries_a_published_file_on_its_lease_frames_and_it_verifies`; `a_paired_lease_lost_mid_read_fails_as_ended_and_leaves_no_partial_hold`; `a_staged_copy_cut_short_mid_read_on_a_paired_connection_is_a_mismatch`; `a_staged_copy_is_read_by_range_only_while_it_waits_for_its_answer`; `reads_past_the_bound_are_refused_busy_and_an_unreadable_copy_is_said`; `a_read_after_the_gateway_revoked_is_answered_not_staged`; `a_copy_let_go_while_it_is_read_is_answered_not_staged`; `no_read_answers_after_its_lease_ended`; `a_gateway_that_reads_nothing_holds_a_bounded_number_of_answers`; `an_artifact_read_names_its_range_and_its_answer_the_bytes_or_why_not`; `every_frame_round_trips_and_names_its_lease` |
+| I10 | A surface follows the agent catalogue (`agents.subscribe`) while a paired environment connects, its connection ends, it connects again and is revoked; a change leaves the catalogue as it was; the follower's grant is lost; it subscribes twice, or unsubscribes with the other kind's method | `PeerEnvironments::connections` moves once each time a connection is admitted and once each time one ends, and once more when one is revoked, each after the connected list has changed; the subscription sends the catalogue `agents.list` answers then, after its reply and again on each move, and nothing when it is the same; moves while a frame waits are one frame; the conversation catalogue's head and list do not move; it is admitted as `agents.list` is (`server.read`, which no peer's credential holds), and a lost grant ends it `refused`; a second is `subscription_duplicate`; each unsubscribe answers `unknown_subscription` for the other's; it ends with its socket, and `source_closed` with its source; the panel's choices replace the list on each frame and stop the subscription on unmount | `connection_changes_are_said_as_a_paired_environment_connects_ends_and_is_revoked`; `the_agent_catalog_is_sent_again_as_paired_environments_come_and_go`; `a_gateway_pairing_no_environments_sends_its_catalog_once`; `changes_while_a_catalog_frame_waits_collapse_into_one_frame`; `paired_environments_coming_and_going_never_move_the_conversation_catalogue`; `a_second_agent_catalog_subscription_is_a_duplicate`; `following_the_agent_catalog_is_admitted_as_reading_it_is`; `each_unsubscribe_stops_only_its_own_kind`; `the_environments_source_closing_ends_the_catalog_subscription`; `an_agent_catalog_frame_is_the_generated_shape`; `replaces the choices with each catalog the follow sends, and stops it on unmount` (`src/panel/ui/use-agent-choices.test.ts`) |
 | H10 | A registry whose owner membership is disabled or not an admin | Refused on open (`owner_membership`). The pairing initiator's membership is what keeps a grantor live; the owner's is the one the registry pins | `a_registry_whose_owner_is_not_an_active_admin_does_not_open` |
 
 ## The dialing side
@@ -1187,21 +1261,12 @@ the client and gives the head an access path by receiver
 - **A peer has no catalogue watch.** It polls its catalogue head. A watch
   that wakes only on changes to its own granted rows needs per-receiver
   notices, which nothing builds yet.
-- **The agent catalogue does not refresh itself when a paired environment
-  connects, disconnects or is revoked.** `agents.list` adds the
-  environments connected at the moment it is asked, so it is right when
-  read, and a revoked one leaves it at once (row I8). But nothing tells a
-  surface it changed: `agents.list` is a request, not a subscription, and
-  the panel reads it once. The catalogue change source that does exist, the
-  conversation catalogue's head and its watches, is about conversations,
-  and moving it for an environment would move every paired reader's head
-  for a fact it was never granted (row H9). Doing this needs a change
-  source of its own: `PeerEnvironments` would publish a revision (a
-  `watch` counter, bumped when a connection is admitted, when one ends, and
-  when one is revoked), the product socket would offer a subscription to
-  the agent catalogue that sends the catalogue again on each revision, and
-  the panel's choices hook would hold that subscription instead of reading
-  once. That is a new client contract, so it is its own change.
+- **A connection whose writes fail leaves the agent catalogue late.** It
+  stops serving at once, so `agents.list` leaves it out from then on, but
+  the count of connection changes moves only when its connection ends,
+  which the gateway sees when the host's side closes or falls silent, at
+  most the silence bound (45 s) later. Until then a subscriber still shows
+  it, and a conversation started there is refused unreachable (row I10).
 
 - **The owner's Settings › Linked devices lists a peer's credential** among
   the devices, since both are pairing-bound credentials. Telling them apart
