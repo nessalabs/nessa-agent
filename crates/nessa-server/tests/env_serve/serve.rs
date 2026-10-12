@@ -3054,6 +3054,45 @@ async fn a_lease_past_its_granted_duration_is_stopped_recorded_expired_and_said(
 }
 
 #[tokio::test]
+async fn a_stop_after_an_expiry_is_answered_with_what_that_end_took() {
+    let timer = Arc::new(ManualTimer::default());
+    let mut gateway = expiring(timer.clone(), Arc::new(MemoryLedger::default()));
+    gateway.started_expiring(LEASE).await;
+    timer.advance(MAX_LEASE);
+    assert_eq!(
+        gateway.said().await,
+        FromEnvironment::Ending {
+            lease: LEASE.into(),
+            cause: EndingCause::Expired,
+        }
+    );
+    // The gateway closes its agent and stops the harness the host is
+    // already stopping: answered once that stop is done, not as unheld.
+    gateway
+        .send(ToEnvironment::Stop {
+            lease: LEASE.into(),
+            channel: 1,
+            grace_ms: 10,
+            kill_ms: 100,
+        })
+        .await;
+    assert_eq!(
+        gateway.said().await,
+        FromEnvironment::Stopped {
+            lease: LEASE.into(),
+            channel: 1,
+            cleanup: Cleanup::Confirmed { forced: false },
+        }
+    );
+    assert_eq!(gateway.stopped.load(Ordering::SeqCst), 1);
+    assert!(!gateway
+        .ledger
+        .entries()
+        .iter()
+        .any(|entry| matches!(entry, LedgerEntry::Dropped { .. })));
+}
+
+#[tokio::test]
 async fn an_end_and_a_deadline_at_once_end_the_lease_once() {
     let timer = Arc::new(ManualTimer::default());
     let mut gateway = expiring(timer.clone(), Arc::new(MemoryLedger::default()));

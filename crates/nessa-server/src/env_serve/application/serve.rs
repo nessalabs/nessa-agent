@@ -704,6 +704,16 @@ impl Served {
                                 .await;
                         });
                     }
+                    // Its lease is ending here (it expired): the stop is
+                    // answered with what that end took, never as holding
+                    // nothing while its harness may still be stopping.
+                    None if self.ends.contains_key(&lease) => {
+                        self.answer_ended(lease, move |lease, cleanup| FromEnvironment::Stopped {
+                            lease,
+                            channel,
+                            cleanup,
+                        });
+                    }
                     None => {
                         self.dropped(Some(&lease), Some(channel), "stop");
                         // Nothing runs as that harness here: said, so the
