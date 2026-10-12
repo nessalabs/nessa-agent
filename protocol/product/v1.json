@@ -1262,10 +1262,19 @@
         },
         "stopsTurn": {
           "type": "boolean",
-          "description": "True when the only refusal this agent offered stops the turn. The pending line and the notice say that, rather than that the turn continues without the tool."
+          "description": "True when the only refusal this agent offered stops the turn; never true for an allow. The pending line and the notice say that, rather than that the turn continues without the tool."
         }
       },
-      "required": ["waitMs", "dueAtMs", "effect", "reason", "stopsTurn"]
+      "required": ["waitMs", "dueAtMs", "effect", "reason", "stopsTurn"],
+      "allOf": [
+        {
+          "if": {
+            "properties": { "effect": { "const": "allow" } },
+            "required": ["effect"]
+          },
+          "then": { "properties": { "stopsTurn": { "const": false } } }
+        }
+      ]
     },
     "ConversationPermission": {
       "type": "object",

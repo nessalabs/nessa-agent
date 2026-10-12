@@ -209,6 +209,11 @@ if (validateDeadline({ ...deadline, dueAtMs: Number.MAX_SAFE_INTEGER + 1 }))
   throw new Error(
     "Product permission deadline accepts a dueAtMs a client cannot read exactly",
   )
+// Only a refusal can stop the turn.
+if (!validateDeadline({ ...deadline, stopsTurn: true }))
+  throw new Error("Product permission deadline rejects a refusal that stops the turn")
+if (validateDeadline({ ...deadline, effect: "allow", stopsTurn: true }))
+  throw new Error("Product permission deadline accepts an allow that stops the turn")
 // A tool's MCP identity and structured result: optional, bounded, and closed.
 const validateTool = ajv.getSchema(`${schema.$id}#/$defs/ConversationTool`)
 const tool = {

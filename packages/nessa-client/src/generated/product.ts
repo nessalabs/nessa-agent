@@ -549,7 +549,7 @@ export interface ConversationPermissionDeadline {
   effect: ConversationPermissionOptionEffect
   /** Past-tense reason recorded if the deadline wins. A pending review does not show this sentence; it builds a line from the outcome and the wait. */
   reason: string
-  /** True when the only refusal this agent offered stops the turn. The pending line and the notice say that, rather than that the turn continues without the tool. */
+  /** True when the only refusal this agent offered stops the turn; never true for an allow. The pending line and the notice say that, rather than that the turn continues without the tool. */
   stopsTurn: boolean
 }
 /** A pending review with its complete offered choices. */
