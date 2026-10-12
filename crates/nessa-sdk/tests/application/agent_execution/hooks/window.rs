@@ -197,6 +197,28 @@ fn oversized_events_spend_event_slots_so_older_events_leave_the_window() {
 }
 
 #[test]
+fn an_omitted_prefix_longer_than_the_cap_counts_as_omitted_text() {
+    let cap = InvocationObservationWindow::MAX_EVENTS;
+    let events: Vec<_> = (0..cap * 3)
+        .map(|index| tool(&format!("t-{index}")))
+        .collect();
+    let view = window(&events);
+    assert_eq!(view.included_events(), cap);
+    assert!(
+        view.omitted_text(),
+        "an unchecked prefix must not read as text-free"
+    );
+    assert!(view.contains_phrase("anything").is_inconclusive());
+    let checked: Vec<_> = (0..cap * 2)
+        .map(|index| tool(&format!("t-{index}")))
+        .collect();
+    assert!(
+        !window(&checked).omitted_text(),
+        "a prefix inside the cap is checked exactly"
+    );
+}
+
+#[test]
 fn thinking_is_visible_and_spends_the_same_budget() {
     let events = [
         thought("SEC"),

@@ -2008,7 +2008,12 @@ impl Agent {
         outcome: RefusalOutcome,
     ) -> Result<(), AgentError> {
         let (id, attribution, explanation) = hook_attribution(event, index, reason, outcome)?;
-        if let Some(option_id) = deny_option(event) {
+        // Only a continue is an answer. A terminal outcome withdraws the review,
+        // so no answer, and nothing an adapter could replay, carries one.
+        let deny = (outcome == RefusalOutcome::Continue)
+            .then(|| deny_option(event))
+            .flatten();
+        if let Some(option_id) = deny {
             self.answer_permission(PermissionAnswer {
                 attribution,
                 execution_id: event.execution_id().clone(),

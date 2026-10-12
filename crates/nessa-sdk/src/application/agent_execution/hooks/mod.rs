@@ -6,7 +6,7 @@
 //! ToolVerdict::Allow --> retain the review
 //! ToolVerdict::Stopped --> retain, do not publish, do not answer
 //! ToolVerdict::refuse(_, Continue) --> retain, Agent answers the provider's deny option as the hook
-//! ToolVerdict::refuse(_, EndTurn) --> retain, Agent answers a deny or withdraws as the hook, then cancels the turn when the binding can
+//! ToolVerdict::refuse(_, EndTurn) --> retain, withdraw as the hook (hook-refusal.end_turn), then cancel the turn when the binding can
 //! ToolVerdict::refuse(_, CloseSession) --> retain, withdraw as the hook, close with PolicyRefusal
 //! Agent dispatch -> before hooks -> ProviderSessionBackend -> after hooks -> caller
 //! ```

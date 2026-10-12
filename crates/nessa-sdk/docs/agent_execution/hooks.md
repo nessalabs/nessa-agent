@@ -53,7 +53,8 @@ An event larger than 64 KiB is omitted whole, and the walk continues past it.
 That event still spends one of the 256 event slots, so the walk never sizes or
 copies more than 256 events.
 The window reports an omitted prefix, omitted text, a cut text sequence, and an
-oversized omission. `contains_phrase` treats adjacent chunks of the same kind
+oversized omission. Only the newest 256 omitted events are checked for text; a
+longer omitted prefix counts as omitted text. `contains_phrase` treats adjacent chunks of the same kind
 and message identity as one sequence, so a phrase split across chunk boundaries
 still matches. Messages that both lack an id share that identity. A miss is
 `Absent` only when no text was left out; otherwise it is `Inconclusive`. A hook
@@ -90,8 +91,10 @@ at 1024 bytes, and the outcome that was applied. A timeout or a busy refusal
 has no index. A continue with no deny option is an end-turn when
 the binding can cancel one turn, and continue when it cannot. The review is
 withdrawn as the hook either way, so the provider is not left waiting.
-`ToolVerdict::refuse(_, EndTurn)` answers the deny option when one is offered, and withdraws
-the pending review when none is. It then cancels the turn when the binding can.
+`ToolVerdict::refuse(_, EndTurn)` withdraws the pending review as the hook,
+naming the outcome, and then cancels the turn when the binding can. Only a
+continue is ever an answer, and the execution controller rejects a hook answer
+with any other outcome, so no answer carries a terminal outcome to replay.
 An end-turn the binding cannot perform is recorded as continue and does not
 cancel the turn. It does not close the session. The answer, the withdrawal,
 and the turn cancel use the agent's control path. If the answer or the

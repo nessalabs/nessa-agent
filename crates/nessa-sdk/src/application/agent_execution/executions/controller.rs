@@ -388,9 +388,11 @@ impl ExecutionController {
     }
     /// Resolves `answer` once against its execution, review, and offered option.
     /// Returns StalePermission if it cannot match a pending review. A hook basis
-    /// paired with anything other than the request-scoped deny option, or
-    /// with an actor other than [`ApprovalAttribution::hook`] for this review,
-    /// returns InvalidInput and leaves the review pending. The resolution
+    /// paired with anything other than the request-scoped deny option, with
+    /// an actor other than [`ApprovalAttribution::hook`] for this review, or
+    /// with an outcome other than continue, returns InvalidInput and leaves
+    /// the review pending. The runner withdraws a review it refuses with
+    /// end-turn or close-session, so no answer carries those outcomes. The resolution
     /// retains this controller’s session, original input and attribution; the adapter must audit selection
     /// before attempting delivery and audit that delivery independently of waiters.
     pub fn answer_permission(
@@ -401,6 +403,12 @@ impl ExecutionController {
             if answer.attribution != ApprovalAttribution::hook(&answer.id, refusal.clone())? {
                 return Err(AgentError::InvalidInput(
                     "a hook refusal is attributed to the permission-review hook".into(),
+                ));
+            }
+            if refusal.outcome() != &RefusalOutcome::Continue {
+                return Err(AgentError::InvalidInput(
+                    "a hook answer records only continue; a terminal refusal withdraws the review"
+                        .into(),
                 ));
             }
             let decision = self
@@ -876,6 +884,45 @@ mod tests {
                 ApprovalBasis::Explicit,
             ),
         }
+    }
+    #[test]
+    fn a_hook_answer_with_a_terminal_outcome_is_rejected_and_stays_pending() {
+        use crate::application::agent_execution::permissions::HookRefusal;
+        let mut controller = controller();
+        let execution = controller.active_execution_id().unwrap().clone();
+        let deny = PermissionOptions::new(
+            vec![PermissionOption::new(
+                PermissionOptionId::new("deny").unwrap(),
+                String::from("Deny"),
+                PermissionDecision::new(PermissionEffect::Deny, PermissionScope::request()),
+            )
+            .unwrap()],
+            &PermissionOfferPolicy::once_only(),
+        )
+        .unwrap();
+        let id = PermissionId::new("permission").unwrap();
+        controller
+            .request_permission(&execution, id.clone(), tool(None), input(), deny)
+            .unwrap();
+        let hook_answer = |outcome| PermissionAnswer {
+            execution_id: execution.clone(),
+            id: id.clone(),
+            option_id: PermissionOptionId::new("deny").unwrap(),
+            attribution: ApprovalAttribution::hook(
+                &id,
+                HookRefusal::applied(Some(0), "no", outcome),
+            )
+            .unwrap(),
+        };
+        for terminal in [RefusalOutcome::EndTurn, RefusalOutcome::CloseSession] {
+            assert!(matches!(
+                controller.answer_permission(hook_answer(terminal)),
+                Err(AgentError::InvalidInput(_))
+            ));
+        }
+        controller
+            .answer_permission(hook_answer(RefusalOutcome::Continue))
+            .expect("a continue is still an answer");
     }
     #[test]
     fn permission_authority_is_scoped_and_weak() {

@@ -751,20 +751,24 @@ async fn an_end_turn_refusal_does_not_close_the_session() {
         .invoke(request(), close_action())
         .await
         .expect("ending the turn leaves the session open");
-    assert_eq!(fixture.answered.load(Ordering::SeqCst), 1);
-    assert_eq!(fixture.cancelled.load(Ordering::SeqCst), 0);
+    // An end-turn withdraws the review rather than answering it, so no answer
+    // carries a terminal outcome an adapter could replay.
+    assert_eq!(fixture.answered.load(Ordering::SeqCst), 0);
+    assert_eq!(fixture.cancelled.load(Ordering::SeqCst), 1);
     assert_eq!(fixture.turn_cancels.load(Ordering::SeqCst), 1);
     {
-        let answers = fixture.answers.lock().unwrap();
+        let withdrawals = fixture.withdrawals.lock().unwrap();
         assert_eq!(
-            hook_refusal(&answers[0]).outcome(),
-            &RefusalOutcome::EndTurn
-        );
-        assert_eq!(hook_refusal(&answers[0]).reason(), "stop the turn");
-        assert_eq!(
-            answers[0].attribution.actor().principal_id(),
+            withdrawals[0].actor.principal_id(),
             "permission-review-hook"
         );
+        match withdrawals[0].reason.view() {
+            PermissionCancellationReasonView::Custom(reason) => {
+                assert_eq!(reason.code(), "hook-refusal.end_turn");
+                assert_eq!(reason.explanation(), "stop the turn");
+            }
+            other => panic!("withdrawal reason was {other:?}"),
+        }
     }
     assert!(!review_still_pending(&fixture, "review"));
     assert!(fixture.closes.lock().unwrap().is_empty());

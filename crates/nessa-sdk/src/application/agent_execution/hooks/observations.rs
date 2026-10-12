@@ -257,7 +257,7 @@ impl<'a> InvocationObservationWindow<'a> {
                 included_payload_bytes.saturating_add(payload)
             };
             if walked_events == Self::MAX_EVENTS || next_bytes > Self::MAX_PAYLOAD_BYTES {
-                if is_message(event) || events[..index].iter().any(is_message) {
+                if is_message(event) || prefix_may_hold_text(&events[..index]) {
                     omitted_text = true;
                 }
                 break;
@@ -274,7 +274,7 @@ impl<'a> InvocationObservationWindow<'a> {
             start = index;
         }
         let omitted_prefix = start > 0;
-        if omitted_prefix && events[..start].iter().any(is_message) {
+        if omitted_prefix && prefix_may_hold_text(&events[..start]) {
             omitted_text = true;
         }
         let facts = WindowFacts {
@@ -308,6 +308,10 @@ impl<'a> InvocationObservationWindow<'a> {
     }
 
     /// Message text, including thinking, was left outside the included suffix.
+    ///
+    /// Only the newest [`Self::MAX_EVENTS`] omitted events are checked for
+    /// text, so the walk stays bounded. When more than that were omitted, the
+    /// older ones are not looked at and this is `true`.
     pub fn omitted_text(&self) -> bool {
         self.facts.omitted_text
     }
@@ -453,6 +457,16 @@ fn event_included(event: &ExecutionEvent) -> bool {
 
 fn is_message(event: &ExecutionEvent) -> bool {
     matches!(event.update(), ExecutionUpdate::Message(_))
+}
+
+/// Whether an omitted `prefix` may hold message text.
+///
+/// Only the newest [`InvocationObservationWindow::MAX_EVENTS`] of it are
+/// looked at, so the check stays inside the evaluation cap however long the
+/// history is. Older events are not looked at and count as text.
+fn prefix_may_hold_text(prefix: &[ExecutionEvent]) -> bool {
+    let checked = prefix.len().min(InvocationObservationWindow::MAX_EVENTS);
+    prefix.len() > checked || prefix[prefix.len() - checked..].iter().any(is_message)
 }
 
 fn searchable_text(event: &ExecutionEvent) -> Option<&str> {

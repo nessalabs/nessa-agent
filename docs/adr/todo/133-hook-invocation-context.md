@@ -43,7 +43,9 @@ The omitted event is a separator, sets the oversized flag, and sets omitted
 text when it was a message. It spends one of the 256 event slots but no bytes,
 so a run of oversized events cannot make the walk size or copy more than 256
 events. The window reports an omitted prefix, omitted text, a cut text
-sequence, and an oversized omission. Adjacent chunks of the same kind and
+sequence, and an oversized omission. Only the newest 256 omitted events are
+checked for text, so a longer omitted prefix counts as omitted text and the
+check stays inside the cap. Adjacent chunks of the same kind and
 message identity are one sequence, so a phrase search crosses those boundaries.
 Two messages that both lack an id share that identity. A miss is absence only
 when no text was left out; otherwise it is inconclusive. A hook that needs the
@@ -69,8 +71,8 @@ permission answer, so the agent continues. A continue that has no deny option,
 when the binding can cancel one turn, is an end-turn: the pending review is
 withdrawn as the hook, then the turn is cancelled. When the binding cannot
 cancel one turn, that refusal is recorded as continue and the review is still
-withdrawn, so the provider is not left waiting. End-turn answers the deny
-option when one is offered, then cancels the turn. An end-turn the binding
+withdrawn, so the provider is not left waiting. End-turn withdraws the review
+as the hook, naming the outcome, then cancels the turn. An end-turn the binding
 cannot perform is recorded as continue and does not cancel the turn. It does
 not close the session. Close-session withdraws the review as the hook,
 recording the applied outcome, then closes with
@@ -99,8 +101,10 @@ A hook refusal built outside the runner records only continue. End-turn and
 close-session are the runner's transitions: answering a deny does not itself
 cancel the turn or close the session. So the public `HookRefusal::new` takes no
 outcome, and only the runner, which then cancels the turn, builds an end-turn
-refusal. No public answer, through the agent or the execution controller
-directly, can claim an outcome nothing applied.
+refusal. That refusal never leaves as an answer: end-turn and close-session
+withdraw the review, and the execution controller rejects a hook answer whose
+outcome is not continue. So no public answer, through the agent or the
+controller directly, can claim or replay an outcome nothing applied.
 
 Only hooks that review permissions take part. A hook opts out by returning
 `false` from `reviews_permissions`; the typed before- and after-invocation
