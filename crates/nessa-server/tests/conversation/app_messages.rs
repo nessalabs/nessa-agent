@@ -32,7 +32,6 @@ use nessa_protocol::conversation::view::{
 };
 use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_sdk::application::agent_execution::agents::AgentError;
-use nessa_sdk::domain::agent_execution::executions::Initiation;
 use nessa_sdk::domain::agent_execution::prompts::{AppModelContext, MessageSender, UserMessage};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -1630,7 +1629,6 @@ async fn m10_a_release_after_a_turn_running_refusal_keeps_turn_running() {
                         },
                         SubmissionMode::Queue,
                         writer,
-                        Initiation::owner(),
                     )
                     .await
             }

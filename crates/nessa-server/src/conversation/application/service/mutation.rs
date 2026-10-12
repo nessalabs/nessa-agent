@@ -39,6 +39,7 @@ impl ConversationService {
     /// share grant that admitted it. A retry is answered from the first
     /// attempt's receipt and record, so the turn keeps the initiation it was
     /// first admitted with.
+    #[allow(clippy::too_many_arguments)]
     pub async fn submit_command(
         &self,
         storage: Arc<dyn CreationStorage>,
@@ -269,8 +270,7 @@ impl MutationTarget for SubmitTarget {
                     execution_id,
                     message.map_err(CreationInitializationFailure::Target)?,
                     mode,
-                    Writer::Person,
-                    initiation,
+                    Writer::Person(initiation),
                 )
                 .await
                 .map_err(SubmitFailure::into_error)

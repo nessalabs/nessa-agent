@@ -523,7 +523,9 @@ pub enum SubmissionMode {
 /// opening of the conversation for one mount.
 #[derive(Clone)]
 pub(super) enum Writer {
-    Person,
+    /// The person, with who their turn is saved as started by: the owner, or
+    /// the share grant that admitted it.
+    Person(Initiation),
     App {
         sender: McpAppSource,
         apps: Arc<AppReviews>,
@@ -535,9 +537,19 @@ impl Writer {
     fn is_app(&self) -> bool {
         matches!(self, Self::App { .. })
     }
+    /// Who the turn is saved as started by. An app's call asks for
+    /// `conversation.write`, which no paired session is admitted for
+    /// (`read_access::admit_request`), so an app's message is always from the
+    /// owner's own surface.
+    fn initiation(&self) -> Initiation {
+        match self {
+            Self::Person(initiation) => initiation.clone(),
+            Self::App { .. } => Initiation::owner(),
+        }
+    }
     fn sender(&self) -> MessageSender {
         match self {
-            Self::Person => MessageSender::Person,
+            Self::Person(_) => MessageSender::Person,
             Self::App { sender, .. } => MessageSender::App(sender.clone()),
         }
     }
@@ -558,7 +570,7 @@ impl Writer {
     /// admitted in ended or its mount was released. Never the person's.
     fn opening_ended(&self) -> bool {
         match self {
-            Self::Person => false,
+            Self::Person(_) => false,
             Self::App {
                 apps, epoch, mount, ..
             } => apps.admit(*epoch, mount).is_err(),
@@ -2522,8 +2534,7 @@ impl ConversationService {
             execution_id,
             message,
             mode,
-            Writer::Person,
-            Initiation::owner(),
+            Writer::Person(Initiation::owner()),
         )
         .await
         .map_err(SubmitFailure::into_error)
@@ -2569,10 +2580,9 @@ impl ConversationService {
         message: SubmittedMessage,
         mode: SubmissionMode,
         writer: Writer,
-        initiation: Initiation,
     ) -> Result<SubmissionReceipt, SubmitFailure> {
         let (asked, submission) =
-            self.submission_future(id, caller, execution_id, message, mode, writer, initiation);
+            self.submission_future(id, caller, execution_id, message, mode, writer);
         let outcome = tokio::spawn(submission).await;
         let asked = asked.load(Ordering::SeqCst);
         let failure = match outcome {
@@ -2595,7 +2605,6 @@ impl ConversationService {
         message: SubmittedMessage,
         mode: SubmissionMode,
         writer: Writer,
-        initiation: Initiation,
     ) -> (
         Arc<AtomicBool>,
         impl Future<Output = Result<SubmissionReceipt, Halt>> + Send + 'static,
@@ -2816,7 +2825,7 @@ impl ConversationService {
             // (row J15).
             let submitter = Submitter {
                 context: actor,
-                initiation,
+                initiation: writer.initiation(),
             };
             let delivery = match mode {
                 SubmissionMode::Queue => live
