@@ -12,17 +12,19 @@ use super::{
     },
     open_ssh::OpenSshConnector,
 };
-use crate::conversation::application::{Environment, LeaseRelease};
+use crate::conversation::application::{Environment, GrantedTerms, LeaseRelease};
 use crate::env::{LEASE_PROTOCOL, VERSION};
 use crate::env_serve::application::FrameStream;
 use crate::env_serve::application::{
     serve, CommandRan, CommandRunner, CommandStop, HarnessLauncher, LeaseLedger, LedgerEntry,
-    Runners, ServeTimings,
+    PeerGrants, Runners, ServeTimings, Serving,
 };
+use crate::env_serve::domain::{Agents, CommandGrant, Peer, PeerGrant};
 use crate::env_serve::infrastructure::TokioTimer;
 use crate::env_serve::install::Platform;
 use nessa_protocol::lease::{
-    decode, encode, Cleanup, CommandEnd, Data, FromEnvironment, ToEnvironment,
+    decode, encode, Cleanup, CommandEnd, Data, FromEnvironment, GrantedTerms as WireTerms, Sandbox,
+    ToEnvironment,
 };
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
@@ -34,7 +36,8 @@ use nessa_sdk::application::agent_execution::{
 use nessa_sdk::domain::{
     agent_execution::leases::{
         AgentWork, EnvironmentRef, LeaseCleanup, LeaseDeadline, LeaseEndCause, LeaseGrants,
-        LeaseId, LeaseRefusal, LeaseTerms, LeaseWork, SandboxProfile, SshDestination,
+        LeaseId, LeaseRefusal, LeaseTerms, LeaseWork, SandboxProfile, SandboxProfiles,
+        SshDestination,
     },
     agent_execution::leases::{CommandExit, CommandRefusal, CommandWork},
     effective_capabilities::value_objects::EffectiveCapabilities,
@@ -83,6 +86,9 @@ impl HarnessLauncher for Echo {
     }
     fn runs(&self, agent: &str) -> bool {
         agent == "claude"
+    }
+    fn sandboxes(&self) -> SandboxProfiles {
+        SandboxProfiles::HARNESS_DEFAULT
     }
     fn launch(
         &self,
@@ -152,6 +158,19 @@ impl LeaseLedger for Ledger {
     }
 }
 
+/// What the host's owner grants SSH: its entry, as a test sets it; none
+/// keeps everything.
+#[derive(Default)]
+struct SshGrant(Mutex<Option<PeerGrant>>);
+impl PeerGrants for SshGrant {
+    fn entry(&self, peer: &Peer) -> Result<Option<PeerGrant>, String> {
+        Ok(match peer {
+            Peer::Ssh => self.0.lock().unwrap().clone(),
+            Peer::Gateway { .. } => None,
+        })
+    }
+}
+
 /// What each new connection reaches.
 #[derive(Clone)]
 enum Reach {
@@ -187,6 +206,8 @@ struct Connector {
     frames: Arc<Mutex<Vec<ToEnvironment>>>,
     /// How a serving host runs commands; `None` runs none.
     runner: Mutex<Option<Arc<dyn CommandRunner>>>,
+    /// What a serving host's owner grants this gateway, over SSH.
+    grants: Arc<SshGrant>,
 }
 
 impl Connector {
@@ -216,6 +237,7 @@ impl Connector {
             received: Arc::new(Mutex::new(Vec::new())),
             frames: Arc::new(Mutex::new(Vec::new())),
             runner: Mutex::new(None),
+            grants: Arc::default(),
         })
     }
     /// Cut every connection both ways, as a network that went away.
@@ -254,6 +276,10 @@ impl LeaseConnector for Connector {
                     host_out,
                     VERSION,
                     LEASE_PROTOCOL,
+                    Serving {
+                        peer: Peer::Ssh,
+                        grants: self.grants.clone(),
+                    },
                     Runners {
                         harnesses: self.launcher.clone(),
                         commands: self.runner.lock().unwrap().clone(),
@@ -286,7 +312,14 @@ impl LeaseConnector for Connector {
                         .unwrap();
                     while let Ok(Some(body)) = stream.next().await {
                         if let Ok(ToEnvironment::Grant { lease, .. }) = decode(&body) {
-                            let granted = encode(&FromEnvironment::Granted { lease }).unwrap();
+                            let granted = encode(&FromEnvironment::Granted {
+                                lease,
+                                terms: WireTerms {
+                                    sandbox: Sandbox::HarnessDefault,
+                                    timeout_ms: None,
+                                },
+                            })
+                            .unwrap();
                             host_out.write_all(&granted).await.unwrap();
                             break;
                         }
@@ -760,6 +793,10 @@ async fn frames_naming_nothing_held_are_dropped_with_evidence() {
     .unwrap();
     let granted = serde_json::to_vec(&FromEnvironment::Granted {
         lease: "never-asked".into(),
+        terms: WireTerms {
+            sandbox: Sandbox::HarnessDefault,
+            timeout_ms: None,
+        },
     })
     .unwrap();
     let connector = Connector::new(Reach::Scripted(vec![
@@ -1255,6 +1292,9 @@ async fn a_stop_is_waited_for_through_every_step_the_host_takes() {
         fn runs(&self, _agent: &str) -> bool {
             true
         }
+        fn sandboxes(&self) -> SandboxProfiles {
+            SandboxProfiles::HARNESS_DEFAULT
+        }
         fn launch(
             &self,
             _agent: &str,
@@ -1529,10 +1569,11 @@ async fn a_command_runs_on_the_host_and_answers_how_it_ended_and_what_it_printed
     let hold = commands
         .grant(&lease(), &work(&["echo", "hi", "there"]))
         .await
-        .expect("granted");
+        .expect("granted")
+        .hold;
     assert_eq!(commands.reachable(), Some(true));
     let (_stop, stopped) = tokio::sync::watch::channel(None);
-    let result = tokio::time::timeout(Duration::from_secs(5), hold.run(stopped))
+    let result = tokio::time::timeout(Duration::from_secs(5), hold.run(10_000, stopped))
         .await
         .expect("answered");
     assert_eq!(result.exit, CommandExit::Exited { code: 0 });
@@ -1561,9 +1602,10 @@ async fn a_stopped_command_is_stopped_on_the_host_and_answers_the_stops_cause() 
     let hold = commands
         .grant(&lease(), &work(&["sleep", "60"]))
         .await
-        .unwrap();
+        .unwrap()
+        .hold;
     let (stop, stopped) = tokio::sync::watch::channel(None);
-    let running = tokio::spawn(hold.run(stopped));
+    let running = tokio::spawn(hold.run(10_000, stopped));
     tokio::time::sleep(Duration::from_millis(50)).await;
     stop.send_replace(Some(LeaseEndCause::Revoked));
     let result = tokio::time::timeout(Duration::from_secs(5), running)
@@ -1612,6 +1654,63 @@ async fn a_command_is_refused_by_a_host_that_runs_none_or_cannot_be_reached() {
     );
 }
 
+/// Rows I4 and I5 over SSH: the host's owner narrows what SSH is granted.
+/// An agent left out is refused not granted, a command's timeout comes back
+/// narrowed as the terms granted, and with commands left out a command is
+/// refused not granted; each refusal is the host's own, mapped as such.
+#[tokio::test]
+async fn what_the_hosts_owner_did_not_grant_is_refused_and_a_narrowed_timeout_is_answered() {
+    let connector = serving_commands();
+    *connector.grants.0.lock().unwrap() = Some(PeerGrant::new(
+        Agents::Named(Default::default()),
+        Some(CommandGrant::new(2_000).unwrap()),
+    ));
+    let host = environment(connector.clone(), Arc::new(Audit::default()));
+    assert_eq!(
+        host.open(&lease(), &terms("claude"), binding_only())
+            .await
+            .err(),
+        Some(LeaseRefusal::EnvironmentNotGranted)
+    );
+    let commands = host.commands().unwrap();
+    let granted = commands
+        .grant(&lease(), &work(&["echo", "narrowed"]))
+        .await
+        .expect("granted");
+    assert_eq!(
+        granted.granted,
+        GrantedTerms {
+            sandbox: SandboxProfile::None,
+            timeout_ms: Some(2_000),
+        }
+    );
+    drop(granted);
+    *connector.grants.0.lock().unwrap() = Some(PeerGrant::nothing());
+    assert_eq!(
+        commands.grant(&lease(), &work(&["ls"])).await.err(),
+        Some(CommandRefusal::Environment(
+            LeaseRefusal::EnvironmentNotGranted
+        ))
+    );
+}
+
+/// Row I4: a sandbox the host cannot enforce is refused by the host, and
+/// read here as that, not as the host being unreachable.
+#[tokio::test]
+async fn a_sandbox_the_host_cannot_enforce_is_refused_as_such() {
+    let host = environment(Connector::new(Reach::Serving), Arc::new(Audit::default()));
+    let unsandboxed = LeaseTerms {
+        sandbox: SandboxProfile::None,
+        ..terms("claude")
+    };
+    assert_eq!(
+        host.open(&lease(), &unsandboxed, binding_only())
+            .await
+            .err(),
+        Some(LeaseRefusal::SandboxUnavailable)
+    );
+}
+
 #[tokio::test]
 async fn a_granted_command_never_run_is_ended_on_the_host() {
     let connector = serving_commands();
@@ -1621,7 +1720,8 @@ async fn a_granted_command_never_run_is_ended_on_the_host() {
         .unwrap()
         .grant(&lease(), &work(&["echo"]))
         .await
-        .unwrap();
+        .unwrap()
+        .hold;
     drop(hold);
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
@@ -1651,9 +1751,10 @@ async fn a_command_whose_connection_is_lost_is_unanswered_with_what_the_host_rec
         .unwrap()
         .grant(&lease(), &work(&["sleep", "60"]))
         .await
-        .unwrap();
+        .unwrap()
+        .hold;
     let (_stop, stopped) = tokio::sync::watch::channel(None);
-    let running = tokio::spawn(hold.run(stopped));
+    let running = tokio::spawn(hold.run(10_000, stopped));
     tokio::time::sleep(Duration::from_millis(50)).await;
     connector.cut();
     let result = tokio::time::timeout(Duration::from_secs(10), running)

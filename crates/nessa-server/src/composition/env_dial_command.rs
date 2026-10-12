@@ -9,7 +9,8 @@
 //! env dial ADDRESS ──▶ approval(FilePairingEnvironment) until approved (the
 //!   credential is saved) ──▶ let go of the pairing
 //!   ──▶ compose, as env serve does (lock, ledger, launcher)
-//!   ──▶ redial(dial, Composed::serve) until SIGINT or SIGTERM ──▶ finish
+//!   ──▶ redial(dial, Composed::serve as the gateway the pin names) until
+//!   SIGINT or SIGTERM ──▶ finish
 //! ```
 //!
 //! Arrows are construction, then calls in order. The credential the
@@ -22,6 +23,7 @@ use crate::{
     device_pairing::infrastructure::TlsStream,
     env_serve::{
         application::{self, redial, Backoff, NotApproved},
+        domain::Peer,
         infrastructure::{dial, Approved, FilePairingEnvironment, TokioTimer},
     },
 };
@@ -157,8 +159,10 @@ async fn serve_dialing(
             }
         },
         |stream, stopping| {
+            // Each connection was dialed to the gateway holding this pin: its
+            // grants are that gateway's.
             serve_until_stopped(stream, stopping, |input, output| {
-                composed.serve(input, output)
+                composed.serve(Peer::Gateway { pin }, input, output)
             })
         },
         Backoff::default(),

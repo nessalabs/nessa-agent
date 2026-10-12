@@ -41,14 +41,16 @@ pub fn error_code(error: &ConversationError) -> ConversationErrorCode {
         ConversationError::LeaseRefused(LeaseRefusal::SandboxUnavailable) => {
             ConversationErrorCode::SandboxUnavailable
         }
-        // The host could not be reached, another gateway holds it, or it has
-        // no runtime for this conversation's agent: all the host's matter,
-        // worth asking again once the host is set right. Not
+        // The host could not be reached, another gateway holds it, it has
+        // no runtime for this conversation's agent, or its owner has not
+        // granted this gateway that agent: all the host's matter, worth
+        // asking again once the host is set right. Not
         // `agent_not_configured`, which names this gateway's own config.json.
         ConversationError::LeaseRefused(
             LeaseRefusal::EnvironmentUnreachable
             | LeaseRefusal::EnvironmentBusy
-            | LeaseRefusal::AgentUnavailable,
+            | LeaseRefusal::AgentUnavailable
+            | LeaseRefusal::EnvironmentNotGranted,
         ) => ConversationErrorCode::EnvironmentUnavailable,
         // The host's copy of this build, where the gateway installs it,
         // speaks another lease protocol: not one this gateway put there.

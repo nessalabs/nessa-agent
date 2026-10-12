@@ -54,6 +54,10 @@ fn an_ssh_hosts_refusals_are_the_hosts_and_never_this_gateways_configuration() {
             ConversationErrorCode::EnvironmentUnavailable,
         ),
         (
+            LeaseRefusal::EnvironmentNotGranted,
+            ConversationErrorCode::EnvironmentUnavailable,
+        ),
+        (
             LeaseRefusal::EnvironmentVersionMismatch,
             ConversationErrorCode::EnvironmentVersionMismatch,
         ),

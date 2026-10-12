@@ -327,6 +327,125 @@ sequenceDiagram
   same way: the same-enrollment retry the device client has is not offered
   here yet.
 
+### What the environment grants
+
+Part 1d lets the environment's owner decide what each gateway may lease
+there. The gateway's credential says whether it may serve this gateway at
+all; what a machine lets a gateway run on it is the machine's own fact, so
+it lives on the machine, in `<data>/environment/grants.json`:
+
+```text
+nessa env grant [--peer ssh|PIN] [--agent NAME... | --all-agents] [--commands --max-timeout 10m]
+nessa env ungrant [--peer ssh|PIN] (--agent NAME | --commands | --all)
+nessa env grants
+```
+
+```mermaid
+sequenceDiagram
+    participant G as Gateway (open_lease, environment_tools)
+    participant S as env serve (serve)
+    participant F as grants.json (FileGrants)
+    G->>S: Grant {lease, agent, sandbox} or GrantCommand {lease, argv, cwd, timeoutMs}
+    S->>F: this peer's entry, read again now
+    F-->>S: unreadable: logged, and nothing granted
+    F-->>S: the entry, or none (ssh keeps everything, a dialed gateway nothing)
+    S-->>G: not covered: Refused NotGranted, recorded as refused for this peer with what it asked, nothing run
+    S->>S: the host runs it at all? (config.json agents, envServe.commands, its sandboxes)
+    S-->>G: no: Refused AgentUnavailable, CommandsUnavailable or SandboxUnavailable
+    S->>S: record Granted for this peer with the sandbox and the timeout granted (min of asked and maxTimeoutMs)
+    S-->>G: Granted {lease, terms {sandbox, timeoutMs}}
+    G->>G: terms wider than asked, or other than asked: refused EnvironmentNotGranted, the hold dropped
+    G->>G: record what was granted, never what was asked
+```
+
+- **Why the machine's file and not the gateway's credential.** The gateway's
+  registry answers "may this key serve me", which only the gateway can
+  revoke. What a machine runs for a gateway is the machine owner's choice,
+  and the gateway must not be able to widen it, so its one authority is a
+  file on the machine that only its owner writes. The peer is named by how
+  composition reached it, never by what the gateway says: `ssh` for
+  `env serve`, the pin the pairing keeps for `env dial`.
+- **Read at every lease.** Serving reads the file again for every `Grant`
+  and `GrantCommand`, so a change applies from the next lease and the leases
+  already running go on. A file this build cannot read (another schema
+  version, larger than 64 KiB, not private, not this shape) grants nothing,
+  to `ssh` as well, and is logged: a broken file is not taken as no file.
+- **Defaults.** With no file or no entry, `ssh` keeps everything the host
+  runs, as before this part; a dialed gateway is granted nothing until the
+  owner grants it. `env grant` and `env ungrant` default `--peer` to the
+  gateway this machine's pairing was approved by, else `ssh`; an entry equal
+  to the peer's defaults is removed rather than kept.
+- **The grant first.** The peer's grant is checked before what the host
+  runs, so a gateway not granted a lease learns nothing of which agents the
+  host runs or whether it runs commands. `CommandsUnavailable` answers only
+  a peer granted commands.
+- **Narrow, never widen.** `config.json` stays the host's switch for what it
+  runs at all (`envServe.commands`, its agents); a grant only takes away.
+  A command's timeout is the one asked, or the grant's `maxTimeoutMs` when
+  that is shorter, and the command runs with it. The gateway checks each
+  answer in one place per kind (`open_lease` for agents, `environment_tools`
+  for commands), refuses one wider than asked, and runs the command's hold
+  with the timeout it checked, so a misbehaving machine cannot have more
+  recorded or waited for than the gateway asked.
+- **Which side refused.** A refusal the environment gave, or an answer it
+  gave wider than asked, is `EnvironmentNotGranted` inside the lease
+  refusal (`Environment(EnvironmentNotGranted)` for a command), stored under
+  a record kind of its own; a command this gateway's own policy refuses
+  stays `CommandRefusal::EnvironmentNotGranted`. A file change that would
+  pass 64 KiB is refused before anything is written.
+- **Each lease names its peer.** The host's `leases.jsonl` records the
+  peer every grant and refusal was for (`ssh`, or the gateway's pin as the
+  grants file spells it), and a refusal what was asked: the agent and
+  sandbox, or the command, its directory and timeout. Lines written before
+  these fields still account.
+- **Every change is audited, twice.** `env grant` and `env ungrant` keep
+  records of each change in `<data>/environment/grants-audit.jsonl`, all
+  while holding the grants' lock, in a private journal opened to append
+  only, each line synced. Each record says when it was made, by which
+  account (`unix:` and its uid, as the install audit names it; no name is
+  looked up), for which peer, the operation and its arguments, and the
+  peer's whole grant before and after. A change that leaves the grant as it
+  was leaves one `unchanged` record. Any other leaves `intended` before the
+  new file replaces `grants.json` (if that record cannot be kept,
+  `grants.json` stays as it was and the command fails), then its outcome:
+  `written` once the file was replaced, with `durable: false` when the
+  directory could not then be synced (the command fails: in force, not yet
+  durable), or `not_written` when it could not be replaced (the command
+  fails, the grant unchanged). An `intended` record with nothing after it
+  is a change whose process died between the two, or whose outcome record
+  could not be kept (the command then fails: in force, unconfirmed). It may
+  or may not be in force, and `grants.json` is the authority for what is.
+  The journal is not bounded: it grows by two lines per change the owner
+  makes by hand, which no gateway can cause.
+- **One entry per peer.** A peer named twice in `grants.json` makes the file
+  unreadable, whichever entry comes first: it is never read as the last of
+  them.
+
+```mermaid
+sequenceDiagram
+    participant O as Owner (env grant, env ungrant)
+    participant A as change_grant
+    participant F as grants.json (FileGrants)
+    participant J as grants-audit.jsonl (FileGrantAudit)
+    O->>A: peer, operation, this account
+    A->>F: change, holding grants.lock until the outcome is recorded
+    F-->>A: the peer's entry, or its defaults
+    A->>A: GrantOperation apply, the transition
+    F->>F: the new file written to a private temporary file and synced
+    A->>J: intended (or unchanged, and nothing more), appended and synced
+    J-->>A: failed: the temporary file goes, grants.json unchanged, the command fails
+    F->>F: renamed over grants.json, then the directory synced
+    A->>J: written (durable or not) after the rename, or not_written when it failed
+    Note over A,J: a process that dies here leaves intended alone, and grants.json says what is in force
+    A-->>O: every entry printed
+```
+
+- **Known limits.** The product shows a lease the machine did not grant as
+  the environment being unavailable; the run tool names it
+  `environment_not_granted`, with a message saying the environment's owner
+  refused it. A sandbox is granted as asked or refused: no
+  host narrows one yet, since `env serve` only runs the harness default.
+
 ## State and order table
 
 Each row has at least one test.
@@ -345,6 +464,9 @@ Each row has at least one test.
 | I1 | The owner creates an environment invitation; a gateway claims it; the owner approves its key | Same enrollment and listener; the credential names the same `gateway:<key hex>` a reading enrollment of that key would, an active member, holding only `environment.serve`, bound to that key; the owner needs `credential.manage` and never holds the grant; the record keeps `class: "environment"`. A registry in which that credential also or instead reads, or a person's credential serves, is refused on open; `credential.issue` of `environment.serve` to anyone is refused `Conflict`, nothing written; a share to its credential is refused `share_target_not_paired`, nothing granted; Cedar allows the action only to an active member holding it | `owner_route_creates_an_environment_invitation`; `owner_route_without_the_consent_grant_is_forbidden`; `owner_route_refuses_a_member_before_disclosure`; `an_environment_enrollment_issues_the_peer_principal_holding_only_serve`; `an_environment_is_paired_but_never_shared_with`; `cedar_allows_serving_only_to_a_member_holding_the_grant`; `each_class_discloses_only_its_own_grant`; `an_enrollment_record_keeps_its_class`; `the_enrollment_class_is_carried_and_never_changes_in_transit` |
 | I2 | A paired environment dials the native listener and asks for `openEnvironment`; the gateway runs a command there; the environment dials again; then its credential is revoked | Admitted only for a key whose credential is allowed `environment.serve` now: a key paired to read is refused before it takes a permit. The command runs on the environment over its own connection and answers its exit, output and cleanup; a second connection takes the place of the first, whose serving ends; once revoked, the next command is refused unreachable, the connection is closed, and the next dial is refused | `a_paired_environment_dials_in_serves_and_stops_at_revocation`; `a_key_paired_to_read_is_refused_at_open_environment` |
 | I3 | A machine pairs with `env enroll`'s pairing and waits as `env dial` does; the owner approves it, or denies it; one host serves what it dials; its first connection is cut, and it is stopped later | It waits while the pairing is pending and gets its key and the gateway's pin once approved; a denied pairing, or a machine never paired, stops waiting with that reason; a cut connection is dialed again and served by the same host; failed dials wait twice as long each time up to the most, a connection served at least that long starts the wait over, and a failure no dial can change stops it (a pin that is not a key is `InvalidInput`, a key that is not the gateway's is dialed again); stop closes the connection being served, which the gateway sees disconnected | `an_enrolled_environment_waits_for_approval_then_stays_dialed_in`; `waiting_for_approval_ends_when_denied_or_never_paired`; `a_pin_that_is_not_a_key_is_invalid_input_and_another_key_is_not`; `failed_dials_wait_twice_as_long_each_time_up_to_the_most`; `each_connection_is_served_and_a_long_one_starts_the_wait_over`; `a_setup_dialing_again_cannot_change_stops_it`; `stop_closes_the_connection_being_served_and_dials_no_more`; `stop_asked_while_waiting_ends_the_wait` |
+| I4 | A gateway asks a lease of an agent, or a command, that the environment's owner did not grant it, or a sandbox the host cannot enforce; the owner changes the grant | A dialed gateway with no entry, or one leaving the agent or commands out, is refused `NotGranted`, recorded as refused, nothing run, before anything about what the host runs is said, and the gateway answers `EnvironmentNotGranted` as the environment's refusal; `ssh` with no file or no entry keeps everything the host runs; grants that cannot be read refuse every lease; a sandbox the host cannot enforce is refused `SandboxUnavailable`, mapped as such; a change applies from the next lease, the running ones go on | `i4_a_dialed_gateway_without_a_grant_is_refused_and_nothing_runs`; `ssh_without_grants_keeps_everything_the_host_runs`; `grants_that_cannot_be_read_refuse_every_lease`; `a_sandbox_the_host_cannot_enforce_is_refused`; `a_sandbox_the_host_cannot_enforce_is_refused_as_such`; `what_the_hosts_owner_did_not_grant_is_refused_and_a_narrowed_timeout_is_answered`; `a_dialed_gateway_runs_only_what_the_environment_granted_it`; `an_agent_is_admitted_only_when_granted`; `a_peer_without_an_entry_has_its_defaults`; `an_ungranted_gateway_learns_nothing_of_what_the_host_runs`; `grants_and_refusals_name_their_peer_and_old_lines_still_read` |
+| I5 | A gateway asks a command longer than the grant's `maxTimeoutMs`; or an environment answers terms wider than, or other than, asked | The environment records the narrowed timeout and the timeout asked, answers the terms it granted, and runs the command with the narrowed timeout; the gateway records the granted terms and waits for the command that long; a wider or other answer is refused as the environment's `EnvironmentNotGranted` and its hold dropped, nothing run | `i5_a_command_timeout_is_narrowed_recorded_and_run_with`; `a_command_timeout_is_narrowed_and_never_widened`; `i5_a_narrowed_command_is_recorded_as_granted_and_a_wider_one_is_refused`; `l1_an_environment_granting_other_terms_than_asked_is_refused_and_nothing_runs`; `a_grant_names_its_sandbox_and_its_answer_the_granted_terms` |
+| I6 | The owner runs `env grant`, `env ungrant` and `env grants`; the file is another version, too large, not private or not this shape | Each change is written whole and private under a lock and read back as given, an entry equal to the defaults removed; an unreadable file is refused, never taken as no grants, and no change is made over it; a change past the size bound is refused, nothing written; a peer named twice is unreadable in either order; each grant and ungrant appends a private `intended` record of who, when, which peer, the operation and the grant before and after, and then `written` (durable or not) or `not_written`, both under the lock; one whose intent cannot be recorded leaves grants.json unchanged, a sync failure after the rename is `written`, not durable, and fails the command, and an outcome that cannot be recorded fails it as unconfirmed; an ungrant applies to the next lease while the leases running go on | `a_change_is_written_privately_and_read_back`; `every_agent_and_missing_fields_are_read_as_written`; `a_file_this_build_cannot_read_is_refused`; `a_change_past_the_bound_is_refused_and_writes_nothing`; `a_peer_is_spelled_one_way_and_read_back`; `an_absent_file_is_no_entries`; `granting_adds_and_ungranting_takes_away`; `i6_an_ungrant_applies_to_the_next_lease_and_running_leases_stay`; `env_grant_names_agents_or_every_agent_and_commands_with_their_longest_run`; `env_ungrant_takes_one_thing_back_and_env_grants_lists_them`; `a_peer_named_twice_is_refused_in_either_order`; `a_grant_writes_intended_then_written`; `a_rename_failure_writes_intended_then_not_written`; `a_sync_failure_after_the_rename_writes_written_and_is_not_durable`; `an_outcome_that_cannot_be_recorded_leaves_the_change_unconfirmed`; `a_change_that_cannot_be_audited_leaves_the_grants_unchanged` |
 | H10 | A registry whose owner membership is disabled or not an admin | Refused on open (`owner_membership`). The pairing initiator's membership is what keeps a grantor live; the owner's is the one the registry pins | `a_registry_whose_owner_is_not_an_active_admin_does_not_open` |
 
 ## The dialing side

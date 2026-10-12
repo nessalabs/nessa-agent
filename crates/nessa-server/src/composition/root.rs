@@ -125,6 +125,24 @@ impl CompositionRoot {
                 "a paired environment requires Unix process supervision".into(),
             )),
             #[cfg(unix)]
+            Command::EnvGrant {
+                peer,
+                agents,
+                max_timeout_ms,
+            } => super::env_grant_command::grant(peer.as_deref(), agents, max_timeout_ms).await,
+            #[cfg(unix)]
+            Command::EnvUngrant { peer, what } => {
+                super::env_grant_command::ungrant(peer.as_deref(), what).await
+            }
+            #[cfg(unix)]
+            Command::EnvGrants => super::env_grant_command::grants(),
+            #[cfg(not(unix))]
+            Command::EnvGrant { .. } | Command::EnvUngrant { .. } | Command::EnvGrants => {
+                Err(RunError::Agent(
+                    "granting gateways leases requires Unix process supervision".into(),
+                ))
+            }
+            #[cfg(unix)]
             Command::ArtifactPublish { path, media_type } => {
                 let published = super::artifact_command::execute(&path, media_type).await?;
                 if !published {

@@ -6,9 +6,10 @@
 //! config.json "envServe.commands" ──▶ ShepherdCommands (in that workspace), or none
 //! <data>/environment/serve.lock ──▶ ServeLock (one serving process)
 //! <data>/environment/leases.jsonl ──▶ FileLedger
+//! <data>/environment/grants.json ──▶ FileGrants (read at every lease)
 //! <data>/environment/outbox/, a private temporary directory ──▶ FileOutbox
 //! TokioTimer ──▶ what serving's waits are measured on
-//! stdin, stdout ──▶ serve(...) until the gateway's stream ends
+//! stdin, stdout ──▶ serve(Peer::Ssh, ...) until the gateway's stream ends
 //! ```
 //!
 //! Arrows are construction, then the call that runs it. Whatever stops it
@@ -20,11 +21,12 @@ use crate::{
     env::{Environment, LEASE_PROTOCOL, VERSION},
     env_serve::{
         application::{
-            refuse, serve, CommandRunner, HarnessLauncher, Runners, ServeTimings, Timer,
+            refuse, serve, CommandRunner, HarnessLauncher, Runners, ServeTimings, Serving, Timer,
         },
+        domain::Peer,
         infrastructure::{
-            ConfiguredLauncher, FileLedger, FileOutbox, LaunchSpec, ServeLock, ServeLockError,
-            ShepherdCommands, TokioTimer, COMMAND_VARIABLES,
+            ConfiguredLauncher, FileGrants, FileLedger, FileOutbox, LaunchSpec, ServeLock,
+            ServeLockError, ShepherdCommands, TokioTimer, COMMAND_VARIABLES,
         },
     },
 };
@@ -58,8 +60,9 @@ pub(super) async fn execute() -> Result<(), RunError> {
             return Ok(());
         }
     };
+    // Over standard input and output: whoever logged in over SSH.
     composed
-        .serve(tokio::io::stdin(), tokio::io::stdout())
+        .serve(Peer::Ssh, tokio::io::stdin(), tokio::io::stdout())
         .await;
     composed.finish().await;
     Ok(())
@@ -74,6 +77,8 @@ pub(super) struct Composed {
     /// host does not run them.
     commands: Option<(Arc<ShepherdCommands>, ProcessSupervisor)>,
     ledger: Arc<FileLedger>,
+    /// What this host's owner grants each peer.
+    grants: Arc<FileGrants>,
     outbox: Arc<FileOutbox>,
     /// The publish points' directory, removed when serving ends.
     sockets: std::path::PathBuf,
@@ -82,9 +87,9 @@ pub(super) struct Composed {
 }
 
 impl Composed {
-    /// Serve one gateway's leases on `input` and `output` until that stream
-    /// ends.
-    pub(super) async fn serve<R, W>(&self, input: R, output: W)
+    /// Serve one gateway's leases, `peer`'s, on `input` and `output` until
+    /// that stream ends.
+    pub(super) async fn serve<R, W>(&self, peer: Peer, input: R, output: W)
     where
         R: AsyncRead + Unpin + Send + 'static,
         W: AsyncWrite + Unpin + Send + 'static,
@@ -98,6 +103,10 @@ impl Composed {
             output,
             VERSION,
             LEASE_PROTOCOL,
+            Serving {
+                peer,
+                grants: self.grants.clone(),
+            },
             Runners {
                 harnesses: self.launcher.clone(),
                 commands: runner,
@@ -177,6 +186,7 @@ pub(super) async fn compose() -> Result<Composed, (Unavailability, RunError)> {
         launcher: Arc::new(launcher),
         commands,
         ledger: Arc::new(ledger),
+        grants: Arc::new(FileGrants::new(&directory)),
         outbox: Arc::new(outbox),
         sockets,
         lock,

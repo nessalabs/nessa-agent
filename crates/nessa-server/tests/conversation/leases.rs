@@ -12,8 +12,8 @@ use super::{
     ConversationAgents, ConversationAttachments, ConversationCaller, ConversationDeletionBudgets,
     ConversationDependencies, ConversationError, ConversationLimits, ConversationService,
     Environment, EnvironmentDeclaration, EnvironmentFuture, EnvironmentLease, Environments,
-    LeaseHold, LeaseRelease, RequestedConversation, SubmissionMode, SubmittedFile,
-    SubmittedMessage,
+    GrantedCommand, GrantedTerms, LeaseHold, LeaseRelease, RequestedConversation, SubmissionMode,
+    SubmittedFile, SubmittedMessage,
 };
 use super::{
     CommandAnswer, CommandCall, CommandCallError, CommandEnvironment, CommandHold, CommandResult,
@@ -90,6 +90,10 @@ struct Substitute {
     opened: AtomicUsize,
     accounted: Mutex<Vec<LeaseId>>,
     wrapped: Option<Arc<dyn AgentProvider>>,
+    /// The terms it answers as granted; `None` answers what it was asked.
+    granted: Mutex<Option<GrantedTerms>>,
+    /// Holds it answered with that were let go: each ends its lease there.
+    released: Arc<AtomicUsize>,
 }
 impl Substitute {
     fn new(sandbox: SandboxProfiles) -> Self {
@@ -98,6 +102,8 @@ impl Substitute {
             opened: AtomicUsize::new(0),
             accounted: Mutex::new(Vec::new()),
             wrapped: None,
+            granted: Mutex::new(None),
+            released: Arc::default(),
         }
     }
 }
@@ -111,15 +117,21 @@ impl Environment for Substitute {
     fn open<'a>(
         &'a self,
         _lease: &'a LeaseId,
-        _grant: &'a LeaseTerms,
+        grant: &'a LeaseTerms,
         binding: Arc<dyn AgentProvider>,
     ) -> EnvironmentFuture<'a, Result<EnvironmentLease, LeaseRefusal>> {
         self.opened.fetch_add(1, Ordering::SeqCst);
         let provider = self.wrapped.clone().unwrap_or(binding);
+        let granted = self.granted.lock().unwrap().unwrap_or(GrantedTerms {
+            sandbox: grant.sandbox,
+            timeout_ms: None,
+        });
+        let released = self.released.clone();
         Box::pin(async move {
             Ok(EnvironmentLease {
                 provider,
-                hold: Arc::new(AgentCloseHold),
+                hold: Arc::new(CountedHold(released)),
+                granted,
                 workspace: None,
             })
         })
@@ -130,14 +142,21 @@ impl Environment for Substitute {
     }
 }
 
-/// A hold whose Agent's close is the evidence, as in process.
-struct AgentCloseHold;
-impl LeaseHold for AgentCloseHold {
+/// A hold whose Agent's close is the evidence, as in process, counting the
+/// holds let go: an adapter's hold ends its lease where it runs when it is
+/// dropped.
+struct CountedHold(Arc<AtomicUsize>);
+impl LeaseHold for CountedHold {
     fn lost(&self) -> Option<EnvironmentFuture<'static, ()>> {
         None
     }
     fn end(&self, _cause: LeaseEndCause) -> EnvironmentFuture<'_, LeaseRelease> {
         Box::pin(async { LeaseRelease::ByAgentClose })
+    }
+}
+impl Drop for CountedHold {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
     }
 }
 
@@ -1450,6 +1469,10 @@ impl Environment for Host {
             Ok(EnvironmentLease {
                 provider: binding,
                 hold,
+                granted: GrantedTerms {
+                    sandbox: SandboxProfile::HarnessDefault,
+                    timeout_ms: None,
+                },
                 workspace: Some("/srv/work".into()),
             })
         })
@@ -2040,6 +2063,10 @@ async fn b_gate2_a_lost_connection_stops_the_conversation_and_ends_its_lease_as_
 /// set, and each command waits for `finish`, or its stop, and answers so.
 struct CommandHost {
     refusal: Mutex<Option<CommandRefusal>>,
+    /// The terms it answers as granted; `None` answers what it was asked.
+    terms: Mutex<Option<GrantedTerms>>,
+    /// The timeout of each command it ran.
+    timeouts: Arc<Mutex<Vec<u64>>>,
     granted: AtomicUsize,
     finish: tokio::sync::watch::Sender<Option<CommandExit>>,
     stopped: Arc<Mutex<Vec<LeaseEndCause>>>,
@@ -2048,6 +2075,8 @@ impl CommandHost {
     fn new() -> Arc<Self> {
         Arc::new(Self {
             refusal: Mutex::new(None),
+            terms: Mutex::new(None),
+            timeouts: Arc::default(),
             granted: AtomicUsize::new(0),
             finish: tokio::sync::watch::channel(None).0,
             stopped: Arc::default(),
@@ -2083,32 +2112,44 @@ impl CommandEnvironment for CommandHost {
     fn grant<'a>(
         &'a self,
         _lease: &'a LeaseId,
-        _command: &'a CommandWork,
-    ) -> EnvironmentFuture<'a, Result<Box<dyn CommandHold>, CommandRefusal>> {
+        command: &'a CommandWork,
+    ) -> EnvironmentFuture<'a, Result<GrantedCommand, CommandRefusal>> {
         let refusal = *self.refusal.lock().unwrap();
+        let granted = self.terms.lock().unwrap().unwrap_or(GrantedTerms {
+            sandbox: SandboxProfile::None,
+            timeout_ms: Some(command.timeout_ms()),
+        });
         Box::pin(async move {
             if let Some(refusal) = refusal {
                 return Err(refusal);
             }
             self.granted.fetch_add(1, Ordering::SeqCst);
-            Ok(Box::new(FakeCommand {
-                finish: self.finish.subscribe(),
-                stopped: self.stopped.clone(),
-            }) as Box<dyn CommandHold>)
+            Ok(GrantedCommand {
+                hold: Box::new(FakeCommand {
+                    finish: self.finish.subscribe(),
+                    stopped: self.stopped.clone(),
+                    timeouts: self.timeouts.clone(),
+                }),
+                granted,
+            })
         })
     }
 }
 struct FakeCommand {
     finish: tokio::sync::watch::Receiver<Option<CommandExit>>,
     stopped: Arc<Mutex<Vec<LeaseEndCause>>>,
+    /// The timeout each run was given.
+    timeouts: Arc<Mutex<Vec<u64>>>,
 }
 impl CommandHold for FakeCommand {
     fn run(
         self: Box<Self>,
+        timeout_ms: u64,
         mut stop: tokio::sync::watch::Receiver<Option<LeaseEndCause>>,
     ) -> EnvironmentFuture<'static, CommandResult> {
         let mut finish = self.finish.clone();
         let stopped = self.stopped.clone();
+        self.timeouts.lock().unwrap().push(timeout_ms);
         Box::pin(async move {
             let exit = tokio::select! {
                 Ok(exit) = finish.wait_for(Option::is_some) => exit.unwrap(),
@@ -2661,4 +2702,126 @@ async fn a_command_that_ends_after_its_agent_lease_ended_is_recorded_as_late_evi
         LeaseRecord::CommandEnded { lease: ended, exit: CommandExit::Exited { code: 0 }, .. }
             if ended == &lease
     )));
+}
+
+/// Row L1 with an environment that keeps its own policy: what is recorded
+/// is what it answered, so an answer granting other terms than asked — here
+/// a sandbox nobody asked for — is recorded refused, not granted as asked;
+/// nothing runs, and the hold it answered with is let go, ending the lease
+/// there.
+#[tokio::test]
+async fn l1_an_environment_granting_other_terms_than_asked_is_refused_and_nothing_runs() {
+    let root = tempfile::tempdir().unwrap();
+    let provider = Arc::new(ProviderFactory::default());
+    let substitute = Arc::new(Substitute::new(SandboxProfiles::HARNESS_DEFAULT));
+    *substitute.granted.lock().unwrap() = Some(GrantedTerms {
+        sandbox: SandboxProfile::None,
+        timeout_ms: None,
+    });
+    let binding = Arc::new(Provider::new(provider.clone()));
+    let harness = harness(
+        root.path(),
+        substitute.clone(),
+        DELETION_BUDGETS.stop,
+        provider.clone(),
+        binding,
+    );
+    let refused = harness
+        .service
+        .create(
+            harness.id.clone(),
+            caller("create"),
+            RequestedConversation::default(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        refused,
+        ConversationError::LeaseRefused(LeaseRefusal::EnvironmentNotGranted)
+    ));
+    assert_eq!(substitute.opened.load(Ordering::SeqCst), 1);
+    assert_eq!(substitute.released.load(Ordering::SeqCst), 1);
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
+    let lease = harness.lease().await;
+    assert_eq!(kinds(&lease), ["refused"]);
+    let LeaseRecord::Refused { refusal, terms, .. } = &lease.records()[0] else {
+        unreachable!()
+    };
+    assert_eq!(*refusal, LeaseRefusal::EnvironmentNotGranted);
+    // What was asked, since nothing was granted.
+    assert_eq!(terms.sandbox, SandboxProfile::HarnessDefault);
+}
+
+/// Row I5 on the gateway: a command whose environment narrowed its timeout
+/// is recorded issued with the timeout granted, never the one asked, and
+/// runs under it; an answer granting longer than asked, or another sandbox,
+/// is recorded refused and never runs.
+#[tokio::test]
+async fn i5_a_narrowed_command_is_recorded_as_granted_and_a_wider_one_is_refused() {
+    let root = tempfile::tempdir().unwrap();
+    let host = CommandHost::new();
+    let harness = with_command_host(root.path(), host.clone(), Some(devbox_policy()));
+    harness.create().await;
+    let go = harness.running_turn().await;
+    host.finish
+        .send_replace(Some(CommandExit::Exited { code: 0 }));
+    *host.terms.lock().unwrap() = Some(GrantedTerms {
+        sandbox: SandboxProfile::None,
+        timeout_ms: Some(2_000),
+    });
+    let answer = harness
+        .run(command("devbox", &["echo", "hi"], "narrowed"))
+        .await
+        .unwrap();
+    assert!(matches!(answer, CommandAnswer::Ran { .. }), "{answer:?}");
+    assert_eq!(*host.timeouts.lock().unwrap(), [2_000]);
+    let saved = harness.saved_commands();
+    let LeaseRecord::CommandIssued { terms, .. } = &saved[0] else {
+        panic!("issued first: {saved:?}");
+    };
+    assert_eq!(terms.command.timeout_ms(), 2_000);
+    assert_eq!(terms.command.argv()[0].as_ref(), "echo");
+    for (index, wider) in [
+        GrantedTerms {
+            sandbox: SandboxProfile::None,
+            timeout_ms: Some(20_000),
+        },
+        GrantedTerms {
+            sandbox: SandboxProfile::HarnessDefault,
+            timeout_ms: Some(10_000),
+        },
+        GrantedTerms {
+            sandbox: SandboxProfile::None,
+            timeout_ms: None,
+        },
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        *host.terms.lock().unwrap() = Some(wider);
+        let call = format!("wider-{index}");
+        assert_eq!(
+            harness
+                .run(command("devbox", &["echo", "hi"], &call))
+                .await
+                .unwrap(),
+            CommandAnswer::Refused(CommandRefusal::Environment(
+                LeaseRefusal::EnvironmentNotGranted
+            ))
+        );
+        let saved = harness.saved_commands();
+        let Some(LeaseRecord::CommandRefused { terms, refusal, .. }) = saved.last() else {
+            panic!("refused last: {saved:?}");
+        };
+        // The environment's refusal, not this gateway's own policy.
+        assert_eq!(
+            *refusal,
+            CommandRefusal::Environment(LeaseRefusal::EnvironmentNotGranted)
+        );
+        // What was asked, since nothing was granted.
+        assert_eq!(terms.command.timeout_ms(), 10_000);
+    }
+    // Only the narrowed one ran.
+    assert_eq!(*host.timeouts.lock().unwrap(), [2_000]);
+    go.send(()).unwrap();
 }

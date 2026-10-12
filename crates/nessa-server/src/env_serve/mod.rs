@@ -6,8 +6,10 @@
 //! no conversation.
 //!
 //! ```text
-//! composition::env_serve_command ──▶ infrastructure (launcher, ledger, lock)
+//! composition::env_serve_command ──▶ infrastructure (launcher, ledger, lock,
+//!                                     grants)
 //!                                 ──▶ application::serve (the frame loop)
+//! application::serve ──▶ domain (what a peer is granted, and the terms)
 //! the gateway's SSH environment   ──▶ install (where this build lives on a
 //!                                     host, and the commands that put it there)
 //! ```
@@ -16,6 +18,8 @@
 //! launching a harness is.
 #[cfg(unix)]
 pub mod application;
+#[cfg(unix)]
+pub mod domain;
 #[cfg(unix)]
 pub mod infrastructure;
 #[cfg(unix)]

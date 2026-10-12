@@ -361,7 +361,7 @@ their rows; the fold's are named for what they show.
 
 | Row | Domain | Fold | In process |
 | --- | --- | --- | --- |
-| L1 | yes | yes | yes: the lease is Live with the harness default before the first turn |
+| L1 | yes | yes | yes: the lease is Live with the harness default before the first turn; a peer environment may narrow a lease under its owner's grants (a command's timeout), and what it granted is recorded, while an answer wider than or other than asked is refused and nothing runs (`l1_an_environment_granting_other_terms_than_asked_is_refused_and_nothing_runs`, `i5_a_narrowed_command_is_recorded_as_granted_and_a_wider_one_is_refused`; rows I4 to I6 in `docs/design/auth/peer-gateways.md`) |
 | L2 | yes | yes | yes: a profile the environment cannot hold is refused, nothing runs; a refusal that cannot be saved answers a storage failure and is asked again once storage recovers (see below); the deadline half is not reachable, as L3 |
 | L3 | yes | | not reachable: in-process leases carry no deadline |
 | L4 | yes | | not reachable, as L3 |
