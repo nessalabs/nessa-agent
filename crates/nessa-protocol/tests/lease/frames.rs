@@ -2,7 +2,8 @@
 //! and the bounds on a frame and the bytes it carries.
 use super::{
     decode, encode, fingerprint, read_hello, Cleanup, Collection, CollectionRefusal, CommandEnd,
-    Data, FromEnvironment, Hello, StagedArtifact, ToEnvironment, MAX_DATA_BYTES, MAX_FRAME_BYTES,
+    Data, FromEnvironment, GrantRefusal, GrantedTerms, Hello, Sandbox, StagedArtifact,
+    ToEnvironment, MAX_DATA_BYTES, MAX_FRAME_BYTES,
 };
 use crate::pairing::FrameReader;
 use std::collections::BTreeMap;
@@ -24,6 +25,7 @@ fn every_frame_round_trips_and_names_its_lease() {
         ToEnvironment::Grant {
             lease: "l".into(),
             agent: "claude".into(),
+            sandbox: Sandbox::HarnessDefault,
         },
         ToEnvironment::Start {
             lease: "l".into(),
@@ -77,6 +79,28 @@ fn every_frame_round_trips_and_names_its_lease() {
     assert_eq!(keepalive, ToEnvironment::Keepalive);
     assert_eq!(keepalive.lease(), None);
     let from = [
+        FromEnvironment::Granted {
+            lease: "l".into(),
+            terms: GrantedTerms {
+                sandbox: Sandbox::HarnessDefault,
+                timeout_ms: None,
+            },
+        },
+        FromEnvironment::Granted {
+            lease: "l".into(),
+            terms: GrantedTerms {
+                sandbox: Sandbox::None,
+                timeout_ms: Some(30_000),
+            },
+        },
+        FromEnvironment::Refused {
+            lease: "l".into(),
+            reason: GrantRefusal::NotGranted,
+        },
+        FromEnvironment::Refused {
+            lease: "l".into(),
+            reason: GrantRefusal::SandboxUnavailable,
+        },
         FromEnvironment::Stopped {
             lease: "l".into(),
             channel: 2,
@@ -114,6 +138,52 @@ fn every_frame_round_trips_and_names_its_lease() {
         assert_eq!(decoded.lease(), Some("l"));
         assert_eq!(decoded, frame);
     }
+}
+
+/// A grant asks for its sandbox by name, and its answer says the terms
+/// granted: a harness's carries no timeout, a command's its narrowed one.
+#[test]
+fn a_grant_names_its_sandbox_and_its_answer_the_granted_terms() {
+    let grant = serde_json::to_value(ToEnvironment::Grant {
+        lease: "l".into(),
+        agent: "claude".into(),
+        sandbox: Sandbox::HarnessDefault,
+    })
+    .unwrap();
+    assert_eq!(
+        grant,
+        serde_json::json!({"type": "grant", "lease": "l", "agent": "claude", "sandbox": "harnessDefault"})
+    );
+    let harness = serde_json::to_value(FromEnvironment::Granted {
+        lease: "l".into(),
+        terms: GrantedTerms {
+            sandbox: Sandbox::HarnessDefault,
+            timeout_ms: None,
+        },
+    })
+    .unwrap();
+    assert_eq!(
+        harness,
+        serde_json::json!({"type": "granted", "lease": "l", "terms": {"sandbox": "harnessDefault"}})
+    );
+    let command = serde_json::to_value(FromEnvironment::Granted {
+        lease: "l".into(),
+        terms: GrantedTerms {
+            sandbox: Sandbox::None,
+            timeout_ms: Some(5_000),
+        },
+    })
+    .unwrap();
+    assert_eq!(
+        command,
+        serde_json::json!({"type": "granted", "lease": "l", "terms": {"sandbox": "none", "timeoutMs": 5000}})
+    );
+    // A grant without a sandbox is another build's: it is not read as one.
+    assert!(decode::<ToEnvironment>(br#"{"type":"grant","lease":"l","agent":"claude"}"#).is_err());
+    assert_eq!(
+        serde_json::to_value(GrantRefusal::NotGranted).unwrap(),
+        "notGranted"
+    );
 }
 
 fn staged() -> StagedArtifact {
@@ -309,6 +379,7 @@ fn data_and_frames_are_bounded() {
     let oversized = ToEnvironment::Grant {
         lease: "l".repeat(MAX_FRAME_BYTES),
         agent: "claude".into(),
+        sandbox: Sandbox::HarnessDefault,
     };
     assert!(encode(&oversized).is_err());
 }

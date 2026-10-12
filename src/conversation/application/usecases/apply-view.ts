@@ -152,6 +152,7 @@ export function applyView(current: Conversation, view: ConversationView): Conver
       latestInputId: [...seen].at(-1),
       runtime: view.runtime,
       lease: view.lease,
+      artifacts: view.artifacts,
       approvalMode: view.approvalMode,
       approvalModes: view.approvalModes,
       approvalModeChange: view.approvalModeChange,

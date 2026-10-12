@@ -1,5 +1,6 @@
 import type { ImageReference } from "./attachments"
 import type { MessageContent } from "./content"
+import type { PublishedFile } from "./held-files"
 
 export type ConversationTranscriptState =
   "not_loaded" | "partial" | "complete_empty" | "complete" | "stale" | "unknown"
@@ -364,6 +365,8 @@ type ConversationState = {
     runtime?: ConversationRuntime
     /** Where its agent runs, under the lease of its latest run. */
     lease?: ConversationLease
+    /** Files its agent published, as the last view listed them. */
+    artifacts: PublishedFile[]
     /** The committed approval mode in this gateway view. */
     approvalMode: ApprovalMode
     /** The modes this conversation's agent can honour. */

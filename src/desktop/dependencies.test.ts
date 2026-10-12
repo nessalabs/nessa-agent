@@ -7,6 +7,7 @@
  * real servers' apps are registered as the views name them.
  */
 import type {
+  AttachmentApi,
   AuthApi,
   CredentialApi,
   McpAppsApi,
@@ -33,6 +34,8 @@ const settingsParts = {
   pairing: {} as PairingApi,
   credentials: {} as CredentialApi,
   auth: {} as AuthApi,
+  // Read back only for a file a view names; none here does.
+  attachments: {} as AttachmentApi,
 }
 
 describe("the window's widget plugins", () => {

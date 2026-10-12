@@ -19,11 +19,18 @@ import {
   ChatMessageReceipt,
 } from "@nessa-ui/react/chat-bubbles"
 import { MessageContentView } from "./message-content"
+import { PublishedFiles } from "./published-files"
 import { MessageMarkdown } from "@nessa-ui/react/message-markdown"
 import { ProviderSignInCard } from "../../provider-authentication/ui/provider-sign-in"
 import { TranscriptDivider } from "@nessa-ui/react/transcript-divider"
 
-import { type Conversation, type Receipt, type Turn } from "../model"
+import {
+  placePublished,
+  type Conversation,
+  type PublishedFile,
+  type Receipt,
+  type Turn,
+} from "../model"
 import { EmptyState } from "./empty-state"
 import { Starting, Thinking } from "./thinking"
 import { selectedWork } from "./work-selection"
@@ -102,6 +109,7 @@ export function Transcript({
   )
   const provider = conversation.remote?.runtime?.agent
   const sentTurns = conversation.turns.filter((turn) => turn.from === "user").length
+  const published = publishedByRow(conversation, rows)
 
   return (
     <>
@@ -112,6 +120,9 @@ export function Transcript({
             className="mt-auto gap-5 select-text"
           >
             {conversation.turns.length === 0 &&
+            // A file the agent published is something in the conversation,
+            // even with no turn shown: it is listed, not an empty welcome.
+            (conversation.remote?.artifacts ?? []).length === 0 &&
             conversation.phase === "idle" &&
             emptyState ? (
               <EmptyState
@@ -121,6 +132,10 @@ export function Transcript({
                 statusLabel={statusLabel}
               />
             ) : null}
+            <PublishedFiles
+              conversationId={conversation.serverConversationId}
+              files={published.before}
+            />
             {rows.map((row) => {
               const user = row.promptId ? users.get(row.promptId) : undefined
               return (
@@ -128,6 +143,7 @@ export function Transcript({
                   {user && (
                     <TurnRow
                       turn={user}
+                      conversationId={conversation.serverConversationId}
                       streaming={false}
                       animateMount={animateMount}
                       onOpenPaste={onOpenPaste}
@@ -159,6 +175,7 @@ export function Transcript({
                             text: part.text,
                             status: row.status,
                           }}
+                          conversationId={conversation.serverConversationId}
                           streaming={row.status === "running" && streamText}
                           animateMount={animateMount}
                           onOpenPaste={onOpenPaste}
@@ -174,6 +191,10 @@ export function Transcript({
                       )}
                     </React.Fragment>
                   ))}
+                  <PublishedFiles
+                    conversationId={conversation.serverConversationId}
+                    files={published.byRow.get(row.key) ?? []}
+                  />
                   {(provider === "claude" || provider === "codex") &&
                   offersAuthenticationRecovery(
                     conversation.turns.find(
@@ -201,10 +222,15 @@ export function Transcript({
                 </React.Fragment>
               )
             })}
+            <PublishedFiles
+              conversationId={conversation.serverConversationId}
+              files={published.after}
+            />
             {waitingUsers.map((turn) => (
               <TurnRow
                 key={`${turn.id}:waiting`}
                 turn={turn}
+                conversationId={conversation.serverConversationId}
                 streaming={false}
                 animateMount={animateMount}
                 onOpenPaste={onOpenPaste}
@@ -250,10 +276,13 @@ export function Transcript({
 const TurnRow = React.memo(function TurnRow({
   onOpenPaste,
   turn,
+  conversationId,
   streaming,
   animateMount,
 }: {
   turn: Turn
+  /** The gateway's identity for the conversation, to read referenced images from. */
+  conversationId: string | undefined
   onOpenPaste: (text: string) => void
   streaming: boolean
   animateMount: boolean
@@ -265,7 +294,11 @@ const TurnRow = React.memo(function TurnRow({
     >
       <ChatBubble>
         {turn.from === "user" ? (
-          <MessageContentView content={turn.content} onOpenPaste={onOpenPaste} />
+          <MessageContentView
+            content={turn.content}
+            conversationId={conversationId}
+            onOpenPaste={onOpenPaste}
+          />
         ) : (
           <MessageMarkdown streaming={streaming}>{turn.text}</MessageMarkdown>
         )}
@@ -278,6 +311,42 @@ const TurnRow = React.memo(function TurnRow({
     </ChatMessage>
   )
 })
+
+/**
+ * The files the agent published, by row: under the row of the turn that was
+ * running when each was published — the first row that names it — and the
+ * rest before the first row or after the last, as `placePublished` rules.
+ */
+function publishedByRow(
+  conversation: Conversation,
+  rows: readonly { key: string; promptId?: string; sourceTurnId?: string }[],
+): {
+  byRow: Map<string, PublishedFile[]>
+  before: PublishedFile[]
+  after: PublishedFile[]
+} {
+  const files = conversation.remote?.artifacts ?? []
+  const byRow = new Map<string, PublishedFile[]>()
+  if (files.length === 0) return { byRow, before: [], after: [] }
+  const executionOf = new Map(
+    conversation.turns.flatMap((turn) =>
+      turn.executionId ? [[turn.id, turn.executionId] as const] : [],
+    ),
+  )
+  const rowOf = new Map<string, string>()
+  for (const row of rows) {
+    const execution =
+      (row.promptId && executionOf.get(row.promptId)) ||
+      (row.sourceTurnId && executionOf.get(row.sourceTurnId))
+    if (execution && !rowOf.has(execution)) rowOf.set(execution, row.key)
+  }
+  const placed = placePublished(files, rowOf.keys())
+  for (const [execution, published] of placed.byExecution) {
+    const row = rowOf.get(execution)
+    if (row !== undefined) byRow.set(row, published)
+  }
+  return { byRow, before: placed.before, after: placed.after }
+}
 
 /**
  * How a turn ended, when it did not simply finish. It belongs to the turn, not

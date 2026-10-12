@@ -77,3 +77,82 @@ fn watch_requires_a_positive_pass_count() {
     let missing = ["watch", "profile", &target, "1"].map(str::to_owned);
     assert!(matches!(parse(&missing), Err(CommandError::Arguments)));
 }
+
+/// `fetch` names the file exactly as the view does; each part is checked by
+/// the value that owns its syntax before anything is opened or dialled.
+#[test]
+fn fetch_names_a_held_file_and_its_output() {
+    let target = Uuid::new_v4().to_string();
+    let digest = format!("sha256:{}", "0a".repeat(32));
+    let fetch = |digest: &str, mime: &str, size: &str| {
+        parse(
+            &[
+                "fetch",
+                "profile",
+                &target,
+                digest,
+                mime,
+                size,
+                "out/file.png",
+            ]
+            .map(str::to_owned),
+        )
+    };
+    let Ok(Command::Fetch { profile, file, out }) = fetch(&digest, "image/png", "40000") else {
+        panic!("a well-formed fetch parses");
+    };
+    assert_eq!(profile, PathBuf::from("profile"));
+    assert_eq!(out, PathBuf::from("out/file.png"));
+    assert_eq!(file.conversation().to_string(), target);
+    assert_eq!(file.digest().to_string(), digest);
+    assert_eq!(file.media_type().as_str(), "image/png");
+    assert_eq!(file.size(), 40_000);
+    let Ok(Command::Fetch { file, .. }) = fetch(&digest, "image/png", "67108864") else {
+        panic!("the schema's largest size parses");
+    };
+    assert_eq!(file.size(), 67_108_864);
+    for size in [
+        "0",
+        "",
+        "-1",
+        "+1",
+        " 1",
+        "1.0",
+        "67108865",
+        "18446744073709551616",
+    ] {
+        assert!(
+            matches!(
+                fetch(&digest, "image/png", size),
+                Err(CommandError::Arguments)
+            ),
+            "{size:?}"
+        );
+    }
+    let upper = format!("sha256:{}", "0A".repeat(32));
+    for bad in ["0a".repeat(32), upper, "sha256:0a".to_owned()] {
+        assert!(
+            matches!(fetch(&bad, "image/png", "1"), Err(CommandError::Arguments)),
+            "{bad:?}"
+        );
+    }
+    for mime in ["png", "Image/PNG", ""] {
+        assert!(
+            matches!(fetch(&digest, mime, "1"), Err(CommandError::Arguments)),
+            "{mime:?}"
+        );
+    }
+    let conversation = [
+        "fetch",
+        "profile",
+        "not-a-conversation",
+        &digest,
+        "image/png",
+        "1",
+        "out",
+    ]
+    .map(str::to_owned);
+    assert!(matches!(parse(&conversation), Err(CommandError::Identity)));
+    let short = ["fetch", "profile", &target, &digest, "image/png", "1"].map(str::to_owned);
+    assert!(matches!(parse(&short), Err(CommandError::Arguments)));
+}

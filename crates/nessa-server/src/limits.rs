@@ -5,7 +5,7 @@
 //! [`OperationalLimits`], a fixed socket constant, or a bound the protocol
 //! schema publishes. `docs/limits.md` is that catalogue rendered, and the
 //! test beside this module refuses a copy that has drifted.
-use crate::attachments::application::AttachmentLimits;
+use crate::attachments::application::{AttachmentLimits, HeldReads};
 use crate::conversation::application::{
     ArtifactBudget, ARTIFACT_READ_RESUMES, MAX_READ_GRANTS_PER_CONVERSATION,
 };
@@ -256,6 +256,24 @@ fn catalogue() -> &'static [Limit] {
             meaning: "a read whose channel fails more often than this is refused channelUnavailable",
         },
         Limit {
+            id: "artifact.read_range_bytes",
+            tier: "fixed",
+            owner: "attachments HeldReads::MAX_RANGE_BYTES, the schema's ArtifactReadParams maxBytes",
+            meaning: "the most bytes one artifact.read answers with; its base64 fits the socket's ordinary frame",
+        },
+        Limit {
+            id: "artifact.read_busy_wait",
+            tier: "fixed",
+            owner: "attachments HeldReads::BUSY_WAIT",
+            meaning: "how long one artifact.read waits, queued in arrival order, for the store's one read slot before it answers temporarily_unavailable",
+        },
+        Limit {
+            id: "server.artifact_reads",
+            tier: "fixed",
+            owner: "attachments HeldReads::CONCURRENT_READS",
+            meaning: "artifact.read requests the gateway reads or waits on at once, apart from server.requests; past this one is refused temporarily_unavailable at once",
+        },
+        Limit {
             id: "artifact.publish_deadline",
             tier: "fixed",
             owner: "attachments AttachmentLimits::publish_deadline",
@@ -462,6 +480,12 @@ pub(crate) fn effective_json(
         count(ArtifactRecord::MAX_PER_CONVERSATION),
     );
     put("artifact.read_resumes", u64::from(ARTIFACT_READ_RESUMES));
+    put(
+        "artifact.read_range_bytes",
+        count(HeldReads::MAX_RANGE_BYTES),
+    );
+    put("artifact.read_busy_wait", millis(HeldReads::BUSY_WAIT));
+    put("server.artifact_reads", count(HeldReads::CONCURRENT_READS));
     put(
         "artifact.publish_deadline",
         millis(AttachmentLimits::default().publish_deadline),

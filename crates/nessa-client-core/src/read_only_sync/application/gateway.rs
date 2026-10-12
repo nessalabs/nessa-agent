@@ -1,5 +1,6 @@
 use nessa_protocol::product_contract::generated::{
-    CatalogueReadErrorCode, ChangeWatchErrorCode, RecordReadErrorCode, SessionCloseReason,
+    CatalogueReadErrorCode, ChangeWatchErrorCode, ConversationErrorCode, RecordReadErrorCode,
+    SessionCloseReason,
 };
 use std::io::{Read, Result as IoResult, Write};
 use std::net::SocketAddr;
@@ -91,6 +92,20 @@ pub(crate) enum GatewayError {
     Catalogue(CatalogueReadErrorCode),
     /// The gateway refused a change-watch request with its typed code.
     Watch(ChangeWatchErrorCode),
+    /// The gateway refused one `artifact.read` range with its typed code.
+    HeldFile(HeldFileRefusal),
+}
+
+/// How the gateway refuses an `artifact.read` range: a conversation code, or
+/// the socket's own access refusals, which are no conversation code.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HeldFileRefusal {
+    /// The gateway does not know `artifact.read`: it is older than held-file
+    /// reads. Its `unknown_method` is never a `Conversation` code here.
+    UnknownMethod,
+    Conversation(ConversationErrorCode),
+    Forbidden,
+    Unauthorized,
 }
 
 /// One driver attempt's consumed evidence; no durable authentication decision.

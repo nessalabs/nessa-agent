@@ -2,7 +2,11 @@ import { useCallback, useEffect, useState } from "react"
 import { NessaRpcError } from "@nessa/client"
 import { isAuthenticationFailure } from "../session/adapters/client/authentication-failure"
 import { Provider } from "react-redux"
-import { conversationTabSnapshot, restoreConversations } from "../conversation"
+import {
+  conversationTabSnapshot,
+  HeldFilesProvider,
+  restoreConversations,
+} from "../conversation"
 import { createTabStorage } from "../conversation/adapters/browser/tab-storage"
 import { App } from "../panel"
 import {
@@ -19,6 +23,7 @@ import {
 import { makeStore } from "../store"
 import type { Environment } from "../env/environment"
 import { maintainBrowserSession } from "../session/adapters/lifecycle/browser-renewal"
+import { saveFile } from "../host"
 import { createDependencies } from "./dependencies"
 import { BrowserSetupGate } from "./browser-gate"
 
@@ -99,14 +104,20 @@ function BrowserSession({
         dependencies={scope.dependencies}
         onTerminalFailure={onTerminalFailure}
       />
-      <App
-        attachmentResources={scope.dependencies.attachments}
-        canChoosePaths={scope.dependencies.canChoosePaths}
-        digest={scope.dependencies.digest}
-        loadConversationChoices={scope.dependencies.loadConversationChoices}
-        onSignOut={onDisconnect}
-        sessionError={error}
-      />
+      {/* Where its transcripts read held files back from: this scope's gateway. */}
+      <HeldFilesProvider
+        read={scope.dependencies.conversation.readHeldFile}
+        save={saveFile}
+      >
+        <App
+          attachmentResources={scope.dependencies.attachments}
+          canChoosePaths={scope.dependencies.canChoosePaths}
+          digest={scope.dependencies.digest}
+          loadConversationChoices={scope.dependencies.loadConversationChoices}
+          onSignOut={onDisconnect}
+          sessionError={error}
+        />
+      </HeldFilesProvider>
     </BrowserSetupGate>
   )
 }

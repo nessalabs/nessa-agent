@@ -644,13 +644,25 @@ async fn independent_instances_progress() {
     let second =
         SqliteOwnershipStore::open(&directory.path().join("private/second.sqlite3")).unwrap();
     let probe = first.probe.clone();
-    let (gate, watchdog) = physical_tests::hold(probe.clone());
+    let (gate, release, watchdog) = physical_tests::hold_until_released(probe.clone());
     *probe.before.lock().unwrap() = Some(gate);
     let worker = first.clone();
     let held = tokio::spawn(async move { worker.write(&OwnershipSnapshot::default()).await });
     physical_tests::reached(&probe.started, 1).await;
-    second.write(&OwnershipSnapshot::default()).await.unwrap();
+    // Thirty seconds is the hang detector if this write waits on the first
+    // instance's slot. It is not the observation window. The capture stays
+    // held until `release` below.
+    tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        second.write(&OwnershipSnapshot::default()),
+    )
+    .await
+    .expect("the second instance progresses while the first is held")
+    .unwrap();
     assert_eq!(probe.cleaned.load(Ordering::SeqCst), 0);
+    // The neighbor write can outlast a fixed sleep. Release only after the
+    // capture is still shown held, then let it finish.
+    release.release();
     held.await.unwrap().unwrap();
     assert_eq!(watchdog.join().unwrap(), (1, 1, 0));
 }

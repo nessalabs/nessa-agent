@@ -167,7 +167,9 @@ Environments lane, in order:
     conversation's artifact record and view, and the budgets
     ([Artifact channel bounds and resumption](../../design/runtime-architecture.md#artifact-channel-bounds-and-resumption)).
   - [ ] **D2.** A verified download route, inline images in the
-    transcript, and the phone.
+    transcript, and the phone. The route is `artifact.read`, a range read
+    of any held file over the surface's own connection
+    ([Reading a held file back](../../design/runtime-architecture.md#reading-a-held-file-back-slice-d2)).
   - [ ] **D3.** `artifacts.publish` and `artifacts.fetch` in `nessa-mcp`
     once C lands, and a gateway-initiated publish.
 - [x] **E. Record subscriptions; desktop off polling** ([#702](https://github.com/nessalabs/nessa-agent/issues/702);

@@ -1,5 +1,7 @@
 @import "@nessa-ui/react/app.css";
 @source "./";
+/* The conversation vertical's cards the window draws too: the files an agent published. */
+@source "../conversation/ui/published-files.tsx";
 
 html,
 body,

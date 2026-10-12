@@ -479,6 +479,46 @@ fn online_terminal_status_purges_with_one_receipt() {
         .unwrap();
     assert_eq!(fenced, 1);
 }
+/// `fetch` end to end, through the client process: this gateway keeps no
+/// held files, so its `artifact.read` refusal comes back typed on one line,
+/// the exit is a failure, and nothing is written beside the output.
+#[test]
+fn online_fetch_refusal_writes_nothing_beside_its_output() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("gateway");
+    let _gateway = Gateway::start(&root);
+    let setup: Setup =
+        serde_json::from_slice(&std::fs::read(root.join("setup.json")).unwrap()).unwrap();
+    let profile = profile_for(&root, &setup_cache(directory.path()));
+    let outputs = directory.path().join("outputs");
+    std::fs::create_dir(&outputs).unwrap();
+    let out = outputs.join("report.txt");
+    let (ok, report) = command(
+        vec![
+            "fetch".into(),
+            profile,
+            setup.conversation.clone(),
+            format!("sha256:{}", "ab".repeat(32)),
+            "text/plain".into(),
+            "12".into(),
+            out.to_string_lossy().into_owned(),
+        ],
+        false,
+    );
+    assert!(!ok);
+    let report = report.unwrap();
+    assert_eq!(report["operation"], "fetch");
+    assert_eq!(report["successful"], false);
+    assert_eq!(report["connectionCheck"], "performed");
+    assert_eq!(
+        report["fetchFailure"],
+        json!({"code":"gateway","transportFailure":{"code":"heldFile","productCode":"conversations_not_configured"}})
+    );
+    assert_eq!(report["recheck"], Value::Null);
+    assert_eq!(report["enrollment"]["phase"], "active");
+    assert!(!out.exists());
+    assert_eq!(std::fs::read_dir(&outputs).unwrap().count(), 0);
+}
 #[test]
 fn online_saved_projection_uses_durable_progress() {
     let directory = tempfile::tempdir().unwrap();

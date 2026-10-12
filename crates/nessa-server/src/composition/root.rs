@@ -115,6 +115,34 @@ impl CompositionRoot {
                 "nessa env serve requires Unix process supervision".into(),
             )),
             #[cfg(unix)]
+            Command::EnvEnroll { address, code } => {
+                super::env_dial_command::enroll(&address, &code).await
+            }
+            #[cfg(unix)]
+            Command::EnvDial { address } => super::env_dial_command::dial_in(&address).await,
+            #[cfg(not(unix))]
+            Command::EnvEnroll { .. } | Command::EnvDial { .. } => Err(RunError::Agent(
+                "a paired environment requires Unix process supervision".into(),
+            )),
+            #[cfg(unix)]
+            Command::EnvGrant {
+                peer,
+                agents,
+                max_timeout_ms,
+            } => super::env_grant_command::grant(peer.as_deref(), agents, max_timeout_ms).await,
+            #[cfg(unix)]
+            Command::EnvUngrant { peer, what } => {
+                super::env_grant_command::ungrant(peer.as_deref(), what).await
+            }
+            #[cfg(unix)]
+            Command::EnvGrants => super::env_grant_command::grants(),
+            #[cfg(not(unix))]
+            Command::EnvGrant { .. } | Command::EnvUngrant { .. } | Command::EnvGrants => {
+                Err(RunError::Agent(
+                    "granting gateways leases requires Unix process supervision".into(),
+                ))
+            }
+            #[cfg(unix)]
             Command::ArtifactPublish { path, media_type } => {
                 let published = super::artifact_command::execute(&path, media_type).await?;
                 if !published {
@@ -442,7 +470,22 @@ impl CompositionRoot {
                         None => Ok(()),
                     }
                 },
-                conversations.map(|service| async move { service.shutdown().await }),
+                conversations.map(|service| {
+                    let held_reads = shutdown_product.held_reads.clone();
+                    let slot = &slot;
+                    async move {
+                        let drained = service.shutdown().await;
+                        // A held file's ranges are read for surfaces, not for
+                        // conversations, but end with them: fenced, and the
+                        // read under way finished, before the store goes. A
+                        // drain that failed joins the report beside them.
+                        if let Some(reads) = held_reads {
+                            let result = reads.shutdown().await;
+                            update_report(slot, |report| report.observe_held_reads(result));
+                        }
+                        drained
+                    }
+                }),
                 async {
                     // After agents, whose stand-ins end with their servers.
                     #[cfg(unix)]

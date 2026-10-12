@@ -55,6 +55,7 @@ const functional = [
   "approval-deadline",
   "message-sync",
   "command-order",
+  "published-files",
 ]
 
 const options = cli({

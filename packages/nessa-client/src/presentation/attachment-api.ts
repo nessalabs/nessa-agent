@@ -6,10 +6,17 @@ import {
   type AttachmentUploadTransport,
 } from "../application/attachment-upload.js"
 import { requestWithin, type RequestTimer } from "../application/gateway-http.js"
+import {
+  HELD_FILE_BUSY_RETRY_DELAYS_MS,
+  HELD_FILE_RANGE_BYTES,
+  heldFileRefusal,
+  NessaHeldFileError,
+} from "../application/held-file-read.js"
 import { NessaRpcError } from "../application/rpc-error.js"
 import type { RpcRequester } from "../application/session-port.js"
 import { ProductMethod } from "../generated/product.js"
 import {
+  artifactReadRange,
   attachmentBegin,
   MAX_UPLOAD_BYTES,
   storedAttachment,
@@ -67,8 +74,13 @@ export type AttachmentBeginning =
  * `conversation.send`, or undefined for anything that is not one of the four
  * image encodings. Never send a digest you computed.
  *
- * Every failure is a {@link NessaAttachmentError} with a code. Nothing is
- * retried for you.
+ * A file the conversation holds — an image uploaded into it, or an artifact
+ * its agent published — is read back with `fetch`, and handed over only once
+ * its size and SHA-256 are the ones its reference names.
+ *
+ * Every failure of `begin` and `upload` is a {@link NessaAttachmentError} with a
+ * code, and nothing is retried for you; `fetch` fails with a
+ * {@link NessaHeldFileError}.
  */
 export type AttachmentApi = {
   /**
@@ -109,10 +121,85 @@ export type AttachmentApi = {
     file: { mimeType: string; bytes: Blob },
     options?: { signal?: AbortSignal },
   ) => Promise<StoredAttachment>
+  /**
+   * Read back a whole file the conversation holds, verified.
+   *
+   * Asks `artifact.read` for one range of {@link HELD_FILE_RANGE_BYTES} after
+   * another, from the start, each only once the last was answered. Every
+   * answer is held to the range asked: its offset, canonical base64, and
+   * exactly the bytes left up to the range's size — fewer only where the file
+   * ends. The assembled bytes are returned only when their length and SHA-256
+   * are the ones `file` names; nothing unverified is ever handed back, not
+   * even in part. A range the gateway answers `temporarily_unavailable` is
+   * asked again after each of {@link HELD_FILE_BUSY_RETRY_DELAYS_MS} on this
+   * client's timer; every other failure ends the fetch at once.
+   * @param conversationId - Canonical lowercase UUID of the conversation that holds it.
+   * @param file - Exactly as the conversation's view names it: an
+   * `ImageAttachment` of a message, or an artifact's `digest`, `mimeType`
+   * and `size`. The same bytes held as another media type are another file.
+   * @param options - `signal` abandons the fetch between or during ranges,
+   * which then fails as `aborted`; a range already asked for is still answered
+   * to the session, and dropped.
+   * @returns The verified bytes, as a `Blob` of `file.mimeType`.
+   * @throws TypeError for arguments the gateway would refuse, before anything
+   * is sent; otherwise {@link NessaHeldFileError} — see
+   * `HeldFileFailureCode` for each code.
+   */
+  fetch: (
+    conversationId: string,
+    file: AttachmentDescription,
+    options?: { signal?: AbortSignal },
+  ) => Promise<Blob>
 }
 
 const ticketPattern = /^[0-9a-f]{64}$/
 const utf8 = new TextEncoder()
+
+function hex(digest: ArrayBuffer): string {
+  return Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("")
+}
+
+/**
+ * Settles with `work`, or rejects as `aborted` the moment `signal` aborts,
+ * whichever is first. What `work` was doing is not stopped, only no longer
+ * waited for: a request on the session has no way to be withdrawn.
+ */
+function unlessAborted<T>(work: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return work
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(new NessaHeldFileError("aborted"))
+    if (signal.aborted) return onAbort()
+    signal.addEventListener("abort", onAbort, { once: true })
+    work.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort)
+        resolve(value)
+      },
+      (cause: unknown) => {
+        signal.removeEventListener("abort", onAbort)
+        reject(cause)
+      },
+    )
+  })
+}
+
+/** Resolves after `ms` on `timer`, or rejects as `aborted` when `signal` aborts first. */
+function waitOn(timer: RequestTimer, ms: number, signal: AbortSignal | undefined) {
+  return new Promise<void>((resolve, reject) => {
+    const onAbort = () => {
+      stop()
+      reject(new NessaHeldFileError("aborted"))
+    }
+    const stop = timer(ms, () => {
+      signal?.removeEventListener("abort", onAbort)
+      resolve()
+    })
+    if (signal?.aborted) return onAbort()
+    signal?.addEventListener("abort", onAbort, { once: true })
+  })
+}
 
 export function createAttachmentApi(
   session: RpcRequester,
@@ -190,6 +277,64 @@ export function createAttachmentApi(
         // them. Beginning again answers `stored` with one.
         throw new NessaAttachmentError("unexpected_response", reply.status, cause)
       }
+    },
+    async fetch(conversationId, file, options = {}) {
+      if (!conversationIdPattern.test(conversationId))
+        throw new TypeError("Conversation ID must be a canonical lowercase UUID")
+      if (!validDigest(file.digest))
+        throw new TypeError("Digest must be sha256: and 64 lowercase hexadecimal digits")
+      if (!validMediaType(file.mimeType))
+        throw new TypeError("Media type must be lowercase, without parameters")
+      if (!validSize(file.size, MAX_UPLOAD_BYTES))
+        throw new TypeError(`Size must be 1-${MAX_UPLOAD_BYTES} bytes`)
+      // Read once: what was checked is what is asked for and verified against.
+      const { digest, mimeType, size } = file
+      const { signal } = options
+      if (signal?.aborted) throw new NessaHeldFileError("aborted")
+      const bytes = new Uint8Array(size)
+      let offset = 0
+      while (offset < size) {
+        // Exactly this many come back: a whole range, or what is left of the file.
+        const length = Math.min(HELD_FILE_RANGE_BYTES, size - offset)
+        let reply: unknown
+        for (let attempt = 0; ; attempt++) {
+          try {
+            reply = await unlessAborted(
+              session.request(ProductMethod.ArtifactRead, {
+                conversationId,
+                digest,
+                mimeType,
+                size,
+                offset,
+                maxBytes: HELD_FILE_RANGE_BYTES,
+              }),
+              signal,
+            )
+            break
+          } catch (cause) {
+            if (cause instanceof NessaHeldFileError) throw cause
+            const code = heldFileRefusal(cause)
+            const delay = HELD_FILE_BUSY_RETRY_DELAYS_MS[attempt]
+            if (code !== "temporarily_unavailable" || delay === undefined)
+              throw new NessaHeldFileError(code, cause)
+            await waitOn(timer, delay, signal)
+          }
+        }
+        let range: Uint8Array
+        try {
+          range = artifactReadRange(reply, offset, length)
+        } catch (cause) {
+          throw new NessaHeldFileError("unexpected_response", cause)
+        }
+        bytes.set(range, offset)
+        offset += length
+      }
+      // The only check that holds for what arrived: every range was the one
+      // asked for, but only the whole can say they are the file's bytes.
+      const actual = `sha256:${hex(await crypto.subtle.digest("SHA-256", bytes))}`
+      if (signal?.aborted) throw new NessaHeldFileError("aborted")
+      if (actual !== digest) throw new NessaHeldFileError("integrity")
+      return new Blob([bytes], { type: mimeType })
     },
   }
 }

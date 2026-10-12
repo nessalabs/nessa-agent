@@ -13,8 +13,8 @@
 //! it declares only the harness's default: a lease asking for more is refused
 //! by the gateway before this is asked.
 use crate::conversation::application::{
-    Environment, EnvironmentDeclaration, EnvironmentFuture, EnvironmentLease, LeaseHold,
-    LeaseRelease,
+    Environment, EnvironmentDeclaration, EnvironmentFuture, EnvironmentLease, GrantedTerms,
+    LeaseHold, LeaseRelease,
 };
 use nessa_sdk::application::agent_execution::providers::AgentProvider;
 use nessa_sdk::domain::agent_execution::leases::{
@@ -37,13 +37,18 @@ impl Environment for InProcessEnvironment {
     fn open<'a>(
         &'a self,
         _lease: &'a LeaseId,
-        _grant: &'a LeaseTerms,
+        grant: &'a LeaseTerms,
         binding: Arc<dyn AgentProvider>,
     ) -> EnvironmentFuture<'a, Result<EnvironmentLease, LeaseRefusal>> {
         Box::pin(async move {
             Ok(EnvironmentLease {
                 provider: binding,
                 hold: Arc::new(InProcessHold),
+                // No policy of its own: what the gateway admitted.
+                granted: GrantedTerms {
+                    sandbox: grant.sandbox,
+                    timeout_ms: None,
+                },
                 // The gateway's own, which it already knows.
                 workspace: None,
             })

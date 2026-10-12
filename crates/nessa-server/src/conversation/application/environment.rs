@@ -22,7 +22,12 @@
 //! Admission is decided here, once, from the binding's declared sandbox
 //! profiles and the environment's: what is recorded is what was granted
 //! (row L1), and a profile either side cannot hold is a typed refusal
-//! (row L2), never a weaker sandbox.
+//! (row L2), never a weaker sandbox. An environment that admits the lease
+//! under its own policy answers the terms it granted ([`GrantedTerms`]);
+//! those are what is recorded, once checked here against what was asked.
+//! An answer granting anything else — another sandbox, or a timeout a lease
+//! of an agent does not have — is recorded refused, not granted as asked,
+//! and the environment is told to end it.
 //!
 //! This module is the application's. The in-process adapter, the only one
 //! today, is `conversation::infrastructure::environment`; nothing in
@@ -101,12 +106,26 @@ pub(crate) trait Environment: Send + Sync {
     }
 }
 
+/// What an environment says it granted a lease, as it answered: checked
+/// against what was asked before anything is recorded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct GrantedTerms {
+    /// The sandbox it encloses the work in.
+    pub(crate) sandbox: SandboxProfile,
+    /// How long a command may run; `None` for a lease of an agent, which
+    /// has no timeout.
+    pub(crate) timeout_ms: Option<u64>,
+}
+
 /// A lease an environment admitted: the provider that reaches the agent
-/// there, the environment's hold on the lease, and where the agent works
-/// there.
+/// there, the environment's hold on the lease, what it granted, and where
+/// the agent works there.
 pub(crate) struct EnvironmentLease {
     pub(crate) provider: Arc<dyn AgentProvider>,
     pub(crate) hold: Arc<dyn LeaseHold>,
+    /// What it granted: an environment that keeps no policy of its own
+    /// answers what it was asked.
+    pub(crate) granted: GrantedTerms,
     /// The directory the agent works in, as the environment reported it:
     /// `None` for this gateway's own machine, whose workspace the gateway
     /// already knows; a host's own (its hello's) otherwise.
@@ -172,7 +191,11 @@ pub(crate) struct LeaseOpening {
 }
 
 /// Decide `request` against `environment` and, when admitted, open it there.
-/// What is recorded is what was granted, never what was asked (row L1).
+/// What is recorded is what was granted, never what was asked (row L1): the
+/// terms the environment answered, which must be exactly the sandbox asked
+/// and no timeout; any other answer is refused
+/// [`LeaseRefusal::EnvironmentNotGranted`], and the hold it came with is let
+/// go, which ends the lease there.
 pub(crate) async fn open_lease(
     environment: &dyn Environment,
     request: LeaseRequest,
@@ -194,11 +217,28 @@ pub(crate) async fn open_lease(
         .admit(request.sandbox)
     {
         Ok(granted) => {
-            let terms = terms(granted);
-            environment
-                .open(&lease, &terms, binding.clone())
+            let asked = GrantedTerms {
+                sandbox: granted,
+                timeout_ms: None,
+            };
+            match environment
+                .open(&lease, &terms(granted), binding.clone())
                 .await
-                .map(|opened| (terms, opened))
+            {
+                Ok(opened) if opened.granted == asked => {
+                    Ok((terms(opened.granted.sandbox), opened))
+                }
+                Ok(opened) => {
+                    tracing::warn!(
+                        lease = lease.as_str(),
+                        asked = ?asked,
+                        granted = ?opened.granted,
+                        "the environment granted other terms than asked; the lease is refused"
+                    );
+                    Err(LeaseRefusal::EnvironmentNotGranted)
+                }
+                Err(refusal) => Err(refusal),
+            }
         }
         Err(refusal) => Err(refusal),
     };

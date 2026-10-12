@@ -10,6 +10,10 @@ pub(super) struct Gate {
     entered: mpsc::Sender<()>,
     once: AtomicBool,
     release: Mutex<mpsc::Receiver<()>>,
+    /// How long `enter` waits for release before panicking. `None` waits until
+    /// the test releases the gate. `Some` is a hang detector for a watchdog
+    /// that does not release. It is not the observation window.
+    limit: Option<Duration>,
 }
 impl Gate {
     pub(super) fn enter(&self) {
@@ -17,11 +21,11 @@ impl Gate {
             return;
         }
         self.entered.send(()).unwrap();
-        self.release
-            .lock()
-            .unwrap()
-            .recv_timeout(Duration::from_secs(5))
-            .unwrap();
+        let release = self.release.lock().unwrap();
+        match self.limit {
+            Some(limit) => release.recv_timeout(limit).unwrap(),
+            None => release.recv().unwrap(),
+        }
     }
 }
 
@@ -36,6 +40,8 @@ where
         entered: entered_tx,
         once: AtomicBool::new(false),
         release: Mutex::new(release_rx),
+        // Hang detector if the heartbeat watchdog does not release.
+        limit: Some(Duration::from_secs(5)),
     });
     let ticks = Arc::new(AtomicUsize::new(0));
     let observed = ticks.clone();
@@ -72,6 +78,10 @@ where
 }
 
 /// Releases physical work on an OS thread even if the sole runtime thread freezes.
+///
+/// The 200ms sleep is the observation window for a neighbor that does no
+/// physical write of its own. A neighbor that writes can outlast it; that
+/// test holds with [`hold_until_released`] and releases after it has looked.
 pub(super) fn hold(
     probe: Arc<Probe>,
 ) -> (Arc<Gate>, std::thread::JoinHandle<(usize, usize, usize)>) {
@@ -81,8 +91,13 @@ pub(super) fn hold(
         entered: entered_tx,
         once: AtomicBool::new(false),
         release: Mutex::new(release_rx),
+        // Hang detector if this watchdog does not release. The observation
+        // window is the sleep below.
+        limit: Some(Duration::from_secs(5)),
     });
     let watchdog = std::thread::spawn(move || {
+        // The worker signals as it enters. Five seconds is the hang detector
+        // for a worker that has not entered. The hold lasts the sleep below.
         entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
         std::thread::sleep(Duration::from_millis(200));
         probe
@@ -97,6 +112,74 @@ pub(super) fn hold(
         counts
     });
     (gate, watchdog)
+}
+
+/// Keeps the capture entered until `release` is signaled or dropped.
+///
+/// A neighbor write can outlast [`hold`]'s 200ms sleep, so this waits for
+/// the caller. The caller releases after it has observed the neighbor.
+/// Dropping the handle also releases, so a panicked test does not leave the
+/// worker parked. The join value is the probe counts taken at release,
+/// before the capture is allowed to finish.
+///
+/// `nessa-local-storage`'s own tests do not call this. The attribute keeps
+/// that crate's warning set quiet; the server and SDK tests do call it.
+#[allow(dead_code)]
+pub(super) fn hold_until_released(
+    probe: Arc<Probe>,
+) -> (
+    Arc<Gate>,
+    HoldRelease,
+    std::thread::JoinHandle<(usize, usize, usize)>,
+) {
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let (signal_tx, signal_rx) = mpsc::channel();
+    let gate = Arc::new(Gate {
+        entered: entered_tx,
+        once: AtomicBool::new(false),
+        release: Mutex::new(release_rx),
+        limit: None,
+    });
+    let watchdog = std::thread::spawn(move || {
+        // The worker signals as it enters. Five seconds is the hang detector
+        // for a worker that has not entered. The hold lasts until the test
+        // releases it.
+        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let _ = signal_rx.recv();
+        probe
+            .inputs_at_release
+            .store(probe.inputs.load(Ordering::SeqCst), Ordering::SeqCst);
+        let counts = (
+            probe.submitted.load(Ordering::SeqCst),
+            probe.started.load(Ordering::SeqCst),
+            probe.cleaned.load(Ordering::SeqCst),
+        );
+        release_tx.send(()).unwrap();
+        counts
+    });
+    (gate, HoldRelease(Some(signal_tx)), watchdog)
+}
+
+/// Signals [`hold_until_released`] to record probe counts and let the capture finish.
+#[allow(dead_code)]
+pub(super) struct HoldRelease(Option<mpsc::Sender<()>>);
+#[allow(dead_code)]
+impl HoldRelease {
+    pub(super) fn release(mut self) {
+        self.signal();
+    }
+
+    fn signal(&mut self) {
+        if let Some(sender) = self.0.take() {
+            let _ = sender.send(());
+        }
+    }
+}
+impl Drop for HoldRelease {
+    fn drop(&mut self) {
+        self.signal();
+    }
 }
 
 pub(super) async fn reached(counter: &AtomicUsize, expected: usize) {

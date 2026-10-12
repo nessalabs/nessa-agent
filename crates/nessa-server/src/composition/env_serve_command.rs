@@ -6,8 +6,10 @@
 //! config.json "envServe.commands" ──▶ ShepherdCommands (in that workspace), or none
 //! <data>/environment/serve.lock ──▶ ServeLock (one serving process)
 //! <data>/environment/leases.jsonl ──▶ FileLedger
+//! <data>/environment/grants.json ──▶ FileGrants (read at every lease)
 //! <data>/environment/outbox/, a private temporary directory ──▶ FileOutbox
-//! stdin, stdout ──▶ serve(...) until the gateway's stream ends
+//! TokioTimer ──▶ what serving's waits are measured on
+//! stdin, stdout ──▶ serve(Peer::Ssh, ...) until the gateway's stream ends
 //! ```
 //!
 //! Arrows are construction, then the call that runs it. Whatever stops it
@@ -18,10 +20,13 @@ use crate::{
     core::RunError,
     env::{Environment, LEASE_PROTOCOL, VERSION},
     env_serve::{
-        application::{refuse, serve, CommandRunner, HarnessLauncher, Runners, ServeTimings},
+        application::{
+            refuse, serve, CommandRunner, HarnessLauncher, Runners, ServeTimings, Serving, Timer,
+        },
+        domain::Peer,
         infrastructure::{
-            ConfiguredLauncher, FileLedger, FileOutbox, LaunchSpec, ServeLock, ServeLockError,
-            ShepherdCommands, COMMAND_VARIABLES,
+            ConfiguredLauncher, FileGrants, FileLedger, FileOutbox, LaunchSpec, ServeLock,
+            ServeLockError, ShepherdCommands, TokioTimer, COMMAND_VARIABLES,
         },
     },
 };
@@ -31,6 +36,7 @@ use nessa_protocol::{
 };
 use shepherd::{ProcessSupervisor, SupervisorBuilder};
 use std::{collections::HashMap, path::Path, sync::Arc, time::Duration};
+use tokio::io::{AsyncRead, AsyncWrite};
 
 /// How long a new serving process waits for the previous one to finish
 /// ending its leases.
@@ -54,65 +60,86 @@ pub(super) async fn execute() -> Result<(), RunError> {
             return Ok(());
         }
     };
-    let Composed {
-        launcher,
-        commands,
-        ledger,
-        outbox,
-        sockets,
-        lock,
-    } = composed;
-    let runner = commands
-        .as_ref()
-        .map(|(runner, _)| runner.clone() as Arc<dyn CommandRunner>);
-    serve(
-        tokio::io::stdin(),
-        tokio::io::stdout(),
-        VERSION,
-        LEASE_PROTOCOL,
-        Runners {
-            harnesses: launcher,
-            commands: runner,
-        },
-        ledger,
-        outbox,
-        ServeTimings::default(),
-    )
-    .await;
-    // Every command's end is recorded before serving returns; the sweep is
-    // what is left of any of them, and only said.
-    if let Some((_, supervisor)) = commands {
-        match supervisor.shutdown().await {
-            Ok(report) if report.scopes.iter().all(|scope| scope.all_verified()) => {}
-            Ok(_) => tracing::error!("a command's processes could not be confirmed stopped"),
-            Err(error) => tracing::error!(%error, "the command supervisor did not shut down"),
-        }
-    }
-    let _ = std::fs::remove_dir_all(&sockets);
-    drop(lock);
+    // Over standard input and output: whoever logged in over SSH.
+    composed
+        .serve(Peer::Ssh, tokio::io::stdin(), tokio::io::stdout())
+        .await;
+    composed.finish().await;
     Ok(())
 }
 
-struct Composed {
+/// What serving needs on this host, held for as long as it serves: one
+/// connection's leases at a time, over standard input and output or over
+/// each connection a paired environment dials.
+pub(super) struct Composed {
     launcher: Arc<ConfiguredLauncher>,
     /// How commands run here, and what supervises them; `None` when this
     /// host does not run them.
     commands: Option<(Arc<ShepherdCommands>, ProcessSupervisor)>,
     ledger: Arc<FileLedger>,
+    /// What this host's owner grants each peer.
+    grants: Arc<FileGrants>,
     outbox: Arc<FileOutbox>,
     /// The publish points' directory, removed when serving ends.
     sockets: std::path::PathBuf,
     lock: ServeLock,
+    timer: Arc<dyn Timer>,
 }
 
-async fn compose() -> Result<Composed, (Unavailability, RunError)> {
+impl Composed {
+    /// Serve one gateway's leases, `peer`'s, on `input` and `output` until
+    /// that stream ends.
+    pub(super) async fn serve<R, W>(&self, peer: Peer, input: R, output: W)
+    where
+        R: AsyncRead + Unpin + Send + 'static,
+        W: AsyncWrite + Unpin + Send + 'static,
+    {
+        let runner = self
+            .commands
+            .as_ref()
+            .map(|(runner, _)| runner.clone() as Arc<dyn CommandRunner>);
+        serve(
+            input,
+            output,
+            VERSION,
+            LEASE_PROTOCOL,
+            Serving {
+                peer,
+                grants: self.grants.clone(),
+            },
+            Runners {
+                harnesses: self.launcher.clone(),
+                commands: runner,
+            },
+            self.ledger.clone(),
+            self.outbox.clone(),
+            ServeTimings::default(),
+            self.timer.clone(),
+        )
+        .await;
+    }
+
+    /// Stop serving on this host: what is left of commands is swept, the
+    /// publish points removed, and the lock given back.
+    pub(super) async fn finish(self) {
+        // Every command's end is recorded before serving returns; the sweep
+        // is what is left of any of them, and only said.
+        if let Some((_, supervisor)) = self.commands {
+            match supervisor.shutdown().await {
+                Ok(report) if report.scopes.iter().all(|scope| scope.all_verified()) => {}
+                Ok(_) => tracing::error!("a command's processes could not be confirmed stopped"),
+                Err(error) => tracing::error!(%error, "the command supervisor did not shut down"),
+            }
+        }
+        let _ = std::fs::remove_dir_all(&self.sockets);
+        drop(self.lock);
+    }
+}
+
+pub(super) async fn compose() -> Result<Composed, (Unavailability, RunError)> {
     let not_configured = |failure: RunError| (Unavailability::NotConfigured, failure);
     let auth = Environment::auth_directory_from_system()
         .map_err(|error| not_configured(RunError::Agent(error.to_string())))?;
-    let namespace = auth
-        .parent()
-        .ok_or_else(|| not_configured(RunError::Agent("invalid data directory".into())))?
-        .to_path_buf();
     let config = RuntimeConfig::load(&auth).map_err(not_configured)?;
     let launcher = launcher(&config).map_err(not_configured)?;
     let commands = config.env_serve.commands.then(|| {
@@ -125,15 +152,15 @@ async fn compose() -> Result<Composed, (Unavailability, RunError)> {
             ShepherdCommands::new(supervisor.clone(), launcher.workspace().into(), environment);
         (Arc::new(runner), supervisor)
     });
-    let directory = namespace.join("environment");
-    nessa_local_storage::create_directory(&directory)
-        .map_err(|error| not_configured(RunError::Agent(error.to_string())))?;
+    let directory = environment_directory().map_err(not_configured)?;
     let lock = match ServeLock::acquire(&directory.join("serve.lock"), LOCK_WAIT).await {
         Ok(lock) => lock,
         Err(ServeLockError::Busy) => {
             return Err((
                 Unavailability::Busy,
-                RunError::Agent("another nessa env serve holds this data directory".into()),
+                RunError::Agent(
+                    "another nessa env serve or nessa env dial holds this data directory".into(),
+                ),
             ))
         }
         Err(ServeLockError::Io(error)) => {
@@ -159,10 +186,26 @@ async fn compose() -> Result<Composed, (Unavailability, RunError)> {
         launcher: Arc::new(launcher),
         commands,
         ledger: Arc::new(ledger),
+        grants: Arc::new(FileGrants::new(&directory)),
         outbox: Arc::new(outbox),
         sockets,
         lock,
+        timer: Arc::new(TokioTimer::new()),
     })
+}
+
+/// `<data>/environment`, created when absent: where this host keeps what
+/// serving leases needs, and a paired environment its pairing.
+pub(super) fn environment_directory() -> Result<std::path::PathBuf, RunError> {
+    let auth = Environment::auth_directory_from_system()
+        .map_err(|error| RunError::Agent(error.to_string()))?;
+    let directory = auth
+        .parent()
+        .ok_or_else(|| RunError::Agent("invalid data directory".into()))?
+        .join("environment");
+    nessa_local_storage::create_directory(&directory)
+        .map_err(|error| RunError::Agent(error.to_string()))?;
+    Ok(directory)
 }
 
 /// The launcher this host's `agents` block describes: its workspace, and

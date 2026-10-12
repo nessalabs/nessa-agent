@@ -26,7 +26,7 @@ mod attachment_gateway {
         fixture
             .ownership
             .give(CONVERSATION, "organization", "owner");
-        chat_state().with_attachments(fixture.service.clone())
+        chat_state().with_attachments(fixture.service.clone(), fixture.reads())
     }
 
     #[tokio::test]
@@ -326,5 +326,167 @@ mod attachment_gateway {
         .await;
         assert!(limited.starts_with("HTTP/1.1 413"), "{limited}");
         server.abort();
+    }
+
+    fn read(stored: &[u8], media_type: &str, offset: usize, max_bytes: usize) -> serde_json::Value {
+        json!({
+            "conversationId": CONVERSATION,
+            "digest": digest_of(stored).to_string(),
+            "mimeType": media_type,
+            "size": stored.len(),
+            "offset": offset,
+            "maxBytes": max_bytes,
+        })
+    }
+
+    /// The chat fixture's owner owns the conversation, which holds `bytes`.
+    fn holding(fixture: &Fixture, bytes: &[u8], media_type: &str) -> ProductRouteState {
+        fixture.held.hold("organization", CONVERSATION, bytes, media_type);
+        attachment_state(fixture)
+    }
+
+    #[tokio::test]
+    async fn a_reader_reads_a_held_file_back_range_by_range() {
+        let fixture = Fixture::new(AttachmentLimits::default());
+        let bytes: Vec<u8> = (0..70_000u32).map(|i| (i % 251) as u8).collect();
+        let state = holding(&fixture, &bytes, "image/png");
+        let device = chat_session(&state, "owner-device").await;
+        let mut assembled = Vec::new();
+        while assembled.len() < bytes.len() {
+            let reply = chat_request(
+                &state,
+                &device,
+                "artifact.read",
+                read(&bytes, "image/png", assembled.len(), 32 * 1024),
+            )
+            .await;
+            assert!(reply.ok, "{:?}", reply.error);
+            let payload = reply.payload.unwrap();
+            let mut fields: Vec<_> = payload.as_object().unwrap().keys().cloned().collect();
+            fields.sort_unstable();
+            assert_eq!(fields, ["data", "offset"]);
+            assert_eq!(payload["offset"], assembled.len());
+            let data = base64::Engine::decode(
+                &base64::engine::general_purpose::STANDARD,
+                payload["data"].as_str().unwrap(),
+            )
+            .unwrap();
+            assert!(data.len() <= 32 * 1024);
+            assembled.extend(data);
+        }
+        assert_eq!(assembled, bytes);
+    }
+
+    #[tokio::test]
+    async fn a_whole_range_answer_fits_the_ordinary_frame() {
+        let fixture = Fixture::new(AttachmentLimits::default());
+        let bytes = vec![0xff; 32 * 1024];
+        let state = holding(&fixture, &bytes, "application/octet-stream");
+        let device = chat_session(&state, "owner-device").await;
+        let (socket, mut peer) = test_socket(None);
+        let task = tokio::spawn(run_authenticated(socket, state.clone(), device));
+        send_command(
+            &peer,
+            "whole",
+            "artifact.read",
+            read(&bytes, "application/octet-stream", 0, 32 * 1024),
+        );
+        let reply = response(&mut peer).await;
+        assert_eq!(reply["ok"], true, "{reply}");
+        assert_eq!(reply["payload"]["data"].as_str().unwrap().len(), 43_692);
+        drop(peer.input);
+        task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn reading_back_needs_the_read_grant_and_the_conversation_and_names_each_refusal() {
+        let fixture = Fixture::new(AttachmentLimits::default());
+        let state = holding(&fixture, BYTES, "text/plain");
+        // A credential without the read grant is refused by what it holds.
+        for credential in ["owner-phone", "reader", "foreign"] {
+            let session = chat_session(&state, credential).await;
+            let reply =
+                chat_request(&state, &session, "artifact.read", read(BYTES, "text/plain", 0, 4))
+                    .await;
+            assert_eq!(reply.error.unwrap().code, "forbidden", "{credential}");
+        }
+        let device = chat_session(&state, "owner-device").await;
+        let reply =
+            chat_request(&state, &device, "artifact.read", read(BYTES, "text/plain", 0, 4)).await;
+        assert!(reply.ok, "{:?}", reply.error);
+        // Not this principal's conversation: as if it were not there.
+        let other = chat_session(&state, "other-device").await;
+        let reply =
+            chat_request(&state, &other, "artifact.read", read(BYTES, "text/plain", 0, 4)).await;
+        assert_eq!(reply.error.unwrap().code, "conversation_not_found");
+
+        let mut unknown_field = read(BYTES, "text/plain", 0, 4);
+        unknown_field["principalId"] = json!("victim");
+        for (params, code) in [
+            (json!({}), "invalid_request"),
+            (unknown_field, "invalid_request"),
+            (read(BYTES, "Text/Plain", 0, 4), "invalid_request"),
+            (read(BYTES, "text/plain", 0, 0), "invalid_request"),
+            (read(BYTES, "text/plain", 0, 32 * 1024 + 1), "invalid_request"),
+            (read(BYTES, "text/plain", BYTES.len(), 1), "invalid_request"),
+            // The same bytes held as another type are another file.
+            (read(BYTES, "image/png", 0, 4), "attachment_not_found"),
+            (read(b"never held", "text/plain", 0, 4), "attachment_not_found"),
+        ] {
+            let reply = chat_request(&state, &device, "artifact.read", params.clone()).await;
+            assert_eq!(reply.error.unwrap().code, code, "{params}");
+        }
+        fixture.held.release_all();
+        let reply =
+            chat_request(&state, &device, "artifact.read", read(BYTES, "text/plain", 4, 4)).await;
+        assert_eq!(reply.error.unwrap().code, "attachment_not_found");
+
+        fixture
+            .ownership
+            .deleted
+            .lock()
+            .unwrap()
+            .push(crate::attachments_test_support::conversation(CONVERSATION));
+        let reply =
+            chat_request(&state, &device, "artifact.read", read(BYTES, "text/plain", 0, 4)).await;
+        assert_eq!(reply.error.unwrap().code, "conversation_deleted");
+        fixture
+            .ownership
+            .unavailable
+            .store(true, Ordering::SeqCst);
+        let reply =
+            chat_request(&state, &device, "artifact.read", read(BYTES, "text/plain", 0, 4)).await;
+        assert_eq!(reply.error.unwrap().code, "temporarily_unavailable");
+    }
+
+    #[tokio::test]
+    async fn a_gateway_that_runs_no_conversations_reads_nothing_back() {
+        let state = chat_state();
+        let device = chat_session(&state, "owner-device").await;
+        let reply =
+            chat_request(&state, &device, "artifact.read", read(BYTES, "text/plain", 0, 4)).await;
+        assert_eq!(
+            reply.error.unwrap().code,
+            "conversations_not_configured"
+        );
+    }
+
+    #[test]
+    fn the_schema_bounds_a_range_where_the_reads_do() {
+        let schema: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../protocol/product/v1.json"
+        )))
+        .unwrap();
+        let max = crate::attachments::application::HeldReads::MAX_RANGE_BYTES;
+        let defs = &schema["$defs"];
+        assert_eq!(
+            defs["ArtifactReadParams"]["properties"]["maxBytes"]["maximum"],
+            max
+        );
+        assert_eq!(
+            defs["ArtifactReadResult"]["properties"]["data"]["maxLength"],
+            max.div_ceil(3) * 4
+        );
     }
 }

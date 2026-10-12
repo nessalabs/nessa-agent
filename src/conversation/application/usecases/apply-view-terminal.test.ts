@@ -9,6 +9,7 @@ const failureNotice =
 const providerFailure = (revision: string): ConversationView => ({
   questions: [],
   conversationId: "server",
+  artifacts: [],
   approvalMode: "ask",
   approvalModes: [
     { id: "ask", name: "Provider asks", description: "Provider asks where required." },

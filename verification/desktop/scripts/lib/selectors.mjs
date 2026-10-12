@@ -785,3 +785,36 @@ export const panelListFollow = {
   panel: "[data-panel-list-follow]",
   row: "[data-slot=conversation-history-item]",
 }
+
+/**
+ * The published-files fixture (`fixtures/published-files/`, slice D2b): the
+ * desktop window and two panel transcripts, each card a file an agent
+ * published (`src/conversation/ui/published-files.tsx`).
+ */
+export const publishedFiles = {
+  page: "verification/desktop/fixtures/published-files/index.html",
+  title: "Nessa: published files",
+  /** The desktop window's half of the page, and the panels'. */
+  desktop: "#root",
+  panel: "#panel",
+  loosePanel: "#panel-loose",
+  /** One file's card, by the name it was published under. */
+  card: (name) => `[data-published-file="${name}"]`,
+  /** Where a card's picture stands: shown, loading, failed or unread. */
+  picture: "[data-held-file]",
+  shownPicture: '[data-held-file="shown"] img',
+  save: (name) => `button[aria-label="Save ${name}"]`,
+  status: '[role="status"]',
+  download: "a[download]",
+  notKept: "No longer kept",
+  notLoaded: "Couldn’t load",
+  notSaved: "Couldn’t save",
+  retry: "Retry",
+  /** The empty welcome a conversation with nothing in it shows. */
+  welcome: "Nothing here yet",
+  /** Every picture the fixture publishes that is held and readable. */
+  pictures: [
+    "noise.png",
+    ...Array.from({ length: 10 }, (_, index) => `tile-${index}.png`),
+  ],
+}

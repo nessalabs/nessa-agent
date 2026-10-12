@@ -13,6 +13,8 @@ import {
   approvalId,
   inputId,
   modelFor,
+  publishedAfterId,
+  publishedBeforeId,
   replyId,
   reviewOf,
   runningModel,
@@ -215,6 +217,69 @@ describe("a conversation view as a transcript", () => {
       ["e1", "Chart the sales"],
       ["e2", "And costs"],
     ])
+  })
+
+  it("ends a turn's reply with the files it published, and puts the rest after the last turn", () => {
+    const file = (name: string, executionId?: string) => ({
+      ...(executionId === undefined ? {} : { executionId }),
+      lease: "lease-1",
+      name,
+      digest: `sha256:${"a".repeat(64)}`,
+      mimeType: "image/png",
+      size: 3,
+    })
+    const transcript = transcriptFrom(
+      view("c", {
+        messages: [
+          turn({ executionId: "e1", parts: [textPart("Charted", 0)] }),
+          // A turn that said nothing but published a file still has a reply to hold it.
+          turn({ executionId: "e2", userText: "Again" }),
+        ],
+        artifacts: [
+          file("chart.png", "e1"),
+          file("loose.png"),
+          file("again.png", "e2"),
+          file("older.png", "e0"),
+        ],
+        pending: [
+          {
+            executionId: "e3",
+            text: "Waiting",
+            attachments: [],
+            files: [],
+            mode: "queued",
+          },
+        ],
+      }),
+      1,
+      at,
+    )
+    const shown = transcript.messages.map((message) => [
+      message.id,
+      message.parts.map((part) =>
+        part.kind === "file" ? `file:${part.name}` : part.kind,
+      ),
+    ])
+    expect(shown).toEqual([
+      // A turn the bounded view left out is older than every turn shown.
+      [publishedBeforeId, ["file:older.png"]],
+      [inputId("e1"), ["text"]],
+      [replyId("e1"), ["text", "file:chart.png"]],
+      [inputId("e2"), ["text"]],
+      [replyId("e2"), ["file:again.png"]],
+      [publishedAfterId, ["file:loose.png"]],
+      [inputId("e3"), ["text"]],
+    ])
+    // Named exactly as the conversation holds it, and nothing of the lease.
+    expect(transcript.messages[2]!.parts[1]).toEqual({
+      kind: "file",
+      name: "chart.png",
+      digest: `sha256:${"a".repeat(64)}`,
+      mimeType: "image/png",
+      size: 3,
+    })
+    // No other message ever has the loose files' ids.
+    expect(new Set(transcript.messages.map((message) => message.id)).size).toBe(7)
   })
 
   it("D17 (#390): says which app wrote a turn, waiting or not, and nothing of the person's own", () => {

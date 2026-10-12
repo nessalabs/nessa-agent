@@ -3,6 +3,7 @@ import {
   AttachmentStagingError,
   ControlFailedError,
   ConversationReadFailedError,
+  HeldFileReadError,
   SubmissionRefusedError,
   type ConversationEffects,
   type ConversationFollower,
@@ -10,6 +11,9 @@ import {
 } from "../../application/ports"
 import type { ConversationView, Submission } from "../../application/view"
 import { STORED_IMAGE_TYPES } from "../../model"
+
+/** The most published files a view lists, newest last, as the gateway's view does. */
+const SCENARIO_ARTIFACTS_KEPT = 64
 
 /** Explicit development/test injection only; production composition always uses the gateway. */
 export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffects {
@@ -19,6 +23,19 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
   const deleted = new Set<string>()
   // Who follows each conversation, told again whenever it changes.
   const followers = new Map<string, Set<ConversationFollower>>()
+  // The bytes each conversation holds, by the name its view gives them, as
+  // the gateway keeps an upload. Nothing is converted, so what was staged is
+  // what is held.
+  const held = new Map<string, Blob>()
+  const heldKey = (
+    id: string,
+    file: { digest: string; mimeType: string; size: number },
+  ) => JSON.stringify([id, file.digest, file.mimeType, file.size])
+  /** Lets go of everything `id` holds, as closing or deleting it does on the gateway. */
+  const release = (id: string) => {
+    for (const key of held.keys())
+      if ((JSON.parse(key) as string[])[0] === id) held.delete(key)
+  }
   /** Tells `follower` what `id` says now, a task later, as a socket would. */
   const tell = (id: string, follower: ConversationFollower) => {
     void Promise.resolve().then(() => {
@@ -136,6 +153,24 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
     }
     const view = get(input.conversationId)
     if (!view.messages.some((message) => message.executionId === input.executionId)) {
+      // Demo behaviour only, nothing a real agent is promised to do: the echo
+      // agent publishes back every image it was sent, under the turn that
+      // sent it, so a published file can be shown and saved with no gateway.
+      // Its view keeps the newest SCENARIO_ARTIFACTS_KEPT, as the gateway's
+      // does; the bytes stay held, as a record left out of the list does.
+      input.attachments.forEach((image, index) =>
+        view.artifacts.push({
+          executionId: input.executionId,
+          name: `echo-${index + 1}.${image.mimeType.slice("image/".length)}`,
+          digest: image.digest,
+          mimeType: image.mimeType,
+          size: image.size,
+        }),
+      )
+      view.artifacts.splice(
+        0,
+        Math.max(0, view.artifacts.length - SCENARIO_ARTIFACTS_KEPT),
+      )
       view.messages.push({
         executionId: input.executionId,
         userText: input.text,
@@ -172,6 +207,7 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
           ],
           // The gateway derives titles; a scenario has no rule to derive one by.
           title: null,
+          artifacts: [],
           revision: "0",
           messages: [],
           pending: [],
@@ -238,6 +274,7 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
       views.delete(id)
       archived.delete(id)
       deleted.add(id)
+      release(id)
       changed(id)
       listsChanged()
     },
@@ -252,15 +289,26 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
     },
     send,
     steer: send,
-    async stageAttachment(id, file, _bytes, signal) {
+    async stageAttachment(id, file, bytes, signal) {
       get(id)
       if (signal.aborted) throw new AttachmentStagingError("interrupted")
-      // Holds nothing and converts nothing: a scenario has no storage and no
-      // image library. It answers as a gateway would for the four encodings
-      // that need no conversion, and says so for anything that would.
+      // Converts nothing: a scenario has no image library. It answers as a
+      // gateway would for the four encodings that need no conversion, and
+      // says so for anything that would; what it keeps is what was sent.
       const mimeType = STORED_IMAGE_TYPES.find((type) => type === file.mimeType)
       if (!mimeType) throw new AttachmentStagingError("unsupported-image")
-      return { digest: file.digest, mimeType, size: file.size }
+      const stored = { digest: file.digest, mimeType, size: file.size }
+      held.set(heldKey(id, stored), bytes)
+      return stored
+    },
+    async readHeldFile(id, file, signal) {
+      if (scenario === "offline")
+        throw new HeldFileReadError("unavailable", new Error("Scenario: backend offline"))
+      if (deleted.has(id)) throw new HeldFileReadError("deleted")
+      const bytes = held.get(heldKey(id, file))
+      if (!bytes) throw new HeldFileReadError("not-held")
+      if (signal.aborted) throw new HeldFileReadError("unavailable")
+      return new Blob([bytes], { type: file.mimeType })
     },
     async reorder(id, executionIds) {
       const view = get(id)
@@ -314,6 +362,7 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
       )
       view.pending = []
       view.permissions = []
+      release(id)
     },
   }
 }

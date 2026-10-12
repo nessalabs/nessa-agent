@@ -20,9 +20,12 @@ use crate::conversation::infrastructure::LocalReceiverAuthority;
 use crate::device_pairing::infrastructure::PairingOwnerCommands;
 use crate::env::{LEASE_PROTOCOL, VERSION};
 use crate::env_serve::application::{
-    serve, CommandRan, CommandRunner, CommandStop, Runners, ServeTimings,
+    serve, CommandRan, CommandRunner, CommandStop, Runners, ServeTimings, Serving,
 };
-use crate::env_serve::infrastructure::{dial, ConfiguredLauncher, FileLedger, FileOutbox};
+use crate::env_serve::domain::{CommandGrant, Peer, PeerGrant};
+use crate::env_serve::infrastructure::{
+    dial, ConfiguredLauncher, FileGrants, FileLedger, FileOutbox, TokioTimer,
+};
 use crate::product::{ProductDependencies, ProductRouteState};
 use nessa_auth::adapters::cedar::CedarPolicyEvaluator;
 use nessa_auth::adapters::local::LocalCredentialStore;
@@ -229,9 +232,14 @@ impl Gateway {
         let work = CommandWork::new(vec!["echo".into(), word.into()], None, 5_000).unwrap();
         let hold = tokio::time::timeout(WAIT, commands.grant(&lease, &work))
             .await
-            .unwrap()?;
+            .unwrap()?
+            .hold;
         let (_stop, stopped) = watch::channel(None);
-        Ok(tokio::time::timeout(WAIT, hold.run(stopped)).await.unwrap())
+        Ok(
+            tokio::time::timeout(WAIT, hold.run(work.timeout_ms(), stopped))
+                .await
+                .unwrap(),
+        )
     }
 }
 
@@ -251,40 +259,95 @@ struct Machine {
 }
 
 /// Machine E, serving: `nessa env serve`'s frame loop over one connection it
-/// dialed, with a command runner that echoes.
+/// dialed to the gateway `pin` names, with a command runner that echoes,
+/// and commands granted to that gateway.
 fn serving(
     root: &Path,
+    pin: [u8; 44],
     stream: crate::device_pairing::infrastructure::TlsStream,
 ) -> JoinHandle<()> {
-    nessa_local_storage::create_directory(root).unwrap();
-    let workspace = root.canonicalize().unwrap();
-    let ledger = Arc::new(FileLedger::open(workspace.join("leases.jsonl")).unwrap());
-    let outbox = Arc::new(
-        FileOutbox::open(
-            workspace.join("outbox"),
-            workspace.join("sockets"),
-            &workspace,
-        )
-        .unwrap(),
-    );
-    let launcher = Arc::new(ConfiguredLauncher::new(
-        workspace.to_string_lossy().into_owned(),
-        HashMap::new(),
-    ));
+    let host = Host::open(root, pin);
     let (from_gateway, to_gateway) = tokio::io::split(stream);
-    tokio::spawn(serve(
-        from_gateway,
-        to_gateway,
-        VERSION,
-        LEASE_PROTOCOL,
-        Runners {
-            harnesses: launcher,
-            commands: Some(Arc::new(Echo)),
-        },
-        ledger,
-        outbox,
-        ServeTimings::default(),
-    ))
+    tokio::spawn(async move { host.serve(from_gateway, to_gateway).await })
+}
+
+/// E's serving host, as `env serve` composes it: one ledger, outbox and
+/// launcher for every connection it serves, the gateway it dials, and what
+/// its owner grants that gateway.
+struct Host {
+    ledger: Arc<FileLedger>,
+    outbox: Arc<FileOutbox>,
+    launcher: Arc<ConfiguredLauncher>,
+    peer: Peer,
+    grants: Arc<FileGrants>,
+}
+
+impl Host {
+    /// A host whose owner granted the gateway `pin` names commands.
+    fn open(root: &Path, pin: [u8; 44]) -> Self {
+        let host = Self::ungranted(root, pin);
+        host.grant_commands();
+        host
+    }
+
+    /// A host whose owner granted the gateway `pin` names nothing yet.
+    fn ungranted(root: &Path, pin: [u8; 44]) -> Self {
+        nessa_local_storage::create_directory(root).unwrap();
+        let workspace = root.canonicalize().unwrap();
+        Self {
+            peer: Peer::Gateway { pin },
+            grants: Arc::new(FileGrants::new(&workspace)),
+            ledger: Arc::new(FileLedger::open(workspace.join("leases.jsonl")).unwrap()),
+            outbox: Arc::new(
+                FileOutbox::open(
+                    workspace.join("outbox"),
+                    workspace.join("sockets"),
+                    &workspace,
+                )
+                .unwrap(),
+            ),
+            launcher: Arc::new(ConfiguredLauncher::new(
+                workspace.to_string_lossy().into_owned(),
+                HashMap::new(),
+            )),
+        }
+    }
+
+    /// What `nessa env grant --commands` does for this host's gateway.
+    fn grant_commands(&self) {
+        let commands = CommandGrant::new(CommandWork::MAX_TIMEOUT_MS).unwrap();
+        self.grants
+            .change(&self.peer, |_| {
+                Ok::<_, ()>(Some(PeerGrant::nothing().with_commands(commands)))
+            })
+            .unwrap();
+    }
+
+    async fn serve<R, W>(&self, input: R, output: W)
+    where
+        R: tokio::io::AsyncRead + Unpin + Send + 'static,
+        W: tokio::io::AsyncWrite + Unpin + Send + 'static,
+    {
+        serve(
+            input,
+            output,
+            VERSION,
+            LEASE_PROTOCOL,
+            Serving {
+                peer: self.peer,
+                grants: self.grants.clone(),
+            },
+            Runners {
+                harnesses: self.launcher.clone(),
+                commands: Some(Arc::new(Echo)),
+            },
+            self.ledger.clone(),
+            self.outbox.clone(),
+            ServeTimings::default(),
+            Arc::new(TokioTimer::new()),
+        )
+        .await;
+    }
 }
 
 /// Answers `echo` with its arguments.
@@ -336,7 +399,7 @@ async fn a_paired_environment_dials_in_serves_and_stops_at_revocation() {
     let first = dial(a.native, e.identity.clone(), e.pin, clock())
         .await
         .unwrap();
-    let first = serving(&directory.path().join("e"), first);
+    let first = serving(&directory.path().join("e"), e.pin, first);
     a.until_connected(e.peer, true).await;
     let ran = a.echo(e.peer, "hello").await.unwrap();
     assert_eq!(ran.exit, CommandExit::Exited { code: 0 });
@@ -347,7 +410,7 @@ async fn a_paired_environment_dials_in_serves_and_stops_at_revocation() {
     let second = dial(a.native, e.identity.clone(), e.pin, clock())
         .await
         .unwrap();
-    let second = serving(&directory.path().join("e2"), second);
+    let second = serving(&directory.path().join("e2"), e.pin, second);
     tokio::time::timeout(WAIT, first)
         .await
         .expect("the replaced connection's serving ends")
@@ -377,6 +440,38 @@ async fn a_paired_environment_dials_in_serves_and_stops_at_revocation() {
         .err()
         .expect("a revoked environment is refused");
     assert_eq!(refused.kind(), ErrorKind::PermissionDenied);
+}
+
+/// Row I4 end to end: E serves the gateway it dialed only what E's owner
+/// granted it. With no grant, A's command is refused not granted, by E,
+/// over the live connection; once E's owner grants commands, A's next one
+/// runs, on the same connection.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_dialed_gateway_runs_only_what_the_environment_granted_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let a = Gateway::start(&directory.path().join("a")).await;
+    let e = a
+        .pair(
+            &directory.path().join("e-state"),
+            ConsentClass::PeerEnvironment,
+        )
+        .await;
+    let stream = dial(a.native, e.identity.clone(), e.pin, clock())
+        .await
+        .unwrap();
+    let host = Arc::new(Host::ungranted(&directory.path().join("e"), e.pin));
+    let (from_gateway, to_gateway) = tokio::io::split(stream);
+    let _serving = {
+        let host = host.clone();
+        tokio::spawn(async move { host.serve(from_gateway, to_gateway).await })
+    };
+    a.until_connected(e.peer, true).await;
+    assert_eq!(
+        a.echo(e.peer, "ungranted").await.unwrap_err(),
+        CommandRefusal::Environment(LeaseRefusal::EnvironmentNotGranted)
+    );
+    host.grant_commands();
+    assert_eq!(a.echo(e.peer, "granted").await.unwrap().stdout, b"granted");
 }
 
 /// A key paired only to read, as a peer gateway, holds no credential to
@@ -417,7 +512,7 @@ async fn a_lease_asked_across_a_reconnect_runs_on_the_new_connection() {
     let first = dial(a.native, e.identity.clone(), e.pin, clock())
         .await
         .unwrap();
-    let first = serving(&directory.path().join("e"), first);
+    let first = serving(&directory.path().join("e"), e.pin, first);
     a.until_connected(e.peer, true).await;
 
     a.gate.armed.store(true, Ordering::SeqCst);
@@ -432,7 +527,7 @@ async fn a_lease_asked_across_a_reconnect_runs_on_the_new_connection() {
     let second = dial(a.native, e.identity.clone(), e.pin, clock())
         .await
         .unwrap();
-    let _second = serving(&directory.path().join("e2"), second);
+    let _second = serving(&directory.path().join("e2"), e.pin, second);
     tokio::time::timeout(WAIT, first)
         .await
         .expect("the replaced connection's serving ends")
@@ -441,4 +536,209 @@ async fn a_lease_asked_across_a_reconnect_runs_on_the_new_connection() {
     a.gate.released.notify_one();
     let ran = racing.await.unwrap().unwrap();
     assert_eq!(ran.stdout, b"racing");
+}
+
+/// Part 1c: E pairs with `env enroll`'s pairing, waits for the owner's
+/// approval as `env dial` does, then stays dialed in: one host serves each
+/// connection `serve_until_stopped` is given, a connection that is cut is
+/// dialed again, and stop closes the one being served.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_enrolled_environment_waits_for_approval_then_stays_dialed_in() {
+    use super::env_dial_command::serve_until_stopped;
+    use crate::env_serve::application::{approval, redial, Backoff};
+    use crate::env_serve::infrastructure::FilePairingEnvironment;
+    use std::sync::Mutex;
+
+    let directory = tempfile::tempdir().unwrap();
+    let a = Gateway::start(&directory.path().join("a")).await;
+    let created = a
+        .commands
+        .create(&a.session, ConsentClass::PeerEnvironment)
+        .await
+        .unwrap();
+    let environment = directory.path().join("e-environment");
+    nessa_local_storage::create_directory(&environment).unwrap();
+    let native = a.native;
+    let pairing = FilePairingEnvironment::open(&environment, &native.to_string(), clock()).unwrap();
+    let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
+    tokio::time::timeout(WAIT, pairing.enroll(code))
+        .await
+        .unwrap()
+        .unwrap();
+
+    // Not approved yet: waiting is still waiting.
+    let (_running, running) = watch::channel(false);
+    let poll = Duration::from_millis(20);
+    assert!(tokio::time::timeout(
+        Duration::from_millis(300),
+        approval(&pairing, poll, &TokioTimer::new(), running.clone())
+    )
+    .await
+    .is_err());
+    let id = created.record().id();
+    let claimed = a.commands.status(&a.session, id).await.unwrap();
+    let (_, key) = claimed.claim_binding().unwrap();
+    a.commands.approve(&a.session, id, key).await.unwrap();
+    let (identity, pin) =
+        tokio::time::timeout(WAIT, approval(&pairing, poll, &TokioTimer::new(), running))
+            .await
+            .unwrap()
+            .unwrap()
+            .expect("not stopped");
+    pairing.shutdown().await;
+    let peer = PeerEnvironment::new(*key.bytes());
+
+    let host = Arc::new(Host::open(&directory.path().join("e"), pin));
+    let served = Arc::new(Mutex::new(Vec::new()));
+    // Dials after the first wait for this, so the test sees the gateway
+    // drop the cut connection before another one is made.
+    let (release, released) = watch::channel(false);
+    let dials = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (stop, stopping) = watch::channel(false);
+    let dialing = {
+        let served = served.clone();
+        tokio::spawn(async move {
+            redial(
+                move || {
+                    let identity = identity.clone();
+                    let mut released = released.clone();
+                    let n = dials.fetch_add(1, Ordering::SeqCst);
+                    async move {
+                        if n > 0 {
+                            let _ = released.wait_for(|go| *go).await;
+                        }
+                        dial(native, identity, pin, clock()).await
+                    }
+                },
+                move |stream, stopping| {
+                    served.lock().unwrap().push(stream.closer());
+                    let host = host.clone();
+                    async move {
+                        serve_until_stopped(stream, stopping, |input, output| async move {
+                            host.serve(input, output).await;
+                        })
+                        .await;
+                    }
+                },
+                Backoff {
+                    first: Duration::from_millis(10),
+                    most: Duration::from_millis(100),
+                },
+                &TokioTimer::new(),
+                stopping,
+            )
+            .await
+        })
+    };
+    a.until_connected(peer, true).await;
+    let ran = a.echo(peer, "first").await.unwrap();
+    assert_eq!(ran.stdout, b"first");
+
+    // The first connection is cut: E dials again, and the same host serves.
+    served.lock().unwrap()[0].close();
+    a.until_connected(peer, false).await;
+    release.send(true).unwrap();
+    tokio::time::timeout(WAIT, async {
+        while served.lock().unwrap().len() < 2 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("a cut connection is dialed again");
+    a.until_connected(peer, true).await;
+    let ran = a.echo(peer, "dialed in again").await.unwrap();
+    assert_eq!(ran.stdout, b"dialed in again");
+
+    // Stop closes the connection being served, through serve_until_stopped.
+    stop.send(true).unwrap();
+    tokio::time::timeout(WAIT, dialing)
+        .await
+        .expect("stop ends dialing")
+        .unwrap()
+        .unwrap();
+    a.until_connected(peer, false).await;
+    assert_eq!(served.lock().unwrap().len(), 2);
+}
+
+/// Part 1c: waiting for approval ends, with a reason, when the owner denies
+/// the machine, and when nothing was ever paired here, even with the
+/// gateway out of reach.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn waiting_for_approval_ends_when_denied_or_never_paired() {
+    use crate::env_serve::application::{approval, NotApproved};
+    use crate::env_serve::infrastructure::FilePairingEnvironment;
+    use nessa_auth::application::pairing::OwnerDecision;
+
+    let directory = tempfile::tempdir().unwrap();
+    let a = Gateway::start(&directory.path().join("a")).await;
+    let native = a.native.to_string();
+    let (_running, running) = watch::channel(false);
+    let poll = Duration::from_millis(20);
+
+    // Told at once, with no gateway to ask: nothing listens at this address.
+    let nowhere = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .to_string();
+    let unpaired = directory.path().join("unpaired");
+    nessa_local_storage::create_directory(&unpaired).unwrap();
+    let pairing = FilePairingEnvironment::open(&unpaired, &nowhere, clock()).unwrap();
+    let never = tokio::time::timeout(
+        WAIT,
+        approval(&pairing, poll, &TokioTimer::new(), running.clone()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(never.err(), Some(NotApproved::NotPaired));
+    pairing.shutdown().await;
+
+    let created = a
+        .commands
+        .create(&a.session, ConsentClass::PeerEnvironment)
+        .await
+        .unwrap();
+    let denied = directory.path().join("denied");
+    nessa_local_storage::create_directory(&denied).unwrap();
+    let pairing = FilePairingEnvironment::open(&denied, &native, clock()).unwrap();
+    let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
+    tokio::time::timeout(WAIT, pairing.enroll(code))
+        .await
+        .unwrap()
+        .unwrap();
+    a.commands
+        .decide(&a.session, created.record().id(), OwnerDecision::Deny)
+        .await
+        .unwrap();
+    let ended = tokio::time::timeout(WAIT, approval(&pairing, poll, &TokioTimer::new(), running))
+        .await
+        .unwrap();
+    assert_eq!(ended.err(), Some(NotApproved::Ended));
+    pairing.shutdown().await;
+}
+
+/// Part 1c: a pin that is not a key is this side's own setup, which dialing
+/// again cannot change, so it stops redialing; a key that is not this
+/// gateway's is the gateway's answer, and is dialed again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_pin_that_is_not_a_key_is_invalid_input_and_another_key_is_not() {
+    let directory = tempfile::tempdir().unwrap();
+    let a = Gateway::start(&directory.path().join("a")).await;
+    let e = a
+        .pair(
+            &directory.path().join("e-state"),
+            ConsentClass::PeerEnvironment,
+        )
+        .await;
+    let not_a_key = dial(a.native, e.identity.clone(), [0; 44], clock())
+        .await
+        .err()
+        .expect("a pin that is not a key cannot dial");
+    assert_eq!(not_a_key.kind(), ErrorKind::InvalidInput);
+    let other = e.identity.public_spki();
+    let not_the_gateway = dial(a.native, e.identity.clone(), other, clock())
+        .await
+        .err()
+        .expect("another key's pin does not match the gateway");
+    assert_eq!(not_the_gateway.kind(), ErrorKind::ConnectionAborted);
 }

@@ -639,6 +639,10 @@ pub enum LeaseRefusal {
     /// The environment cannot run this agent: its binding cannot start its
     /// harness elsewhere, or the environment has no runtime configured for it.
     AgentUnavailable,
+    /// The environment did not grant the lease as asked: its owner has not
+    /// granted this gateway the agent there, or it answered terms wider than
+    /// those asked, which are never run under.
+    EnvironmentNotGranted,
 }
 
 /// Why a command lease was not issued: the refusals every lease can meet, and

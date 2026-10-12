@@ -62,6 +62,7 @@ use crate::linger::application::NotApplicableLinger;
 #[cfg(target_os = "linux")]
 use crate::linger::{application::LingerSession, infrastructure::SystemLogind};
 use crate::local_data;
+use crate::saving::{self, SaveDestination, SaveSessions};
 use crate::settings::{SettingsFile, SettingsStore};
 use crate::shortcuts::{ShortcutStore, ShortcutsFile};
 use crate::startup::StartupRefusal;
@@ -100,6 +101,13 @@ pub struct HostDependencies {
     /// Where the person chooses files to attach: the operating system's own
     /// file dialog, which the webview has no way of putting on screen itself.
     pub picker: Arc<dyn FilePicker>,
+    /// Where the person chooses to save a file the page hands over: the
+    /// operating system's save dialog, which the webview cannot download
+    /// through itself (`crate::saving`).
+    pub save_destination: Arc<dyn SaveDestination>,
+    /// The saves the page has begun and not finished, by token: one ledger
+    /// for the process, so a part reaches the save it was begun for.
+    pub save_sessions: Arc<SaveSessions>,
     /// What the filesystem says about a file the picker answered with: how long
     /// it is, and what is in it. Its own dependency rather than part of the
     /// picker, because the filesystem is a different outside thing from the
@@ -266,6 +274,8 @@ impl HostDependencies {
                 gateway_endpoint::infrastructure::endpoint_discovery(service_namespace),
             )),
             picker: attachments::file_picker(app),
+            save_destination: saving::save_destination(app),
+            save_sessions: saving::save_sessions(),
             files: attachments::chosen_files(),
             types: attachments::content_types(),
             tickets: attachments::attachment_tickets(),

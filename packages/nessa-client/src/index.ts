@@ -180,6 +180,12 @@ export {
   type AttachmentFailureCode,
 } from "./application/attachment-upload.js"
 export {
+  HELD_FILE_BUSY_RETRY_DELAYS_MS,
+  HELD_FILE_RANGE_BYTES,
+  NessaHeldFileError,
+  type HeldFileFailureCode,
+} from "./application/held-file-read.js"
+export {
   mcpAppDeadlines,
   type McpAppsApi,
   type McpResourceDescription,

@@ -9,6 +9,7 @@ import "./styles.css"
 import { SetupGate } from "./onboarding"
 import { nativeAgentApiKeys } from "./onboarding/adapters/agent-api-key"
 import { App } from "./panel"
+import { HeldFilesProvider } from "./conversation"
 import { SessionLifecycle } from "./session"
 import { makeStore } from "./store"
 import { createDependencies } from "./composition/dependencies"
@@ -21,6 +22,7 @@ import {
   hostStartup,
   quitNessa,
   restartNessa,
+  saveFile,
   windowSize,
   windowSurface,
 } from "./host"
@@ -48,15 +50,18 @@ if (!container) throw new Error("missing #root")
 // Setup owns an authenticated session for explicit native-runtime downloads.
 const panel = (
   <Provider store={store}>
-    <App
-      onProviderSignIn={signInToProvider}
-      canSignInToProvider={providerLoginAvailable}
-      attachmentResources={dependencies.attachments}
-      canChoosePaths={dependencies.canChoosePaths}
-      digest={dependencies.digest}
-      loadConversationChoices={dependencies.loadConversationChoices}
-      agentInstallations={dependencies.agentInstallations}
-    />
+    {/* Where its transcripts read held files back from: the conversation effects'. */}
+    <HeldFilesProvider read={dependencies.conversation.readHeldFile} save={saveFile}>
+      <App
+        onProviderSignIn={signInToProvider}
+        canSignInToProvider={providerLoginAvailable}
+        attachmentResources={dependencies.attachments}
+        canChoosePaths={dependencies.canChoosePaths}
+        digest={dependencies.digest}
+        loadConversationChoices={dependencies.loadConversationChoices}
+        agentInstallations={dependencies.agentInstallations}
+      />
+    </HeldFilesProvider>
     {dependencies.usesLocalSession && <SessionLifecycle dependencies={dependencies} />}
   </Provider>
 )

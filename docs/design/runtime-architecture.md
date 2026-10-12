@@ -361,7 +361,7 @@ their rows; the fold's are named for what they show.
 
 | Row | Domain | Fold | In process |
 | --- | --- | --- | --- |
-| L1 | yes | yes | yes: the lease is Live with the harness default before the first turn |
+| L1 | yes | yes | yes: the lease is Live with the harness default before the first turn; a peer environment may narrow a lease under its owner's grants (a command's timeout), and what it granted is recorded, while an answer wider than or other than asked is refused and nothing runs (`l1_an_environment_granting_other_terms_than_asked_is_refused_and_nothing_runs`, `i5_a_narrowed_command_is_recorded_as_granted_and_a_wider_one_is_refused`; rows I4 to I6 in `docs/design/auth/peer-gateways.md`) |
 | L2 | yes | yes | yes: a profile the environment cannot hold is refused, nothing runs; a refusal that cannot be saved answers a storage failure and is asked again once storage recovers (see below); the deadline half is not reachable, as L3 |
 | L3 | yes | | not reachable: in-process leases carry no deadline |
 | L4 | yes | | not reachable, as L3 |
@@ -1092,7 +1092,7 @@ machines is a transfer of an artifact:
 | Movement | Channel | Verified by |
 | --- | --- | --- |
 | Agent output on an environment to the gateway (a DMG, a screenshot, a log) | The **artifact channel**: sftp on the SSH connection; a bounded artifact stream on a paired connection | Digest on receipt; hold recorded with the lease as cause |
-| Gateway to a surface (download, preview) | The existing ticketed `/attachments` path; the device's protected channel for phones | Digest on receipt |
+| Gateway to a surface (download, preview) | `artifact.read`, by range over the surface's own authenticated connection: the product socket for a desktop or browser, the device's protected channel for a phone | Size and digest of the assembled file, on receipt |
 | Gateway to an environment (an image in a prompt, a file the agent needs) | Lease-scoped ticket, fetched by digest | Digest on receipt |
 | Surface upload (a screenshot you drag in) | The existing ticketed upload | Digest at the gateway |
 
@@ -1177,6 +1177,155 @@ sequenceDiagram
   record is then the only word on it, and publishing again answers which.
   Its hold is the conversation's, released with its other files; the
   record stays as history.
+
+### Reading a held file back (slice D2)
+
+A surface reads any file a conversation holds (an artifact its agent
+published, or an image uploaded into it) with `artifact.read`, one range
+of at most `artifact.read_range_bytes` (32 KiB) at a time, base64 in an
+ordinary answer. It names the file exactly as the view does: digest, media
+type and size, since the same bytes held as another type are another file.
+
+```mermaid
+sequenceDiagram
+    participant U as Surface (desktop, browser or phone)
+    participant P as Product socket
+    participant H as HeldReads (attachments)
+    participant S as Attachment store
+    U->>P: artifact.read{conversation, digest, type, size, offset, maxBytes}
+    P->>P: conversation.read grant, admitted to the conversation (a device only if shared)
+    P->>H: read(caller, conversation, file, range)
+    H->>H: the caller's conversation? (as an upload asks)
+    H->>S: read_held(file, range): the hold for exactly this file, and its bytes opened, in one step
+    S-->>H: at most 32 KiB
+    H-->>P: the range
+    P-->>U: {offset, data}
+    U->>U: next range, then size and digest of the whole, before it is shown or kept
+```
+
+- **One authority for what may be read.** The hold is: only a file the
+  caller's conversation keeps now, whatever else names its digest. Every
+  range checks again, in the step that opens the bytes, so a release between
+  two ranges answers the next `attachment_not_found`, and no range of other
+  bytes is served under its name. A file kept again in the meantime reads on.
+- **One path for every surface.** The answer is ordinary, so it fits the
+  socket's 64 KiB frame and the protected channel's alike; no unauthenticated
+  route or ticket is needed, since each surface already holds an
+  authenticated connection. A 64 MiB file is 2048 ranges, which is cheap on
+  the loopback a desktop uses and slow on a distant phone; a streamed route
+  is a later change if that matters.
+- **Verified by the receiver.** A range is not checked on its own. The
+  surface assembles the file and checks its size and digest before it shows
+  or keeps it, which is the only check that holds for what arrived.
+- **Contention.** The store reads with one slot, held for one record read
+  and one range. Ranges queue for it in arrival order, each at most
+  `artifact.read_busy_wait`, then answer `temporarily_unavailable`, and the
+  same range can be asked again. At most `server.artifact_reads` ranges are
+  read or waiting at once, on capacity of their own, so a burst of them never
+  holds the requests every other method needs; a surface reads its ranges
+  one after another.
+- **Not audited.** A read changes nothing and is admitted exactly as
+  `conversation.read` is, which is not audited either.
+
+On the client, `attachments.fetch` in `@nessa/client` is the one reader:
+it asks for 32 KiB ranges from offset 0, one after another, holds each answer
+to the range asked (its offset, canonical base64, and exactly the bytes left,
+fewer only at the end), asks a busy range again after each of
+`HELD_FILE_BUSY_RETRY_DELAYS_MS`, and returns a `Blob` only once the whole
+has the named size and SHA-256 (`NessaHeldFileError` otherwise, `integrity`
+for bytes that are not the file). The panel and the desktop window read
+through the conversation vertical's `heldFileReader`, the one place the
+client's codes become the panel's `HeldFileFailure`. Its `HeldFilesProvider`
+reads a file when something first shows it, keeps one object URL per
+conversation and file while anything shows it, and revokes it after; a newer
+view of the conversation reads nothing again. Every read a window makes, for
+showing or saving, waits in one queue two at a time: the panel and the
+desktop window each take two of the gateway's four read slots. That is not a
+guarantee — a read abandoned mid-range can hold its slot until the gateway
+finishes that range, and other devices read too — so a read refused busy
+recovers through the retries below rather than failing. A file that is not held, a deleted conversation and bytes that did not
+verify are kept while shown; a file that could not be read now is asked for
+again after a growing wait, or at once from its Retry. The transcript places
+each file with `placePublished`, the one rule the panel and the desktop share:
+under the turn that published it, before the first turn when that turn is one
+the bounded view left out, and after the last when no turn ran. A picture up
+to the gateway's image bound is shown once verified; a larger one, and any
+other file, is read only to save it. Saving goes through the host's own port
+(`saveFile`). A plain browser downloads from an object URL it revokes after.
+The desktop app's webviews have no download handler and its link policy
+refuses `blob:`, so there the host writes the file (`src-tauri/src/saving/`)
+in bounded steps:
+
+- `save_file_begin` shows the save dialog. It answers cancelled, or a token
+  for a temporary file created new beside the chosen path.
+- `save_file_part` carries one raw part of at most 1 MiB under that token.
+  A JSON body is accepted only within the same bound.
+- `save_file_finish` syncs the file and renames it over the chosen path.
+- `save_file_abort` removes the temporary file. The page calls it on any
+  failure.
+
+A file past 64 MiB is refused and its temporary file removed. A part after
+finish or abort is refused. A save left idle for about 60 s is let go and its
+temporary file removed. So the chosen path holds either the whole file or
+what was there before. Images a turn names by reference are painted from the
+same reader, saying why when they cannot be. `published-files.mjs` checks
+this surface in the browser
+([checklist](../../verification/desktop/CHECKLIST.md#published-files-701)).
+
+```mermaid
+sequenceDiagram
+    participant T as Transcript card (panel or desktop)
+    participant C as HeldFilesProvider (queue, 2 at a time; object URL per file shown)
+    participant R as heldFileReader (conversation vertical)
+    participant A as attachments.fetch (@nessa/client)
+    participant P as Product socket
+    participant H as Host (src-tauri saving, desktop only)
+    T->>C: show {conversation, digest, type, size}
+    C->>R: read, once while it is shown, when its turn in the queue comes
+    R->>A: fetch(conversation, file, signal)
+    loop each 32 KiB range from 0
+        A->>P: artifact.read{offset, maxBytes 32768}
+        P-->>A: {offset, data} or temporarily_unavailable (asked again, bounded)
+        A->>A: offset, base64 and length are the range asked
+    end
+    A->>A: size and SHA-256 of the whole
+    A-->>R: Blob, or NessaHeldFileError
+    R-->>C: Blob, or HeldFileReadError(not-held, deleted, damaged, unavailable)
+    C-->>T: object URL, or the reason; revoked when nothing shows it
+    Note over C: unavailable: asked again after a growing wait, or on Retry
+    T->>C: Save
+    C-->>T: the bytes shown, the read going, or a queued read
+    alt browser
+        T->>T: saveFile: object URL download, revoked after
+    else desktop app
+        T->>H: save_file_begin{name}
+        H-->>T: cancelled, or token (temporary file created beside the chosen path)
+        loop each part of at most 1 MiB
+            T->>H: save_file_part (raw body, token header)
+            H-->>T: written, or refused (past 64 MiB, not open)
+        end
+        T->>H: save_file_finish{token}
+        H->>H: sync, rename over the chosen path
+        Note over T,H: any failure: save_file_abort removes the temporary file; idle 60 s: let go
+    end
+```
+
+A paired device reads the same way over its protected channel:
+`nessa-client-core`'s `fetch PROFILE CONVERSATION DIGEST MIMETYPE SIZE OUT`
+(`fetch_held_file`) asks one 32 KiB range per operation, holds each answer to
+the range asked, and retries a busy range after each of
+`BUSY_RETRY_DELAYS_MS`. It asks at least one range every time, the last one
+again when a part is already complete, so a part never stands in for the
+gateway's answer. It assembles into `OUT.<key>.part`, keyed on the
+conversation, digest, media type and size, held with an exclusive lock and
+resumed from its length after a failure, and hard-links
+it at `OUT` only once the part as it is on disk has the named size and SHA-256
+and is synced; the link itself refuses anything at `OUT`, so nothing there is
+ever replaced. A part that is not the file is removed or emptied, so `OUT`
+holds only verified bytes. `show` lists the artifacts that
+name what to fetch. A Terminal enrollment's purge empties the device's cache
+and leaves files it fetched untouched; the order is in
+[the example's fetch rows](read-only-sync-example.md#fetching-a-held-file).
 
 ## Previews: a port, not a file
 

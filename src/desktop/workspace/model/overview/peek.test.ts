@@ -39,6 +39,21 @@ describe("peekOf", () => {
     expect(peekOf(conversation(asked, begun)).since).toEqual([begun])
   })
 
+  it("drops the files the agent published, whose cards and bytes are the session's", () => {
+    const file: Part = {
+      kind: "file",
+      name: "chart.png",
+      digest: `sha256:${"a".repeat(64)}`,
+      mimeType: "image/png",
+      size: 3,
+    }
+    const asked = message("user", 1, text("Chart it."))
+    const drawn = message("agent", 2, text("Here."), file)
+    const only = message("agent", 3, file)
+    const peek = peekOf(conversation(asked, drawn, only))
+    expect(peek.since.map((item) => item.parts)).toEqual([[text("Here.")]])
+  })
+
   it("tells the turn from the person's latest message, then everything the agent did since, in order", () => {
     const first = message("user", 1, text("Fix it."))
     const earlier = message("agent", 2, step("old"), text("Fixed."))
