@@ -94,8 +94,12 @@ An end-turn the binding cannot perform is recorded as continue and does not
 cancel the turn. It does not close the session. The answer, the withdrawal,
 and the turn cancel use the agent's control path. If the answer or the
 withdrawal fails, the answer or withdrawal still records the outcome that was
-intended, and the turn is cancelled; if that fails too, the session stops
-on the observation-failure path. A withdrawal's cancellation code names that
+intended, and the turn is cancelled. The session stays usable, but the
+invocation returns `AgentError::ExecutionObservation` carrying that failure
+beside the provider result. Like any failed invocation, that stops queued
+work behind it. If the turn cancel fails too, both failures are
+returned, delivery first, and the session stops on the observation-failure
+path. A withdrawal's cancellation code names that
 outcome: `hook-refusal.continue`, `hook-refusal.end_turn`, or
 `hook-refusal.close_session`. `ToolVerdict::refuse(_, CloseSession)` withdraws the review as the hook, recording
 `hook-refusal.close_session` and the hook's reason, then closes with

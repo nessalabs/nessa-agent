@@ -78,8 +78,12 @@ recording the applied outcome, then closes with
 The deny, the withdrawal, and the turn cancel go through the agent's control
 path. If
 the deny or the withdrawal fails, that refusal still records the outcome that
-was intended, and the turn is cancelled; if that fails too, the session stops
-on the observation-failure path. A withdrawal names the applied outcome in its
+was intended, and the turn is cancelled. The session stays usable, and the
+invocation still reports the failure beside the provider result, so an
+unaudited refusal never reads as a clean turn. As with any failed invocation,
+queued work behind it is stopped rather than dispatched blind. If the turn cancel fails too,
+both failures are reported, delivery first, and the session stops on the
+observation-failure path. A withdrawal names the applied outcome in its
 cancellation code. A hook error, panic, timeout, or busy guard is
 deny-and-continue with the reason `"hook failed: error"`,
 `"hook failed: panic"`, `"hook failed: timeout"`, or `"hook failed: busy"`.

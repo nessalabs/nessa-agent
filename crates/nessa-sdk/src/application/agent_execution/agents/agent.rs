@@ -1497,6 +1497,7 @@ impl Agent {
         let mut stop_after_ready_settlement = false;
         let mut pending_provider_outcome = None;
         let mut pending_save_failure: Option<StorageError> = None;
+        let mut refusal_failure: Option<AgentError> = None;
         loop {
             if let Some(error) = pending_save_failure.take() {
                 storage_failure.get_or_insert(error.clone());
@@ -1765,19 +1766,29 @@ impl Agent {
                                 Ok(()) => {
                                     if let ToolVerdict::Refuse(_) = &decision.verdict {
                                         drop(events);
-                                        if let Some((confirmed, failure)) = self
+                                        let applied = self
                                             .apply_permission_verdict(
                                                 &event,
                                                 decision.index,
                                                 decision.verdict.clone(),
                                             )
-                                            .await
-                                        {
-                                            if let Some(failure) = failure {
+                                            .await;
+                                        if let Some(confirmed) = applied.closed {
+                                            if let Some(failure) = applied.failure {
                                                 observation_failure = Some(failure);
                                             }
                                             ended = true;
                                             stop_after_ready_settlement = !confirmed;
+                                        } else if let Some(failure) = applied.failure {
+                                            // The turn ended and the session stays
+                                            // usable; the failure is still reported.
+                                            refusal_failure = Some(match refusal_failure.take() {
+                                                None => failure,
+                                                Some(first) => AgentError::MultipleOperationFailures {
+                                                    first_error: Box::new(first),
+                                                    subsequent_error: Box::new(failure),
+                                                },
+                                            });
                                         }
                                         events = attached.events.lock().await;
                                     }
@@ -1848,6 +1859,13 @@ impl Agent {
                 }
             }
         }
+        let observation_failure = match (refusal_failure, observation_failure) {
+            (Some(first), Some(later)) => Some(AgentError::MultipleOperationFailures {
+                first_error: Box::new(first),
+                subsequent_error: Box::new(later),
+            }),
+            (first, later) => first.or(later),
+        };
         let result = match observation_failure {
             Some(error) => Err(AgentError::ExecutionObservation {
                 error: Box::new(error),
@@ -1903,19 +1921,18 @@ impl Agent {
     /// control path as an explicit answer, withdrawal, or turn cancel. An
     /// end-turn the binding cannot perform is recorded as continue. A continue
     /// with no deny option becomes an end-turn when the binding can cancel the
-    /// turn. A delivery failure ends the turn; if that also fails, the session
-    /// stops on the observation-failure path.
-    ///
-    /// `Some` means that path closed the session. The bool is whether the close
-    /// was confirmed, and the error is the failure to report.
+    /// turn. A delivery failure ends the turn and is reported, but leaves the
+    /// session usable. If ending the turn also fails, both failures are
+    /// reported, delivery first, and the session stops on the
+    /// observation-failure path.
     async fn apply_permission_verdict(
         &self,
         event: &ExecutionEvent,
         index: Option<usize>,
         verdict: ToolVerdict,
-    ) -> Option<(bool, Option<AgentError>)> {
+    ) -> AppliedVerdict {
         let ToolVerdict::Refuse(refusal) = verdict else {
-            return None;
+            return AppliedVerdict::default();
         };
         let (reason, outcome) = (refusal.reason(), refusal.outcome());
         if outcome == RefusalOutcome::CloseSession {
@@ -1936,7 +1953,10 @@ impl Agent {
                 (Some(operation_error), None) => Some(operation_error),
                 (None, cleanup_error) => cleanup_error,
             };
-            return Some((confirmed, failure));
+            return AppliedVerdict {
+                closed: Some(confirmed),
+                failure,
+            };
         }
         let effective = effective_hook_outcome(
             outcome,
@@ -1946,21 +1966,35 @@ impl Agent {
         let delivered = self
             .deliver_hook_refusal(event, index, reason, effective)
             .await;
-        if delivered.is_err() || effective == RefusalOutcome::EndTurn {
-            match self.cancel_turn(event.execution_id().clone()).await {
-                Ok(()) => None,
-                Err(failure) => {
-                    let (error, confirmed) = self
-                        .stop_after_observation_failure(
-                            failure.into_error(),
-                            ObservationFailureCause::ExecutionFailed,
-                        )
-                        .await;
-                    Some((confirmed, Some(error)))
+        let delivery_failure = delivered.err();
+        if delivery_failure.is_none() && effective != RefusalOutcome::EndTurn {
+            return AppliedVerdict::default();
+        }
+        match self.cancel_turn(event.execution_id().clone()).await {
+            Ok(()) => AppliedVerdict {
+                closed: None,
+                failure: delivery_failure,
+            },
+            Err(failure) => {
+                let cancel_failure = failure.into_error();
+                let failure = match delivery_failure {
+                    Some(delivery) => AgentError::MultipleOperationFailures {
+                        first_error: Box::new(delivery),
+                        subsequent_error: Box::new(cancel_failure),
+                    },
+                    None => cancel_failure,
+                };
+                let (error, confirmed) = self
+                    .stop_after_observation_failure(
+                        failure,
+                        ObservationFailureCause::ExecutionFailed,
+                    )
+                    .await;
+                AppliedVerdict {
+                    closed: Some(confirmed),
+                    failure: Some(error),
                 }
             }
-        } else {
-            None
         }
     }
 
@@ -2273,6 +2307,15 @@ impl Agent {
             combine_owned_close(seal, cleanup, descendants)
         })
     }
+}
+
+/// What applying a permission-review refusal did.
+#[derive(Default)]
+struct AppliedVerdict {
+    /// `Some` when the session was closed; the bool is whether the close was confirmed.
+    closed: Option<bool>,
+    /// A failure to report from this invocation, closed or not.
+    failure: Option<AgentError>,
 }
 
 fn combine_owned_close(

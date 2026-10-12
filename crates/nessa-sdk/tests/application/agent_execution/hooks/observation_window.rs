@@ -46,6 +46,7 @@ struct ScriptedBackend {
     release: Arc<tokio::sync::Notify>,
     turn_cancel: bool,
     fail_delivery: bool,
+    fail_turn_cancel: bool,
 }
 
 fn admit_reviews(
@@ -213,8 +214,15 @@ impl ProviderSessionBackend for ScriptedBackend {
         let controller = self.controller.clone();
         let reviews = self.reviews.clone();
         let release = self.release.clone();
+        let fail = self.fail_turn_cancel;
         Box::pin(async move {
             turn_cancels.fetch_add(1, Ordering::SeqCst);
+            if fail {
+                return Err(ProviderOperationFailure::new(
+                    AgentError::Transport("turn cancel failed".into()),
+                    ProviderSessionState::Usable,
+                ));
+            }
             clear_turn_reviews(&controller, &turn, &reviews);
             release.notify_waiters();
             Ok(())
@@ -241,6 +249,7 @@ struct ScriptedProvider {
     release: Arc<tokio::sync::Notify>,
     turn_cancel: bool,
     fail_delivery: bool,
+    fail_turn_cancel: bool,
 }
 
 impl AgentProvider for ScriptedProvider {
@@ -272,6 +281,7 @@ impl AgentProvider for ScriptedProvider {
                         release: release.clone(),
                         turn_cancel: self.turn_cancel,
                         fail_delivery: self.fail_delivery,
+                        fail_turn_cancel: self.fail_turn_cancel,
                     }),
                     capabilities(),
                 ),
@@ -357,6 +367,7 @@ struct Fixture {
 struct FixtureKnobs {
     turn_cancel: bool,
     fail_delivery: bool,
+    fail_turn_cancel: bool,
 }
 
 async fn agent_with(events: Vec<ExecutionEvent>, hooks: Vec<Arc<dyn InvocationHook>>) -> Fixture {
@@ -366,6 +377,7 @@ async fn agent_with(events: Vec<ExecutionEvent>, hooks: Vec<Arc<dyn InvocationHo
         FixtureKnobs {
             turn_cancel: true,
             fail_delivery: false,
+            fail_turn_cancel: false,
         },
     )
     .await
@@ -409,6 +421,7 @@ async fn open_on_clock(
             release: Arc::new(tokio::sync::Notify::new()),
             turn_cancel: knobs.turn_cancel,
             fail_delivery: knobs.fail_delivery,
+            fail_turn_cancel: knobs.fail_turn_cancel,
         }),
         match clock {
             Some(clock) => storage.manager_with_clock(clock).await,
@@ -1134,6 +1147,7 @@ async fn a_substituted_message_clock_times_out_a_slow_hook() {
         FixtureKnobs {
             turn_cancel: true,
             fail_delivery: false,
+            fail_turn_cancel: false,
         },
         Some(clock.clone()),
     )
@@ -1201,6 +1215,7 @@ async fn hooks_that_do_not_review_leave_the_review_to_the_person() {
         FixtureKnobs {
             turn_cancel: true,
             fail_delivery: false,
+            fail_turn_cancel: false,
         },
         None,
     )
@@ -1232,6 +1247,7 @@ async fn a_hook_that_does_not_review_is_skipped_beside_one_that_does() {
         FixtureKnobs {
             turn_cancel: true,
             fail_delivery: false,
+            fail_turn_cancel: false,
         },
         None,
     )
@@ -1265,6 +1281,7 @@ async fn output_before_a_review_is_saved_while_its_hook_runs() {
         FixtureKnobs {
             turn_cancel: true,
             fail_delivery: false,
+            fail_turn_cancel: false,
         },
         Some(clock),
     )
@@ -1359,6 +1376,7 @@ async fn an_end_turn_the_binding_cannot_cancel_is_recorded_as_continue() {
         FixtureKnobs {
             turn_cancel: false,
             fail_delivery: false,
+            fail_turn_cancel: false,
         },
     )
     .await;
@@ -1394,6 +1412,7 @@ async fn a_continue_without_a_deny_option_stays_open_when_the_binding_cannot_can
         FixtureKnobs {
             turn_cancel: false,
             fail_delivery: false,
+            fail_turn_cancel: false,
         },
     )
     .await;
@@ -1433,14 +1452,27 @@ async fn a_failed_hook_denial_ends_the_turn_and_leaves_no_review_pending() {
         FixtureKnobs {
             turn_cancel: true,
             fail_delivery: true,
+            fail_turn_cancel: false,
         },
     )
     .await;
-    fixture
+    let failure = fixture
         .agent
         .invoke(request(), close_action())
         .await
-        .expect("a failed denial ends the turn without closing");
+        .expect_err("a failed denial is reported");
+    let AgentError::ExecutionObservation {
+        error,
+        execution_result,
+    } = &failure
+    else {
+        panic!("a failed denial was reported as {failure:?}");
+    };
+    assert_eq!(**error, AgentError::StalePermission);
+    assert!(
+        matches!(execution_result.as_deref(), Some(Ok(_))),
+        "the provider result is kept beside the failure: {execution_result:?}"
+    );
     assert_eq!(fixture.answered.load(Ordering::SeqCst), 1);
     assert_eq!(fixture.turn_cancels.load(Ordering::SeqCst), 1);
     assert_eq!(
@@ -1465,6 +1497,49 @@ async fn a_failed_hook_denial_ends_the_turn_and_leaves_no_review_pending() {
         .invoke(second_request(), close_action())
         .await
         .expect("the session stays usable");
+}
+
+#[tokio::test]
+async fn a_failed_denial_and_a_failed_turn_cancel_are_both_reported() {
+    let fixture = open_fixture(
+        script(),
+        vec![Arc::new(ReviewHook {
+            seen: Arc::new(Mutex::new(Vec::new())),
+            verdict: ToolVerdict::refuse("stop this call", RefusalOutcome::Continue),
+        })],
+        FixtureKnobs {
+            turn_cancel: true,
+            fail_delivery: true,
+            fail_turn_cancel: true,
+        },
+    )
+    .await;
+    let failure = fixture
+        .agent
+        .invoke(request(), close_action())
+        .await
+        .expect_err("both failures are reported");
+    let AgentError::ExecutionObservation { error, .. } = &failure else {
+        panic!("both failures were reported as {failure:?}");
+    };
+    let AgentError::MultipleOperationFailures {
+        first_error,
+        subsequent_error,
+    } = error.as_ref()
+    else {
+        panic!("both failures were reported as {error:?}");
+    };
+    assert_eq!(
+        **first_error,
+        AgentError::StalePermission,
+        "delivery is first"
+    );
+    assert_eq!(
+        **subsequent_error,
+        AgentError::Transport("turn cancel failed".into())
+    );
+    assert_eq!(fixture.turn_cancels.load(Ordering::SeqCst), 1);
+    assert!(!fixture.closes.lock().unwrap().is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
