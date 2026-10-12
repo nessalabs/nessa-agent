@@ -239,7 +239,9 @@ pub trait InvocationHook: Send + Sync {
 
     /// Whether [`Self::before_permission_review`] decides anything for this hook.
     ///
-    /// When no hook in an invocation reviews permissions, a review goes to the
+    /// A hook that returns `false` is not called for permission reviews, even
+    /// when another hook in the same invocation reviews them. When no hook in
+    /// an invocation reviews permissions, a review goes to the
     /// person exactly as it would with no hooks: no hook thread is started and
     /// no runtime refusal (busy or timeout) can deny it. The default is `true`,
     /// so an implementation that reviews is never skipped. Return `false` from
@@ -269,7 +271,8 @@ pub trait InvocationHook: Send + Sync {
 #[derive(Clone, Default)]
 pub struct InvocationHooks {
     handlers: Arc<[Arc<dyn InvocationHook>]>,
-    reviews_permissions: bool,
+    /// Per registration, whether that hook reviews permissions.
+    reviewers: Arc<[bool]>,
 }
 
 impl InvocationHooks {
@@ -277,12 +280,15 @@ impl InvocationHooks {
     /// callbacks. An empty list performs no extension work.
     pub fn new(handlers: Vec<Arc<dyn InvocationHook>>) -> Self {
         // A panic here counts as reviewing, so a broken hook is never skipped.
-        let reviews_permissions = handlers.iter().any(|hook| {
-            catch_unwind(AssertUnwindSafe(|| hook.reviews_permissions())).unwrap_or(true)
-        });
+        let reviewers = handlers
+            .iter()
+            .map(|hook| {
+                catch_unwind(AssertUnwindSafe(|| hook.reviews_permissions())).unwrap_or(true)
+            })
+            .collect();
         Self {
             handlers: handlers.into(),
-            reviews_permissions,
+            reviewers,
         }
     }
 
@@ -293,7 +299,7 @@ impl InvocationHooks {
     /// Whether any hook here reviews permissions. When none does, a review
     /// runs no hook thread and cannot be refused by the runtime.
     pub(crate) fn reviews_permissions(&self) -> bool {
-        self.reviews_permissions
+        self.reviewers.contains(&true)
     }
 
     pub(crate) fn before(
@@ -320,9 +326,9 @@ impl InvocationHooks {
 
     /// Decide the permission-gated call in `event` against the retained prefix.
     ///
-    /// The first refusal wins, and its registration index is returned with the
-    /// verdict. A hook error or panic is deny-and-continue, and the reason
-    /// names which.
+    /// Only hooks that review permissions are called. The first refusal wins,
+    /// and its registration index is returned with the verdict. A hook error
+    /// or panic is deny-and-continue, and the reason names which.
     pub(crate) fn before_permission_review(
         &self,
         event: &ExecutionEvent,
@@ -336,7 +342,13 @@ impl InvocationHooks {
         };
         let call = ProposedToolCall::new(tool_id, input);
         let observations = evaluation.window();
-        for (index, handler) in self.handlers.iter().enumerate() {
+        let reviewing = self
+            .handlers
+            .iter()
+            .zip(self.reviewers.iter())
+            .enumerate()
+            .filter_map(|(index, (handler, reviews))| reviews.then_some((index, handler)));
+        for (index, handler) in reviewing {
             match invoke_verdict(|| handler.before_permission_review(&call, &observations)) {
                 Ok(ToolVerdict::Allow) => {}
                 Ok(ToolVerdict::Stopped) => {

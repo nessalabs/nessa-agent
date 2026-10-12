@@ -221,6 +221,8 @@ impl<'a> InvocationObservationWindow<'a> {
     /// ADR 0014 fixed this so a hook walks a turn suffix rather than the
     /// retained history. The history bound stays 262_144 events; this cap does
     /// not retain anything new. Thinking spends this budget like any other event.
+    /// An oversized event that the walk skips also spends one of these slots,
+    /// so the walk never sizes, and the copy never holds, more than this many events.
     pub const MAX_EVENTS: usize = 256;
 
     /// Maximum payload bytes of the included suffix.
@@ -234,7 +236,8 @@ impl<'a> InvocationObservationWindow<'a> {
     ///
     /// The walk counts every event, including thoughts. An event whose own
     /// payload exceeds [`Self::MAX_PAYLOAD_BYTES`] is omitted whole, recorded
-    /// as oversized, and left as a separator while the walk continues. The
+    /// as oversized, and left as a separator while the walk continues. It
+    /// spends an event slot but no bytes. The
     /// walk records the omission flags as it goes. It allocates nothing.
     /// Payload bytes are the text or tool content a hook can read, not spare
     /// capacity of a message chunk.
@@ -244,21 +247,27 @@ impl<'a> InvocationObservationWindow<'a> {
         let mut included_payload_bytes = 0usize;
         let mut omitted_text = false;
         let mut excluded_oversized = false;
-        for (index, event) in events.iter().enumerate().rev() {
+        // Every walked event spends a slot, an oversized one included.
+        for (walked_events, (index, event)) in events.iter().enumerate().rev().enumerate() {
             let payload = payload_bytes(event);
-            if payload > Self::MAX_PAYLOAD_BYTES {
+            let oversized = payload > Self::MAX_PAYLOAD_BYTES;
+            let next_bytes = if oversized {
+                included_payload_bytes
+            } else {
+                included_payload_bytes.saturating_add(payload)
+            };
+            if walked_events == Self::MAX_EVENTS || next_bytes > Self::MAX_PAYLOAD_BYTES {
+                if is_message(event) || events[..index].iter().any(is_message) {
+                    omitted_text = true;
+                }
+                break;
+            }
+            if oversized {
                 excluded_oversized = true;
                 if is_message(event) {
                     omitted_text = true;
                 }
                 continue;
-            }
-            let next_bytes = included_payload_bytes.saturating_add(payload);
-            if included_events == Self::MAX_EVENTS || next_bytes > Self::MAX_PAYLOAD_BYTES {
-                if is_message(event) || events[..index].iter().any(is_message) {
-                    omitted_text = true;
-                }
-                break;
             }
             included_events += 1;
             included_payload_bytes = next_bytes;

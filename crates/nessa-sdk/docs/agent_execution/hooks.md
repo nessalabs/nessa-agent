@@ -50,6 +50,8 @@ evaluation ([ADR 0014](../../../../docs/adr/todo/0014-nessa-owned-policy-hooks.m
 [ADR 133](../../../../docs/adr/todo/133-hook-invocation-context.md)). Those caps
 do not change how much history the session retains. Thinking spends the budget.
 An event larger than 64 KiB is omitted whole, and the walk continues past it.
+That event still spends one of the 256 event slots, so the walk never sizes or
+copies more than 256 events.
 The window reports an omitted prefix, omitted text, a cut text sequence, and an
 oversized omission. `contains_phrase` treats adjacent chunks of the same kind
 and message identity as one sequence, so a phrase split across chunk boundaries
@@ -67,7 +69,8 @@ at most 32 of those threads. A review that arrives while that budget is held,
 or while this agent's earlier hook thread has not returned, is refused
 immediately as `"hook failed: busy"`, without another blocking thread.
 A hook reviews permissions unless its `reviews_permissions` returns `false`,
-as the typed `BeforeInvocation` and `AfterInvocation` registrations do. When
+as the typed `BeforeInvocation` and `AfterInvocation` registrations do. A hook
+that opts out is never called for a review, even beside one that reviews. When
 no hook in the invocation reviews permissions, a review goes to the person
 exactly as it would with no hooks: no hook thread runs, so no busy or timeout
 refusal can deny it. Message text that is still waiting for its commit

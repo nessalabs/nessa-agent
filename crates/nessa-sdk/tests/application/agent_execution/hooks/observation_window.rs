@@ -1219,6 +1219,37 @@ async fn hooks_that_do_not_review_leave_the_review_to_the_person() {
     assert!(review_still_pending(&fixture, "review"));
 }
 
+/// Reviews with the default verdict, which admits every call.
+struct AllowingReviewer;
+
+impl InvocationHook for AllowingReviewer {}
+
+#[tokio::test]
+async fn a_hook_that_does_not_review_is_skipped_beside_one_that_does() {
+    let fixture = open_on_clock(
+        script(),
+        vec![Arc::new(OptedOutRefuser), Arc::new(AllowingReviewer)],
+        FixtureKnobs {
+            turn_cancel: true,
+            fail_delivery: false,
+        },
+        None,
+    )
+    .await;
+    fixture
+        .agent
+        .invoke(request(), close_action())
+        .await
+        .expect("the reviewing hook admits the call");
+    assert_eq!(
+        fixture.answered.load(Ordering::SeqCst),
+        0,
+        "a hook that does not review refused the call"
+    );
+    assert!(fixture.withdrawals.lock().unwrap().is_empty());
+    assert!(review_still_pending(&fixture, "review"));
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn output_before_a_review_is_saved_while_its_hook_runs() {
     let clock = Arc::new(ManualMessageClock::new());

@@ -183,6 +183,20 @@ fn an_oversized_event_is_a_separator_and_older_text_stays_visible() {
 }
 
 #[test]
+fn oversized_events_spend_event_slots_so_older_events_leave_the_window() {
+    let mut events = vec![tool("older")];
+    events.extend((0..InvocationObservationWindow::MAX_EVENTS).map(|_| oversized_tool()));
+    let view = window(&events);
+    assert_eq!(view.included_events(), 0);
+    assert!(view.omitted_prefix());
+    assert!(view.excluded_oversized());
+    assert!(view.iter().next().is_none());
+    let suffix = EvaluationSuffix::capture(&events);
+    assert!(suffix.entries.len() <= InvocationObservationWindow::MAX_EVENTS);
+    assert!(suffix.window().iter().next().is_none());
+}
+
+#[test]
 fn thinking_is_visible_and_spends_the_same_budget() {
     let events = [
         thought("SEC"),

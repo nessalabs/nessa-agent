@@ -40,12 +40,14 @@ is no `disclose_thinking` opt-in and no withheld view.
 
 An event whose own payload exceeds 64 KiB is omitted whole. The walk continues.
 The omitted event is a separator, sets the oversized flag, and sets omitted
-text when it was a message. The window reports an omitted prefix, omitted text,
-a cut text sequence, and an oversized omission. Adjacent chunks of the same
-kind and message identity are one sequence, so a phrase search crosses those
-boundaries. Two messages that both lack an id share that identity. A miss is
-absence only when no text was left out; otherwise it is inconclusive. A hook
-that needs the whole turn treats inconclusive, and an incomplete window, as a no.
+text when it was a message. It spends one of the 256 event slots but no bytes,
+so a run of oversized events cannot make the walk size or copy more than 256
+events. The window reports an omitted prefix, omitted text, a cut text
+sequence, and an oversized omission. Adjacent chunks of the same kind and
+message identity are one sequence, so a phrase search crosses those boundaries.
+Two messages that both lack an id share that identity. A miss is absence only
+when no text was left out; otherwise it is inconclusive. A hook that needs the
+whole turn treats inconclusive, and an incomplete window, as a no.
 
 `Debug` prints the counts and the omission flags. It does not print event
 payloads. That is a log-size bound, not a secrecy switch.
@@ -98,8 +100,10 @@ directly, can claim an outcome nothing applied.
 
 Only hooks that review permissions take part. A hook opts out by returning
 `false` from `reviews_permissions`; the typed before- and after-invocation
-registrations do. With no reviewing hook, a review is handled exactly as with
-no hooks at all, so the runtime can never refuse it as busy or timed out.
+registrations do. An opted-out hook is never called for a review, even when
+another hook in the invocation reviews it. With no reviewing hook, a review is
+handled exactly as with no hooks at all, so the runtime can never refuse it as
+busy or timed out.
 Message text still waiting for its commit deadline is saved before the hook
 runs, because the hook's wait cannot poll that deadline.
 
