@@ -68,7 +68,10 @@ function armed(): ConversationPermission {
   }
 }
 
-function shown(revision: number, review: ConversationPermission | undefined): ConversationView {
+function shown(
+  revision: number,
+  review: ConversationPermission | undefined,
+): ConversationView {
   return conversationView(
     view(conversation, {
       revision: String(revision),
@@ -101,7 +104,10 @@ function shown(revision: number, review: ConversationPermission | undefined): Co
 
 const gateway = fakeGateway()
 let revision = 1
-gateway.rows.set(conversation, row(conversation, { title: "Armed review", running: true }))
+gateway.rows.set(
+  conversation,
+  row(conversation, { title: "Armed review", running: true }),
+)
 gateway.views.set(conversation, shown(revision, armed()))
 
 const clock: GatewayClock = {
@@ -121,7 +127,10 @@ store.dispatch(followWorkspace())
 void store.dispatch(loadWorkspace())
 
 window.setTimeout(() => {
-  gateway.rows.set(conversation, row(conversation, { title: "Armed review", running: false }))
+  gateway.rows.set(
+    conversation,
+    row(conversation, { title: "Armed review", running: false }),
+  )
   gateway.views.set(conversation, shown(++revision, undefined))
   gateway.publish(conversation)
   gateway.publishList()

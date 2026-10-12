@@ -35,9 +35,7 @@ const shot = async (options, page, name, locator) => {
 
 await main(meta, async ({ options, rep, url, mode }) => {
   if (mode === "prod" && !options.given("url"))
-    throw new CannotRun(
-      `${approvalDeadline.page} is a dev-server page (--mode dev)`,
-    )
+    throw new CannotRun(`${approvalDeadline.page} is a dev-server page (--mode dev)`)
   const served = await fetch(new URL(approvalDeadline.page, url)).then(
     (response) => response.ok,
     () => false,
@@ -53,7 +51,9 @@ await main(meta, async ({ options, rep, url, mode }) => {
       })
       const { page } = opened
       try {
-        const row = page.locator(css.sessionRow, { hasText: approvalDeadline.session }).first()
+        const row = page
+          .locator(css.sessionRow, { hasText: approvalDeadline.session })
+          .first()
         await row.waitFor({ timeout: 10_000 }).catch(() => {})
         if (!(await row.count()))
           throw new CannotRun(`no session row "${approvalDeadline.session}" in the list`)
@@ -71,7 +71,12 @@ await main(meta, async ({ options, rep, url, mode }) => {
         const first = pending.exec(firstText)
         const firstSeconds = first ? Number(first[1]) : NaN
         if (drawn)
-          await shot(options, page, `${engine}-pending`, page.locator(css.approvalCard).first())
+          await shot(
+            options,
+            page,
+            `${engine}-pending`,
+            page.locator(css.approvalCard).first(),
+          )
         const decreased = await until(
           page,
           ([sel, started]) => {
@@ -106,15 +111,17 @@ await main(meta, async ({ options, rep, url, mode }) => {
           )
         const failures = []
         if (!drawn) failures.push("the deadline row was not drawn")
-        else if (!first)
-          failures.push(`pending text was ${JSON.stringify(firstText)}`)
+        else if (!first) failures.push(`pending text was ${JSON.stringify(firstText)}`)
         else if (firstSeconds < 2)
-          failures.push(`countdown started at ${firstSeconds}s, too late to watch it fall`)
+          failures.push(
+            `countdown started at ${firstSeconds}s, too late to watch it fall`,
+          )
         if (!decreased)
           failures.push(`countdown did not fall from ${JSON.stringify(firstText)}`)
         else if (later && Number(later[1]) >= firstSeconds)
           failures.push(`countdown stayed at ${later[1]}s`)
-        if (!replaced) failures.push(`the card was not replaced by ${JSON.stringify(notice)}`)
+        if (!replaced)
+          failures.push(`the card was not replaced by ${JSON.stringify(notice)}`)
         return {
           pending: firstText,
           later: laterText,
