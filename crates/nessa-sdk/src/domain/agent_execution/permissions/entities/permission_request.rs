@@ -181,23 +181,31 @@ impl PermissionRequest {
         execution_id: &ExecutionId,
         option_id: &PermissionOptionId,
     ) -> Result<PermissionDecision, ExecutionError> {
+        let decision = self.offered(execution_id, option_id)?.clone();
+        self.state = PermissionState::Answered {
+            option_id: option_id.clone(),
+            decision: decision.clone(),
+        };
+        Ok(decision)
+    }
+    /// The decision `option_id` would record, checked as an answer is, without
+    /// answering. Returns the error [`Self::answer`] would.
+    pub(crate) fn offered(
+        &self,
+        execution_id: &ExecutionId,
+        option_id: &PermissionOptionId,
+    ) -> Result<&PermissionDecision, ExecutionError> {
         if execution_id != &self.execution_id {
             return Err(ExecutionError::DifferentExecution);
         }
         if self.state != PermissionState::Pending {
             return Err(ExecutionError::PermissionResolved);
         }
-        let decision = self
+        Ok(self
             .options
             .find(option_id)
             .ok_or(ExecutionError::UnknownPermissionOption)?
-            .decision()
-            .clone();
-        self.state = PermissionState::Answered {
-            option_id: option_id.clone(),
-            decision: decision.clone(),
-        };
-        Ok(decision)
+            .decision())
     }
     /// Cancel a pending request with the supplied lifecycle reason. Returns PermissionResolved for answered or already-cancelled reviews, preserving their original evidence.
     pub(crate) fn cancel(

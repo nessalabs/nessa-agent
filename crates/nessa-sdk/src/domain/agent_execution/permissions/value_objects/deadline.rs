@@ -232,6 +232,17 @@ impl PermissionReviewDeadline {
 }
 
 impl PermissionReviewDeadline {
+    /// Whether `other` decides as this deadline does: the same class, wait,
+    /// outcome, reason and stop. When it is due and whether it is armed are
+    /// about who holds the review, not what it decides, so they are ignored.
+    pub fn decides_as(&self, other: &Self) -> bool {
+        self.class == other.class
+            && self.wait == other.wait
+            && self.effect == other.effect
+            && self.reason == other.reason
+            && self.stops_turn == other.stops_turn
+    }
+
     /// Holds none of the state a settlement or a live review adds.
     fn is_template(&self) -> bool {
         !self.stops_turn && self.due_at_ms.is_none() && !self.armed
@@ -668,6 +679,40 @@ mod tests {
             PermissionDeadlinePolicy::new(read_only.clone().promise(1_000), other.clone()),
             Err(ExecutionError::SettledPermissionDeadlineTemplate)
         );
+        assert!(other.decides_as(&other.clone().promise(1_000)));
+        assert!(other.decides_as(&other.clone().restored(false, None).unwrap()));
+        assert!(!other.decides_as(&read_only));
+        assert!(!other.decides_as(
+            &PermissionReviewDeadline::new(
+                PermissionToolClass::Other,
+                Duration::from_secs(2),
+                PermissionEffect::Deny,
+                reason,
+            )
+            .unwrap()
+        ));
+        assert!(!other.decides_as(
+            &PermissionReviewDeadline::new(
+                PermissionToolClass::Other,
+                Duration::from_secs(1),
+                PermissionEffect::Allow,
+                reason,
+            )
+            .unwrap()
+        ));
+        assert!(!other.decides_as(
+            &PermissionReviewDeadline::new(
+                PermissionToolClass::Other,
+                Duration::from_secs(1),
+                PermissionEffect::Deny,
+                "another reason",
+            )
+            .unwrap()
+        ));
+        assert!(!other.decides_as(&PermissionReviewDeadline {
+            stops_turn: true,
+            ..other.clone()
+        }));
         assert!(PermissionDeadlinePolicy::new(read_only, other).is_ok());
         for error in [
             ExecutionError::ZeroPermissionDeadline,

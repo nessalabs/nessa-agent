@@ -451,6 +451,30 @@ impl ExecutionController {
         &mut self,
         answer: PermissionAnswer,
     ) -> Result<PermissionResolution, AgentError> {
+        // A deadline attribution is checked before anything is consumed: it
+        // must be the deadline this review published, and its outcome the
+        // selected option's. A refused one leaves the review pending, so the
+        // deadline that does own it can still answer the provider.
+        let by_deadline = if let ApprovalBasis::Deadline(deadline) = answer.attribution.basis() {
+            let decision = self
+                .session
+                .offered_decision(&answer.execution_id, &answer.id, &answer.option_id)
+                .map_err(|_| AgentError::StalePermission)?;
+            let published = self
+                .published_deadlines
+                .get(&answer.id)
+                .is_some_and(|published| published.decides_as(deadline));
+            if !published || decision.effect() != deadline.effect() {
+                return Err(AgentError::InvalidInput(
+                    "a deadline attribution must be the deadline this review published, \
+                     selecting an option with its outcome"
+                        .into(),
+                ));
+            }
+            true
+        } else {
+            false
+        };
         let request = self
             .session
             .answer_permission(&answer.execution_id, &answer.id, &answer.option_id)
@@ -460,26 +484,8 @@ impl ExecutionController {
             .remove(&answer.id)
             .expect("controller retains the accepted review input");
         self.retained_review_bytes -= charged_bytes;
-        // Settlement evidence is an answer attributed to the very deadline
-        // this review published, not to any deadline a caller can build.
-        let by_deadline = match answer.attribution.basis() {
-            ApprovalBasis::Deadline(deadline) => self
-                .published_deadlines
-                .get(&answer.id)
-                .is_some_and(|published| {
-                    published.effect() == deadline.effect()
-                        && published.reason() == deadline.reason()
-                        && published.stops_turn() == deadline.stops_turn()
-                }),
-            _ => false,
-        };
-        let resolution =
-            PermissionResolution::new(self.id().clone(), request, input, answer.attribution);
-        // The answer is accepted even when its attribution is rejected, so the
-        // published deadline is released either way. Only an accepted deadline
-        // attribution is settlement evidence.
-        self.settle_published_deadline(&answer.id, by_deadline && resolution.is_ok());
-        resolution
+        self.settle_published_deadline(&answer.id, by_deadline);
+        PermissionResolution::new(self.id().clone(), request, input, answer.attribution)
     }
     // Only the snapshot retention validator uses this on a disposable controller.
     // Answers are absent from observations: release the hypothetical pending
@@ -1012,27 +1018,48 @@ mod tests {
             "a person's answer has no deadline notice"
         );
 
-        let mut other_deadline = pending(Some(allow.clone()));
-        other_deadline
-            .answer_permission(PermissionAnswer {
-                attribution: ApprovalAttribution::deadline(
-                    &permission,
-                    deadline(PermissionEffect::Allow, "a different sentence"),
-                )
-                .unwrap(),
-                ..answer("permission")
-            })
-            .unwrap();
+        // A deadline attribution that is not the published deadline, or whose
+        // outcome is not the selected option's, is refused before anything is
+        // consumed: the review stays pending and has no notice.
+        let refused = |published: Option<PermissionReviewDeadline>, claimed| {
+            let mut controller = pending(published);
+            let refused = matches!(
+                controller.answer_permission(PermissionAnswer {
+                    attribution: ApprovalAttribution::deadline(&permission, claimed).unwrap(),
+                    ..answer("permission")
+                }),
+                Err(AgentError::InvalidInput(_))
+            );
+            let still_pending = controller.answer_permission(answer("permission")).is_ok();
+            refused && still_pending && stale(&mut controller)
+        };
         assert!(
-            stale(&mut other_deadline),
-            "an answer attributed to a deadline the review did not publish has no notice"
+            refused(
+                Some(allow.clone()),
+                deadline(PermissionEffect::Allow, "a different sentence")
+            ),
+            "another reason is not the published deadline"
         );
-
-        let mut unpublished = pending(None);
-        unpublished.answer_permission(by_deadline()).unwrap();
         assert!(
-            stale(&mut unpublished),
-            "a review that published no deadline was not settled by one"
+            refused(
+                Some(allow.clone()),
+                PermissionReviewDeadline::new(
+                    PermissionToolClass::ReadOnly,
+                    Duration::from_secs(8),
+                    PermissionEffect::Allow,
+                    STANDARD_ALLOW_REASON,
+                )
+                .unwrap()
+            ),
+            "another class and wait is not the published deadline"
+        );
+        assert!(
+            refused(Some(deny.clone()), deny.clone()),
+            "a deny deadline cannot select the allow option"
+        );
+        assert!(
+            refused(None, allow.clone()),
+            "a review that published no deadline cannot be answered by one"
         );
 
         let mut cancelled = pending(Some(deny.clone()));

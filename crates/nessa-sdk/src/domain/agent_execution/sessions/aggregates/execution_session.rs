@@ -4,8 +4,8 @@ use crate::domain::agent_execution::{
     executions::{ExecutionId, ExecutionOutcome},
     permissions::{
         PendingPermissions, PermissionAuthority, PermissionCancellationReason,
-        PermissionCancellationReasonView, PermissionId, PermissionOptionId, PermissionRequest,
-        PermissionStateView,
+        PermissionCancellationReasonView, PermissionDecision, PermissionId, PermissionOptionId,
+        PermissionRequest, PermissionStateView,
     },
     sessions::{ExecutionFinish, ExecutionSessionId, SessionClosure},
     tools::{ToolCall, ToolCallId, ToolCallUpdate, ToolObservationUndo},
@@ -522,6 +522,34 @@ impl ExecutionSession {
             .ok_or(ExecutionError::UnknownPermission)?;
         request.answer(execution, option)?;
         Ok(pending.remove(id).expect("answered permission"))
+    }
+    /// The decision `option` would record for pending review `id` in
+    /// `execution`, checked as [`Self::answer_permission`] checks it, and
+    /// without answering. A caller that must validate what it records with
+    /// the answer does so here first, so a refused answer consumes nothing.
+    pub fn offered_decision(
+        &self,
+        execution: &ExecutionId,
+        id: &PermissionId,
+        option: &PermissionOptionId,
+    ) -> Result<PermissionDecision, ExecutionError> {
+        if self.is_closed() {
+            return Err(ExecutionError::SessionClosed);
+        }
+        self.check_execution(execution)?;
+        let active = self
+            .active_execution
+            .as_ref()
+            .expect("checked active execution");
+        let pending = active
+            .pending_permissions
+            .lock()
+            .expect("pending permissions");
+        pending
+            .get(id)
+            .ok_or(ExecutionError::UnknownPermission)?
+            .offered(execution, option)
+            .cloned()
     }
     /// Cancel one pending review in `execution` without affecting other requests or reopening its identity.
     /// Execution-terminal causes require `finish_execution`, or correlated `close`
