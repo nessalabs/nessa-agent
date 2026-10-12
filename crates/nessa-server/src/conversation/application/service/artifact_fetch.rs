@@ -213,10 +213,13 @@ impl ConversationService {
         let asked = Mutex::new(None);
         let delivered = Arc::new(AtomicBool::new(false));
         let answered = tokio::time::timeout(wait, async {
+            // An answer already there is taken before the stop, as the
+            // publish path takes it, so a stop never hides an outcome the
+            // host already gave.
             tokio::select! {
                 biased;
-                () = cancelled(&mut stop) => Err(Gone::Cancelled),
                 answer = self.fetch_within(id, call, &asked, &delivered) => Ok(answer),
+                () = cancelled(&mut stop) => Err(Gone::Cancelled),
             }
         })
         .await
