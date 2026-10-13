@@ -480,11 +480,11 @@ impl ShareGrants for LocalConversationStore {
                 .optional()
                 .map_err(failed)?;
             match entry {
-                Some((after, Some(text))) if after == role_name(ShareRole::Drive) => policy_from(
-                    &text,
-                )
-                .map(Some)
-                .ok_or_else(|| unreadable("share_grant_changes", &id)),
+                Some((after, Some(text))) if after == role_name(ShareRole::Drive) => {
+                    policy_from(&text)
+                        .map(Some)
+                        .ok_or_else(|| unreadable("share_grant_changes", &id))
+                }
                 _ => Ok(None),
             }
         })

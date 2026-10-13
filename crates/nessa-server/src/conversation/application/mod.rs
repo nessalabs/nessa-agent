@@ -207,6 +207,8 @@ pub(crate) use placement::Environments;
 #[cfg(any(unix, test))]
 pub(crate) use placement::{ConversationPlacements, PlacementError};
 // For the paired environment adapter, which lives with the Unix-only SSH one.
+pub use drive_tools::DriveTools;
+pub(crate) use drive_tools::MAX_ADMITTED_POLICIES;
 #[cfg(unix)]
 pub(crate) use placement::PairedEnvironments;
 pub use placement::{FETCH_CALL_WAIT, PUBLISH_CALL_WAIT};
@@ -248,7 +250,6 @@ pub use share_grants::{
     ShareConversation, ShareGrant, ShareGrantChange, ShareGrantTransition, ShareGrants,
     MAX_DRIVE_GRANTS_PER_CONVERSATION, MAX_SHARE_GRANTS_PER_CONVERSATION,
 };
-pub use drive_tools::DriveTools;
 pub use tool_policy::{ToolDecision, ToolInitiator, ToolPolicyEvaluator, ToolPolicyUnavailable};
 
 #[cfg(test)]

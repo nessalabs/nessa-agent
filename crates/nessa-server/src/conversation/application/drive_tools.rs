@@ -61,9 +61,9 @@ pub(crate) fn checked_source(agent: AgentId) -> Option<ToolSource> {
 }
 
 /// The most policies one conversation keeps for its admitted Drive turns.
-/// A conversation holds at most eight Drive grants, and only a turn admitted
-/// since the oldest kept one can need a policy this has let go of; such a
-/// turn's calls are refused, never allowed.
+/// A conversation holds at most eight Drive grants, and a policy is let go
+/// of only once this many others were admitted since it last was; a turn
+/// still needing it has its calls refused, never allowed.
 pub(crate) const MAX_ADMITTED_POLICIES: usize = 64;
 
 /// The tool policies of the Drive turns one conversation admitted, by grant
@@ -75,16 +75,15 @@ pub(crate) struct AdmittedPolicies {
 }
 
 impl AdmittedPolicies {
-    /// Keep `policy` as `grant`'s at `revision`, letting go of the oldest
-    /// past [`MAX_ADMITTED_POLICIES`].
+    /// Keep `policy` as `grant`'s at `revision`, as the one most recently
+    /// admitted, letting go of the least recently admitted past
+    /// [`MAX_ADMITTED_POLICIES`].
     pub(crate) fn admit(&self, grant: &str, revision: u64, policy: ToolPolicy) {
-        let mut held = self.held.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        if held
-            .iter()
-            .any(|(kept, kept_revision, _)| kept == grant && *kept_revision == revision)
-        {
-            return;
-        }
+        let mut held = self
+            .held
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        held.retain(|(kept, kept_revision, _)| !(kept == grant && *kept_revision == revision));
         if held.len() == MAX_ADMITTED_POLICIES {
             held.pop_front();
         }
@@ -92,7 +91,10 @@ impl AdmittedPolicies {
     }
 
     fn policy(&self, grant: &str, revision: u64) -> Option<ToolPolicy> {
-        let held = self.held.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let held = self
+            .held
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         held.iter()
             .find(|(kept, kept_revision, _)| kept == grant && *kept_revision == revision)
             .map(|(_, _, policy)| policy.clone())

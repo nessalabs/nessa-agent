@@ -900,6 +900,8 @@ pub(crate) struct ProviderFactory {
     pub(crate) permission_answers: Mutex<Vec<PermissionAnswer>>,
     /// Whether the agent's own hooks may answer a review first.
     pub(crate) native_hooks: AtomicBool,
+    /// Offer "Reject once" beside "Allow once", so a refusal can be answered.
+    pub(crate) offer_deny: AtomicBool,
     /// Gate after domain consumption rather than before it.
     pub(crate) consume_before_answer_gate: AtomicBool,
     /// Return the controller's actual confirmed selection for successful corpus fixtures.
@@ -1603,19 +1605,27 @@ impl ProviderSessionBackend for Backend {
                 return reply;
             }
             if self.factory.request_permission.load(Ordering::SeqCst) != 0 {
-                let options = PermissionOptions::new(
-                    vec![PermissionOption::new(
-                        PermissionOptionId::new("allow").unwrap(),
-                        "Allow once",
-                        PermissionDecision::new(
-                            PermissionEffect::Allow,
-                            PermissionScope::request(),
-                        ),
-                    )
-                    .unwrap()],
-                    &PermissionOfferPolicy::once_only(),
+                let mut choices = vec![PermissionOption::new(
+                    PermissionOptionId::new("allow").unwrap(),
+                    "Allow once",
+                    PermissionDecision::new(PermissionEffect::Allow, PermissionScope::request()),
                 )
-                .unwrap();
+                .unwrap()];
+                if self.factory.offer_deny.load(Ordering::SeqCst) {
+                    choices.push(
+                        PermissionOption::new(
+                            PermissionOptionId::new("reject").unwrap(),
+                            "Reject once",
+                            PermissionDecision::new(
+                                PermissionEffect::Deny,
+                                PermissionScope::request(),
+                            ),
+                        )
+                        .unwrap(),
+                    );
+                }
+                let options =
+                    PermissionOptions::new(choices, &PermissionOfferPolicy::once_only()).unwrap();
                 let event = self
                     .controller
                     .lock()

@@ -25,7 +25,9 @@
 //! environment owner's own policy. An answer granting more — a longer
 //! timeout, another sandbox — is never run.
 use super::{ConversationError, ConversationService, LiveConversation};
+use crate::conversation::application::drive_tools::{refusal, DriveTools};
 use crate::conversation::application::{environment::GrantedTerms, CommandResult, Environment};
+use crate::conversation::domain::{ToolCall, ToolSource};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::application::agent_execution::{
     permissions::ActionContext,
@@ -36,8 +38,6 @@ use nessa_sdk::domain::agent_execution::leases::{
     CommandExit, CommandOutput, CommandRefusal, CommandTerms, CommandWork, EnvironmentRef, Lease,
     LeaseEndCause, LeaseId, LeasePhase, LeaseRefusal, SandboxProfile, SandboxProfiles,
 };
-use crate::conversation::application::drive_tools::{refusal, DriveTools};
-use crate::conversation::domain::{ToolCall, ToolSource};
 use std::sync::{Arc, OnceLock};
 use tokio::sync::watch;
 

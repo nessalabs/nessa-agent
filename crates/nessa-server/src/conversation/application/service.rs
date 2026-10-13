@@ -2769,8 +2769,14 @@ impl ConversationService {
                         .invocations
                         .iter()
                         .find(|record| record.request.execution_id == execution)
-                        .map(|record| record.request.user_message.app_model_context().to_vec())
+                        .map(|record| {
+                            (
+                                record.request.user_message.app_model_context().to_vec(),
+                                record.initiation.clone(),
+                            )
+                        })
                 });
+            let (original, saved_initiation) = original.unzip();
             let known = original.is_some();
             // Asked under the submission lock, which a desktop stop takes to
             // mark the owner: an owner being stopped is handed no new message
@@ -2817,9 +2823,15 @@ impl ConversationService {
             // A Drive grant's turn is admitted only where every call it asks
             // about is checked against the grant's policy, and is saved as
             // checked (rows J26 and J27).
-            let initiation = match writer.initiation().initiator() {
-                Initiator::Owner => Initiation::owner(),
-                Initiator::Grant(grant) => {
+            // A retry by the same initiator is answered from what was saved,
+            // checked or not, and is not admitted again; one by another is
+            // the agent's conflict to refuse.
+            let retried = saved_initiation
+                .filter(|saved| saved.initiator() == writer.initiation().initiator());
+            let initiation = match (retried, writer.initiation().initiator()) {
+                (Some(saved), _) => saved,
+                (None, Initiator::Owner) => Initiation::owner(),
+                (None, Initiator::Grant(grant)) => {
                     service
                         .admit_drive_turn(&live, &id, grant, non_default_mode)
                         .await?;

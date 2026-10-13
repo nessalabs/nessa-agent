@@ -41,7 +41,7 @@ use crate::application::agent_execution::sessions::{
     SessionManager, StorageError,
 };
 use crate::application::agent_execution::tools::ToolReviewInput;
-use crate::domain::agent_execution::executions::Initiation;
+use crate::domain::agent_execution::executions::{Initiation, ToolChecking};
 use crate::domain::agent_execution::permissions::{
     CustomPermissionCancellationReason, PermissionAuthorityError, PermissionCancellationReason,
     PermissionEffect, PermissionId, PermissionOptionId, PermissionScope, RefusalOutcome,
@@ -285,6 +285,26 @@ fn hook_attribution(
     let explanation = refusal.reason().to_owned();
     let attribution = ApprovalAttribution::hook(id, refusal)?;
     Ok((id.clone(), attribution, explanation))
+}
+
+/// Why a turn started as `initiation` may not be sent to `attached`, if it
+/// may not: a turn saved as [`ToolChecking::Checked`] needs a process that
+/// asks about every call, so in [`ApprovalMode::Ask`] with its own hooks not
+/// allowed to answer first.
+fn checked_tools_unsupported(
+    initiation: &Initiation,
+    approval_mode: Option<ApprovalMode>,
+    capabilities: OperationCapabilities,
+) -> Result<(), AgentError> {
+    if initiation.tools() != ToolChecking::Checked {
+        return Ok(());
+    }
+    if approval_mode != Some(ApprovalMode::Ask) || capabilities.native_hooks_allowed() {
+        return Err(AgentError::Unsupported(
+            "a checked turn needs a process that asks about every tool call".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn deny_option(event: &ExecutionEvent) -> Option<PermissionOptionId> {
@@ -1502,6 +1522,16 @@ impl Agent {
             },
             Err(error) => Err(error),
         };
+        // A turn saved as checked is sent only to a process that asks about
+        // every call it is to check: in Ask mode, its own hooks not allowed.
+        // Read here, after preparation, because a restart re-reads both.
+        let preparation = preparation.and_then(|()| {
+            checked_tools_unsupported(
+                &initiation,
+                self.approval_mode(),
+                attached.session.operation_capabilities(),
+            )
+        });
         if let Err(mut error) = preparation {
             if let Err(storage) = self
                 .record_undispatched_stop(index, saved_index, work)

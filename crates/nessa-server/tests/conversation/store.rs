@@ -3664,7 +3664,10 @@ async fn a_revisions_policy_is_read_from_its_journal_entry() {
         at(id.clone(), "phone", shell_less).await,
         no_shell().policy().cloned()
     );
-    assert_eq!(at(id.clone(), "phone", ruled).await, rules().policy().cloned());
+    assert_eq!(
+        at(id.clone(), "phone", ruled).await,
+        rules().policy().cloned()
+    );
     assert_eq!(at(id.clone(), "phone", read).await, None);
     assert_eq!(at(id.clone(), "laptop", ruled).await, None);
     assert_eq!(at(other.clone(), "phone", ruled).await, None);

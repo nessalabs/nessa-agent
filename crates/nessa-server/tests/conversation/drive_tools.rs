@@ -117,7 +117,9 @@ fn a_grants_call_is_decided_by_its_policy_at_the_turns_revision() {
     );
     assert_eq!(
         refusal(&drive, &admitted, &grant(3), call("unlisted")).as_deref(),
-        Some(r#"Drive grant "phone" at revision 3 does not allow "unlisted" (rules: none allows it)"#)
+        Some(
+            r#"Drive grant "phone" at revision 3 does not allow "unlisted" (rules: none allows it)"#
+        )
     );
     // Not the other revision's policy, and not another grant's.
     let unavailable = |revision| {
@@ -148,28 +150,25 @@ fn a_grants_call_nothing_can_check_is_refused() {
 }
 
 /// A conversation keeps at most its bound of policies, letting go of the
-/// oldest; one admitted again is not kept twice.
+/// least recently admitted; one admitted again is kept once, as the newest.
 #[test]
 fn admitted_policies_keep_at_most_their_bound() {
     let drive = bound();
     let admitted = AdmittedPolicies::default();
-    for revision in 0..MAX_ADMITTED_POLICIES as u64 {
-        admitted.admit("phone", revision, read_only());
+    let bound = MAX_ADMITTED_POLICIES as u64;
+    for revision in 0..bound {
         admitted.admit("phone", revision, read_only());
     }
-    assert_eq!(refusal(&drive, &admitted, &grant(0), call("Read")), None);
-    admitted.admit("phone", MAX_ADMITTED_POLICIES as u64, read_only());
-    assert!(refusal(&drive, &admitted, &grant(0), call("Read")).is_some());
-    assert_eq!(refusal(&drive, &admitted, &grant(1), call("Read")), None);
-    assert_eq!(
-        refusal(
-            &drive,
-            &admitted,
-            &grant(MAX_ADMITTED_POLICIES as u64),
-            call("Read")
-        ),
-        None
-    );
+    // Admitted again, revision 0 is now the newest and 1 the oldest.
+    admitted.admit("phone", 0, read_only());
+    admitted.admit("phone", bound, read_only());
+    assert!(refusal(&drive, &admitted, &grant(1), call("Read")).is_some());
+    for revision in [0, 2, bound] {
+        assert_eq!(
+            refusal(&drive, &admitted, &grant(revision), call("Read")),
+            None
+        );
+    }
 }
 
 /// OpenCode runs the tools it allows without asking, so it has no checked

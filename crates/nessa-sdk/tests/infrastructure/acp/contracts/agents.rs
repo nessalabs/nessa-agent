@@ -232,7 +232,13 @@ async fn native_steering_from_another_initiator_waits_for_its_own_turn() {
         .await
         .unwrap();
     assert_eq!(
-        events.next().await.unwrap().unwrap().execution_id().as_str(),
+        events
+            .next()
+            .await
+            .unwrap()
+            .unwrap()
+            .execution_id()
+            .as_str(),
         "first"
     );
     let grant = Initiation::grant(GrantInitiator::new("receiver", 3).unwrap());
