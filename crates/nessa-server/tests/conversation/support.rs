@@ -1,6 +1,7 @@
 //! Test-only provider and metadata ports; all scheduling runs through the real SDK Agent.
 use crate::conversation::application::{
-    ArtifactKept, AttachmentRelease, ConversationAgent, ConversationAgentFuture,
+    AccessAsk, AccessDecision, AccessDenial, ArtifactKept, AttachmentRelease, CatalogueEntryAccess,
+    ConversationAccessPolicyEvaluator, ConversationAgent, ConversationAgentFuture,
     ConversationAgentSource, ConversationAgents, ConversationAttachments, ConversationCreation,
     ConversationCreationAudit, ConversationCreationAuditRecord, ConversationCreationDisposition,
     ConversationDeletionAudit, ConversationDeletionAuditRecord, ConversationDeletionBudgets,
@@ -12,6 +13,7 @@ use crate::conversation::application::{
     ProviderSessionErasers, PublishedArtifact, UnfinishedDeletions,
 };
 use crate::conversation::domain::{Conversation, ConversationDeletion, ProviderSessionErasure};
+use crate::conversation::infrastructure::CedarConversationAccessPolicy;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::ConversationApprovalMode;
@@ -1170,6 +1172,7 @@ pub(crate) fn image_fixture_with_model(
     let summaries = Arc::new(MemorySummaries::default());
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage: storage.clone(),
             metadata: repository.clone(),
@@ -1311,6 +1314,7 @@ pub(crate) fn mode_fixture_with_summaries(
     let mode_audit = Arc::new(RecordingModeAudit::default());
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: mode_agents(provider.clone(), execution_audit.clone()),
             storage,
             metadata: repository.clone(),
@@ -1349,6 +1353,7 @@ pub(crate) fn fixture(
     let summaries = Arc::new(MemorySummaries::default());
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage: storage.clone(),
             metadata: repository.clone(),
@@ -1956,7 +1961,7 @@ pub(crate) fn roles_beyond_read() -> [crate::conversation::domain::ShareAccess; 
         ShareAccess::new(ShareRole::Comment, None).unwrap(),
         ShareAccess::new(
             ShareRole::Drive,
-            Some(ToolPolicy::Preset(ToolPreset::NoShell)),
+            Some(ToolPolicy::preset(ToolPreset::NoShell)),
         )
         .unwrap(),
     ]
@@ -1975,4 +1980,62 @@ fn mode_panic(payload_drop: bool, message: &'static str) -> ! {
         std::panic::panic_any(ModePanicPayload);
     }
     panic!("{message}");
+}
+
+/// The checked-in conversation access policy, as composition builds it:
+/// every service, store and passive read these tests build asks it, so they
+/// exercise the rules the gateway runs. Validated once per test process.
+fn checked_in_access_policy() -> &'static Arc<CedarConversationAccessPolicy> {
+    static POLICY: std::sync::OnceLock<Arc<CedarConversationAccessPolicy>> =
+        std::sync::OnceLock::new();
+    POLICY.get_or_init(|| {
+        Arc::new(
+            CedarConversationAccessPolicy::new()
+                .expect("the checked-in conversation access policy validates"),
+        )
+    })
+}
+
+/// [`checked_in_access_policy`], as a dependency is injected.
+pub(crate) fn access_policy() -> Arc<dyn ConversationAccessPolicyEvaluator> {
+    checked_in_access_policy().clone()
+}
+
+/// [`checked_in_access_policy`], borrowed for as long as the test runs.
+pub(crate) fn access_policy_ref() -> &'static dyn ConversationAccessPolicyEvaluator {
+    checked_in_access_policy().as_ref()
+}
+
+/// The checked-in access policy, counting what it is asked, until
+/// [`Self::undecide`]: from then on it cannot decide anything, as an
+/// evaluator whose bundle or entities failed answers.
+#[derive(Default)]
+pub(crate) struct ObservedPolicy {
+    undecided: AtomicBool,
+    asked: AtomicUsize,
+}
+impl ObservedPolicy {
+    /// Answer every later ask `Deny(Unavailable)`.
+    pub(crate) fn undecide(&self) {
+        self.undecided.store(true, Ordering::SeqCst);
+    }
+    /// How many asks it has answered.
+    pub(crate) fn asked(&self) -> usize {
+        self.asked.load(Ordering::SeqCst)
+    }
+}
+impl ConversationAccessPolicyEvaluator for ObservedPolicy {
+    fn evaluate(&self, ask: &AccessAsk<'_>) -> AccessDecision {
+        self.asked.fetch_add(1, Ordering::SeqCst);
+        if self.undecided.load(Ordering::SeqCst) {
+            return AccessDecision::Deny(AccessDenial::Unavailable);
+        }
+        access_policy_ref().evaluate(ask)
+    }
+}
+
+/// A paired catalogue reader signed in as `signed_in_as`, its entries
+/// admitted by the checked-in access policy.
+pub(crate) fn catalogue_entries(signed_in_as: &str) -> CatalogueEntryAccess {
+    CatalogueEntryAccess::new(access_policy(), PrincipalId::new(signed_in_as).unwrap())
 }

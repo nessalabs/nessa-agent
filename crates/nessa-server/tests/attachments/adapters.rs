@@ -3,7 +3,7 @@
 use super::*;
 use crate::{
     attachments::application::{
-        AttachmentLimits, AttachmentStore, ConversationOwnership, Ownership,
+        AttachmentLimits, AttachmentStore, ConversationOwnership, Ownership, OwnershipUnavailable,
     },
     attachments_test_support::{
         conversation, digest_of, organization, principal, Fixture, StubNormalizer, CONVERSATION,
@@ -11,8 +11,9 @@ use crate::{
     },
     conversation::{
         application::{
-            AttachmentRelease, AttachmentReleaseCause, ConversationAttachments, ConversationError,
-            ConversationRepository,
+            AccessAction, AccessAsk, AccessDecision, AccessDenial, AttachmentRelease,
+            AttachmentReleaseCause, ConversationAccessPolicyEvaluator, ConversationAttachments,
+            ConversationError, ConversationRepository,
         },
         domain::{Conversation, ConversationDeletion},
     },
@@ -135,6 +136,14 @@ async fn a_close_releases_through_the_service_and_reports_what_did_not_complete(
 
 #[tokio::test]
 async fn ownership_is_the_conversation_contexts_own_rule_read_without_opening_anything() {
+    for action in [AccessAction::Act, AccessAction::ArtifactRead] {
+        ownership_by_its_access_policy(action).await;
+    }
+}
+
+/// Uploading acts on the conversation and reading a held file back is
+/// `artifact.read`; the policy answers both alike today.
+async fn ownership_by_its_access_policy(action: AccessAction) {
     let repository = Arc::new(MemoryRepository::default());
     repository
         .create(
@@ -153,7 +162,11 @@ async fn ownership_is_the_conversation_contexts_own_rule_read_without_opening_an
         )
         .await
         .unwrap();
-    let ownership = RepositoryOwnership::new(repository.clone());
+    let ownership = RepositoryOwnership::new(
+        repository.clone(),
+        crate::conversation_test_support::access_policy(),
+        action,
+    );
     let owns = |organization_id: &'static str, principal_id: &'static str, id: &'static str| {
         let ownership = &ownership;
         async move {
@@ -204,6 +217,47 @@ async fn ownership_is_the_conversation_contexts_own_rule_read_without_opening_an
     assert_eq!(
         owns("org", "other", CONVERSATION).await,
         Ok(Ownership::NotFound)
+    );
+}
+
+/// A policy that cannot decide is an ownership that cannot be read, never
+/// a conversation that is not there.
+#[tokio::test]
+async fn ownership_the_policy_cannot_decide_is_unavailable() {
+    struct Undecided;
+    impl ConversationAccessPolicyEvaluator for Undecided {
+        fn evaluate(&self, _: &AccessAsk<'_>) -> AccessDecision {
+            AccessDecision::Deny(AccessDenial::Unavailable)
+        }
+    }
+    let repository = Arc::new(MemoryRepository::default());
+    repository
+        .create(
+            Conversation::new(
+                conversation(CONVERSATION),
+                organization("org"),
+                principal("owner"),
+                "panel".into(),
+                "create".into(),
+                1,
+                AgentId::Claude,
+                ConversationModelId::new("test-model").unwrap(),
+                ConversationApprovalMode::Ask,
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let ownership = RepositoryOwnership::new(repository, Arc::new(Undecided), AccessAction::Act);
+    assert_eq!(
+        ownership
+            .owns(
+                &organization("org"),
+                &principal("owner"),
+                &conversation(CONVERSATION)
+            )
+            .await,
+        Err(OwnershipUnavailable)
     );
 }
 

@@ -58,17 +58,23 @@ device unpaired it is refused, and changes nothing.
 
 ## One authority
 
-"May this reader read this conversation" has one owner,
-`conversation::application::share_grants`:
+"May this reader read this conversation" has one owner, the conversation
+access policy (`ConversationAccessPolicyEvaluator`, answered by Cedar in
+`conversation/infrastructure/access_policy/cedar/`), asked through
+`PairedAccess` with the facts `share_grants` reads:
 
 - **Who is a grantee** is decided by construction. A session whose credential
   has a receiver binding is a paired device, because only pairing creates
   receiver bindings; every other session is one of the owner's own surfaces
   and reads by ownership, exactly as before. A gateway that pairs nothing has
   no bindings, so nothing changes for it (row G11).
-- **`admit_read`** answers one conversation. An ungranted id is refused as a
-  conversation that is not the owner's, so a device cannot tell it from one
-  that does not exist.
+- **`conversation.read`** answers one conversation, for the party with the
+  grant it holds there, of any role. Refused, the party is told what the
+  policy lets it know: forbidden when it may read the conversation but not
+  do what it asked, deleted when `catalogue.entry` shows it the tombstone and
+  the person it signed in as may `conversation.locate` it, and otherwise not
+  found. So a device cannot tell an ungranted id from one that does not
+  exist.
 - **A device lists through its catalogue**, which the store narrows to its
   grants. The socket's lists (`conversation.list`, `.observe`,
   `.subscribeList`) are the owner's own and are refused to a device
@@ -85,9 +91,9 @@ Every read path asks it:
 
 | Path | Asks |
 |---|---|
-| A device's `conversation.recordsHead`, `recordsPage`, and `conversation.watchRecords` (admitted as a record head) | `AdmitPassiveRead::execute` → `admit_read` |
-| A device's catalogue head, manifest and resolve, and `conversation.watchCatalogue` | the store's head, page and resolve, narrowed in SQL (the head over granted rows and the reader's own grant changes) |
-| `conversation.read` and every view subscription batch (`subscription::authorize_batch`) | `product::read_access::admit_conversation` → `admit_read` |
+| A device's `conversation.recordsHead`, `recordsPage`, and `conversation.watchRecords` (admitted as a record head) | `AdmitPassiveRead::execute` → `conversation.read` |
+| A device's catalogue head, manifest and resolve, and `conversation.watchCatalogue` | the store's head, page and resolve, narrowed in SQL (the head over granted rows and the reader's own grant changes); each entry admitted by `catalogue.entry` |
+| `conversation.read` and every view subscription batch (`subscription::authorize_batch`) | `product::read_access::admit_conversation` → `PairedAccess::admit(conversation.read)` |
 | `conversation.list`, `conversation.observe`, every list subscription batch (`subscription::authorize_batch`) | `product::read_access::admit_list`: the owner's surfaces only |
 
 The catalogue is narrowed in SQL rather than filtered after the read, because
@@ -109,12 +115,13 @@ sequenceDiagram
     Socket->>Grants: page narrowed to the device's grants
     Socket-->>Device: the granted row, past the completed revision
     Device->>Socket: recordsHead
-    Socket->>Grants: admit_read for this receiver
+    Socket->>Grants: the grant this receiver holds
+    Socket->>Socket: PairedAccess: conversation.read (Cedar)
     Socket-->>Device: records
     Owner->>Socket: conversation.unshare
     Socket->>Grants: change Revoke, bump the revision, journal
     Device->>Socket: recordsPage
-    Socket->>Grants: admit_read
+    Socket->>Socket: PairedAccess: conversation.read, then catalogue.entry, then locate
     Socket-->>Device: refused, as not the owner's
 ```
 
@@ -157,18 +164,29 @@ leave notes (below), J3b delivers a `next_turn` note to the next turn
 and J3c shows notes in the transcript (below). J4 enforces the policy ([Checking a Drive turn's
 tools](#checking-a-drive-turns-tools)).
 
-- **The role** is `ShareRole` (`conversation/domain`), Read < Comment <
-  Drive, with `at_least` to ask "does this role allow that one". The store's
-  grant predicate (`store::share_grants::granted`) is still the one statement
-  of "holds a grant", of any role.
-- **The tool policy** is `ToolPolicy`: a preset (`read_only_tools`,
-  `no_shell`, `ask_everything`, `all`) or allow and deny patterns. It is
-  checked for shape and size only: at most 16 patterns in each list, at
-  least one pattern in one of them, each 1 to 48 bytes, plain text. What
-  it allows is decided by Cedar ([below](#what-a-tool-policy-allows));
-  nothing asks it yet. `ShareAccess` holds the two together, so a Drive grant always has a policy and a Read or
-  Comment grant never has one (row J3). The store keeps the policy as JSON
-  and reads it back through the same constructors.
+- **The role** is `ShareRole` (`conversation/domain`), which only names the
+  role. What each role allows is the access policy's: `conversation.read`
+  for any grant, `conversation.comment` and `note.deliver` for Comment or
+  Drive, `conversation.drive` for Drive, asked through `PairedAccess`. The
+  store's grant predicate (`store::share_grants::granted`) is still the one
+  statement of "holds a grant", of any role.
+- **The tool policy** is `ToolPolicy`: which tools, a preset
+  (`read_only_tools`, `no_shell`, `ask_everything`, `all`) or allow and deny
+  patterns, and the command hosts its turns may run commands on
+  (`CommandHosts`). It is checked for shape and size only: at most 16
+  patterns in each list, at least one pattern in one of them, each 1 to 48
+  bytes, plain text; at most 16 hosts, each a name `run` could take, once,
+  and at most 96 bytes. Hosts take the room of patterns: a policy's patterns
+  and hosts together are at most 32, and a host is never longer as JSON than
+  the longest pattern. Whether `conversation.shares` still fits one frame
+  with hosts is measured, not argued: row J10's test builds the largest
+  answer, hosts and all, and checks it. What it allows is decided by Cedar
+  ([below](#what-a-tool-policy-allows)).
+  `ShareAccess` holds the role and policy together, so a Drive grant always
+  has a policy and a Read or Comment grant never has one (row J3). The store
+  keeps the policy as JSON and reads it back through the same constructors;
+  `commandHosts` is written only when it names a host, so a policy stored
+  before hosts were names none.
 - **Changing a grant** is sharing again with another role or policy. It is
   applied, journaled with the role and policy before and after, and moves
   the grant's policy revision; sharing the same role and policy again
@@ -201,7 +219,7 @@ sequenceDiagram
     Grants->>Grants: journal role and policy before/after, set policy_revision
     Note over Grants: role change only: no catalogue revision, no notice
     Device->>Socket: recordsHead / conversation.read
-    Socket->>Grants: admit_read (any role)
+    Socket->>Socket: PairedAccess: conversation.read (any role)
     Socket-->>Device: records, exactly as for Read
 ```
 
@@ -295,10 +313,18 @@ policy (`conversation/application/drive_tools.rs`).
   does not stop Codex running a read-only command. Everything that writes,
   reaches the network or runs outside that sandbox is asked about, and so
   checked. The protocol's description of a tool policy says this too.
-- **An allowed `run` reaches every command host.** Where a command runs is
-  the gateway's command policy, the same for every turn; a grant that allows
-  `run` allows it on every environment the gateway grants commands on.
-  Per-grant hosts belong to the move of every policy to Cedar (gate 18).
+- **An allowed `run` reaches only the grant's own hosts.** Whether a turn may
+  call `run` is its tool policy's; where the command goes and which program
+  runs is the command policy's (`CommandPolicyEvaluator`, `commands.cedar`),
+  asked by `admit_command` for the turn's initiator. The owner's turns use
+  every host the gateway grants commands on. A Drive grant's turn uses a host
+  only when the gateway grants commands on it and the grant's policy at the
+  turn's revision names it in `commandHosts`; a grant that names none uses
+  none. A host refused is `environment_not_granted`, recorded as a refused
+  command, and a program the gateway denies or does not list is
+  `command_denied`, for the owner and a grant alike. `environments_list`
+  asks the same policy: a grant's turn is shown only the hosts it may use,
+  and the one the conversation runs on.
 - **Only its own initiator steers a turn.** A turn's calls are judged under
   the initiation its record saved, so the SDK never injects input from
   anyone else into a running turn: it waits for a turn of its own
@@ -330,9 +356,15 @@ sequenceDiagram
     end
     Agent->>Gateway: run
     Gateway->>Cedar: evaluate(grant + policy, gateway/run)
-    Cedar-->>Gateway: Refuse
     Gateway->>Gateway: DriveToolAudit.record(decision)
-    Gateway-->>Agent: not allowed, decision audited, no lease record
+    alt refused
+        Cedar-->>Gateway: Refuse
+        Gateway-->>Agent: not allowed, decision audited, no lease record
+    else allowed
+        Gateway->>Gateway: admit_command(grant + policy, host, program)
+        Note over Gateway: CommandPolicyEvaluator: host in the grant's commandHosts<br/>and the gateway's, then the gateway's programs
+        Gateway-->>Agent: refused environment_not_granted / command_denied, recorded, or the command runs
+    end
 ```
 
 ## Driving a shared conversation
@@ -434,7 +466,8 @@ conversation, saved with who left it, that starts no turn and steers none.
 The owner's surfaces leave notes on the method's Cedar grant,
 `conversation.write`, like any other write. A paired session leaves one
 when it holds a Comment or a Drive grant on the conversation it names
-(`admit_role` with Comment, the same path a Drive command takes with Drive);
+(`conversation.comment` through `PairedAccess`, the same path a Drive
+command takes with `conversation.drive`);
 a Read grant is `forbidden` and no grant is `conversation_not_found` (rows
 J17, J12).
 
@@ -482,8 +515,8 @@ sequenceDiagram
     participant Session as SessionManager
     Device->>Socket: conversation.message {conversationId, requestId, text, delivery}
     Socket->>Socket: owner is the session's principal, pairing's conversation.read
-    Socket->>Grants: admit_role(conversation, receiver, Comment)
-    Grants-->>Socket: held grant and its policy revision
+    Socket->>Grants: held grant and its policy revision
+    Socket->>Socket: PairedAccess: conversation.comment (Cedar)
     Socket->>Service: leave_note as the owner, author = grant (receiver, revision)
     Service->>Session: record_note(text, delivery, actor, author)
     Session->>Session: same request saved? answer it. Else bounds and rate at the wall clock
@@ -517,11 +550,12 @@ makes it `assigned` to that turn for good; one that can no longer go is
   turn, not one squeezed into a turn already running or waiting.
 - **The host decides who may still be heard; the SDK decides what goes.**
   Before such a turn, the service asks `share_grants::note_candidates` about
-  each pending note: the owner's are allowed, a grant's are allowed while it
-  holds Comment or more, and revoked once it is gone or below Comment. A
-  grant it cannot read leaves its notes pending for a later turn. Each grant
-  is read once, through the same `admit_role` a Drive command and a new
-  note go through, so the Cedar migration moves one check. A change of the
+  each pending note: the owner's are allowed, and a grant's are asked of the
+  access policy as `note.deliver` with the role it holds now, which allows
+  Comment or Drive; refused, once the grant is gone or holds only Read, they
+  are revoked. A grant the policy cannot decide about, or whose role cannot
+  be read, leaves its notes pending for a later turn. Each grant is read and
+  asked once per turn. A change of the
   grant's policy revision retires nothing: the revision saved with the note
   stays as its attribution. The verdict is the grant as it stood when the
   turn was admitted, as for a Drive grant's own turn (row J15): a revoke
@@ -709,4 +743,4 @@ otherwise.
 | J24 | A turn that took notes is dispatched; a note's text trying to close its block; the largest message with 8 notes at their longest; the view of a conversation with notes, past 64, and past its byte budget | The provider gets the notes, with author kind and surface, as one labelled JSON block before the person's words; the text stays inside its entry; it fits one frame. The view lists the newest 64 with state, turn, reason, the turn they follow and author; they yield after the transcript and before artifacts | `an_idle_queued_turn_hands_the_provider_the_notes_it_took` (`nessa-sdk` `agents.rs`); `notes_go_before_the_persons_words_as_one_labelled_block_of_json`, `a_note_cannot_close_its_block_or_pass_for_another`, `notes_are_counted_against_the_frame` (`nessa-sdk` `prompt_content.rs`); `a_saved_note_is_given_to_the_model_with_its_author_and_surface` (`nessa-sdk` `sessions/notes.rs`); `the_view_shows_each_note_where_it_stands_and_who_left_it`, `the_view_lists_the_newest_notes_and_they_yield_after_the_transcript` (`nessa-protocol` `projection.rs`) |
 | J26 | A driver's send or steer with the conversation in Auto; with its agent's own hooks allowed; with no Drive tools bound, on OpenCode, or with no journal entry for the revision; back in Ask; a retry of an admitted turn in Auto; a queued checked turn whose agent allows its own hooks by the time it is sent; a grant's turn saved unchecked by an older gateway; the owner's message meanwhile; a revision's policy read after later changes and a revoke | `drive_policy_unenforceable`, nothing saved; admitted in Ask; the retry answered from what was saved; the queued turn settled unsent, never reaching the agent; a grant's turn not saved as checked settled unsent; the owner's admitted; each revision's policy as its journal entry says, `None` for a revision that is no Drive grant of that party there | `a_drive_turn_is_refused_where_its_tools_cannot_be_checked`; `a_queued_drive_turn_is_not_sent_where_its_tools_can_no_longer_be_checked`; `j26_a_drive_turn_nothing_can_check_is_refused_and_reaches_no_agent` (`tests/conversation/leases.rs`); `a_grant_turn_not_saved_as_checked_is_not_sent` (`nessa-sdk` `hooks/observation_window.rs`); `only_agents_that_ask_have_a_checked_source` (`tests/conversation/drive_tools.rs`); `a_revisions_policy_is_read_from_its_journal_entry` (`tests/conversation/store.rs`) |
 | J27 | A driver's turn asks permission for a tool its grant's policy refuses; one it allows (`all`); the owner's turn asks the same; a policy not kept, unbound, or that cannot be evaluated; another initiator steers a running turn | Refused as the hook, the turn goes on, the reason naming the grant, revision, tool and rules; left to the person; left to the person; refused; queued as a turn of its own, never injected | `a_drivers_tool_call_is_checked_against_the_grants_policy`; `a_grants_call_is_decided_by_its_policy_at_the_turns_revision`, `a_grants_call_nothing_can_check_is_refused`, `the_owners_turn_is_never_refused` (`tests/conversation/drive_tools.rs`); `native_steering_from_another_initiator_waits_for_its_own_turn` (`nessa-sdk` `contracts/agents.rs`) |
-| J28 | A driver's turn calls the gateway's `run`, `artifacts_publish` or `artifacts_fetch` under `read_only_tools`; `run` under `all`; `run` under `all` with the Drive tool audit unavailable | Refused with why, each decision in the audit, no lease record, the host asked nothing; runs as the owner's would, on any host the gateway grants commands on, after its decision and rule are in the audit; refused, nothing run | `j28_the_gateways_own_tools_are_checked_against_a_drive_grants_policy`, `j28_a_drive_grant_allowed_run_runs_a_command_as_the_owner_would`, `j28_an_allowed_run_whose_decision_cannot_be_recorded_is_refused` (`tests/conversation/leases.rs`); `a_decision_is_written_once_and_acknowledged_again`, `a_contradicting_record_for_the_same_decision_is_refused` (`conversation/infrastructure/drive_tool_audit.rs`) |
+| J28 | A driver's turn calls the gateway's `run`, `artifacts_publish` or `artifacts_fetch` under `read_only_tools`; `run` under `all`; `run` under `all` with the Drive tool audit unavailable | Refused with why, each decision in the audit, no lease record, the host asked nothing; runs as the owner's would, after its decision and rule are in the audit, but only on a host both the gateway grants commands on and the grant's own `commandHosts` names (a grant naming none runs nowhere); refused, nothing run | `j28_the_gateways_own_tools_are_checked_against_a_drive_grants_policy`, `j28_a_drive_grant_allowed_run_runs_a_command_as_the_owner_would`, `a_drive_grants_run_goes_only_to_the_hosts_its_policy_names`, `j28_an_allowed_run_whose_decision_cannot_be_recorded_is_refused` (`tests/conversation/leases.rs`); `a_decision_is_written_once_and_acknowledged_again`, `a_contradicting_record_for_the_same_decision_is_refused` (`conversation/infrastructure/drive_tool_audit.rs`) |

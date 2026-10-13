@@ -100,8 +100,9 @@ device does. The owner shares a conversation with the peer's credential
 peer's receiver, and every read the peer makes asks that receiver's grants:
 
 - **Record head and pages, and a records watch** go through
-  `AdmitPassiveRead::execute`, which asks `admit_read` for the receiver's
-  grant on that conversation; an ungranted one is `wrong_owner`.
+  `AdmitPassiveRead::execute`, which asks the conversation access policy
+  (`conversation.read`, ADR 803) with the receiver's grant on that
+  conversation; an ungranted one is `wrong_owner`.
 - **Catalogue manifest and resolve** are narrowed in SQL to the receiver's
   granted rows (`store::share_grants::granted`). A manifest pass may not reach
   past the receiver's own head, so probing boundaries finds that head and not
@@ -119,8 +120,9 @@ peer's receiver, and every read the peer makes asks that receiver's grants:
   head instead. A device, which signs in as the owner, keeps its watch.
 - **The socket's `conversation.read`, `.list`, `.observe` and subscriptions**
   need `conversation.write`, which a gateway principal can never hold, so the
-  policy refuses them. Behind that, `reader_of` makes a paired reader of a
-  peer like a device: its read and view ask the grant, its lists are refused.
+  policy refuses them. Behind that, `binding_of` makes a paired reader of a
+  peer like a device: its read and view ask the access policy
+  (`conversation.read`), and its lists are refused (`conversation.list`).
 
 Admission matches the receiver binding to the session by credential and
 organization. The binding's `owner_id` is the **grantor**: the owner whose

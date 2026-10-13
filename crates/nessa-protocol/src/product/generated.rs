@@ -987,6 +987,8 @@ pub struct ConversationToolPolicy {
     pub allow: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deny: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_hosts: Option<Vec<String>>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

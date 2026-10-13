@@ -55,9 +55,18 @@
 //! host under `nessa env serve`, the binding stays here. `FilePlacements`
 //! keeps which conversations were placed on which host.
 //! `CedarToolPolicyEvaluator` answers the `ToolPolicyEvaluator` port: may a
-//! turn's initiator call a tool (`tool_policy/cedar/`). `DurableDriveToolAudit`
-//! keeps each of its decisions on the gateway's own tools for a Drive turn,
-//! one immutable file per conversation, call, tool and outcome.
+//! turn's initiator call a tool (`tool_policy/cedar/`). Beside it in the same
+//! bundle, `CedarCommandPolicyEvaluator` answers `CommandPolicyEvaluator`
+//! (may the initiator use a host, run a program there) and
+//! `CedarAppCallPolicyEvaluator` answers `AppCallPolicyEvaluator` (may an
+//! MCP App reach a server, call a tool on it).
+//! `CedarConversationAccessPolicy` answers `ConversationAccessPolicyEvaluator`
+//! (`access_policy/cedar/`): who may locate, act on, read, comment in, drive
+//! or share a conversation, and watch a catalogue. The store asks it inside
+//! the transaction that writes a share grant.
+//! `DurableDriveToolAudit` keeps each of the tool policy's decisions on the
+//! gateway's own tools for a Drive turn, one immutable file per conversation,
+//! call, tool and outcome.
 mod change_watch;
 pub use change_watch::{NessaRecordWatches, UuidWatchNamespaces};
 // Composed only by the Unix gateway (`composition/local_auth.rs`), as
@@ -116,8 +125,13 @@ pub use context_drops::audit_context_drops;
 mod file_link_audit;
 pub use file_link_audit::DurableConversationFileLinkAudit;
 
+mod access_policy;
+pub use access_policy::CedarConversationAccessPolicy;
+
 mod tool_policy;
-pub use tool_policy::CedarToolPolicyEvaluator;
+pub use tool_policy::{
+    CedarAppCallPolicyEvaluator, CedarCommandPolicyEvaluator, CedarToolPolicyEvaluator,
+};
 
 mod deletion_audit;
 pub use deletion_audit::DurableConversationDeletionAudit;
