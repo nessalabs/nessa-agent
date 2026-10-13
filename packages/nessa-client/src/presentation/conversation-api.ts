@@ -1,4 +1,10 @@
 import {
+  captureQuestionChoices,
+  questionFields,
+  type QuestionTarget,
+  type QuestionChoice,
+} from "../application/question-target.js"
+import {
   NessaConversationMutationError,
   NessaConversationControlError,
 } from "../application/conversation-mutation-error.js"
@@ -13,7 +19,6 @@ import type {
   ConversationView,
   ConversationReceipt,
   ConversationMutationResult,
-  ConversationQuestionChoice,
   ConversationReorderResult,
   ConversationSetApprovalModeResult,
   ApprovalMode,
@@ -180,10 +185,8 @@ export type ConversationApi = {
    * current question before making a new deliberate answer.
    */
   answerQuestion: (
-    conversationId: string,
-    executionId: string,
-    questionId: string,
-    choices: readonly ConversationQuestionChoice[] | null,
+    target: QuestionTarget,
+    choices: readonly QuestionChoice[] | null,
     options?: ConversationActionOptions,
   ) => Promise<ConversationMutationResult>
   /** Withdraw the identified review with a human-readable reason recorded by the gateway. */
@@ -264,7 +267,7 @@ export function createConversationApi(
       | readonly string[]
       | readonly ImageAttachment[]
       | readonly LinkedFile[]
-      | readonly ConversationQuestionChoice[]
+      | readonly QuestionChoice[]
       | null
       | undefined
     >,
@@ -471,7 +474,13 @@ export function createConversationApi(
         false,
       )
     },
-    answerQuestion: (id, executionId, questionId, choices, options = {}) => {
+    answerQuestion: (target, choices, options = {}) => {
+      const capturedChoices = captureQuestionChoices(choices)
+      const {
+        conversationId: id,
+        executionId,
+        questionId,
+      } = questionFields(target, capturedChoices)
       validConversationId(id)
       const requestId = boundedText(options.requestId ?? newId(), "Request ID", 256)
       return mutate(
@@ -481,7 +490,7 @@ export function createConversationApi(
           requestId,
           executionId,
           questionId,
-          choices: choices === null ? null : choices.map((choice) => ({ ...choice })),
+          choices: capturedChoices,
         },
         (value) => conversationMutation(value, requestId),
         false,

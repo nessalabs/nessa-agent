@@ -6,8 +6,7 @@ published lease, decoded by the actual client validator; `ssh-live`,
 `peer-lost` and `peer-refused` on a paired machine.
 `run-on-fixture.html?case=none|hosts|paired` mounts the production composer
 tray with no SSH host, two, or one and a connected paired machine. Run `node verification/desktop/scripts/lease-details.mjs`
-for both. Like the fixture below, they are served by the development server
-only.
+for both. These lease/composer fixtures are served by the development server only.
 
 `fixture.html` mounts the production `ConversationControls` and `applyView` with
 current published gateway views. Every case passes the actual client decoder
@@ -17,13 +16,12 @@ published result, including re-enabling controls after an incomplete view.
 
 Run `node verification/desktop/scripts/committed-transcript.mjs`. It shares the
 desktop verification browser, result and selector owners; Chromium and WebKit
-measure notice counts, enabled control counts and horizontal overflow. The fixture
-is served by the development server and is not included in product assets.
-The standard `run-all.mjs` default development mode runs it through the shared
-server URL. `run-all --mode prod` leaves this check out and names it
-"not run: dev server only"; that is not "could not run". Explicit fixture-serving
-URLs are supported; a product-only preview without the fixture, run on its own,
-reports could-not-run.
+measure notice counts, enabled control counts and horizontal overflow. The fixture is served by the development server for ordinary functional checks.
+`committed-transcript.mjs --mode prod` builds it with the application's Vite
+configuration plus `verification/conversation/vite.config.ts`, then checks the
+minified production components; it is not added to packaged application inputs.
+`run-all --mode prod` starts this fixture preview separately from the product
+preview. Explicit fixture-serving URLs remain supported.
 
 The production question and notification components also render one retained ask
 with three real sibling fields while the interaction display-limit notice appears
@@ -42,3 +40,13 @@ and controls over a gated close port. `local-tab-lifetimes.mjs` measures fresh
 local identity, old follow cleanup, replacement follow, original close target,
 and replacement notices at 360, 600 and 1440 pixels in both engines. The
 fixture is served in development and is excluded from product assets.
+
+The question-target consumer mounts the real panel component, Redux control
+thunk and client serializer over two decoded views with equal execution/question
+IDs. Chromium and WebKit at 360, 600 and 1440 pixels assert three fields, one
+initial selection, another equal-key ask’s retained middle selection, zero
+inherited selections after switching conversations, and
+two exact action records: an offered choice for the second conversation and null
+decline for the first. This recorder does not authenticate a server or establish
+current authority. The cropped screenshot lives in
+`verification/desktop/evidence/question-targets/question-targets.png`.

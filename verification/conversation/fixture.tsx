@@ -1,7 +1,7 @@
 import type { ConversationView as PublishedConversationView } from "@nessa/client"
 /** Browser inputs are published gateway views; authority is tested in the server projection. */
 import { configureStore } from "@reduxjs/toolkit"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { createRoot } from "react-dom/client"
 import { Provider } from "react-redux"
 import { conversationView as decodeView } from "../../packages/nessa-client/src/protocol/conversation-validate"
@@ -9,10 +9,18 @@ import { makeStore } from "../../src/store"
 import { createDependencies } from "../../src/composition/dependencies"
 import { scenarioEffects } from "../../src/conversation/adapters/scenario/effects"
 import {
+  bindConversation,
+  openConversation,
+  setActive,
   closeTab,
   followConversation,
   restoreConversations,
 } from "../../src/conversation/adapters/store/slice"
+import {
+  useConversationDispatch,
+  useConversationSelector,
+} from "../../src/conversation/adapters/store/hooks"
+import { createConversationApi } from "../../packages/nessa-client/src/presentation/conversation-api"
 import { conversationTabSnapshot } from "../../src/conversation/application/saved-tabs"
 import { followByReading } from "../../src/conversation/testing"
 import { applyView } from "../../src/conversation/application/usecases/apply-view"
@@ -189,9 +197,8 @@ function HistoryTabConsumer() {
   }
   const close = async () => {
     if (!active) return
-    await active.store
-      .dispatch(closeTab(active.store.getState().conversation.activeId))
-      .unwrap()
+    const id = active.store.getState().conversation.activeId
+    await active.store.dispatch(closeTab(id)).unwrap()
     setResult(
       (previous) =>
         previous && {
@@ -199,7 +206,7 @@ function HistoryTabConsumer() {
           closes: active.closeCalls(),
           open: active.store
             .getState()
-            .conversation.conversations.some((item) => item.id === "c0"),
+            .conversation.conversations.some((item) => item.id === id),
         },
     )
   }
@@ -231,10 +238,83 @@ function HistoryTabConsumer() {
   )
 }
 
-function Fixture() {
-  const [current, setCurrent] = useState<Conversation>(() =>
-    conversation("committed-conversation"),
+const questionConversations = [
+  "00000000-0000-4000-8000-000000000001",
+  "00000000-0000-4000-8000-000000000002",
+] as const
+
+/** Real panel controls and client serialization; this recorder is not an authenticated gateway. */
+function QuestionTargetConsumer() {
+  const [requests, setRequests] = useState<unknown[]>([])
+  const [tabs] = useState(() => {
+    let action = 0
+    const client = createConversationApi(
+      {
+        request: async (_method, params) => {
+          setRequests((previous) => [...previous, params])
+          return { requestId: (params as { requestId: string }).requestId, applied: true }
+        },
+      },
+      () => `question-action-${++action}`,
+    )
+    const effects = {
+      ...scenarioEffects("echo"),
+      create: async (conversationId: string) => ({ conversationId }),
+      follow: followByReading(async (id: string) =>
+        decodeView({ ...questionView(false), conversationId: id }, id),
+      ),
+      answerQuestion: async (...args: Parameters<typeof client.answerQuestion>) => {
+        await client.answerQuestion(...args)
+      },
+    }
+    const result = makeStore(createDependencies({ conversation: effects }))
+    result.dispatch(bindConversation({ id: "c0", serverId: questionConversations[0] }))
+    result.dispatch(openConversation())
+    result.dispatch(bindConversation({ id: "c1", serverId: questionConversations[1] }))
+    result.dispatch(setActive("c0"))
+    return result
+  })
+  useEffect(() => {
+    void tabs.dispatch(followConversation("c0"))
+    void tabs.dispatch(followConversation("c1"))
+  }, [tabs])
+  return (
+    <section data-question-target-consumer data-requests={JSON.stringify(requests)}>
+      <Provider store={tabs}>
+        <QuestionTargetTabs />
+      </Provider>
+    </section>
   )
+}
+function QuestionTargetTabs() {
+  const dispatch = useConversationDispatch()
+  const active = useConversationSelector((state) =>
+    state.conversation.conversations.find(
+      (item) => item.id === state.conversation.activeId,
+    ),
+  )
+  return (
+    <>
+      <nav aria-label="Question conversations">
+        <button onClick={() => dispatch(setActive("c0"))}>
+          First question conversation
+        </button>
+        <button onClick={() => dispatch(setActive("c1"))}>
+          Second question conversation
+        </button>
+      </nav>
+      <div data-question-target-active={active?.serverConversationId}>
+        {active && <ConversationQuestions conversation={active} gatewayAvailable />}
+      </div>
+    </>
+  )
+}
+
+function Fixture() {
+  const [current, setCurrent] = useState<Conversation>(() => ({
+    ...conversation("committed-conversation"),
+    serverConversationId: "committed-conversation",
+  }))
   const [caseName, setCaseName] = useState("initial")
   const show = (state: ConversationTranscriptState, authority: boolean) => {
     setCurrent((previous) => applyView(previous, view(state, authority)))
@@ -276,6 +356,7 @@ function Fixture() {
         <ConversationQuestions conversation={current} gatewayAvailable />
       </section>
       <HistoryTabConsumer />
+      <QuestionTargetConsumer />
       <section data-committed-controls>
         <ConversationControls conversation={current} gatewayAvailable />
       </section>

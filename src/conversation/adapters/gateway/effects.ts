@@ -782,12 +782,10 @@ export function gatewayEffects(
         throw controlFailure(error)
       }
     },
-    async answerQuestion(conversationId, executionId, questionId, choices) {
+    async answerQuestion(target, choices) {
       try {
         await api().answerQuestion(
-          conversationId,
-          executionId,
-          questionId,
+          target,
           choices === null
             ? null
             : choices.map((choice) => ({

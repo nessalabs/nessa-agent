@@ -13,6 +13,8 @@ export const content = {
   widget: "widget",
 }
 
+const questionTargetConsumer = "[data-question-target-consumer]"
+const questionTargetActive = "[data-question-target-active]"
 const committedQuestions = "[data-committed-questions]"
 
 /** CSS selectors, grouped by the part of the window they belong to. */
@@ -22,6 +24,9 @@ export const css = {
   historyTabConsumer: "[data-history-tab-consumer]",
   committedFixture: "[data-committed-fixture]",
   committedControls: "[data-committed-controls]",
+  questionTargetConsumer,
+  questionTargetActive,
+  questionTargetInputs: `${questionTargetActive} input[type="radio"]`,
   committedQuestions,
   committedQuestionInputs: `${committedQuestions} input[type="radio"]`,
   committedLimitNotice: "[data-committed-limit-notice]",
@@ -637,6 +642,15 @@ export const committedRoles = {
   state: (state, authority) => [
     "button",
     { name: authority ? state : "complete without live attachment", exact: true },
+  ],
+  questionAnswer: ["button", { name: "Answer", exact: true }],
+  questionSkip: ["button", { name: "Skip", exact: true }],
+  questionConversation: (second) => [
+    "button",
+    {
+      name: second ? "Second question conversation" : "First question conversation",
+      exact: true,
+    },
   ],
   questions: (limited) => [
     "button",

@@ -129,7 +129,6 @@ export const DEV_SERVER_ONLY = "not run: dev server only"
 export const devServerOnlyChecks = [
   "panel-list-follow",
   "mode-publication",
-  "committed-transcript",
   "local-tab-lifetimes",
   "lease-details",
   "app-review",
