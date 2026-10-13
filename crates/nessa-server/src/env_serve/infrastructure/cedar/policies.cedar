@@ -1,7 +1,8 @@
 // Who may lease what from this host. The principal is the peer leasing:
 // `kind` is "ssh" (whoever runs `nessa env serve` over SSH) or "gateway" (a
 // paired gateway this host dials), and `hasEntry` says whether the host's
-// owner wrote it an entry in grants.json; both are kept for the record.
+// owner wrote it an entry in grants.json. Both are facts a policy may use; none
+// does today, and a test holds that whether an entry was written never decides.
 // `allAgents`, `agents` and `commands` are the grant the peer holds: its
 // entry as written, or, with none, what the server's domain says a peer
 // with no entry holds (`domain::unwritten`: everything for ssh, nothing for

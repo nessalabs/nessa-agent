@@ -269,7 +269,10 @@ fn who_may_be_issued_a_credential_on_each_path() {
                 Ok(Decision::Allow),
                 "{kind:?} member {path:?}"
             );
-            let admin = if matches!(path, IssuePath::Bootstrap | IssuePath::SurfaceProvision) {
+            let admin = if matches!(
+                path,
+                IssuePath::Bootstrap | IssuePath::SurfaceProvision | IssuePath::OwnerRecovery
+            ) {
                 Decision::Allow
             } else {
                 Decision::Deny

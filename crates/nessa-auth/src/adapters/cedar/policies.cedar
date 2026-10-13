@@ -108,8 +108,8 @@ when { context.action == "credential.manage" && context.path == "product" };
 // A peer gateway is never issued one: it is enrolled only by pairing, which
 // binds its credential to the key it pinned, and an issued bearer secret
 // would be a second way in. A member may be issued a credential on any
-// issuing path; an admin only on the local operator's, bootstrap and surface
-// provisioning, never over the product protocol.
+// issuing path; an admin only on the local operator's (bootstrap, surface
+// provisioning and owner recovery), never over the product protocol.
 @id("issue.member")
 permit (
     principal is Nessa::Recipient,
@@ -130,5 +130,5 @@ permit (
 when {
     ["human", "agent", "integration"].contains(principal.kind) &&
     principal.role == "admin" &&
-    ["bootstrap", "provision"].contains(context.path)
+    ["bootstrap", "provision", "recovery"].contains(context.path)
 };

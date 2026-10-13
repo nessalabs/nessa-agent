@@ -256,8 +256,8 @@ Cedar actions decide what may be issued: `credential.issue` says who a new
 credential may be issued to, and `credential.hold` says which grants it may
 carry. Both read the issuing path as a fact in `context.path`, so an issue over
 the product protocol cannot hand out an admin membership or the
-`credential.manage` grant, while the local operator's bootstrap and surface
-provisioning can. The lifecycle code still checks the request's own shape, such
+`credential.manage` grant, while the local operator's bootstrap, surface
+provisioning and owner recovery can. The lifecycle code still checks the request's own shape, such
 as matching organizations and an active membership.
 
 ## 7. A request through the real application

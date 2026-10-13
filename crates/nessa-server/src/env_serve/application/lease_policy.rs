@@ -43,7 +43,9 @@ pub(crate) struct LeaseFacts<'a> {
 /// The policy's answer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum LeaseDecision {
-    /// Admitted, by these policies.
+    /// Admitted, by these policies. A command also needs the grant's terms
+    /// to run on: a yes for a grant that holds no command timeout is refused
+    /// as a broken bundle, never run without terms.
     Allow { policies: Vec<String> },
     /// Refused, and why.
     Deny(Denial),

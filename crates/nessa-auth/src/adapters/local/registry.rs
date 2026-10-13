@@ -842,10 +842,18 @@ impl LocalCredentialStore {
             .iter()
             .find(|principal| principal.id == membership.principal_id)
             .ok_or(LocalStoreError::Corrupt)?;
+        let kind = principal_kind(owner)?;
+        validate_recipient(
+            self.grants.as_ref(),
+            kind,
+            membership,
+            &current.gateway_id,
+            IssuePath::OwnerRecovery,
+        )?;
         validate_grants(
             self.grants.as_ref(),
             &metadata,
-            principal_kind(owner)?,
+            kind,
             &current.gateway_id,
             IssuePath::OwnerRecovery,
         )?;
