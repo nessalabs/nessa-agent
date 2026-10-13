@@ -331,3 +331,6 @@ fn another_valid_owner_credential_cannot_stage_the_original_signed_consent() {
         approved
     );
 }
+
+#[path = "owner_phone_purpose_tests.rs"]
+mod owner_phone_purpose_tests;

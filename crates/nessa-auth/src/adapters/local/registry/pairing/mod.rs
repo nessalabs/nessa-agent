@@ -3,6 +3,7 @@
 mod device_verifier;
 mod enrollment;
 mod owner_phone;
+mod owner_phone_purpose;
 mod owner_phone_original;
 mod projection;
 pub use device_verifier::DeviceCredentialVerifier;

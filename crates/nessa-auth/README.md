@@ -153,6 +153,17 @@ or product/native phone transport, and does not change legacy per-chat policies.
 Native listener and protected product activation remain subsequent consumers;
 this producer alone establishes no protected connection or resource acceptance.
 
+`application/pairing/owner_phone_purpose.rs` publishes the trusted current
+delegated identity projection. The registry adapter joins a freshly checked
+session and the actual signed Active device record from the same revision;
+historical bootstrap retirement does not withdraw the delegated credential.
+`owner_phone_purpose_tests.rs` covers current revocation, membership loss, legacy
+classes and a real revoke between snapshot and join. Receiver holding, current
+epochs and Cedar method/target decisions remain the server's responsibility.
+`NativeTransport::request_key_update` delegates TLS control emission to rustls;
+the counted real transport regression checks flushed bytes before application
+writes and preserved pinned identity, without implementing another TLS parser.
+
 ## Follow-on work and parallel ownership
 
 Independent changes can target these modules after agreeing on their ports:
