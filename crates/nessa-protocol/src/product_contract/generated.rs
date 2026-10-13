@@ -125,6 +125,7 @@ pub enum ConversationErrorCode {
     MessageQuotaExceeded,
     DrivePolicyUnenforceable,
     Revoked,
+    RevokedAfterSave,
 }
 impl ConversationErrorCode {
     pub fn as_str(self) -> &'static str {
@@ -187,6 +188,7 @@ impl ConversationErrorCode {
             Self::MessageQuotaExceeded => "message_quota_exceeded",
             Self::DrivePolicyUnenforceable => "drive_policy_unenforceable",
             Self::Revoked => "revoked",
+            Self::RevokedAfterSave => "revoked_after_save",
         }
     }
 }

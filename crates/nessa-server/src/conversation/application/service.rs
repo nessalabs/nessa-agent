@@ -2998,8 +2998,9 @@ impl ConversationService {
             // The hold is this grant only. Taken before the agent is asked,
             // so a revoke that already landed is `NotAsked`. A queued turn
             // keeps it until enqueue returns. A native steer moves it into
-            // the save check, which drops it after the save and compares the
-            // revision again before the provider is asked (row J29).
+            // the save check, which drops the first permit after the save,
+            // compares the live revision, and keeps that second permit until
+            // the provider operation starts (row J29).
             let mut revision_hold = None;
             let mut saved_grant = None;
             if let Some((receiver, revision)) = fresh_grant {
@@ -3075,9 +3076,9 @@ impl ConversationService {
             };
             // Enqueue kept the permit through the save and through starting
             // the runner, and drops it here, before the turn is watched. A
-            // native steer already dropped it inside the save check, before
-            // the provider was asked. A revoke of this grant applies from
-            // here, not across the turn itself.
+            // native steer released its second permit when the provider
+            // operation started, before the response wait. A revoke of this
+            // grant applies from here, not across the turn itself.
             drop(revision_hold);
             // Refused: what it took went nowhere, and each is reported
             // dropped unsent (`c11_a_refused_submission_drops_what_it_took_on_record`).
@@ -3085,7 +3086,7 @@ impl ConversationService {
             // went with it, and should the turn then fail, it is lost (C13).
             // Unresolved: it follows the message, whose record covers it.
             let delivery = delivery.map_err(|error| match error {
-                AgentError::RefusedAfterSave => ConversationError::Revoked,
+                AgentError::RefusedAfterSave => ConversationError::RevokedAfterSave,
                 AgentError::AfterSaveUnavailable => ConversationError::Metadata,
                 other => ConversationError::Agent(other),
             });
@@ -5695,8 +5696,8 @@ fn completed_reply(snapshot: Option<&SessionSnapshot>, execution: &str) -> Optio
 /// lock that admits the turn, so a turn that ends in between cannot leave an
 /// idle admission without the notes it should take.
 /// Drops one grant's admission permit after the steer is saved, then
-/// compares the live revision before the provider is asked. The permit is
-/// not held across that wait. Drop releases it if `steer` never asks.
+/// compares the live revision. A match keeps that second permit until the
+/// provider operation starts. Drop releases it if `steer` never asks.
 struct ConfirmSavedGrant {
     hold: std::sync::Mutex<Option<RevisionHold>>,
     grants: Arc<dyn ShareGrants>,
@@ -5726,13 +5727,25 @@ impl AfterSaveCheck for ConfirmSavedGrant {
                 .await
             {
                 Ok(again) => {
-                    drop(again);
+                    *self
+                        .hold
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(again);
                     Ok(())
                 }
                 Err(ConversationError::Revoked) => Err(AfterSaveRefusal::Refused),
                 Err(_) => Err(AfterSaveRefusal::Unavailable),
             }
         })
+    }
+
+    fn provider_operation_started(&self) {
+        drop(
+            self.hold
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take(),
+        );
     }
 }
 

@@ -1540,6 +1540,9 @@ function reasonFor(
     case ConversationErrorCode.AttachmentCleanupUnavailable:
     case ConversationErrorCode.ConversationErasureIncomplete:
     case ConversationErrorCode.MessageQuotaExceeded:
+    // A native steer was saved, then refused because its grant moved before
+    // injection. The attempt is settled, so it is not a clean refusal.
+    case ConversationErrorCode.RevokedAfterSave:
       return "unavailable"
     // An MCP App's own calls: this source makes none, so none of these can
     // answer it; one that did would be no answer it knows.

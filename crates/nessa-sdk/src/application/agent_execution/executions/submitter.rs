@@ -35,21 +35,33 @@ pub struct Submitter {
 /// join the running turn.
 ///
 /// The SDK calls [`AfterSaveCheck::after_save`] once, still holding its
-/// scheduler lock, then drops any resources the check released. `Err`
-/// settles the saved attempt and does not inject or queue it. A panic from
-/// the check is the scheduling task's panic. Dropping the submitter before
-/// `steer` runs drops the check without calling it; the check owns whatever
-/// it must release on drop.
+/// scheduler lock. `Err` settles the saved attempt and does not inject or
+/// queue it. `Ok(())` may keep a permit until
+/// [`AfterSaveCheck::provider_operation_started`], which runs once the
+/// provider operation has started and before the SDK waits for that
+/// operation's response, and also when the SDK will not inject. A panic
+/// from the check is the scheduling task's panic. Dropping the submitter
+/// before `steer` runs drops the check without calling it; the check owns
+/// whatever it must release on drop.
 pub trait AfterSaveCheck: Send + Sync {
     /// Whether the saved turn may still be injected or queued.
     ///
     /// `Ok(())` continues. [`AfterSaveRefusal::Refused`] and
     /// [`AfterSaveRefusal::Unavailable`] both leave the provider uncalled;
     /// the first is the host's refusal, the second is the host being unable
-    /// to decide.
+    /// to decide. A permit kept for the provider call stays with the check
+    /// until [`Self::provider_operation_started`].
     fn after_save<'a>(
         &'a self,
     ) -> Pin<Box<dyn Future<Output = Result<(), AfterSaveRefusal>> + Send + 'a>>;
+
+    /// The provider operation has started, or the SDK will not inject.
+    ///
+    /// Release whatever [`Self::after_save`] kept so a later change can
+    /// commit. Called before the SDK waits for the provider's response, and
+    /// on the paths that queue or refuse instead of injecting. A second
+    /// call releases nothing. A check that kept nothing does nothing.
+    fn provider_operation_started(&self) {}
 }
 
 /// Why [`AfterSaveCheck`] declined to start a turn that was already saved.

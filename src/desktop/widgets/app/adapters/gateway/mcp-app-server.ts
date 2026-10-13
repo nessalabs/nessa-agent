@@ -107,6 +107,7 @@ const outcomes: Readonly<Record<ConversationErrorCode, Outcome>> = {
   [ConversationErrorCode.MessageQuotaExceeded]: "failed",
   [ConversationErrorCode.DrivePolicyUnenforceable]: "failed",
   [ConversationErrorCode.Revoked]: "failed",
+  [ConversationErrorCode.RevokedAfterSave]: "failed",
   [ConversationErrorCode.ConversationCapacity]: "failed",
   [ConversationErrorCode.ConversationConfigurationChanged]: "failed",
   [ConversationErrorCode.ConversationStateUnreadable]: "failed",

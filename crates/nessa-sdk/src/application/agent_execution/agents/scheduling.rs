@@ -10,9 +10,9 @@ use super::{Agent, AgentError, AttachmentPhase, AttachmentRequest};
 use crate::application::agent_execution::{
     caller_wake::{contain_caller_wake, CallerWaiter},
     executions::{
-        AfterSaveRefusal, ExecutionAuditRecord, ExecutionRequest, QueueAdmissionRecord,
-        QueueOrderRecord, QueueSettlementRecord, SteeringAcknowledgementRecord, SubmissionMode,
-        Submitter,
+        AfterSaveCheck, AfterSaveRefusal, ExecutionAuditRecord, ExecutionRequest,
+        QueueAdmissionRecord, QueueOrderRecord, QueueSettlementRecord,
+        SteeringAcknowledgementRecord, SubmissionMode, Submitter,
     },
     permissions::ActionContext,
     providers::{
@@ -33,6 +33,7 @@ use std::{
     collections::{HashMap, HashSet},
     future::{poll_fn, Future},
     panic::{catch_unwind, AssertUnwindSafe},
+    sync::Arc,
     task::Poll,
     time::Duration,
 };
@@ -1432,8 +1433,9 @@ impl Agent {
     /// When `submitter` carries [`Submitter::with_after_save`](crate::application::agent_execution::executions::Submitter::with_after_save),
     /// that check runs after the input is saved and before this injects into
     /// the provider or queues the turn. A refusal settles the saved attempt
-    /// and leaves the provider uncalled. The check is not held across the
-    /// provider's injection wait: it returns before that wait starts.
+    /// and leaves the provider uncalled. A permit the check keeps is released
+    /// when the provider operation starts, before this waits for the
+    /// provider's response, and when this queues or refuses instead.
     /// Dropping the caller's wait does not abandon accepted steering delivery.
     /// Identical retries recover the original injection acknowledgement, queued
     /// receipt, or error; they never inject a second time. Conflicting retries return
@@ -1556,7 +1558,7 @@ impl Agent {
                 NoteIntake::default(),
             )
             .await?;
-        let refused = match after_save {
+        let refused = match after_save.as_ref() {
             Some(check) => match check.after_save().await {
                 Ok(()) => None,
                 Err(AfterSaveRefusal::Refused) => Some(AgentError::RefusedAfterSave),
@@ -1564,26 +1566,40 @@ impl Agent {
             },
             None => None,
         };
+        let release_saved = |check: Option<&Arc<dyn AfterSaveCheck>>| {
+            if let Some(check) = check {
+                check.provider_operation_started();
+            }
+        };
         // WorkStatus persistence can be overtaken by close or provider settlement.
         // Revalidate the captured target before handing anything to the adapter.
         let mut activated = false;
         let outcome = if let Some(error) = refused {
+            release_saved(after_save.as_ref());
             Err(error)
         } else if !self.inner.lifecycle.accepts_queued()
             || close_notice.has_changed().unwrap_or(true)
         {
+            release_saved(after_save.as_ref());
             Err(AgentError::Closed)
         } else if self.inner.lifecycle.active().as_ref() != target.as_ref() || !joins_target {
+            release_saved(after_save.as_ref());
             Ok(SteeringOutcome::PromptRequired)
         } else {
             match &target {
                 Some(target) => {
-                    work_owner.as_ref().expect("steering owner").activate()?;
+                    if let Err(error) = work_owner.as_ref().expect("steering owner").activate() {
+                        release_saved(after_save.as_ref());
+                        return Err(error);
+                    }
                     activated = true;
-                    self.deliver_native_steering(target.clone(), input.clone())
+                    self.deliver_native_steering(target.clone(), input.clone(), after_save.as_ref())
                         .await
                 }
-                None => Ok(SteeringOutcome::PromptRequired),
+                None => {
+                    release_saved(after_save.as_ref());
+                    Ok(SteeringOutcome::PromptRequired)
+                }
             }
         };
         let outcome = match outcome {
@@ -1863,11 +1879,29 @@ impl Agent {
         &self,
         target: ExecutionId,
         input: ExecutionRequest,
+        after_save: Option<&Arc<dyn AfterSaveCheck>>,
     ) -> Result<SteeringOutcome, AgentError> {
-        let admission = self.accept_control()?;
-        let attached = self.inner.lifecycle.attached_provider(&admission)?;
+        let started = || {
+            if let Some(check) = after_save {
+                check.provider_operation_started();
+            }
+        };
+        let admission = match self.accept_control() {
+            Ok(admission) => admission,
+            Err(error) => {
+                started();
+                return Err(error);
+            }
+        };
+        let attached = match self.inner.lifecycle.attached_provider(&admission) {
+            Ok(attached) => attached,
+            Err(error) => {
+                started();
+                return Err(error);
+            }
+        };
         let mut cleanup_needed = false;
-        let mut delivery = Box::pin(async { attached.session.steer(target, input).await });
+        let mut delivery = Box::pin(attached.session.steer(target, input, &started));
         let outcome = self
             .run_control(
                 admission.clone(),

@@ -50,10 +50,15 @@ pub enum ConversationError {
     /// the policy unreadable. Nothing was saved or sent.
     DrivePolicyUnenforceable,
     /// A Drive grant's turn whose grant was revoked, or whose revision moved,
-    /// after admission read that revision. A queued turn is not saved. A
-    /// native steer that lost the compare after its save is not injected
-    /// (row J29).
+    /// before the turn was saved. A queued turn saves nothing. A steer that
+    /// is queued rather than injected saves nothing. The same command is
+    /// admitted again only under the grant as it stands now (row J29).
     Revoked,
+    /// A native steer that was saved, then refused because the grant moved
+    /// before injection. The saved attempt is settled as refused and nothing
+    /// reached the agent. A retry of that same execution is answered the
+    /// same way and is not admitted again (row J29).
+    RevokedAfterSave,
     /// A delete that happened — the conversation is tombstoned, left out of
     /// every list, and refused — and did not finish. Repeating the delete
     /// finishes it.

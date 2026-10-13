@@ -6,7 +6,7 @@ use super::{agents::MemoryStorage, support::*};
 use nessa_sdk::application::agent_execution::hooks::{
     HookError, InvocationContext, InvocationHook,
 };
-use std::{future::Future, time::Duration};
+use std::{future::Future, sync::atomic::AtomicBool, time::Duration};
 use tokio::sync::{mpsc, oneshot, watch, Notify};
 
 struct Started {
@@ -26,6 +26,10 @@ struct GatedProvider {
     closed: AtomicUsize,
     steering_wait: Mutex<Option<oneshot::Receiver<()>>>,
     steering_started: Notify,
+    /// Parked before the steer is recorded, so a test can see the save
+    /// check still holding whatever it kept.
+    hold_before_handoff: Mutex<Option<oneshot::Receiver<()>>>,
+    entered_before_handoff: Notify,
 }
 struct GatedBackend {
     provider: Arc<GatedProvider>,
@@ -125,14 +129,20 @@ impl ProviderSessionBackend for GatedBackend {
             ))
         })
     }
-    fn steer(
-        &self,
+    fn steer<'a>(
+        &'a self,
         target: ExecutionId,
         input: ExecutionRequest,
-    ) -> ProviderOperationFuture<'_, SteeringOutcome> {
+        started: &'a (dyn Fn() + Send + Sync),
+    ) -> ProviderOperationFuture<'a, SteeringOutcome> {
         Box::pin(async move {
             let result: Result<SteeringOutcome, AgentError> = {
                 async move {
+                    let hold = self.provider.hold_before_handoff.lock().unwrap().take();
+                    if let Some(hold) = hold {
+                        self.provider.entered_before_handoff.notify_one();
+                        let _ = hold.await;
+                    }
                     let saved = self.provider.storage.snapshot();
                     let record = saved
                         .invocations
@@ -145,6 +155,9 @@ impl ProviderSessionBackend for GatedBackend {
                         .unwrap()
                         .push(record.clone());
                     self.provider.steered.lock().unwrap().push((target, input));
+                    // The fixture has the steer. Release what the host held
+                    // until this handoff, then wait for the response.
+                    started();
                     let wait = self.provider.steering_wait.lock().unwrap().take();
                     self.provider.steering_started.notify_one();
                     if let Some(wait) = wait {
@@ -231,6 +244,8 @@ async fn fixture(
         closed: AtomicUsize::new(0),
         steering_wait: Mutex::new(None),
         steering_started: Notify::new(),
+        hold_before_handoff: Mutex::new(None),
+        entered_before_handoff: Notify::new(),
     });
     let agent = attached_agent(
         Arc::new(GatedFactory(provider.clone())),
@@ -465,6 +480,73 @@ async fn scheduling_a_refused_save_check_is_not_injected() {
         record(&storage, "correction").result,
         Some(Err(AgentError::RefusedAfterSave))
     );
+    complete(running);
+    within(first.wait()).await.unwrap();
+    agent.close(close_action()).await.unwrap();
+}
+
+/// The check keeps what it held through the save until the provider has the
+/// steer, and releases it while the provider is still waiting to answer.
+struct ReleaseOnHandoff {
+    released: AtomicBool,
+}
+
+impl AfterSaveCheck for ReleaseOnHandoff {
+    fn after_save<'a>(
+        &'a self,
+    ) -> std::pin::Pin<Box<dyn Future<Output = Result<(), AfterSaveRefusal>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn provider_operation_started(&self) {
+        self.released.store(true, Ordering::SeqCst);
+    }
+}
+
+#[tokio::test]
+async fn scheduling_a_saved_check_releases_when_the_provider_takes_the_steer() {
+    let (agent, _storage, provider, mut calls) = fixture(Ok(SteeringOutcome::Injected)).await;
+    let (hold_sender, hold) = oneshot::channel();
+    *provider.hold_before_handoff.lock().unwrap() = Some(hold);
+    let (wait_sender, wait) = oneshot::channel();
+    *provider.steering_wait.lock().unwrap() = Some(wait);
+    let first = agent
+        .enqueue(request("active"), Submitter::owner(actor()))
+        .await
+        .unwrap();
+    let running = started(&mut calls, "active").await;
+    let check = Arc::new(ReleaseOnHandoff {
+        released: AtomicBool::new(false),
+    });
+    let mut steer = Box::pin(agent.steer(
+        request("correction"),
+        Submitter::owner(actor()).with_after_save(check.clone()),
+    ));
+    tokio::select! {
+        _ = provider.entered_before_handoff.notified() => {}
+        _ = &mut steer => panic!("steer finished before the provider took it"),
+    }
+    assert!(
+        !check.released.load(Ordering::SeqCst),
+        "the save check released before the provider took the steer"
+    );
+    hold_sender.send(()).unwrap();
+    tokio::select! {
+        _ = provider.steering_started.notified() => {}
+        _ = &mut steer => panic!("steer finished as the provider took it"),
+    }
+    assert!(check.released.load(Ordering::SeqCst));
+    assert_eq!(provider.steered.lock().unwrap().len(), 1);
+    tokio::select! {
+        _ = &mut steer => panic!("steer finished during the response wait"),
+        () = tokio::time::sleep(Duration::from_millis(30)) => {}
+    }
+    wait_sender.send(()).unwrap();
+    match within(&mut steer).await {
+        Ok(SteeringDelivery::Injected { .. }) => {}
+        Ok(SteeringDelivery::Queued(_)) => panic!("steer queued instead of injecting"),
+        Err(error) => panic!("steer failed: {error}"),
+    }
     complete(running);
     within(first.wait()).await.unwrap();
     agent.close(close_action()).await.unwrap();

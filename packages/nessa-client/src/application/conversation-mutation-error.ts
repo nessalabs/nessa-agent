@@ -58,6 +58,8 @@ const REFUSALS: Partial<Record<ConversationErrorCode, string>> = {
     "Nessa could not install itself on the SSH host this conversation runs on: the copy did not verify, did not run there, or could not be stored, so nothing was sent. Retry; the gateway's environment audit says which.",
   linked_file_unreachable:
     "This conversation runs on an SSH host, which cannot read files on this computer, so the message was not sent. Remove the linked files, or attach images, whose bytes are sent with them.",
+  revoked_after_save:
+    "The message was saved, then refused because its access changed before it reached the agent. Sending it again needs a new message.",
 }
 
 /**
@@ -164,8 +166,9 @@ export function rejectedBeforeDispatch(code: ConversationErrorCode): boolean {
     // refused before anything of it is saved or sent.
     case ConversationErrorCode.DrivePolicyUnenforceable:
       return true
-    // A Drive grant's send or steer whose grant was revoked or changed
-    // before the turn was saved. Nothing was saved.
+    // A Drive grant's send, or a steer that is queued rather than injected,
+    // whose grant was revoked or changed before the turn was saved. Nothing
+    // was saved.
     case ConversationErrorCode.Revoked:
       return true
     // `temporarily_unavailable` is the one worth naming: a supervising task
@@ -181,6 +184,11 @@ export function rejectedBeforeDispatch(code: ConversationErrorCode): boolean {
     case ConversationErrorCode.AuditUnavailable:
     case ConversationErrorCode.SubmissionConflict:
     case ConversationErrorCode.SubmissionUnresolved:
+    // A native steer was saved, then refused because the grant moved before
+    // injection. The saved attempt is settled as refused and nothing reached
+    // the agent. Retrying that same execution is answered the same way and
+    // is not a clean retry of a command that was never saved.
+    case ConversationErrorCode.RevokedAfterSave:
     case ConversationErrorCode.StalePermission:
     case ConversationErrorCode.AgentOperationFailed:
     case ConversationErrorCode.AttachmentCapacity:
