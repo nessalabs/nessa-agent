@@ -698,12 +698,14 @@ this resource, now? Whenever code answers that question, the answer comes from
 Cedar.
 
 - **One port per question, one adapter behind it.** The application owns a
-  narrow port that takes Nessa's typed facts and returns a typed decision.
-  The adapter that implements it lives in a module directory named `cedar`,
-  holds its schema and policies as checked-in files, validates them strictly
-  when composition builds it, and fails closed on any error or diagnostic.
-  `crates/nessa-auth/src/adapters/cedar/` is the shape to copy. Nothing
-  outside a `cedar` directory names the `cedar_policy` crate.
+  narrow port, a trait named `…PolicyEvaluator`, that takes Nessa's typed facts
+  and returns a typed decision. The adapter that implements it lives in a
+  module directory named `cedar`, holds its schema and policies as checked-in
+  files, validates them strictly when composition builds it, and fails closed
+  on any error or diagnostic. `crates/nessa-auth/src/adapters/cedar/` is the
+  shape to copy for those parts; its context booleans and its policies without
+  `@id` are what ADR 803 removes next, not a pattern. Nothing outside a `cedar`
+  directory names the `cedar_policy` crate, tests included.
 - **Cedar sees the facts, not a verdict.** Entities and context carry what is
   true — the role, the grants held, the owner, the principal's kind, the tool's
   name — and the policy draws the conclusion. A context value such as
@@ -736,8 +738,9 @@ refuses is dropped.
 `scripts/architecture/policy-engine.mjs`, run by
 `node scripts/check-architecture.mjs`, enforces where Cedar lives: it refuses
 the `cedar_policy` crate outside a `cedar` directory, and an implementation of
-a `…PolicyEvaluator` port outside one. It cannot tell a hand-written policy
-decision from other Rust, so review holds the rest of this gate.
+a `…PolicyEvaluator` port outside one except in test code. It finds ports by
+that name, and it cannot tell a hand-written policy decision from other Rust,
+so review holds the rest of this gate.
 
 ## Audit evidence is part of the behavior
 

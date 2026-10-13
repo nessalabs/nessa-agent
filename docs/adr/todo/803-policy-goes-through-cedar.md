@@ -62,7 +62,7 @@ owners, principal kind, tool name), never a yes/no that Rust has already worked
 out. Each port has its own checked-in schema and policies, strictly validated
 when composition builds the adapter, and fails closed. The engine does not move
 to one crate: a decision's port and adapter live with the context that owns the
-decision, as `nessa-auth` and slice J4's tool-policy adapter already do.
+decision, as `nessa-auth` does, and as slice J4's tool-policy adapter will.
 
 ```mermaid
 sequenceDiagram
@@ -121,7 +121,7 @@ table survives edits.
 | | `mcp_servers/domain/app_call.rs` `admit_app`, `admit_tool_call` | An MCP App calls only its own server, and only tools visible to it |
 | | `nessa-sdk` `infrastructure/mcp/stand_in.rs`, `infrastructure/mcp/wire.rs` `hidden_for_model` | The model may not call a tool hidden from it |
 | | `conversation/domain/value_objects/share_access.rs` `ToolRules`, `ToolPreset` | The Drive tool policy: stored, never evaluated. Slice J4 builds its Cedar evaluator |
-| | `nessa-sdk` `claude_acp/tools/wire.rs` `DISALLOWED_TOOLS`; `opencode_acp/sessions/binding.rs` `SESSION_POLICY` | Fixed tool deny lists sent to the harness at launch |
+| | `nessa-sdk` `infrastructure/claude_acp/tools/wire.rs` `DISALLOWED_TOOLS`; `infrastructure/opencode_acp/sessions/binding.rs` `SESSION_POLICY` | Fixed tool deny lists sent to the harness at launch |
 | **D. Environment host** | `nessa-server` `env_serve/domain/grants.rs` `granted_to`, `admit_agent`, `admit_command`; `env_serve/application/serve.rs` lease grant | Which agents and commands a leasing peer may use; SSH gets all, a dialed gateway nothing; a revoked gateway is refused |
 | **E. Artifacts in the SDK** | `nessa-sdk` `application/agent_execution/sessions/artifacts.rs` `admit`, `asked_by` | An artifact is recorded only by the lease issuer or the person who started the turn |
 

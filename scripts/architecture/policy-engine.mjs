@@ -1,23 +1,28 @@
+import { posix } from "node:path"
 import { maskRustNonCode, normalizedPath } from "./rust-boundaries.mjs"
 
 /**
  * Policy goes through Cedar (CODING_STANDARDS.md gate 18, ADR 803).
  *
  * Whether someone may do something to something is a Cedar policy, behind a
- * port the application owns, implemented by an adapter in a module directory
- * named `cedar`. This holds the part a text check can see: where the engine
- * is. It refuses the `cedar_policy` crate outside a `cedar` directory, so the
- * engine cannot leak past its adapter, and it refuses an implementation of a
+ * port the application owns, named `…PolicyEvaluator`, and implemented by an
+ * adapter in a module directory named `cedar`. This holds the part a text
+ * check can see: where the engine is. It refuses the `cedar_policy` crate
+ * anywhere outside a `cedar` directory, test code included, so the engine
+ * cannot leak past its adapter. It refuses an implementation of a
  * `…PolicyEvaluator` port outside one, so a port meant for Cedar cannot be
- * answered by hand-written Rust instead.
+ * answered by hand-written Rust instead; only test code may substitute it.
  *
  * It cannot tell a hand-written policy decision — a role compared, a grant
  * list scanned — from any other Rust, and does not pretend to; review holds
  * that half of the gate.
  *
- * Test code may substitute a port, so `#[cfg(test)]` modules, `tests.rs` and
- * `*_tests.rs` files, and anything outside `src/` are not read. Pure text on
- * purpose: `check-architecture.mjs` runs with bare Node.
+ * Test code is what the compiler says it is: the body of a `#[cfg(test)]`
+ * module, and the files an out-of-line `#[cfg(test)] mod name;` loads, with
+ * everything below them. [`testModuleFiles`] finds those files from the
+ * declaration, so no file name is taken as a sign of test code. A file pulled
+ * in with `include!` is read as product code. Pure text on purpose:
+ * `check-architecture.mjs` runs with bare Node.
  */
 
 /** A path segment named `cedar` is an adapter directory. */
@@ -28,14 +33,21 @@ const ENGINE = /\bcedar_policy\b/
 
 /**
  * An implementation of a policy port, generic or through a qualified path:
- * `impl PolicyEvaluator for X`, `impl<T> crate::ports::ToolPolicyEvaluator for X`.
+ * `impl PolicyEvaluator for X`, `impl<T> ports::ToolPolicyEvaluator<T> for X`.
  */
-const IMPLEMENTS = /\bimpl\s*(?:<[^{;]*?>\s*)?(?:[\w:]*::)?\w*PolicyEvaluator\s+for\b/
+const IMPLEMENTS =
+  /\bimpl\s*(?:<[^{;]*?>\s*)?(?:[\w:]*::)?\w*PolicyEvaluator\s*(?:<[^{;]*?>\s*)?\s+for\b/
 
-/** `text` with each `#[cfg(test)]` module's body blanked, lines kept. */
+/** `#[cfg(test)]`, or a `cfg(all(test, …))`, then any further attributes. */
+const TEST_ATTRIBUTES = String.raw`#\[cfg\((?:test|all\(\s*test\b[^\]]*)\)\]\s*((?:#\[[^\]]*\]\s*)*)`
+
+/** The `mod` keyword after a visibility, if any. */
+const MOD = String.raw`(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*`
+
+/** `text` with each inline `#[cfg(test)]` module's body blanked, lines kept. */
 function withoutTestModules(text) {
   const out = text.split("")
-  const opening = /#\[cfg\(test\)\]\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+\s*\{/g
+  const opening = new RegExp(`${TEST_ATTRIBUTES}${MOD}\\{`, "g")
   for (let match; (match = opening.exec(text)); ) {
     let depth = 1
     let index = match.index + match[0].length
@@ -50,22 +62,60 @@ function withoutTestModules(text) {
   return out.join("")
 }
 
-/** Whether `file` is test code by its name or place. */
-function isTestFile(file) {
-  return !file.includes("/src/") || /(?:^|\/)tests\.rs$|_tests\.rs$|\/tests\//.test(file)
+/**
+ * Where the out-of-line test modules `path` declares live: each module's
+ * candidate files (`name.rs`, `name/mod.rs`, or its `#[path]`), and the
+ * directory everything below it lives in. Paths are repository-relative.
+ */
+export function testModuleFiles(path, source) {
+  const file = normalizedPath(path)
+  const masked = maskRustNonCode(source)
+  const dir = posix.dirname(file)
+  const stem = posix.basename(file, ".rs")
+  const owns = ["mod", "lib", "main"].includes(stem) ? dir : posix.join(dir, stem)
+  const files = []
+  const below = []
+  const declaration = new RegExp(`${TEST_ATTRIBUTES}${MOD};`, "g")
+  for (let match; (match = declaration.exec(source)); ) {
+    if (masked[match.index] !== "#") continue
+    const name = match[2]
+    const pathAttribute = /#\[path\s*=\s*"([^"]+)"\s*\]/.exec(match[1])
+    if (pathAttribute) {
+      const target = posix.normalize(posix.join(dir, pathAttribute[1]))
+      files.push(target)
+      below.push(
+        posix.basename(target) === "mod.rs"
+          ? `${posix.dirname(target)}/`
+          : `${posix.join(posix.dirname(target), posix.basename(target, ".rs"))}/`,
+      )
+    } else {
+      files.push(posix.join(owns, `${name}.rs`), posix.join(owns, name, "mod.rs"))
+      below.push(`${posix.join(owns, name)}/`)
+    }
+  }
+  return { files, below }
 }
 
-/** Violations of where the policy engine may live, for one Rust file. */
-export function policyEngineViolations(path, source) {
+/** Whether `file` is test code, given every crate's `testModuleFiles`. */
+export function isTestCode(path, tests) {
   const file = normalizedPath(path)
-  if (isTestFile(file) || ADAPTER.test(file)) return []
-  const text = withoutTestModules(maskRustNonCode(source))
+  return tests.files.has(file) || tests.below.some((prefix) => file.startsWith(prefix))
+}
+
+/**
+ * Violations of where the policy engine may live, for one Rust file under a
+ * crate's `src/`. `test` says the whole file is test code.
+ */
+export function policyEngineViolations(path, source, test = false) {
+  const file = normalizedPath(path)
+  if (ADAPTER.test(file)) return []
+  const text = maskRustNonCode(source)
   const violations = []
   if (ENGINE.test(text))
     violations.push(
       "the cedar_policy crate is named only inside a `cedar` adapter directory; the rest of the code asks its policy port (CODING_STANDARDS.md#policy-goes-through-cedar)",
     )
-  if (IMPLEMENTS.test(text))
+  if (!test && IMPLEMENTS.test(withoutTestModules(text)))
     violations.push(
       "a policy port is implemented by a Cedar adapter in a `cedar` directory, not by hand-written Rust (CODING_STANDARDS.md#policy-goes-through-cedar)",
     )
