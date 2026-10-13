@@ -1,3 +1,4 @@
+import { conversationView as panelView } from "../../src/conversation/adapters/gateway/effects"
 /** The production details sheet over published gateway views, one per lease state. */
 import { createRoot } from "react-dom/client"
 import { conversationView as decodeView } from "../../packages/nessa-client/src/protocol/conversation-validate"
@@ -125,7 +126,7 @@ function withLease(lease: Record<string, unknown> | undefined): Conversation {
     },
     id,
   )
-  return applyView(conversation(id), view)
+  return applyView(conversation(id), panelView(view, 1_700_000_000_000))
 }
 
 /** One case per page, named by `?case=`: the sheet is modal, so nothing
