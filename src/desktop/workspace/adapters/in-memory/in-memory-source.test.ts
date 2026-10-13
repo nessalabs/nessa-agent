@@ -294,9 +294,28 @@ describe("the in-memory source", () => {
             },
           ],
         },
+        {
+          executionId: "e1",
+          questionId: "q2",
+          message: "Keep the old name?",
+          questions: [
+            {
+              key: "keep",
+              prompt: "Keep it",
+              multiSelect: false,
+              freeText: false,
+              required: false,
+              options: [{ value: "yes", label: "Yes" }],
+            },
+          ],
+        },
       ],
     })
     const source = inMemorySource(clock.schedule, seed)
+    const summaryBefore = seed.index.sessions.find(
+      (session) => session.id === "split-panes",
+    )
+    if (!summaryBefore) throw new Error("split-panes has no summary")
     await source.answerQuestion(
       "split-panes",
       "e1",
@@ -304,7 +323,8 @@ describe("the in-memory source", () => {
       [{ key: "where", values: ["here"], ownWords: "secret words" }],
       "person",
     )
-    expect((await source.transcript("split-panes")).questions).toEqual([])
+    const answered = await source.transcript("split-panes")
+    expect(answered.questions?.map((question) => question.questionId)).toEqual(["q2"])
     const taken = source.audit().at(-1)
     expect(taken).toMatchObject({
       action: "answer-question",
@@ -313,7 +333,25 @@ describe("the in-memory source", () => {
       initiator: "person",
       outcome: "taken",
     })
+    expect(taken?.after).toBe(answered.revision)
+    expect(taken?.after).toBe(held.revision + 1)
+    expect(taken?.before?.revision).toBe(summaryBefore.revision)
+    expect(taken?.after).not.toBe(taken?.before?.revision)
     expect(JSON.stringify(taken)).not.toContain("secret words")
+    await source.answerQuestion("split-panes", "e1", "q2", null, "agent")
+    const declined = await source.transcript("split-panes")
+    expect(declined.questions).toEqual([])
+    const declinedAudit = source.audit().at(-1)
+    expect(declinedAudit).toMatchObject({
+      action: "decline-question",
+      executionId: "e1",
+      questionId: "q2",
+      initiator: "agent",
+      outcome: "taken",
+    })
+    expect(declinedAudit?.after).toBe(declined.revision)
+    expect(declinedAudit?.after).toBe(answered.revision + 1)
+    expect(declinedAudit?.before?.revision).toBe(summaryBefore.revision)
     await expect(
       source.answerQuestion("split-panes", "e1", "q1", null, "person"),
     ).rejects.toMatchObject({ reason: "not-waiting" })

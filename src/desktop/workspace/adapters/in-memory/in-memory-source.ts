@@ -58,7 +58,9 @@ export interface AuditedState {
  * session, by whom and when — on record as the source begins to carry it out,
  * before the effect, and in that carry-out order — then the session as it
  * stood (`before`), what became of it and when, and, taken, the revision it
- * produced (`after`: the new summary's, or the removal's). Calls asked in one
+ * produced (`after`: the new summary's, the removal's, or, for a question
+ * answered or declined, the transcript revision that dropped it — the
+ * summary does not move). Calls asked in one
  * tick are carried out in the order they were asked, so a message and the
  * answer it overtakes stay in that order. This source refuses only by type;
  * it has no faults of its own to tell apart. Kept in memory only, for as long
@@ -89,7 +91,10 @@ export interface AuditEntry {
   /** The session when the source came to carry the call out, if it held it; absent until then. */
   readonly before?: AuditedState | null
   readonly outcome: "asked" | "taken" | { readonly refused: WorkspaceFailureReason }
-  /** The revision the call produced, once taken. */
+  /**
+   * The revision the call produced, once taken: the summary's, the removal's,
+   * or the transcript's when a question was answered or declined.
+   */
   readonly after?: number
   readonly settledAt?: number
 }
@@ -213,7 +218,7 @@ export function inMemorySource(
     return session
   }
 
-  const putTranscript = (change: Transcript) => {
+  const putTranscript = (change: Transcript): Transcript => {
     const transcript = {
       ...change,
       // Counted from what a read would have said, so no two contents share a revision.
@@ -221,6 +226,7 @@ export function inMemorySource(
     }
     transcripts.set(transcript.sessionId, transcript)
     emit({ kind: "transcript", transcript })
+    return transcript
   }
 
   const transcriptOf = (sessionId: string): Transcript =>
@@ -532,15 +538,14 @@ export function inMemorySource(
         },
         () => {
           const transcript = waitingQuestion(sessionId, executionId, questionId)
-          putTranscript({
+          return putTranscript({
             ...transcript,
             questions: (transcript.questions ?? []).filter(
               (question) =>
                 question.executionId !== executionId ||
                 question.questionId !== questionId,
             ),
-          })
-          return known(sessionId).revision
+          }).revision
         },
       ),
     deny: (sessionId, approvalId, initiator, optionId) =>
