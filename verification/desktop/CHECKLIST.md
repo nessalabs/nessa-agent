@@ -1409,7 +1409,9 @@ zero times, preserves the draft and paints **Attachments still loading**; read
 completion allows one send containing the text and one image. A second URL drop
 while the first fetch is pending paints **Still reading files** and starts no
 second fetch. The JSON reports send, attachment, refusal and page-error counts
-for all six engine/scenario pairs. This verifies browser interactions with the
+for all ten engine/scenario pairs. A late upload success or failure for a closed
+parent leaves the replacement parent's same-ID tile uploading (one rendered
+`data-upload="uploading"` tile), per [upload targets](../../docs/design/upload-targets.md). This verifies browser interactions with the
 production panel; it does not exercise an operating-system file picker.
 
 

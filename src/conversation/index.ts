@@ -36,6 +36,7 @@ export {
   HeldFileReadError,
   type HeldFileReader,
   type HeldFileSaver,
+  type UploadChange,
 } from "./application/ports"
 export {
   placePublished,

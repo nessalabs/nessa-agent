@@ -63,18 +63,16 @@ export function removeFile(tabs: LocalTabs, id: string): LocalTabs {
 /**
  * The one owner of a draft file's upload state.
  *
- * It only ever changes a file that is still in a draft. An upload that settles
- * after its tile was removed finds nothing here and changes nothing — it cannot
- * put the file back — and a sent turn's files are past changing.
+ * It only changes a file in its named parent draft. A completion whose parent
+ * or file no longer exists changes nothing; a sent turn's files are past changing.
  *
  * Each step has one predecessor. A result for an upload that is not in flight
- * is ignored rather than applied: `stored` arriving on a failed or retried part
- * would describe a different attempt from the one on screen.
+ * is ignored rather than applied: `stored` arriving on a failed part is not
+ * a transition from the state on screen. The same file ID reused within
+ * the same parent does not distinguish attempts; issue 814 documents this limit.
  */
 export function changeUpload(tabs: LocalTabs, change: UploadChange): LocalTabs {
-  const current = tabs.conversations.find((conversation) =>
-    conversation.draft.some((part) => part.type === "file" && part.id === change.fileId),
-  )
+  const current = findConversation(tabs, change.conversationId)
   const file = current?.draft.find(
     (part): part is FileAttachment => part.type === "file" && part.id === change.fileId,
   )

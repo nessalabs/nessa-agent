@@ -50,7 +50,9 @@ it("keeps a sent image's preview for its turn, and releases it with the conversa
     new File(["png"], "finder.png", { type: "image/png" }),
   ])
   store.dispatch(attachFiles({ files: [image!], conversationId: "c0" }))
-  store.dispatch(uploadChanged({ fileId: image!.id, to: "uploading" }))
+  store.dispatch(
+    uploadChanged({ conversationId: "c0", fileId: image!.id, to: "uploading" }),
+  )
   await store.dispatch(
     stageAttachment({
       id: "c0",
@@ -92,7 +94,9 @@ it("does not let sent messages use up what attaching needs", async () => {
     ])
     sentIds.push(image!.id)
     store.dispatch(attachFiles({ files: [image!], conversationId: "c0" }))
-    store.dispatch(uploadChanged({ fileId: image!.id, to: "uploading" }))
+    store.dispatch(
+      uploadChanged({ conversationId: "c0", fileId: image!.id, to: "uploading" }),
+    )
     await store.dispatch(
       stageAttachment({
         id: "c0",
