@@ -26,9 +26,6 @@ nessa-local-database = { path = "../nessa-local-database" }
 nessa-local-storage = { path = "../nessa-local-storage", features = ["physical-operation"] }
 nessa-gateway-endpoint = { path = "../nessa-gateway-endpoint" }
 nessa-auth = { path = "../nessa-auth" }
-# The environment host's lease policy (ADR 803), in `env_serve::infrastructure::cedar`
-# only. The same pin as nessa-auth's, so the build holds one engine.
-cedar-policy = { version = "=4.12.0", default-features = false }
 nessa-agent-credentials = { path = "../nessa-agent-credentials" }
 axum = { version = "0.8", features = ["ws"] }
 futures-util = "0.3"
@@ -63,8 +60,9 @@ async-trait = "0.1"
 # implementation rather than two.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 sha2 = "0.10"
-# The tool policy's evaluator (conversation/infrastructure/tool_policy/cedar), the
-# same pinned build nessa-auth embeds.
+# The tool policy's evaluator (conversation/infrastructure/tool_policy/cedar) and
+# the environment host's lease policy (env_serve/infrastructure/cedar), the same
+# pinned build nessa-auth embeds.
 cedar-policy = { version = "=4.12.0", default-features = false }
 # Keying each MCP server's configuration digest with a per-process secret,
 # so a stand-in's arguments say nothing about its variables' values.
