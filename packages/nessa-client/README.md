@@ -247,6 +247,10 @@ conversation, execution and question identities. Edited/copied targets and
 answers naming another ask’s fields or options fail before RPC
 (`application/question-target.test.ts`). Required fields, free text, selection
 counts, current pending state and authority remain server-owned semantics.
+When an application waits before dispatching a deliberate answer,
+`captureQuestionChoices(choices)` retains its read-only choice data (or null
+decline) without deciding provider policy. Hold it together with the captured
+question target; the client uses the same primitive before RPC correlation.
 
 The client generates separate execution and action IDs once per message. A
 conversation ID is a canonical lowercase hyphenated UUID. Message text is limited

@@ -15,3 +15,8 @@ Source-asserted revert: queued choice values snapshot
 FAIL QT11: queued serialization retains the exact answer snapshot that passed correlation
 -         "value-a",
 +         "value-b",
+Source-asserted reverts: caller array/record hooks and question command ownership
+FAIL QT12: array subclass hooks cannot keep caller-owned answer values behind capture
+FAIL QT12: overridden projection map cannot retain mutable offered options
+FAIL QT12: serialization hooks on source records do not replace captured choice data
+FAIL QT13: a pending answer retains its original target and choices when the caller replaces the command

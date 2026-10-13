@@ -1,4 +1,7 @@
-import type { ConversationQuestion } from "../generated/product.js"
+import type {
+  ConversationQuestion,
+  ConversationQuestionChoice,
+} from "../generated/product.js"
 
 declare const questionTarget: unique symbol
 
@@ -26,28 +29,66 @@ const issued = new WeakSet<QuestionTarget>()
 
 /** Capture a validated view or trusted projection; this does not authenticate its source. */
 export function questionTargets(view: QuestionView): readonly QuestionTarget[] {
-  return Object.freeze(
-    view.questions.map((ask) => {
-      const target = Object.freeze({
-        conversationId: view.conversationId,
-        executionId: ask.executionId,
-        questionId: ask.questionId,
-        message: ask.message,
-        questions: Object.freeze(
-          ask.questions.map((question) =>
-            Object.freeze({
-              ...question,
-              options: Object.freeze(
-                question.options.map((option) => Object.freeze({ ...option })),
-              ),
-            }),
-          ),
-        ),
-      } satisfies Omit<QuestionTarget, typeof questionTarget>) as QuestionTarget
-      issued.add(target)
-      return target
-    }),
-  )
+  const conversationId = view.conversationId
+  const asks = view.questions
+  const targets: QuestionTarget[] = []
+  const askCount = asks.length
+  for (let askIndex = 0; askIndex < askCount; askIndex += 1) {
+    const sourceAsk = asks[askIndex]
+    if (sourceAsk === undefined) throw new TypeError("A captured ask must be present")
+    const { executionId, questionId, message, questions: fields } = sourceAsk
+    const questions: CapturedQuestion[] = []
+    const fieldCount = fields.length
+    for (let fieldIndex = 0; fieldIndex < fieldCount; fieldIndex += 1) {
+      const sourceField = fields[fieldIndex]
+      if (sourceField === undefined)
+        throw new TypeError("A captured question field must be present")
+      const {
+        key,
+        prompt,
+        header,
+        multiSelect,
+        freeText,
+        required,
+        options: sourceOptions,
+      } = sourceField
+      const options: Readonly<Asked["options"][number]>[] = []
+      const optionCount = sourceOptions.length
+      for (let optionIndex = 0; optionIndex < optionCount; optionIndex += 1) {
+        const option = sourceOptions[optionIndex]
+        if (option === undefined)
+          throw new TypeError("A captured question option must be present")
+        options.push(
+          Object.freeze({
+            value: option.value,
+            label: option.label,
+            description: option.description,
+          }),
+        )
+      }
+      questions.push(
+        Object.freeze({
+          key,
+          prompt,
+          header,
+          multiSelect,
+          freeText,
+          required,
+          options: Object.freeze(options),
+        }),
+      )
+    }
+    const target = Object.freeze({
+      conversationId,
+      executionId,
+      questionId,
+      message,
+      questions: Object.freeze(questions),
+    } satisfies Omit<QuestionTarget, typeof questionTarget>) as QuestionTarget
+    issued.add(target)
+    targets.push(target)
+  }
+  return Object.freeze(targets)
 }
 
 /** Read an issued target's enclosing conversation before routing local controls. */
@@ -75,4 +116,38 @@ export function questionFields(
   }
   const { conversationId, executionId, questionId } = target
   return { conversationId, executionId, questionId }
+}
+
+/** Published question choice data with read-only option values. */
+export type QuestionChoice = Readonly<Omit<ConversationQuestionChoice, "values">> & {
+  readonly values: readonly string[]
+}
+
+/**
+ * Copy and freeze a deliberate question reply before holding it across an await.
+ * This captures indexed data, not caller-overridable array protocols (QT12).
+ * It does not decide provider answer semantics; questionFields owns correlation.
+ */
+export function captureQuestionChoices(
+  choices: readonly QuestionChoice[] | null,
+): readonly QuestionChoice[] | null {
+  if (choices === null) return null
+  const captured: QuestionChoice[] = []
+  const choiceCount = choices.length
+  for (let index = 0; index < choiceCount; index += 1) {
+    const sourceChoice = choices[index]
+    if (sourceChoice === undefined)
+      throw new TypeError("A captured question choice must be present")
+    const { key, ownWords, values: sourceValues } = sourceChoice
+    const values: string[] = []
+    const valueCount = sourceValues.length
+    for (let valueIndex = 0; valueIndex < valueCount; valueIndex += 1) {
+      const value = sourceValues[valueIndex]
+      if (value === undefined)
+        throw new TypeError("A captured question value must be present")
+      values.push(value)
+    }
+    captured.push(Object.freeze({ key, ownWords, values: Object.freeze(values) }))
+  }
+  return Object.freeze(captured)
 }

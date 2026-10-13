@@ -1,6 +1,7 @@
 import {
   permissionTargetConversation,
   questionTargetConversation,
+  captureQuestionChoices,
   type PermissionTarget,
   type QuestionTarget,
 } from "@nessa/client"
@@ -464,9 +465,18 @@ export const controlConversation = createAsyncThunk<
   void,
   { id: string; control: Control },
   ThunkConfig
->("conversation/control", async ({ id, control }, { dispatch, getState, extra }) => {
+>("conversation/control", async (request, { dispatch, getState, extra }) => {
+  const { id, control: requestedControl } = request
   const current = getState().conversation.conversations.find((item) => item.id === id)
   if (!current?.serverConversationId || current.controlPending) return
+  const control =
+    requestedControl.kind === "answerQuestion"
+      ? Object.freeze({
+          kind: "answerQuestion" as const,
+          target: requestedControl.target,
+          choices: captureQuestionChoices(requestedControl.choices),
+        })
+      : requestedControl
   const serverId = current.serverConversationId
   // A delayed action belongs to the conversation captured on the approval
   // card, even if its local tab has since been rebound. No create/control

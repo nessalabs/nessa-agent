@@ -1,4 +1,4 @@
-import type { PermissionTarget, QuestionTarget } from "@nessa/client"
+import type { PermissionTarget, QuestionTarget, QuestionChoice } from "@nessa/client"
 import type {
   ConversationListing,
   ConversationView,
@@ -135,7 +135,7 @@ export interface ConversationEffects {
   /** Answer one question the agent asked; null choices decline it. */
   answerQuestion(
     target: QuestionTarget,
-    choices: readonly { key: string; values: string[]; ownWords?: string }[] | null,
+    choices: readonly QuestionChoice[] | null,
   ): Promise<void>
   cancel(target: PermissionTarget): Promise<void>
   close(conversationId: string): Promise<void>

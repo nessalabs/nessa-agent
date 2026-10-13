@@ -1,4 +1,9 @@
-import { questionFields, type QuestionTarget } from "../application/question-target.js"
+import {
+  captureQuestionChoices,
+  questionFields,
+  type QuestionTarget,
+  type QuestionChoice,
+} from "../application/question-target.js"
 import {
   NessaConversationMutationError,
   NessaConversationControlError,
@@ -14,7 +19,6 @@ import type {
   ConversationView,
   ConversationReceipt,
   ConversationMutationResult,
-  ConversationQuestionChoice,
   ConversationReorderResult,
   ConversationSetApprovalModeResult,
   ApprovalMode,
@@ -182,7 +186,7 @@ export type ConversationApi = {
    */
   answerQuestion: (
     target: QuestionTarget,
-    choices: readonly ConversationQuestionChoice[] | null,
+    choices: readonly QuestionChoice[] | null,
     options?: ConversationActionOptions,
   ) => Promise<ConversationMutationResult>
   /** Withdraw the identified review with a human-readable reason recorded by the gateway. */
@@ -251,10 +255,6 @@ function validConversationId(value: string): string {
   return value
 }
 
-type CapturedQuestionChoice = Readonly<Omit<ConversationQuestionChoice, "values">> & {
-  readonly values: readonly string[]
-}
-
 export function createConversationApi(
   session: RpcRequester,
   newId: () => string,
@@ -267,7 +267,7 @@ export function createConversationApi(
       | readonly string[]
       | readonly ImageAttachment[]
       | readonly LinkedFile[]
-      | readonly CapturedQuestionChoice[]
+      | readonly QuestionChoice[]
       | null
       | undefined
     >,
@@ -475,17 +475,7 @@ export function createConversationApi(
       )
     },
     answerQuestion: (target, choices, options = {}) => {
-      const capturedChoices =
-        choices === null
-          ? null
-          : Object.freeze(
-              choices.map((choice) =>
-                Object.freeze({
-                  ...choice,
-                  values: Object.freeze([...choice.values]),
-                }),
-              ),
-            )
+      const capturedChoices = captureQuestionChoices(choices)
       const {
         conversationId: id,
         executionId,

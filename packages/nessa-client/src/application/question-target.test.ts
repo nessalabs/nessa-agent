@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest"
-import { questionTargets, type QuestionTarget } from "../index.js"
+import { captureQuestionChoices, questionTargets, type QuestionTarget } from "../index.js"
 import {
   createConversationApi,
   type ConversationApi,
@@ -187,4 +187,205 @@ it("QT11: queued serialization retains the exact answer snapshot that passed cor
   expect(Object.isFrozen(fields.choices)).toBe(true)
   expect(Object.isFrozen(fields.choices[0])).toBe(true)
   expect(Object.isFrozen(fields.choices[0]!.values)).toBe(true)
+})
+
+it("QT12: array subclass hooks cannot keep caller-owned answer values behind capture", async () => {
+  const [target] = questionTargets(source())
+  const valueSource = ["value-a"]
+  let reads = 0
+  class Choices extends Array<{ key: string; values: string[] }> {
+    override map<U>(): U[] {
+      return this as unknown as U[]
+    }
+  }
+  const choices = new Choices({
+    key: "field-a",
+    get values() {
+      reads += 1
+      return valueSource
+    },
+  })
+  let release!: () => void
+  const gate = new Promise<void>((done) => {
+    release = done
+  })
+  let serialized: unknown
+  const request = vi.fn(async (_method: string, params: unknown) => {
+    await gate
+    serialized = JSON.parse(JSON.stringify(params))
+    return { requestId: "action", applied: true }
+  })
+  const api = createConversationApi({ request }, () => "action")
+  const pending = api.answerQuestion(target!, choices)
+  valueSource[0] = "value-b"
+  release()
+  await pending
+  expect(reads).toBe(1)
+  expect(serialized).toMatchObject({ choices: [{ key: "field-a", values: ["value-a"] }] })
+})
+
+it("QT12: overridden projection map cannot retain mutable offered options", async () => {
+  const view = source()
+  type Option = (typeof view.questions)[0]["questions"][0]["options"][0]
+  class Options extends Array<Option> {
+    override map<U>(): U[] {
+      return this as unknown as U[]
+    }
+  }
+  const option = { value: "value-a", label: "Original" }
+  view.questions[0]!.questions[0]!.options = new Options(option)
+  const [target] = questionTargets(view)
+  Object.assign(option, { value: "value-b", label: "Changed" })
+  expect(target!.questions[0]!.options[0]).toEqual({
+    value: "value-a",
+    label: "Original",
+  })
+  const { api, request } = requester()
+  await api.answerQuestion(target!, [{ key: "field-a", values: ["value-a"] }])
+  expect(request).toHaveBeenCalledTimes(1)
+  expect(() =>
+    api.answerQuestion(target!, [{ key: "field-a", values: ["value-b"] }]),
+  ).toThrow(TypeError)
+})
+
+it.each(["asks", "fields"] as const)(
+  "QT12: %s array hooks cannot replace factory-issued targets with source objects",
+  async (level) => {
+    class SourceArray<T> extends Array<T> {
+      override map<U>(): U[] {
+        return this as unknown as U[]
+      }
+    }
+    const view = source()
+    if (level === "asks") view.questions = new SourceArray(...view.questions)
+    else view.questions[0]!.questions = new SourceArray(...view.questions[0]!.questions)
+    const [target] = questionTargets(view)
+    expect(target).toMatchObject({
+      conversationId: first,
+      executionId: "turn-a",
+      questionId: "ask-a",
+    })
+    view.questions[0]!.questions[0]!.key = "changed"
+    expect(target!.questions[0]!.key).toBe("field-a")
+    const { api, request } = requester()
+    await api.answerQuestion(target!, [{ key: "field-a", values: ["value-a"] }])
+    expect(request).toHaveBeenCalledTimes(1)
+  },
+)
+
+it("QT12: choice value iteration does not substitute values for indexed source data", async () => {
+  class Values extends Array<string> {
+    override [Symbol.iterator](): ArrayIterator<string> {
+      return ["value-b"].values()
+    }
+  }
+  const [target] = questionTargets(source())
+  const { api, request } = requester()
+  await api.answerQuestion(target!, [{ key: "field-a", values: new Values("value-a") }])
+  expect(request.mock.calls[0]![1]).toMatchObject({
+    choices: [{ key: "field-a", values: ["value-a"] }],
+  })
+})
+
+it("QT12: reading an indexed value cannot extend the captured choice list", async () => {
+  const values = ["value-a"]
+  Object.defineProperty(values, 0, {
+    get: () => {
+      values[1] = "value-b"
+      return "value-a"
+    },
+  })
+  const [target] = questionTargets(source())
+  const { api, request } = requester()
+  await api.answerQuestion(target!, [{ key: "field-a", values }])
+  expect(request.mock.calls[0]![1]).toMatchObject({
+    choices: [{ key: "field-a", values: ["value-a"] }],
+  })
+})
+
+it("QT12: sparse source arrays are refused rather than captured as incomplete intent", () => {
+  const { api, request } = requester()
+  const [target] = questionTargets(source())
+  expect(() => api.answerQuestion(target!, new Array(1))).toThrow(TypeError)
+  expect(() =>
+    api.answerQuestion(target!, [{ key: "field-a", values: new Array(1) }]),
+  ).toThrow(TypeError)
+  for (const level of ["asks", "fields", "options"]) {
+    const view = source()
+    if (level === "asks") view.questions = new Array(1)
+    else if (level === "fields") view.questions[0]!.questions = new Array(1)
+    else view.questions[0]!.questions[0]!.options = new Array(1)
+    expect(() => questionTargets(view)).toThrow(TypeError)
+  }
+  expect(request).not.toHaveBeenCalled()
+})
+it("the public choice capture retains valid replies and null declines", () => {
+  expect(captureQuestionChoices(null)).toBeNull()
+  const original = [{ key: "field-a", values: ["value-a"], ownWords: "Original" }]
+  const captured = captureQuestionChoices(original)
+  original[0]!.values[0] = "value-b"
+  expect(captured).toEqual([
+    { key: "field-a", values: ["value-a"], ownWords: "Original" },
+  ])
+  expect(Object.isFrozen(captured)).toBe(true)
+  expect(Object.isFrozen(captured![0]!.values)).toBe(true)
+})
+function rejectedCapturedChoices() {
+  const captured = captureQuestionChoices([{ key: "field-a", values: ["value-a"] }])
+  if (captured) {
+    // @ts-expect-error captured question choices are immutable value objects
+    captured[0]!.key = "field-b"
+    // @ts-expect-error captured option lists cannot be extended
+    captured[0]!.values.push("value-b")
+  }
+}
+void rejectedCapturedChoices
+
+it("QT12: serialization hooks on source records do not replace captured choice data", async () => {
+  const [target] = questionTargets(source())
+  const { api, request } = requester()
+  const choice = {
+    key: "field-a",
+    values: ["value-a"],
+    toJSON: () => ({ key: "field-b", values: ["value-b"] }),
+  }
+  await api.answerQuestion(target!, [choice])
+  expect(JSON.parse(JSON.stringify(request.mock.calls[0]![1]))).toMatchObject({
+    choices: [{ key: "field-a", values: ["value-a"] }],
+  })
+})
+
+it("QT12: one enclosing conversation identity is read for the whole projection", async () => {
+  const view = source()
+  let reads = 0
+  Object.defineProperty(view, "conversationId", {
+    get: () => (++reads === 1 ? first : second),
+  })
+  const targets = questionTargets(view)
+  expect(reads).toBe(1)
+  expect(targets.map((target) => target.conversationId)).toEqual([first, first])
+  const { api, request } = requester()
+  await api.answerQuestion(targets[0]!, null)
+  await api.answerQuestion(targets[1]!, null)
+  expect(request).toHaveBeenCalledTimes(2)
+})
+
+it("QT12: inherited data getters are captured without inheriting source behavior", async () => {
+  class Choice {
+    get key() {
+      return "field-a"
+    }
+    get values() {
+      return ["value-a"]
+    }
+    toJSON() {
+      return { key: "field-b", values: ["value-b"] }
+    }
+  }
+  const [target] = questionTargets(source())
+  const { api, request } = requester()
+  await api.answerQuestion(target!, [new Choice()])
+  expect(JSON.parse(JSON.stringify(request.mock.calls[0]![1]))).toMatchObject({
+    choices: [{ key: "field-a", values: ["value-a"] }],
+  })
 })
