@@ -332,6 +332,47 @@ pub trait ShareGrants: Send + Sync {
         receiver_id: &'a str,
         policy_revision: u64,
     ) -> ConversationFuture<'a, Option<ToolPolicy>>;
+    /// Keep `receiver_id`'s grant on `id` at `policy_revision` until the
+    /// returned hold is dropped. [`ConversationError::Revoked`] when that
+    /// grant is gone, stands at another revision, or its revision cannot be
+    /// read as one. A store that cannot be asked is [`ConversationError::Metadata`].
+    ///
+    /// The default holds nothing and admits. A table that records no live
+    /// grant has nothing to revoke; the metadata store overrides this, and a
+    /// Drive turn is saved only while that override still finds the admitted
+    /// revision (row J29).
+    fn hold_revision<'a>(
+        &'a self,
+        id: &'a ConversationId,
+        receiver_id: &'a str,
+        policy_revision: u64,
+    ) -> ConversationFuture<'a, RevisionHold> {
+        let _ = (id, receiver_id, policy_revision);
+        Box::pin(async { Ok(RevisionHold::vacant()) })
+    }
+}
+
+/// A grant revision kept still until this is dropped.
+///
+/// [`RevisionHold::vacant`] keeps nothing. The metadata store's hold keeps
+/// the admission lock, so a grant change waits until the turn that checked
+/// the revision has been saved.
+#[must_use = "dropping the hold lets a grant change land before the turn is saved"]
+pub struct RevisionHold {
+    _keep: Option<Box<dyn Send>>,
+}
+
+impl RevisionHold {
+    /// A hold that keeps nothing.
+    pub fn vacant() -> Self {
+        Self { _keep: None }
+    }
+
+    pub(crate) fn held(guard: impl Send + 'static) -> Self {
+        Self {
+            _keep: Some(Box::new(guard)),
+        }
+    }
 }
 
 /// The owner's share commands: `conversation.share`, `.unshare`, `.shares`.

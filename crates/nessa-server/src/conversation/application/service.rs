@@ -2840,6 +2840,9 @@ impl ConversationService {
             // the agent's conflict to refuse.
             let retried = saved_initiation
                 .filter(|saved| saved.initiator() == writer.initiation().initiator());
+            // Read before `retried` moves into `initiation`. A saved turn's
+            // retry is not checked again.
+            let fresh = retried.is_none();
             let initiation = match (retried, writer.initiation().initiator()) {
                 (Some(saved), _) => saved,
                 (None, Initiator::Owner) => Initiation::owner(),
@@ -2963,6 +2966,35 @@ impl ConversationService {
                 estimated_input_tokens: u64::from(limits.max_context_window() - reserved),
                 reserved_output_tokens: reserved,
             };
+            // A fresh Drive turn is saved only while its grant is still at
+            // the revision admission read. Taken before the agent is asked,
+            // held across the save, and dropped once that save has returned,
+            // before the turn is watched: a revoke waits out the save and
+            // not the turn. A retry of a turn already saved is answered from
+            // that save and is not checked again (row J29).
+            let fresh_grant = if fresh {
+                match initiation.initiator() {
+                    Initiator::Grant(grant) => {
+                        Some((grant.grant().to_owned(), grant.policy_revision()))
+                    }
+                    Initiator::Owner => None,
+                }
+            } else {
+                None
+            };
+            let revision_hold = match fresh_grant {
+                Some((receiver, revision)) => Some(
+                    service
+                        .inner
+                        .drive
+                        .get()
+                        .ok_or(ConversationError::DrivePolicyUnenforceable)?
+                        .grants
+                        .hold_revision(&id, &receiver, revision)
+                        .await?,
+                ),
+                None => None,
+            };
             // Asked from here: whatever becomes of this task, what it took
             // follows the message, and only the agent's own refusal hands
             // it back (C11b).
@@ -3020,6 +3052,9 @@ impl ConversationService {
                         })
                 }
             };
+            // The turn is saved once enqueue returns. A revoke that waited
+            // on this hold applies from here, not across the turn itself.
+            drop(revision_hold);
             // Refused: what it took went nowhere, and each is reported
             // dropped unsent (`c11_a_refused_submission_drops_what_it_took_on_record`).
             // Admitted, and saved before the agent answered: what it carried

@@ -86,6 +86,16 @@ pub struct LocalConversationStore {
     connection: Arc<Mutex<Connection>>,
     changes: CatalogueChanges,
     access: Option<Arc<dyn ConversationAccessPolicyEvaluator>>,
+    /// Held across a Drive turn's revision check and its save, and across
+    /// every grant change. One lock for every conversation: the metadata
+    /// connection is already one, and a map of locks would keep every grant
+    /// ever named. A turn's save therefore blocks grant changes on other
+    /// conversations for the save only, not for the turn.
+    ///
+    /// Taken before the connection lock, never after. `change` and
+    /// `hold_revision` both take this first and the connection inside
+    /// `run`; a caller that already holds the connection must not call them.
+    admission: Arc<tokio::sync::Mutex<()>>,
 }
 impl LocalConversationStore {
     /// Open the database at `path`, in a composition-selected directory that
@@ -99,6 +109,7 @@ impl LocalConversationStore {
             connection: Arc::new(Mutex::new(connection)),
             changes: CatalogueChanges::default(),
             access: None,
+            admission: Arc::new(tokio::sync::Mutex::new(())),
         })
     }
     /// The access policy a share grant change is admitted by, in its

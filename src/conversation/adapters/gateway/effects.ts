@@ -242,6 +242,9 @@ const failures: Partial<Record<ConversationErrorCode, CommandFailure>> = {
   // Answers only a Drive grant's send or steer, which the panel, as the
   // owner, never makes.
   drive_policy_unenforceable: "invalid-request",
+  // A Drive grant's send or steer refused because the grant was revoked or
+  // changed before the turn was saved. The panel, as the owner, never sends one.
+  revoked: "invalid-request",
 }
 
 /**
@@ -329,6 +332,7 @@ const readFailures: Record<ConversationErrorCode, ReadFailure> = {
   message_quota_exceeded: "unavailable",
   // A Drive turn's refusal; no read is ever answered with it.
   drive_policy_unenforceable: "unavailable",
+  revoked: "unavailable",
   model_unavailable: "unavailable",
   approval_mode_unavailable: "unavailable",
   approval_mode_not_applied: "unavailable",

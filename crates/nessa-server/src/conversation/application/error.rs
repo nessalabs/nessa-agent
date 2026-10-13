@@ -49,6 +49,10 @@ pub enum ConversationError {
     /// (OpenCode), an approval mode other than Ask, native hooks allowed, or
     /// the policy unreadable. Nothing was saved or sent.
     DrivePolicyUnenforceable,
+    /// A Drive grant's turn whose grant was revoked, or whose revision moved,
+    /// after admission read that revision and before the turn was saved.
+    /// Nothing was saved or sent (row J29).
+    Revoked,
     /// A delete that happened — the conversation is tombstoned, left out of
     /// every list, and refused — and did not finish. Repeating the delete
     /// finishes it.

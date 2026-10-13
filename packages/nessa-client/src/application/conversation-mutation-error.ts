@@ -164,6 +164,10 @@ export function rejectedBeforeDispatch(code: ConversationErrorCode): boolean {
     // refused before anything of it is saved or sent.
     case ConversationErrorCode.DrivePolicyUnenforceable:
       return true
+    // A Drive grant's send or steer whose grant was revoked or changed
+    // before the turn was saved. Nothing was saved.
+    case ConversationErrorCode.Revoked:
+      return true
     // `temporarily_unavailable` is the one worth naming: a supervising task
     // also reports it when work it had already admitted was lost, so it is not
     // a refusal at all. The rest are either certainly after dispatch, or not

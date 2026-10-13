@@ -3820,3 +3820,91 @@ async fn a_revisions_policy_is_read_from_its_journal_entry() {
         no_shell().policy().cloned()
     );
 }
+
+/// Row J29: a Drive turn's save keeps the admitted revision, and a grant
+/// change waits until that hold is dropped. A missing grant, another
+/// revision, or a revision cell that is not a journal sequence is `revoked`.
+#[tokio::test]
+async fn a_turn_is_saved_only_while_its_grant_stays_at_the_admitted_revision() {
+    use crate::conversation::application::{ShareGrantTransition, ShareGrants};
+    use tokio::sync::Notify;
+    let opened = opened();
+    let Opened {
+        _directory,
+        path,
+        store,
+    } = opened;
+    let store = Arc::new(store);
+    let id = new_id();
+    store.create(owned(&id)).await.unwrap();
+    assert!(share_as(&store, &id, "phone", no_shell(), "share")
+        .await
+        .unwrap());
+    let revision = only_grant(&store, &id).await.policy_revision;
+    assert!(matches!(
+        ShareGrants::hold_revision(&*store, &id, "other", revision).await,
+        Err(ConversationError::Revoked)
+    ));
+    assert!(matches!(
+        ShareGrants::hold_revision(&*store, &id, "phone", revision + 1).await,
+        Err(ConversationError::Revoked)
+    ));
+
+    let hold = ShareGrants::hold_revision(&*store, &id, "phone", revision)
+        .await
+        .unwrap();
+    let started = Arc::new(Notify::new());
+    let revoking = Arc::clone(&store);
+    let revoke_id = id.clone();
+    let started_in_task = Arc::clone(&started);
+    let mut revoke = tokio::spawn(async move {
+        started_in_task.notify_one();
+        revoking
+            .change(grant_change(
+                ShareGrantTransition::Revoke,
+                &revoke_id,
+                Some("phone"),
+                "phone-credential",
+                "revoke-during-hold",
+            ))
+            .await
+    });
+    started.notified().await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), &mut revoke)
+            .await
+            .is_err(),
+        "a revoke committed while the revision was held"
+    );
+    drop(hold);
+    assert!(tokio::time::timeout(Duration::from_secs(5), &mut revoke)
+        .await
+        .expect("the revoke finishes")
+        .expect("the revoke task")
+        .unwrap());
+    assert!(matches!(
+        ShareGrants::hold_revision(&*store, &id, "phone", revision).await,
+        Err(ConversationError::Revoked)
+    ));
+
+    let again = new_id();
+    store.create(owned(&again)).await.unwrap();
+    assert!(share_as(&store, &again, "phone", no_shell(), "share-again")
+        .await
+        .unwrap());
+    let live = only_grant(&store, &again).await.policy_revision;
+    let connection = raw(&path);
+    connection
+        .execute_batch("PRAGMA foreign_keys = OFF;")
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE share_grants SET policy_revision = 0 WHERE conversation_id = ?1",
+            params![again.to_string()],
+        )
+        .unwrap();
+    assert!(matches!(
+        ShareGrants::hold_revision(&*store, &again, "phone", live).await,
+        Err(ConversationError::Revoked)
+    ));
+}

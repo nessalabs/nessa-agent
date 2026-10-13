@@ -225,9 +225,13 @@ impl ShareGrants for LocalConversationStore {
     }
 
     fn change(&self, change: ShareGrantChange) -> ConversationFuture<'_, bool> {
+        let admission = std::sync::Arc::clone(&self.admission);
         let changes = self.changes.clone();
         let access = self.access.clone();
-        self.run(move |connection| {
+        // Built first and polled only after the admission lock: the lock is
+        // held across the transaction, and the connection is taken inside
+        // `run`, so admission stays outside the connection.
+        let write = self.run(move |connection| {
             let transaction = connection
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .map_err(failed)?;
@@ -452,6 +456,29 @@ impl ShareGrants for LocalConversationStore {
                 ));
             }
             Ok(true)
+        });
+        Box::pin(async move {
+            let _hold = admission.lock().await;
+            write.await
+        })
+    }
+
+    fn hold_revision<'a>(
+        &'a self,
+        id: &'a ConversationId,
+        receiver_id: &'a str,
+        policy_revision: u64,
+    ) -> ConversationFuture<'a, crate::conversation::application::RevisionHold> {
+        let admission = std::sync::Arc::clone(&self.admission);
+        let read = self.live_revision(id, receiver_id);
+        Box::pin(async move {
+            let guard = admission.lock_owned().await;
+            match read.await? {
+                Some(live) if live == policy_revision => {
+                    Ok(crate::conversation::application::RevisionHold::held(guard))
+                }
+                _ => Err(ConversationError::Revoked),
+            }
         })
     }
 
@@ -533,6 +560,35 @@ impl ShareGrants for LocalConversationStore {
                         .ok_or_else(|| unreadable("share_grant_changes", &id))
                 }
                 _ => Ok(None),
+            }
+        })
+    }
+}
+
+impl LocalConversationStore {
+    /// The revision the live grant row holds, `None` when the row is absent
+    /// or its revision is not one this build can read. A row that cannot be
+    /// read is skipped, not a failure of the store.
+    fn live_revision<'a>(
+        &'a self,
+        id: &'a ConversationId,
+        receiver_id: &'a str,
+    ) -> ConversationFuture<'a, Option<u64>> {
+        let (id, receiver_id) = (id.to_string(), receiver_id.to_owned());
+        self.run(move |connection| {
+            match connection
+                .query_row(
+                    "SELECT policy_revision FROM share_grants
+                     WHERE conversation_id = ?1 AND receiver_id = ?2",
+                    params![id, receiver_id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .optional()
+            {
+                Ok(Some(value)) => Ok(sequence(value)),
+                Ok(None) => Ok(None),
+                Err(error) if super::damaged(&error) => Ok(None),
+                Err(error) => Err(failed(error)),
             }
         })
     }
