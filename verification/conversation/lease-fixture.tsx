@@ -103,6 +103,7 @@ function withLease(lease: ConversationLease | undefined): Conversation {
       tools: [],
       permissions: [],
       artifacts: [],
+      notes: [],
       capabilities: {
         queue: true,
         steer: true,
