@@ -20,7 +20,9 @@ export MACOSX_DEPLOYMENT_TARGET=15.0
 
 cargo build --locked --release -p nessa-device-client \
   --target aarch64-apple-ios --target aarch64-apple-ios-sim
-cargo build --locked --release -p nessa-device-client --features bindgen
+cargo build --locked --release -p nessa-device-client --lib
+cargo build --locked --release -p nessa-device-client \
+  --features bindgen --bin nessa-device-bindgen
 mkdir -p "$destination/Sources" "$destination/Headers"
 "$build/release/nessa-device-bindgen" generate \
   --library "$build/release/libnessa_device_client.dylib" --language swift \

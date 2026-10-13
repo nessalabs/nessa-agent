@@ -81,6 +81,7 @@ invented disclosure.
 
 | Additional native ordering | Required result / verification |
 | --- | --- |
+| Runtime Apple archives versus binding generator | Build host and iOS runtime libraries without the generator feature; select only the generator binary for its feature-enabled build, preserving the host archive used for packaging |
 | Second Swift call before first queued dispatch | Reject Busy before enqueue; direct generated callers also receive Rust Busy |
 | Stop before retained read registration | Retain stop state through registration; existing bounded read wakes |
 | Close before dispatch or while physical read runs | Close admission first, stop/drain actual owner before scope replacement |
