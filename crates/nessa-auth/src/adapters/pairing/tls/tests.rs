@@ -315,6 +315,18 @@ fn a_relay_proof_verifies_only_for_its_key_and_its_challenge() {
 }
 
 #[test]
+fn a_pinned_gateway_spki_names_the_key_it_registers_under() {
+    let identity = relay_identity(6);
+    assert_eq!(
+        relay_key(&identity.public_spki()),
+        Some(identity.public_key())
+    );
+    let mut other = identity.public_spki();
+    other[11] ^= 1;
+    assert_eq!(relay_key(&other), None);
+}
+
+#[test]
 fn a_relay_proof_signs_its_context_first_and_never_a_handshake_prefix() {
     let identity = relay_identity(5);
     let key = identity.public_key();

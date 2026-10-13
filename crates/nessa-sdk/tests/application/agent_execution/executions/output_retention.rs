@@ -27,6 +27,29 @@ fn message_identity_uses_one_shared_nonempty_byte_bound() {
 }
 
 #[test]
+fn deadline_notice_identity_uses_the_shared_observation_bound() {
+    use crate::domain::agent_execution::permissions::{
+        DeadlineReason, PermissionEffect, PermissionId,
+    };
+    let notice = |id: String| {
+        ExecutionEvent::new(
+            ExecutionId::new("output").unwrap(),
+            ExecutionUpdate::DeadlineAnswered {
+                id: PermissionId::new(id).unwrap(),
+                effect: PermissionEffect::Deny,
+                reason: DeadlineReason::new("denied because nobody answered").unwrap(),
+            },
+        )
+    };
+    assert!(notice("x".repeat(MAX_OBSERVATION_ID_BYTES))
+        .validate_payload_size()
+        .is_ok());
+    assert!(notice("x".repeat(MAX_OBSERVATION_ID_BYTES + 1))
+        .validate_payload_size()
+        .is_err());
+}
+
+#[test]
 fn retained_output_counts_exact_utf8_bytes_and_empty_event_slots() {
     let event = message("é".repeat(MAX_MESSAGE_CHUNK_BYTES / 2));
     let mut usage = ObservationUsage::default();

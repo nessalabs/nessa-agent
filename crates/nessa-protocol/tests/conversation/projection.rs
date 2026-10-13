@@ -41,8 +41,9 @@ use nessa_sdk::domain::agent_execution::executions::{
 use nessa_sdk::domain::agent_execution::permissions::{
     PermissionApplicationId, PermissionCancellationReason, PermissionDecision, PermissionEffect,
     PermissionId, PermissionOfferPolicy, PermissionOption, PermissionOptionId, PermissionOptions,
-    PermissionScope, PermissionSessionId, ReviewDecline, ReviewDeclineId, ReviewDeclineObservation,
-    ReviewDeclineReason, ReviewDeclineStage,
+    PermissionReviewDeadline, PermissionScope, PermissionSessionId, PermissionToolClass,
+    ReviewDecline, ReviewDeclineId, ReviewDeclineObservation, ReviewDeclineReason,
+    ReviewDeclineStage, STANDARD_DENY_REASON, STANDARD_STOP_REASON,
 };
 use nessa_sdk::domain::agent_execution::prompts::{PromptText, UserMessage};
 use nessa_sdk::domain::agent_execution::questions::{
@@ -234,7 +235,7 @@ fn lifecycle_diagnostics_are_clipped_at_a_utf8_boundary() {
 
 fn review(arguments: String) -> ExecutionEvent {
     event(ExecutionUpdate::PermissionRequested {
-        id: PermissionId::new("permission").unwrap(),
+        id: PermissionId::new("7").unwrap(),
         tool_id: ToolCallId::new("tool").unwrap(),
         observation: ToolObservation::default(),
         input: ToolReviewInput {
@@ -251,7 +252,112 @@ fn review(arguments: String) -> ExecutionEvent {
             &PermissionOfferPolicy::once_only(),
         )
         .unwrap(),
+        deadline: None,
     })
+}
+/// The fixture review, published with a deadline that takes `effect` for `reason`.
+fn review_with_deadline(effect: PermissionEffect, reason: &str) -> ExecutionEvent {
+    let ExecutionUpdate::PermissionRequested {
+        id,
+        tool_id,
+        observation,
+        input,
+        options,
+        ..
+    } = review("{}".into()).update().clone()
+    else {
+        unreachable!()
+    };
+    event(ExecutionUpdate::PermissionRequested {
+        id,
+        tool_id,
+        observation,
+        input,
+        options,
+        deadline: Some(
+            PermissionReviewDeadline::new(
+                PermissionToolClass::Other,
+                std::time::Duration::from_secs(30),
+                effect,
+                reason,
+            )
+            .unwrap()
+            .promise(1_700_000_030_000)
+            .unwrap(),
+        ),
+    })
+}
+/// The fixture review cancelled with `reason`, as a live controller records it.
+fn cancelled_review(
+    reason: PermissionCancellationReason,
+    origin: CancellationOrigin,
+) -> ExecutionEvent {
+    let ExecutionUpdate::PermissionRequested {
+        id, input, options, ..
+    } = review("{}".into()).update().clone()
+    else {
+        unreachable!()
+    };
+    let execution = ExecutionId::new("execution").unwrap();
+    let mut owner = ExecutionController::new(ExecutionSessionId::new("provider-session").unwrap());
+    owner.begin_execution(execution.clone()).unwrap();
+    owner
+        .request_permission(
+            &execution,
+            id.clone(),
+            ToolCallUpdate::new(
+                ToolCallId::new("tool").unwrap(),
+                None,
+                None,
+                None,
+                None,
+                None,
+            ),
+            input,
+            options,
+            None,
+        )
+        .unwrap();
+    let cancelled = owner
+        .cancel_permission(&execution, &id, reason, origin)
+        .unwrap()
+        .unwrap();
+    event(ExecutionUpdate::PermissionCancelled(cancelled))
+}
+/// The review cancelled by `deadline`, the one it published, because no
+/// refusal was offered.
+fn deadline_cancelled_review(deadline: PermissionReviewDeadline) -> ExecutionEvent {
+    let ExecutionUpdate::PermissionRequested {
+        id, input, options, ..
+    } = review("{}".into()).update().clone()
+    else {
+        unreachable!()
+    };
+    let execution = ExecutionId::new("execution").unwrap();
+    let mut owner = ExecutionController::new(ExecutionSessionId::new("provider-session").unwrap());
+    owner.begin_execution(execution.clone()).unwrap();
+    owner
+        .request_permission(
+            &execution,
+            id.clone(),
+            ToolCallUpdate::new(
+                ToolCallId::new("tool").unwrap(),
+                None,
+                None,
+                None,
+                None,
+                None,
+            ),
+            input,
+            options,
+            Some(deadline.clone().promise(1_700_000_030_000).unwrap()),
+        )
+        .unwrap();
+    let cancelled = owner
+        .cancel_deadline_for_test(&execution, &id, deadline)
+        .unwrap()
+        .unwrap();
+    event(ExecutionUpdate::PermissionCancelled(cancelled))
 }
 fn review_snapshot(events: Vec<ExecutionEvent>) -> SessionSnapshot {
     SessionSnapshot {
@@ -1385,6 +1491,7 @@ fn a_review_reaching_beyond_its_request_is_not_offered() {
         observation,
         input,
         options,
+        deadline: None,
     })]);
     let mut projection = projection();
     projection.replace_committed(
@@ -1435,6 +1542,7 @@ fn a_review_says_what_each_offered_option_decides() {
         observation,
         input,
         options,
+        deadline: None,
     })]);
     let mut projection = projection();
     projection.replace_committed(
@@ -1708,6 +1816,7 @@ fn active_interactions_survive_recent_message_window_without_copying_the_message
                 observation,
                 input,
                 options,
+                deadline: None,
             }));
     }
     let large = committed("incarnation", 27, 27, 27, Some(&costly));
@@ -1754,6 +1863,7 @@ fn active_interactions_survive_recent_message_window_without_copying_the_message
             ),
             input.clone(),
             options.clone(),
+            None,
         )
         .unwrap();
     let cancelled = owner
@@ -1853,6 +1963,7 @@ fn custom_backend_questions_over_display_budget_remain_semantic_and_atomic() {
                     ),
                     input,
                     options,
+                    None,
                 )
                 .unwrap(),
         );
@@ -2565,6 +2676,404 @@ fn selection_and_runtime_replacements_own_revision_without_transcript_output() {
     });
     assert_ne!(projection.read().revision, running.revision);
     assert!(projection.read().messages.is_empty());
+}
+
+#[test]
+fn a_pending_review_shows_an_armed_deadline_and_a_restored_one_does_not() {
+    use std::time::Duration;
+    let ExecutionUpdate::PermissionRequested {
+        id,
+        tool_id,
+        observation,
+        input,
+        options,
+        ..
+    } = review("{}".into()).update().clone()
+    else {
+        unreachable!()
+    };
+    let armed = PermissionReviewDeadline::new(
+        PermissionToolClass::Other,
+        Duration::from_secs(30),
+        PermissionEffect::Deny,
+        STANDARD_DENY_REASON,
+    )
+    .unwrap()
+    .promise(1_700_000_030_000)
+    .unwrap();
+    let show = |deadline| {
+        let snapshot = review_snapshot(vec![event(ExecutionUpdate::PermissionRequested {
+            id: id.clone(),
+            tool_id: tool_id.clone(),
+            observation: observation.clone(),
+            input: input.clone(),
+            options: options.clone(),
+            deadline,
+        })]);
+        let mut projection = projection();
+        projection.replace_committed(
+            &committed("incarnation", 1, 1, 1, Some(&snapshot)),
+            &[],
+            Some(&ExecutionId::new("execution").unwrap()),
+        );
+        projection.transcript_state(ConversationTranscriptState::Complete);
+        projection.read()
+    };
+    let pending = show(Some(armed));
+    let deadline = pending.permissions[0]
+        .deadline
+        .as_ref()
+        .expect("an armed deadline is on the pending review");
+    assert_eq!(deadline.wait_ms, 30_000);
+    assert_eq!(deadline.due_at_ms, 1_700_000_030_000);
+    assert_eq!(deadline.effect, ConversationPermissionOptionEffect::Deny);
+    assert_eq!(deadline.reason, STANDARD_DENY_REASON);
+    assert!(!deadline.stops_turn);
+    let due = 1_700_000_030_000;
+    let restored = PermissionReviewDeadline::new(
+        PermissionToolClass::Other,
+        Duration::from_secs(30),
+        PermissionEffect::Deny,
+        STANDARD_DENY_REASON,
+    )
+    .unwrap()
+    .promise(due)
+    .unwrap()
+    .restored(false, Some(due))
+    .expect("a continuing deny deadline restores");
+    assert!(!restored.armed());
+    assert_eq!(restored.due_at_ms(), Some(due));
+    assert!(
+        show(Some(restored.clone())).permissions[0]
+            .deadline
+            .is_none(),
+        "a restored deadline is not on the card"
+    );
+}
+
+#[test]
+fn a_saved_deadline_counts_down_while_this_process_holds_the_review() {
+    use std::collections::HashSet;
+    use std::time::Duration;
+    let ExecutionUpdate::PermissionRequested {
+        id,
+        tool_id,
+        observation,
+        input,
+        options,
+        ..
+    } = review("{}".into()).update().clone()
+    else {
+        unreachable!()
+    };
+    let due = 1_700_000_030_000;
+    let restored = PermissionReviewDeadline::new(
+        PermissionToolClass::Other,
+        Duration::from_secs(30),
+        PermissionEffect::Deny,
+        STANDARD_DENY_REASON,
+    )
+    .unwrap()
+    .stopping()
+    .promise(due)
+    .unwrap()
+    .restored(true, Some(due))
+    .expect("a stopping deny deadline restores");
+    assert!(!restored.armed());
+    let snapshot = review_snapshot(vec![event(ExecutionUpdate::PermissionRequested {
+        id,
+        tool_id,
+        observation,
+        input,
+        options,
+        deadline: Some(restored),
+    })]);
+    let active = ExecutionId::new("execution").unwrap();
+    let show = |holding: HashSet<(String, String)>| {
+        let mut projection = projection();
+        projection.replace_committed_while_holding(
+            &committed("incarnation", 1, 1, 1, Some(&snapshot)),
+            &[],
+            Some(&active),
+            &holding,
+        );
+        projection.transcript_state(ConversationTranscriptState::Complete);
+        projection.read()
+    };
+    let absent = show(HashSet::new());
+    assert!(
+        absent.permissions[0].deadline.is_none(),
+        "a saved deadline stays off the card when this process is not holding the review"
+    );
+    let other = show(HashSet::from([("execution".into(), "other".into())]));
+    assert!(
+        other.permissions[0].deadline.is_none(),
+        "holding a different review does not show this deadline"
+    );
+    let pending = show(HashSet::from([("execution".into(), "7".into())]));
+    let deadline = pending.permissions[0]
+        .deadline
+        .as_ref()
+        .expect("a review this process holds counts down from the saved deadline");
+    assert_eq!(deadline.wait_ms, 30_000);
+    assert_eq!(deadline.due_at_ms, due);
+    assert_eq!(deadline.effect, ConversationPermissionOptionEffect::Deny);
+    assert_eq!(deadline.reason, STANDARD_STOP_REASON);
+    assert!(deadline.stops_turn);
+    let mut idle = projection();
+    idle.replace_committed_while_holding(
+        &committed("incarnation", 1, 1, 1, Some(&snapshot)),
+        &[],
+        None,
+        &HashSet::from([("execution".into(), "7".into())]),
+    );
+    assert!(
+        idle.read().permissions.is_empty(),
+        "a held review that is not the active execution is not offered"
+    );
+}
+
+#[test]
+fn an_automatic_decision_is_named_allowed_or_denied_in_the_notice() {
+    let notice = |effect, sentence: &str| {
+        let reason =
+            nessa_sdk::domain::agent_execution::permissions::DeadlineReason::new(sentence).unwrap();
+        let snapshot = review_snapshot(vec![
+            review_with_deadline(effect, sentence),
+            event(ExecutionUpdate::DeadlineAnswered {
+                id: PermissionId::new("7").unwrap(),
+                effect,
+                reason,
+            }),
+        ]);
+        let mut projection = projection();
+        projection.replace_committed(
+            &committed("incarnation", 1, 1, 1, Some(&snapshot)),
+            &[],
+            Some(&ExecutionId::new("execution").unwrap()),
+        );
+        projection.transcript_state(ConversationTranscriptState::Complete);
+        let view = projection.read();
+        view.messages[0].parts[0].text.clone()
+    };
+    assert_eq!(
+        notice(PermissionEffect::Deny, STANDARD_DENY_REASON),
+        format!("Denied automatically: {STANDARD_DENY_REASON}")
+    );
+    assert_eq!(
+        notice(PermissionEffect::Allow, "allowed because nobody was there"),
+        "Allowed automatically: allowed because nobody was there"
+    );
+    assert_eq!(
+        notice(PermissionEffect::Deny, STANDARD_STOP_REASON),
+        format!("Denied automatically: {STANDARD_STOP_REASON}")
+    );
+}
+
+#[test]
+fn a_deadline_notice_without_an_earlier_request_in_that_execution_is_omitted() {
+    let reason =
+        nessa_sdk::domain::agent_execution::permissions::DeadlineReason::new(STANDARD_DENY_REASON)
+            .unwrap();
+    let notice = |id: &str| {
+        event(ExecutionUpdate::DeadlineAnswered {
+            id: PermissionId::new(id).unwrap(),
+            effect: PermissionEffect::Deny,
+            reason: reason.clone(),
+        })
+    };
+    let texts = |events| {
+        let snapshot = review_snapshot(events);
+        let mut projection = projection();
+        projection.replace_committed(
+            &committed("incarnation", 1, 1, 1, Some(&snapshot)),
+            &[],
+            Some(&ExecutionId::new("execution").unwrap()),
+        );
+        projection.transcript_state(ConversationTranscriptState::Complete);
+        projection
+            .read()
+            .messages
+            .into_iter()
+            .flat_map(|message| message.parts)
+            .filter(|part| part.kind == "local_notice")
+            .map(|part| part.text)
+            .collect::<Vec<_>>()
+    };
+    assert!(
+        texts(vec![notice("7")]).is_empty(),
+        "a notice with no earlier request is omitted"
+    );
+    let published = || review_with_deadline(PermissionEffect::Deny, STANDARD_DENY_REASON);
+    assert!(
+        texts(vec![published(), notice("other")]).is_empty(),
+        "a notice whose id is not the request's is omitted"
+    );
+    assert_eq!(
+        texts(vec![published(), notice("7")]),
+        vec![format!("Denied automatically: {STANDARD_DENY_REASON}")]
+    );
+    let ExecutionUpdate::PermissionRequested {
+        tool_id,
+        observation,
+        input,
+        options,
+        deadline,
+        ..
+    } = published().update().clone()
+    else {
+        unreachable!()
+    };
+    let opaque = event(ExecutionUpdate::PermissionRequested {
+        id: PermissionId::new("review-a").unwrap(),
+        tool_id,
+        observation,
+        input,
+        options,
+        deadline,
+    });
+    assert!(
+        texts(vec![opaque, notice("review-a")]).is_empty(),
+        "a review whose id is not a notice id shows no notice the client would refuse"
+    );
+}
+
+#[test]
+fn a_deadline_notice_is_shown_only_as_the_one_settlement_its_review_published() {
+    use nessa_sdk::domain::agent_execution::permissions::{DeadlineReason, STANDARD_ALLOW_REASON};
+    let notice = |effect, reason: &str| {
+        event(ExecutionUpdate::DeadlineAnswered {
+            id: PermissionId::new("7").unwrap(),
+            effect,
+            reason: DeadlineReason::new(reason).unwrap(),
+        })
+    };
+    let shown = |events| {
+        let snapshot = review_snapshot(events);
+        let mut projection = projection();
+        projection.replace_committed(
+            &committed("incarnation", 1, 1, 1, Some(&snapshot)),
+            &[],
+            Some(&ExecutionId::new("execution").unwrap()),
+        );
+        projection.transcript_state(ConversationTranscriptState::Complete);
+        let view = projection.read();
+        let notices = view
+            .messages
+            .iter()
+            .flat_map(|message| &message.parts)
+            .filter(|part| part.kind == "local_notice")
+            .map(|part| part.text.clone())
+            .collect::<Vec<_>>();
+        (notices, view.permissions.len())
+    };
+    let deny = || notice(PermissionEffect::Deny, STANDARD_DENY_REASON);
+    let denied = format!("Denied automatically: {STANDARD_DENY_REASON}");
+    let published = || review_with_deadline(PermissionEffect::Deny, STANDARD_DENY_REASON);
+
+    assert_eq!(
+        shown(vec![review("{}".into()), deny()]),
+        (vec![], 1),
+        "a review that published no deadline was not settled by one, and stays pending"
+    );
+    assert_eq!(
+        shown(vec![
+            published(),
+            notice(PermissionEffect::Allow, STANDARD_ALLOW_REASON)
+        ]),
+        (vec![], 1),
+        "a notice that contradicts the published effect is not shown and removes nothing"
+    );
+    assert_eq!(
+        shown(vec![
+            published(),
+            notice(PermissionEffect::Deny, STANDARD_STOP_REASON)
+        ]),
+        (vec![], 1),
+        "a notice whose reason is not the published one is not shown"
+    );
+    assert_eq!(
+        shown(vec![published(), deny(), deny()]),
+        (vec![denied.clone()], 0),
+        "a duplicate notice is shown once"
+    );
+    assert_eq!(
+        shown(vec![
+            published(),
+            cancelled_review(
+                PermissionCancellationReason::provider_withdrawal(),
+                CancellationOrigin::Provider,
+            ),
+            deny(),
+        ]),
+        (vec![], 0),
+        "a review cancelled for another reason was not settled by its deadline"
+    );
+    assert_eq!(
+        shown(vec![
+            published(),
+            cancelled_review(
+                PermissionCancellationReason::deadline_exceeded(),
+                CancellationOrigin::Runtime,
+            ),
+            deny(),
+        ]),
+        (vec![], 0),
+        "an execution timeout shares the reason, but the review's deadline did not settle it"
+    );
+    let deadline_after = |wait, effect, reason| {
+        PermissionReviewDeadline::new(
+            PermissionToolClass::Other,
+            std::time::Duration::from_secs(wait),
+            effect,
+            reason,
+        )
+        .unwrap()
+    };
+    let deadline = |effect, reason| deadline_after(30, effect, reason);
+    // A cancellation by a deadline the review did not publish never reaches
+    // the projection: the SDK refuses that history.
+    let refused = |events| {
+        CommittedSession::new(
+            SessionId::new("conversation").unwrap(),
+            "incarnation".into(),
+            1,
+            1,
+            1,
+            Some(review_snapshot(events)),
+            CommittedStatus::new(CommittedCompleteness::Complete, CommittedFreshness::Current),
+        )
+        .is_err()
+    };
+    assert!(
+        refused(vec![
+            published(),
+            deadline_cancelled_review(deadline_after(
+                8,
+                PermissionEffect::Deny,
+                STANDARD_DENY_REASON
+            )),
+            deny(),
+        ]),
+        "a cancellation by a deadline that shares the outcome but not the wait"
+    );
+    assert!(
+        refused(vec![
+            published(),
+            deadline_cancelled_review(deadline(PermissionEffect::Allow, STANDARD_ALLOW_REASON)),
+            deny(),
+        ]),
+        "a cancellation by a deadline the review did not publish"
+    );
+    assert_eq!(
+        shown(vec![
+            published(),
+            deadline_cancelled_review(deadline(PermissionEffect::Deny, STANDARD_DENY_REASON)),
+            deny(),
+        ]),
+        (vec![denied], 0),
+        "a review its deadline cancelled has that deadline's notice"
+    );
 }
 
 #[test]

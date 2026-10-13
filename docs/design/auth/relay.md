@@ -1,7 +1,8 @@
 # Forwarding relay and the sleeping gateway — issue 266
 
-Status: design accepted; slice R1 (the relay service) merged, R2a (the
-gateway serving through a relay) in review. Part of
+Status: design accepted; slices R1 (the relay service) and R2a (the
+gateway serving through a relay) merged, R2b-1 (the reader's race of
+direct and relay) in review. Part of
 [#263](https://github.com/nessalabs/nessa-agent/issues/263); it also carries
 the relay half of slice I ([#706](https://github.com/nessalabs/nessa-agent/issues/706)),
 so one relay serves phones, peer gateways and paired environments. The map's
@@ -185,7 +186,7 @@ Every paired reader gets the same order: **direct, then relay**.
 | Side | Setting | Where the dial lives |
 | --- | --- | --- |
 | Gateway | `native.relay: "host:port"` in `config.json`. While set, the gateway keeps its serve connection, redialing with a bounded backoff | `device_pairing` listener: see below |
-| Phone and peer-gateway reader | The record of the gateway carries an optional relay beside its address; `peer.enroll` takes it, and `peer.relay` sets or clears it on a peer already kept | `nessa-client-core`'s `GatewayConnector`, widened to carry the optional relay |
+| Phone and peer-gateway reader | The record of the gateway carries an optional relay beside its address; `peer.enroll` takes it, and `peer.relay` sets or clears it on a peer already kept | `nessa-client-core`'s retained reader: its connector carries the optional relay |
 | Paired environment | `nessa env dial ADDRESS --relay host:port` | `env_serve`'s dial |
 
 **On the gateway, the relay is a second source inside the one listening
@@ -235,7 +236,8 @@ so typing it once at pairing is enough for the first relay.
 | --- | --- | --- |
 | R1 | The relay protocol in `nessa-protocol`, the relay service and `nessa relay serve --listen ADDRESS` (not to be confused with the existing `nessa mcp-relay`), the gateway's proof signature, and the timer port moved out of `env_serve` so the relay waits on it too. Inert: nothing uses it yet | Two test parties join through it and exchange bytes; `Offline` for an absent K and `NoAnswer` for one that does not accept; a wrong or replayed proof refused; the newest registration wins; every limit and deadline holds on the injected clock |
 | R2a | The gateway's `native.relay`: its registration, kept with a bounded backoff and dropped after two silent ping intervals, and each announced reader accepted on a relay permit from a pool of four, as a second source in its one listening socket | A reader that reaches only the relay completes TLS pinned to the gateway's key and is answered; four relay permits held leave direct readers admitted; no relay fault ends the listener; stop drains every relay permit |
-| R2b | The relay leg in the client core's connector, raced with the direct dial; the same in the peer gateways' connector; the peer record's relay and `peer.relay` | A reader whose direct dial hangs or is refused is joined through the relay; one whose direct dial connects first never dials the relay |
+| R2b-1 | The relay leg in the client core's retained reader, raced with the direct dial: the relay starts once the direct dial has not connected within a 750 ms head start, or at once when it is refused, and the first to connect is used | A reader whose direct dial hangs or is refused is joined through the relay; one whose direct dial connects first never dials the relay; a relay that fails first leaves a slow direct dial to connect; a stop ends the wait |
+| R2b-2 | The same for peer gateways: the peer record's relay, `peer.enroll` taking one, `peer.relay` setting or clearing it, and the peer poller's read and status dial both using it | A peer whose direct address is out of reach is read and asked its status through its relay |
 | R2c | End to end over the real relay, gateway and reader | A reader reads through the relay to **the same checkpoint**, the same head and the same bytes, that a direct read reaches; a relay that flips, drops, or records and replays TLS records leaves the cache unchanged; revoking the reader still refuses it through the relay; repeated `Connect{K}` cannot starve a direct reader |
 | R3 | The honest state: `away` in the reader's outcome and in a peer's `sync.state`, with the cache kept and readable | A gateway that stops serving is `away` to its reader within the keepalive bound, its cached conversations still read, and it reads fresh again once it is back; a busy gateway is `unreachable`, never `away` |
 | R4 | `nessa env dial --relay` | A paired environment with no direct path dials through the relay and serves a lease; this is slice I's "Direct and relay converge" line |
@@ -264,6 +266,8 @@ so typing it once at pairing is enough for the first relay.
 | RL15 | The gateway's registration ends, or hears nothing for two ping intervals | Dropped and made again after a wait that doubles from 1 s to 60 s, starting over after a registration that lasted a minute; direct readers are served throughout | R2a |
 | RL16 | The relay announces a reader while the gateway's four relay permits are held | Nothing is dialed; the relay answers that reader `NoAnswer` at its join deadline; direct readers are admitted as before | R2a |
 | RL17 | The gateway key cannot make its relay proof | The gateway stops registering and logs it; it serves directly as before | R2a |
+| RL18 | A reader with a relay whose direct dial connects within the head start | The direct connection is used; the relay is never dialed | R2b-1 |
+| RL19 | A reader whose direct dial is refused, or has not connected within the head start | The relay leg starts, and the first of the two to connect is used; both failing reports the relay's answer | R2b-1 |
 
 ## What the relay sees
 

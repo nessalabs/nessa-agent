@@ -45,6 +45,30 @@ const utf8 = new TextEncoder()
 /** A canonical lowercase hyphenated UUID: the schema's pattern for a conversation identity. */
 export const conversationIdPattern = new RegExp(bounds.conversationIdPattern)
 
+/** A pending review's deadline: the wait, when it is due, the outcome, and whether that refusal stops the turn. */
+function deadlineOf(value: unknown) {
+  const deadline = record(value)
+  exact(deadline, ["waitMs", "dueAtMs", "effect", "reason", "stopsTurn"])
+  const waitMs = deadline.waitMs
+  if (
+    typeof waitMs !== "number" ||
+    !Number.isInteger(waitMs) ||
+    waitMs < 1 ||
+    waitMs > 86_400_000
+  )
+    throw new Error("Invalid conversation waitMs")
+  const dueAtMs = deadline.dueAtMs
+  if (typeof dueAtMs !== "number" || !Number.isSafeInteger(dueAtMs) || dueAtMs < 1)
+    throw new Error("Invalid conversation dueAtMs")
+  const effect = text(deadline, "effect", 16)
+  oneOf(effect, Object.values(ConversationPermissionOptionEffect))
+  const reason = text(deadline, "reason", 512, false)
+  if (!reason.trim() || /\p{Cc}/u.test(reason))
+    throw new Error("Invalid conversation reason")
+  flag(deadline, "stopsTurn")
+  if (effect === ConversationPermissionOptionEffect.Allow && deadline.stopsTurn === true)
+    throw new Error("Invalid conversation stopsTurn")
+}
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new Error("Invalid conversation response")
@@ -185,6 +209,7 @@ export function conversationView(value: unknown, expected: string): Conversation
   exact(item, [
     "conversationId",
     "revision",
+    "serverNowMs",
     "messages",
     "pending",
     "permissions",
@@ -207,6 +232,15 @@ export function conversationView(value: unknown, expected: string): Conversation
   if (identity(item, "conversationId") !== expected)
     throw new Error("Conversation response belongs to another conversation")
   identity(item, "revision")
+  // The gateway's time the view was sent at: what each deadline's `dueAtMs`
+  // is measured against (`clientDueAtMs`).
+  const serverNowMs = item.serverNowMs
+  if (
+    typeof serverNowMs !== "number" ||
+    !Number.isSafeInteger(serverNowMs) ||
+    serverNowMs < 1
+  )
+    throw new Error("Invalid conversation serverNowMs")
   optionalText(item, "title", bounds.maxConversationTitleBytes)
   flag(item, "truncated")
   flag(item, "queueComplete")
@@ -441,6 +475,7 @@ export function conversationView(value: unknown, expected: string): Conversation
       "argumentsJson",
       "origin",
       "ask",
+      "deadline",
     ])
     for (const key of ["executionId", "permissionId", "toolId"]) identity(permission, key)
     // What it asks the person to allow, a closed set: a surface words its
@@ -492,6 +527,7 @@ export function conversationView(value: unknown, expected: string): Conversation
       text(option, "label", 2048, false)
       oneOf(text(option, "effect"), Object.values(ConversationPermissionOptionEffect))
     }
+    if (permission.deadline !== undefined) deadlineOf(permission.deadline)
   }
   const toolIds = new Set<string>()
   // One execution runs in one process, so its tools share that start's choice.

@@ -908,7 +908,7 @@ mod committed_tests {
     use crate::application::agent_execution::sessions::{
         CommittedCompleteness, CommittedFreshness,
     };
-    use crate::domain::agent_execution::executions::{GrantInitiator, GrantRole};
+    use crate::domain::agent_execution::executions::GrantInitiator;
     use crate::domain::agent_execution::prompts::{PromptText, UserMessage};
     #[test]
     fn typed_shutdown_tree_limits_and_iterative_rejection() {
@@ -1040,7 +1040,7 @@ mod committed_tests {
         // holds none.
         let before = super::super::retained::snapshot(&snapshot);
         snapshot.invocations[0].initiation =
-            Initiation::grant(GrantInitiator::new("share-grant", GrantRole::Drive, 3).unwrap());
+            Initiation::grant(GrantInitiator::new("share-grant", 3).unwrap());
         assert_eq!(
             super::super::retained::snapshot(&snapshot) - before,
             "share-grant".len()

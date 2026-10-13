@@ -48,7 +48,7 @@ use crate::read_only_sync::infrastructure::cache::ReadOnlyCache;
 use crate::read_only_sync::infrastructure::gateway::{
     CatalogueReader, DeviceEvidence, GatewayConnection, Session,
 };
-use nessa_auth::adapters::pairing::NativeIdentity;
+use nessa_auth::adapters::pairing::{relay_key, NativeIdentity};
 use nessa_auth::application::ports::Clock as WallClock;
 use nessa_protocol::clock::Clock as MonotonicClock;
 use nessa_protocol::conversation::domain::ConversationId;
@@ -64,6 +64,7 @@ use nessa_sync::replication::{
     },
     domain::{Id, Limits, Scope},
 };
+use relay::{race, relay_leg, RelayRoute, HEAD_START};
 use std::cell::Cell;
 use std::io::{Read, Result as IoResult, Write};
 use std::net::{Shutdown, SocketAddr, TcpStream};
@@ -74,6 +75,7 @@ use std::time::Duration;
 
 mod active;
 mod device;
+mod relay;
 mod saved;
 pub use active::RetainedDeviceReader;
 pub use device::{RetainedEnrollmentClient, RetainedEnrollmentStatus, RetainedPurge};
@@ -125,6 +127,12 @@ pub struct ReaderAccess<'a> {
     pub role: ReaderRole,
     /// The gateway's native address.
     pub address: SocketAddr,
+    /// The relay to ask for the gateway, as `host:port`, when the direct
+    /// dial has not connected within a short head start or was refused.
+    /// The relay is asked for the pinned key and joins nothing it cannot
+    /// prove; what crosses it is the same pinned TLS. `None` dials directly
+    /// only.
+    pub relay: Option<&'a str>,
     /// The reader's own key.
     pub identity: &'a NativeIdentity,
     /// The gateway key pinned at enrollment.
@@ -253,14 +261,31 @@ impl Cancellation for Stopping {
         Some(self.until)
     }
 }
-struct StoppableConnector(Arc<ReadStop>);
+struct StoppableConnector {
+    /// The read's stop and its budget on the injected clock.
+    ending: Arc<Stopping>,
+    relay: Option<RelayRoute>,
+}
 impl GatewayConnector for StoppableConnector {
     fn connect(&self, address: SocketAddr, timeout: Duration) -> IoResult<Box<dyn GatewayStream>> {
-        // The connect itself cannot be stopped; it is bounded by `timeout`,
-        // at most [`HANDSHAKE`].
-        let socket = TcpStream::connect_timeout(&address, timeout)?;
-        self.0.register(&socket)?;
-        Ok(Box::new(Socket::new(socket, self.0.clone())))
+        // A dial itself cannot be stopped; it is bounded by `timeout`, at
+        // most [`HANDSHAKE`]. With a relay the race between the two dials
+        // asks the stop and the injected clock's budget as it waits.
+        let socket = match &self.relay {
+            None => TcpStream::connect_timeout(&address, timeout)?,
+            Some(route) => {
+                let route = route.clone();
+                race(
+                    move |left| TcpStream::connect_timeout(&address, left),
+                    move |left| relay_leg(&route, left),
+                    timeout,
+                    HEAD_START,
+                    &|| self.ending.cancelled(),
+                )?
+            }
+        };
+        self.ending.stop.register(&socket)?;
+        Ok(Box::new(Socket::new(socket, self.ending.stop.clone())))
     }
 }
 /// A read's socket. Each wait the caller sets is taken in slices of at most
@@ -448,7 +473,6 @@ impl RetainedCache {
         max_withdrawn: usize,
         withdrawn: &mut Vec<String>,
     ) -> Result<ReadReport, ReadFailure> {
-        let stop = &ending.stop;
         let receiver = Id::new(access.receiver).map_err(|_| ReadFailure::Protocol)?;
         let policy = GatewayPolicy::new(
             HANDSHAKE_MS,
@@ -464,7 +488,16 @@ impl RetainedCache {
                 credential: access.credential,
             },
             access.client_id,
-            &StoppableConnector(stop.clone()),
+            &StoppableConnector {
+                ending: ending.clone(),
+                // A pin that is no Ed25519 key fails TLS whatever the route.
+                relay: access.relay.and_then(|address| {
+                    Some(RelayRoute {
+                        address: address.to_owned(),
+                        key: relay_key(&access.pin)?,
+                    })
+                }),
+            },
             self.clock.clone(),
             ending.clone(),
             policy,

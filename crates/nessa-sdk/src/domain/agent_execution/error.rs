@@ -132,6 +132,33 @@ pub enum ExecutionError {
     UnofferedAnswer,
     /// The selected option was not offered by this request.
     UnknownPermissionOption,
+    /// A permission deadline waits no time, so the request would be decided in
+    /// the instant it appeared.
+    ZeroPermissionDeadline,
+    /// A permission deadline waits longer than a day, so a misconfiguration
+    /// could push the moment past what the clock can reach and leave the
+    /// review waiting.
+    PermissionDeadlineTooLong,
+    /// A permission deadline's wait is not a whole number of milliseconds.
+    /// The wire and the saved record carry `waitMs`, so a part of a
+    /// millisecond would be lost on the way: a wait under one would read as
+    /// zero, which a client refuses.
+    FractionalPermissionDeadline,
+    /// A permission deadline reason holds a control character, so it cannot be
+    /// shown on one line.
+    ControlCharacterInPermissionReason,
+    /// A class deadline was installed in the other class's slot.
+    MismatchedPermissionDeadline,
+    /// An allow deadline records that it stops the turn. Only a refusal can
+    /// stop the turn, so this combination is not a deadline.
+    AllowDeadlineStopsTurn,
+    /// A deadline installed as a class policy carries state only a settled or
+    /// live review has: it stops the turn, has a due time, or is armed. A
+    /// policy is a template, so a settlement would inherit that state.
+    SettledPermissionDeadlineTemplate,
+    /// A deadline's due time is zero or later than a client can read exactly,
+    /// so the card would show a moment other than the one the worker keeps.
+    UnrepresentablePermissionDeadlineDue,
     /// A cancellation code is in the namespace only the runner writes, and was
     /// not issued for the review it would withdraw.
     ReservedCancellationCode,

@@ -4,7 +4,7 @@ use crate::agents::application::{AgentProbe, AgentProbeEvidence};
 use crate::app::dependencies::RuntimeDependencies;
 use crate::composition::local_auth::SystemClock;
 use crate::composition::native_pairing::{bind, prepare, start, NativeInputs};
-use crate::composition::runtime_config::NativeConfig;
+use crate::composition::runtime_config::{NativeConfig, RelayAddress};
 use crate::conversation::application::{
     ConversationRepository, RecordReadError, RecordReadFuture, RecordReadLease,
     RecordReadOperation, RecordReadResponse, RecordReadSource,
@@ -269,10 +269,16 @@ async fn gateway_child() {
         Ok(address) => address.parse().unwrap(),
         Err(_) => "127.0.0.1:0".parse().unwrap(),
     };
+    // "relay": a real relay in this process, and the gateway registered at
+    // it, so a reader whose direct dial fails reads through it.
+    let relay = match std::env::var("NESSA_ONLINE_GATE").as_deref() {
+        Ok("relay") => Some(serve_relay(root).await),
+        _ => None,
+    };
     let (prepared, commands, _peers) = prepare(
         &NativeConfig {
             listen_address: address,
-            relay: None,
+            relay,
         },
         NativeInputs {
             namespace: root.to_path_buf(),
@@ -588,6 +594,33 @@ async fn live_control(
         println!("DONE {line}");
         io::stdout().flush().unwrap();
     }
+}
+
+/// Serve a relay on a fresh local port for the rest of this process, and
+/// note its address in `relay-address` for the reading test.
+async fn serve_relay(root: &Path) -> RelayAddress {
+    use crate::relay::{
+        application::{Relay, RelayLimits},
+        infrastructure::{serve_tcp, Ed25519Proofs, OsRelayEntropy},
+    };
+    use crate::timer::{Timer, TokioTimer};
+    let socket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = socket.local_addr().unwrap().to_string();
+    let timer: Arc<dyn Timer> = Arc::new(TokioTimer::new());
+    let relay = Relay::new(
+        timer.clone(),
+        Arc::new(OsRelayEntropy),
+        Arc::new(Ed25519Proofs),
+        RelayLimits::default(),
+    );
+    tokio::spawn(serve_tcp(
+        socket,
+        relay,
+        timer,
+        std::future::pending::<()>(),
+    ));
+    private_write(&root.join("relay-address"), address.as_bytes());
+    RelayAddress::try_from(address).unwrap()
 }
 
 /// Pair one device through the real listener, its private state under

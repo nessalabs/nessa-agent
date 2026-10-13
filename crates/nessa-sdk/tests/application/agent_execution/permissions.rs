@@ -74,6 +74,7 @@ fn a_hook_refusal_cannot_select_an_allow_option() {
             tool,
             review_input(),
             options,
+            None,
         )
         .unwrap();
     let hook = ApprovalAttribution::hook(&permission, HookRefusal::new(Some(0), "no")).unwrap();
@@ -393,6 +394,7 @@ fn answer_delivery_retains_controller_session_despite_identical_local_identities
                 tool,
                 review_input(),
                 request.options().clone(),
+                None,
             )
             .unwrap();
         let resolution = controller
@@ -447,6 +449,7 @@ async fn substituted_backend_cannot_return_a_foreign_sessions_permission_as_succ
             ToolCallUpdate::new(request.tool_id().clone(), None, None, None, None, None),
             review_input(),
             request.options().clone(),
+            None,
         )
         .unwrap();
     let backend = Arc::new(InMemoryPermissionBackend {
@@ -494,6 +497,7 @@ fn retained_review() -> ExecutionEvent {
             observation: ToolObservation::default(),
             input: review_input(),
             options: request.options().clone(),
+            deadline: None,
         },
     )
 }

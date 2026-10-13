@@ -1,8 +1,9 @@
 import { offersAuthenticationRecovery } from "../../../../provider-authentication/model/recovery"
-import type {
-  ConversationMessage,
-  ConversationPermission,
-  ConversationTool,
+import {
+  deadlinePendingLine,
+  type ConversationMessage,
+  type ConversationPermission,
+  type ConversationTool,
 } from "@nessa/client"
 import { describe, expect, it } from "vitest"
 import { appWidget } from "../../../widgets/app/model/app-ref"
@@ -21,7 +22,7 @@ import {
   summaryFrom,
   transcriptFrom,
 } from "./gateway-views"
-import { row, view } from "./fake-gateway"
+import { GATEWAY_NOW_MS, row, view } from "./fake-gateway"
 
 const at = () => 42
 
@@ -81,6 +82,7 @@ describe("a conversation view as a transcript", () => {
       }),
       1,
       at,
+      GATEWAY_NOW_MS,
     )
     const reply = transcript.messages.find((message) => message.role === "agent")
     expect(reply?.parts).toEqual([
@@ -98,6 +100,7 @@ describe("a conversation view as a transcript", () => {
       }),
       1,
       at,
+      GATEWAY_NOW_MS,
     )
     expect(transcript.messages.map((message) => message.id)).toEqual([
       sent,
@@ -115,6 +118,7 @@ describe("a conversation view as a transcript", () => {
       }),
       1,
       at,
+      GATEWAY_NOW_MS,
     )
     const ids = transcript.messages.map((message) => message.id)
     expect(new Set(ids).size).toBe(ids.length)
@@ -140,6 +144,7 @@ describe("a conversation view as a transcript", () => {
       }),
       1,
       at,
+      GATEWAY_NOW_MS,
     )
     expect(transcript.messages[1].parts).toEqual([
       { kind: "text", text: "Hello" },
@@ -171,6 +176,7 @@ describe("a conversation view as a transcript", () => {
       }),
       1,
       at,
+      GATEWAY_NOW_MS,
     )
     expect(
       transcript.messages[1].parts.map((part) =>
@@ -184,6 +190,7 @@ describe("a conversation view as a transcript", () => {
       view("c", { messages: [turn({ parts: [toolPart("gone", 0)] })] }),
       1,
       at,
+      GATEWAY_NOW_MS,
     )
     expect(transcript.messages).toHaveLength(1)
   })
@@ -211,6 +218,7 @@ describe("a conversation view as a transcript", () => {
       }),
       1,
       at,
+      GATEWAY_NOW_MS,
     )
     expect(
       transcript.messages.map((message) => [message.id, messageText(message)]),
@@ -254,6 +262,7 @@ describe("a conversation view as a transcript", () => {
       }),
       1,
       at,
+      GATEWAY_NOW_MS,
     )
     const shown = transcript.messages.map((message) => [
       message.id,
@@ -304,6 +313,7 @@ describe("a conversation view as a transcript", () => {
       }),
       1,
       at,
+      GATEWAY_NOW_MS,
     )
     const users = transcript.messages.filter((message) => message.role === "user")
     expect(users.map((message) => [message.parts, message.app])).toEqual([
@@ -323,21 +333,26 @@ describe("a conversation view as a transcript", () => {
       }),
       1,
       at,
+      GATEWAY_NOW_MS,
     )
     expect(working.activity).toEqual({ label: "Reading files", since: 42 })
     const thinking = transcriptFrom(
       view("c", { messages: [turn({ status: "running" })] }),
       1,
       at,
+      GATEWAY_NOW_MS,
     )
     expect(thinking.activity?.label).toBe("Thinking")
     const streaming = transcriptFrom(
       view("c", { messages: [turn({ status: "running", parts: [textPart("Hi", 0)] })] }),
       1,
       at,
+      GATEWAY_NOW_MS,
     )
     expect(streaming.activity).toBeNull()
-    expect(transcriptFrom(view("c", { messages: [turn()] }), 1, at).activity).toBeNull()
+    expect(
+      transcriptFrom(view("c", { messages: [turn()] }), 1, at, GATEWAY_NOW_MS).activity,
+    ).toBeNull()
   })
 
   it("asks the first pending permission as the approval, under an id that names the review", () => {
@@ -360,6 +375,7 @@ describe("a conversation view as a transcript", () => {
       }),
       1,
       at,
+      GATEWAY_NOW_MS,
     )
     expect(transcript.approval).toMatchObject({
       // The exact input approved, whatever the provider titles the review.
@@ -370,10 +386,90 @@ describe("a conversation view as a transcript", () => {
       options: [{ id: "a", label: "Allow", choice: "once" }],
       ask: "tool",
     })
+    expect(transcript.approval?.deadline).toBeUndefined()
+    const waiting = transcriptFrom(
+      view("c", {
+        messages: [turn({ status: "running" })],
+        permissions: [
+          {
+            executionId: "e/1",
+            permissionId: "p%2",
+            toolId: "t1",
+            title: "Tool permission",
+            options: [{ id: "a", label: "Allow", effect: "allow" }],
+            toolName: "bash",
+            origin: { kind: "harness" },
+            ask: "tool",
+            argumentsJson: '{"command":"rm -rf build"}',
+            deadline: {
+              waitMs: 30_000,
+              dueAtMs: 1_700_000_030_000,
+              effect: "deny",
+              reason:
+                "No human answered in time. Continue without this tool or try another approach.",
+              stopsTurn: true,
+            },
+          },
+        ],
+      }),
+      1,
+      at,
+      GATEWAY_NOW_MS,
+    )
+    expect(waiting.approval?.deadline).toEqual({
+      waitMs: 30_000,
+      dueAtMs: 1_700_000_030_000,
+      effect: "deny",
+      reason:
+        "No human answered in time. Continue without this tool or try another approach.",
+      stopsTurn: true,
+    })
     expect(reviewOf(transcript.approval!.id)).toEqual({
       executionId: "e/1",
       permissionId: "p%2",
     })
+  })
+
+  it("puts the deadline on the window's clock, so a clock ahead or behind the gateway's counts down the same", () => {
+    // Due 30 s after the gateway sent the view, on the gateway's clock.
+    const asked = (skewMs: number) => {
+      const receivedAtMs = GATEWAY_NOW_MS + skewMs
+      const transcript = transcriptFrom(
+        view("c", {
+          permissions: [
+            {
+              executionId: "e1",
+              permissionId: "p1",
+              toolId: "t1",
+              title: "Tool permission",
+              options: [{ id: "d", label: "Deny", effect: "deny" }],
+              toolName: "bash",
+              origin: { kind: "harness" },
+              ask: "tool",
+              argumentsJson: "{}",
+              deadline: {
+                waitMs: 30_000,
+                dueAtMs: GATEWAY_NOW_MS + 30_000,
+                effect: "deny",
+                reason: "No human answered in time.",
+                stopsTurn: false,
+              },
+            },
+          ],
+        }),
+        1,
+        at,
+        receivedAtMs,
+      )
+      return { deadline: transcript.approval!.deadline!, receivedAtMs }
+    }
+    for (const skewMs of [0, 60_000, -60_000]) {
+      const { deadline, receivedAtMs } = asked(skewMs)
+      expect(deadline.dueAtMs - receivedAtMs, `skew ${skewMs}`).toBe(30_000)
+      expect(deadlinePendingLine(deadline, receivedAtMs)).toBe(
+        "If nobody answers within 30 seconds, this is denied automatically.",
+      )
+    }
   })
 })
 
@@ -401,6 +497,7 @@ describe("who asks for an approval (#436)", () => {
       }),
       1,
       at,
+      GATEWAY_NOW_MS,
     ).approval
 
   it("carries each offered answer in the view's order and words, and none it did not offer (#444)", () => {
@@ -430,6 +527,7 @@ describe("who asks for an approval (#436)", () => {
       }),
       1,
       at,
+      GATEWAY_NOW_MS,
     ).approval
     expect(both?.options).toEqual([
       { id: "opt-b", label: "Nope", choice: "deny" },
@@ -515,11 +613,11 @@ describe("provider authentication recovery", () => {
   it("uses only the latest turn's typed refusal, never its diagnostic text", () => {
     const source = view("auth")
     source.messages = [turn({ status: "failed", authenticationRequired: true })]
-    expect(recovery(transcriptFrom(source, 1, at))).toBe(true)
+    expect(recovery(transcriptFrom(source, 1, at, GATEWAY_NOW_MS))).toBe(true)
     source.messages.push(turn({ executionId: "later" }))
-    expect(recovery(transcriptFrom(source, 2, at))).toBe(false)
+    expect(recovery(transcriptFrom(source, 2, at, GATEWAY_NOW_MS))).toBe(false)
     source.messages = [turn({ status: "failed", error: "OAuth session expired" })]
-    expect(recovery(transcriptFrom(source, 3, at))).toBe(false)
+    expect(recovery(transcriptFrom(source, 3, at, GATEWAY_NOW_MS))).toBe(false)
   })
 })
 
@@ -540,7 +638,7 @@ it("shows auth recovery without duplicating its diagnostic and preserves unrelat
       }),
     ],
   })
-  const transcript = transcriptFrom(source, 1, at)
+  const transcript = transcriptFrom(source, 1, at, GATEWAY_NOW_MS)
   expect(recovery(transcript)).toBe(true)
   expect(transcript.messages.flatMap((message) => message.parts)).toEqual([
     { kind: "text", text: "Chart the sales" },
@@ -558,20 +656,20 @@ it("recovery follows the latest mapped input across pending and dispatched turns
     mode: "queued" as const,
   }
   const source = view("auth", { messages: [refusal] })
-  expect(recovery(transcriptFrom(source, 1, at))).toBe(true)
+  expect(recovery(transcriptFrom(source, 1, at, GATEWAY_NOW_MS))).toBe(true)
   source.pending = [{ ...pending, executionId: refusal.executionId }]
-  expect(recovery(transcriptFrom(source, 2, at))).toBe(true)
+  expect(recovery(transcriptFrom(source, 2, at, GATEWAY_NOW_MS))).toBe(true)
   source.pending.push(pending)
-  expect(recovery(transcriptFrom(source, 3, at))).toBe(false)
+  expect(recovery(transcriptFrom(source, 3, at, GATEWAY_NOW_MS))).toBe(false)
   source.messages.push(turn({ executionId: pending.executionId, status: "running" }))
-  expect(recovery(transcriptFrom(source, 4, at))).toBe(false)
+  expect(recovery(transcriptFrom(source, 4, at, GATEWAY_NOW_MS))).toBe(false)
   source.pending = []
   source.messages[1] = turn({
     executionId: pending.executionId,
     status: "completed",
     parts: [textPart("Ready", 0)],
   })
-  expect(recovery(transcriptFrom(source, 5, at))).toBe(false)
+  expect(recovery(transcriptFrom(source, 5, at, GATEWAY_NOW_MS))).toBe(false)
 })
 
 it("retains an unknown Codex runtime agent independently of catalogue fallback", () => {
@@ -579,7 +677,7 @@ it("retains an unknown Codex runtime agent independently of catalogue fallback",
   source.runtime = { ...source.runtime!, agent: "codex", model: "unknown-codex-model" }
   source.messages = [turn({ status: "failed", authenticationRequired: true })]
   expect(runningModel(source)).toBeUndefined()
-  expect(transcriptFrom(source, 1, at).agent).toBe("codex")
+  expect(transcriptFrom(source, 1, at, GATEWAY_NOW_MS).agent).toBe("codex")
 })
 
 function recovery(transcript: ReturnType<typeof transcriptFrom>) {
@@ -592,7 +690,7 @@ function recovery(transcript: ReturnType<typeof transcriptFrom>) {
 
 describe("a conversation view's lease", () => {
   it("is carried as where the agent runs, and is absent until one is recorded", () => {
-    expect(transcriptFrom(view("c", {}), 1, at).lease).toBeUndefined()
+    expect(transcriptFrom(view("c", {}), 1, at, GATEWAY_NOW_MS).lease).toBeUndefined()
     const transcript = transcriptFrom(
       view("c", {
         lease: {
@@ -607,6 +705,7 @@ describe("a conversation view's lease", () => {
       }),
       1,
       at,
+      GATEWAY_NOW_MS,
     )
     expect(transcript.lease).toEqual({
       state: "ended",

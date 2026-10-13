@@ -455,7 +455,127 @@ while True:
             for review_id in (cancelled_permission_id, cancelled_permission_id, "unknown"):
                 send({"method": "$/cancel_request", "params": {"requestId": review_id}})
             text("provider cancellation processed")
-        elif mode in ("permission", "permission-write-failure", "permission-stop", "permission-failure", "permission-finished", "permission-provider-error", "permission-byte-flood", "unknown-tool"):
+        elif mode == "permission-deadline-allow-only":
+            update({"sessionUpdate": "tool_call", **tool()})
+            send({"id": permission_id, "method": "session/request_permission", "params": {
+                "sessionId": session, "toolCall": {key: value for key, value in tool().items() if key != "title"}, "options": [
+                    {"optionId": "approve-one", "kind": "allow_once", "name": "Allow once"}]}})
+        elif mode in (
+            "permission-deadline",
+            "permission-read-deadline",
+            "permission-read-sparse",
+            "permission-read-outside",
+            "permission-read-symlink",
+            "permission-read-no-path",
+            "permission-deadline-provider-cancel",
+            "permission-deadline-close-hold",
+        ):
+            call = tool("Read" if mode.startswith("permission-read") else "Write")
+            if mode in ("permission-read-deadline", "permission-read-sparse"):
+                (root / "fixture.txt").write_text("fixture")
+                call["kind"] = "read"
+                call["title"] = "Read fixture.txt"
+                call["locations"] = [{"path": str(root / "fixture.txt")}]
+            elif mode == "permission-read-outside":
+                outside = (root / ".." / "home-ssh").resolve()
+                outside.write_text("key")
+                call["kind"] = "read"
+                call["title"] = "Read ssh"
+                call["locations"] = [{"path": str(outside)}]
+            elif mode == "permission-read-symlink":
+                outside = (root / ".." / "linked-secret").resolve()
+                outside.write_text("secret")
+                link = root / "looks-inside"
+                link.symlink_to(outside)
+                call["kind"] = "read"
+                call["title"] = "Read link"
+                call["locations"] = [{"path": str(link)}]
+            elif mode == "permission-read-no-path":
+                call["kind"] = "read"
+                call["title"] = "Read nothing"
+            update({"sessionUpdate": "tool_call", **call})
+            # `permission-read-sparse` names only the tool on the permission, as
+            # ACP allows: its kind and path came in the tool_call above.
+            asked = {key: value for key, value in call.items() if key != "title"}
+            if mode == "permission-read-sparse":
+                asked = {"toolCallId": call["toolCallId"], "status": "pending"}
+            send({"id": permission_id, "method": "session/request_permission", "params": {
+                "sessionId": session,
+                "toolCall": asked,
+                "options": [
+                    {"optionId": "approve-one", "kind": "allow_once", "name": "Allow once"},
+                    {"optionId": "deny-one", "kind": "reject_once", "name": "Deny once"},
+                    {"optionId": "never-choose", "kind": "allow_always", "name": "Always"}]}})
+            if mode == "permission-deadline-provider-cancel":
+                # The provider ends the prompt on its own. The process stays
+                # up through the shutdown grace; session/cancel holds until
+                # release-close.
+                stdin_lines.wait_for_file("release-provider-cancel", seconds=30)
+                result(pending, {"stopReason": "cancelled"})
+                record("provider-cancel-sent", "yes")
+                pending = None
+        elif mode == "permission-deadline-stop":
+            # A reviewable write stays pending, then a shell review is declined
+            # and stops the turn. The cancelled reply waits so the next prompt
+            # is held, which is the stop this deadline must not outlive.
+            if (root / "cancel-observed").exists():
+                text(user_text)
+                result(pending, {"stopReason": "end_turn"})
+                pending = None
+            else:
+                write = tool("Write")
+                update({"sessionUpdate": "tool_call", **write})
+                send({"id": permission_id, "method": "session/request_permission", "params": {
+                    "sessionId": session,
+                    "toolCall": {key: value for key, value in write.items() if key != "title"},
+                    "options": [
+                        {"optionId": "approve-one", "kind": "allow_once", "name": "Allow once"},
+                        {"optionId": "deny-one", "kind": "reject_once", "name": "Deny once"}]}})
+                bash = tool("Bash")
+                bash["toolCallId"] = "bash-1"
+                update({"sessionUpdate": "tool_call", **bash})
+                send({"id": "bash-review", "method": "session/request_permission", "params": {
+                    "sessionId": session,
+                    "toolCall": {key: value for key, value in bash.items() if key != "title"},
+                    "options": [
+                        {"optionId": "approve-one", "kind": "allow_once", "name": "Allow once"},
+                        {"optionId": "deny-one", "kind": "reject_once", "name": "Deny once"}]}})
+        elif mode in ("permission-deadline-pair", "permission-deadline-same"):
+            calls = []
+            if mode == "permission-deadline-pair":
+                (root / "fixture.txt").write_text("fixture")
+                read = tool("Read")
+                read["kind"] = "read"
+                read["toolCallId"] = "read-1"
+                read["title"] = "Read fixture.txt"
+                read["locations"] = [{"path": str(root / "fixture.txt")}]
+                write = tool("Write")
+                write["toolCallId"] = "write-1"
+                # The write is requested first so its id sorts first. Its
+                # deadline is later, which is what the order test is about.
+                calls = [(write, "write-review"), (read, "read-review")]
+            else:
+                first = tool("Write")
+                second = tool("Write")
+                second["toolCallId"] = "file-2"
+                calls = [(first, "first-review"), (second, "second-review")]
+            for call, _review_id in calls:
+                update({"sessionUpdate": "tool_call", **call})
+            for call, review_id in calls:
+                send({"id": review_id, "method": "session/request_permission", "params": {
+                    "sessionId": session,
+                    "toolCall": {key: value for key, value in call.items() if key != "title"},
+                    "options": [
+                        {"optionId": "approve-one", "kind": "allow_once", "name": "Allow once"},
+                        {"optionId": "deny-one", "kind": "reject_once", "name": "Deny once"}]}})
+        elif mode == "permission-finished" and len(history) > 1:
+            # The next turn stays open and asks for nothing. A deadline the
+            # previous turn left armed can still come due while this one runs.
+            text("turn-2-open")
+            stdin_lines.wait_for_file("release-turn-2", seconds=30)
+            result(pending, {"stopReason": "end_turn"})
+            pending = None
+        elif mode in ("permission", "permission-unfinished-frame", "permission-write-failure", "permission-stop", "permission-failure", "permission-finished", "permission-provider-error", "permission-byte-flood", "unknown-tool"):
             update({"sessionUpdate": "tool_call", **tool("Bash" if mode == "unknown-tool" else "Write")})
             if mode == "permission-write-failure":
                 os.close(sys.stdin.fileno())
@@ -464,6 +584,12 @@ while True:
                     {"optionId": "approve-one", "kind": "allow_once", "name": "Allow once"},
                     {"optionId": "deny-one", "kind": "reject_once", "name": "Deny once"},
                     {"optionId": "never-choose", "kind": "allow_always", "name": "Always"}]}})
+            if mode == "permission-unfinished-frame":
+                # No newline. The next command that drains provider output
+                # cannot return until the review is answered and this frame
+                # is finished. `an_unrelated_command_already_queued_does_not_hold_a_due_deadline`.
+                sys.stdout.write('{"jsonrpc":"2.0","method":"session/update","params":')
+                sys.stdout.flush()
             if mode == "permission-write-failure":
                 signal.pause()
             if mode == "permission-byte-flood":
@@ -735,13 +861,27 @@ while True:
             pending = None
     elif method == "session/cancel":
         (root / "cancel-observed").write_text("yes")
+        if mode == "permission-deadline-provider-cancel":
+            # The cancelled prompt already ended the turn. Stay alive through
+            # the shutdown grace so a deadline still armed can be told from
+            # one that was disarmed.
+            stdin_lines.wait_for_file("release-close", seconds=30)
+        if mode == "permission-deadline-close-hold" and pending is not None:
+            # Stay alive through the grace. The deadline's remaining wait is
+            # shorter than that grace, and answering now would hide whether
+            # the deadline fired during it.
+            stdin_lines.wait_for_file("release-close", seconds=30)
         if mode == "ask-after-cancel":
             # Asked while the session is ending: nobody could answer it.
             send({"id": "late", "method": "elicitation/create", "params": {
                 "sessionId": session, "mode": "form", "message": "One more thing?",
                 "requestedSchema": {"type": "object", "properties": {
                     "question_0": {"type": "string", "oneOf": [{"const": "yes"}]}}}}})
-        if mode in (
+        if mode == "permission-deadline-stop" and pending is not None:
+            wait_for_release("release-stopped-result")
+            result(pending, {"stopReason": "cancelled"})
+            pending = None
+        elif mode in (
             "refusal-end-turn",
             "refusal-close-session",
             "refusal-stale-next",
@@ -843,7 +983,54 @@ while True:
         text("declined and carried on")
         result(pending, {"stopReason": "end_turn"})
         pending = None
+    elif mode == "permission-deadline-allow-only" and msg.get("id") == permission_id:
+        record("permission-outcome", json.dumps(msg["result"]))
+        text(msg["result"]["outcome"]["outcome"])
+        result(pending, {"stopReason": "end_turn"})
+        pending = None
+    elif mode == "permission-deadline-stop" and msg.get("id") in (permission_id, "bash-review"):
+        # The stop cancels these reviews. The prompt stays open until session/cancel.
+        record(str(msg["id"]) + "-outcome", json.dumps(msg["result"]))
+    elif mode in ("permission-deadline-pair", "permission-deadline-same") and msg.get("id") in (
+        "read-review", "write-review", "first-review", "second-review",
+    ):
+        record(str(msg["id"]) + "-outcome", json.dumps(msg["result"]))
+        needed = ("read-review", "write-review") if mode == "permission-deadline-pair" else ("first-review", "second-review")
+        if all((root / (name + "-outcome")).exists() for name in needed) and pending is not None:
+            text("both settled")
+            result(pending, {"stopReason": "end_turn"})
+            pending = None
+    elif mode in (
+        "permission-deadline",
+        "permission-read-deadline",
+        "permission-read-sparse",
+        "permission-read-outside",
+        "permission-read-symlink",
+        "permission-read-no-path",
+        "permission-deadline-close-hold",
+    ) and msg.get("id") == permission_id:
+        if mode == "permission-deadline-close-hold":
+            # Close cancels the review on the wire. The prompt stays open
+            # until session/cancel, which is what the grace is waiting on.
+            record("permission-outcome", json.dumps(msg["result"]))
+        else:
+            # Echo the deadline's own reason. A selected option with no reason is
+            # not that answer, and the turn still ends so the wait can be told
+            # from a stall.
+            record("permission-outcome", json.dumps(msg["result"]))
+            meta = msg["result"].get("_meta") or {}
+            text(meta.get("deadlineReason") or "no deadline reason")
+            result(pending, {"stopReason": "end_turn"})
+            pending = None
     elif msg.get("id") == permission_id:
+        if mode == "permission-unfinished-frame":
+            # Close the frame opened when the review was asked, then end the
+            # turn the same way any other answered review does.
+            sys.stdout.write(json.dumps({
+                "sessionId": session,
+                "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "held"}},
+            }) + "}\n")
+            sys.stdout.flush()
         choice = msg["result"]["outcome"]
         if provider_cancel_mode:
             assert (root / "provider-cancel-response").exists()

@@ -113,6 +113,8 @@ async fn blocked_worker(
         permission_authority: PermissionAuthoritySource::default(),
         operation_capabilities,
         permissions: HashMap::new(),
+        armed_permissions: HashMap::new(),
+        path_classification: std::sync::Arc::new(tokio::sync::Semaphore::new(1)),
         startup_advisory_session: None,
         questions: HashMap::new(),
         declined: None,
@@ -126,6 +128,7 @@ async fn blocked_worker(
         closing: false,
         turn_cancel_requested: None,
         deferred_outcome: None,
+        carried: std::collections::VecDeque::new(),
         provider_result: None,
         settlement_facts: SettlementFacts::new(),
         correlation_sequence: 0,
@@ -853,4 +856,224 @@ async fn a_held_prompt_waits_until_the_active_turn_is_gone() {
         .unwrap_or_else(|failure| panic!("{:?}", failure.error()));
     assert_eq!(worker.held_prompts.len(), 1);
     assert!(reply_rx.try_recv().is_err());
+}
+
+fn armed_review(clock: &ManualClock) -> ArmedPermission {
+    use crate::domain::agent_execution::permissions::{
+        DeadlineDenyPreference, PermissionDeadlinePolicy, PermissionOption, PermissionOptions,
+        PermissionToolClass,
+    };
+    let option = PermissionOption::new(
+        PermissionOptionId::new("deny-one").unwrap(),
+        "Deny once",
+        PermissionDecision::new(PermissionEffect::Deny, PermissionScope::request()),
+    )
+    .unwrap();
+    let options =
+        PermissionOptions::new(vec![option], &PermissionOfferPolicy::once_only()).unwrap();
+    let settlement = PermissionDeadlinePolicy::standard().settlement(
+        PermissionToolClass::Other,
+        &options,
+        &DeadlineDenyPreference::continuing(),
+    );
+    ArmedPermission {
+        at: clock.now() + Duration::from_secs(30),
+        settlement,
+    }
+}
+
+async fn no_published_event(events: &mut EventReceiver) {
+    let late = tokio::time::timeout(Duration::from_millis(50), events.recv()).await;
+    assert!(
+        late.is_err(),
+        "a disarmed deadline published an event: {late:?}"
+    );
+}
+
+#[tokio::test]
+async fn armed_permissions_are_empty_after_the_turn_ends_and_after_provider_cancel() {
+    let (mut worker, mut execution, mut events, _recovery, clock) = blocked_worker("", false).await;
+    let id = PermissionId::new("review").unwrap();
+    worker
+        .armed_permissions
+        .insert(id.clone(), armed_review(&clock));
+    promptly(worker.finish_turn_wire())
+        .await
+        .unwrap_or_else(|failure| panic!("{:?}", failure.error()));
+    assert!(
+        worker.armed_permissions.is_empty(),
+        "finish_turn_wire left a deadline armed"
+    );
+    clock.advance(Duration::from_secs(30));
+    promptly(worker.settle_due_permissions(&mut execution, clock.now()))
+        .await
+        .unwrap_or_else(|failure| panic!("{:?}", failure.error()));
+    no_published_event(&mut events).await;
+    worker
+        .scope
+        .cleanup(Duration::ZERO, Duration::from_secs(2))
+        .await
+        .unwrap();
+
+    let (mut worker, mut execution, mut events, _recovery, clock) = blocked_worker("", false).await;
+    worker.armed_permissions.insert(id, armed_review(&clock));
+    let message =
+        serde_json::from_value(json!({"jsonrpc":"2.0","id":1,"result":{"stopReason":"cancelled"}}))
+            .unwrap();
+    promptly(worker.message(&mut execution, message, None))
+        .await
+        .unwrap_or_else(|failure| panic!("{:?}", failure.error()));
+    assert_eq!(
+        worker.deferred_outcome,
+        Some(ExecutionOutcome::Cancelled),
+        "a provider-cancelled turn did not tear the session down"
+    );
+    // Disarm is `cancel_wire_requests` during teardown, not this branch.
+    // The map is still armed until that runs; settling it here would be the
+    // deadline answering a turn the provider already stopped.
+    promptly(worker.cancel_wire_requests())
+        .await
+        .unwrap_or_else(|error| panic!("{error:?}"));
+    assert!(
+        worker.armed_permissions.is_empty(),
+        "teardown left a provider-cancelled deadline armed"
+    );
+    clock.advance(Duration::from_secs(30));
+    promptly(worker.settle_due_permissions(&mut execution, clock.now()))
+        .await
+        .unwrap_or_else(|failure| panic!("{:?}", failure.error()));
+    no_published_event(&mut events).await;
+    worker
+        .scope
+        .cleanup(Duration::ZERO, Duration::from_secs(2))
+        .await
+        .unwrap();
+}
+
+/// A deadline's choice the provider never received is not a decision.
+///
+/// The notice says the review was allowed or denied automatically, and it is
+/// saved. Publishing it before the write could fail would leave that in the
+/// history while the provider was still waiting.
+#[tokio::test]
+async fn a_deadline_answer_that_cannot_be_written_publishes_no_notice() {
+    let (mut worker, mut execution, mut events, _recovery, clock) = blocked_worker("", false).await;
+    worker
+        .permission(&mut execution, RpcId::Number(77), permission_params(), None)
+        .await
+        .map_err(WorkerFailure::into_error)
+        .unwrap();
+    assert_eq!(worker.armed_permissions.len(), 1, "the review is armed");
+    // The provider is gone: the deadline's answer cannot be written.
+    worker.scope.stdin = None;
+    clock.advance(Duration::from_secs(30));
+    let settled = promptly(worker.settle_due_permissions(&mut execution, clock.now()))
+        .await
+        .map_err(WorkerFailure::into_error);
+    assert_eq!(settled, Err(AgentError::Closed));
+    while let Ok(Some(event)) = timeout(Duration::from_millis(50), events.recv()).await {
+        assert!(
+            !matches!(event.update(), ExecutionUpdate::DeadlineAnswered { .. }),
+            "an unwritten deadline answer was published: {event:?}"
+        );
+    }
+}
+
+/// A clock whose every reading is a second after the last.
+struct SteppingClock(Arc<ManualClock>);
+impl Clock for SteppingClock {
+    fn now(&self) -> ClockInstant {
+        let now = self.0.now();
+        self.0.advance(Duration::from_secs(1));
+        now
+    }
+    fn unix_ms_at(&self, at: ClockInstant) -> u64 {
+        self.0.unix_ms_at(at)
+    }
+    fn sleep_until(&self, deadline: ClockInstant) -> ClockSleep {
+        self.0.sleep_until(deadline)
+    }
+}
+
+/// The card's `dueAtMs` and the moment the worker answers are one deadline.
+///
+/// Read separately, a pause between the two readings dated the card earlier
+/// than the deadline was armed, so the card said the time was up while the
+/// worker kept waiting for the rest.
+#[tokio::test]
+async fn a_cards_due_time_is_the_moment_the_deadline_answers() {
+    let (mut worker, mut execution, mut events, _recovery, clock) = blocked_worker("", false).await;
+    worker.config.clock = Arc::new(SteppingClock(clock.clone()));
+    worker
+        .permission(&mut execution, RpcId::Number(77), permission_params(), None)
+        .await
+        .map_err(WorkerFailure::into_error)
+        .unwrap();
+    let due_at_ms = loop {
+        let event = timeout(Duration::from_secs(1), events.recv())
+            .await
+            .expect("the review is published")
+            .unwrap();
+        if let ExecutionUpdate::PermissionRequested { deadline, .. } = event.update() {
+            break deadline
+                .as_ref()
+                .and_then(|deadline| deadline.due_at_ms())
+                .expect("a promised deadline");
+        }
+    };
+    let armed = worker
+        .armed_permissions
+        .values()
+        .next()
+        .expect("the review is armed");
+    assert_eq!(
+        clock.unix_ms_at(armed.at),
+        due_at_ms,
+        "the card and the worker disagree on when the deadline answers"
+    );
+    worker
+        .scope
+        .cleanup(Duration::ZERO, Duration::from_secs(2))
+        .await
+        .unwrap();
+}
+
+/// A deadline that cancels a review publishes that cancellation before the
+/// provider is told.
+///
+/// When the cancellation could not be published, it was still written to the
+/// provider, and a later notice saved without it said the deadline answered a
+/// review that nothing in the history settled.
+#[tokio::test]
+async fn an_unpublished_deadline_cancellation_is_not_written_to_the_provider() {
+    let (mut worker, mut execution, events, _recovery, clock) = blocked_worker("", false).await;
+    let allow_only = json!({"sessionId":"context", "toolCall":{"toolCallId":"tool", "title":"Edit", "kind":"edit", "status":"pending", "rawInput":{"target":"/tmp/file"}}, "options":[{"optionId":"allow", "name":"Allow", "kind":"allow_once"}]});
+    worker
+        .permission(&mut execution, RpcId::Number(77), allow_only, None)
+        .await
+        .map_err(WorkerFailure::into_error)
+        .unwrap();
+    let id = worker
+        .armed_permissions
+        .keys()
+        .next()
+        .cloned()
+        .expect("the review is armed");
+    // Nothing can be published any more.
+    drop(events);
+    worker.scope.stdin = None;
+    clock.advance(Duration::from_secs(30));
+    let settled = promptly(worker.settle_due_permissions(&mut execution, clock.now()))
+        .await
+        .map_err(WorkerFailure::into_error);
+    assert!(settled.is_err(), "an unpublished cancellation was settled");
+    assert_ne!(
+        settled,
+        Err(AgentError::Closed),
+        "the cancellation was written to the provider before it was published"
+    );
+    assert!(
+        worker.permissions.contains_key(&id),
+        "the provider's request was let go before its cancellation was published"
+    );
 }

@@ -47,6 +47,7 @@ fn stale_callbacks_preserve_current_tools_reviews_and_execution_evidence() {
                 update(Some("first tool")),
                 review_input(),
                 options.clone(),
+                None,
             )
             .unwrap();
         controller
@@ -64,6 +65,7 @@ fn stale_callbacks_preserve_current_tools_reviews_and_execution_evidence() {
                 update(Some("second tool")),
                 original_input.clone(),
                 options.clone(),
+                None,
             )
             .unwrap();
         let rejected = match callback {
@@ -77,6 +79,7 @@ fn stale_callbacks_preserve_current_tools_reviews_and_execution_evidence() {
                     update(Some("stale request")),
                     review_input(),
                     options.clone(),
+                    None,
                 )
                 .map(|_| ()),
             Callback::CancelReview => controller
@@ -138,6 +141,7 @@ fn stale_callbacks_preserve_current_tools_reviews_and_execution_evidence() {
                 update(None),
                 review_input(),
                 options,
+                None,
             )
             .unwrap();
         let ExecutionUpdate::PermissionRequested { observation, .. } = event.update() else {

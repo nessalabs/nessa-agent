@@ -12,9 +12,11 @@ fn assert_capabilities(actual: OperationCapabilities, native_steering: bool, ses
         actual.permission_denial(),
         PermissionDenialCapability::SupportedForOfferedPermissionReviews
     );
+    // Negotiated Claude cannot defer. That is the provider's gap, not a
+    // capability Nessa has not built yet.
     assert_eq!(
         actual.permission_deferral(),
-        PermissionDeferralCapability::UnsupportedNotImplemented
+        PermissionDeferralCapability::Unsupported
     );
 }
 

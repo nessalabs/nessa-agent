@@ -154,6 +154,7 @@ it("carries a refused creation's reason through the control that asked for it", 
       conversation: gatewayEffects(
         () => client,
         () => Promise.reject(new Error("no wait expected")),
+        () => 0,
       ),
     }),
   )
@@ -207,6 +208,7 @@ it.each([
         conversation: gatewayEffects(
           () => client,
           () => Promise.reject(new Error("no wait expected")),
+          () => 0,
         ),
       }),
     )

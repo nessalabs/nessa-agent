@@ -52,6 +52,7 @@ const functional = [
   "subagents",
   "mcp-apps",
   "app-review",
+  "approval-deadline",
   "message-sync",
   "command-order",
   "published-files",

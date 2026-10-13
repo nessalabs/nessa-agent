@@ -157,6 +157,7 @@ fn review_snapshots_charge_accumulated_observations_and_cancellation_evidence() 
                 arguments_json: "{}".into(),
             },
             options,
+            None,
         )
         .unwrap();
     // A tiny sparse request can capture a much larger accumulated observation.

@@ -29,6 +29,7 @@ import { sessionReady } from "../../session/adapters/store/slice"
 import { setSelection } from "../../conversation/adapters/store/slice"
 import { createAttachmentResources } from "../adapters/attachment-resources"
 import { App } from "./app"
+import { ClockProvider } from "../../conversation"
 import type { ConversationChoices } from "../adapters/agent-choices"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -111,21 +112,24 @@ function panel(choices?: ConversationChoices) {
     null,
     React.createElement(Provider, {
       store,
-      children: React.createElement(App, {
-        attachmentResources,
-        canChoosePaths: false,
-        digest: async () => "digest",
-        followConversationChoices: (show) => {
-          show({
-            catalog: choices?.catalog ?? {
-              agents: [],
-              environments: [],
-              nativeHooks: { claude: "off", codex: "off" },
-            },
-            chosenAgent: choices?.chosenAgent,
-          })
-          return () => undefined
-        },
+      children: React.createElement(ClockProvider, {
+        now: () => 1_000,
+        children: React.createElement(App, {
+          attachmentResources,
+          canChoosePaths: false,
+          digest: async () => "digest",
+          followConversationChoices: (show) => {
+            show({
+              catalog: choices?.catalog ?? {
+                agents: [],
+                environments: [],
+                nativeHooks: { claude: "off", codex: "off" },
+              },
+              chosenAgent: choices?.chosenAgent,
+            })
+            return () => undefined
+          },
+        }),
       }),
     }),
   )

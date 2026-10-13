@@ -13,6 +13,7 @@ import {
   followConversation,
 } from "../../../../src/conversation/testing"
 import { App } from "../../../../src/panel/ui/app"
+import { ClockProvider } from "../../../../src/conversation/ui/clock"
 import { createAttachmentResources } from "../../../../src/panel/adapters/attachment-resources"
 import { ConversationReadFailedError } from "../../../../src/conversation/testing"
 import { sendDraft } from "../../../../src/conversation/adapters/store/slice"
@@ -34,6 +35,7 @@ const attachments = createAttachmentResources()
 const effects = gatewayEffects(
   () => client,
   (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  () => Date.now(),
 )
 let viewUnavailable = false
 let dispatched = 0
@@ -184,7 +186,10 @@ function Panel() {
 }
 createRoot(document.getElementById("root")!).render(
   <Provider store={store}>
-    <Panel />
+    {/* A fixture is its own composition root, so it chooses the clock. */}
+    <ClockProvider now={() => Date.now()}>
+      <Panel />
+    </ClockProvider>
   </Provider>,
 )
 declare global {

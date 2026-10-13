@@ -9,6 +9,7 @@ import {
 import { emptyLocalTabs } from "../../../../src/conversation/application/local-tabs"
 import { conversation, textContent } from "../../../../src/conversation/model"
 import { applyView } from "../../../../src/conversation/application/usecases/apply-view"
+import { ClockProvider } from "../../../../src/conversation/ui/clock"
 import { Transcript } from "../../../../src/conversation/ui/transcript"
 import { view } from "../../../../src/desktop/workspace/adapters/gateway/fake-gateway"
 import "@fontsource-variable/geist"
@@ -191,6 +192,9 @@ const container = document.getElementById("root")
 if (!container) throw new Error("missing root")
 createRoot(container).render(
   <Provider store={store as never}>
-    <PanelTranscript />
+    {/* A fixture is its own composition root, so it chooses the clock. */}
+    <ClockProvider now={() => Date.now()}>
+      <PanelTranscript />
+    </ClockProvider>
   </Provider>,
 )

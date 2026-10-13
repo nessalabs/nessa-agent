@@ -498,10 +498,13 @@ impl ExecutionSession {
             .insert(request.id().clone(), request);
         Ok(())
     }
-    /// Decision of a still-pending offered option.
+    /// Decision of a still-pending offered option, checked as
+    /// [`Self::answer_permission`] checks it.
     ///
     /// Rejects a closed session, a mismatched execution, an unknown review, or
-    /// an option that was not offered. Does not answer or cancel the review.
+    /// an option that was not offered. Does not answer or cancel the review, so
+    /// a caller that must validate what it records with the answer does so
+    /// here first and a refused answer consumes nothing.
     pub fn pending_option_decision(
         &self,
         execution: &ExecutionId,
@@ -520,12 +523,11 @@ impl ExecutionSession {
             .pending_permissions
             .lock()
             .expect("pending permissions");
-        let request = pending.get(id).ok_or(ExecutionError::UnknownPermission)?;
-        request
-            .options()
-            .find(option)
-            .map(|choice| choice.decision().clone())
-            .ok_or(ExecutionError::UnknownPermissionOption)
+        pending
+            .get(id)
+            .ok_or(ExecutionError::UnknownPermission)?
+            .offered(execution, option)
+            .cloned()
     }
 
     /// Resolve the exact execution, review ID, and offered option. Rejects closed or mismatched contexts and stale/unknown choices; returns the answered entity as evidence and retains its ID against replay.

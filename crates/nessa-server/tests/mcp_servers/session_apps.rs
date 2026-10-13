@@ -35,6 +35,9 @@ impl Clock for WaitRecorder {
     fn now(&self) -> ClockInstant {
         self.clock.now()
     }
+    fn unix_ms_at(&self, at: ClockInstant) -> u64 {
+        self.clock.unix_ms_at(at)
+    }
     fn sleep_until(&self, deadline: ClockInstant) -> ClockSleep {
         let wait = deadline.saturating_duration_since(self.clock.now());
         self.waits.lock().unwrap().push(wait);

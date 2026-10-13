@@ -53,6 +53,12 @@ pub struct ExecutionController {
     authority: PermissionAuthoritySource,
     session: ExecutionSession,
     review_inputs: HashMap<PermissionId, (ToolReviewInput, usize)>,
+    /// The deadline each pending review published, by review.
+    published_deadlines: HashMap<PermissionId, PermissionReviewDeadline>,
+    /// Reviews their own deadline settled, with the deadline they published,
+    /// waiting for the one notice that says so. Taking an entry is what makes
+    /// the notice once-only.
+    deadline_settled: HashMap<PermissionId, PermissionReviewDeadline>,
     admitted_question_ids: HashSet<QuestionId>,
     retained_tool_bytes: usize,
     retained_review_bytes: usize,
@@ -76,6 +82,8 @@ impl ExecutionController {
             authority,
             session: ExecutionSession::new(id),
             review_inputs: HashMap::new(),
+            published_deadlines: HashMap::new(),
+            deadline_settled: HashMap::new(),
             admitted_question_ids: HashSet::new(),
             retained_tool_bytes: 0,
             retained_review_bytes: 0,
@@ -222,6 +230,7 @@ impl ExecutionController {
         tool: ToolCallUpdate,
         input: ToolReviewInput,
         options: PermissionOptions,
+        deadline: Option<crate::domain::agent_execution::permissions::PermissionReviewDeadline>,
     ) -> Result<ExecutionEvent, AgentError> {
         let (charged_bytes, review_bytes) =
             self.validate_review_retention(execution, &id, tool.id(), &input, &options)?;
@@ -248,6 +257,10 @@ impl ExecutionController {
         self.review_inputs
             .insert(id.clone(), (input.clone(), charged_bytes));
         self.retained_review_bytes = review_bytes;
+        if let Some(deadline) = &deadline {
+            self.published_deadlines
+                .insert(id.clone(), deadline.clone());
+        }
         self.event(
             execution,
             ExecutionUpdate::PermissionRequested {
@@ -256,9 +269,66 @@ impl ExecutionController {
                 observation,
                 input,
                 options,
+                deadline,
             },
         )
     }
+
+    /// What the session will know about `update`'s tool once it is applied:
+    /// the observation already held for that tool, or none, with the update's
+    /// fields over it. A permission frame may carry only the tool's id, the
+    /// kind and paths having come in an earlier update, so a review is judged
+    /// on this and not on the frame alone. Reads only; nothing is admitted.
+    pub(crate) fn observation_after(&self, update: &ToolCallUpdate) -> ToolObservation {
+        self.session
+            .tool(update.id())
+            .map(|tool| tool.observation().clone())
+            .unwrap_or_default()
+            .with_update(update.clone())
+    }
+
+    /// The lasting observation that `id`'s own deadline settled it.
+    ///
+    /// Does not answer the review. The caller first settles it here, with an
+    /// answer attributed to the deadline or a cancellation for
+    /// `deadline_exceeded`, and then emits this so a surface that was not
+    /// watching the audit still sees who decided. The effect and reason are
+    /// the ones the review published, not the caller's. A review that was not
+    /// settled by its deadline, or whose notice was already made, returns
+    /// [`AgentError::StalePermission`]; a stale execution returns the same
+    /// error as any other event. Only the ACP worker emits it: a permission id
+    /// from that worker shares the decimal sequence with a review decline, so
+    /// it is a valid notice id.
+    pub(crate) fn deadline_answered(
+        &mut self,
+        execution: &ExecutionId,
+        id: &PermissionId,
+    ) -> Result<ExecutionEvent, AgentError> {
+        self.check_execution(execution)?;
+        let deadline = self
+            .deadline_settled
+            .remove(id)
+            .ok_or(AgentError::StalePermission)?;
+        self.event(
+            execution,
+            ExecutionUpdate::DeadlineAnswered {
+                id: id.clone(),
+                effect: deadline.effect(),
+                reason: deadline.recorded_reason(),
+            },
+        )
+    }
+
+    /// Keep `id`'s published deadline as settlement evidence when `by_deadline`,
+    /// and let it go otherwise. A review answered by anyone else has no notice.
+    fn settle_published_deadline(&mut self, id: &PermissionId, by_deadline: bool) {
+        if let Some(deadline) = self.published_deadlines.remove(id) {
+            if by_deadline {
+                self.deadline_settled.insert(id.clone(), deadline);
+            }
+        }
+    }
+
     pub(crate) fn validate_review_retention(
         &self,
         execution: &ExecutionId,
@@ -408,10 +478,19 @@ impl ExecutionController {
     /// end-turn or close-session, so no answer carries those outcomes. The resolution
     /// retains this controller’s session, original input and attribution; the adapter must audit selection
     /// before attempting delivery and audit that delivery independently of waiters.
+    ///
+    /// This is the caller's answer, so it cannot claim the deadline decided:
+    /// that is InvalidInput, and the review stays pending. Only the worker that
+    /// armed the deadline settles it, through `settle_deadline`.
     pub fn answer_permission(
         &mut self,
         answer: PermissionAnswer,
     ) -> Result<PermissionResolution, AgentError> {
+        if matches!(answer.attribution.basis(), ApprovalBasis::Deadline(_)) {
+            return Err(AgentError::InvalidInput(
+                "only the review's own deadline can answer it as a deadline".into(),
+            ));
+        }
         if let ApprovalBasis::Hook(refusal) = answer.attribution.basis() {
             if answer.attribution != ApprovalAttribution::hook(&answer.id, refusal.clone())? {
                 return Err(AgentError::InvalidInput(
@@ -436,6 +515,61 @@ impl ExecutionController {
                 ));
             }
         }
+        self.resolve(answer, false)
+    }
+    /// The deadline the worker armed for review `id` selects `option`.
+    ///
+    /// `deadline` must be the one this review published, and its outcome the
+    /// option's; anything else is InvalidInput and consumes nothing, so the
+    /// review stays pending. Returns StalePermission when no pending review
+    /// matches.
+    pub(crate) fn settle_deadline(
+        &mut self,
+        execution: &ExecutionId,
+        id: &PermissionId,
+        option: &PermissionOptionId,
+        deadline: PermissionReviewDeadline,
+    ) -> Result<PermissionResolution, AgentError> {
+        let decision = self
+            .session
+            .pending_option_decision(execution, id, option)
+            .map_err(|_| AgentError::StalePermission)?;
+        let published = self
+            .published_deadlines
+            .get(id)
+            .is_some_and(|published| published.decides_as(&deadline));
+        if !published || decision.effect() != deadline.effect() {
+            return Err(AgentError::InvalidInput(
+                "a deadline settlement must be the deadline this review published, \
+                 selecting an option with its outcome"
+                    .into(),
+            ));
+        }
+        let answer = PermissionAnswer {
+            attribution: ApprovalAttribution::deadline(id, deadline)?,
+            execution_id: execution.clone(),
+            id: id.clone(),
+            option_id: option.clone(),
+        };
+        self.resolve(answer, true)
+    }
+    /// [`Self::settle_deadline`] for another crate's tests, which have no
+    /// worker to arm a deadline. Production builds do not have it.
+    #[cfg(feature = "test-support")]
+    pub fn settle_deadline_for_test(
+        &mut self,
+        execution: &ExecutionId,
+        id: &PermissionId,
+        option: &PermissionOptionId,
+        deadline: PermissionReviewDeadline,
+    ) -> Result<PermissionResolution, AgentError> {
+        self.settle_deadline(execution, id, option, deadline)
+    }
+    fn resolve(
+        &mut self,
+        answer: PermissionAnswer,
+        by_deadline: bool,
+    ) -> Result<PermissionResolution, AgentError> {
         let request = self
             .session
             .answer_permission(&answer.execution_id, &answer.id, &answer.option_id)
@@ -445,6 +579,7 @@ impl ExecutionController {
             .remove(&answer.id)
             .expect("controller retains the accepted review input");
         self.retained_review_bytes -= charged_bytes;
+        self.settle_published_deadline(&answer.id, by_deadline);
         PermissionResolution::new(self.id().clone(), request, input, answer.attribution)
     }
     // Only the snapshot retention validator uses this on a disposable controller.
@@ -493,13 +628,68 @@ impl ExecutionController {
         reason: PermissionCancellationReason,
         origin: CancellationOrigin,
     ) -> Result<Option<PermissionCancellation>, AgentError> {
+        not_a_deadline(&origin)?;
+        self.cancel_one(execution, id, reason, origin, false)
+    }
+    /// The deadline the worker armed for review `id` cancels it, because the
+    /// agent offered no refusal to select.
+    ///
+    /// `deadline` must be the one this review published; anything else is
+    /// InvalidInput and changes nothing. Returns None if the review is absent.
+    #[must_use = "record cancellation evidence before discarding it"]
+    pub(crate) fn cancel_deadline(
+        &mut self,
+        execution: &ExecutionId,
+        id: &PermissionId,
+        deadline: PermissionReviewDeadline,
+    ) -> Result<Option<PermissionCancellation>, AgentError> {
+        if !self
+            .published_deadlines
+            .get(id)
+            .is_some_and(|published| published.decides_as(&deadline))
+        {
+            return Err(AgentError::InvalidInput(
+                "a deadline cancellation must be the deadline this review published".into(),
+            ));
+        }
+        self.cancel_one(
+            execution,
+            id,
+            PermissionCancellationReason::deadline_exceeded(),
+            CancellationOrigin::Deadline(deadline),
+            true,
+        )
+    }
+    /// [`Self::cancel_deadline`] for another crate's tests, which have no
+    /// worker to arm a deadline. Production builds do not have it.
+    #[cfg(feature = "test-support")]
+    pub fn cancel_deadline_for_test(
+        &mut self,
+        execution: &ExecutionId,
+        id: &PermissionId,
+        deadline: PermissionReviewDeadline,
+    ) -> Result<Option<PermissionCancellation>, AgentError> {
+        self.cancel_deadline(execution, id, deadline)
+    }
+    fn cancel_one(
+        &mut self,
+        execution: &ExecutionId,
+        id: &PermissionId,
+        reason: PermissionCancellationReason,
+        origin: CancellationOrigin,
+        by_deadline: bool,
+    ) -> Result<Option<PermissionCancellation>, AgentError> {
         origin.validate_reason(&reason)?;
         validate_hook_withdrawal(id, &reason, &origin)?;
         let request = self
             .session
             .cancel_permission(execution, id, reason)
             .map_err(domain_error)?;
-        Ok(request.map(|request| self.cancellation(request, origin)))
+        Ok(request.map(|request| {
+            // A cancellation that is this review's own deadline settles it.
+            self.settle_published_deadline(id, by_deadline);
+            self.cancellation(request, origin)
+        }))
     }
     fn cancellation(
         &mut self,
@@ -511,6 +701,7 @@ impl ExecutionController {
             .remove(request.id())
             .expect("accepted review input");
         self.retained_review_bytes -= charged_bytes;
+        self.settle_published_deadline(request.id(), false);
         PermissionCancellation::new(self.id().clone(), request, input, origin)
     }
     /// Cancels pending reviews in `execution` with the lifecycle `reason` and `origin`.
@@ -525,6 +716,7 @@ impl ExecutionController {
         reason: PermissionCancellationReason,
         origin: CancellationOrigin,
     ) -> Result<Vec<PermissionCancellation>, AgentError> {
+        not_a_deadline(&origin)?;
         origin.validate_reason(&reason)?;
         Ok(self
             .session
@@ -571,6 +763,7 @@ impl ExecutionController {
         reason: PermissionCancellationReason,
         origin: CancellationOrigin,
     ) -> Result<Vec<ExecutionAuditRecord>, AgentError> {
+        not_a_deadline(&origin)?;
         origin.validate_reason(&reason)?;
         let result = match execution {
             Some(execution) => self.session.close_execution(execution, reason),
@@ -610,6 +803,8 @@ impl ExecutionController {
         }));
         self.retained_tool_bytes = 0;
         self.admitted_question_ids.clear();
+        // A notice is about the execution that is ending; none can follow it.
+        self.deadline_settled.clear();
         Ok(records)
     }
     fn check_execution(&self, execution: &ExecutionId) -> Result<(), AgentError> {
@@ -689,6 +884,16 @@ fn domain_error(error: ExecutionError) -> AgentError {
     }
 }
 
+/// Only the worker that armed a review's deadline cancels as it, one review at
+/// a time, through [`ExecutionController::cancel_deadline`].
+fn not_a_deadline(origin: &CancellationOrigin) -> Result<(), AgentError> {
+    if matches!(origin, CancellationOrigin::Deadline(_)) {
+        return Err(AgentError::InvalidInput(
+            "only the review's own deadline can cancel it as a deadline".into(),
+        ));
+    }
+    Ok(())
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -916,6 +1121,7 @@ mod tests {
             tool(Some(title.into())),
             input(),
             options("Allow".into()),
+            None,
         )
     }
     fn answer(id: &str) -> PermissionAnswer {
@@ -929,6 +1135,225 @@ mod tests {
             ),
         }
     }
+    #[test]
+    fn a_deadline_notice_is_made_once_and_only_for_a_review_its_deadline_settled() {
+        use crate::domain::agent_execution::permissions::{
+            PermissionToolClass, STANDARD_ALLOW_REASON, STANDARD_DENY_REASON,
+        };
+        use std::time::Duration;
+        let execution = ExecutionId::new("execution").unwrap();
+        let permission = PermissionId::new("permission").unwrap();
+        let deadline = |effect, reason| {
+            PermissionReviewDeadline::new(
+                PermissionToolClass::Other,
+                Duration::from_secs(30),
+                effect,
+                reason,
+            )
+            .unwrap()
+        };
+        let allow = deadline(PermissionEffect::Allow, STANDARD_ALLOW_REASON);
+        let deny = deadline(PermissionEffect::Deny, STANDARD_DENY_REASON);
+        let pending = |published: Option<PermissionReviewDeadline>| {
+            let mut controller = controller();
+            controller
+                .request_permission(
+                    &execution,
+                    permission.clone(),
+                    tool(None),
+                    input(),
+                    options("Allow".into()),
+                    published.map(|deadline| deadline.promise(1_000).unwrap()),
+                )
+                .unwrap();
+            controller
+        };
+        let allow_option = PermissionOptionId::new("allow").unwrap();
+        let settle = |controller: &mut ExecutionController, deadline| {
+            controller.settle_deadline(&execution, &permission, &allow_option, deadline)
+        };
+        let stale = |controller: &mut ExecutionController| {
+            matches!(
+                controller.deadline_answered(&execution, &permission),
+                Err(AgentError::StalePermission)
+            )
+        };
+
+        let mut unsettled = pending(Some(allow.clone()));
+        assert!(stale(&mut unsettled), "a pending review has no notice");
+
+        let mut answered = pending(Some(allow.clone()));
+        settle(&mut answered, allow.clone()).unwrap();
+        let event = answered.deadline_answered(&execution, &permission).unwrap();
+        assert_eq!(
+            event.update(),
+            &ExecutionUpdate::DeadlineAnswered {
+                id: permission.clone(),
+                effect: PermissionEffect::Allow,
+                reason: allow.recorded_reason(),
+            },
+            "the notice repeats the published deadline"
+        );
+        assert!(stale(&mut answered), "the notice is made once");
+
+        let mut explicit = pending(Some(allow.clone()));
+        explicit.answer_permission(answer("permission")).unwrap();
+        assert!(
+            stale(&mut explicit),
+            "a person's answer has no deadline notice"
+        );
+
+        // A caller's answer cannot claim the deadline decided, even the
+        // published one; a settlement that is not the published deadline, or
+        // whose outcome is not the selected option's, is refused too. Neither
+        // consumes anything: the review stays pending and has no notice.
+        let mut claimed = pending(Some(allow.clone()));
+        assert!(matches!(
+            claimed.answer_permission(PermissionAnswer {
+                attribution: ApprovalAttribution::deadline(&permission, allow.clone()).unwrap(),
+                ..answer("permission")
+            }),
+            Err(AgentError::InvalidInput(_))
+        ));
+        assert!(claimed.answer_permission(answer("permission")).is_ok());
+        assert!(stale(&mut claimed), "a refused claim makes no notice");
+        let refused = |published: Option<PermissionReviewDeadline>, claimed| {
+            let mut controller = pending(published);
+            let refused = matches!(
+                settle(&mut controller, claimed),
+                Err(AgentError::InvalidInput(_))
+            );
+            let still_pending = controller.answer_permission(answer("permission")).is_ok();
+            refused && still_pending && stale(&mut controller)
+        };
+        assert!(
+            refused(
+                Some(allow.clone()),
+                deadline(PermissionEffect::Allow, "a different sentence")
+            ),
+            "another reason is not the published deadline"
+        );
+        assert!(
+            refused(
+                Some(allow.clone()),
+                PermissionReviewDeadline::new(
+                    PermissionToolClass::ReadOnly,
+                    Duration::from_secs(8),
+                    PermissionEffect::Allow,
+                    STANDARD_ALLOW_REASON,
+                )
+                .unwrap()
+            ),
+            "another class and wait is not the published deadline"
+        );
+        assert!(
+            refused(Some(deny.clone()), deny.clone()),
+            "a deny deadline cannot select the allow option"
+        );
+        assert!(
+            refused(None, allow.clone()),
+            "a review that published no deadline cannot be answered by one"
+        );
+
+        let mut timed_out = pending(Some(deny.clone()));
+        let _ = timed_out
+            .cancel_permission(
+                &execution,
+                &permission,
+                PermissionCancellationReason::deadline_exceeded(),
+                CancellationOrigin::Runtime,
+            )
+            .unwrap()
+            .unwrap();
+        assert!(
+            stale(&mut timed_out),
+            "an execution timeout is not the review's deadline"
+        );
+        // A caller cannot cancel as the deadline, even with its reason and
+        // the published deadline; the review stays pending.
+        let mut claimed = pending(Some(deny.clone()));
+        assert!(matches!(
+            claimed.cancel_permission(
+                &execution,
+                &permission,
+                PermissionCancellationReason::deadline_exceeded(),
+                CancellationOrigin::Deadline(deny.clone()),
+            ),
+            Err(AgentError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            claimed.cancel_permissions(
+                &execution,
+                PermissionCancellationReason::deadline_exceeded(),
+                CancellationOrigin::Deadline(deny.clone()),
+            ),
+            Err(AgentError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            claimed.close(
+                PermissionCancellationReason::session_closed(),
+                CancellationOrigin::Deadline(deny.clone()),
+            ),
+            Err(AgentError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            claimed.cancel_deadline(&execution, &permission, allow.clone()),
+            Err(AgentError::InvalidInput(_))
+        ));
+        assert!(claimed.answer_permission(answer("permission")).is_ok());
+        assert!(
+            stale(&mut claimed),
+            "a refused deadline cancel makes no notice"
+        );
+
+        let mut cancelled = pending(Some(deny.clone()));
+        let record = cancelled
+            .cancel_deadline(&execution, &permission, deny.clone())
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.origin(), &CancellationOrigin::Deadline(deny.clone()));
+        let event = cancelled
+            .deadline_answered(&execution, &permission)
+            .unwrap();
+        assert_eq!(
+            event.update(),
+            &ExecutionUpdate::DeadlineAnswered {
+                id: permission.clone(),
+                effect: PermissionEffect::Deny,
+                reason: deny.recorded_reason(),
+            }
+        );
+
+        let mut withdrawn = pending(Some(deny.clone()));
+        let _ = withdrawn
+            .cancel_permission(
+                &execution,
+                &permission,
+                PermissionCancellationReason::provider_withdrawal(),
+                CancellationOrigin::Provider,
+            )
+            .unwrap()
+            .unwrap();
+        assert!(
+            stale(&mut withdrawn),
+            "a review cancelled for another reason was not settled by its deadline"
+        );
+
+        let mut finished = pending(Some(deny));
+        let _ = finished
+            .cancel_permission(
+                &execution,
+                &permission,
+                PermissionCancellationReason::deadline_exceeded(),
+                CancellationOrigin::Runtime,
+            )
+            .unwrap();
+        let _ = finished
+            .finish_execution(&execution, Ok(ExecutionOutcome::Completed))
+            .unwrap();
+        assert!(finished.deadline_settled.is_empty() && finished.published_deadlines.is_empty());
+    }
+
     #[test]
     fn a_hook_answer_with_a_terminal_outcome_is_rejected_and_stays_pending() {
         use crate::application::agent_execution::permissions::HookRefusal;
@@ -946,7 +1371,7 @@ mod tests {
         .unwrap();
         let id = PermissionId::new("permission").unwrap();
         controller
-            .request_permission(&execution, id.clone(), tool(None), input(), deny)
+            .request_permission(&execution, id.clone(), tool(None), input(), deny, None)
             .unwrap();
         let hook_answer = |outcome| PermissionAnswer {
             execution_id: execution.clone(),
@@ -1161,7 +1586,8 @@ mod tests {
                     permission.clone(),
                     update(None),
                     review(1),
-                    choices.clone()
+                    choices.clone(),
+                    None,
                 )
                 .is_err());
             assert_eq!(controller.retained_review_bytes, 0);
@@ -1172,6 +1598,7 @@ mod tests {
                     update(None),
                     review(0),
                     choices,
+                    None,
                 )
                 .unwrap();
             assert_eq!(controller.retained_review_bytes, MAX_RETAINED_BYTES);
@@ -1284,7 +1711,8 @@ mod tests {
                 PermissionId::new("p").unwrap(),
                 tool(Some("unaccepted".into())),
                 input(),
-                options("x".repeat(MAX_RETAINED_BYTES))
+                options("x".repeat(MAX_RETAINED_BYTES)),
+                None,
             )
             .is_err());
         assert_eq!(controller.session.tool_count(), 0);

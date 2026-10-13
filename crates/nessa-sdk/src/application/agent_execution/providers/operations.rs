@@ -244,6 +244,11 @@ pub enum ModelSwitchReportingCapability {
 pub enum PermissionDeferralCapability {
     /// Explicit defer integration is not implemented in Nessa.
     UnsupportedNotImplemented,
+    /// This provider has no explicit defer outcome that keeps a review unresolved.
+    ///
+    /// Distinct from [`Self::UnsupportedNotImplemented`]: the provider cannot
+    /// defer, so a surface must not describe the gap as Nessa's.
+    Unsupported,
     /// A defer outcome keeps the review pending for one correlated later answer.
     SupportedWithNonterminalOutcome,
 }
@@ -294,7 +299,15 @@ impl OperationCapabilities {
             provider,
             compaction_reporting: CompactionReportingCapability::UnsupportedNotImplemented,
             model_switch_reporting: ModelSwitchReportingCapability::UnsupportedNotImplemented,
-            permission_deferral: PermissionDeferralCapability::UnsupportedNotImplemented,
+            permission_deferral: match provider.permission_deferral {
+                ProviderPermissionDeferralCapability::Unsupported => {
+                    PermissionDeferralCapability::Unsupported
+                }
+                ProviderPermissionDeferralCapability::Unknown
+                | ProviderPermissionDeferralCapability::SupportedWithNonterminalOutcome => {
+                    PermissionDeferralCapability::UnsupportedNotImplemented
+                }
+            },
             pre_tool_policy: PreToolPolicyCapability::UnsupportedNotImplemented,
             policy_end_turn: end_turn_capability(provider.turn_stop_cleanup),
             policy_close_session: close_session_capability(provider.session_close_ownership),

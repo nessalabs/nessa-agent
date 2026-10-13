@@ -27,6 +27,7 @@ const view: ConversationView = {
   ],
   title: "Flights to Lisbon",
   revision: "opaque-1",
+  serverNowMs: 1_700_000_000_000,
   messages: [],
   pending: [],
   permissions: [],

@@ -74,6 +74,7 @@ function refusingCreation(code: string) {
       conversation: gatewayEffects(
         () => client,
         () => Promise.reject(new Error("no wait expected")),
+        () => 0,
       ),
     }),
   )
@@ -129,6 +130,7 @@ it("client loss after cached creation is known unsent rather than an uncertain a
   const effects = gatewayEffects(
     () => client,
     () => Promise.reject(new Error("no wait expected")),
+    () => 0,
   )
   await effects.create("server")
   client = null
@@ -227,6 +229,7 @@ it("a reconnecting client rejects locally without attempting a message RPC", asy
   const effects = gatewayEffects(
     () => client,
     () => Promise.reject(new Error("no wait expected")),
+    () => 0,
   )
   await expect(
     Promise.resolve().then(() =>

@@ -191,6 +191,38 @@ for (const invalid of [
   if (validateView(JSON.parse(JSON.stringify(invalid))))
     throw new Error("Product conversation view accepts an invalid artifact")
 }
+// A deadline's dueAtMs and the view's serverNowMs are compared in a client's
+// numbers, so both stop at the largest integer a client reads exactly.
+const validateDeadline = ajv.getSchema(
+  `${schema.$id}#/$defs/ConversationPermissionDeadline`,
+)
+const deadline = {
+  waitMs: 30000,
+  dueAtMs: Number.MAX_SAFE_INTEGER,
+  effect: "deny",
+  reason: "No human answered in time.",
+  stopsTurn: false,
+}
+if (!validateDeadline(deadline))
+  throw new Error("Product permission deadline rejects the largest exact dueAtMs")
+if (validateDeadline({ ...deadline, dueAtMs: Number.MAX_SAFE_INTEGER + 1 }))
+  throw new Error(
+    "Product permission deadline accepts a dueAtMs a client cannot read exactly",
+  )
+// Only a refusal can stop the turn.
+if (!validateDeadline({ ...deadline, stopsTurn: true }))
+  throw new Error("Product permission deadline rejects a refusal that stops the turn")
+if (validateDeadline({ ...deadline, effect: "allow", stopsTurn: true }))
+  throw new Error("Product permission deadline accepts an allow that stops the turn")
+// The reason is a sentence the client shows: not blank, no control characters.
+for (const reason of [" ", "\u3000\t", "denied\nlater", "denied\u0085", "denied\u007f"]) {
+  if (validateDeadline({ ...deadline, reason }))
+    throw new Error(
+      "Product permission deadline accepts a blank or control-character reason",
+    )
+}
+if (!validateDeadline({ ...deadline, reason: " Denied — nobody answered. " }))
+  throw new Error("Product permission deadline rejects a padded sentence")
 // A tool's MCP identity and structured result: optional, bounded, and closed.
 const validateTool = ajv.getSchema(`${schema.$id}#/$defs/ConversationTool`)
 const tool = {
