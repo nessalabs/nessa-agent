@@ -445,9 +445,9 @@ async fn a_gateway_with_a_relay_answers_a_reader_that_reaches_only_the_relay() {
     relay_task.await.unwrap();
 }
 
-/// Issue #266, rows RL15 and RL17: a relay that cannot be reached is
-/// retried in the background and never ends the listener; direct readers
-/// are answered throughout, and stop still joins cleanly.
+/// Issue #266, row RL15 and slice R2a's "no relay fault ends the
+/// listener": with the relay out of reach, direct readers are answered,
+/// the listener reports no failure, and stop still joins cleanly.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_relay_that_cannot_be_reached_leaves_direct_readers_served() {
     // A port bound and released: nothing listens there.

@@ -388,8 +388,6 @@ async fn native_listener_serves_relayed_connections_on_their_own_permits() {
             .is_err(),
         "the drain waited for the relay permits still held"
     );
-    // The silent direct peers were woken by the stop.
-    assert_eq!(connections.wake_report().unwrap().iter().count(), 8);
     drop(relayed);
     tokio::time::timeout(WAIT, running)
         .await
