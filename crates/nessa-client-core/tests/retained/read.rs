@@ -410,7 +410,7 @@ fn a_relayed_connect_ends_when_the_injected_budget_is_spent() {
     let connector = StoppableConnector {
         ending,
         relay: Some(RelayRoute {
-            address: silent.local_addr().unwrap().to_string(),
+            address: RelayAddress::try_from(silent.local_addr().unwrap().to_string()).unwrap(),
             key: [3; 32],
         }),
     };

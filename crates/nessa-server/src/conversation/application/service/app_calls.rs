@@ -1275,10 +1275,11 @@ pub(super) fn with_app_reviews(
         encoded_len(&bound_view_within(view.clone(), 0, false))
     };
     // The notice, where the view has none of its own and it fits beside
-    // the agent's own.
+    // the agent's own. It joins the view's object as `,"key":"value"`: one
+    // comma, not the two braces of an object of its own.
     let notice = Some(
         serde_json::to_vec(&serde_json::json!({ "interactionViewError": UNSHOWN_APP_REVIEWS }))
-            .map_or(usize::MAX, |bytes| bytes.len()),
+            .map_or(usize::MAX, |bytes| bytes.len() - 1),
     )
     .filter(|&notice| {
         view.interaction_view_error.is_none() && floor.saturating_add(notice) <= MAX_VIEW_BYTES

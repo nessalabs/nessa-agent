@@ -228,6 +228,24 @@ fn catalogue() -> &'static [Limit] {
             meaning: "the notes one author, a principal under one authority, leaves in one conversation in any 60 seconds on the gateway's wall clock; one more is refused message_quota_exceeded, and a clock set back makes no room",
         },
         Limit {
+            id: "conversation.pending_notes",
+            tier: "fixed",
+            owner: "NoteRecord::MAX_PENDING in crates/nessa-sdk/src/application/agent_execution/sessions/notes.rs",
+            meaning: "the next_turn notes one conversation keeps waiting for a turn, not counting one past its lifetime; one more next_turn note is refused message_quota_exceeded and nothing is saved",
+        },
+        Limit {
+            id: "conversation.note_lifetime",
+            tier: "fixed",
+            owner: "NoteRecord::PENDING_LIFETIME_MS in crates/nessa-sdk/src/application/agent_execution/sessions/notes.rs",
+            meaning: "how long a next_turn note waits for a turn, from when it was accepted, on the gateway's wall clock; the first turn admitted after that retires it expired",
+        },
+        Limit {
+            id: "conversation.notes_per_turn",
+            tier: "fixed",
+            owner: "UserMessage::MAX_NOTES in crates/nessa-sdk/src/domain/agent_execution/prompts/value_objects/user_message.rs, which NoteRecord::MAX_PER_TURN follows",
+            meaning: "the next_turn notes one turn takes, the oldest first; the rest wait for the next turn",
+        },
+        Limit {
             id: "conversation.note_bytes",
             tier: "fixed",
             owner: "NoteText::MAX_BYTES in crates/nessa-sdk/src/application/agent_execution/sessions/notes.rs, the schema's ConversationMessageParams",
@@ -388,13 +406,13 @@ fn catalogue() -> &'static [Limit] {
             id: "peer.preempt",
             tier: "fixed",
             owner: "PREEMPT in crates/nessa-server/src/peer_gateways/infrastructure/commands.rs",
-            meaning: "the longest peer.enroll or peer.forget waits for a peer read it stopped to give back its turn; at least twice the read's unstoppable connect (the 5 s handshake), and the read only queues its audit records before it gives the turn back, so past it the command answers peer_busy only if local storage stalls",
+            meaning: "the longest peer.enroll, peer.forget or peer.relay waits for a peer read it stopped to give back its turn; at least twice the read's unstoppable connect (the 5 s handshake), and the read only queues its audit records before it gives the turn back, so past it the command answers peer_busy only if local storage stalls",
         },
         Limit {
             id: "peer.audit_queue",
             tier: "fixed",
             owner: "AUDIT_QUEUE in crates/nessa-server/src/peer_gateways/infrastructure/audit.rs",
-            meaning: "the most peer audit records waiting to be written, one at a time in the order they were handed over; one poller cycle queues at most about half of it, so it fills only when the store falls behind; a record past it is refused at once, its sequence left as a gap, so peer.enroll or peer.forget answers peer_audit_unavailable before any effect and a peer read's change stands with its record logged as not kept; an owner command's record waits behind at most this many, well inside its 5 s audit deadline",
+            meaning: "the most peer audit records waiting to be written, one at a time in the order they were handed over; one poller cycle queues at most about half of it, so it fills only when the store falls behind; a record past it is refused at once, its sequence left as a gap, so peer.enroll, peer.forget or peer.relay answers peer_audit_unavailable before any effect and a peer read's change stands with its record logged as not kept; an owner command's record waits behind at most this many, well inside its 5 s audit deadline",
         },
         Limit {
             id: "peer.withdrawn_per_read",
@@ -556,6 +574,15 @@ pub(crate) fn effective_json(
     put(
         "conversation.note_rate",
         count(NoteRecord::MAX_PER_AUTHOR_IN_WINDOW),
+    );
+    put("conversation.pending_notes", count(NoteRecord::MAX_PENDING));
+    put(
+        "conversation.note_lifetime",
+        millis(Duration::from_millis(NoteRecord::PENDING_LIFETIME_MS)),
+    );
+    put(
+        "conversation.notes_per_turn",
+        count(NoteRecord::MAX_PER_TURN),
     );
     put("conversation.note_bytes", count(NoteText::MAX_BYTES));
     put(

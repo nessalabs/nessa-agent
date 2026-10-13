@@ -936,8 +936,8 @@ pub(super) mod build {
             agent_execution::{
                 permissions::PermissionOfferPolicy,
                 prompts::{
-                    AppModelContext, LinkedFile, McpAppSource, PromptSource, PromptSourceKind,
-                    SystemPrompt, SystemPromptBuilder, UserMessage,
+                    AppModelContext, LinkedFile, McpAppSource, NoteContext, PromptSource,
+                    PromptSourceKind, SystemPrompt, SystemPromptBuilder, UserMessage,
                 },
                 tools::MAX_MCP_NAME_BYTES,
             },
@@ -1002,11 +1002,16 @@ pub(super) mod build {
     ///   (the path's last component, punctuation backslash-escaped and then
     ///   escaped once, 6 bytes at most for each byte), both from at most
     ///   `LinkedFile::MAX_PATH_BYTES` (4 096): 10 × 9 × 4 096 = 368 640.
+    /// - Notes, which a turn admitted while the conversation is idle takes:
+    ///   `UserMessage::MAX_NOTES` (8), each at most `NoteContext::MAX_TEXT_BYTES`
+    ///   (8 KiB) of text, naming the surface it was left from
+    ///   (`NoteContext::MAX_SURFACE_BYTES`, 256), both escaped twice:
+    ///   8 × 7 × (8 192 + 256) = 473 088.
     /// - Everything else, which none of the message's senders writes: the
     ///   request around it and every block's keys, quotes and braces, as the
-    ///   SDK measures them, `AcpConfig::LARGEST_MESSAGE_SYNTAX_BYTES`, 3 781.
+    ///   SDK measures them, `AcpConfig::LARGEST_MESSAGE_SYNTAX_BYTES`, 4 417.
     ///
-    /// 14 646 325 in all, 2 130 891 under [`MAX_FRAME_BYTES`].
+    /// 15 120 049 in all, 1 657 167 under [`MAX_FRAME_BYTES`].
     const LARGEST_MESSAGE_FRAME_BYTES: usize =
         (UserMessage::MAX_IMAGE_BYTES as usize + 2 * UserMessage::MAX_IMAGES) / 3 * 4
             + ESCAPED_ONCE * MAX_MCP_MESSAGE_BYTES
@@ -1016,10 +1021,13 @@ pub(super) mod build {
                     + 2 * MAX_MCP_NAME_BYTES
                     + McpAppSource::MAX_TOOL_ID_BYTES)
             + UserMessage::MAX_FILES * (3 + ESCAPED_ONCE) * LinkedFile::MAX_PATH_BYTES
+            + UserMessage::MAX_NOTES
+                * ESCAPED_TWICE
+                * (NoteContext::MAX_TEXT_BYTES + NoteContext::MAX_SURFACE_BYTES)
             + AcpConfig::LARGEST_MESSAGE_SYNTAX_BYTES;
     const _: () = assert!(
         LARGEST_MESSAGE_FRAME_BYTES <= MAX_FRAME_BYTES,
-        "the largest message, with its images encoded and the most app context it may carry, must fit one ACP frame"
+        "the largest message, with its images encoded and the most app context and notes it may carry, must fit one ACP frame"
     );
     /// What an agent may send us, which is the buffer this host can be made to
     /// allocate for one frame and has nothing to do with the prompts it writes.

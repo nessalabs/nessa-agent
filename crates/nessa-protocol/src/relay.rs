@@ -37,6 +37,11 @@ pub const MAX_FRAME: usize = HEADER + 64;
 pub const PREAMBLE_DEADLINE: Duration = Duration::from_secs(10);
 /// How long a reader waits for the gateway it asked for to accept.
 pub const JOIN_DEADLINE: Duration = Duration::from_secs(5);
+/// How long a reader's direct dial has to connect before it asks the relay
+/// too. A direct dial to a home address from another network usually times
+/// out rather than being refused, so without this the relay would wait out
+/// the whole connect budget.
+pub const DIRECT_HEAD_START: Duration = Duration::from_millis(750);
 /// How often the relay pings a serve connection.
 pub const PING_INTERVAL: Duration = Duration::from_secs(15);
 /// Pings a serve connection may leave unanswered before the relay drops
@@ -116,6 +121,57 @@ impl fmt::Debug for RelayFrame {
             Self::Joined => f.write_str("Joined"),
             Self::Offline => f.write_str("Offline"),
             Self::NoAnswer => f.write_str("NoAnswer"),
+        }
+    }
+}
+
+/// Longest relay address: a DNS name's limit.
+pub const MAX_RELAY_ADDRESS: usize = 255;
+
+/// Where a relay listens: `host:port`, where the host is a name or an
+/// address (an IPv6 one in brackets). Unlike a gateway's native address it
+/// may be a name, since a relay is usually somewhere public; it is looked up
+/// at each dial. The address carries no trust: whoever answers there is
+/// asked for a key and joins nothing it cannot prove.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct RelayAddress(String);
+
+impl RelayAddress {
+    /// The `host:port` to dial.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<RelayAddress> for String {
+    fn from(address: RelayAddress) -> Self {
+        address.0
+    }
+}
+
+impl TryFrom<String> for RelayAddress {
+    type Error = String;
+    fn try_from(address: String) -> Result<Self, Self::Error> {
+        let refuse = || format!("relay must be host:port, at most {MAX_RELAY_ADDRESS} bytes");
+        if address.len() > MAX_RELAY_ADDRESS
+            || address.chars().any(|c| c.is_whitespace() || c.is_control())
+        {
+            return Err(refuse());
+        }
+        let (host, port) = address.rsplit_once(':').ok_or_else(refuse)?;
+        let port_ok = port.parse::<u16>().is_ok_and(|port| port != 0);
+        let host_ok = !host.is_empty()
+            && match host.strip_prefix('[') {
+                Some(bracketed) => bracketed
+                    .strip_suffix(']')
+                    .is_some_and(|v6| v6.parse::<std::net::Ipv6Addr>().is_ok()),
+                None => !host.contains(':'),
+            };
+        if port_ok && host_ok {
+            Ok(Self(address))
+        } else {
+            Err(refuse())
         }
     }
 }

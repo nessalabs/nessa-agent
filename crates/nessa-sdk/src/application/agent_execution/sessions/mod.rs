@@ -90,10 +90,11 @@ pub use leases::{CurrentLease, CurrentLeaseState, LeaseRecord};
 pub use manager::{
     ArtifactRecordError, LeaseCommit, LeaseRecordError, NoteRecordError, SessionManager,
 };
-pub(crate) use manager::{AttachedProvider, AttachmentOpenFailureSource};
+pub(crate) use manager::{AttachedProvider, AttachmentOpenFailureSource, NoteIntake};
 pub use message_commit_clock::{MessageCommitClock, MessageCommitSleep};
 pub use notes::{
-    NoteDelivery, NoteId, NoteRecord, NoteRequest, NoteState, NoteText, NoteValueError,
+    NoteCandidates, NoteDelivery, NoteId, NoteRecord, NoteRequest, NoteRetiredRecord,
+    NoteRetirement, NoteRetirementReason, NoteState, NoteText, NoteValueError,
 };
 pub use storage::{
     CommittedSession, InvocationCancellationEvent, InvocationRecord, InvocationSchedulingEvent,

@@ -314,6 +314,7 @@ fn review_snapshot(events: Vec<ExecutionEvent>) -> SessionSnapshot {
             },
             actor: ActionContext::new("person", "panel", "send").unwrap(),
             initiation: Initiation::owner(),
+            notes: Vec::new(),
             acknowledgement: SubmissionAcknowledgement::Acknowledged,
             events,
             scheduling: vec![],

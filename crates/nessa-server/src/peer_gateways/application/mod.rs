@@ -17,6 +17,7 @@
 //! record that cannot be kept is logged and the change stands: cleanup is
 //! never held back for its evidence.
 use nessa_auth::domain::{pairing::DeviceKey, PrincipalId};
+use nessa_protocol::relay::{GatewayKey, RelayAddress};
 use std::{
     future::Future,
     io,
@@ -38,11 +39,15 @@ pub enum PeerState {
     Pending {
         /// Where the peer last answered.
         address: SocketAddr,
+        /// The relay to ask for it there.
+        relay: Option<RelayAddress>,
     },
     /// The peer issued this gateway a credential.
     Active {
         /// Where the peer last answered.
         address: SocketAddr,
+        /// The relay to ask for it there.
+        relay: Option<RelayAddress>,
         /// The issued credential's identifier, not a secret.
         credential: String,
         /// The receiver the peer paired with it.
@@ -52,6 +57,8 @@ pub enum PeerState {
     Revoked {
         /// Where the peer last answered.
         address: SocketAddr,
+        /// The relay to ask for it there.
+        relay: Option<RelayAddress>,
     },
     /// A record is there and this build cannot read it.
     Unreadable,
@@ -117,6 +124,7 @@ pub enum PeerAuditRecord {
         operation: Uuid,
         initiator: PrincipalId,
         address: SocketAddr,
+        relay: Option<RelayAddress>,
     },
     /// That enrollment ended. `peer` is known once the peer presented its
     /// key; `outcome` is the refusal the owner was given, if any.
@@ -124,6 +132,7 @@ pub enum PeerAuditRecord {
         operation: Uuid,
         initiator: PrincipalId,
         address: SocketAddr,
+        relay: Option<RelayAddress>,
         peer: Option<DeviceKey>,
         before: PeerState,
         after: PeerState,
@@ -140,6 +149,24 @@ pub enum PeerAuditRecord {
         operation: Uuid,
         initiator: PrincipalId,
         peer: DeviceKey,
+        before: PeerState,
+        after: PeerState,
+        outcome: Result<(), &'static str>,
+    },
+    /// `peer.relay` asked to set (or, `None`, clear) `peer`'s relay:
+    /// nothing has been checked or written yet.
+    RelayRequested {
+        operation: Uuid,
+        initiator: PrincipalId,
+        peer: DeviceKey,
+        relay: Option<RelayAddress>,
+    },
+    /// That change ended.
+    RelayFinished {
+        operation: Uuid,
+        initiator: PrincipalId,
+        peer: DeviceKey,
+        relay: Option<RelayAddress>,
         before: PeerState,
         after: PeerState,
         outcome: Result<(), &'static str>,
@@ -174,8 +201,12 @@ pub trait PeerAudit: Send + Sync {
 /// The bounded future a connector answers with.
 pub type PeerConnectFuture<'a> = Pin<Box<dyn Future<Output = io::Result<TcpStream>> + Send + 'a>>;
 
-/// Opens the connection an enrollment runs over: the network, behind the
-/// peer commands' own port so a test can stand in for it.
+/// Opens the connections the peer commands run over: the network, behind
+/// their own port so a test can stand in for it. `connect` dials a peer's
+/// address; `relay` asks the relay at `relay` for the peer holding `key`
+/// and answers the joined stream, with the peer's own bytes next on it, or
+/// `ConnectionRefused` when the relay says the peer is offline or did not
+/// answer.
 ///
 /// A connector sets no deadline of its own. The peer commands bound the
 /// returned future by their injected monotonic clock and drop it when that
@@ -183,4 +214,5 @@ pub type PeerConnectFuture<'a> = Pin<Box<dyn Future<Output = io::Result<TcpStrea
 /// running.
 pub trait PeerConnector: Send + Sync {
     fn connect(&self, address: SocketAddr) -> PeerConnectFuture<'_>;
+    fn relay<'a>(&'a self, relay: &'a RelayAddress, key: GatewayKey) -> PeerConnectFuture<'a>;
 }

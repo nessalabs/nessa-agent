@@ -37,6 +37,7 @@ function deferred<T>() {
 const view = (id: string, text = ""): ConversationView => ({
   conversationId: id,
   artifacts: [],
+  notes: [],
   approvalMode: "ask",
   approvalModes: [
     { id: "ask", name: "Provider asks", description: "Provider asks where required." },
