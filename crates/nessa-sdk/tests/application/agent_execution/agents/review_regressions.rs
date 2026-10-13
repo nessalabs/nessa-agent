@@ -956,7 +956,10 @@ async fn custom_storage_cannot_cancel_a_review_its_deadline_answered() {
     ];
     for (published, offered, noticed, answered) in cases {
         let (agent, _, storage) = probe(false).await;
-        agent.invoke(input("saved-review"), actor()).await.unwrap();
+        agent
+            .invoke(input("saved-review"), Submitter::owner(actor()))
+            .await
+            .unwrap();
         drop(agent);
         {
             let mut state = storage.0.lock().unwrap();
@@ -1081,7 +1084,10 @@ async fn custom_storage_cannot_cancel_a_review_by_a_deadline_it_did_not_publish(
     ];
     for (published, cancelled_by, offers_denial, corrupt) in cases {
         let (agent, _, storage) = probe(false).await;
-        agent.invoke(input("saved-review"), actor()).await.unwrap();
+        agent
+            .invoke(input("saved-review"), Submitter::owner(actor()))
+            .await
+            .unwrap();
         drop(agent);
         {
             let mut state = storage.0.lock().unwrap();
@@ -1195,7 +1201,10 @@ async fn custom_storage_cannot_give_a_review_and_a_decline_one_identity() {
     let cases = [("8", false, false), ("7", false, true), ("7", true, true)];
     for (decline, before, shared) in cases {
         let (agent, _, storage) = probe(false).await;
-        agent.invoke(input("saved-review"), actor()).await.unwrap();
+        agent
+            .invoke(input("saved-review"), Submitter::owner(actor()))
+            .await
+            .unwrap();
         drop(agent);
         {
             let mut state = storage.0.lock().unwrap();
