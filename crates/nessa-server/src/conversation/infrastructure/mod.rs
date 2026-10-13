@@ -54,6 +54,8 @@
 //! other, one per host `config.json` names (#699): the harness runs on the
 //! host under `nessa env serve`, the binding stays here. `FilePlacements`
 //! keeps which conversations were placed on which host.
+//! `CedarToolPolicyEvaluator` answers the `ToolPolicyEvaluator` port: may a
+//! turn's initiator call a tool (`tool_policy/cedar/`).
 mod change_watch;
 pub use change_watch::{NessaRecordWatches, UuidWatchNamespaces};
 // Composed only by the Unix gateway (`composition/local_auth.rs`), as
@@ -109,6 +111,9 @@ pub use context_drops::audit_context_drops;
 
 mod file_link_audit;
 pub use file_link_audit::DurableConversationFileLinkAudit;
+
+mod tool_policy;
+pub use tool_policy::CedarToolPolicyEvaluator;
 
 mod deletion_audit;
 pub use deletion_audit::DurableConversationDeletionAudit;
