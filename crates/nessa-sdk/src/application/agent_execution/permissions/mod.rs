@@ -26,13 +26,15 @@ pub use answer::{
     PermissionAnswer, PermissionAnswerFailure, PermissionAnswerFuture, PermissionAnswerResult,
     PermissionSelectionState, QuestionAnswer,
 };
+pub(crate) use approval::cap_hook_reason;
 pub use approval::{
     ActionContext, ApprovalAttribution, ApprovalBasis, ApprovalModeSnapshot, ApprovalRuleReference,
-    PermissionResolution,
+    HookRefusal, PermissionResolution,
 };
 pub use audit::{
     PermissionAnswerDelivery, PermissionAnswerRecord, QuestionAnswerRecord, QuestionRefusalRecord,
     RefusedAsk, ReviewDeclineRecord,
 };
+pub(crate) use cancellation::validate_hook_withdrawal;
 pub use cancellation::{CancellationOrigin, PermissionCancellation, PermissionCancellationRequest};
 pub use outcome::{admit_configured_outcome, ConfiguredRefusal, StopKind};

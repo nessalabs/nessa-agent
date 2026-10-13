@@ -1,7 +1,9 @@
 #![deny(missing_docs)]
 
-use super::{PermissionApplicationId, PermissionOptionId, PermissionSessionId};
-use crate::domain::agent_execution::ExecutionError;
+use super::{
+    PermissionApplicationId, PermissionId, PermissionOptionId, PermissionSessionId, RefusalOutcome,
+};
+use crate::domain::agent_execution::{executions::ExecutionId, ExecutionError};
 use std::collections::HashSet;
 
 /// Whether the selected action is allowed. Scope is a separate value.
@@ -247,13 +249,24 @@ impl PermissionOptions {
     /// and scoped identities. Immutable storage has no spare string/vector capacity.
     /// Callers choose their admission budget; this measurement imposes no policy cap.
     pub fn payload_bytes(&self) -> usize {
-        self.0.iter().fold(0usize, |total, option| {
-            total
+        self.payload_bytes_up_to(usize::MAX)
+    }
+    /// [`Self::payload_bytes`], stopping once the count passes `limit`. A
+    /// result above `limit` says only that the choices are larger than `limit`,
+    /// so sizing a long list does not walk every choice.
+    pub fn payload_bytes_up_to(&self, limit: usize) -> usize {
+        let mut total = 0usize;
+        for option in self.0.iter() {
+            if total > limit {
+                return total;
+            }
+            total = total
                 .saturating_add(std::mem::size_of::<PermissionOption>())
                 .saturating_add(option.id().as_str().len())
                 .saturating_add(option.label().len())
-                .saturating_add(option.decision().payload_bytes())
-        })
+                .saturating_add(option.decision().payload_bytes());
+        }
+        total
     }
     /// Find the admitted option with exact `id`, or None if absent.
     pub fn find(&self, id: &PermissionOptionId) -> Option<&PermissionOption> {
@@ -357,6 +370,26 @@ impl PermissionCancellationReason {
     pub fn custom(reason: CustomPermissionCancellationReason) -> Self {
         Self(PermissionCancellationReasonValue::Custom(reason))
     }
+    /// Whether this reason may withdraw `review` in `execution`: a hook-refusal
+    /// code withdraws only the review, in the turn, the runner issued it for,
+    /// and `None` allows none, so a copy of a recorded one, or a saved one,
+    /// withdraws nothing.
+    pub(crate) fn may_withdraw(&self, review: Option<(&ExecutionId, &PermissionId)>) -> bool {
+        match &self.0 {
+            PermissionCancellationReasonValue::Custom(reason) if reason.is_hook_refusal() => review
+                .is_some_and(|review| {
+                    reason
+                        .withdraws
+                        .as_ref()
+                        .is_some_and(|(execution, id)| (execution, id) == review)
+                }),
+            _ => true,
+        }
+    }
+    /// Whether this is a custom reason with a hook-refusal code.
+    pub(crate) fn is_hook_refusal(&self) -> bool {
+        matches!(&self.0, PermissionCancellationReasonValue::Custom(reason) if reason.is_hook_refusal())
+    }
     /// Borrow the cause and any validated custom payload without mutation authority.
     ///
     /// ```compile_fail
@@ -406,30 +439,96 @@ impl PermissionCancellationReason {
 /// A caller-defined cause, such as an automatic guard's decision.
 /// Code identifies the cause consistently; explanation describes this cancellation.
 /// Both preserve supplied text and must be nonblank. Bounds are UTF-8 bytes.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Two reasons are equal when their code and explanation are.
+#[derive(Clone, Debug)]
 pub struct CustomPermissionCancellationReason {
     code: Box<str>,
     explanation: Box<str>,
+    // The one review, in its turn, a hook-refusal code may withdraw; never saved.
+    withdraws: Option<(ExecutionId, PermissionId)>,
 }
+impl PartialEq for CustomPermissionCancellationReason {
+    fn eq(&self, other: &Self) -> bool {
+        self.code == other.code && self.explanation == other.explanation
+    }
+}
+impl Eq for CustomPermissionCancellationReason {}
 impl CustomPermissionCancellationReason {
     /// Maximum UTF-8 byte length of the stable cause code.
     pub const MAX_CODE_BYTES: usize = 128;
     /// Maximum UTF-8 byte length of the descriptive explanation.
     pub const MAX_EXPLANATION_BYTES: usize = 1024;
+    /// Codes that record a permission-review hook's refusal. Only the runner
+    /// that applied the refusal, and so ended the turn or closed the session
+    /// it records, writes one.
+    pub const HOOK_REFUSAL_PREFIX: &'static str = "hook-refusal.";
 
     /// Preserve `code` and `explanation` exactly. Returns [`ExecutionError::EmptyValue`]
     /// if either is blank or [`ExecutionError::ValueTooLong`] if its UTF-8 bytes
-    /// exceed the corresponding maximum. Construction performs no cancellation.
+    /// exceed the corresponding maximum. A code that starts with
+    /// [`Self::HOOK_REFUSAL_PREFIX`] is [`ExecutionError::ReservedCancellationCode`].
+    /// Construction performs no cancellation.
     pub fn new(
+        code: impl Into<String>,
+        explanation: impl Into<String>,
+    ) -> Result<Self, ExecutionError> {
+        let reason = Self::restore(code, explanation)?;
+        if reason.is_hook_refusal() {
+            return Err(ExecutionError::ReservedCancellationCode);
+        }
+        Ok(reason)
+    }
+    fn is_hook_refusal(&self) -> bool {
+        self.code.starts_with(Self::HOOK_REFUSAL_PREFIX)
+    }
+    /// The withdrawal the runner records for a hook refusal of `review` in
+    /// `execution` with `outcome`. It can withdraw only that review.
+    pub(crate) fn hook_refusal(
+        execution: &ExecutionId,
+        review: &PermissionId,
+        outcome: RefusalOutcome,
+        explanation: impl Into<String>,
+    ) -> Result<Self, ExecutionError> {
+        let name = Self::outcome_name(&outcome);
+        let mut reason =
+            Self::restore(format!("{}{name}", Self::HOOK_REFUSAL_PREFIX), explanation)?;
+        reason.withdraws = Some((execution.clone(), review.clone()));
+        Ok(reason)
+    }
+    /// Rebuild a saved reason, checking its bounds. A code in the reserved
+    /// namespace must be one the runner writes, or it is
+    /// [`ExecutionError::ReservedCancellationCode`].
+    pub(crate) fn restore(
         code: impl Into<String>,
         explanation: impl Into<String>,
     ) -> Result<Self, ExecutionError> {
         let reason = Self {
             code: code.into().into_boxed_str(),
             explanation: explanation.into().into_boxed_str(),
+            withdraws: None,
         };
         reason.validate()?;
+        if reason.is_hook_refusal()
+            && ![
+                RefusalOutcome::Continue,
+                RefusalOutcome::EndTurn,
+                RefusalOutcome::CloseSession,
+            ]
+            .iter()
+            .any(|outcome| {
+                reason.code[Self::HOOK_REFUSAL_PREFIX.len()..] == *Self::outcome_name(outcome)
+            })
+        {
+            return Err(ExecutionError::ReservedCancellationCode);
+        }
         Ok(reason)
+    }
+    fn outcome_name(outcome: &RefusalOutcome) -> &'static str {
+        match outcome {
+            RefusalOutcome::Continue => "continue",
+            RefusalOutcome::EndTurn => "end_turn",
+            RefusalOutcome::CloseSession => "close_session",
+        }
     }
     fn validate(&self) -> Result<(), ExecutionError> {
         for (value, field, max_bytes) in [

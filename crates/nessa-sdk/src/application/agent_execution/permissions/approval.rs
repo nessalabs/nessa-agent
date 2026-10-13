@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::domain::agent_execution::{
-    permissions::{PermissionRequest, PermissionStateView},
+    permissions::{PermissionId, PermissionRequest, PermissionStateView, RefusalOutcome},
     sessions::ExecutionSessionId,
 };
 
@@ -66,7 +66,21 @@ impl ActionContext {
     pub fn request_id(&self) -> &str {
         &self.request_id
     }
+    /// Whether this is the actor [`ApprovalAttribution::hook`] names for
+    /// `permission`: the hook principal, a registration index or `runtime`,
+    /// and that review's identity.
+    pub(crate) fn is_hook_for(&self, permission: &PermissionId) -> bool {
+        let surface = &*self.surface_id;
+        &*self.principal_id == HOOK_PRINCIPAL
+            && &*self.request_id == permission.as_str()
+            && (surface == "runtime"
+                || surface
+                    .parse::<usize>()
+                    .is_ok_and(|index| index.to_string() == surface))
+    }
 }
+
+const HOOK_PRINCIPAL: &str = "permission-review-hook";
 
 /// The host's effective mode and immutable configuration revision at decision time.
 /// This is attribution, not a mode evaluator or permission to bypass host policy.
@@ -149,6 +163,106 @@ pub enum ApprovalBasis {
     Mode(ApprovalModeSnapshot),
     /// An identified rule revision selected the option.
     Rule(ApprovalRuleReference),
+    /// A permission-review hook selected the option.
+    ///
+    /// The actor is the hook (`permission-review-hook`), not the person who
+    /// submitted the turn. The value keeps the registration index when a hook
+    /// returned, the capped reason, and the outcome that was actually applied.
+    /// A runtime refusal has no index.
+    Hook(HookRefusal),
+}
+
+/// A permission-review hook's refusal, retained with the answer or withdrawal.
+///
+/// The reason is capped so a hook cannot put an unbounded string into the
+/// audit record. Construction does not answer a review.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HookRefusal {
+    index: Option<usize>,
+    reason: Box<str>,
+    outcome: RefusalOutcome,
+}
+
+impl HookRefusal {
+    /// Maximum UTF-8 byte length of the retained hook reason.
+    pub const MAX_REASON_BYTES: usize = 1024;
+
+    /// Retain `index` and a capped `reason` for a refusal whose outcome is
+    /// continue.
+    ///
+    /// `index` is the hook's zero-based registration position. `None` means the
+    /// runtime refused before a registered hook returned. A blank reason becomes
+    /// `"hook refused"`. A reason longer than [`Self::MAX_REASON_BYTES`] is cut
+    /// on a character boundary. This does not answer a review.
+    ///
+    /// End-turn and close-session are recorded only by the runner that cancels
+    /// the turn or closes the session, so a caller cannot build a refusal that
+    /// claims either outcome:
+    ///
+    /// ```
+    /// use nessa_sdk::application::agent_execution::permissions::HookRefusal;
+    /// use nessa_sdk::domain::agent_execution::permissions::RefusalOutcome;
+    /// assert_eq!(HookRefusal::new(Some(0), "no").outcome(), &RefusalOutcome::Continue);
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use nessa_sdk::application::agent_execution::permissions::HookRefusal;
+    /// use nessa_sdk::domain::agent_execution::permissions::RefusalOutcome;
+    /// let _ = HookRefusal::new(Some(0), "no", RefusalOutcome::EndTurn);
+    /// ```
+    pub fn new(index: Option<usize>, reason: impl Into<String>) -> Self {
+        Self::applied(index, reason, RefusalOutcome::Continue)
+    }
+
+    /// The runner's refusal, carrying the outcome it applies after recording it.
+    pub(crate) fn applied(
+        index: Option<usize>,
+        reason: impl Into<String>,
+        outcome: RefusalOutcome,
+    ) -> Self {
+        Self {
+            index,
+            reason: cap_hook_reason(reason.into()).into_boxed_str(),
+            outcome,
+        }
+    }
+
+    /// Zero-based position of the hook in the invocation's registration list.
+    ///
+    /// `None` means the runtime refused: the deadline elapsed, another hook
+    /// thread was still running, or the blocking task failed. It is not hook 0.
+    pub fn index(&self) -> Option<usize> {
+        self.index
+    }
+
+    /// Why the hook refused, capped at [`Self::MAX_REASON_BYTES`].
+    pub fn reason(&self) -> &str {
+        &self.reason
+    }
+
+    /// The outcome that was applied. An end-turn the binding cannot perform
+    /// is recorded as continue.
+    pub fn outcome(&self) -> &RefusalOutcome {
+        &self.outcome
+    }
+}
+
+/// Trim `reason`, name a blank one, and cut it to
+/// [`HookRefusal::MAX_REASON_BYTES`] on a character boundary. A reason that
+/// already fits is returned without a copy.
+pub(crate) fn cap_hook_reason(reason: String) -> String {
+    let trimmed = reason.trim();
+    if trimmed.is_empty() {
+        return "hook refused".to_owned();
+    }
+    if trimmed.len() == reason.len() && reason.len() <= HookRefusal::MAX_REASON_BYTES {
+        return reason;
+    }
+    let mut end = trimmed.len().min(HookRefusal::MAX_REASON_BYTES);
+    while !trimmed.is_char_boundary(end) {
+        end -= 1;
+    }
+    trimmed[..end].to_owned()
 }
 
 /// Who answered and why, required for allowances and denials alike.
@@ -167,9 +281,25 @@ impl ApprovalAttribution {
     pub fn actor(&self) -> &ActionContext {
         &self.actor
     }
-    /// Exact explicit, mode, or rule basis retained with the decision.
+    /// Exact explicit, mode, rule, or hook basis retained with the decision.
     pub fn basis(&self) -> &ApprovalBasis {
         &self.basis
+    }
+
+    /// The permission-review hook answering `permission` with `refusal`.
+    ///
+    /// The principal is `permission-review-hook`. The surface is the hook's
+    /// registration index, or `runtime` when no hook returned. Neither is the
+    /// person who submitted the turn. Construction does not answer the review.
+    pub fn hook(permission: &PermissionId, refusal: HookRefusal) -> Result<Self, AgentError> {
+        let surface = match refusal.index() {
+            Some(index) => index.to_string(),
+            None => "runtime".to_owned(),
+        };
+        Ok(Self::new(
+            ActionContext::new(HOOK_PRINCIPAL, surface, permission.as_str())?,
+            ApprovalBasis::Hook(refusal),
+        ))
     }
 }
 

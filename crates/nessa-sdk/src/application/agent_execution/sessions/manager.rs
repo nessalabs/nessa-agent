@@ -1,10 +1,10 @@
 use super::{
     app_sources, artifacts::ArtifactRefusal, attachment::AttachmentLease,
     steering_position::SteeringPosition, ArtifactRecord, CurrentLease, InvocationCancellationEvent,
-    InvocationRecord, InvocationSchedulingEvent, LeaseRecord, MessageCommitClock, ProviderContext,
-    QueueHistoryRecord, SessionChange, SessionLoadState, SessionSaveGeneration, SessionSaveUnit,
-    SessionSnapshot, SessionStorage, SessionStorageLease, StorageError, StorageFuture,
-    SubmissionAcknowledgement,
+    InvocationRecord, InvocationSchedulingEvent, LeaseRecord, MessageCommitClock,
+    MessageCommitSleep, ProviderContext, QueueHistoryRecord, SessionChange, SessionLoadState,
+    SessionSaveGeneration, SessionSaveUnit, SessionSnapshot, SessionStorage, SessionStorageLease,
+    StorageError, StorageFuture, SubmissionAcknowledgement,
 };
 use crate::application::agent_execution::{
     agents::AgentError,
@@ -329,6 +329,14 @@ impl SessionManager {
     pub(crate) async fn wait_for_message_deadline(&self, deadline: Duration) {
         self.message_commit_clock.sleep_until(deadline).await;
     }
+    /// Elapsed time on the injected message-commit clock.
+    pub(crate) fn message_commit_now(&self) -> Duration {
+        self.message_commit_clock.now()
+    }
+    /// Wake when the injected message-commit clock reaches `deadline`.
+    pub(crate) fn message_commit_sleep_until(&self, deadline: Duration) -> MessageCommitSleep {
+        self.message_commit_clock.sleep_until(deadline)
+    }
     pub(crate) async fn flush_due_messages(
         &self,
         generation: SessionSaveGeneration,
@@ -337,6 +345,15 @@ impl SessionManager {
         if evidence.message_commit.as_ref().is_some_and(|pending| {
             pending.generation == generation && self.message_commit_clock.now() >= pending.deadline
         }) {
+            self.save_observed(&mut evidence).await?;
+        }
+        Ok(())
+    }
+    /// Saves a streaming message that is waiting for its commit deadline now,
+    /// so a wait that cannot poll that deadline does not hold it back.
+    pub(crate) async fn flush_pending_messages(&self) -> Result<(), StorageError> {
+        let mut evidence = self.evidence.lock().await;
+        if evidence.message_commit.is_some() {
             self.save_observed(&mut evidence).await?;
         }
         Ok(())
@@ -1390,6 +1407,28 @@ impl SessionManager {
         id: &'a ExecutionId,
     ) -> InvocationObservations<'a> {
         InvocationObservations { manager: self, id }
+    }
+
+    /// Borrow one invocation's retained events while `body` runs.
+    ///
+    /// The evidence mutex is held for the call. `body` copies what it needs and
+    /// returns before any hook callback. This method does not itself copy payloads.
+    pub(crate) async fn with_invocation_events<R>(
+        &self,
+        index: usize,
+        body: impl FnOnce(&[ExecutionEvent]) -> R + Send,
+    ) -> Result<R, StorageError> {
+        let evidence = self.evidence.lock().await;
+        let record = evidence
+            .observed
+            .as_ref()
+            .ok_or_else(|| StorageError::Corrupt("invocation observations have no session".into()))?
+            .invocations
+            .get(index)
+            .ok_or_else(|| {
+                StorageError::Corrupt("invocation observations have no submitted invocation".into())
+            })?;
+        Ok(body(&record.events))
     }
     pub(crate) fn retire_observations(&self, id: &ExecutionId) {
         if let Some(authority) = self

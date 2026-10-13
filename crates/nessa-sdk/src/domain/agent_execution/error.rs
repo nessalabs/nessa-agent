@@ -132,6 +132,9 @@ pub enum ExecutionError {
     UnofferedAnswer,
     /// The selected option was not offered by this request.
     UnknownPermissionOption,
+    /// A cancellation code is in the namespace only the runner writes, and was
+    /// not issued for the review it would withdraw.
+    ReservedCancellationCode,
 }
 impl fmt::Display for ExecutionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

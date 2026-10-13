@@ -1,14 +1,45 @@
 //! Typed extension points around a session invocation, independent of providers.
 //!
 //! ```text
+//! retained events --bounded copy--> InvocationObservationWindow --> hook callback
+//! PermissionRequested --> ProposedToolCall --> permission-review hook
+//! ToolVerdict::Allow --> retain the review
+//! ToolVerdict::Stopped --> retain, do not publish, do not answer
+//! ToolVerdict::refuse(_, Continue) --> retain, Agent answers the provider's deny option as the hook
+//! ToolVerdict::refuse(_, EndTurn) --> retain, withdraw as the hook (hook-refusal.end_turn), then cancel the turn when the binding can
+//! ToolVerdict::refuse(_, CloseSession) --> retain, withdraw as the hook, close with PolicyRefusal
 //! Agent dispatch -> before hooks -> ProviderSessionBackend -> after hooks -> caller
 //! ```
-//! Arrows show call order. Hooks inspect borrowed application input/results;
-//! domain transitions and mandatory audit delivery keep their existing owners.
+//!
+//! The copy is the evaluation suffix: at most 256 events and 64 KiB, including
+//! thinking. The evidence lock is released before the callback. A permission
+//! review is human-paced, so the hook runs on a blocking thread until the
+//! session's message-commit clock advances two seconds, and it yields to stop.
+//! A callback that overruns keeps that thread until it returns; its late verdict
+//! is discarded. One process runs at most 32 of those threads. Every event kind
+//! is visible; [`ObservationKind`]
+//! tells them apart. Tools the harness runs without asking never reach the
+//! permission-review hook.
+
+mod observations;
+
+pub(crate) use observations::EvaluationSuffix;
+pub use observations::{
+    InvocationObservationWindow, ObservationKind, PhrasePresence, ProposedToolCall,
+};
 
 mod invocation;
 
-pub use invocation::{HookError, HookFailure, InvocationContext, InvocationHook, InvocationHooks};
+pub use invocation::{
+    HookError, HookFailure, InvocationContext, InvocationHook, InvocationHooks, ToolRefusal,
+    ToolVerdict,
+};
+pub(crate) use invocation::{
+    HookFailureKind, PermissionHookThreadGuard, PermissionReviewDecision, PRE_TOOL_HOOK_DEADLINE,
+};
 
 mod callbacks;
-pub use callbacks::{AfterInvocation, AfterInvocationEvent, BeforeInvocation, HookRegistration};
+pub use callbacks::{
+    AfterInvocation, AfterInvocationEvent, BeforeInvocation, BeforePermissionReview,
+    HookRegistration,
+};
