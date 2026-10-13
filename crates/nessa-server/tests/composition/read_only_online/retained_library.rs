@@ -353,11 +353,8 @@ fn a_reader_whose_direct_dial_is_refused_reads_through_the_relay() {
     let credential = saved.credential().as_str().to_owned();
     let (key, pin, _) = saved.into_enrollment().into_parts();
     let identity = NativeIdentity::restore(key).unwrap();
-    // A port nothing listens on: the direct dial is refused at once.
-    let refused = std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap();
+    // Port 0 is never a listener's: the direct dial is refused at once.
+    let refused = SocketAddr::from(([127, 0, 0, 1], 0));
     let read = |cache: &mut RetainedCache, address: SocketAddr, relay: Option<&str>| {
         cache.read(
             ReaderAccess {

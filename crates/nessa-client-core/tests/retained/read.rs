@@ -385,3 +385,51 @@ fn uncertain_cache_commit_is_distinct_from_a_pre_effect_failure() {
     assert_eq!(cache_failure(&CacheError::Unavailable), ReadFailure::Cache);
     assert!(!holds_back(ReadFailure::CacheUncertain));
 }
+
+/// A monotonic clock the test moves by hand.
+struct Moved(std::sync::atomic::AtomicU64);
+impl MonotonicClock for Moved {
+    fn elapsed_ms(&self) -> u64 {
+        self.0.load(Ordering::SeqCst)
+    }
+}
+
+/// A connect with a relay ends once the read's budget on the injected clock
+/// is spent, though neither dial has answered and their own deadlines, on
+/// the system clock, are far off.
+#[test]
+fn a_relayed_connect_ends_when_the_injected_budget_is_spent() {
+    // A relay that takes the connection and never answers it.
+    let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let clock = Arc::new(Moved(std::sync::atomic::AtomicU64::new(0)));
+    let ending = Arc::new(Stopping {
+        stop: ReadStop::new(),
+        clock: clock.clone(),
+        until: 1_000,
+    });
+    let connector = StoppableConnector {
+        ending,
+        relay: Some(RelayRoute {
+            address: silent.local_addr().unwrap().to_string(),
+            key: [3; 32],
+        }),
+    };
+    let started = std::time::Instant::now();
+    let ended = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            std::thread::sleep(Duration::from_millis(100));
+            clock.0.store(1_000, Ordering::SeqCst);
+        });
+        // Port 0 is never a listener's, so the direct dial is refused and
+        // the relay leg starts at once.
+        connector.connect(
+            SocketAddr::from(([127, 0, 0, 1], 0)),
+            Duration::from_secs(30),
+        )
+    });
+    let Err(error) = ended else {
+        panic!("a silent relay joined nothing");
+    };
+    assert_eq!(error.kind(), std::io::ErrorKind::ConnectionAborted);
+    assert!(started.elapsed() < Duration::from_secs(15));
+}

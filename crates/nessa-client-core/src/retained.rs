@@ -262,14 +262,15 @@ impl Cancellation for Stopping {
     }
 }
 struct StoppableConnector {
-    stop: Arc<ReadStop>,
+    /// The read's stop and its budget on the injected clock.
+    ending: Arc<Stopping>,
     relay: Option<RelayRoute>,
 }
 impl GatewayConnector for StoppableConnector {
     fn connect(&self, address: SocketAddr, timeout: Duration) -> IoResult<Box<dyn GatewayStream>> {
         // A dial itself cannot be stopped; it is bounded by `timeout`, at
         // most [`HANDSHAKE`]. With a relay the race between the two dials
-        // asks the stop as it waits.
+        // asks the stop and the injected clock's budget as it waits.
         let socket = match &self.relay {
             None => TcpStream::connect_timeout(&address, timeout)?,
             Some(route) => {
@@ -279,12 +280,12 @@ impl GatewayConnector for StoppableConnector {
                     move |left| relay_leg(&route, left),
                     timeout,
                     HEAD_START,
-                    &|| self.stop.is_stopped(),
+                    &|| self.ending.cancelled(),
                 )?
             }
         };
-        self.stop.register(&socket)?;
-        Ok(Box::new(Socket::new(socket, self.stop.clone())))
+        self.ending.stop.register(&socket)?;
+        Ok(Box::new(Socket::new(socket, self.ending.stop.clone())))
     }
 }
 /// A read's socket. Each wait the caller sets is taken in slices of at most
@@ -472,7 +473,6 @@ impl RetainedCache {
         max_withdrawn: usize,
         withdrawn: &mut Vec<String>,
     ) -> Result<ReadReport, ReadFailure> {
-        let stop = &ending.stop;
         let receiver = Id::new(access.receiver).map_err(|_| ReadFailure::Protocol)?;
         let policy = GatewayPolicy::new(
             HANDSHAKE_MS,
@@ -489,7 +489,7 @@ impl RetainedCache {
             },
             access.client_id,
             &StoppableConnector {
-                stop: stop.clone(),
+                ending: ending.clone(),
                 // A pin that is no Ed25519 key fails TLS whatever the route.
                 relay: access.relay.and_then(|address| {
                     Some(RelayRoute {
