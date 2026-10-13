@@ -653,7 +653,10 @@ async fn conversation_image_offer_matches_the_composed_upload_normalizer() {
         );
         let (service, provider, _, _) = image_fixture(
             true,
-            Some(Arc::new(ConversationHolds::new(uploads.clone()))),
+            Some(Arc::new(ConversationHolds::new(
+                uploads.clone(),
+                fixture.reads(),
+            ))),
         );
         let id = ConversationId::new(CONVERSATION).unwrap();
         service
