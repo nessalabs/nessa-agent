@@ -14,7 +14,8 @@
 //!
 //! Arrows are steps, in order. The pairing is a port so every answer,
 //! failures included, can be given by a test.
-use super::{redial::stopped, timer::Timer};
+use super::redial::stopped;
+use crate::timer::Timer;
 use std::{future::Future, time::Duration};
 use tokio::sync::watch;
 
