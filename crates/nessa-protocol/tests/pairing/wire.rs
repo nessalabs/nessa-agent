@@ -1,4 +1,6 @@
 //! Public codec tests. Domain transitions prove representation, not enrollment effects.
+#[path = "wire/owner_phone.rs"]
+mod owner_phone;
 use crate::pairing::{
     wire::{
         decode_reply, decode_request, encode_challenge, encode_hello, encode_refused,
