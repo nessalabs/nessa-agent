@@ -25,11 +25,13 @@ import {
   closeConversation,
   AttachmentStagingError,
   removeFile,
+  uploadChanged,
   scenarioEffects,
   useConversation,
 } from "../../conversation/testing"
 import { makeStore } from "../../store"
 import { useAttachmentUploads } from "./use-attachment-uploads"
+import { useFileAttachments } from "./use-file-attachments"
 
 const DIGEST = `sha256:${"ab".repeat(32)}`
 
@@ -488,4 +490,86 @@ it("AL11: an old owner's completion cannot wake a replacement's custom live proj
   expect(
     replacement.store.getState().conversation.conversations[0]!.draft[1],
   ).toMatchObject({ placementId: "a2", upload: { status: "not-started" } })
+})
+
+it.each(["resolve", "reject"] as const)(
+  "AL15: detached queue stays idle after %s and remount resumes a sibling",
+  async (outcome) => {
+    const replies: ReturnType<typeof deferred<typeof stored>>[] = []
+    const stage = vi.fn(() => {
+      const reply = deferred<typeof stored>()
+      replies.push(reply)
+      return reply.promise
+    })
+    const scope = owner(4, stage)
+    await showOwner(scope)
+    await vi.waitFor(() => expect(stage).toHaveBeenCalledTimes(3))
+    await React.act(async () => root.render(null))
+    await React.act(async () => {
+      if (outcome === "resolve") replies[0]!.resolve(stored)
+      else replies[0]!.reject(new AttachmentStagingError("unavailable"))
+    })
+    expect(stage).toHaveBeenCalledTimes(3)
+    expect(scope.store.getState().conversation.conversations[0]!.draft[3]).toMatchObject({
+      upload: { status: "not-started" },
+    })
+    await showOwner(scope)
+    await vi.waitFor(() => expect(stage).toHaveBeenCalledTimes(4))
+    await React.act(async () =>
+      replies.slice(1).forEach((reply) => reply.resolve(stored)),
+    )
+  },
+)
+
+it("AL16: preview follows the current placement, retires on owner swap, and never resurrects", async () => {
+  let attachments: ReturnType<typeof useFileAttachments> | undefined
+  const previews: Array<{
+    owner: Parameters<typeof useFileAttachments>[1]
+    viewed: ReturnType<typeof useFileAttachments>["viewed"]
+  }> = []
+  function PreviewSurface({
+    resources,
+  }: {
+    resources: Parameters<typeof useFileAttachments>[1]
+  }) {
+    attachments = useFileAttachments(useConversation(), resources)
+    previews.push({ owner: resources, viewed: attachments.viewed })
+    return null
+  }
+  const original = owner(1, async () => stored)
+  const replacement = owner(1, async () => stored)
+  async function show(scope: ReturnType<typeof owner>) {
+    await React.act(async () =>
+      root.render(
+        React.createElement(Provider, {
+          store: scope.store,
+          children: React.createElement(PreviewSurface, {
+            resources: scope.dependencies.attachments,
+          }),
+        }),
+      ),
+    )
+  }
+  await show(original)
+  await React.act(async () => attachments!.open(attachments!.files[0]!))
+  expect(attachments!.viewed?.placementId).toBe("a1")
+  await React.act(async () =>
+    original.store.dispatch(
+      uploadChanged({ conversationId: "c0", placementId: "a1", to: "uploading" }),
+    ),
+  )
+  expect(attachments!.viewed?.upload.status).toBe("uploading")
+  await show(replacement)
+  expect(attachments!.files[0]!.placementId).toBe("a1")
+  expect(
+    previews
+      .filter((render) => render.owner === replacement.dependencies.attachments)
+      .every((render) => render.viewed === null),
+  ).toBe(true)
+  expect(attachments!.viewed).toBeNull()
+  await show(original)
+  expect(attachments!.viewed).toBeNull()
+  await React.act(async () => attachments!.open(attachments!.files[0]!))
+  await React.act(async () => original.store.dispatch(removeFile("a1")))
+  expect(attachments!.viewed).toBeNull()
 })

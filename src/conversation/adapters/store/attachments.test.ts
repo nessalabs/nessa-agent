@@ -8,6 +8,8 @@
  * effect that must stay in flight is a promise the test resolves itself.
  */
 import { expect, it, vi } from "vitest"
+import { attachmentResourceUsage } from "../../application/queries/attachment-resources"
+import { conversationDeleted } from "./history"
 import { makeStore } from "../../../store"
 import { createDependencies } from "../../../composition/dependencies"
 import {
@@ -27,6 +29,13 @@ import { scenarioEffects } from "../scenario/effects"
 import { followByReading } from "../../testing"
 import {
   attachFiles,
+  conversationReducer,
+  openConversation,
+  bindConversation,
+  submissionStarted,
+  submissionAccepted,
+  setActive,
+  closeConversation,
   closeTab,
   controlConversation,
   followConversation,
@@ -775,3 +784,77 @@ it("says an image cannot go into a conversation deleted elsewhere, and offers no
     upload: { status: "failed", reason: "conversation-deleted" },
   })
 })
+
+it.each(["remove", "close", "delete"] as const)(
+  "AL14: %s of the final needed references immediately bounds preview-only resources",
+  (exit) => {
+    let tabs = conversationReducer(undefined, { type: "init" })
+    const dispatch = (action: Parameters<typeof conversationReducer>[1]) => {
+      tabs = conversationReducer(tabs, action)
+    }
+    const size = 64 * 1024 * 1024
+    for (let index = 1; index <= 2; index++) {
+      const file = {
+        type: "file" as const,
+        resourceId: `shared-${index}`,
+        name: "image.png",
+        mimeType: "image/png",
+        size,
+        previewUrl: `blob:${index}`,
+        path: null,
+      }
+      dispatch(attachFiles({ conversationId: "c0", files: [file] }))
+      const part = tabs.conversations[0]!.draft[0]!
+      if (part.type !== "file") throw new Error("File not admitted")
+      dispatch(
+        uploadChanged({
+          conversationId: "c0",
+          placementId: part.placementId,
+          to: "uploading",
+        }),
+      )
+      dispatch(
+        uploadChanged({
+          conversationId: "c0",
+          placementId: part.placementId,
+          to: "stored",
+          image: stored,
+        }),
+      )
+      dispatch(openConversation())
+      dispatch(bindConversation({ id: tabs.activeId, serverId: `server-${index}` }))
+      dispatch(attachFiles({ conversationId: tabs.activeId, files: [file] }))
+      dispatch(
+        submissionStarted({
+          conversationId: "c0",
+          executionId: `e${index}`,
+          actionId: `q${index}`,
+          mode: "queued",
+          content: tabs.conversations[0]!.draft,
+        }),
+      )
+      dispatch(submissionAccepted({ id: "c0", executionId: `e${index}` }))
+    }
+    expect(attachmentResourceUsage(tabs).needed.size).toBe(2)
+    for (let index = 1; index <= 2; index++) {
+      dispatch(setActive(`c${index}`))
+      const part = tabs.conversations.find((tab) => tab.id === `c${index}`)!.draft[0]!
+      if (part.type !== "file") throw new Error("File not admitted")
+      if (exit === "remove") dispatch(removeFile(part.placementId))
+      else if (exit === "close") dispatch(closeConversation(`c${index}`))
+      else dispatch(conversationDeleted(`server-${index}`))
+    }
+    expect(attachmentResourceUsage(tabs).needed.size).toBe(0)
+    expect(
+      [...attachmentResourceUsage(tabs).previews.values()].reduce(
+        (sum, weight) => sum + weight,
+        0,
+      ),
+    ).toBe(size)
+    expect(
+      tabs.conversations[0]!.turns.flatMap((turn) =>
+        turn.from === "user" ? turn.content : [],
+      ).filter((part) => part.type === "image-reference"),
+    ).toHaveLength(1)
+  },
+)

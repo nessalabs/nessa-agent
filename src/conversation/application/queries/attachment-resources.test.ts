@@ -180,3 +180,31 @@ function admissionTypeChecks() {
   return [placement, upload]
 }
 void admissionTypeChecks
+
+it("AL13: admission ignores caller array methods and captures every field once", () => {
+  const reads = new Map<string, number>()
+  const descriptor = { ...input, placementId: "caller", upload: { status: "stored" } }
+  for (const [key, value] of Object.entries(input))
+    Object.defineProperty(descriptor, key, {
+      get: () => {
+        reads.set(key, (reads.get(key) ?? 0) + 1)
+        return reads.get(key) === 1 ? value : key === "size" ? -1 : "changed"
+      },
+    })
+  const files = [descriptor]
+  Object.defineProperty(files, "map", { value: () => files })
+  Object.defineProperty(files, Symbol.iterator, {
+    value: () => {
+      throw new Error("caller iterator")
+    },
+  })
+  const tabs = attachFiles(emptyLocalTabs(), files, "c0")
+  expect(placed(tabs)).toEqual({
+    ...input,
+    placementId: "a1",
+    upload: { status: "not-started" },
+  })
+  expect(tabs.nextPlacementId).toBe(2)
+  for (const key of ["resourceId", "name", "mimeType", "size", "previewUrl", "path"])
+    expect(reads.get(key)).toBe(1)
+})

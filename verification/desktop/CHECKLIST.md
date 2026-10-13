@@ -1409,7 +1409,7 @@ zero times, preserves the draft and paints **Attachments still loading**; read
 completion allows one send containing the text and one image. A second URL drop
 while the first fetch is pending paints **Still reading files** and starts no
 second fetch. The JSON reports send, attachment, refusal and page-error counts
-for all eighteen engine/scenario pairs. A late upload success or failure for a closed
+for all twenty engine/scenario pairs. A late upload success or failure for a closed
 parent leaves the replacement parent's shared-resource tile uploading (one rendered
 `data-upload="uploading"` tile), per [attachment lifetimes](../../docs/design/attachment-lifetimes.md).
 The same-parent remove/re-add cases also retain one uploading tile after an old
@@ -1417,7 +1417,10 @@ success/failure. Shared bytes receive two distinct placement uploads; removing
 one aborts exactly one, keeps the other alive, and releases bytes only after the
 last parent closes. A Provider replacement gives the new store's `a1` its own
 upload: the old completion leaves its single rendered tile uploading, and only
-its own reply makes that tile stored. This verifies browser interactions with the
+its own reply makes that tile stored. An open original preview disappears when
+the owner changes, despite matching local conversation/placement numbers. Unmounting
+with three active uploads leaves the fourth queued after a completion; remounting
+resumes that sibling. This verifies browser interactions with the
 production panel; it does not exercise an operating-system file picker.
 
 

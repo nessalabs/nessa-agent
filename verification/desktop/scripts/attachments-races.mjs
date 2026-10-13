@@ -61,6 +61,7 @@ try {
         "upload-placement-failure",
         "shared-resource",
         "owner-swap",
+        "detached-queue",
       ]) {
         const context = await browser.newContext({
           viewport: { width: 800, height: 900 },
@@ -78,15 +79,49 @@ try {
             () => typeof window.__attachmentProbe?.drop === "function",
           )
           const snapshot = () => page.evaluate(() => window.__attachmentProbe.snapshot())
-          if (scenario === "owner-swap") {
+          if (scenario === "detached-queue") {
+            await page.evaluate(() => window.__attachmentProbe.startDetachedUploads())
+            await page.waitForFunction(
+              () => window.__attachmentProbe.snapshot().detachedStageCount === 3,
+            )
+            await page.evaluate(() => window.__attachmentProbe.detachCoordinator())
+            await page.locator(selectors.editor).waitFor({ state: "detached" })
+            await page.evaluate(() => window.__attachmentProbe.finishDetachedUpload())
+            await page.waitForFunction(
+              () =>
+                window.__attachmentProbe
+                  .snapshot()
+                  .draft.find((part) => part.type === "file")?.upload.status === "stored",
+            )
+            assert.equal((await snapshot()).detachedStageCount, 3)
+            await page.evaluate(() => window.__attachmentProbe.remountCoordinator())
+            await page.waitForFunction(
+              () => window.__attachmentProbe.snapshot().detachedStageCount === 4,
+            )
+            assert.equal(await page.locator(selectors.uploadTile).count(), 4)
+            await page.screenshot({ path: `/tmp/816-r2-remount-${engine}.png` })
+          } else if (scenario === "owner-swap") {
             await page.evaluate(() => window.__attachmentProbe.startOwnerUpload())
             await page.waitForFunction(
               () => window.__attachmentProbe.snapshot().sharedUploads.length === 1,
             )
+            await page
+              .getByRole("button", { name: "Open original.png", exact: true })
+              .click()
+            await page
+              .getByRole("dialog", { name: "original.png", exact: true })
+              .waitFor()
+            await page.screenshot({ path: `/tmp/816-r2-preview-original-${engine}.png` })
             await page.evaluate(() => window.__attachmentProbe.swapOwner())
+            await page
+              .getByRole("dialog", { name: "original.png", exact: true })
+              .waitFor({ state: "detached" })
             await page.waitForFunction(
               () => window.__attachmentProbe.snapshot().sharedUploads.length === 2,
             )
+            await page.screenshot({
+              path: `/tmp/816-r2-preview-replacement-${engine}.png`,
+            })
             await page.evaluate(() => window.__attachmentProbe.finishOriginalOwner())
             assert.equal(
               (await snapshot()).draft.find((part) => part.type === "file").upload.status,

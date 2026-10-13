@@ -31,6 +31,8 @@ resource together. Needed resources remain held; absent resources are released.
 Within a draft, duplicate resource descriptors remain refused; separate drafts may
 share one resource with independent placements and upload outcomes.
 
+Admission reads the indexed descriptor fields once into an ordinary snapshot; caller array methods and getters do not participate in validation or issuance. Every changed conversation publication reconciles the preview bound through the same resource classification, including removing the final needed reference.
+
 ## Ordering and enforcement
 
 | Row | Input or ordering | Required result | Enforcer |
@@ -48,9 +50,15 @@ share one resource with independent placements and upload outcomes.
 | AL11 | Provider replaces its store/resources while an old upload waits | Queues belong to resource owners; old completion neither settles nor pumps replacement owner | Owner-keyed scheduler and Provider-swap tests |
 | AL12 | Revisit the same owner, or unmount and mount another owner before completion | Original capacity and abort ownership survive; only the corresponding queue changes | Scheduler revisit/unmount tests |
 
+| AL13 | Caller overrides array methods or descriptor getters vary across reads | Validate and admit the same copied snapshot; fresh owner-issued placement | Admission snapshot tests |
+| AL14 | Remove, close, delete or replace the final needed reference | Newly preview-only resources obey the bound immediately | Reducer publication reconciliation tests |
+| AL15 | Coordinator unmounts while three active uploads hold a queued sibling | Physical uploads settle without starting the sibling; remount resumes it | Owner-scoped pump subscription and tests |
+| AL16 | Preview is open while owner changes or placement disappears | No retired preview is rendered; current descriptor follows its placement | Owner/placement selection tests |
+
 A resource manager belongs to one store lifetime; normal composition creates one
 per store. Scheduler bookkeeping is weakly keyed by that existing owner, so local
 placement numbers may repeat in another store without sharing slots or settlements.
+Each mounted coordinator subscribes one pump callback to its resource owner and disposes that subscription on cleanup. Completion signals only the currently attached subscriber; queue capacity survives detached intervals. Preview selection retains the owner and placement, and resolves the current descriptor from the draft on every render.
 Already admitted uploads retain their original store and queue across a component
 unmount; React ownership changes confer no authority over the replacement owner.
 

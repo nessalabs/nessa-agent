@@ -35,17 +35,24 @@ export function attachFiles(
   conversationId: string,
 ): LocalTabs {
   const current = findConversation(tabs, conversationId)
-  if (!current || files.length === 0) return tabs
+  const count = files.length
+  if (!current || count === 0) return tabs
   // Validate the whole resource batch before consuming placement identities.
-  const inputs = files.map((file) => ({
-    type: "file" as const,
-    resourceId: file.resourceId,
-    name: file.name,
-    mimeType: declaredMediaType(file.name, file.mimeType),
-    size: file.size,
-    previewUrl: file.previewUrl,
-    path: file.path,
-  }))
+  const inputs: AttachmentInput[] = []
+  for (let index = 0; index < count; index++) {
+    const file = files[index]
+    if (!file) return tabs
+    const { resourceId, name, mimeType, size, previewUrl, path } = file
+    inputs.push({
+      type: "file",
+      resourceId,
+      name,
+      mimeType: declaredMediaType(name, mimeType),
+      size,
+      previewUrl,
+      path,
+    })
+  }
   const proposed = [...current.draft, ...inputs]
   if (!validDraftAttachments(proposed)) return tabs
   let allocated = tabs

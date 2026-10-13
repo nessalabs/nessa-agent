@@ -48,6 +48,10 @@ let sharedReplies:
 let sharedResourceId: string | undefined
 let uploadReached: (() => void) | undefined
 let uploadResult: Promise<unknown> | undefined
+const detachedReplies: Array<
+  (image: { digest: string; mimeType: "image/png"; size: number }) => void
+> = []
+let detached = false
 const sends: unknown[] = []
 let fetchCalls = 0
 const resources = createAttachmentResources()
@@ -58,6 +62,7 @@ const store = makeStore({
   conversation: {
     ...effects,
     stageAttachment: (id, file, bytes, signal) => {
+      if (detached) return new Promise((resolve) => detachedReplies.push(resolve))
       if (sharedReplies)
         return new Promise((resolve, reject) => {
           const reply = { resolve, aborted: false }
@@ -197,6 +202,27 @@ const probe = {
       size: png.length,
     }),
   closeSharedParent: () => store.dispatch(closeConversation("c1")),
+  startDetachedUploads: () => {
+    detached = true
+    store.dispatch(
+      bindConversation({ id: "c0", serverId: "00000000-0000-4000-8000-000000000001" }),
+    )
+    const files = resources.add(
+      Array.from(
+        { length: 4 },
+        (_, index) => new File([png], `${index}.png`, { type: "image/png" }),
+      ),
+    )
+    store.dispatch(attachFiles({ conversationId: "c0", files }))
+  },
+  detachCoordinator: () => application.render(null),
+  remountCoordinator: () => showScope(store, resources),
+  finishDetachedUpload: () =>
+    detachedReplies[0]!({
+      digest: `sha256:${"ef".repeat(32)}`,
+      mimeType: "image/png",
+      size: png.length,
+    }),
   startOwnerUpload: () => {
     sharedReplies = new Map()
     store.dispatch(
@@ -250,6 +276,7 @@ const probe = {
       size: png.length,
     }),
   snapshot: () => ({
+    detachedStageCount: detachedReplies.length,
     sharedUploads: sharedReplies
       ? [...sharedReplies].map(([id, reply]) => ({ id, aborted: reply.aborted }))
       : [],

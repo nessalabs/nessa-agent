@@ -136,7 +136,8 @@ export function useFileAttachments(
   } | null>(null)
   const [viewed, setViewed] = React.useState<{
     conversationId: string
-    file: FileAttachment
+    owner: AttachmentResources
+    placementId: string
   } | null>(null)
   React.useEffect(() => {
     mounted.current = true
@@ -209,17 +210,17 @@ export function useFileAttachments(
   React.useEffect(() => {
     if (
       viewed &&
-      !chat.conversations.some(
-        (conversation) =>
-          conversation.id === viewed.conversationId &&
-          conversation.draft.some(
-            (part) =>
-              part.type === "file" && part.placementId === viewed.file.placementId,
-          ),
-      )
+      (viewed.owner !== resources ||
+        !chat.conversations.some(
+          (conversation) =>
+            conversation.id === viewed.conversationId &&
+            conversation.draft.some(
+              (part) => part.type === "file" && part.placementId === viewed.placementId,
+            ),
+        ))
     )
       setViewed(null)
-  }, [chat.conversations, viewed])
+  }, [chat.conversations, resources, viewed])
   // Somebody with a file attached is somebody who may open it.
   const anyFiles = chat.conversations.some((conversation) =>
     conversation.draft.some((part) => part.type === "file"),
@@ -581,15 +582,26 @@ export function useFileAttachments(
     conversationOf,
     chooseFiles: () => void chooseFiles(),
     addChosenFiles,
-    viewed: viewed?.conversationId === chat.active.id ? viewed.file : null,
-    open: (file: FileAttachment) => setViewed({ conversationId: chat.active.id, file }),
+    viewed:
+      viewed?.owner === resources && viewed.conversationId === chat.active.id
+        ? (chat.active.draft.find(
+            (part): part is FileAttachment =>
+              part.type === "file" && part.placementId === viewed.placementId,
+          ) ?? null)
+        : null,
+    open: (file: FileAttachment) =>
+      setViewed({
+        conversationId: chat.active.id,
+        owner: resources,
+        placementId: file.placementId,
+      }),
     close: () => setViewed(null),
     remove: (id: string) => {
       chat.removeFile(id)
       // Taking a tile off is an answer to "attach fewer" and to "this draft is
       // too heavy" alike, whichever of them was being said.
       answerRefusal(chat.active.id)
-      if (viewed?.file.placementId === id) setViewed(null)
+      if (viewed?.placementId === id) setViewed(null)
     },
   }
 }

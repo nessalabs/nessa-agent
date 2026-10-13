@@ -6,6 +6,7 @@ import { nextUploads, uploadImage } from "../application/upload-image"
 type UploadQueue = {
   inFlight: Map<string, AbortController>
   settled: Set<string>
+  pump?: () => void
 }
 // One resource manager belongs to one store lifetime. Weak ownership keeps
 // placement numbers local without sharing slots when a Provider changes stores.
@@ -107,7 +108,7 @@ export function useAttachmentUploads(
         if (queue.inFlight.get(file.placementId) === stopping)
           queue.inFlight.delete(file.placementId)
         queue.settled.add(file.placementId)
-        if (latest.current.queue === queue) pump()
+        queue.pump?.()
       })
     }
   }, [])
@@ -127,7 +128,11 @@ export function useAttachmentUploads(
       stopping.abort()
       queue.inFlight.delete(placementId)
     }
+    queue.pump = pump
     pump()
+    return () => {
+      if (queue.pump === pump) delete queue.pump
+    }
   }, [chat, resources, digest, queue, pump])
   return {
     /** Try a failed upload again. The effect above picks it up from there. */

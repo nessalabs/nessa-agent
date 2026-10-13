@@ -19,7 +19,6 @@ import {
 import {
   createAsyncThunk,
   createSlice,
-  current as snapshot,
   type GetThunkAPI,
   type PayloadAction,
 } from "@reduxjs/toolkit"
@@ -658,16 +657,6 @@ export const stopGenerating = createAsyncThunk<
   )
 })
 
-/**
- * Apply the sent-preview bound to a draft state these reducers have already
- * changed. The rule itself is pure and returns new tabs; a reducer that has
- * touched its draft may not also return a value, so the result is written back.
- */
-function releaseOldPreviews(state: LocalTabs) {
-  const bounded = boundSentPreviews(snapshot(state), MAX_SENT_PREVIEW_BYTES)
-  state.conversations = bounded.conversations
-}
-
 const conversationSlice = createSlice({
   name: "conversation",
   initialState: emptyLocalTabs(),
@@ -773,8 +762,6 @@ const conversationSlice = createSlice({
         turn.error = undefined
       }
       if (current) current.readRequest = undefined
-      // The gateway has the message: its originals are only previews from here.
-      releaseOldPreviews(state)
     },
     submissionFailed(
       state,
@@ -845,8 +832,6 @@ const conversationSlice = createSlice({
           ...applyView(current, view),
           readRequest: requestId,
         }
-        // A view can be what first says a turn was taken.
-        releaseOldPreviews(state)
       }
     },
     controlStarted(state, action: PayloadAction<string>) {
@@ -899,7 +884,13 @@ export const {
   controlStarted,
   controlFinished,
 } = conversationSlice.actions
-export const conversationReducer = conversationSlice.reducer
+/** Reconcile all reference-changing publications through the one preview bound. */
+export const conversationReducer: typeof conversationSlice.reducer = (state, action) => {
+  const next = conversationSlice.reducer(state, action)
+  return next.conversations === state?.conversations
+    ? next
+    : boundSentPreviews(next, MAX_SENT_PREVIEW_BYTES)
+}
 // Mounted beside the tabs by the store, which reaches this vertical through this module alone.
 export { conversationHistoryReducer } from "./history"
 
