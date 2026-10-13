@@ -382,6 +382,10 @@ pub struct ConversationTool {
     /// in [`MAX_STRUCTURED_CONTENT_BYTES`]; its text stays in `details`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub structured_content: Option<String>,
+    /// The hooks choice of the process start this call ran under, read from
+    /// the call's saved events. Absent when that start recorded none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_hooks: Option<NativeHooksChoice>,
 }
 /// The most bytes of a tool's structured result a view carries. The schema
 /// states it again; `nessa-server/tests/conversation/agreement.rs` holds the two together.
@@ -437,6 +441,7 @@ impl ConversationCapabilities {
 pub struct ConversationAgentFeatures {
     pub permission_denial: PermissionDenialSupport,
     pub native_hook_suppression: NativeHookSuppressionSupport,
+    pub native_hooks: NativeHooksChoice,
     pub compaction_reporting: CompactionReportingSupport,
     pub model_switch_reporting: ModelSwitchReportingSupport,
     pub permission_deferral: PermissionDeferralSupport,
@@ -465,6 +470,7 @@ support_enum!(NativeHookSuppressionSupport {
     Unsupported,
     SupportedForUserConfiguredHooks
 });
+support_enum!(NativeHooksChoice { Off, On });
 support_enum!(CompactionReportingSupport {
     UnsupportedNotImplemented,
     SupportedWithInvocationCorrelation
@@ -513,6 +519,11 @@ impl From<OperationCapabilities> for ConversationAgentFeatures {
                 PermissionDenialCapability::SupportedForOfferedPermissionReviews => {
                     PermissionDenialSupport::SupportedForOfferedPermissionReviews
                 }
+            },
+            native_hooks: if value.native_hooks_allowed() {
+                NativeHooksChoice::On
+            } else {
+                NativeHooksChoice::Off
             },
             native_hook_suppression: match value.native_hook_suppression() {
                 NativeHookSuppressionCapability::Unknown => NativeHookSuppressionSupport::Unknown,

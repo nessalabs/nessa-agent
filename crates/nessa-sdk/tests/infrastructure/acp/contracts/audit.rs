@@ -371,12 +371,16 @@ async fn failed_session_audit_still_attempts_pending_permission_evidence() {
     );
     assert_eq!(active.await.unwrap(), Err(AgentError::AuditFailure));
     let records = audit.records.lock().unwrap();
-    assert_eq!(records.len(), 3);
-    assert!(matches!(records[2], ExecutionAuditRecord::Finished(_)));
-    let ExecutionAuditRecord::SessionClosed(closure) = &records[0] else {
+    assert!(matches!(
+        records[0],
+        ExecutionAuditRecord::NativeHooksLaunch(_)
+    ));
+    assert_eq!(records.len(), 4);
+    assert!(matches!(records[3], ExecutionAuditRecord::Finished(_)));
+    let ExecutionAuditRecord::SessionClosed(closure) = &records[1] else {
         panic!("expected closure")
     };
-    let ExecutionAuditRecord::Cancelled(permission) = &records[1] else {
+    let ExecutionAuditRecord::Cancelled(permission) = &records[2] else {
         panic!("expected cancellation")
     };
     assert_eq!(permission.request().id(), &id);

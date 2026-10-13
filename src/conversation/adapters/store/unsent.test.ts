@@ -182,6 +182,7 @@ it("known-unsent follow-up does not settle the earlier running invocation before
             agentFeatures: {
               permissionDenial: "unknown",
               nativeHookSuppression: "unknown",
+              nativeHooks: "off",
               compactionReporting: "unsupported_not_implemented",
               modelSwitchReporting: "unsupported_not_implemented",
               permissionDeferral: "unsupported_not_implemented",

@@ -40,7 +40,7 @@ use super::managed_adapter::ManagedAdapter;
 #[cfg(unix)]
 use crate::agents::application::AgentCredentialSource;
 #[cfg(unix)]
-use crate::agents::infrastructure::CredentialedClaudeProvider;
+use crate::agents::infrastructure::{CredentialedClaudeProvider, NativeHooksPreferences};
 #[cfg(unix)]
 use crate::conversation::application::{ConversationAgent, ProviderSessionErasers};
 #[cfg(any(unix, test))]
@@ -658,11 +658,14 @@ pub(super) fn providers(
     let mut providers = HashMap::new();
     let mut unavailable = HashSet::new();
     let mut erasers = ProviderSessionErasers::default();
+    let native_hooks = NativeHooksPreferences::open(directory.to_owned(), clock.clone())
+        .map_err(|error| RunError::Agent(error.to_string()))?;
     let dependencies = ProviderDependencies {
         directory: directory.to_owned(),
         clock,
         images,
         credentials,
+        native_hooks: native_hooks.clone(),
     };
     for (agent, runtime) in config.agents() {
         if agent == AgentId::Opencode || deferred.contains(&agent) {
@@ -732,6 +735,7 @@ pub(super) fn providers(
         providers,
         unavailable,
         erasers,
+        native_hooks,
     })
 }
 
@@ -893,6 +897,9 @@ pub(super) struct ConfiguredAgents {
     /// How each agent in [`Self::providers`] deletes its own record of a
     /// session, keyed by agent.
     pub erasers: ProviderSessionErasers,
+    /// The choice Claude and Codex launches read. The same value is given to
+    /// later provider builds and to the product command that changes it.
+    pub native_hooks: Arc<NativeHooksPreferences>,
 }
 
 /// Effects shared by every provider generation built for one conversation root.
@@ -903,6 +910,7 @@ pub(super) struct ProviderDependencies {
     pub(super) clock: Arc<dyn Clock>,
     pub(super) images: Arc<dyn UserImageSource>,
     pub(super) credentials: Arc<dyn AgentCredentialSource>,
+    pub(super) native_hooks: Arc<NativeHooksPreferences>,
 }
 #[cfg(unix)]
 pub(super) mod build {
@@ -911,6 +919,7 @@ pub(super) mod build {
         AgentId, AgentRuntime, AgentsConfig, CredentialedClaudeProvider, ProviderDependencies,
         RunError, ValidatedOpenCodePolicy,
     };
+    use crate::agents::application::NativeHooksAgent;
     use crate::conversation::{
         application::ProviderSessionEraser,
         infrastructure::{BindingSessionEraser, DurableExecutionAudit},
@@ -1201,7 +1210,8 @@ pub(super) mod build {
                 )
                 .map_err(failed)?
                 .with_approval_mode(approval_mode)
-                .map_err(failed)?,
+                .map_err(failed)?
+                .with_native_hooks(dependencies.native_hooks.switch(NativeHooksAgent::Claude)),
             ),
             AgentId::Codex => bound(
                 CodexAcpProvider::SANDBOX_PROFILES,
@@ -1209,7 +1219,8 @@ pub(super) mod build {
                     .map_err(failed)?
                     .with_system_prompt(prompt)
                     .with_approval_mode(approval_mode)
-                    .map_err(failed)?,
+                    .map_err(failed)?
+                    .with_native_hooks(dependencies.native_hooks.switch(NativeHooksAgent::Codex)),
             ),
             // No prompt, because there is nowhere to put one that Opencode can
             // be shown to read: its binding offers no `with_system_prompt` for

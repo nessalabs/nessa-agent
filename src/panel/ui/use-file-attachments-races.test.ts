@@ -86,7 +86,11 @@ async function mount(text = "") {
               digest: async () => `sha256:${"ab".repeat(32)}`,
               followConversationChoices: (show) => {
                 show({
-                  catalog: { agents: [], environments: [] },
+                  catalog: {
+                    agents: [],
+                    environments: [],
+                    nativeHooks: { claude: "off", codex: "off" },
+                  },
                   chosenAgent: undefined,
                 })
                 return () => undefined

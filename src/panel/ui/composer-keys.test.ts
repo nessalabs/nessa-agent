@@ -77,6 +77,7 @@ function view(
       agentFeatures: {
         permissionDenial: "unknown",
         nativeHookSuppression: "unknown",
+        nativeHooks: "off",
         compactionReporting: "unsupported_not_implemented",
         modelSwitchReporting: "unsupported_not_implemented",
         permissionDeferral: "unsupported_not_implemented",
@@ -119,7 +120,11 @@ function panel(choices?: ConversationChoices) {
           digest: async () => "digest",
           followConversationChoices: (show) => {
             show({
-              catalog: choices?.catalog ?? { agents: [], environments: [] },
+              catalog: choices?.catalog ?? {
+                agents: [],
+                environments: [],
+                nativeHooks: { claude: "off", codex: "off" },
+              },
               chosenAgent: choices?.chosenAgent,
             })
             return () => undefined
@@ -138,6 +143,7 @@ it("shows the catalog model beside the voice control on a new draft", async () =
     chosenAgent: "claude",
     catalog: {
       environments: [],
+      nativeHooks: { claude: "off", codex: "off" },
       agents: [
         {
           agent: "claude",
@@ -206,6 +212,7 @@ it("binds the displayed catalog fallback when the host choice is stale", async (
     chosenAgent: "removed-agent",
     catalog: {
       environments: [],
+      nativeHooks: { claude: "off", codex: "off" },
       agents: [
         {
           agent: "codex",

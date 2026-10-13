@@ -12,7 +12,8 @@ use super::super::{
 use super::{cleanup::ProcessCleanup, AcpConfig, StandInGrant};
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::{
-    ExecutionAudit, ExecutionEvent, ExecutionRequest, PermissionAuthoritySource,
+    ExecutionAudit, ExecutionEvent, ExecutionRequest, NativeHooksLaunchCause,
+    PermissionAuthoritySource,
 };
 use crate::domain::agent_execution::permissions::{PermissionAuthority, PermissionAuthorityError};
 
@@ -65,6 +66,7 @@ pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
     audit: Arc<dyn ExecutionAudit>,
     request: ProviderOpenRequest,
 ) -> Result<OpenedProviderSession, ProviderOpenError> {
+    let session_key = request.session_key().map(str::to_owned);
     let (session, restore, mut open_control) = request.into_parts();
     // This open's MCP servers, read once and kept for as long as the provider
     // session lives — through every restart of its process — so a harness
@@ -97,11 +99,18 @@ pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
         capabilities: capabilities.clone(),
         profile: ControlMutex::new(profile),
         audit,
+        session_key,
         permission_sequence: Arc::new(AtomicU64::new(0)),
         question_sequence: Arc::new(AtomicU64::new(0)),
         _stand_in_grant: stand_in_grant,
     };
-    let (mut generation, initial_events) = factory.start(restore)?;
+    // Only an open for a named session belongs to an attachment.
+    let cause = if factory.session_key.is_some() {
+        NativeHooksLaunchCause::Open
+    } else {
+        NativeHooksLaunchCause::DirectOpen
+    };
+    let (mut generation, initial_events) = factory.start(restore, cause)?;
     let (ready, stop_selected) = generation.ready_during_open(&mut open_control).await;
     let session_id = match ready {
         Ok(id) => id,
@@ -170,6 +179,8 @@ struct WorkerFactory<P> {
     capabilities: EffectiveCapabilities,
     profile: ControlMutex<P>,
     audit: Arc<dyn ExecutionAudit>,
+    /// The conversation this factory was opened for, when the request named one.
+    session_key: Option<String>,
     permission_sequence: Arc<AtomicU64>,
     /// Question identities, minted here for the same reason review identities
     /// are: they outlive any one provider request, including across restarts
@@ -183,15 +194,37 @@ impl<P: AcpProfile + Clone> WorkerFactory<P> {
     fn start(
         &self,
         restore: Option<ExecutionSessionId>,
+        cause: NativeHooksLaunchCause,
     ) -> Result<(Generation, EventStream), ProviderOpenError> {
+        let launch_id = NEXT_LAUNCH_ID.fetch_add(1, Ordering::Relaxed);
         let span = tracing::info_span!(target: "nessa_sdk::timing", "agent_launch",
-            launch_id = NEXT_LAUNCH_ID.fetch_add(1, Ordering::Relaxed),
+            launch_id,
             restored = restore.is_some());
         let _entered = span.enter();
         let started = self.config.clock.now();
         tracing::info!(target: "nessa_sdk::timing", phase = "process_start", "agent startup started");
-        self.operation_capabilities
-            .send_replace(ProviderOperationCapabilities::default());
+        // Negotiated facts reset until this process answers. This start reads
+        // the switch once, onto the profile. The process factory reads the
+        // same bool. The worker gets the profile cloned under the same lock,
+        // so a start racing this one cannot hand it a different capture.
+        // The hooks choice is published once the process exists and before
+        // its worker runs: a reader during startup stamps tool rows from that
+        // value, and those rows are not rewritten. A start that fails before
+        // then keeps the choice the last process ran with.
+        let (native_hooks_allowed, launched_profile) = {
+            let mut profile = self
+                .profile
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            profile.capture_native_hooks();
+            (profile.native_hooks_allowed(), profile.clone())
+        };
+        self.operation_capabilities.send_modify(|published| {
+            *published = ProviderOperationCapabilities {
+                native_hooks_allowed: published.native_hooks_allowed,
+                ..ProviderOperationCapabilities::default()
+            }
+        });
         let mut executable_use = match self.config.executable.admit() {
             Ok(guard) => guard,
             Err(failure) => {
@@ -245,6 +278,8 @@ impl<P: AcpProfile + Clone> WorkerFactory<P> {
         tracing::info!(target: "nessa_sdk::timing", phase = "process_start",
             elapsed_ms = self.config.clock.now().saturating_duration_since(started).as_secs_f64() * 1000.0,
             "agent process started");
+        self.operation_capabilities
+            .send_modify(|published| published.native_hooks_allowed = native_hooks_allowed);
         let (commands, receiver) = mpsc::channel(COMMAND_QUEUE_CAPACITY);
         let (close_requested, close_receiver) = watch::channel(None);
         let (finished, completion) = watch::channel(None);
@@ -255,10 +290,7 @@ impl<P: AcpProfile + Clone> WorkerFactory<P> {
         tokio::spawn(
             worker::run(
                 scope,
-                self.profile
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .clone(),
+                launched_profile,
                 self.config.clone(),
                 self.capabilities.clone(),
                 receiver,
@@ -273,6 +305,9 @@ impl<P: AcpProfile + Clone> WorkerFactory<P> {
                 self.operation_capabilities.clone(),
                 self.permission_authority.clone(),
                 recovery.clone(),
+                launch_id,
+                cause,
+                self.session_key.clone(),
             )
             .in_current_span(),
         );
@@ -614,7 +649,10 @@ impl<P: AcpProfile + Clone> AcpSession<P> {
                 if close_activity.has_changed().unwrap_or(true) {
                     return Err(AgentError::Closed.into());
                 }
-                let (next, events) = match self.factory.start(Some(self.id.clone())) {
+                let (next, events) = match self
+                    .factory
+                    .start(Some(self.id.clone()), NativeHooksLaunchCause::Restart)
+                {
                     Ok(started) => started,
                     Err(failure) => {
                         let (cause, cleanup, source) = failure.into_parts();
@@ -1275,6 +1313,9 @@ impl ExecutionEventStream for Events {
     }
 }
 
+#[cfg(test)]
+#[path = "../../../../tests/infrastructure/acp/sessions/launch_capabilities.rs"]
+mod launch_capabilities_tests;
 #[cfg(test)]
 #[path = "../../../../tests/infrastructure/acp/sessions/restoration_recovery.rs"]
 mod restoration_recovery_tests;

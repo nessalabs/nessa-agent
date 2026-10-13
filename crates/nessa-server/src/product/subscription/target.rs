@@ -10,9 +10,10 @@
 //!
 //! Every batch is admitted by [`authorize_batch`] and nothing else.
 //!
-//! The agent catalog (`agents.subscribe`) is followed the same way, with one
-//! wake source: the paired environments' count of connection changes
-//! (`PeerEnvironments::connections`). Its batch is the catalog `agents.list`
+//! The agent catalog (`agents.subscribe`) is followed the same way, with two
+//! wake sources: the paired environments' count of connection changes
+//! (`PeerEnvironments::connections`) and the native hooks choice's count of
+//! commands. Its batch is the catalog `agents.list`
 //! answers, read again; nothing of a conversation is read or watched for it.
 
 use super::delivery::{Deadline, Outgoing, SubscriptionDeliveries};
@@ -185,6 +186,8 @@ struct Sources {
     live: Option<watch::Receiver<u64>>,
     /// The paired environments' connection changes, for the agent catalog.
     environments: Option<watch::Receiver<u64>>,
+    /// The native hooks choice's commands, for the agent catalog.
+    hooks: Option<watch::Receiver<u64>>,
 }
 
 enum Wake {
@@ -221,6 +224,7 @@ impl Sources {
                         .live_changes(conversation),
                 ),
                 environments: None,
+                hooks: None,
             },
             Target::List { .. } => {
                 let owner = caller(session, String::new());
@@ -241,16 +245,18 @@ impl Sources {
                     catalogue: Some(catalogue),
                     live: None,
                     environments: None,
+                    hooks: None,
                 }
             }
-            // Only the paired environments change the catalog after
-            // startup; a gateway that pairs none has no source, and the
-            // catalog's first frame is its last (row AC1).
+            // Only the paired environments and the native hooks choice
+            // change the catalog after startup; a gateway with neither has
+            // no source, and the catalog's first frame is its last (row AC1).
             Target::Agents => Self {
                 records: None,
                 catalogue: None,
                 live: None,
                 environments: state.agents_catalog_changes(),
+                hooks: state.native_hooks_changes(),
             },
         })
     }
@@ -297,6 +303,12 @@ impl Sources {
                 None => std::future::pending().await,
             }
         };
+        let hooks = async {
+            match self.hooks.as_mut() {
+                Some(hooks) => hooks.changed().await,
+                None => std::future::pending().await,
+            }
+        };
         tokio::select! {
             state = records => match state {
                 ChangeWatchState::Dirty => Wake::Changed,
@@ -311,6 +323,10 @@ impl Sources {
                 Err(_) => Wake::Closed,
             },
             changed = environments => match changed {
+                Ok(()) => Wake::Changed,
+                Err(_) => Wake::Closed,
+            },
+            changed = hooks => match changed {
                 Ok(()) => Wake::Changed,
                 Err(_) => Wake::Closed,
             },
@@ -1197,6 +1213,7 @@ mod tests {
             )),
             live: Some(receiver),
             environments: None,
+            hooks: None,
         };
         assert!(!sources.drain().await, "nothing waiting");
         live.send(1).unwrap();
@@ -1226,6 +1243,7 @@ mod tests {
             catalogue: None,
             live: None,
             environments: None,
+            hooks: None,
         };
         drop(changes);
         assert!(matches!(sources.changed().await, Wake::Closed));

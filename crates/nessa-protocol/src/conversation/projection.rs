@@ -10,7 +10,7 @@ use super::view::{
     ConversationPermission, ConversationPermissionAsk, ConversationPermissionDeadline,
     ConversationPermissionOption, ConversationPermissionOptionEffect, ConversationPermissionOrigin,
     ConversationQuestion, ConversationRuntime, ConversationSelectionView, ConversationTool,
-    ConversationTranscriptState, ConversationView, MAX_STRUCTURED_CONTENT_BYTES,
+    ConversationTranscriptState, ConversationView, NativeHooksChoice, MAX_STRUCTURED_CONTENT_BYTES,
 };
 use nessa_sdk::application::agent_execution::permissions::CancellationOrigin;
 use nessa_sdk::application::agent_execution::{
@@ -249,6 +249,10 @@ pub struct Projection {
     /// leaves when its parts do: cleared for a replayed record, or its message
     /// let go.
     tool_parts: HashMap<String, HashSet<String>>,
+    /// The hooks choice each execution's tool events were saved with. One
+    /// execution runs on one process start, so its events agree. `None`
+    /// marks saved events that disagree: no choice can be shown for them.
+    execution_hooks: HashMap<String, Option<bool>>,
     /// The execution this replacement was told is active. It is who may be
     /// offered an interaction. It does not, by itself, decide that every
     /// other unfinished record was interrupted.
@@ -499,6 +503,7 @@ impl Projection {
             answered_questions: HashSet::new(),
             terminal_executions: HashSet::new(),
             tool_parts: HashMap::new(),
+            execution_hooks: HashMap::new(),
             live_here: live_here.clone(),
             holding_reviews: holding_reviews.clone(),
             unfinished_at_fold,
@@ -819,6 +824,7 @@ impl Projection {
         if self.view.messages.len() == MAX_MESSAGES {
             let evicted = self.view.messages.remove(0);
             self.tool_parts.remove(&evicted.execution_id);
+            self.execution_hooks.remove(&evicted.execution_id);
             self.view.truncated = true;
         }
         self.view.messages.push(ConversationMessage {
@@ -1283,6 +1289,30 @@ impl Projection {
             }
             ExecutionUpdate::Tool(update) => {
                 self.view.messages[index].status = ConversationMessageStatus::Running;
+                // The choice of the process start that produced the call,
+                // saved with its event. Never the choice in effect now.
+                let hooks = event.native_hooks().map(|allowed| {
+                    let agreed = match self.execution_hooks.get(id) {
+                        None => Some(allowed),
+                        Some(Some(saved)) if *saved == allowed => Some(allowed),
+                        Some(_) => None,
+                    };
+                    self.execution_hooks.insert(id.to_owned(), agreed);
+                    if agreed.is_none() {
+                        // Saved events of one execution disagree. Showing
+                        // either would be a guess, so none of its calls
+                        // shows one.
+                        for tool in self
+                            .view
+                            .tools
+                            .iter_mut()
+                            .filter(|tool| tool.execution_id == id)
+                        {
+                            tool.native_hooks = None;
+                        }
+                    }
+                    agreed
+                });
                 let position = self.view.tools.iter().position(|tool| {
                     tool.execution_id == id && tool.tool_id == update.id().as_str()
                 });
@@ -1303,9 +1333,19 @@ impl Projection {
                         status: "pending".into(),
                         mcp: None,
                         structured_content: None,
+                        native_hooks: None,
                     });
                     self.view.tools.last_mut().unwrap()
                 };
+                if let Some(agreed) = hooks {
+                    tool.native_hooks = agreed.map(|allowed| {
+                        if allowed {
+                            NativeHooksChoice::On
+                        } else {
+                            NativeHooksChoice::Off
+                        }
+                    });
+                }
                 if let Some(title) = update.title() {
                     tool.title = clipped(title, 512);
                 }
@@ -1437,6 +1477,7 @@ impl Projection {
         self.view.messages[index].parts.clear();
         self.view.messages[index].retained_text = 0;
         self.tool_parts.remove(id);
+        self.execution_hooks.remove(id);
         self.view.messages[index].event_count = 0;
         self.view.messages[index].steering_offset = record.target_event_offset;
         self.view.messages[index].status = ConversationMessageStatus::Running;

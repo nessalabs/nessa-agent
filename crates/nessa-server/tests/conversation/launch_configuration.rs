@@ -361,3 +361,141 @@ async fn a_tools_disabled_agent_opens_and_deletes_with_a_server_saved() {
         ProviderSessionDeletion::Deleted
     );
 }
+
+struct NoCredentials;
+
+impl crate::agents::application::AgentCredentialSource for NoCredentials {
+    fn read(
+        &self,
+        _: nessa_protocol::agents::AgentId,
+    ) -> Result<
+        Option<crate::agents::application::AgentCredential>,
+        crate::agents::application::AgentCredentialFailure,
+    > {
+        Ok(None)
+    }
+}
+
+/// Composition used to build Claude and Codex with a switch that ignored the
+/// stored choice: replacing `.with_native_hooks(...)` with
+/// `NativeHooksSwitch::off()` still passed every test. The provider this
+/// module's `build::provider` returns is the one a launch reads, so turning
+/// the stored choice on has to show up on that provider, and OpenCode, which
+/// is given no switch, stays off.
+#[tokio::test]
+async fn turning_the_switch_on_reaches_the_next_claude_and_codex_provider() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    let executable = root.path().join("agent");
+    std::fs::write(&executable, "").unwrap();
+    let providers = root.path().join("providers");
+    std::fs::create_dir(&providers).unwrap();
+    let catalog = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../nessa-sdk/data/models.json");
+    let clock = Arc::new(crate::composition::local_auth::SystemClock);
+    let preferences = crate::agents::infrastructure::NativeHooksPreferences::open(
+        root.path().join("hooks"),
+        clock.clone(),
+    )
+    .unwrap();
+    let dependencies = super::ProviderDependencies {
+        directory: providers,
+        clock,
+        images: Arc::new(NoImages),
+        credentials: Arc::new(NoCredentials),
+        native_hooks: preferences.clone(),
+    };
+    let claude = composed_provider(
+        &dependencies,
+        nessa_protocol::agents::AgentId::Claude,
+        "claude-sonnet-5",
+        &workspace,
+        &executable,
+        &catalog,
+    );
+    let codex = composed_provider(
+        &dependencies,
+        nessa_protocol::agents::AgentId::Codex,
+        "gpt-6-astra",
+        &workspace,
+        &executable,
+        &catalog,
+    );
+    let opencode = composed_provider(
+        &dependencies,
+        nessa_protocol::agents::AgentId::Opencode,
+        "opencode/minimax-m3",
+        &workspace,
+        &executable,
+        &catalog,
+    );
+    assert!(!claude.native_hooks_allowed());
+    assert!(!codex.native_hooks_allowed());
+    assert!(!opencode.native_hooks_allowed());
+
+    for (agent, request_id) in [
+        (
+            crate::agents::application::NativeHooksAgent::Claude,
+            "claude-on",
+        ),
+        (
+            crate::agents::application::NativeHooksAgent::Codex,
+            "codex-on",
+        ),
+    ] {
+        preferences
+            .set(crate::agents::application::NativeHooksChange {
+                agent,
+                enabled: true,
+                request_id: request_id.into(),
+                organization_id: "organization".into(),
+                principal_id: "principal".into(),
+                surface_id: "credential".into(),
+                caller_kind: "person".into(),
+            })
+            .await
+            .unwrap();
+    }
+
+    assert!(claude.native_hooks_allowed());
+    assert!(codex.native_hooks_allowed());
+    assert!(!opencode.native_hooks_allowed());
+}
+
+fn composed_provider(
+    dependencies: &super::ProviderDependencies,
+    agent: nessa_protocol::agents::AgentId,
+    model: &str,
+    workspace: &std::path::Path,
+    executable: &std::path::Path,
+    catalog: &std::path::Path,
+) -> Arc<dyn AgentProvider> {
+    let config = AgentsConfig {
+        catalog: catalog.to_owned(),
+        workspace: workspace.to_owned(),
+        mcp_servers: Vec::new(),
+        stand_ins: Default::default(),
+        mcp_stand_ins: Default::default(),
+        selected: None,
+        runtimes: HashMap::new(),
+    };
+    let runtime = AgentRuntime {
+        command: ExecutableUseSnapshot::unmanaged(executable.to_owned()),
+        args: Vec::new(),
+        model: model.into(),
+        context_tokens: 100_000,
+        output_tokens: 4096,
+        tools_enabled: true,
+    };
+    super::build::provider(
+        agent,
+        &config,
+        &runtime,
+        nessa_sdk::application::agent_execution::providers::ApprovalMode::Ask,
+        dependencies,
+        super::build::environment(agent, BTreeMap::new()),
+        None,
+    )
+    .unwrap_or_else(|error| panic!("{agent:?} provider: {error}"))
+    .provider
+}

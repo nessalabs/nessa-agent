@@ -92,7 +92,14 @@ createRoot(root).render(
         canChoosePaths
         digest={async () => `sha256:${"ab".repeat(32)}`}
         followConversationChoices={(show) => {
-          show({ catalog: { agents: [], environments: [] }, chosenAgent: undefined })
+          show({
+            catalog: {
+              agents: [],
+              environments: [],
+              nativeHooks: { claude: "off", codex: "off" },
+            },
+            chosenAgent: undefined,
+          })
           return () => undefined
         }}
       />

@@ -8,6 +8,7 @@
 //!      │   source means)        own conventions)    variable and file are)
 //!      └──────────────reads a named file through────────▶
 //!   credentialed_claude.rs ──reads──▶ agent_credentials.rs ──▶ keychain
+//!   native_hooks.rs ──writes──▶ native-hooks.json and audit/native-hooks
 //! ```
 //!
 //! The arrows point one way: an agent's module knows nothing about how its
@@ -28,7 +29,9 @@ mod codex;
 mod credentialed_claude;
 mod credentials;
 mod local;
+mod native_hooks;
 pub use agent_credentials::LocalAgentCredentials;
 #[cfg(unix)]
 pub use credentialed_claude::CredentialedClaudeProvider;
 pub use local::{AgentLaunchFiles, LocalAgentProbe};
+pub use native_hooks::NativeHooksPreferences;

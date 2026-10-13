@@ -8,6 +8,7 @@ export type ConversationTranscriptState =
 export type AgentFeatures = {
   permissionDenial: "unknown" | "unsupported" | "supported_for_offered_permission_reviews"
   nativeHookSuppression: "unknown" | "unsupported" | "supported_for_user_configured_hooks"
+  nativeHooks: "off" | "on"
   compactionReporting:
     "unsupported_not_implemented" | "supported_with_invocation_correlation"
   modelSwitchReporting: "unsupported_not_implemented" | "supported_after_validated_switch"

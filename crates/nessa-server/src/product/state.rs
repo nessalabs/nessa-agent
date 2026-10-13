@@ -2,13 +2,15 @@ use super::operational_limits::OperationalLimits;
 use super::{change_watch::WatchOwners, WatchTaskFault};
 use crate::agent_install::application::AgentInstallations;
 use crate::agents::application::{AgentProbe, SharedAgentReadiness};
+use crate::agents::infrastructure::NativeHooksPreferences;
 use crate::attachments::{
     application::{AttachmentService, HeldReads},
     entrypoint::http::UploadRoute,
 };
 use crate::conversation::application::{
-    CatalogueReadSource, ConversationRepository, ConversationService, McpAppAudit, ReadGrants,
-    ReceiverAuthority, RecordReadSource, WatchCatalogue, WatchNamespaces, WatchRecords,
+    CatalogueReadSource, ConversationRepository, ConversationService, McpAppAudit,
+    ReceiverAuthority, RecordReadSource, ShareGrants, WatchCatalogue, WatchNamespaces,
+    WatchRecords,
 };
 use crate::conversation::infrastructure::UuidWatchNamespaces;
 pub(crate) use crate::core::limit_log::note_limit;
@@ -42,7 +44,7 @@ use tokio::sync::{watch, Semaphore};
 pub(crate) type PassiveReadAuthorities = (
     Arc<dyn ReceiverAuthority>,
     Arc<dyn ConversationRepository>,
-    Arc<dyn ReadGrants>,
+    Arc<dyn ShareGrants>,
 );
 
 /// The paired environments connected now, as `PeerEnvironments` answers
@@ -122,6 +124,12 @@ pub struct ProductRouteState {
     pub(crate) agent_installations: Option<Arc<dyn AgentInstallations>>,
     pub(crate) installs: Arc<Semaphore>,
     pub(crate) agents_catalog: Option<Arc<AgentsListResult>>,
+    /// Claude and Codex native-hook choices. None when this route has no
+    /// conversation directory. OpenCode is not in the store.
+    pub(crate) native_hooks: Option<Arc<NativeHooksPreferences>>,
+    /// The registry's principal kinds, for the native-hooks audit. None in a
+    /// route that has no registry; a change then records `unknown`.
+    pub(crate) caller_kinds: Option<Arc<dyn crate::agents::application::CallerKindSource>>,
     /// The paired environments connected now, by name: added to the
     /// catalog's places each time it is read, since they come and go.
     pub(crate) connected_environments: Option<ConnectedEnvironments>,
@@ -280,6 +288,8 @@ impl ProductRouteState {
             record_source: None,
             catalogue_source: None,
             agents_catalog: None,
+            native_hooks: None,
+            caller_kinds: None,
             connected_environments: None,
             agent_installations: None,
             installs: Arc::new(Semaphore::new(1)),
@@ -365,9 +375,9 @@ impl ProductRouteState {
         mut self,
         receivers: Arc<dyn ReceiverAuthority>,
         conversations: Arc<dyn ConversationRepository>,
-        read_grants: Arc<dyn ReadGrants>,
+        share_grants: Arc<dyn ShareGrants>,
     ) -> Self {
-        self.passive_read = Some((receivers, conversations, read_grants));
+        self.passive_read = Some((receivers, conversations, share_grants));
         self
     }
 
@@ -420,6 +430,21 @@ impl ProductRouteState {
         self
     }
 
+    /// The native-hook choices Claude and Codex launches read.
+    pub fn with_native_hooks(mut self, native_hooks: Arc<NativeHooksPreferences>) -> Self {
+        self.native_hooks = Some(native_hooks);
+        self
+    }
+
+    /// Where a native-hooks change reads the caller's kind.
+    pub fn with_caller_kinds(
+        mut self,
+        caller_kinds: Arc<dyn crate::agents::application::CallerKindSource>,
+    ) -> Self {
+        self.caller_kinds = Some(caller_kinds);
+        self
+    }
+
     /// Offer the paired environments connected when the catalog is read as
     /// places a new conversation may run, after its SSH hosts, and read it
     /// again for its subscribers when they change.
@@ -443,16 +468,29 @@ impl ProductRouteState {
                 places.extend((connected.names)().into_iter().map(Value::String));
             }
         }
+        // The stored hooks choice, read now. The composed catalog's own copy
+        // is never shown.
+        let selection = self
+            .native_hooks
+            .as_ref()
+            .map(|hooks| hooks.selection())
+            .unwrap_or_else(crate::agents::application::NativeHooksSelection::off);
+        catalog["nativeHooks"] = native_hooks_value(selection);
         Some(catalog)
     }
 
-    /// A wake-up each time the agent catalog may have changed, seen as of
-    /// now; `None` where nothing changes it after startup, as on a gateway
-    /// that pairs no environments.
+    /// A wake-up each time a paired environment may have come or gone,
+    /// seen as of now; `None` on a gateway that pairs no environments.
     pub(crate) fn agents_catalog_changes(&self) -> Option<watch::Receiver<u64>> {
         let mut changes = self.connected_environments.as_ref()?.changes.clone();
         changes.mark_unchanged();
         Some(changes)
+    }
+
+    /// A wake-up after each native hooks command, seen as of now; `None`
+    /// where hooks are not configured.
+    pub(crate) fn native_hooks_changes(&self) -> Option<watch::Receiver<u64>> {
+        Some(self.native_hooks.as_ref()?.changes())
     }
 
     /// Share one attachment service between the socket that issues tickets and
@@ -610,6 +648,22 @@ impl Default for SessionSettings {
         )
         .expect("the built-in deadlines are positive and representable")
     }
+}
+
+fn native_hooks_value(selection: crate::agents::application::NativeHooksSelection) -> Value {
+    use nessa_protocol::product::generated::{AgentsNativeHooks, NativeHooksChoice};
+    let choice = |enabled| {
+        if enabled {
+            NativeHooksChoice::On
+        } else {
+            NativeHooksChoice::Off
+        }
+    };
+    serde_json::to_value(AgentsNativeHooks {
+        claude: choice(selection.claude()),
+        codex: choice(selection.codex()),
+    })
+    .expect("generated hooks choice serializes")
 }
 
 #[cfg(test)]

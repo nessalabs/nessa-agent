@@ -49,6 +49,7 @@ mod finalized_execution;
 mod harness_host;
 mod identity;
 mod images;
+mod native_hooks;
 mod open;
 mod operations;
 mod ports;
@@ -72,6 +73,7 @@ pub use harness_host::{
 };
 pub use identity::ProviderIdentity;
 pub use images::{ImageInputRefusal, UserImageError, UserImageFuture, UserImageSource};
+pub use native_hooks::NativeHooksSwitch;
 pub(crate) use open::{FailedOpenCauseSource, FailedOpenCleanup};
 pub use open::{
     ProviderCleanup, ProviderOpenControl, ProviderOpenError, ProviderOpenFuture,

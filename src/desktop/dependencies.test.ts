@@ -7,6 +7,7 @@
  * real servers' apps are registered as the views name them.
  */
 import type {
+  AgentsApi,
   AttachmentApi,
   AuthApi,
   CredentialApi,
@@ -36,6 +37,7 @@ const settingsParts = {
   auth: {} as AuthApi,
   // Read back only for a file a view names; none here does.
   attachments: {} as AttachmentApi,
+  agents: {} as AgentsApi,
 }
 
 describe("the window's widget plugins", () => {
@@ -303,6 +305,7 @@ function gatewayWithApp() {
           status: "running",
           details: "",
           input: "",
+          nativeHooks: "off",
           mcp: {
             server: "mcptest",
             tool: "show_chart",

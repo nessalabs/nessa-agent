@@ -332,6 +332,7 @@ const AGENT_TAKES_IMAGES: ProviderOperationCapabilities = ProviderOperationCapab
     image_input: true,
     permission_denial: PermissionDenialCapability::Unknown,
     native_hook_suppression: NativeHookSuppressionCapability::Unknown,
+    native_hooks_allowed: false,
     compaction_reporting: ProviderCompactionReportingCapability::Unknown,
     model_switch_reporting: ProviderModelSwitchReportingCapability::Unknown,
     permission_deferral: ProviderPermissionDeferralCapability::Unknown,

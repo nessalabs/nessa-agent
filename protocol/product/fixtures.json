@@ -104,6 +104,7 @@
       "agentFeatures": {
         "permissionDenial": "supported_for_offered_permission_reviews",
         "nativeHookSuppression": "unknown",
+        "nativeHooks": "off",
         "compactionReporting": "unsupported_not_implemented",
         "modelSwitchReporting": "unsupported_not_implemented",
         "permissionDeferral": "unsupported_not_implemented",
@@ -312,7 +313,8 @@
           }
         ]
       }
-    ]
+    ],
+    "nativeHooks": { "claude": "off", "codex": "off" }
   },
   "ConversationSetApprovalModeParams": {
     "conversationId": "00000000-0000-4000-8000-000000000001",

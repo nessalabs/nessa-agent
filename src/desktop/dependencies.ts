@@ -39,10 +39,13 @@ import {
 import {
   linkedDevicesGateway,
   mcpServersGateway,
+  nativeHooksGateway,
   type LinkedDevicesClient,
   type LinkedDevicesGateway,
   type McpServersClient,
   type McpServersGateway,
+  type NativeHooksClient,
+  type NativeHooksGateway,
 } from "./settings"
 import {
   createWidgetRegistry,
@@ -87,6 +90,8 @@ export interface DesktopDependencies extends WorkspaceDependencies {
   readonly mcpServers: McpServersGateway | undefined
   /** Pairing and linked devices, for Settings; absent without a gateway. Provided by `main.tsx`. */
   readonly linkedDevices: LinkedDevicesGateway | undefined
+  /** Claude and Codex native-hook choices, for Settings; absent without a gateway. Provided by `main.tsx`. */
+  readonly nativeHooks: NativeHooksGateway | undefined
   /**
    * How the window reads back a file a conversation holds — one its agent
    * published — verified, for the transcript to show and save. Through the
@@ -167,6 +172,9 @@ export function createDesktopDependencies(
     linkedDevices: source
       ? linkedDevicesGateway({ connected: () => source.connected(), after })
       : undefined,
+    nativeHooks: source
+      ? nativeHooksGateway({ connected: () => source.connected() })
+      : undefined,
     now,
     newId,
     // The page's own layout: every command that changes the panes is held to it.
@@ -184,10 +192,11 @@ export function createDesktopDependencies(
   }
 }
 
-/** A gateway client the window can show conversations, draw apps, read held files, manage MCP servers, and pair devices through. */
+/** A gateway client the window can show conversations, draw apps, read held files, manage MCP servers, pair devices, and set native hooks through. */
 type WindowGatewayClient = GatewayClient &
   McpServersClient &
-  LinkedDevicesClient & {
+  LinkedDevicesClient &
+  NativeHooksClient & {
     readonly mcpApps: McpAppsApi
     readonly attachments: AttachmentApi
   }

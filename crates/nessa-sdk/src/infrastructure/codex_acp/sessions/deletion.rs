@@ -17,10 +17,12 @@ use std::{future::Future, pin::Pin};
 impl ProviderSessionDeleter for CodexAcpProvider {
     fn delete_session(&self, session: ExecutionSessionId) -> ProviderSessionDeletionFuture<'_> {
         Box::pin(async move {
+            // Deleting is Nessa's housekeeping, not a run of the agent, so its
+            // process keeps hooks suppressed whatever the switch says.
             let answer = acp_deletion::delete_session(
-                self.process_factory(),
+                self.process_factory_allowing(false),
                 self.config().clone(),
-                &self.profile(),
+                &self.profile_allowing(false),
                 &session,
                 self.deletions(),
             )

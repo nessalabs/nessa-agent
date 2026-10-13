@@ -306,6 +306,12 @@ export const NativeHookSuppressionSupport = {
 } as const
 export type NativeHookSuppressionSupport =
   (typeof NativeHookSuppressionSupport)[keyof typeof NativeHookSuppressionSupport]
+/** Whether this launch allows the harness's own hooks. Off asks the harness to leave them off. On means hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts. On does not prove a hook ran, and it does not change nativeHookSuppression. */
+export const NativeHooksChoice = { Off: "off", On: "on" } as const
+export type NativeHooksChoice = (typeof NativeHooksChoice)[keyof typeof NativeHooksChoice]
+/** A harness whose own hooks the caller can allow. OpenCode is not in this set and stays suppressed. */
+export const NativeHooksAgent = { Claude: "claude", Codex: "codex" } as const
+export type NativeHooksAgent = (typeof NativeHooksAgent)[keyof typeof NativeHooksAgent]
 /** Whether Nessa reports provider compaction with invocation correlation. */
 export const CompactionReportingSupport = {
   UnsupportedNotImplemented: "unsupported_not_implemented",
@@ -374,6 +380,8 @@ export interface ConversationAgentFeatures {
   permissionDenial: PermissionDenialSupport
   /** Verified suppression state for user-configured provider hooks. */
   nativeHookSuppression: NativeHookSuppressionSupport
+  /** The hooks choice this conversation was started with. When on, hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts. For Claude, on also applies the repo's .claude settings, including its allow rules and startup hooks. */
+  nativeHooks: NativeHooksChoice
   /** Effective Nessa support for correlated compaction reporting. */
   compactionReporting: CompactionReportingSupport
   /** Effective Nessa support for validated model-switch reporting. */
@@ -606,6 +614,8 @@ export interface ConversationTool {
   mcp?: ConversationMcpTool
   /** The call's structured result (MCP structuredContent) as JSON text, when the harness passed it on and it fits; absent otherwise. The result's text stays in details either way. */
   structuredContent?: string
+  /** The hooks choice of the process start this tool call ran under, saved with the call so it survives a gateway restart. Absent when that start recorded none: a harness without the choice, or a call saved before it was recorded. Recorded input and output are what the model proposed or the tool returned, and a hook may have changed or approved them when this is on. */
+  nativeHooks?: NativeHooksChoice
 }
 /** An MCP tool's identity: the server by the name it was configured under, and the tool on it; the UI the tool declared, when known; and the arguments the gateway's connection saw for the call, when it could match them. */
 export interface ConversationMcpTool {
@@ -925,8 +935,47 @@ export interface ConversationDeleteParams {
   /** Stable action identifier retained for retries of one logical command. */
   requestId: string
 }
-/** Grant (conversation.share) or revoke (conversation.unshare) one paired device Read on one of the caller's conversations. Nothing is granted by default or by list: a paired device sees only the conversations granted to it, one grant per conversation, and an ungranted one is not listed, not readable and not watchable. A grant is refused share_target_not_paired unless the credential is an active paired device or peer gateway of the conversation's owner that holds conversation.read (an environment's credential never does), and conversation_deleted on a deleted conversation; a revoke needs only ownership. Revoking ends the device's next read; a read already admitted may finish. applied is false when nothing changed: granting a grant already held, or revoking one not held. A conversation holds at most 64 grants; one more is refused invalid_request. A retried requestId answers what it answered the first time, so a share retried after a later unshare grants nothing; the same requestId naming another device or the other change is refused invalid_request. A retried share is checked like a new one first, so once the conversation is deleted or the device unpaired it is refused conversation_deleted or share_target_not_paired and changes nothing. */
+/** What a share grant lets its holder do. read: list, read and watch the conversation's records. comment and drive name what later releases let the holder do (leave notes the agent sees on the owner's next turn; start, steer and stop turns under a tool policy); today both read exactly as read does, and every command that changes the conversation is still refused to a paired party whatever its role. */
+export const ConversationShareRole = {
+  Read: "read",
+  Comment: "comment",
+  Drive: "drive",
+} as const
+export type ConversationShareRole =
+  (typeof ConversationShareRole)[keyof typeof ConversationShareRole]
+/** A named tool policy. read_only_tools: only tools that read. no_shell: every tool except shell commands. ask_everything: every tool, each one asked for. all: every tool, asked as the conversation's approval mode asks. */
+export const ConversationToolPreset = {
+  ReadOnlyTools: "read_only_tools",
+  NoShell: "no_shell",
+  AskEverything: "ask_everything",
+  All: "all",
+} as const
+export type ConversationToolPreset =
+  (typeof ConversationToolPreset)[keyof typeof ConversationToolPreset]
+/** The tool policy a drive grant's turns run under: either preset alone, or allow and deny together. Allow and deny each hold at most 16 patterns, and at least one of the two holds one (both empty is refused); each pattern is 1 to 48 UTF-8 bytes with no surrounding whitespace and no control character; anything else is refused invalid_request. A pattern is kept as written; nothing evaluates it yet. */
+export interface ConversationToolPolicy {
+  /** A named policy. Present alone, without allow or deny. */
+  preset?: ConversationToolPreset
+  /** Tools the holder's turns may call. Present with deny, without preset. */
+  allow?: string[]
+  /** Tools the holder's turns may never call. Present with allow, without preset. */
+  deny?: string[]
+}
+/** Grant (conversation.share) one paired device or peer gateway a role on one of the caller's conversations, or change the role and policy it already holds there. Nothing is granted by default or by list: a paired party sees only the conversations granted to it, one grant per conversation, and an ungranted one is not listed, not readable and not watchable. Every role reads; drive needs a policy and read and comment take none, and either mistake is refused invalid_request. A grant is refused share_target_not_paired unless the credential is an active paired device or peer gateway of the conversation's owner that holds conversation.read (an environment's credential never does), and conversation_deleted on a deleted conversation. applied is false when nothing changed: granting the role and policy already held. A conversation holds at most 64 grants, and at most 8 drive grants; one more is refused invalid_request. A retried requestId answers what it answered the first time, so a share retried after a later unshare grants nothing; the same requestId naming another device, another role or policy, or the other change is refused invalid_request. A retried share is checked like a new one first, so once the conversation is deleted or the device unpaired it is refused conversation_deleted or share_target_not_paired and changes nothing. */
 export interface ConversationShareParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** The paired device's credential, as credential.list names it. */
+  credentialId: string
+  /** The role to grant. */
+  role: ConversationShareRole
+  /** The tool policy. Present exactly when role is drive. */
+  policy?: ConversationToolPolicy
+}
+/** Revoke (conversation.unshare) one paired party's grant on one of the caller's conversations, whatever its role. A revoke needs only ownership, so it works on a deleted conversation and for a party since unpaired. Revoking ends the party's next read; a read already admitted may finish. applied is false when no grant was held. A retried requestId answers what it answered the first time; the same requestId naming another device or the other change is refused invalid_request. */
+export interface ConversationUnshareParams {
   /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
   conversationId: string
   /** Stable action identifier retained for retries of one logical command. */
@@ -939,12 +988,16 @@ export interface ConversationSharesParams {
   /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
   conversationId: string
 }
-/** One Read grant on a conversation. */
+/** One grant on a conversation. */
 export interface ConversationShare {
   /** The paired device's credential, as credential.list names it. */
   credentialId: string
-  /** What the grant allows. Read: the device may list, read and watch the conversation's records. */
-  role: "read"
+  /** What the grant allows. */
+  role: ConversationShareRole
+  /** The tool policy. Present exactly when role is drive. */
+  policy?: ConversationToolPolicy
+  /** Moves each time the owner changes this grant's role or policy, and never otherwise. A later release stamps it on the turns a drive grant starts. */
+  policyRevision: number
   /** When the grant was made, Unix milliseconds. */
   grantedAtMs: number
 }
@@ -1648,12 +1701,39 @@ export interface AgentOption {
   /** Models runnable by this agent. */
   models: AgentModelOption[]
 }
+/** Allow or stop allowing one harness to run its own hooks. The next launch of that harness omits Nessa's suppression request when enabled is true. OpenCode is not a value of agent. */
+export interface AgentsSetNativeHooksParams {
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** Claude or Codex. */
+  agent: NativeHooksAgent
+  /** True omits the suppression request the next time that harness's agent starts. False restores it. */
+  enabled: boolean
+}
+/** The choice now in effect for the named harness. When enabled is true, hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts. Applies the next time each conversation's agent starts. */
+export interface AgentsSetNativeHooksResult {
+  /** Original action identifier. */
+  requestId: string
+  /** The harness this command changed. */
+  agent: NativeHooksAgent
+  /** The choice now in effect. */
+  enabled: boolean
+}
 /** Configured agents and their model-specific choices. */
 export interface AgentsListResult {
   /** Configured agents. */
   agents: AgentOption[]
   /** Places a new conversation may run besides this gateway: the SSH destinations config.json names, in the order it names them, then each paired environment connected when the catalog is read, as `peer:` and its key in lowercase hex. At most 16 of the first and 8 of the second. agents.list reads it once; agents.subscribe reads it again each time a paired environment connects, disconnects or is revoked. */
   environments: string[]
+  /** The stored choice the next process start of Claude and Codex reads, whether or not that agent is in this catalog. This is the catalog's only copy of it: agent rows do not repeat it. OpenCode has no entry and stays suppressed. agents.subscribe reads the catalog again each time this choice changes. */
+  nativeHooks: AgentsNativeHooks
+}
+/** The choice in effect for the next process start of each harness. Off keeps Nessa's request to leave that harness's hooks off. On means hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts. For Claude, on also applies the repo's .claude settings, including its allow rules and startup hooks, so turn it on only for projects you trust. Applies the next time each conversation's agent starts. */
+export interface AgentsNativeHooks {
+  /** Claude's stored choice. */
+  claude: NativeHooksChoice
+  /** Codex's stored choice. */
+  codex: NativeHooksChoice
 }
 /** The agent catalog as it is now, read after a paired environment connected, disconnected or was revoked, and sent only when it differs from the last one sent. Replace what was held with it. The subscription ends with conversation.subscriptionEnded, as a conversation subscription does. */
 export interface AgentsListed {
@@ -2328,7 +2408,7 @@ export const mcpServerRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 64,
+  maxReadyMethods: 65,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -2338,6 +2418,8 @@ export const bounds = {
   maxRecordResponseBytes: 131072,
   minAgentInstallRequestIdCharacters: 1,
   maxAgentInstallRequestIdBytes: 256,
+  minNativeHooksRequestIdCharacters: 1,
+  maxNativeHooksRequestIdBytes: 256,
   maxConfiguredAgents: 3,
   maxAgentInstallVersionBytes: 128,
   maxImageBytes: 5242880,
@@ -2414,6 +2496,7 @@ export const ProductMethod = {
   ArtifactRead: "artifact.read",
   AttachmentBegin: "attachment.begin",
   AgentsList: "agents.list",
+  AgentsSetNativeHooks: "agents.setNativeHooks",
   AgentsSubscribe: "agents.subscribe",
   AgentsUnsubscribe: "agents.unsubscribe",
   ConversationSetApprovalMode: "conversation.setApprovalMode",
@@ -2490,6 +2573,7 @@ export const productReadyMethods = [
   "artifact.read",
   "attachment.begin",
   "agents.list",
+  "agents.setNativeHooks",
   "agents.subscribe",
   "agents.unsubscribe",
   "conversation.setApprovalMode",
@@ -2558,6 +2642,7 @@ export const productMethodGrants = {
   "artifact.read": "conversation.read",
   "attachment.begin": "conversation.write",
   "agents.list": "server.read",
+  "agents.setNativeHooks": "credential.manage",
   "agents.subscribe": "server.read",
   "agents.unsubscribe": "server.read",
   "conversation.setApprovalMode": "conversation.write",

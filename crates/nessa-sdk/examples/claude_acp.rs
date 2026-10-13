@@ -131,6 +131,15 @@ impl ExecutionAudit for TracingExecutionAudit {
                         "Native steering acknowledged"
                     );
                 }
+                ExecutionAuditRecord::NativeHooksLaunch(record) => {
+                    tracing::info!(
+                        session = record.session_id().unwrap_or(""),
+                        launch = record.launch_id(),
+                        harness = record.harness(),
+                        allowed = record.allowed(),
+                        "harness process started with this hooks choice"
+                    );
+                }
             }
             Ok(())
         })

@@ -17,7 +17,11 @@ import { createDesktopDependencies } from "./dependencies"
 import { hostGateway } from "./adapters/host-gateway"
 import { workspaceBackend, type WorkspaceBackend } from "./model/workspace-backend"
 import { seededWindow } from "./seeded-window"
-import { LinkedDevicesProvider, McpServersProvider } from "./settings"
+import {
+  LinkedDevicesProvider,
+  McpServersProvider,
+  NativeHooksProvider,
+} from "./settings"
 import { makeDesktopStore } from "./store"
 import { DesktopIconFamilyProvider } from "./ui/icons"
 import { DesktopWindow } from "./ui/desktop-window"
@@ -104,11 +108,13 @@ createRoot(container).render(
               <McpServersProvider gateway={dependencies.mcpServers}>
                 <LinkedDevicesProvider gateway={dependencies.linkedDevices}>
                   <HeldFilesProvider read={dependencies.heldFiles} save={saveFile}>
-                    <DesktopWindow
-                      hostKind={host.kind}
-                      browserSurface={host.kind === "browser"}
-                      inspectable={import.meta.env.DEV}
-                    />
+                    <NativeHooksProvider gateway={dependencies.nativeHooks}>
+                      <DesktopWindow
+                        hostKind={host.kind}
+                        browserSurface={host.kind === "browser"}
+                        inspectable={import.meta.env.DEV}
+                      />
+                    </NativeHooksProvider>
                   </HeldFilesProvider>
                 </LinkedDevicesProvider>
               </McpServersProvider>

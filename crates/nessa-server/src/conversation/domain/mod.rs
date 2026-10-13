@@ -7,7 +7,8 @@
 //! the domain decides which progress is possible and which request decided it.
 //! The conversation's identity, its summary and the catalogue stream identity
 //! are `nessa_protocol::conversation::domain`, read by gateway and device alike.
-//! Which commands its agent may run where is its [`CommandPolicy`].
+//! Which commands its agent may run where is its [`CommandPolicy`]. What a
+//! share of it lets a paired party do is its [`ShareAccess`].
 mod command_policy;
 mod entities;
 mod receiver;
@@ -20,6 +21,7 @@ pub use receiver::{
 };
 pub use value_objects::{
     ConversationDeletion, DeletionContradiction, ProviderSessionErasure, ProviderSessionLink,
+    ShareAccess, ShareAccessError, ShareRole, ToolPolicy, ToolPolicyError, ToolPreset, ToolRules,
 };
 
 #[cfg(test)]

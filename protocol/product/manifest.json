@@ -114,6 +114,10 @@
       "params": null,
       "grant": "server.read"
     },
+    "agents.setNativeHooks": {
+      "params": "AgentsSetNativeHooksParams",
+      "grant": "credential.manage"
+    },
     "agents.subscribe": {
       "params": null,
       "grant": "server.read"
@@ -255,7 +259,7 @@
       "grant": "credential.manage"
     },
     "conversation.unshare": {
-      "params": "ConversationShareParams",
+      "params": "ConversationUnshareParams",
       "grant": "credential.manage"
     },
     "conversation.shares": {

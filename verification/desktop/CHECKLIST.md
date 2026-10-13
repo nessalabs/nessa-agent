@@ -862,6 +862,16 @@ phone's scanner is not this screen.
 - [ ] **Keyboard focus shows the window's focus ring** on Settings' tabs and
   controls (not a fill). _Check:_ `settings-page.mjs --only focus-ring`
   (WebKit walks with ⌥Tab, as Safari does).
+- [ ] **Claude and Codex native hooks rest without a gateway.** Access shows
+  both rows disabled, with no switch, and says hooks can approve, deny, or
+  change a tool call and its result without Nessa asking, and can run
+  commands when the agent starts. OpenCode has no row. With a gateway
+  and Claude's choice on, that row's switch is on and says to turn it on
+  only for projects you trust, and that the choice applies the next time
+  each conversation's agent starts. Claude on but missing from the catalog
+  says it isn't set up. A refused change says it could not change. _Check:_
+  `settings-page.mjs --only native-hooks,native-hooks-on,native-hooks-unset,native-hooks-failed`; unit tests
+  `native-hooks-rows.test.tsx`, `native-hooks-gateway.test.ts`.
 
 ### Integrations: the gateway's MCP servers
 

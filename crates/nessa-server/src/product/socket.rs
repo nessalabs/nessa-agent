@@ -39,8 +39,10 @@ use nessa_protocol::product::generated::{
     action_for_method, CredentialIssueParams, CredentialListParams, CredentialListResult,
     CredentialRevokeParams, CredentialRevokeResult, ExistingCredentialResult,
     IssuedCredentialResult, ProductSessionReady, SessionAuthenticateParams, SessionChallenge,
-    SessionTermination, MAX_PRODUCT_CLIENT_ID_CHARACTERS, MAX_PRODUCT_SURFACE_INSTANCE_CHARACTERS,
-    MAX_RECORD_RESPONSE_BYTES, PRODUCT_HANDSHAKE_METHOD, PRODUCT_READY_METHODS, PRODUCT_VERSION,
+    SessionTermination, MAX_NATIVE_HOOKS_REQUEST_ID_BYTES, MAX_PRODUCT_CLIENT_ID_CHARACTERS,
+    MAX_PRODUCT_SURFACE_INSTANCE_CHARACTERS, MAX_RECORD_RESPONSE_BYTES,
+    MIN_NATIVE_HOOKS_REQUEST_ID_CHARACTERS, PRODUCT_HANDSHAKE_METHOD, PRODUCT_READY_METHODS,
+    PRODUCT_VERSION,
 };
 use nessa_protocol::product::handshake::{authentication_close_reason, supports_product_version};
 use nessa_protocol::product_contract::generated::SessionCloseReason;
@@ -1466,7 +1468,7 @@ async fn dispatch(
         }
         return success(&frame.id, &session_ready(state, &session, &snapshot));
     }
-    match admit_action(state, &session, &frame.method).await {
+    match super::read_access::admit_request(state, &session, &frame).await {
         Ok(()) => dispatch_authorized(state, &session, frame).await,
         Err(code) => failure(&frame.id, code),
     }
@@ -1482,6 +1484,17 @@ pub(super) async fn admit_action(
     method: &str,
 ) -> Result<(), &'static str> {
     let action_name = action_for_method(method).ok_or("unknown_method")?;
+    admit_grant(state, session, action_name).await
+}
+
+/// [`admit_action`] for a grant named directly: `action_name` under current
+/// policy, then browser presence. A paired session's Drive command asks it
+/// for pairing's own grant (`read_access::admit_request`).
+pub(super) async fn admit_grant(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+    action_name: &str,
+) -> Result<(), &'static str> {
     match authorize(state, session, action_name).await {
         Ok(Decision::Allow) => ensure_browser_session_present(state, session)
             .await
@@ -1533,6 +1546,80 @@ async fn authorize(
     .await
 }
 
+async fn set_native_hooks(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+    frame: RequestFrame,
+) -> OutgoingMessage {
+    use crate::agents::application::{
+        NativeHooksAgent as Choice, NativeHooksChange, NativeHooksError,
+    };
+    use nessa_protocol::product::generated::{
+        AgentsSetNativeHooksParams, AgentsSetNativeHooksResult,
+    };
+    let Some(hooks) = state.native_hooks.as_ref() else {
+        return failure(&frame.id, "conversations_not_configured");
+    };
+    let params: AgentsSetNativeHooksParams = match serde_json::from_value(frame.params) {
+        Ok(params) => params,
+        Err(_) => return failure(&frame.id, "invalid_request"),
+    };
+    if params.request_id.chars().count() < MIN_NATIVE_HOOKS_REQUEST_ID_CHARACTERS
+        || params.request_id.len() > MAX_NATIVE_HOOKS_REQUEST_ID_BYTES
+    {
+        return failure(&frame.id, "invalid_request");
+    }
+    let agent = Choice::from(params.agent);
+    let context = session.context();
+    let enabled = params.enabled;
+    let request_id = params.request_id.clone();
+    let caller_kind = state
+        .caller_kinds
+        .as_ref()
+        .map(|source| {
+            source
+                .caller_kind(context.principal_id().as_str())
+                .to_owned()
+        })
+        .unwrap_or_else(|| "unknown".to_owned());
+    let change = NativeHooksChange {
+        agent,
+        enabled,
+        request_id: params.request_id,
+        organization_id: context.organization_id().as_str().to_owned(),
+        principal_id: context.principal_id().as_str().to_owned(),
+        surface_id: context.credential_id().as_str().to_owned(),
+        caller_kind,
+    };
+    match hooks.set(change).await {
+        Ok(selection) => success(
+            &frame.id,
+            &AgentsSetNativeHooksResult {
+                request_id,
+                agent: params.agent,
+                enabled: selection.get(agent),
+            },
+        ),
+        Err(NativeHooksError::Audit) => failure(&frame.id, "audit_unavailable"),
+        // A crashed save is not a new wire code. The command can be retried.
+        Err(NativeHooksError::Storage | NativeHooksError::Interrupted) => {
+            failure(&frame.id, "temporarily_unavailable")
+        }
+    }
+}
+
+impl From<nessa_protocol::product::generated::NativeHooksAgent>
+    for crate::agents::application::NativeHooksAgent
+{
+    fn from(agent: nessa_protocol::product::generated::NativeHooksAgent) -> Self {
+        use nessa_protocol::product::generated::NativeHooksAgent as WireAgent;
+        match agent {
+            WireAgent::Claude => Self::Claude,
+            WireAgent::Codex => Self::Codex,
+        }
+    }
+}
+
 async fn dispatch_authorized(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
@@ -1548,6 +1635,7 @@ async fn dispatch_authorized(
                 None => failure(&frame.id, "conversations_not_configured"),
             }
         }
+        "agents.setNativeHooks" => set_native_hooks(state, session, frame).await,
         "agents.installOptions" | "agents.install" => {
             super::agent_install::dispatch(state, session, frame).await
         }
@@ -2549,7 +2637,19 @@ mod tests {
     }
 
     fn snapshot(role: MembershipRole, status: MembershipStatus) -> AccessSnapshot {
+        snapshot_with(role, status, &["server.read", "credential.manage"])
+    }
+
+    fn snapshot_with(
+        role: MembershipRole,
+        status: MembershipStatus,
+        actions: &[&str],
+    ) -> AccessSnapshot {
         let organization = OrganizationId::new("organization").unwrap();
+        let resource = Resource::new(
+            organization.clone(),
+            ResourceId::new("gateway-resource").unwrap(),
+        );
         AccessSnapshot {
             credential: Credential::new(
                 CredentialId::new("credential").unwrap(),
@@ -2558,22 +2658,10 @@ mod tests {
                 AudienceId::new("gateway").unwrap(),
                 100,
                 200,
-                vec![
-                    Grant::new(
-                        Action::new("server.read").unwrap(),
-                        Resource::new(
-                            organization.clone(),
-                            ResourceId::new("gateway-resource").unwrap(),
-                        ),
-                    ),
-                    Grant::new(
-                        Action::new("credential.manage").unwrap(),
-                        Resource::new(
-                            organization.clone(),
-                            ResourceId::new("gateway-resource").unwrap(),
-                        ),
-                    ),
-                ],
+                actions
+                    .iter()
+                    .map(|action| Grant::new(Action::new(*action).unwrap(), resource.clone()))
+                    .collect(),
             )
             .unwrap(),
             membership: Membership::new(
@@ -3029,6 +3117,102 @@ mod tests {
         assert!(audit.records().is_empty());
         assert_eq!(files.locks.load(std::sync::atomic::Ordering::SeqCst), 0);
         assert_eq!(files.publishes.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    struct HooksClock;
+    impl nessa_auth::application::ports::Clock for HooksClock {
+        fn unix_milliseconds(&self) -> u64 {
+            1
+        }
+    }
+
+    struct AgentCaller;
+    impl crate::agents::application::CallerKindSource for AgentCaller {
+        fn caller_kind(&self, _: &str) -> &'static str {
+            "agent"
+        }
+    }
+
+    /// A member who can write conversations is refused before params are read,
+    /// and nothing is written. The credential also carries `conversation.write`,
+    /// so a method mapped to that grant would pass this caller.
+    #[tokio::test]
+    async fn review_setting_native_hooks_needs_the_owner_grant() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("data");
+        let preferences = crate::agents::infrastructure::NativeHooksPreferences::open(
+            directory.clone(),
+            Arc::new(HooksClock),
+        )
+        .unwrap();
+        let (state, authority) = fixture(MembershipRole::Member);
+        *authority
+            .snapshot
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = snapshot_with(
+            MembershipRole::Member,
+            MembershipStatus::Active,
+            &["server.read", "conversation.write", "credential.manage"],
+        );
+        let state = state.with_native_hooks(preferences);
+        let session = authenticate(&state).await;
+        assert_eq!(
+            action_for_method("agents.setNativeHooks"),
+            Some("credential.manage")
+        );
+        let (ok, answer) = mcp_servers_call(
+            &state,
+            &session,
+            "agents.setNativeHooks",
+            json!({"not": "params"}),
+        )
+        .await;
+        assert!(!ok);
+        assert_eq!(answer["code"], "forbidden");
+        assert!(!directory.join("native-hooks.json").exists());
+        let audit = directory.join("audit").join("native-hooks");
+        let records = std::fs::read_dir(&audit)
+            .unwrap()
+            .filter(|entry| {
+                entry
+                    .as_ref()
+                    .ok()
+                    .and_then(|entry| entry.path().extension().map(|ext| ext == "json"))
+                    .unwrap_or(false)
+            })
+            .count();
+        assert_eq!(records, 0);
+    }
+
+    #[tokio::test]
+    async fn an_agent_caller_is_recorded_as_an_agent() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("data");
+        let preferences = crate::agents::infrastructure::NativeHooksPreferences::open(
+            directory.clone(),
+            Arc::new(HooksClock),
+        )
+        .unwrap();
+        let (state, _) = fixture(MembershipRole::Admin);
+        let state = state
+            .with_native_hooks(preferences)
+            .with_caller_kinds(Arc::new(AgentCaller));
+        let session = authenticate(&state).await;
+        let (ok, _) = mcp_servers_call(
+            &state,
+            &session,
+            "agents.setNativeHooks",
+            json!({"requestId": "turn", "agent": "claude", "enabled": true}),
+        )
+        .await;
+        assert!(ok);
+        let recorded = std::fs::read_dir(directory.join("audit").join("native-hooks"))
+            .unwrap()
+            .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
+            .find(|text| text.contains("\"phase\":\"requested\""))
+            .unwrap();
+        let value: Value = serde_json::from_str(&recorded).unwrap();
+        assert_eq!(value["initiator"]["kind"], "agent");
     }
 
     /// The MCP server methods on the wire: `kind: "stdio"`, variable names in

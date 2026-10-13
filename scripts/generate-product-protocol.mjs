@@ -478,6 +478,12 @@ const bounds = {
     schema.$defs.AgentInstallParams.properties.requestId.minLength,
   maxAgentInstallRequestIdBytes:
     schema.$defs.AgentInstallParams.properties.requestId["x-utf8MaxBytes"],
+  minNativeHooksRequestIdCharacters:
+    schema.$defs.AgentsSetNativeHooksParams.properties.requestId.minLength,
+  maxNativeHooksRequestIdBytes: agreeing("native hooks request id bytes", [
+    schema.$defs.AgentsSetNativeHooksParams.properties.requestId["x-utf8MaxBytes"],
+    schema.$defs.AgentsSetNativeHooksResult.properties.requestId["x-utf8MaxBytes"],
+  ]),
   maxConfiguredAgents: schema.$defs.AgentsListResult.properties.agents.maxItems,
   maxAgentInstallVersionBytes: agreeing("native installation version bytes", [
     schema.$defs.AgentInstallOffer.properties.version["x-utf8MaxBytes"],
@@ -612,6 +618,8 @@ for (const name of [
   "maxProductSurfaceInstanceCharacters",
   "minAgentInstallRequestIdCharacters",
   "maxAgentInstallRequestIdBytes",
+  "minNativeHooksRequestIdCharacters",
+  "maxNativeHooksRequestIdBytes",
   "maxPhysicalRecordPayloadBytes",
   "maxRecordPageRecords",
   "maxRecordPagePayloadBytes",

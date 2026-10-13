@@ -44,6 +44,7 @@ const tool = (change: Partial<ConversationTool> = {}): ConversationTool => ({
   status: "completed",
   details: "",
   input: "",
+  nativeHooks: "off",
   ...change,
 })
 

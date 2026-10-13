@@ -104,9 +104,21 @@ request SDK hook-event reporting. Nessa's [profile](../../../crates/nessa-sdk/sr
 requests `disableAllHooks: true` and empty `settingSources` for native configured
 hooks. That suppresses project and user hooks. Managed hooks still fire with
 `disableAllHooks`, and the managed hook alone matches the managed hook plus the
-flag, so managed hooks cannot be suppressed. The negotiated fact stays
+flag, so managed hooks cannot be suppressed. When the caller has allowed native
+hooks for Claude, the profile sends `settingSources` `user`, `project`, and
+`local` — the sources the Claude CLI loads — and omits `disableAllHooks`. The
+other settings stay. That is not an enable flag. It also applies the repo's
+`.claude` settings, including its allow rules and startup hooks, so turn it on
+only for projects you trust. Each process start reads the current switch
+once, including the next start of a conversation already open. Applies the
+next time each conversation's agent starts. A process already running keeps
+the choice it started with. Hooks can approve, deny, or change a tool call
+and its result without Nessa asking, and can run commands when the agent
+starts. With hooks on, recorded input and output are what the model proposed
+or the tool returned, and a hook may have changed or approved them. The
+negotiated fact stays
 `Unknown`: a requested override is not reported as supported, and a hook that
-still fires is not suppressed.
+still fires is not suppressed. Allowing hooks does not change that fact.
 `claude_startup_and_restoration_continue_when_native_hook_suppression_is_unknown`
 checks that fact across an open, a prompt, a restore, and a second prompt. The
 fixture accepts the launch only after `disableAllHooks` is true and setting
@@ -210,10 +222,19 @@ these observations do not expose pre-compaction or general model-switch vetoes.
 
 #### Native suppression request and verification gap
 
-Current main asks for suppression on every launch and does not treat the ask as
+By default every launch asks for suppression and does not treat the ask as
 proof. The [binding](../../../crates/nessa-sdk/src/infrastructure/codex_acp/sessions/binding.rs)
 puts `features.hooks: false` and `notify: []` in `CODEX_CONFIG` beside the model
-and, when the binding has them, the instructions. The pinned adapter,
+and, when the binding has them, the instructions. Each process start reads the current switch once and, when that start has
+allowed native hooks for Codex, both keys are omitted. Applies the next time
+each conversation's agent starts. A process already running keeps the choice
+it started with. The binding does not set
+`features.hooks` true. Hooks can approve, deny, or change a tool call and its
+result without Nessa asking, and can run commands when the agent starts. With
+hooks on, recorded input and output are what the model proposed or the tool
+returned, and a hook may have changed or approved them. Legacy managed
+configuration and MDM can still apply
+after that omission. The pinned adapter,
 `@agentclientprotocol/codex-acp` 1.12.0, forwards that JSON as the `thread/start`
 config override. A negotiated session reports native hook suppression as
 `Unsupported`. Startup and restoration still complete, and a prompt runs both
@@ -318,6 +339,8 @@ process a private `HOME` and XDG roots, removes `OPENCODE_CONFIG`,
 external plugin list. It does not disable the default plugins compiled into
 the binary. The negotiated fact stays `Unknown`: the profile has no checked
 answer, and this request is not reported as supported.
+The Claude and Codex opt-in does not cover OpenCode. Its launch stays
+suppressed, and there is no setting that omits this request.
 `opencode_startup_and_restoration_continue_when_native_hook_suppression_is_unknown`
 checks that fact across an open, a prompt, a restore, and a second prompt. The
 fixture accepts the launch only after external plugins are off, project config
@@ -516,7 +539,7 @@ closed as not planned and deferred; it is not part of this implementation plan.
 
 | Capability | Baseline answer | Activation requirement |
 | --- | --- | --- |
-| Native executable-hook suppression | Claude sends `disableAllHooks: true`, which suppresses project and user hooks, and reports `Unknown`. Managed hooks still fire with that flag, so managed hooks cannot be suppressed. Codex sends `features.hooks: false` and `notify: []` and reports `Unsupported`, because legacy managed configuration and MDM still apply after the session override. OpenCode sends `OPENCODE_PURE=1` with private roots and project config disabled, and reports `Unknown`; default plugins stay loaded | Report unproven suppression and continue startup and restoration, including with zero Nessa hooks. Do not report supported without effective proof. Preserve provider builtin cleanup. |
+| Native executable-hook suppression | By default Claude sends `disableAllHooks: true`, which suppresses project and user hooks, and reports `Unknown`. Managed hooks still fire with that flag, so managed hooks cannot be suppressed. By default Codex sends `features.hooks: false` and `notify: []` and reports `Unsupported`, because legacy managed configuration and MDM still apply after the session override. Each process start reads the current switch once, for a new conversation and for one already open. When that start allows native hooks, Claude sends `settingSources` `user`, `project`, and `local` and omits `disableAllHooks`, and Codex omits `features` and `notify`; neither fact changes. Applies the next time each conversation's agent starts. Hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts. For Claude, on also applies the repo's `.claude` settings, including its allow rules and startup hooks, so turn it on only for projects you trust. OpenCode sends `OPENCODE_PURE=1` with private roots and project config disabled, and reports `Unknown`; default plugins stay loaded. OpenCode has no such allowance. Allowing OpenCode's hooks is not planned now. | Report unproven suppression and continue startup and restoration, including with zero Nessa hooks. Do not report supported without effective proof. Preserve provider builtin cleanup. |
 | Pre-tool denial | Conditional ACP review path, not universal coverage | Prove the requested tool set cannot execute before Nessa's decision. |
 | Policy end-turn | Not implemented | Same target across direct/queued/steered work; late provider result and reusable session verified. |
 | Policy session close | Existing attributed close primitive, configured policy integration absent | Rule cause retained through all cleanup/audit paths. |

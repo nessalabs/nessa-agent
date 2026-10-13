@@ -346,7 +346,7 @@ pub(crate) async fn open_proven_stop(
         provider.process_factory(),
         provider.config().clone(),
         provider.capabilities().clone(),
-        ProvenStopProfile::new(provider.profile()),
+        ProvenStopProfile::new(provider.profile_allowing(false)),
         audit,
         request,
     )

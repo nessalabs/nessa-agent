@@ -275,6 +275,8 @@ export type {
   ApprovalModeChoice,
   AgentModelOption,
   AgentOption,
+  NativeHooksAgent,
+  AgentsSetNativeHooksResult,
   InstallableAgent,
   AgentInstallOffer,
   AgentInstallOptionsResult,

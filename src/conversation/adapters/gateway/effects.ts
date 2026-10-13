@@ -77,6 +77,7 @@ function conversationView(
       agentFeatures: {
         permissionDenial: features.permissionDenial,
         nativeHookSuppression: features.nativeHookSuppression,
+        nativeHooks: features.nativeHooks,
         compactionReporting: features.compactionReporting,
         modelSwitchReporting: features.modelSwitchReporting,
         permissionDeferral: features.permissionDeferral,

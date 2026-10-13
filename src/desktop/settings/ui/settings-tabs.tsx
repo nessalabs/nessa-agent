@@ -49,6 +49,7 @@ import {
 } from "./settings-controls"
 import { IntegrationsTab } from "./integrations-tab"
 import { LinkedDevicesTab } from "./linked-devices-tab"
+import { NativeHooksRows } from "./native-hooks-rows"
 
 /**
  * What each tab shows. Every setting the window owns is real and
@@ -61,6 +62,8 @@ import { LinkedDevicesTab } from "./linked-devices-tab"
  * gateway, and pending where it has none (`integrations-tab.tsx`).
  * Linked devices pairs and revokes where the window has a gateway, and is
  * pending where it has none (`linked-devices-tab.tsx`).
+ * Access lists Claude and Codex native hooks where the window has a gateway,
+ * and rests those rows where it has none (`native-hooks-rows.tsx`).
  */
 export const settingsTabPages: Record<SettingsTabId, ComponentType> = {
   general: GeneralTab,
@@ -496,22 +499,25 @@ function AccessTab() {
   const [access, setAccess] = usePrototype<"ask" | "edits" | "full">("ask")
   const [remember, setRemember] = usePrototype(true)
   return (
-    <Group note="Each session can change this from the shield in its composer.">
-      <Row id="default-access">
-        <Segmented
-          value={access}
-          onChange={setAccess}
-          options={[
-            { id: "ask", label: "Ask first" },
-            { id: "edits", label: "Edit files" },
-            { id: "full", label: "Full access" },
-          ]}
-        />
-      </Row>
-      <Row id="remember-approvals">
-        <Toggle checked={remember} onChange={setRemember} />
-      </Row>
-    </Group>
+    <>
+      <Group note="Each session can change this from the shield in its composer.">
+        <Row id="default-access">
+          <Segmented
+            value={access}
+            onChange={setAccess}
+            options={[
+              { id: "ask", label: "Ask first" },
+              { id: "edits", label: "Edit files" },
+              { id: "full", label: "Full access" },
+            ]}
+          />
+        </Row>
+        <Row id="remember-approvals">
+          <Toggle checked={remember} onChange={setRemember} />
+        </Row>
+      </Group>
+      <NativeHooksRows />
+    </>
   )
 }
 

@@ -32,6 +32,7 @@ const agentFeatures: AgentFeatures = {
   policyEndTurn: "unsupported",
   policyCloseSession: "unsupported",
   incomingElicitation: "unsupported",
+  nativeHooks: "off",
 }
 
 function waiting(dueAtMs: number): Conversation {

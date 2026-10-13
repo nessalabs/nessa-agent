@@ -1037,3 +1037,60 @@ fn audit_names_the_deadline_that_cancelled_a_review_it_could_not_refuse() {
         "deadline_exceeded"
     );
 }
+
+#[test]
+fn audit_maps_why_a_hooks_launch_happened() {
+    use nessa_sdk::application::agent_execution::executions::{
+        NativeHooksLaunchCause, NativeHooksLaunchRecord,
+    };
+    let open = record_value(&ExecutionAuditRecord::NativeHooksLaunch(
+        NativeHooksLaunchRecord::new(
+            Some("conversation".into()),
+            7,
+            "codex",
+            true,
+            NativeHooksLaunchCause::Open,
+            false,
+        ),
+    ));
+    assert_eq!(
+        open,
+        serde_json::json!({
+            "kind": "native_hooks_launch",
+            "sessionId": "conversation",
+            "launchId": 7,
+            "harness": "codex",
+            "nativeHooks": "on",
+            "cause": "open",
+            "initiator": {"kind": "attachment", "sessionId": "conversation"},
+            "restoredContext": false,
+        })
+    );
+    let restart = record_value(&ExecutionAuditRecord::NativeHooksLaunch(
+        NativeHooksLaunchRecord::new(
+            Some("conversation".into()),
+            8,
+            "claude",
+            false,
+            NativeHooksLaunchCause::Restart,
+            true,
+        ),
+    ));
+    assert_eq!(restart["cause"], "restart");
+    assert_eq!(restart["initiator"], serde_json::json!({"kind": "runtime"}));
+    assert_eq!(restart["restoredContext"], true);
+    assert_eq!(restart["nativeHooks"], "off");
+    // An open with no session has no attachment to point at.
+    let direct = record_value(&ExecutionAuditRecord::NativeHooksLaunch(
+        NativeHooksLaunchRecord::new(
+            None,
+            9,
+            "codex",
+            true,
+            NativeHooksLaunchCause::DirectOpen,
+            false,
+        ),
+    ));
+    assert_eq!(direct["cause"], "open");
+    assert_eq!(direct["initiator"], serde_json::json!({"kind": "direct"}));
+}

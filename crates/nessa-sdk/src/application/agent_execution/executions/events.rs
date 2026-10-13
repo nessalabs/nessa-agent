@@ -27,6 +27,7 @@ use std::mem::size_of;
 pub struct ExecutionEvent {
     execution_id: ExecutionId,
     update: ExecutionUpdate,
+    native_hooks: Option<bool>,
 }
 impl ExecutionEvent {
     /// Maximum retained UTF-8 allocation of one text or thought chunk (4 MiB).
@@ -180,7 +181,21 @@ impl ExecutionEvent {
         Self {
             execution_id,
             update,
+            native_hooks: None,
         }
+    }
+    /// The same observation, stamped with the hooks choice of the process start
+    /// that produced it. The stamp is saved with the event, so a reader after a
+    /// restart sees the choice the call ran under, not the one in effect now.
+    pub fn with_native_hooks(mut self, allowed: bool) -> Self {
+        self.native_hooks = Some(allowed);
+        self
+    }
+    /// Whether the producing process start allowed the harness's own hooks.
+    /// `None` when that start had no such choice, or the event was saved
+    /// without one.
+    pub fn native_hooks(&self) -> Option<bool> {
+        self.native_hooks
     }
     /// Borrow the stable identity used to route this observation.
     pub fn execution_id(&self) -> &ExecutionId {

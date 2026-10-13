@@ -377,7 +377,7 @@ fn map_error(error: ConversationError) -> CatalogueSourceError {
 }
 
 /// A sync scope is a paired device's: its receiver reads only the rows
-/// granted to it (`read_grants`).
+/// granted to it (`share_grants`).
 fn device(scope: &Scope) -> Reader {
     Reader::PairedDevice {
         receiver_id: scope.receiver().as_str().to_owned(),
