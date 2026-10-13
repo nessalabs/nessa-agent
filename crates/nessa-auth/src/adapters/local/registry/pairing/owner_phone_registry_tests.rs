@@ -2,7 +2,7 @@
 use super::*;
 use crate::{
     adapters::pairing::verify_owner_phone_request,
-    application::pairing::OwnerPhoneStore,
+    application::{pairing::OwnerPhoneStore, ports::IssuePath},
     domain::pairing::{OwnerPhoneRequest, OwnerPhoneRequestId, OwnerPhoneSource},
 };
 struct SignedFixture {
@@ -291,7 +291,10 @@ fn another_valid_owner_credential_cannot_stage_the_original_signed_consent() {
     .iter()
     .map(|a| grant("org-1", a))
     .collect();
-    let outcome = f.store.issue_internal(request, true).unwrap();
+    let outcome = f
+        .store
+        .issue_internal(request, IssuePath::SurfaceProvision)
+        .unwrap();
     let evidence = match outcome {
         IssueCredentialOutcome::Issued { evidence, .. } => evidence,
         _ => panic!("expected fresh owner credential"),
