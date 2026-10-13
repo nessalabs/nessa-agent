@@ -175,8 +175,8 @@ replaces in the same change.
 
 ## Consequences
 
-- Every refusal can name the policy that made it, which the audit trail and
-  the person's error message both want.
+- Every refusal can name the policy that made it, or say that no policy
+  allowed it, which the audit trail and the person's error message both want.
 - Policies are data a reviewer reads in one file per area, instead of logic
   spread over thirty functions.
 - Cost: each migration step rebuilds entity mapping and tests for its area, and

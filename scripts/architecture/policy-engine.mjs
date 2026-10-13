@@ -19,12 +19,13 @@ import { maskRustNonCode, normalizedPath } from "./rust-boundaries.mjs"
  * that half of the gate.
  *
  * Test code is what the compiler says it is: the body of a `#[cfg(test)]`
- * module, and the files an out-of-line `#[cfg(test)] mod name;` loads and the
- * modules they declare in turn. [`testCodeFiles`] follows those declarations
- * the way rustc resolves a file's top-level modules, so no file name is taken
- * as a sign of test code. Two things it does not follow, and reads as product
- * code: a `mod name;` nested inside an inline `mod … { }` block, and a file
- * pulled in with `include!`. Only a crate's `src/` is read; tests, benches and
+ * module, and a file that only test code loads: an out-of-line
+ * `#[cfg(test)] mod name;`, and the modules such files declare in turn. A
+ * file product code also loads is product code. [`testCodeFiles`] follows
+ * declarations the way rustc resolves a file's top-level modules, so no file
+ * name is taken as a sign of test code. Two things it does not follow, and
+ * reads as product code: a `mod name;` nested inside an inline `mod … { }`
+ * block, and a file pulled in with `include!`. Only a crate's `src/` is read; tests, benches and
  * examples outside it are not. Pure text on purpose: `check-architecture.mjs`
  * runs with bare Node.
  */
@@ -39,8 +40,22 @@ const ENGINE = /\bcedar_policy\b/
  * An implementation of a policy port, generic or through a qualified path:
  * `impl PolicyEvaluator for X`, `impl<T> ports::ToolPolicyEvaluator<T> for X`.
  */
-const IMPLEMENTS =
-  /\bimpl\s*(?:<[^{;]*?>\s*)?(?:[\w:]*::)?\w*PolicyEvaluator\s*(?:<[^{;]*?>\s*)?\s+for\b/
+const implementing = (name) =>
+  new RegExp(
+    String.raw`\bimpl\s*(?:<[^{;]*?>\s*)?(?:[\w:]*::)?${name}\s*(?:<[^{;]*?>\s*)?\s+for\b`,
+  )
+const IMPLEMENTS = implementing(String.raw`\w*PolicyEvaluator`)
+
+/** A policy port imported under another name: `use ports::PolicyEvaluator as Rules;`. */
+const ALIAS = /\b\w*PolicyEvaluator\s+as\s+(\w+)/g
+
+/** Whether `text` implements a policy port, under its own name or an alias. */
+function implementsPort(text) {
+  if (IMPLEMENTS.test(text)) return true
+  for (const [, alias] of text.matchAll(ALIAS))
+    if (alias !== "_" && implementing(alias).test(text)) return true
+  return false
+}
 
 /** `#[cfg(test)]`, or a `cfg(all(test, …))`. */
 const TEST_CFG = String.raw`#\[cfg\((?:test|all\(\s*test\b[^\]]*)\)\]`
@@ -72,6 +87,18 @@ function withoutTestModules(text) {
 /** Any out-of-line `mod name;`, its attributes captured. */
 const DECLARATION = new RegExp(String.raw`((?:#\[[^\]]*\]\s*)*)${MOD};`, "g")
 
+/** The `{ }` nesting depth at each index of masked `text`. */
+function braceDepths(text) {
+  const depths = new Array(text.length)
+  let depth = 0
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] === "}") depth = Math.max(0, depth - 1)
+    depths[index] = depth
+    if (text[index] === "{") depth += 1
+  }
+  return depths
+}
+
 /** Whether a declaration's attributes put it behind a test cfg. */
 const IS_TEST = new RegExp(TEST_CFG)
 
@@ -81,8 +108,9 @@ const IS_TEST = new RegExp(TEST_CFG)
  * `name.rs` or `name/mod.rs` in the directory `path` owns, or a `#[path]`
  * relative to `path`'s own directory. A `mod.rs`, `lib.rs` or `main.rs` owns
  * its directory, and so does a file loaded through `#[path]`
- * (`ownsDirectory`); any other `foo.rs` owns `foo/`. `testOnly` keeps only
- * `cfg(test)` declarations. Paths are repository-relative.
+ * (`ownsDirectory`); any other `foo.rs` owns `foo/`. Each candidate says
+ * whether its declaration is behind a test cfg (`test`); `testOnly` keeps
+ * only those. Paths are repository-relative.
  */
 export function moduleDeclarations(
   path,
@@ -95,18 +123,26 @@ export function moduleDeclarations(
   const stem = posix.basename(file, ".rs")
   const owns =
     ownsDirectory || ["mod", "lib", "main"].includes(stem) ? dir : posix.join(dir, stem)
+  const depth = braceDepths(masked)
   const modules = []
   for (const match of source.matchAll(DECLARATION)) {
     const at = match.index + match[0].search(/\S/)
-    if (masked[at] !== source[at]) continue
-    if (testOnly && !IS_TEST.test(match[1])) continue
+    if (masked[at] !== source[at] || depth[at] !== 0) continue
+    const test = IS_TEST.test(match[1])
+    if (testOnly && !test) continue
     const pathAttribute = /#\[path\s*=\s*"([^"]+)"\s*\]/.exec(match[1])
     modules.push(
       pathAttribute
-        ? [{ path: posix.normalize(posix.join(dir, pathAttribute[1])), byPath: true }]
+        ? [
+            {
+              path: posix.normalize(posix.join(dir, pathAttribute[1])),
+              byPath: true,
+              test,
+            },
+          ]
         : [
-            { path: posix.join(owns, `${match[2]}.rs`), byPath: false },
-            { path: posix.join(owns, match[2], "mod.rs"), byPath: false },
+            { path: posix.join(owns, `${match[2]}.rs`), byPath: false, test },
+            { path: posix.join(owns, match[2], "mod.rs"), byPath: false, test },
           ],
     )
   }
@@ -115,31 +151,42 @@ export function moduleDeclarations(
 
 /**
  * Every file under `sources` (a map of repository-relative path to text) that
- * only test code loads: what a `cfg(test)` declaration loads, and every module
- * those files declare in turn.
+ * only test code loads. Product code is what a crate root reaches through
+ * declarations without a test cfg; a root is any file nothing declares, so a
+ * file this check cannot place counts as product code. Every other file is
+ * reached only through a `cfg(test)` declaration: test code. A file loaded
+ * both ways is product code, because the product build compiles it.
  */
 export function testCodeFiles(sources) {
-  const tests = new Set()
-  const queue = []
-  const load = (modules) => {
-    for (const candidates of modules)
-      for (const candidate of candidates)
-        if (sources.has(candidate.path) && !tests.has(candidate.path)) {
-          tests.add(candidate.path)
-          queue.push(candidate)
-        }
-  }
+  // A file loaded through #[path] owns its own directory, so its own
+  // declarations resolve only once the #[path] loads are known.
+  const byPath = new Set()
   for (const [path, source] of sources)
-    load(moduleDeclarations(path, source, { testOnly: true }))
-  while (queue.length) {
-    const next = queue.shift()
-    load(
-      moduleDeclarations(next.path, sources.get(next.path), {
-        ownsDirectory: next.byPath,
-      }),
-    )
-  }
-  return tests
+    for (const candidates of moduleDeclarations(path, source))
+      for (const candidate of candidates) if (candidate.byPath) byPath.add(candidate.path)
+  const declarations = new Map(
+    [...sources].map(([path, source]) => [
+      path,
+      moduleDeclarations(path, source, { ownsDirectory: byPath.has(path) }).flat(),
+    ]),
+  )
+  const declared = new Set(
+    [...declarations.values()].flat().map((candidate) => candidate.path),
+  )
+  const product = new Set()
+  const queue = [...sources.keys()].filter((path) => !declared.has(path))
+  for (const root of queue) product.add(root)
+  while (queue.length)
+    for (const candidate of declarations.get(queue.shift()))
+      if (
+        !candidate.test &&
+        sources.has(candidate.path) &&
+        !product.has(candidate.path)
+      ) {
+        product.add(candidate.path)
+        queue.push(candidate.path)
+      }
+  return new Set([...sources.keys()].filter((path) => !product.has(path)))
 }
 
 /**
@@ -155,7 +202,7 @@ export function policyEngineViolations(path, source, test = false) {
     violations.push(
       "the cedar_policy crate is named only inside a `cedar` adapter directory; the rest of the code asks its policy port (CODING_STANDARDS.md#policy-goes-through-cedar)",
     )
-  if (!test && IMPLEMENTS.test(withoutTestModules(text)))
+  if (!test && implementsPort(withoutTestModules(text)))
     violations.push(
       "a policy port is implemented by a Cedar adapter in a `cedar` directory, not by hand-written Rust (CODING_STANDARDS.md#policy-goes-through-cedar)",
     )

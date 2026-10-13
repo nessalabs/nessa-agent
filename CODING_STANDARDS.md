@@ -714,7 +714,8 @@ Cedar.
   is then only repeating what Rust decided.
 - **A refusal names its rule.** Policies carry an `@id`, and the decision
   carries the ids that decided it, so a refusal can be audited and explained
-  without re-deriving it.
+  without re-deriving it. When no policy matched, the refusal says so — Cedar's
+  default deny is a reason too, not a missing one.
 - **Policy data is a fact, not a rule.** A share grant's role, a person's tool
   rules, or an environment's grants file are stored data. Turning them into
   Cedar policies or entities happens in the adapter, built as Cedar JSON, never

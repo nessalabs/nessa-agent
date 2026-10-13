@@ -203,3 +203,46 @@ test("test code is what cfg(test) loads, and everything that declares in turn", 
     "crates/x/src/test_support/mod.rs",
   ])
 })
+
+test("a file product code also loads is product code", () => {
+  const sources = new Map([
+    ["crates/x/src/lib.rs", "mod shared;\n#[cfg(test)]\nmod tests;"],
+    ["crates/x/src/tests.rs", '#[path = "shared.rs"]\nmod shared;'],
+    ["crates/x/src/shared.rs", "mod inner;"],
+    ["crates/x/src/shared/inner.rs", ""],
+  ])
+  assert.deepEqual([...testCodeFiles(sources)].sort(), ["crates/x/src/tests.rs"])
+})
+
+test("a declaration nested in an inline module is not read as a top-level one", () => {
+  for (const source of [
+    "mod outer {\n    #[cfg(test)]\n    mod tests;\n}",
+    "#[cfg(test)]\nmod tests {\n    mod helpers;\n}",
+  ])
+    assert.deepEqual(moduleDeclarations(product, source), [], source)
+  assert.equal(
+    moduleDeclarations(
+      product,
+      "mod outer {\n    fn f() {}\n}\n#[cfg(test)]\nmod tests;",
+      {
+        testOnly: true,
+      },
+    ).length,
+    1,
+  )
+})
+
+test("a policy port implemented under an alias is refused", () => {
+  for (const source of [
+    "use nessa_auth::application::ports::PolicyEvaluator as Rules;\nimpl Rules for HandWritten {}",
+    "use ports::{ToolPolicyEvaluator as Tools, Decision};\nimpl<T> Tools<T> for HandWritten {}",
+  ])
+    assert.equal(policyEngineViolations(product, source).length, 1, source)
+  assert.deepEqual(
+    policyEngineViolations(
+      product,
+      "use ports::PolicyEvaluator as _;\nimpl Display for X {}",
+    ),
+    [],
+  )
+})
