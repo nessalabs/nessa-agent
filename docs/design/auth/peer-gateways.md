@@ -1064,7 +1064,7 @@ sequenceDiagram
     participant K as B's gateway key store
     participant A as Gateway A (native listener)
     participant U as B's peer audit
-    O->>B: peer.enroll {address, code} (Cedar: credential.manage)
+    O->>B: peer.enroll {address, code, relay?} (Cedar: credential.manage)
     B->>U: intent {operation, address, owner} (not kept: peer_audit_unavailable, nothing checked or dialed)
     B->>B: take the turn (a poller cycle: stop it and take it, another command: peer_busy, outcome audited)
     B->>A: TCP connect via PeerConnector, bounded by the deadline clock (passed: peer_unreachable)
@@ -1074,13 +1074,13 @@ sequenceDiagram
     A-->>B: Hello (class must be peer read, else peer_wrong_invitation)
     B->>A: OPAQUE with the code (wrong code: peer_invitation_refused)
     A-->>B: KE2, authenticating A's key
-    B->>R: save pending {A's pin, B's key by its public half, address}
+    B->>R: save pending {A's pin, B's key by its public half, address, relay?}
     R->>R: note A's key, then its record as read
     R->>R: refuse another key, B's own key, a kept peer, or one past MAX_PEERS
     B->>A: KE3 (confirm)
     A-->>B: Claimed
     B->>U: outcome {operation, peer, before -> after, answer}, on every path (not kept: peer_audit_unavailable)
-    B-->>O: PeerGateway {peerKey, phase: pending, address}
+    B-->>O: PeerGateway {peerKey, phase: pending, address, relay?}
 ```
 
 - **One key, one principal.** B enrolls with the gateway's own native key,
@@ -1101,6 +1101,14 @@ sequenceDiagram
   approval happens on A. The credential reaches the record when B next reads
   its pinned status, which the poller does ("Reading a peer", below). `peer.list` shows
   every kept peer; `peer.forget` removes B's record only.
+- **A peer can keep a relay.** `peer.enroll` takes an optional `relay`
+  (`host:port`) and `peer.relay {peerKey, relay}` sets or clears it, owner
+  only and audited like the other commands. The enrollment itself always
+  dials the address directly: until A's key is pinned there is nothing to
+  ask a relay for. Once pinned, the poller's status dial and its read race
+  the direct address with the relay, as a phone's reader does
+  ([relay](relay.md), rows RL19 and RL20). A record without a relay keeps
+  its old shape on disk.
 - **It dials what the owner names.** `peer.enroll` connects from this
   gateway's host to whatever IP address and port the owner gives, which is
   why it is owner-only (`credential.manage`) and why every failure that is
@@ -1174,22 +1182,23 @@ sequenceDiagram
 | P5 | A device invitation's code | `peer_wrong_invitation`, before the PAKE; nothing saved | `a_refused_or_wrong_class_invitation_saves_nothing`, `a_composed_gateway_enrolls_into_another_with_its_own_key` |
 | P6 | A wrong code, or a cancelled invitation | `peer_invitation_refused`; nothing saved | `a_refused_or_wrong_class_invitation_saves_nothing` |
 | P7 | Nothing at the address; a peer already kept | `peer_unreachable`; `peer_exists`, the kept record unchanged byte for byte, and audited with that peer's key and its state before and after, both as found | same |
-| P8 | No native pairing; a member; malformed params | `peer_not_configured`; `forbidden`; `invalid_request`, before any effect | `peer_routes_refuse_before_any_effect` |
+| P8 | No native pairing; a member; malformed params, a relay that is not `host:port` among them | `peer_not_configured`; `forbidden`; `invalid_request`, before any effect | `peer_routes_refuse_before_any_effect` |
 | P9 | A pending save with any key but the gateway's own, or for a pin that is the gateway's own key | Refused, nothing written; the second is `peer_own_gateway` | `a_record_takes_only_the_gateways_key_and_an_unreadable_one_can_be_forgotten` |
-| P10 | A record of another shape, or a valid one whose `gatewayKey` is not this gateway's | Listed `unreadable`; its credential does not load (`Corrupt`); enrolling into that peer is `peer_exists`, audited `unreadable` before and after, and leaves it as it was; `peer.forget` removes it | same |
+| P10 | A record of another shape, or a valid one whose `gatewayKey` is not this gateway's | Listed `unreadable`; its credential does not load (`Corrupt`); enrolling into that peer is `peer_exists` and `peer.relay` on it `peer_unavailable`, each audited `unreadable` before and after and leaving it as it was; `peer.forget` removes it | same |
 | P11 | `peer.forget` while an enrollment runs | `peer_busy`; once the enrollment ends, forget runs | `forgetting_waits_for_a_running_enrollment` |
 | P12 | An enroll or forget that succeeds or is refused; its intent, or its outcome, not kept | Intent and outcome kept, naming the operation, peer, address, state before and after, answer, cause and owner; no intent: nothing dialed or removed, `peer_audit_unavailable`; no outcome: the record made or removed stands, `peer_audit_unavailable` | `enrolling_and_forgetting_are_audited_and_answer_only_when_kept`, `the_durable_peer_audit_reports_a_record_it_could_not_keep` |
 | P13 | A connect that never answers; one that completes past the deadline | Held while the injected deadline clock stands still; once it passes the connect deadline, `peer_unreachable`, audited, the attempt dropped and nothing saved; a late connection is closed unused, `peer_unreachable` | `a_connect_that_never_answers_ends_when_the_injected_clock_passes_its_deadline`, `a_connect_completed_after_the_deadline_is_refused_and_closed` |
-| P14 | Every answer of `peer.enroll` (ok, busy, unreachable, refused code, wrong invitation, own gateway, exists, capacity) and of `peer.forget` (ok, busy, not found) | Exactly one intent and one outcome per call under one operation id, naming the owner, the target, and the peer once known; the table must list every answer | `every_peer_command_answer_keeps_one_intent_and_one_outcome` |
+| P14 | Every answer of `peer.enroll` (ok, busy, unreachable, refused code, wrong invitation, own gateway, exists, capacity), of `peer.forget` (ok, busy, not found) and of `peer.relay` (ok, busy, not found) | Exactly one intent and one outcome per call under one operation id, naming the owner, the target, and the peer once known; the table must list every answer | `every_peer_command_answer_keeps_one_intent_and_one_outcome` |
 | P15 | The injected entropy for an enrollment fails | `peer_unavailable`, nothing saved, its intent and outcome kept | `an_enrollment_whose_entropy_fails_is_unavailable_and_audited` |
 | P16 | The audit never acknowledges an intent, or an outcome | Held while the injected clock stands; once it passes `AUDIT_DEADLINE`, `peer_audit_unavailable`: no intent, nothing dialed; no outcome, the effect stands | `an_audit_that_never_answers_ends_the_call_at_its_deadline` |
+| P17 | `peer.enroll` with a relay; `peer.relay` setting it, then clearing it | Listed and stored with the relay; changed, then gone from the record, which no longer names the field; each change audited with the relay before and after | `a_peer_keeps_its_relay_and_peer_relay_changes_it` |
 
 ## Reading a peer
 
 Part 2b-3 reads what each peer granted. One task per gateway,
 `PeerPoller`, started and joined with native pairing, walks the kept peers
 one at a time. Each cycle holds the peer commands' turn, but gives it up to
-the owner: `peer.enroll` and `peer.forget` stop a cycle that holds it and go
+the owner: `peer.enroll`, `peer.forget` and `peer.relay` stop a cycle that holds it and go
 ahead, so a peer, however slow, never keeps the owner waiting.
 
 ```mermaid
@@ -1203,7 +1212,7 @@ sequenceDiagram
     P->>R: list kept peers to schedule (pending or active)
     P->>P: take the turn when free (registered as this cycle's)
     P->>R: read the record again (gone, revoked or unreadable: drop the peer)
-    P->>A: pinned status, through PeerConnector under the deadline clock
+    P->>A: pinned status, through PeerConnector under the deadline clock (a relay kept: raced with it after DIRECT_HEAD_START, or at once on refusal)
     A-->>P: Pending / Claimed / Approved: wait an interval
     A-->>P: Terminal or Unclaimed: the client removes the cache, then marks the record revoked
     A-->>P: Active {receiver, epoch}: the client saves the credential into the record
@@ -1219,7 +1228,7 @@ sequenceDiagram
     C-->>P: ResetRequired or damaged: empty the cache, read once more
     A-->>P: openProduct refused (redacted)
     P->>A: pinned status again, only Terminal ends the enrollment
-    O->>P: peer.forget or peer.enroll while the cycle holds the turn
+    O->>P: peer.forget, peer.enroll or peer.relay while the cycle holds the turn
     P->>P: cycle stopped: read sockets shut, its stop flag asked every 50 ms, waits woken, turn given back
     P-->>O: the command runs, the read carries on at the next cycle
     P->>U: each change as it is made (status, reset, conversations withdrawn): queued, in turn order
@@ -1405,11 +1414,12 @@ sequenceDiagram
 | R19 | A cached conversation over quota, then one the peer stopped granting; then a stop or a lost connection | The second is withdrawn; the read ends `quota`, still `quota` when the walk is then stopped or loses its connection; a storage failure is held back the same way, and only a damaged cache or a lost connection stops the withdrawals | `a_full_cache_still_withdraws_what_the_gateway_no_longer_grants`, `a_full_catalogue_still_withdraws_and_quota_outranks_a_storage_failure`, `a_withdrawal_that_cannot_be_written_does_not_stop_the_others`, `a_full_cache_is_listed_quota_and_a_read_that_saved_nothing_unreachable`, `a_held_quota_outlasts_a_stop_or_a_lost_connection` |
 | R20 | A status step whose write fails after it began, or lands before the status fails; a cycle giving back the turn as an owner command asks; a read whose worker panics after a withdrawal | Named by the transition begun (`peer_ended` after a failed ending, `peer_approved` after a failed save), its outcome the store's (refused when the write failed, succeeded when it landed, whatever the status said); the owner command finds the turn free or a cycle to stop, never `peer_busy`; the withdrawal is still reported and audited | `a_slot_names_the_transition_a_status_began_whatever_storage_did`, `a_status_change_is_named_by_the_transition_its_store_began`, `a_status_change_outcome_is_what_its_store_did`, `a_cycle_gives_back_the_turn_as_it_clears_itself`, `a_read_that_panics_still_reports_what_it_withdrew` |
 | R21 | A walk cut short after its catalogue pass (A unshared Y, the pass reached A's new head, Y not yet asked), then a restart, at A's unchanged head | No walk is noted, so the next read walks every cached conversation and withdraws Y, audited; `synced` only after that, holding nothing; a note that cannot be written fails the read as the cache's failure, backed off | `a_peer_reads_only_what_it_is_granted_and_stops_at_revocation` (the cache put back as the cut walk left it), `a_cache_without_the_walk_marker_is_walked_at_an_unchanged_head`, `a_marker_that_cannot_be_written_fails_the_read`, `a_walk_marker_is_kept_per_catalogue_and_goes_with_a_purge` |
-| R22 | The audit queue is full (the store fell behind) | Answered at once, no wait: `peer.enroll` and `peer.forget` are `peer_audit_unavailable` with nothing dialed or removed; a poller change lands and its record is logged as not kept, never written; each refusal uses up its sequence, so the next kept record follows a gap | `a_full_queue_refuses_the_owner_and_drops_the_poller_record` |
+| R22 | The audit queue is full (the store fell behind) | Answered at once, no wait: `peer.enroll`, `peer.forget` and `peer.relay` are `peer_audit_unavailable` with nothing dialed, removed or changed; a poller change lands and its record is logged as not kept, never written; each refusal uses up its sequence, so the next kept record follows a gap | `a_full_queue_refuses_the_owner_and_drops_the_poller_record` |
 | R23 | Native pairing stops with records queued and the store stalled; or its writer panics | The audit is closed and drained within one `AUDIT_DEADLINE` on the injected clock: records before the stall are written, the rest are logged and not, and the writer ends once the stalled write returns; a writer that panicked ends the drain at once, reported as not drained, its unwritten records logged | `close_drains_within_one_deadline`, `a_writer_that_panics_does_not_hold_the_drain` |
 | R24 | Native pairing stops while an enroll and a forget have handed over their intents; while a command holds the turn; or a command is asked after | The peer commands are closed before the audit. The first two are waited for, find the turn closed, and answer `peer_unavailable` with their outcomes kept, having read, dialed and removed nothing. A command holding the turn is waited for, within `PREEMPT`, and its outcome kept before the audit closes (past `PREEMPT`, see Known limits). One asked after is refused `peer_unavailable` before its intent, leaving no record | `a_command_admitted_before_shutdown_ends_with_its_outcome_and_no_effect`, `close_waits_for_a_command_holding_the_turn_and_keeps_its_outcome`, `a_command_asked_after_close_is_refused_before_its_intent` |
 | R25 | One read finds more conversations withdrawn than `WITHDRAWN_PER_READ` | It withdraws that many and ends incomplete; the next cycle withdraws the rest; one cycle's records stay within about half the audit's queue | `a_read_withdraws_at_most_its_cap_and_ends_incomplete`; the bound on a cycle's records is a compile-time assertion beside `WITHDRAWN_PER_READ` |
 | R26 | A stop wins the status wait after the worker has committed an ending, before the poller has taken the status answer. The poller's own stop, or the cycle an owner command stops | The answer is kept, so the audit names the cause it carried. The cycle does not continue into a read | `a_stop_after_an_ended_transition_commits_keeps_the_status_cause`, `a_stopped_status_records_its_cause_and_does_not_read` |
+| R27 | A peer kept with a relay whose address stops answering | Its status dial and its read race the address with the relay and go through the relay; the grant is read as over a direct connection | `a_peer_whose_address_stops_answering_is_read_through_its_relay`; the race itself in `tests/peer_gateways/connector.rs` |
 | R17 | The wait after each cycle | The interval when settled or pending; an eighth of it when incomplete or stopped; doubling from the interval on each failure in a row; spread 80 to 120 percent; never past the cap; a failing entropy source draws the middle | `failures_double_the_wait_up_to_the_cap`, `jitter_spreads_a_wait_over_80_to_120_percent_and_the_cap_still_holds` and the other tests in `tests/peer_gateways/poller.rs` |
 
 ## What this part does not do
