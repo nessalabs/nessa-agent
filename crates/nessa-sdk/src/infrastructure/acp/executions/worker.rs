@@ -4098,15 +4098,17 @@ impl<P: AcpProfile> Worker<P> {
             self.send(permission_wire::permission_cancel(&wire_id))
                 .await
         };
-        if let Ok(event) = execution.deadline_answered(&execution_id, &id) {
-            self.emit(event)
-                .map_err(|error| self.record_failure(OperationEffectPhase::EventDelivery, error))?;
-        }
         if let Err(error) = sent {
             let correlation = delivery_correlation.unwrap_or_else(|| self.next_correlation());
             return Err(
                 self.record_failure(OperationEffectPhase::PermissionDelivery(correlation), error)
             );
+        }
+        // The notice says the deadline decided, so it follows the write: an
+        // answer the provider never received decided nothing.
+        if let Ok(event) = execution.deadline_answered(&execution_id, &id) {
+            self.emit(event)
+                .map_err(|error| self.record_failure(OperationEffectPhase::EventDelivery, error))?;
         }
         // Codex ends the turn when the refusal it was given stops the turn.
         // The cancelled result that follows is that turn ending. Without this,

@@ -890,26 +890,48 @@ async fn custom_storage_cannot_cancel_a_review_its_deadline_answered() {
         )
         .unwrap()
     };
-    // The published deadline, and whether a matching notice ended the review.
+    // The published deadline, the one option's effect, and whether a
+    // matching notice ended the review. A notice no offered option could
+    // have been selected for answered nothing.
     let cases = [
-        (Some(deadline(PermissionEffect::Allow)), false, false),
-        (Some(deadline(PermissionEffect::Allow)), true, true),
-        (None, true, false),
-        (Some(deadline(PermissionEffect::Deny)), true, false),
+        (
+            Some(deadline(PermissionEffect::Allow)),
+            PermissionEffect::Allow,
+            false,
+            false,
+        ),
+        (
+            Some(deadline(PermissionEffect::Allow)),
+            PermissionEffect::Allow,
+            true,
+            true,
+        ),
+        (None, PermissionEffect::Allow, true, false),
+        (
+            Some(deadline(PermissionEffect::Deny)),
+            PermissionEffect::Allow,
+            true,
+            false,
+        ),
+        (
+            Some(deadline(PermissionEffect::Allow)),
+            PermissionEffect::Deny,
+            true,
+            false,
+        ),
     ];
-    for (published, noticed, answered) in cases {
+    for (published, offered, noticed, answered) in cases {
         let (agent, _, storage) = probe(false).await;
         agent.invoke(input("saved-review"), actor()).await.unwrap();
         drop(agent);
         {
             let mut state = storage.0.lock().unwrap();
             let saved = state.snapshot.as_mut().unwrap();
-            let decision =
-                PermissionDecision::new(PermissionEffect::Allow, PermissionScope::request());
+            let decision = PermissionDecision::new(offered, PermissionScope::request());
             let options = PermissionOptions::new(
                 vec![PermissionOption::new(
-                    PermissionOptionId::new("allow").unwrap(),
-                    "Allow",
+                    PermissionOptionId::new("only").unwrap(),
+                    "Only",
                     decision.clone(),
                 )
                 .unwrap()],

@@ -181,17 +181,22 @@ impl Observations {
             // a later cancellation of it contradicts the notice. A deadline
             // that cancelled its review comes after that cancellation and
             // finds nothing pending. A notice that is not the review's own
-            // published deadline answered nothing, so it ends nothing.
+            // published deadline answered nothing, so it ends nothing, and
+            // neither does one whose effect no offered option could select.
             ExecutionUpdate::DeadlineAnswered { id, effect, reason } => {
                 let answered = self.reviews.get(id).is_some_and(|&previous| {
-                    let ExecutionUpdate::PermissionRequested { deadline, .. } =
-                        record.events[previous].update()
+                    let ExecutionUpdate::PermissionRequested {
+                        deadline, options, ..
+                    } = record.events[previous].update()
                     else {
                         unreachable!("review correlation index")
                     };
                     deadline.as_ref().is_some_and(|published| {
                         published.effect() == *effect && published.reason() == reason.as_str()
-                    })
+                    }) && options
+                        .choices()
+                        .iter()
+                        .any(|option| option.decision().effect() == *effect)
                 });
                 if answered {
                     let (id, previous) = self

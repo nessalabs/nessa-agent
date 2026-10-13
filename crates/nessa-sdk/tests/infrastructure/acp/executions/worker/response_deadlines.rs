@@ -949,3 +949,32 @@ async fn armed_permissions_are_empty_after_the_turn_ends_and_after_provider_canc
         .await
         .unwrap();
 }
+
+/// A deadline's choice the provider never received is not a decision.
+///
+/// The notice says the review was allowed or denied automatically, and it is
+/// saved. Publishing it before the write could fail would leave that in the
+/// history while the provider was still waiting.
+#[tokio::test]
+async fn a_deadline_answer_that_cannot_be_written_publishes_no_notice() {
+    let (mut worker, mut execution, mut events, _recovery, clock) = blocked_worker("", false).await;
+    worker
+        .permission(&mut execution, RpcId::Number(77), permission_params(), None)
+        .await
+        .map_err(WorkerFailure::into_error)
+        .unwrap();
+    assert_eq!(worker.armed_permissions.len(), 1, "the review is armed");
+    // The provider is gone: the deadline's answer cannot be written.
+    worker.scope.stdin = None;
+    clock.advance(Duration::from_secs(30));
+    let settled = promptly(worker.settle_due_permissions(&mut execution, clock.now()))
+        .await
+        .map_err(WorkerFailure::into_error);
+    assert_eq!(settled, Err(AgentError::Closed));
+    while let Ok(Some(event)) = timeout(Duration::from_millis(50), events.recv()).await {
+        assert!(
+            !matches!(event.update(), ExecutionUpdate::DeadlineAnswered { .. }),
+            "an unwritten deadline answer was published: {event:?}"
+        );
+    }
+}
