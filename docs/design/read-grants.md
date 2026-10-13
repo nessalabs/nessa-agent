@@ -427,7 +427,10 @@ makes it `assigned` to that turn for good; one that can no longer go is
   is read once, through the same `admit_role` a Drive command and a new
   note go through, so the Cedar migration moves one check. A change of the
   grant's policy revision retires nothing: the revision saved with the note
-  stays as its attribution.
+  stays as its attribution. The verdict is the grant as it stood when the
+  turn was admitted, as for a Drive grant's own turn (row J15): a revoke
+  that lands while a turn is being admitted stops the next turn, not that
+  one.
 - **Admission retires before it takes.** Under its lock, `notes::select`
   walks the pending notes in the order they were left: one past 24 hours
   is retired `expired`, one the host revoked `permission_lost`, and up to 8
