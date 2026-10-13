@@ -2134,7 +2134,7 @@ export interface PeerEnrollParams {
   address: string
   /** The one-time code the peer's owner was shown for a gateway invitation, in its grouped display form. */
   code: string
-  /** Where to ask for the peer when its address does not answer: a relay's `host:port`, the host a name or an address (an IPv6 one in brackets). Looked up at each dial. It carries no trust: the peer must still present its pinned key through it. Enrollment itself always dials the address; the relay is kept for reading the peer afterwards. Absent: none. */
+  /** Where to ask for the peer when its address does not answer: a relay's `host:port`, the host a name or an address (an IPv6 one in brackets), at most 255 UTF-8 bytes (`x-utf8MaxBytes`; `maxLength` counts code points and is only a coarse bound). Looked up at each dial. It carries no trust: the peer must still present its pinned key through it. Enrollment itself always dials the address; the relay is kept for reading the peer afterwards. Absent: none. */
   relay?: string
 }
 /** Wire input for peer.forget: the peer to forget, named by its key. */
@@ -2146,7 +2146,7 @@ export interface PeerForgetParams {
 export interface PeerRelayParams {
   /** The peer's key, as peer.list shows it. */
   peerKey: number[]
-  /** Where to ask for the peer when its address does not answer: a relay's `host:port`, the host a name or an address (an IPv6 one in brackets). Looked up at each dial. It carries no trust: the peer must still present its pinned key through it. Null clears it, so the peer is read only at its address. */
+  /** Where to ask for the peer when its address does not answer: a relay's `host:port`, the host a name or an address (an IPv6 one in brackets), at most 255 UTF-8 bytes (`x-utf8MaxBytes`; `maxLength` counts code points and is only a coarse bound). Looked up at each dial. It carries no trust: the peer must still present its pinned key through it. Null clears it, so the peer is read only at its address. */
   relay: string | null
 }
 /** Where this gateway's enrollment with a peer stands, as this gateway last heard. pending: claimed, waiting on the peer's owner to approve, or not yet confirmed. active: the peer issued this gateway a credential. revoked: the peer ended the enrollment (its owner revoked the credential, or denied, cancelled or let expire the claim), its retained cache is removed and it is no longer read; only peer.forget helps. unreadable: the peer's record is there but this build cannot read it, or it was made with a key that is no longer this gateway's; only peer.forget helps. */

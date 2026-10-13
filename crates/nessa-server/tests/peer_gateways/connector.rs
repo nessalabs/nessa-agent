@@ -40,9 +40,13 @@ async fn scripted_relay(
 async fn no_relay_is_the_direct_connect_alone() {
     let (stream, _listener) = direct_stream();
     let local = stream.local_addr().unwrap();
-    let used = raced(async { Ok(stream) }, None, &Mutex::new(None))
-        .await
-        .unwrap();
+    let used = raced(
+        async { Ok(stream) },
+        None::<PeerConnectFuture>,
+        &Mutex::new(None),
+    )
+    .await
+    .unwrap();
     assert_eq!(used.local_addr().unwrap(), local);
 }
 
@@ -55,7 +59,7 @@ async fn a_direct_connect_first_never_dials_the_relay() {
     let local = stream.local_addr().unwrap();
     let used = raced(
         async { Ok(stream) },
-        Some((address, KEY)),
+        Some(TcpPeerConnector.relay(&address, KEY)),
         &Mutex::new(None),
     )
     .await
@@ -74,7 +78,7 @@ async fn a_refused_direct_connect_reads_through_the_relay_at_once() {
     let started = Instant::now();
     let mut joined = raced(
         async { Err(io::ErrorKind::ConnectionRefused.into()) },
-        Some((address, KEY)),
+        Some(TcpPeerConnector.relay(&address, KEY)),
         &Mutex::new(None),
     )
     .await
@@ -95,7 +99,7 @@ async fn a_direct_connect_still_waiting_after_the_head_start_is_raced_by_the_rel
     let (address, serving) = scripted_relay(RelayFrame::Joined, b"tls").await;
     let mut joined = raced(
         std::future::pending(),
-        Some((address, KEY)),
+        Some(TcpPeerConnector.relay(&address, KEY)),
         &Mutex::new(None),
     )
     .await
@@ -117,9 +121,13 @@ async fn a_relay_that_refuses_first_leaves_a_slow_direct_connect_to_connect() {
         tokio::time::sleep(DIRECT_HEAD_START + Duration::from_millis(500)).await;
         Ok(stream)
     };
-    let used = raced(slow, Some((address, KEY)), &Mutex::new(None))
-        .await
-        .unwrap();
+    let used = raced(
+        slow,
+        Some(TcpPeerConnector.relay(&address, KEY)),
+        &Mutex::new(None),
+    )
+    .await
+    .unwrap();
     assert_eq!(used.local_addr().unwrap(), local);
     serving.await.unwrap();
 }
@@ -130,7 +138,7 @@ async fn both_failing_is_the_relays_refusal() {
         let (address, serving) = scripted_relay(answer, b"").await;
         let refused = raced(
             async { Err(io::ErrorKind::TimedOut.into()) },
-            Some((address, KEY)),
+            Some(TcpPeerConnector.relay(&address, KEY)),
             &Mutex::new(None),
         )
         .await
@@ -145,7 +153,7 @@ async fn a_relay_answering_a_gateways_frame_is_invalid() {
     let (address, serving) = scripted_relay(RelayFrame::Registered, b"").await;
     let refused = raced(
         async { Err(io::ErrorKind::ConnectionRefused.into()) },
-        Some((address, KEY)),
+        Some(TcpPeerConnector.relay(&address, KEY)),
         &Mutex::new(None),
     )
     .await
@@ -160,7 +168,11 @@ async fn a_relay_refusal_outlives_a_direct_connect_dropped_at_the_callers_deadli
     let refused = Mutex::new(None);
     let dropped = tokio::time::timeout(
         DIRECT_HEAD_START + Duration::from_millis(500),
-        raced(std::future::pending(), Some((address, KEY)), &refused),
+        raced(
+            std::future::pending(),
+            Some(TcpPeerConnector.relay(&address, KEY)),
+            &refused,
+        ),
     )
     .await;
     assert!(dropped.is_err(), "the direct connect still waits");

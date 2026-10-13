@@ -1087,6 +1087,13 @@ impl PeerConnector for Never {
             std::future::pending().await
         })
     }
+    fn relay<'a>(
+        &'a self,
+        _: &'a nessa_protocol::relay::RelayAddress,
+        _: nessa_protocol::relay::GatewayKey,
+    ) -> PeerConnectFuture<'a> {
+        Box::pin(async { Err(std::io::ErrorKind::ConnectionRefused.into()) })
+    }
 }
 
 /// Row P13: the connect runs under the injected deadline clock, not an
@@ -1177,6 +1184,13 @@ impl PeerConnector for Late {
             stream.set_nonblocking(false)?;
             Ok(stream)
         })
+    }
+    fn relay<'a>(
+        &'a self,
+        _: &'a nessa_protocol::relay::RelayAddress,
+        _: nessa_protocol::relay::GatewayKey,
+    ) -> PeerConnectFuture<'a> {
+        Box::pin(async { Err(std::io::ErrorKind::ConnectionRefused.into()) })
     }
 }
 

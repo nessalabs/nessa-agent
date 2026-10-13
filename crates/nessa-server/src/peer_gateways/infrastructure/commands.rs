@@ -478,12 +478,13 @@ impl PeerCommands {
     /// An enrollment dials only the address: until it, there is no pinned
     /// key to ask a relay for.
     pub(super) async fn dial_peer(&self, record: &PeerRecord) -> io::Result<TcpStream> {
-        let relay = record.relay().cloned().zip(relay_key(record.pin()));
+        let relay = record.relay().zip(relay_key(record.pin()));
         let address = record.address();
         let refused = Mutex::new(None);
         let dialed = self
             .within(CONNECT, || {
-                raced(self.connector.connect(address), relay, &refused)
+                let leg = relay.map(|(relay, key)| self.connector.relay(relay, key));
+                raced(self.connector.connect(address), leg, &refused)
             })
             .await;
         dialed.unwrap_or_else(|| {

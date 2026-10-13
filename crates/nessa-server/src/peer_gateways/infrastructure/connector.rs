@@ -1,6 +1,7 @@
 //! The real peer connector: a TCP connect on the async runtime, and the relay
-//! leg a status dial races it with when the peer's record keeps a relay. Each
-//! has no timeout of its own; the peer commands bound them by their injected
+//! leg a status dial races it with when the peer's record keeps a relay, with
+//! [`raced`], the race itself, over whatever connector the commands hold.
+//! Each leg has no timeout of its own; the peer commands bound them by their injected
 //! deadline clock and drop them at that deadline, which abandons the attempt
 //! and closes its socket.
 //!
@@ -28,6 +29,9 @@ impl PeerConnector for TcpPeerConnector {
             blocking(stream)
         })
     }
+    fn relay<'a>(&'a self, relay: &'a RelayAddress, key: GatewayKey) -> PeerConnectFuture<'a> {
+        Box::pin(relay_leg(relay, key))
+    }
 }
 
 /// The enrollment client reads and writes the stream blocking, on a worker.
@@ -37,17 +41,17 @@ fn blocking(stream: tokio::net::TcpStream) -> io::Result<TcpStream> {
     Ok(stream)
 }
 
-/// `direct`, raced with the relay leg to `relay` once `direct` has not
+/// `direct`, raced with the relay leg `relay` once `direct` has not
 /// connected within [`DIRECT_HEAD_START`] or has failed. No relay: `direct`
 /// alone. A relay that refuses while `direct` still waits leaves its error
 /// in `refused`, so a caller that drops this at its deadline still reports
 /// the relay's answer rather than its own timeout.
 pub(super) async fn raced(
     direct: impl Future<Output = io::Result<TcpStream>>,
-    relay: Option<(RelayAddress, GatewayKey)>,
+    relay: Option<impl Future<Output = io::Result<TcpStream>>>,
     refused: &Mutex<Option<io::Error>>,
 ) -> io::Result<TcpStream> {
-    let Some((address, key)) = relay else {
+    let Some(leg) = relay else {
         return direct.await;
     };
     tokio::pin!(direct);
@@ -59,7 +63,6 @@ pub(super) async fn raced(
         },
         () = tokio::time::sleep(DIRECT_HEAD_START) => false,
     };
-    let leg = relay_leg(&address, key);
     tokio::pin!(leg);
     if direct_failed {
         return leg.await;
