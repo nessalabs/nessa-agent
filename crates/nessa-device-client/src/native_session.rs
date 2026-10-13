@@ -249,6 +249,8 @@ pub enum NativeConsentClass {
     PeerRead,
     /// A peer environment-serving identity.
     PeerEnvironment,
+    /// Explicit first-party owner phone consent.
+    OwnerPhoneReadWrite,
 }
 impl From<ConsentClass> for NativeConsentClass {
     fn from(value: ConsentClass) -> Self {
@@ -256,6 +258,7 @@ impl From<ConsentClass> for NativeConsentClass {
             ConsentClass::DeviceRead => Self::DeviceRead,
             ConsentClass::PeerRead => Self::PeerRead,
             ConsentClass::PeerEnvironment => Self::PeerEnvironment,
+            ConsentClass::OwnerPhoneReadWrite => Self::OwnerPhoneReadWrite,
         }
     }
 }

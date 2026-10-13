@@ -183,6 +183,9 @@ impl PairingStore for LocalCredentialStore {
         clock: &'a dyn Clock,
     ) -> PortFuture<'a, PairingRecord, PairingStoreError> {
         Box::pin(async move {
+            if !record.intent().class().uses_pake() {
+                return Err(PairingStoreError::Domain(PairingError::Ineligible));
+            }
             let mut slot = self
                 .registry()
                 .map_err(|_| PairingStoreError::Unavailable)?;
@@ -429,17 +432,20 @@ impl PairingStore for LocalCredentialStore {
                     issued_at: transition.ordering_time_ms() / 1000,
                     expires_at: None,
                     revoked_at: None,
-                    grants: vec![CredentialGrantDto {
-                        action: intent.grant().action().as_str().to_owned(),
-                        resource: ResourceDto {
-                            organization_id: intent
-                                .resource()
-                                .organization_id()
-                                .as_str()
-                                .to_owned(),
-                            id: intent.resource().id().as_str().to_owned(),
-                        },
-                    }],
+                    grants: intent
+                        .grants()
+                        .map(|grant| CredentialGrantDto {
+                            action: grant.action().as_str().to_owned(),
+                            resource: ResourceDto {
+                                organization_id: grant
+                                    .resource()
+                                    .organization_id()
+                                    .as_str()
+                                    .to_owned(),
+                                id: grant.resource().id().as_str().to_owned(),
+                            },
+                        })
+                        .collect(),
                 };
                 let credential =
                     domain_credential(&metadata).map_err(|_| PairingStoreError::Unavailable)?;
@@ -746,7 +752,7 @@ fn enroll_peer_principal(
     }
 }
 
-fn validate_pairing_admission(
+pub(super) fn validate_pairing_admission(
     registry: &Registry,
     admission: &PairingAdmission,
     now_ms: u64,
@@ -761,6 +767,25 @@ fn validate_pairing_admission(
         return Err(PairingStoreError::Domain(PairingError::Expired));
     }
     let intent = admission.intent();
+    // Every later owner-phone stage and publication keeps the original bootstrap
+    // issuer. Another credential of the same principal is not original replay authority.
+    if !intent.class().uses_pake() {
+        for stored in &registry.pairings {
+            let Some(request) = stored
+                .owner_phone_request()
+                .map_err(PairingStoreError::Domain)?
+            else {
+                continue;
+            };
+            let record = stored
+                .restore(&registry.transitions)
+                .map_err(PairingStoreError::Domain)?;
+            if record.intent() == intent && request.source().credential() != admission.credential()
+            {
+                return Err(PairingStoreError::Domain(PairingError::Conflict));
+            }
+        }
+    }
     let issuer = registry
         .credentials
         .iter()

@@ -15,8 +15,9 @@ pub use aggregates::{
 };
 pub use value_objects::{
     is_peer_principal, peer_principal, AttemptId, ConsentClass, ConsentIntent, ConsentIntentId,
-    DeviceKey, DisclosedConsent, InvitationId, PairingError, PairingInitiator, PairingPolicy,
-    PublicIntent, PEER_PRINCIPAL_PREFIX,
+    DeviceKey, DisclosedConsent, InvitationId, OwnerPhoneRequest, OwnerPhoneRequestId,
+    OwnerPhoneSource, PairingError, PairingInitiator, PairingPolicy, PublicIntent,
+    PEER_PRINCIPAL_PREFIX,
 };
 
 pub(crate) use aggregates::Event;

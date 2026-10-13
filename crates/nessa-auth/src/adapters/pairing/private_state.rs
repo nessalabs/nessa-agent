@@ -42,6 +42,9 @@ const PEER_CREDENTIAL_MAGIC: &[u8; 4] = b"NSPA";
 /// An environment peer's enrollment, told apart the same way.
 const ENVIRONMENT_PENDING_MAGIC: &[u8; 4] = b"NSEP";
 const ENVIRONMENT_CREDENTIAL_MAGIC: &[u8; 4] = b"NSEA";
+/// Owner-phone scope cannot be restored as a legacy shared reader.
+const OWNER_PHONE_PENDING_MAGIC: &[u8; 4] = b"NSOP";
+const OWNER_PHONE_CREDENTIAL_MAGIC: &[u8; 4] = b"NSOA";
 
 /// The pending and credential magics of one enrollment class.
 fn magics(class: ConsentClass) -> (&'static [u8; 4], &'static [u8; 4]) {
@@ -49,6 +52,9 @@ fn magics(class: ConsentClass) -> (&'static [u8; 4], &'static [u8; 4]) {
         ConsentClass::DeviceRead => (PENDING_MAGIC, CREDENTIAL_MAGIC),
         ConsentClass::PeerRead => (PEER_PENDING_MAGIC, PEER_CREDENTIAL_MAGIC),
         ConsentClass::PeerEnvironment => (ENVIRONMENT_PENDING_MAGIC, ENVIRONMENT_CREDENTIAL_MAGIC),
+        ConsentClass::OwnerPhoneReadWrite => {
+            (OWNER_PHONE_PENDING_MAGIC, OWNER_PHONE_CREDENTIAL_MAGIC)
+        }
     }
 }
 /// The class and record kind a magic names; `None` for any other bytes.
