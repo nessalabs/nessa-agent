@@ -656,12 +656,14 @@ async fn an_environment_is_paired_but_never_shared_with() {
     .unwrap();
     let id = conversation.id().clone();
     metadata.create(conversation).await.unwrap();
+    let policy = access_policy();
     let shares = ShareConversation {
         conversations: metadata.as_ref(),
         receivers: fixture.receivers.as_ref(),
         grants: metadata.as_ref(),
         access: fixture.registry.as_ref(),
         gateway: &gateway(),
+        policy: policy.as_ref(),
     };
     let caller = ConversationCaller {
         organization_id: fixture.session.context().organization_id().clone(),
@@ -717,12 +719,14 @@ async fn k3_a_worker_reads_nothing_on_the_gateway_it_serves() {
     .unwrap();
     let id = conversation.id().clone();
     metadata.create(conversation).await.unwrap();
+    let policy = access_policy();
     let shares = ShareConversation {
         conversations: metadata.as_ref(),
         receivers: fixture.receivers.as_ref(),
         grants: metadata.as_ref(),
         access: fixture.registry.as_ref(),
         gateway: &gateway(),
+        policy: policy.as_ref(),
     };
     let caller = ConversationCaller {
         organization_id: fixture.session.context().organization_id().clone(),
@@ -874,12 +878,14 @@ async fn a_peer_reads_only_what_it_was_granted() {
         (&elsewhere, "share-peer-elsewhere"),
     ];
     for (access, request) in readers {
+        let policy = access_policy();
         let shares = ShareConversation {
             conversations: metadata.as_ref(),
             receivers: fixture.receivers.as_ref(),
             grants: metadata.as_ref(),
             access,
             gateway: &gateway(),
+            policy: policy.as_ref(),
         };
         assert!(matches!(
             shares
@@ -896,12 +902,14 @@ async fn a_peer_reads_only_what_it_was_granted() {
         ));
         assert!(!metadata.is_granted(&id, &peer.receiver).await.unwrap());
     }
+    let policy = access_policy();
     let shares = ShareConversation {
         conversations: metadata.as_ref(),
         receivers: fixture.receivers.as_ref(),
         grants: metadata.as_ref(),
         access: fixture.registry.as_ref(),
         gateway: &gateway(),
+        policy: policy.as_ref(),
     };
     assert!(shares
         .share(

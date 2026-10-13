@@ -120,8 +120,9 @@ peer's receiver, and every read the peer makes asks that receiver's grants:
   head instead. A device, which signs in as the owner, keeps its watch.
 - **The socket's `conversation.read`, `.list`, `.observe` and subscriptions**
   need `conversation.write`, which a gateway principal can never hold, so the
-  policy refuses them. Behind that, `reader_of` makes a paired reader of a
-  peer like a device: its read and view ask the grant, its lists are refused.
+  policy refuses them. Behind that, `binding_of` makes a paired reader of a
+  peer like a device: its read and view ask the access policy
+  (`conversation.read`), and its lists are refused (`conversation.list`).
 
 Admission matches the receiver binding to the session by credential and
 organization. The binding's `owner_id` is the **grantor**: the owner whose

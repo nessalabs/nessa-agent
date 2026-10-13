@@ -11,24 +11,6 @@ fn rules(allow: &[&str], deny: &[&str]) -> Result<ToolRules, ToolPolicyError> {
     )
 }
 
-#[test]
-fn each_role_allows_what_the_roles_before_it_allow() {
-    use ShareRole::{Comment, Drive, Read};
-    for (role, allows) in [
-        (Read, [true, false, false]),
-        (Comment, [true, true, false]),
-        (Drive, [true, true, true]),
-    ] {
-        for (other, expected) in [Read, Comment, Drive].into_iter().zip(allows) {
-            assert_eq!(
-                role.at_least(other),
-                expected,
-                "{role:?} at least {other:?}"
-            );
-        }
-    }
-}
-
 /// Row J3: Drive needs a policy, and Read and Comment take none.
 #[test]
 fn drive_needs_a_policy_and_read_and_comment_take_none() {

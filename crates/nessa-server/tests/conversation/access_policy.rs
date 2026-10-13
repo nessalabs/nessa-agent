@@ -1,11 +1,15 @@
 //! Conversation access as Cedar decides it: the checked-in bundle
 //! validates, every rule allows what it names and nothing past it, a
 //! refusal says which rule made it, anything the adapter cannot decide is
-//! refused, and each rule answers exactly as the Rust it replaces did,
-//! across every combination of who asks, whose conversation it is, whether
-//! it was deleted, the role held and what a request carries.
+//! refused, and each rule answers as its truth table below says, across
+//! every combination of who asks, whose conversation it is, whether it was
+//! deleted, the role held and what a request carries. The tables were
+//! written from the Rust the rules replaced (ADR 803 step 3) and pin that
+//! behaviour now that the Rust is gone.
 use super::*;
-use crate::conversation::application::{AccessAction, OwnerAccess};
+use crate::conversation::application::{
+    AccessAction, OwnerAccess, PairedAccess, PairedParty, PairedRefusal,
+};
 use crate::conversation::domain::{Conversation, ConversationDeletion, ConversationRefusal};
 use nessa_auth::domain::{Action, Grant, OrganizationId, PrincipalId, Resource, ResourceId};
 use nessa_protocol::agents::AgentId;
@@ -668,7 +672,8 @@ fn an_evaluation_error_fails_closed() {
     );
 }
 
-// Equivalence with the Rust each rule replaces.
+// Truth tables: each answer written out, as the Rust each rule replaced
+// gave it.
 
 const PEOPLE: [(&str, &str); 3] = [("org", "owner"), ("org", "other"), ("elsewhere", "owner")];
 const ROLES: [Option<ShareRole>; 4] = [
@@ -678,27 +683,38 @@ const ROLES: [Option<ShareRole>; 4] = [
     Some(ShareRole::Drive),
 ];
 
-/// `Conversation::check_access` and `OwnerAccess::admit_to` (act, then
-/// locate on a refusal) agree for every caller and deletion: only the owner
-/// learns of a deletion.
+/// `OwnerAccess::admit_to` (act, then locate on a refusal) for every caller
+/// and deletion: the owner acts on a live conversation and is told a
+/// deleted one was deleted; anybody else is told it does not exist.
 #[test]
-fn owner_access_answers_as_check_access_did() {
+fn owner_access_tells_only_the_owner_of_a_deletion() {
+    use ConversationRefusal::{Deleted, NotFound};
     let policy = policy();
     let access = OwnerAccess::new(&policy);
-    for deleted in [false, true] {
+    type Row<'a> = (
+        (&'a str, &'a str),
+        bool,
+        Result<(), ConversationRefusal>,
+        bool,
+    );
+    let table: [Row<'_>; 6] = [
+        // (caller, deleted, act, locates)
+        (("org", "owner"), false, Ok(()), true),
+        (("org", "owner"), true, Err(Deleted), true),
+        (("org", "other"), false, Err(NotFound), false),
+        (("org", "other"), true, Err(NotFound), false),
+        (("elsewhere", "owner"), false, Err(NotFound), false),
+        (("elsewhere", "owner"), true, Err(NotFound), false),
+    ];
+    for ((org, who), deleted, act, locates) in table {
         let record = conversation("org", "owner", deleted);
-        for (org, who) in PEOPLE {
-            let (org, who) = (organization(org), principal(who));
-            assert_eq!(
-                access.admit_to(AccessAction::Act, &record, &org, &who),
-                record.check_access(&org, &who),
-                "{org:?} {who:?} deleted={deleted}"
-            );
-            assert_eq!(
-                access.locates(&record, &org, &who),
-                Ok(record.allows(&org, &who)),
-            );
-        }
+        let (org, who) = (organization(org), principal(who));
+        assert_eq!(
+            access.admit_to(AccessAction::Act, &record, &org, &who),
+            act,
+            "{org:?} {who:?} deleted={deleted}"
+        );
+        assert_eq!(access.locates(&record, &org, &who), Ok(locates));
     }
 }
 
@@ -724,12 +740,13 @@ fn owner_access_the_policy_cannot_decide_is_unavailable() {
     );
 }
 
-/// What a paired reader may do, as `admit_read`, `admit_role` with
-/// `ShareRole::at_least`, `passive_read`'s ownership check and
-/// `read_access`'s peer-gateway refusal decided it, for every binding,
-/// signer, deletion and role.
+/// What a paired reader may do, for every binding, signer, deletion and
+/// role: it reads its grantor's live conversation with any role; comments
+/// with Comment or Drive and drives with Drive, as a device and never as a
+/// peer gateway; sees a granted tombstone in its catalogue; never writes,
+/// lists or shares; and watches the catalogue only as a device.
 #[test]
-fn paired_access_answers_as_the_grant_checks_did() {
+fn paired_access_answers_its_truth_table() {
     let policy = policy();
     for deleted in [false, true] {
         let record = conversation("org", "owner", deleted);
@@ -744,25 +761,28 @@ fn paired_access_answers_as_the_grant_checks_did() {
                         request: RequestShape::default(),
                     };
                     let (borg, bowner) = (organization(org), principal(binding_owner));
-                    // `AdmitPassiveRead::execute`: the binding's owner's,
-                    // not deleted, and granted with any role.
-                    let owned = record.check_access(&borg, &bowner).is_ok();
+                    // The binding's owner's conversation, in its
+                    // organization.
+                    let grantors = (org, binding_owner) == ("org", "owner");
+                    let owned = grantors && !deleted;
                     assert_eq!(
                         allowed(&paired(&policy, AccessAction::Read, on(&record), &facts)),
                         owned && held.is_some(),
                         "read {org} {binding_owner} {signed_in_as} {held:?} deleted={deleted}"
                     );
-                    // `admit_request`: a peer gateway is refused; the role
-                    // is `admit_role`'s `at_least`; the service then asks
-                    // the owner's ownership.
+                    // A peer gateway neither comments nor drives; each
+                    // role is listed with what it allows.
                     let device = signed_in_as == binding_owner;
-                    for (action, role) in [
-                        (AccessAction::Comment, ShareRole::Comment),
-                        (AccessAction::Drive, ShareRole::Drive),
+                    for (action, roles) in [
+                        (
+                            AccessAction::Comment,
+                            &[ShareRole::Comment, ShareRole::Drive][..],
+                        ),
+                        (AccessAction::Drive, &[ShareRole::Drive][..]),
                     ] {
                         assert_eq!(
                             allowed(&paired(&policy, action, on(&record), &facts)),
-                            device && owned && held.is_some_and(|held| held.at_least(role)),
+                            device && owned && held.is_some_and(|held| roles.contains(&held)),
                             "{} {org} {binding_owner} {signed_in_as} {held:?} deleted={deleted}",
                             action.name()
                         );
@@ -776,7 +796,7 @@ fn paired_access_answers_as_the_grant_checks_did() {
                             on(&record),
                             &facts
                         )),
-                        record.allows(&borg, &bowner) && held.is_some(),
+                        grantors && held.is_some(),
                     );
                     // `admit_list` and the share commands refuse a paired
                     // device by what it is.
@@ -788,8 +808,8 @@ fn paired_access_answers_as_the_grant_checks_did() {
                     ] {
                         assert!(!allowed(&paired(&policy, action, on(&record), &facts)));
                     }
-                    // `admit_current`: a catalogue watch is refused unless
-                    // the binding's owner is who signed in.
+                    // A catalogue watch is refused unless the binding's
+                    // owner is who signed in.
                     let catalogue = AccessResource::Catalogue {
                         organization: &borg,
                         owner: &bowner,
@@ -809,12 +829,11 @@ fn paired_access_answers_as_the_grant_checks_did() {
     }
 }
 
-/// `product::read_access::drives_only_text`, as its truth table: it is
-/// private to the product module, so its rule is restated here from the
-/// code: a Drive command naming attachments or files, or a receipt lookup
-/// for `create`, is refused, and anything else is let through.
+/// A driver sends text, as its truth table: a Drive command naming
+/// attachments or files, or a receipt lookup for `create`, is refused, and
+/// anything else is let through (row J14).
 #[test]
-fn drive_text_only_answers_as_drives_only_text_did() {
+fn drive_text_only_answers_its_truth_table() {
     fn drives_only_text(attachments: bool, files: bool, receipt: Option<&str>) -> bool {
         !(attachments || files || receipt == Some("create"))
     }
@@ -863,13 +882,12 @@ fn drive_text_only_answers_as_drives_only_text_did() {
     }
 }
 
-/// `ShareConversation::share`'s target check and the store's in-transaction
-/// ownership check, restated as their predicate: the conversation is the
-/// caller's and not deleted, the target's binding is in the caller's
-/// organization and names the caller, and its credential holds
-/// `conversation.read` on exactly this gateway.
+/// The share rule as its truth table: the conversation is the caller's and
+/// not deleted, the target's binding is in the caller's organization and
+/// names the caller, and its credential holds `conversation.read` on
+/// exactly this gateway.
 #[test]
-fn owner_share_answers_as_the_share_checks_did() {
+fn owner_share_answers_its_truth_table() {
     let policy = policy();
     let elsewhere = Resource::new(
         organization("elsewhere"),
@@ -892,9 +910,8 @@ fn owner_share_answers_as_the_share_checks_did() {
         for who in ["owner", "other"] {
             for (target_org, target_owner) in PEOPLE {
                 for grants in &grant_sets {
-                    let rust = record
-                        .check_access(&organization("org"), &principal(who))
-                        .is_ok()
+                    let expected = who == "owner"
+                        && !deleted
                         && organization(target_org) == organization("org")
                         && principal(target_owner) == principal(who)
                         && grants.iter().any(|grant| {
@@ -910,11 +927,287 @@ fn owner_share_answers_as_the_share_checks_did() {
                             target_owner,
                             grants
                         )),
-                        rust,
+                        expected,
                         "{who} {target_org} {target_owner} {grants:?} deleted={deleted}"
                     );
                 }
             }
         }
     }
+}
+
+/// What a paired party is told, for every signer, role held, deletion and
+/// request: allowed; a peer gateway forbidden before anything else; a party
+/// that may read the conversation forbidden what its role or request does
+/// not allow; a granted tombstone told it was deleted when the party signed
+/// in as its owner, as the socket's owner check told it; and anything else
+/// told it does not exist, as an ungranted id is (rows G1, J11 to J14).
+#[test]
+fn paired_access_tells_each_refusal_as_its_table_says() {
+    use PairedRefusal::{Deleted, Forbidden, NotFound};
+    use ShareRole::{Comment, Drive, Read};
+    let policy = policy();
+    let (org, owner, peer) = (
+        organization("org"),
+        principal("owner"),
+        principal("gateway:peer"),
+    );
+    let attachments = RequestShape {
+        attachments: true,
+        ..RequestShape::default()
+    };
+    let text = RequestShape::default();
+    type Row<'a> = (
+        bool,
+        AccessAction,
+        Option<ShareRole>,
+        bool,
+        RequestShape<'a>,
+        Result<(), PairedRefusal>,
+    );
+    // (peer, action, held, deleted, request, told)
+    let table: [Row<'_>; 30] = [
+        (false, AccessAction::Read, None, false, text, Err(NotFound)),
+        (false, AccessAction::Read, Some(Read), false, text, Ok(())),
+        (false, AccessAction::Read, Some(Drive), false, text, Ok(())),
+        (false, AccessAction::Read, None, true, text, Err(NotFound)),
+        (
+            false,
+            AccessAction::Read,
+            Some(Read),
+            true,
+            text,
+            Err(Deleted),
+        ),
+        (
+            false,
+            AccessAction::Comment,
+            None,
+            false,
+            text,
+            Err(NotFound),
+        ),
+        (
+            false,
+            AccessAction::Comment,
+            Some(Read),
+            false,
+            text,
+            Err(Forbidden),
+        ),
+        (
+            false,
+            AccessAction::Comment,
+            Some(Comment),
+            false,
+            text,
+            Ok(()),
+        ),
+        (
+            false,
+            AccessAction::Comment,
+            Some(Drive),
+            false,
+            text,
+            Ok(()),
+        ),
+        (
+            false,
+            AccessAction::Comment,
+            Some(Comment),
+            false,
+            attachments,
+            Ok(()),
+        ),
+        (
+            false,
+            AccessAction::Comment,
+            Some(Comment),
+            true,
+            text,
+            Err(Deleted),
+        ),
+        (
+            false,
+            AccessAction::Comment,
+            None,
+            true,
+            text,
+            Err(NotFound),
+        ),
+        (false, AccessAction::Drive, None, false, text, Err(NotFound)),
+        (
+            false,
+            AccessAction::Drive,
+            Some(Read),
+            false,
+            text,
+            Err(Forbidden),
+        ),
+        (
+            false,
+            AccessAction::Drive,
+            Some(Comment),
+            false,
+            text,
+            Err(Forbidden),
+        ),
+        (false, AccessAction::Drive, Some(Drive), false, text, Ok(())),
+        (
+            false,
+            AccessAction::Drive,
+            Some(Drive),
+            false,
+            attachments,
+            Err(Forbidden),
+        ),
+        (
+            false,
+            AccessAction::Drive,
+            None,
+            false,
+            attachments,
+            Err(NotFound),
+        ),
+        (
+            false,
+            AccessAction::Drive,
+            Some(Drive),
+            true,
+            text,
+            Err(Deleted),
+        ),
+        // A role below the action's on a deleted conversation is told it
+        // was deleted: the policy says nothing of a role on a tombstone.
+        (
+            false,
+            AccessAction::Drive,
+            Some(Read),
+            true,
+            text,
+            Err(Deleted),
+        ),
+        (false, AccessAction::Drive, None, true, text, Err(NotFound)),
+        (true, AccessAction::Read, Some(Read), false, text, Ok(())),
+        (true, AccessAction::Read, None, false, text, Err(NotFound)),
+        // A peer's own principal owns nothing, so it is never told of a
+        // deletion.
+        (
+            true,
+            AccessAction::Read,
+            Some(Read),
+            true,
+            text,
+            Err(NotFound),
+        ),
+        (
+            true,
+            AccessAction::Comment,
+            Some(Comment),
+            false,
+            text,
+            Err(Forbidden),
+        ),
+        (
+            true,
+            AccessAction::Comment,
+            None,
+            false,
+            text,
+            Err(Forbidden),
+        ),
+        (
+            true,
+            AccessAction::Drive,
+            Some(Drive),
+            false,
+            text,
+            Err(Forbidden),
+        ),
+        (true, AccessAction::Drive, None, true, text, Err(Forbidden)),
+        (
+            true,
+            AccessAction::Drive,
+            Some(Drive),
+            false,
+            attachments,
+            Err(Forbidden),
+        ),
+        (
+            true,
+            AccessAction::Comment,
+            None,
+            true,
+            text,
+            Err(Forbidden),
+        ),
+    ];
+    for (is_peer, action, held, deleted, request, told) in table {
+        let record = conversation("org", "owner", deleted);
+        let access = PairedAccess::new(
+            &policy,
+            PairedParty {
+                organization: &org,
+                signed_in_as: if is_peer { &peer } else { &owner },
+                binding_owner: &owner,
+                receiver: "receiver-1",
+            },
+        );
+        assert_eq!(
+            access.admit(action, &record, held, request),
+            told,
+            "peer={is_peer} {} {held:?} deleted={deleted} {request:?}",
+            action.name()
+        );
+    }
+}
+
+/// A paired party lists nothing of the owner's and shares nothing, and an
+/// evaluator that cannot decide makes every paired question unavailable.
+#[test]
+fn paired_access_lists_and_shares_nothing_and_fails_closed() {
+    struct Undecided;
+    impl ConversationAccessPolicyEvaluator for Undecided {
+        fn evaluate(&self, _: &AccessAsk<'_>) -> AccessDecision {
+            AccessDecision::Deny(AccessDenial::Unavailable)
+        }
+    }
+    let policy = policy();
+    let (org, owner) = (organization("org"), principal("owner"));
+    let party = PairedParty {
+        organization: &org,
+        signed_in_as: &owner,
+        binding_owner: &owner,
+        receiver: "receiver-1",
+    };
+    let record = conversation("org", "owner", false);
+    let access = PairedAccess::new(&policy, party);
+    assert_eq!(
+        access.admit_catalogue(AccessAction::List),
+        Err(PairedRefusal::Forbidden)
+    );
+    for action in [
+        AccessAction::Share,
+        AccessAction::Unshare,
+        AccessAction::Shares,
+    ] {
+        assert_eq!(
+            access.allows(action, &record, Some(ShareRole::Drive)),
+            Ok(false)
+        );
+    }
+    let undecided = PairedAccess::new(&Undecided, party);
+    assert_eq!(
+        undecided.admit(
+            AccessAction::Read,
+            &record,
+            Some(ShareRole::Read),
+            RequestShape::default()
+        ),
+        Err(PairedRefusal::Unavailable)
+    );
+    assert_eq!(
+        undecided.admit_catalogue(AccessAction::List),
+        Err(PairedRefusal::Unavailable)
+    );
 }

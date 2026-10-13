@@ -6,14 +6,14 @@
 //! value never matches a pattern itself.
 //!
 //! ```text
-//! ShareAccess ──role──▶ ShareRole (Read < Comment < Drive)
+//! ShareAccess ──role──▶ ShareRole (Read, Comment or Drive)
 //!      └──────policy──▶ ToolPolicy (Drive only) ──▶ ToolPreset | ToolRules
 //! ```
 
-/// How much a share lets its holder do. Each role allows everything the
-/// roles before it do, so the declaration order is the order `at_least`
-/// compares by.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// How much a share lets its holder do. What each role allows is the
+/// conversation access policy's, which Cedar answers; this value only names
+/// the role.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ShareRole {
     /// Fold the records and watch them live.
     Read,
@@ -21,13 +21,6 @@ pub enum ShareRole {
     Comment,
     /// Comment, and start, steer and stop turns under a tool policy.
     Drive,
-}
-
-impl ShareRole {
-    /// Whether this role allows everything `role` allows.
-    pub fn at_least(self, role: ShareRole) -> bool {
-        self >= role
-    }
 }
 
 /// A named tool policy a Drive grant may use instead of its own rules.

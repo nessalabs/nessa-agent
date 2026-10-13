@@ -2084,16 +2084,18 @@ async fn a_paired_device_on_the_socket_sees_only_what_it_was_granted() {
 }
 
 /// Row H8 (`docs/design/auth/peer-gateways.md`): a session whose receiver
-/// binding's owner is not the session's principal, the shape a paired peer
-/// gateway has, is a paired reader on the socket like a device: `reader_of`
-/// matches its binding by credential and organization, not by owner, and its
-/// read and view subscription then ask its receiver's grant. Ungranted, both
-/// answer `conversation_not_found`; granted, the read answers. Its lists are
-/// refused, as a device's are. (A real peer never gets this far: these
-/// methods need `conversation.write`, which a gateway principal can never
-/// hold, so the policy refuses them first.)
+/// binding's owner is not the session's principal is a paired reader on the
+/// socket like a device: `binding_of` matches its binding by credential and
+/// organization, not by owner, and its read and view subscription then ask
+/// the access policy, which reads by the grant its receiver holds on its
+/// grantor's conversations. Ungranted, both answer `conversation_not_found`.
+/// Granted, a conversation that is not the binding owner's still answers
+/// `conversation_not_found`: a grant reads only its grantor's conversations
+/// (`grant.read`). Its lists are refused, as a device's are. (A real peer
+/// never gets this far: these methods need `conversation.write`, which a
+/// gateway principal can never hold, so the policy refuses them first.)
 #[tokio::test]
-async fn a_binding_owned_by_another_principal_reads_only_what_it_was_granted() {
+async fn a_binding_owned_by_another_principal_reads_only_its_grantors_grants() {
     let fixture = SubscriptionFixture::new().await;
     fixture.turn("first").await;
     let fixture =
@@ -2116,7 +2118,7 @@ async fn a_binding_owned_by_another_principal_reads_only_what_it_was_granted() {
         )
         .await;
     let read = fixture.call("conversation.read", conversation).await;
-    assert_eq!(read["ok"], true, "{read}");
+    assert_eq!(read["error"]["code"], "conversation_not_found", "{read}");
     fixture.assert_lists_refused().await;
 }
 
@@ -2669,6 +2671,63 @@ async fn a_drive_grant_lowered_revoked_or_unpaired_drives_no_more() {
     let fixture = fixture.with_devices(this_device(false));
     let answer = fixture.call("conversation.send", send("unpaired")).await;
     assert_eq!(answer["error"]["code"], "unauthorized", "{answer}");
+}
+
+/// A device holding a grant on a conversation its owner then deleted is
+/// told `conversation_deleted` for a read, a Drive command and a Comment
+/// note, as the owner's own surface is: it signs in as the owner, and the
+/// catalogue shows it the tombstone. Revoked, it is told the conversation
+/// does not exist.
+#[tokio::test]
+async fn a_granted_device_is_told_its_conversation_was_deleted() {
+    let fixture = SubscriptionFixture::new().await;
+    fixture.turn("first").await;
+    let fixture = fixture.with_devices(this_device(true));
+    fixture
+        .grant_to(crate::conversation::application::ShareGrantTransition::Grant(drive_access()))
+        .await;
+    grants(
+        &fixture.authority,
+        &["conversation.read", "conversation.write", "server.read"],
+    );
+    let deleted = owner_call(
+        &fixture,
+        "conversation.delete",
+        json!({"conversationId": fixture.id.to_string(), "requestId": "delete"}),
+    )
+    .await;
+    assert_eq!(deleted["ok"], true, "{deleted}");
+    let read = fixture
+        .call(
+            "conversation.read",
+            json!({"conversationId": fixture.id.to_string()}),
+        )
+        .await;
+    assert_eq!(read["error"]["code"], "conversation_deleted", "{read}");
+    let send = fixture
+        .call(
+            "conversation.send",
+            drive_params("conversation.send", &fixture.id, "after"),
+        )
+        .await;
+    assert_eq!(send["error"]["code"], "conversation_deleted", "{send}");
+    let note = fixture
+        .call(
+            "conversation.message",
+            comment_params("conversation.message", &fixture.id, "after"),
+        )
+        .await;
+    assert_eq!(note["error"]["code"], "conversation_deleted", "{note}");
+    fixture
+        .grant_to(crate::conversation::application::ShareGrantTransition::Revoke)
+        .await;
+    let read = fixture
+        .call(
+            "conversation.read",
+            json!({"conversationId": fixture.id.to_string()}),
+        )
+        .await;
+    assert_eq!(read["error"]["code"], "conversation_not_found", "{read}");
 }
 
 /// Row J14: a driver sends text. A message naming an image or a linked

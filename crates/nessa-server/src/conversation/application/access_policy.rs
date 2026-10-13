@@ -12,6 +12,15 @@
 //!                        └─ Deny ──▶ conversation.locate ── Allow ──▶ Deleted
 //!                                                        └─ Deny ──▶ NotFound
 //!   ──▶ Unavailable on either ──▶ Unavailable
+//! PairedAccess::admit(action, conversation, held, request)
+//!   ──▶ action ── Allow ──▶ Ok
+//!              └─ Deny ──▶ forbidden by `paired.peer_gateway` ──▶ Forbidden
+//!                       └─ conversation.read ── Allow ──▶ Forbidden
+//!                                            └─ Deny ──▶ catalogue.entry ── Deny ──▶ NotFound
+//!                                                                         └─ Allow ──▶ locate (Person)
+//!                                                                                ── Allow ──▶ Deleted
+//!                                                                                └─ Deny ──▶ NotFound
+//!   ──▶ Unavailable on any ──▶ Unavailable
 //! ```
 //!
 //! Arrows are calls. The facts are what is true: who asks (an owner's own
@@ -404,6 +413,182 @@ impl<'a> OwnerAccess<'a> {
             Answer::Allowed => Ok(true),
             Answer::Refused => Ok(false),
             Answer::Unavailable => Err(ConversationRefusal::Unavailable),
+        }
+    }
+}
+
+/// The policy id of the rule that a peer gateway never comments or drives.
+/// A refusal it decided is told `Forbidden` before anything else, as the
+/// socket refused a peer before it read any grant.
+const PEER_GATEWAY_POLICY: &str = "paired.peer_gateway";
+
+/// A paired party reading through its receiver binding, as the session and
+/// the binding say who it is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PairedParty<'a> {
+    /// The organization the binding and session are in.
+    pub organization: &'a OrganizationId,
+    /// The principal the session signed in as.
+    pub signed_in_as: &'a PrincipalId,
+    /// The grantor whose conversations the binding reads.
+    pub binding_owner: &'a PrincipalId,
+    /// The receiver the binding names.
+    pub receiver: &'a str,
+}
+
+/// Why the policy refused a paired party, as the party is told.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PairedRefusal {
+    /// The conversation is not one it may see: to it, it does not exist
+    /// (row G1).
+    NotFound,
+    /// It may see that the conversation was deleted, and is told so.
+    Deleted,
+    /// It may see the conversation but not do this.
+    Forbidden,
+    /// The policy could not decide.
+    Unavailable,
+}
+
+/// Whether a paired party may take an action on a conversation, as the
+/// refusal it is told. Every answer is the policy's; which refusal is told
+/// is asked of it too: a party that may read the conversation is forbidden
+/// what it asked, one the catalogue shows only its tombstone is told it was
+/// deleted when the person it signed in as may locate it, as that person
+/// would be, and anybody else is told it does not exist.
+#[derive(Clone, Copy)]
+pub struct PairedAccess<'a> {
+    policy: &'a dyn ConversationAccessPolicyEvaluator,
+    party: PairedParty<'a>,
+}
+
+impl<'a> PairedAccess<'a> {
+    pub fn new(policy: &'a dyn ConversationAccessPolicyEvaluator, party: PairedParty<'a>) -> Self {
+        Self { policy, party }
+    }
+
+    fn ask<'b>(
+        &'b self,
+        action: AccessAction,
+        resource: AccessResource<'b>,
+        held: Option<ShareRole>,
+        request: RequestShape<'b>,
+    ) -> AccessAsk<'b> {
+        AccessAsk {
+            subject: AccessSubject::PairedReader {
+                organization: self.party.organization,
+                signed_in_as: self.party.signed_in_as,
+                binding_owner: self.party.binding_owner,
+                receiver: self.party.receiver,
+            },
+            action,
+            resource,
+            held,
+            request,
+            target: None,
+        }
+    }
+
+    /// Whether the party, holding `held` on `conversation`, may take
+    /// `action` on it with a request carrying `request`.
+    ///
+    /// # Errors
+    /// The refusal it is told, as [`PairedAccess`] says.
+    pub fn admit(
+        &self,
+        action: AccessAction,
+        conversation: &Conversation,
+        held: Option<ShareRole>,
+        request: RequestShape<'_>,
+    ) -> Result<(), PairedRefusal> {
+        let resource = AccessResource::of(conversation);
+        match self
+            .policy
+            .evaluate(&self.ask(action, resource, held, request))
+        {
+            AccessDecision::Allow { .. } => return Ok(()),
+            AccessDecision::Deny(AccessDenial::Unavailable) => {
+                return Err(PairedRefusal::Unavailable)
+            }
+            AccessDecision::Deny(AccessDenial::Forbidden { policies })
+                if policies.iter().any(|id| id == PEER_GATEWAY_POLICY) =>
+            {
+                tracing::debug!(
+                    action = action.name(),
+                    ?policies,
+                    "a paired party was forbidden"
+                );
+                return Err(PairedRefusal::Forbidden);
+            }
+            AccessDecision::Deny(denial) => {
+                tracing::debug!(
+                    action = action.name(),
+                    ?denial,
+                    "a paired party was refused"
+                );
+            }
+        }
+        if action != AccessAction::Read && self.allows(AccessAction::Read, conversation, held)? {
+            return Err(PairedRefusal::Forbidden);
+        }
+        if !self.allows(AccessAction::CatalogueEntry, conversation, held)? {
+            return Err(PairedRefusal::NotFound);
+        }
+        match OwnerAccess::new(self.policy).locates(
+            conversation,
+            self.party.organization,
+            self.party.signed_in_as,
+        ) {
+            Ok(true) => Err(PairedRefusal::Deleted),
+            Ok(false) => Err(PairedRefusal::NotFound),
+            Err(_) => Err(PairedRefusal::Unavailable),
+        }
+    }
+
+    /// Whether the policy lets the party, holding `held` on `conversation`,
+    /// take `action` on it, without asking which refusal it would be told.
+    ///
+    /// # Errors
+    /// `Unavailable` when the policy could not decide.
+    pub fn allows(
+        &self,
+        action: AccessAction,
+        conversation: &Conversation,
+        held: Option<ShareRole>,
+    ) -> Result<bool, PairedRefusal> {
+        match answer(
+            self.policy,
+            &self.ask(
+                action,
+                AccessResource::of(conversation),
+                held,
+                RequestShape::default(),
+            ),
+        ) {
+            Answer::Allowed => Ok(true),
+            Answer::Refused => Ok(false),
+            Answer::Unavailable => Err(PairedRefusal::Unavailable),
+        }
+    }
+
+    /// Whether the party may take `action` on the owner's catalogue its
+    /// binding reads: `conversation.list` or `catalogue.watch`.
+    ///
+    /// # Errors
+    /// `Forbidden` when the policy refuses, `Unavailable` when it could not
+    /// decide.
+    pub fn admit_catalogue(&self, action: AccessAction) -> Result<(), PairedRefusal> {
+        let resource = AccessResource::Catalogue {
+            organization: self.party.organization,
+            owner: self.party.binding_owner,
+        };
+        match answer(
+            self.policy,
+            &self.ask(action, resource, None, RequestShape::default()),
+        ) {
+            Answer::Allowed => Ok(()),
+            Answer::Refused => Err(PairedRefusal::Forbidden),
+            Answer::Unavailable => Err(PairedRefusal::Unavailable),
         }
     }
 }

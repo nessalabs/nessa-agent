@@ -2,8 +2,8 @@
 //! an agent. The summary rules are tested where they live, in
 //! `nessa-protocol/tests/conversation/summary.rs`.
 use super::{
-    Conversation, ConversationDeletion, ConversationRefusal, DeletionContradiction,
-    ProviderSessionErasure, ProviderSessionLink,
+    Conversation, ConversationDeletion, DeletionContradiction, ProviderSessionErasure,
+    ProviderSessionLink,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::agents::AgentId;
@@ -285,8 +285,12 @@ fn a_restored_tombstone_that_contradicts_itself_or_its_conversation_is_refused()
     assert!(owned().deleted(deletion("delete-1")).is_ok());
 }
 
+/// Ownership is a record fact that deletion does not change: the deleted
+/// conversation is still its owner's, to finish deleting, and nobody
+/// else's. Who is told it was deleted is the access policy's
+/// (`tests/conversation/access_policy.rs`).
 #[test]
-fn only_the_owner_is_told_a_conversation_was_deleted() {
+fn a_deleted_conversation_is_still_only_its_owners() {
     let conversation = owned();
     let owner = (
         OrganizationId::new("org").unwrap(),
@@ -302,19 +306,11 @@ fn only_the_owner_is_told_a_conversation_was_deleted() {
             PrincipalId::new("person").unwrap(),
         ),
     ];
-    assert_eq!(conversation.check_access(&owner.0, &owner.1), Ok(()));
+    assert!(conversation.allows(&owner.0, &owner.1));
     let deleted = conversation.deleted(deletion("delete-1")).unwrap();
-    assert_eq!(
-        deleted.check_access(&owner.0, &owner.1),
-        Err(ConversationRefusal::Deleted)
-    );
-    // Still the owner's, to finish deleting.
     assert!(deleted.allows(&owner.0, &owner.1));
     for (organization, principal) in &others {
-        assert_eq!(
-            deleted.check_access(organization, principal),
-            Err(ConversationRefusal::NotFound)
-        );
+        assert!(!deleted.allows(organization, principal));
     }
 }
 

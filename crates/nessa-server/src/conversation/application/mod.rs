@@ -161,7 +161,8 @@ mod tool_policy;
 pub use crate::conversation::domain::ReceiverBinding;
 pub use access_policy::{
     AccessAction, AccessAsk, AccessDecision, AccessDenial, AccessResource, AccessSubject,
-    ConversationAccessPolicyEvaluator, OwnerAccess, RequestShape, ShareTarget,
+    ConversationAccessPolicyEvaluator, OwnerAccess, PairedAccess, PairedParty, PairedRefusal,
+    RequestShape, ShareTarget,
 };
 pub use catalogue::{
     CatalogueDescriptor, CatalogueEntryAccess, CatalogueEntryAdmission, CatalogueEntryAnswer,
@@ -255,9 +256,9 @@ pub use service::{
 };
 pub(crate) use session_key::conversation_session;
 pub use share_grants::{
-    admit_read, admit_role, binding_of, note_candidates, reader_of, HeldGrant, Reader, RoleRefusal,
-    ShareConversation, ShareGrant, ShareGrantChange, ShareGrantTransition, ShareGrants,
-    MAX_DRIVE_GRANTS_PER_CONVERSATION, MAX_SHARE_GRANTS_PER_CONVERSATION,
+    binding_of, note_candidates, paired_facts, HeldGrant, Reader, ShareConversation, ShareGrant,
+    ShareGrantChange, ShareGrantTransition, ShareGrants, MAX_DRIVE_GRANTS_PER_CONVERSATION,
+    MAX_SHARE_GRANTS_PER_CONVERSATION,
 };
 pub use tool_policy::{ToolDecision, ToolInitiator, ToolPolicyEvaluator, ToolPolicyUnavailable};
 
