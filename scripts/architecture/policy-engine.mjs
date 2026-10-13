@@ -70,7 +70,7 @@ const MOD = String.raw`(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*`
 function withoutTestModules(text) {
   const out = text.split("")
   const opening = new RegExp(`${TEST_ATTRIBUTES}${MOD}\\{`, "g")
-  for (let match; (match = opening.exec(text)); ) {
+  for (let match; (match = opening.exec(text));) {
     let depth = 1
     let index = match.index + match[0].length
     for (; index < text.length && depth > 0; index += 1) {
