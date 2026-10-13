@@ -535,6 +535,7 @@ function captureControl(source: Control): Control {
       const values: string[] = []
       for (let value = 0; value < source.values.length; value++)
         values.push(source.values[value])
+      // Only DTO fields survive capture; caller serialization hooks do not (PS23).
       choices.push({ key: source.key, values, ownWords: source.ownWords })
     }
     command.choices = choices

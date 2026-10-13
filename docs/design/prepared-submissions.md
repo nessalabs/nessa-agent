@@ -81,6 +81,7 @@ flowchart TD
 | PS20 | Adapter receipt getters change after validation | Publish the captured validated receipt and original target, with no reread | `prepared-submission.test.ts` |
 | PS21 | Caller replaces a control variant/target/values during create | Execute the captured command and copied values | `prepared-operations.test.ts` |
 | PS22 | Retry awaits create; tab closes and operation table is pruned | Retain eligible operation before await; submit original intent and repeat its requested Stop | `prepared-operations.test.ts` |
+| PS23 | Question records or arrays carry caller serialization hooks | Serialize copied DTO fields only; no caller hooks survive capture | `prepared-operations.test.ts` |
 
 
 Existing scenarios and gateway fakes consume the same prepared contract. Their

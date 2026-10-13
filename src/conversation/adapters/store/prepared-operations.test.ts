@@ -459,3 +459,47 @@ it.each([
       [{ key: "key", values: ["original"], ownWords: undefined }],
     )
 })
+
+it("serializes captured question DTOs without caller hooks after create awaits (PS23)", async () => {
+  const waiting = gate(),
+    echo = scenarioEffects("echo")
+  const create = vi.fn(async (id: string) => {
+    await waiting.promise
+    return echo.create(id)
+  })
+  const valuesHook = vi.fn(() => ["substituted"])
+  const recordHook = vi.fn(() => ({ key: "other", values: ["substituted"] }))
+  const listHook = vi.fn(() => [{ key: "other", values: ["substituted"] }])
+  const values = Object.assign(["original"], { toJSON: valuesHook })
+  const choice = { key: "key", values, ownWords: "original words", toJSON: recordHook }
+  const choices = Object.assign([choice], { toJSON: listHook })
+  let serialized: string | undefined
+  const answerQuestion = vi.fn<ConversationEffects["answerQuestion"]>(
+    async (_id, _execution, _question, captured) => {
+      serialized = JSON.stringify(captured)
+    },
+  )
+  const { store } = fixture({ create, answerQuestion }, echo)
+  const pending = store.dispatch(
+    controlConversation({
+      id: "c0",
+      control: {
+        kind: "answerQuestion",
+        executionId: "original",
+        questionId: "question",
+        choices,
+      },
+    }),
+  )
+  choice.ownWords = "edited words"
+  values[0] = "edited"
+  waiting.resolve()
+  const result = await pending
+  expect(result.meta.requestStatus).toBe("fulfilled")
+  expect(serialized).toBe(
+    JSON.stringify([{ key: "key", values: ["original"], ownWords: "original words" }]),
+  )
+  expect(valuesHook).not.toHaveBeenCalled()
+  expect(recordHook).not.toHaveBeenCalled()
+  expect(listHook).not.toHaveBeenCalled()
+})
