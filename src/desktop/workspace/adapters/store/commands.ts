@@ -589,28 +589,23 @@ export function approve({
 /**
  * What became of an answer to a question the agent asked. `sent` once the
  * source has taken it. `not-asked` when this window is not showing that
- * question. `answering` when this ask is already on its way. `refused` when
- * the source declined it, `unknown` when it is not known to have been taken.
- * The question leaves when a later read omits it.
+ * question. `refused` when the source declined it, `unknown` when it is not
+ * known to have been taken. A second card of the same ask joins the send
+ * already on its way and receives that same outcome. The question leaves
+ * when a later read omits it.
  */
 export type QuestionOutcome =
   | { readonly status: "sent" }
   | { readonly status: "not-asked" }
-  | { readonly status: "answering" }
   | { readonly status: "refused"; readonly reason: WorkspaceFailureReason }
   | { readonly status: "unknown"; readonly reason: WorkspaceFailureReason }
 
 /**
- * Asks already on their way. The overview can draw a question while the pane
- * beneath it still holds the same card, so the second send has to see the
- * first. Cleared when that send settles, taken or refused.
- */
-const questionsInFlight = new Set<string>()
-
-/**
  * Answers a question the session's agent is waiting on, or declines it
  * (`choices` null). Only a question on screen is answered. The card keeps
- * its own busy state; this does not record one on the workspace.
+ * its own busy state; whether a send is already on its way belongs to this
+ * store's `questionFlights`, so a second card hears the refusal and can
+ * try again.
  */
 export function answerQuestion({
   sessionId,
@@ -625,7 +620,7 @@ export function answerQuestion({
   choices: readonly QuestionChoice[] | null
   initiator: Initiator
 }): WorkspaceCommand<Promise<QuestionOutcome>> {
-  return async (_dispatch, getState, { workspace }) => {
+  return async (_dispatch, getState, { workspace, questionFlights }) => {
     const state = getState().workspace
     const asked = entry(state.transcripts, sessionId)?.questions?.some(
       (question) =>
@@ -633,25 +628,23 @@ export function answerQuestion({
     )
     if (!onScreen(state, sessionId) || !asked) return { status: "not-asked" }
     const flight = JSON.stringify([sessionId, executionId, questionId])
-    if (questionsInFlight.has(flight)) return { status: "answering" }
-    questionsInFlight.add(flight)
-    try {
-      await workspace.answerQuestion(
-        sessionId,
-        executionId,
-        questionId,
-        choices,
-        initiator,
-      )
-      return { status: "sent" }
-    } catch (error) {
-      const reason = failureReason(error)
-      return reason === "unavailable"
-        ? { status: "unknown", reason }
-        : { status: "refused", reason }
-    } finally {
-      questionsInFlight.delete(flight)
-    }
+    return questionFlights.join(flight, async () => {
+      try {
+        await workspace.answerQuestion(
+          sessionId,
+          executionId,
+          questionId,
+          choices,
+          initiator,
+        )
+        return { status: "sent" as const }
+      } catch (error) {
+        const reason = failureReason(error)
+        return reason === "unavailable"
+          ? { status: "unknown" as const, reason }
+          : { status: "refused" as const, reason }
+      }
+    })
   }
 }
 

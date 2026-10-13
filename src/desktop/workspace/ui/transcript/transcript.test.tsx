@@ -27,6 +27,7 @@ import { fakeSource, settle, testStore } from "../../testing"
 import { failureCopy, readFailureCopy } from "../failure-copy"
 import { approvalHead, approvalReason } from "./approval-request"
 import { spoken } from "./said"
+import { QuestionCard } from "./question-card"
 import { Transcript } from "./transcript"
 
 class Observer {
@@ -435,10 +436,128 @@ describe("a transcript", () => {
       initiator: "person" as const,
     }
     const first = store.dispatch(answerQuestion(ask))
-    const second = await store.dispatch(answerQuestion(ask))
-    expect(second).toEqual({ status: "answering" })
+    const second = store.dispatch(answerQuestion(ask))
+    await settle()
     expect(source.calls.filter((call) => call[0] === "answerQuestion")).toHaveLength(1)
     await source.release("answerQuestion")
+    expect(await first).toEqual({ status: "sent" })
+    expect(await second).toEqual({ status: "sent" })
+  })
+
+  it("lets a second card retry after the send already on its way is refused", async () => {
+    const source = fakeSource()
+    source.hold("answerQuestion")
+    const question = {
+      executionId: "e1",
+      questionId: "place",
+      message: "Where should this land?",
+      questions: [
+        {
+          key: "where",
+          prompt: "Pick a place",
+          multiSelect: false,
+          freeText: false,
+          required: false,
+          options: [{ value: "here", label: "Here" }],
+        },
+      ],
+    }
+    const { store } = await shown(source, {
+      ...conversation,
+      approval: null,
+      questions: [question],
+    })
+    await act(async () => {
+      root.render(
+        <StrictMode>
+          <Provider store={store}>
+            <QuestionCard sessionId="b" question={question} />
+            <QuestionCard sessionId="b" question={question} />
+          </Provider>
+        </StrictMode>,
+      )
+    })
+    const cards = () => [...host.querySelectorAll<HTMLElement>('[data-question="place"]')]
+    const skip = (card: HTMLElement | undefined) =>
+      [...(card?.querySelectorAll("button") ?? [])].find(
+        (button) => button.textContent === "Skip",
+      )
+    expect(cards()).toHaveLength(2)
+    await act(async () => {
+      skip(cards()[0])?.click()
+      skip(cards()[1])?.click()
+    })
+    expect(source.calls.filter((call) => call[0] === "answerQuestion")).toHaveLength(1)
+    source.refuse("answerQuestion", "unavailable")
+    await act(async () => {
+      await source.release("answerQuestion")
+      await settle()
+    })
+    const after = cards()
+    expect(after).toHaveLength(2)
+    for (const card of after) {
+      expect(card.querySelector(".workspace-question-failure")?.textContent).toBe(
+        failureCopy("unavailable"),
+      )
+      expect(skip(card)?.disabled).toBe(false)
+    }
+    source.refuse("answerQuestion", undefined)
+    source.hold("answerQuestion")
+    await act(async () => {
+      skip(cards()[0])?.click()
+      await settle()
+    })
+    expect(source.calls.filter((call) => call[0] === "answerQuestion")).toHaveLength(2)
+    await act(async () => {
+      await source.release("answerQuestion")
+    })
+  })
+
+  it("does not share a question send across two stores", async () => {
+    const held = fakeSource()
+    const other = fakeSource()
+    held.hold("answerQuestion")
+    const ask = {
+      sessionId: "b",
+      executionId: "e1",
+      questionId: "place",
+      choices: null,
+      initiator: "person" as const,
+    }
+    const question = {
+      executionId: "e1",
+      questionId: "place",
+      message: "Where should this land?",
+      questions: [
+        {
+          key: "where",
+          prompt: "Pick a place",
+          multiSelect: false,
+          freeText: false,
+          required: false,
+          options: [{ value: "here", label: "Here" }],
+        },
+      ],
+    }
+    const open = async (source: ReturnType<typeof fakeSource>) => {
+      source.transcripts.set("b", {
+        ...conversation,
+        approval: null,
+        questions: [question],
+      })
+      const store = testStore(source)
+      await store.dispatch(loadWorkspace())
+      store.dispatch(openSession({ sessionId: "b" }))
+      await settle()
+      return store
+    }
+    const firstStore = await open(held)
+    const secondStore = await open(other)
+    const first = firstStore.dispatch(answerQuestion(ask))
+    expect(await secondStore.dispatch(answerQuestion(ask))).toEqual({ status: "sent" })
+    expect(other.calls.filter((call) => call[0] === "answerQuestion")).toHaveLength(1)
+    expect(held.calls.filter((call) => call[0] === "answerQuestion")).toHaveLength(1)
+    await held.release("answerQuestion")
     expect(await first).toEqual({ status: "sent" })
   })
 

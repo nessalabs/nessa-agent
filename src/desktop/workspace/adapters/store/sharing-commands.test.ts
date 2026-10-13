@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest"
 import { makeDesktopStore } from "../../../store"
 import type { SharingSource } from "../../application/ports"
 import { SharingError } from "../../application/ports"
+import { createQuestionFlights } from "../../application/question-flights"
 import {
   emptyDraft,
   type ShareDraft,
@@ -38,6 +39,7 @@ function storeWith(sharing: SharingSource | undefined) {
     newId: () => `id-${++next}`,
     measure: () => roomyGrid,
     overviewFilter: keptFilter(),
+    questionFlights: createQuestionFlights(),
     sharing,
   })
 }

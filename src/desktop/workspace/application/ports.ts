@@ -40,6 +40,7 @@ import type {
   SharingChoices,
   SharingFailure,
 } from "../model/sharing"
+import type { QuestionFlights } from "./question-flights"
 
 /**
  * A message sent to a session, as the source is asked to deliver it. Sent
@@ -297,6 +298,12 @@ export interface WorkspaceDependencies {
    * (`effects.ts`). The store owns the filter; this only keeps it.
    */
   readonly overviewFilter: RememberedFilter
+  /**
+   * Asks already on their way, for this composed store. A second card of
+   * the same question joins the send and hears how it settled
+   * (`question-flights.ts`).
+   */
+  readonly questionFlights: QuestionFlights
   /**
    * Who a session is shared with, and sharing it. Absent where the window
    * has nothing to share through — a source composition was handed with no

@@ -15,6 +15,7 @@ import { defaultFilter, type AgentsFilter } from "./model/overview/filter"
 import type { WorkspaceFailureReason } from "./model/failure"
 import type { PaneRoom } from "../split-panes/model/pane-sizing"
 import { WorkspaceSourceError } from "./application/ports"
+import { createQuestionFlights } from "./application/question-flights"
 import type {
   WorkspaceIndex,
   SessionStatus,
@@ -283,6 +284,7 @@ export function testStore(
     newId: () => `id-${++next}`,
     measure,
     overviewFilter,
+    questionFlights: createQuestionFlights(),
   })
 }
 

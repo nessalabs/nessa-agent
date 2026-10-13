@@ -11,6 +11,7 @@ import { Provider } from "react-redux"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { makeDesktopStore } from "../../../store"
 import { SharingError, type SharingSource } from "../../application/ports"
+import { createQuestionFlights } from "../../application/question-flights"
 import { inMemorySharing } from "../../adapters/in-memory/in-memory-sharing"
 import { closeShare, openShare, readShares } from "../../adapters/store/commands"
 import { fakeSource, keptFilter, roomyGrid, settle } from "../../testing"
@@ -59,6 +60,7 @@ async function render(sharing: SharingSource) {
     newId: () => `id-${++next}`,
     measure: () => roomyGrid,
     overviewFilter: keptFilter(),
+    questionFlights: createQuestionFlights(),
     sharing,
   })
   await act(async () =>

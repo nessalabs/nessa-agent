@@ -25,7 +25,7 @@ import { failureCopy } from "../failure-copy"
  * is what holds Answer back, on this surface and the panel's.
  *
  * The card's own busy state covers the send. A second card of the same ask
- * — the overview over the pane — is told the first is already on its way.
+ * joins that send and hears how it settled, so a refusal enables both.
  */
 export function QuestionCard({
   sessionId,
@@ -58,7 +58,7 @@ export function QuestionCard({
         initiator: "person",
       }),
     ).then((outcome) => {
-      if (outcome.status === "sent" || outcome.status === "answering") return
+      if (outcome.status === "sent") return
       setBusy(false)
       if (outcome.status === "refused" || outcome.status === "unknown")
         setFailure(outcome.reason)
