@@ -238,7 +238,7 @@ grant's policy.
 ### Who started a turn
 
 Slice J2b saves every turn with who started it, in the SDK's turn record
-(`InvocationRecord::initiation`, record schema version 4): the owner, or the
+(`InvocationRecord::initiation`, record schema version 3): the owner, or the
 share grant that admitted it with the policy revision read for that command,
 and that its tools ran unchecked (row J15). The admission is the one
 authority: `admit_request` answers with the initiation it admitted, the
@@ -250,8 +250,8 @@ socket hands it to `submit_command`, and the turn is saved with it.
   turn started. Which roles may start a turn is the admission's rule alone
   (row J12): the turn record cannot state a role, so it can never disagree
   with that rule, and a later slice that lets another role start a turn
-  changes the admission only. Version 3 copied the role onto the turn; a
-  version 3 record is refused as another version.
+  changes the admission only. A saved turn that carries a role is not of
+  this shape and is refused as corrupt.
 
 - **The stamp is per turn, as admitted.** A policy changed after a command
   was admitted stamps the next command's turn and leaves this one as it was

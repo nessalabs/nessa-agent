@@ -798,15 +798,14 @@ impl StorageError {
     /// `schemaVersion` written on every session-record batch and transcript checkpoint.
     ///
     /// This build reads only [`Self::SCHEMA_VERSION`]. A record stamped 1 or 2
-    /// (before turns saved who started them), 3 (when a grant's role was
-    /// copied onto the turn), a finished object with no
+    /// (before turns saved who started them), a finished object with no
     /// marker, or any other unsigned integer is [`Self::AnotherVersion`] and is
     /// not decoded. A marker that is not an
     /// unsigned integer is [`Self::Corrupt`]. A missing marker together with a
     /// body the walk refuses is also [`Self::Corrupt`]: the broken body is
     /// reported, not another version. Old files are deleted by hand. Nothing
     /// is migrated.
-    pub const SCHEMA_VERSION: u64 = 4;
+    pub const SCHEMA_VERSION: u64 = 3;
     fn measure(
         mut pending: Vec<(&StorageError, usize)>,
         mut usage: StorageErrorUsage,
