@@ -1650,13 +1650,12 @@ mod tests {
     /// through a checkpoint and the fold restored from it.
     #[test]
     fn a_grant_initiation_survives_a_checkpoint_and_its_restore() {
-        use crate::domain::agent_execution::executions::{GrantInitiator, GrantRole};
+        use crate::domain::agent_execution::executions::GrantInitiator;
         let scope = scope();
         let mut fold = TranscriptFold::new(scope.clone()).unwrap();
         fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
             .unwrap();
-        let initiation =
-            Initiation::grant(GrantInitiator::new("receiver", GrantRole::Drive, 7).unwrap());
+        let initiation = Initiation::grant(GrantInitiator::new("receiver", 7).unwrap());
         let mut input = accepted_input("driven");
         let SessionChange::InputAccepted(record) = &mut input else {
             panic!("an accepted input")

@@ -5,19 +5,6 @@
 
 use crate::domain::agent_execution::ExecutionError;
 
-/// Access a share grant gives the person who holds it.
-/// This is the SDK's own copy of the role a host checked; the SDK never reads
-/// the host's share records.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum GrantRole {
-    /// May read the conversation.
-    Read,
-    /// May read and comment.
-    Comment,
-    /// May drive the conversation: start and steer turns.
-    Drive,
-}
-
 /// Who started a turn: the conversation's owner, or someone holding a share grant.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Initiator {
@@ -27,36 +14,33 @@ pub enum Initiator {
     Grant(GrantInitiator),
 }
 
-/// The share grant a turn was started under, as the host checked it.
+/// The share grant a turn was started under, as the host admitted it: which
+/// grant, and the revision of it the host checked.
+///
+/// It names the grant and keeps no copy of what the grant allowed. Which
+/// grants may start a turn, and with what role, is the host's rule, and the
+/// host's record of the grant at that revision is the one place that says
+/// what it held. A copy here could only drift from it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GrantInitiator {
     grant: Box<str>,
-    role: GrantRole,
     policy_revision: u64,
 }
 impl GrantInitiator {
     /// Maximum UTF-8 byte length of a grant's identity text.
     pub const MAX_GRANT_BYTES: usize = 256;
 
-    /// Retain the grant's exact identity text, the role it gave, and the
-    /// revision of the grant's policy the host checked. Blank `grant` text
+    /// Retain the grant's exact identity text and the revision of the grant
+    /// the host checked. Blank `grant` text
     /// returns [`ExecutionError::EmptyValue`]; text over
     /// [`Self::MAX_GRANT_BYTES`] UTF-8 bytes returns
     /// [`ExecutionError::ValueTooLong`]. This does not check the grant exists.
-    pub fn new(
-        grant: impl Into<String>,
-        role: GrantRole,
-        policy_revision: u64,
-    ) -> Result<Self, ExecutionError> {
-        Self::checked(grant.into(), role, policy_revision)
+    pub fn new(grant: impl Into<String>, policy_revision: u64) -> Result<Self, ExecutionError> {
+        Self::checked(grant.into(), policy_revision)
     }
     // Not generic, so the checks are one function that every caller's
     // instantiation of `new` shares.
-    fn checked(
-        grant: String,
-        role: GrantRole,
-        policy_revision: u64,
-    ) -> Result<Self, ExecutionError> {
+    fn checked(grant: String, policy_revision: u64) -> Result<Self, ExecutionError> {
         if grant.trim().is_empty() {
             return Err(ExecutionError::EmptyValue("share grant"));
         }
@@ -69,7 +53,6 @@ impl GrantInitiator {
         // Compact storage keeps the retained bytes equal to the text length.
         Ok(Self {
             grant: grant.into_boxed_str(),
-            role,
             policy_revision,
         })
     }
@@ -77,11 +60,8 @@ impl GrantInitiator {
     pub fn grant(&self) -> &str {
         &self.grant
     }
-    /// The role the grant gave when the turn started.
-    pub fn role(&self) -> GrantRole {
-        self.role
-    }
-    /// Revision of the grant's policy the host checked.
+    /// Revision of the grant the host checked: the host's record of the grant
+    /// at this revision says what it allowed.
     pub fn policy_revision(&self) -> u64 {
         self.policy_revision
     }

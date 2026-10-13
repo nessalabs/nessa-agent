@@ -238,11 +238,20 @@ grant's policy.
 ### Who started a turn
 
 Slice J2b saves every turn with who started it, in the SDK's turn record
-(`InvocationRecord::initiation`, record schema version 3): the owner, or the
-share grant that admitted it, with the role and the policy revision read for
-that command, and that its tools ran unchecked (row J15). The admission is
-the one authority: `admit_request` answers with the initiation it admitted,
-the socket hands it to `submit_command`, and the turn is saved with it.
+(`InvocationRecord::initiation`, record schema version 4): the owner, or the
+share grant that admitted it with the policy revision read for that command,
+and that its tools ran unchecked (row J15). The admission is the one
+authority: `admit_request` answers with the initiation it admitted, the
+socket hands it to `submit_command`, and the turn is saved with it.
+
+- **The turn names the grant; it copies nothing of it.** The policy revision
+  is the sequence of the grant journal row that last set the grant's role and
+  policy, so that row is the one record of what the grant allowed when the
+  turn started. Which roles may start a turn is the admission's rule alone
+  (row J12): the turn record cannot state a role, so it can never disagree
+  with that rule, and a later slice that lets another role start a turn
+  changes the admission only. Version 3 copied the role onto the turn; a
+  version 3 record is refused as another version.
 
 - **The stamp is per turn, as admitted.** A policy changed after a command
   was admitted stamps the next command's turn and leaves this one as it was
@@ -388,4 +397,4 @@ otherwise.
 | J12 | A paired session, holding `conversation.write` and a Drive grant, calls any other method whose grant is `conversation.write`; or, holding a Read or Comment grant, a Drive command; or a party signed in as a principal other than its grantor, as a peer is, holding Drive, a Drive command | `forbidden` | `a_paired_session_writes_only_what_a_drive_grant_admits` |
 | J13 | A Drive grant lowered to Read, then revoked; the device unpaired; or a device without pairing's `conversation.read` | The next command `forbidden`, `conversation_not_found`, `unauthorized`, and `forbidden` before its grant is read | `a_drive_grant_lowered_revoked_or_unpaired_drives_no_more` |
 | J14 | A driver's message, or receipt, naming an image or a linked file; a driver asking the receipt of a create | `forbidden` | `a_driver_sends_text_and_names_nothing_of_the_owners` |
-| J15 | The owner's turn, before and while devices are paired, from the owner's own unbound surface; a driver's sent and steered turns; the driver's retry of the same request, and its next turn, after the owner changed the grant's policy | Saved as the owner's; as the Drive grant with the revision read for it; the retry answered from its receipt with the first revision kept, the next turn with the new revision; each with tools not checked. A grant initiation survives a record checkpoint and its restore | `a_turn_is_saved_with_who_started_it`; `a_grant_initiation_survives_a_checkpoint_and_its_restore` (`nessa-sdk` `transcript.rs`) |
+| J15 | The owner's turn, before and while devices are paired, from the owner's own unbound surface; a driver's sent and steered turns; the driver's retry of the same request, and its next turn, after the owner changed the grant's policy | Saved as the owner's; as the grant with the revision read for it, and no copy of its role; the retry answered from its receipt with the first revision kept, the next turn with the new revision; each with tools not checked. A grant initiation survives a record checkpoint and its restore | `a_turn_is_saved_with_who_started_it`; `a_grant_initiation_survives_a_checkpoint_and_its_restore` (`nessa-sdk` `transcript.rs`) |

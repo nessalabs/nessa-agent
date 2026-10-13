@@ -333,7 +333,7 @@ mod tests {
             sessions::{InvocationRecord, SubmissionAcknowledgement},
         },
         domain::agent_execution::{
-            executions::{GrantInitiator, GrantRole, Initiation, MessageChunk, MessageId},
+            executions::{GrantInitiator, Initiation, MessageChunk, MessageId},
             permissions::{
                 ReviewDecline, ReviewDeclineId, ReviewDeclineObservation, ReviewDeclineReason,
                 ReviewDeclineStage,
@@ -622,28 +622,20 @@ mod tests {
             owner["changes"][0]["InputAccepted"]["metadata"]["initiation"],
             serde_json::json!({"initiator": "Owner", "tools": "NotChecked"})
         );
-        for (role, name) in [
-            (GrantRole::Read, "Read"),
-            (GrantRole::Comment, "Comment"),
-            (GrantRole::Drive, "Drive"),
-        ] {
-            let grant = saved(&record(Initiation::grant(
-                GrantInitiator::new("grant-1", role, 4).unwrap(),
-            )));
-            assert_eq!(
-                grant["changes"][0]["InputAccepted"]["metadata"]["initiation"],
-                serde_json::json!({
-                    "initiator": {
-                        "Grant": {"grant": "grant-1", "role": name, "policy_revision": 4}
-                    },
-                    "tools": "NotChecked"
-                })
-            );
-        }
+        let grant = saved(&record(Initiation::grant(
+            GrantInitiator::new("grant-1", 4).unwrap(),
+        )));
+        assert_eq!(
+            grant["changes"][0]["InputAccepted"]["metadata"]["initiation"],
+            serde_json::json!({
+                "initiator": {"Grant": {"grant": "grant-1", "policy_revision": 4}},
+                "tools": "NotChecked"
+            })
+        );
 
         let grant = |grant: serde_json::Value| {
             serde_json::json!({
-                "initiator": {"Grant": {"grant": grant, "role": "Drive", "policy_revision": 4}},
+                "initiator": {"Grant": {"grant": grant, "policy_revision": 4}},
                 "tools": "NotChecked"
             })
         };
@@ -658,17 +650,19 @@ mod tests {
             Some(serde_json::json!({"initiator": "Owner", "tools": "Checked"})),
             Some(serde_json::json!({"initiator": "Owner"})),
             Some(serde_json::json!({"initiator": "Owner", "tools": "NotChecked", "by": 1})),
+            // A grant's role is the host's record of the grant, never a copy
+            // on the turn: a turn that carries one is not of this shape.
             Some(serde_json::json!({
-                "initiator": {"Grant": {"grant": "g", "role": "Owner", "policy_revision": 4}},
+                "initiator": {"Grant": {"grant": "g", "role": "Drive", "policy_revision": 4}},
                 "tools": "NotChecked"
             })),
             Some(serde_json::json!({
-                "initiator": {"Grant": {"grant": "g", "role": "Read", "policy_revision": -1}},
+                "initiator": {"Grant": {"grant": "g", "policy_revision": -1}},
                 "tools": "NotChecked"
             })),
             Some(serde_json::json!({
                 "initiator": {
-                    "Grant": {"grant": "g", "role": "Read", "policy_revision": 1, "more": 1}
+                    "Grant": {"grant": "g", "policy_revision": 1, "more": 1}
                 },
                 "tools": "NotChecked"
             })),

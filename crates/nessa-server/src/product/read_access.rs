@@ -31,7 +31,7 @@ use nessa_protocol::product::generated::{
 };
 use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
-use nessa_sdk::domain::agent_execution::executions::{GrantInitiator, GrantRole, Initiation};
+use nessa_sdk::domain::agent_execution::executions::{GrantInitiator, Initiation};
 
 /// The reader `session` is now: the owner when this gateway keeps no
 /// receiver bindings or the credential has none.
@@ -165,22 +165,11 @@ pub(super) async fn admit_request(
     drives_only_text(frame)?;
     // A receiver id is at most 128 bytes, inside what a record keeps; one of
     // only blanks, which no pairing mints, is refused as unverifiable.
-    GrantInitiator::new(
-        binding.receiver_id,
-        grant_role(held.role),
-        held.policy_revision,
-    )
-    .map(Initiation::grant)
-    .map_err(|_| refusal_code(ReadRefusal::Unverifiable))
-}
-
-/// The role a grant gave, as a saved turn names it.
-fn grant_role(role: ShareRole) -> GrantRole {
-    match role {
-        ShareRole::Read => GrantRole::Read,
-        ShareRole::Comment => GrantRole::Comment,
-        ShareRole::Drive => GrantRole::Drive,
-    }
+    // The turn names the grant and its revision; what that revision allowed is
+    // the grant journal's to say, not a copy on the turn.
+    GrantInitiator::new(binding.receiver_id, held.policy_revision)
+        .map(Initiation::grant)
+        .map_err(|_| refusal_code(ReadRefusal::Unverifiable))
 }
 
 /// The grant pairing mints a device (`device_pairing`), which a Drive
