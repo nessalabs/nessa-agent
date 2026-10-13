@@ -13,7 +13,7 @@
 //! from there with the same stage, never a second receiver or credential.
 use super::cleanup::{CleanupError, SettleCleanup};
 use super::owner::{OwnerError, PairingOwner};
-use super::receivers::{ReceiverError, ReceiverRequest};
+use super::receivers::{ReceiverDispatch, ReceiverError, ReceiverRequest};
 use super::recurrence::{access_error_recurs, receiver_error_recurs, store_error_recurs};
 use nessa_auth::{
     application::{
@@ -166,9 +166,10 @@ impl PairingOwner<'_> {
         let id = current.id();
         let request = ReceiverRequest::for_stage(&current).ok_or_else(conflict)?;
         if current.receiver_binding().is_none() {
+            let dispatch = ReceiverDispatch::for_pair(stage).map_err(store)?;
             let outcome = self
                 .receivers
-                .pair(&request)
+                .pair(&dispatch)
                 .map_err(ActivationError::Receiver)?;
             // Auth correlates the outcome with the stage (design row P21).
             current = self

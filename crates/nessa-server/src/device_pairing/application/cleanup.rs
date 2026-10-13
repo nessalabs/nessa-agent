@@ -10,7 +10,7 @@
 //! Arrows are calls, in order. Nothing here pairs a receiver: cleanup only looks
 //! up the original receipt (design row P48). Auth keeps the first terminal
 //! cause and initiator; this only completes the physical obligation.
-use super::receivers::{PairingReceivers, ReceiverError, ReceiverRequest};
+use super::receivers::{PairingReceivers, ReceiverDispatch, ReceiverError, ReceiverRequest};
 use super::recurrence::{receiver_error_recurs, store_error_recurs};
 use nessa_auth::{
     application::{
@@ -117,9 +117,10 @@ impl SettleCleanup<'_> {
                 }
             }
         };
+        let dispatch = ReceiverDispatch::for_fence(&_stage).map_err(CleanupError::Enrollment)?;
         let fence = self
             .receivers
-            .fence(&request, &receiver, epoch)
+            .fence(&dispatch, &receiver, epoch)
             .map_err(CleanupError::Receiver)?;
         self.enrollments
             .finish_cleanup(id, &fence, self.clock)

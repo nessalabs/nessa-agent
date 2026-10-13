@@ -5,9 +5,9 @@
 //! correlated by the enrollment's durable stage, so a retry finds the original
 //! receipt instead of pairing again.
 use nessa_auth::{
-    application::pairing::ReceiverOutcome,
+    application::pairing::{PairingStoreError, ReceiverOutcome, StageOwnership},
     domain::{
-        pairing::{AttemptId, PairingRecord},
+        pairing::{AttemptId, PairingError, PairingPhase, PairingRecord},
         CredentialId, OrganizationId, PrincipalId, ResourceId,
     },
 };
@@ -22,6 +22,88 @@ pub struct ReceiverRequest {
     generation: u64,
     organization: OrganizationId,
     owner: PrincipalId,
+}
+
+/// One mutable receiver dispatch borrowing actual noncloneable stage ownership.
+/// Read-only selectors or a caller-constructed record cannot construct this lease.
+pub struct ReceiverDispatch<'a> {
+    _ownership: &'a StageOwnership,
+    request: ReceiverRequest,
+    kind: DispatchKind,
+}
+#[derive(PartialEq, Eq)]
+enum DispatchKind {
+    Pair,
+    Fence {
+        receiver: ResourceId,
+        paired_epoch: u64,
+    },
+}
+impl<'a> ReceiverDispatch<'a> {
+    /// Admit an original Pair under its current live physical stage owner.
+    /// Once admitted, a late physical outcome remains owned even if the record ends.
+    pub fn for_pair(ownership: &'a StageOwnership) -> Result<Self, PairingStoreError> {
+        let record = ownership.current()?;
+        if record.phase() != PairingPhase::Staging || record.receiver_binding().is_some() {
+            return Err(PairingStoreError::Domain(PairingError::Ineligible));
+        }
+        Self::new(ownership, &record, DispatchKind::Pair)
+    }
+    /// Admit fencing only for an ended original stage with its real receipt retained.
+    pub fn for_fence(ownership: &'a StageOwnership) -> Result<Self, PairingStoreError> {
+        let record = ownership.current()?;
+        // PairingRecord::cleanup_pending owns the Terminal/unsettled-stage relation.
+        if !record.cleanup_pending() {
+            return Err(PairingStoreError::Domain(PairingError::Ineligible));
+        }
+        let (receiver, paired_epoch) = record
+            .receiver_binding()
+            .ok_or(PairingStoreError::Domain(PairingError::Ineligible))?;
+        Self::new(
+            ownership,
+            &record,
+            DispatchKind::Fence {
+                receiver: receiver.clone(),
+                paired_epoch,
+            },
+        )
+    }
+    fn new(
+        ownership: &'a StageOwnership,
+        record: &PairingRecord,
+        kind: DispatchKind,
+    ) -> Result<Self, PairingStoreError> {
+        let request = ReceiverRequest::for_stage(record)
+            .ok_or(PairingStoreError::Domain(PairingError::Conflict))?;
+        Ok(Self {
+            _ownership: ownership,
+            request,
+            kind,
+        })
+    }
+    pub(crate) fn pair_request(&self) -> Result<&ReceiverRequest, ReceiverError> {
+        if self.kind != DispatchKind::Pair {
+            return Err(ReceiverError::Conflict);
+        }
+        Ok(&self.request)
+    }
+    pub(crate) fn fence_request(
+        &self,
+        receiver: &ResourceId,
+        paired_epoch: u64,
+    ) -> Result<&ReceiverRequest, ReceiverError> {
+        if !matches!(&self.kind, DispatchKind::Fence { receiver: original, paired_epoch: epoch } if original == receiver && *epoch == paired_epoch)
+        {
+            return Err(ReceiverError::Conflict);
+        }
+        Ok(&self.request)
+    }
+}
+impl std::ops::Deref for ReceiverDispatch<'_> {
+    type Target = ReceiverRequest;
+    fn deref(&self) -> &Self::Target {
+        &self.request
+    }
 }
 impl ReceiverRequest {
     /// The request for this record's durable stage; `None` before Stage.
@@ -79,7 +161,7 @@ pub enum ReceiverError {
 pub trait PairingReceivers: Send + Sync {
     /// Pair a receiver for this stage. A repeat of the same stage returns the
     /// original receipt, with no second receiver or epoch.
-    fn pair(&self, request: &ReceiverRequest) -> Result<ReceiverOutcome, ReceiverError>;
+    fn pair(&self, dispatch: &ReceiverDispatch<'_>) -> Result<ReceiverOutcome, ReceiverError>;
     /// The original pair receipt for this stage, without pairing: `None` is a
     /// coherent absence, never an unavailable read.
     fn paired(&self, request: &ReceiverRequest) -> Result<Option<ReceiverOutcome>, ReceiverError>;
@@ -97,7 +179,7 @@ pub trait PairingReceivers: Send + Sync {
     /// this credential returns that revocation.
     fn fence(
         &self,
-        request: &ReceiverRequest,
+        dispatch: &ReceiverDispatch<'_>,
         receiver: &ResourceId,
         paired_epoch: u64,
     ) -> Result<ReceiverOutcome, ReceiverError>;
