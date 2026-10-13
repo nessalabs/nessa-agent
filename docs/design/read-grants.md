@@ -197,6 +197,28 @@ tools](#checking-a-drive-turns-tools)).
 - **A retry** of a share answers from its journal row, and compares the role
   and policy too: the same request id naming another role or policy is
   refused `InvalidInput` (row J6).
+- **The receipt.** `conversation.share` answers the policy revision the
+  grant holds once the change is made: the new one when applied, the one
+  kept when not. A retry answers its first answer, read from the journal as
+  the revision the grant held just after that row, never what it holds now
+  (row J29). `conversation.unshare` answers `{requestId, applied}` only:
+  after it the device holds no grant, so there is no revision to name, and a
+  later grant takes a new one past every revision before it (the journal's
+  sequence is never reused).
+- **Compare and set.** Both take an optional `expectedPolicyRevision`: the
+  revision the caller built its change on. The store compares it with the
+  grant's revision inside the transaction that would write the change, after
+  a retry is answered from its journal row, so a change whose answer was
+  lost — a share's or a revoke's — is not refused by the revision it moved
+  itself. A revision is a journal sequence, which starts at 1, so 0 names
+  no grant held: a first grant built on a list without one names 0, and is
+  refused once another grant has landed. A mismatch is refused
+  `share_grant_changed` and writes nothing: not the grant, the journal or
+  the catalogue (row J30). A revision past the schema's bound (a JSON safe
+  integer, 2^53 − 1) is refused `invalid_request`. Leaving it out changes
+  whatever is held, as before. The comparison is a store consistency check, not a decision about
+  who may share, so it is not policy and does not go through Cedar; Cedar
+  still decides the method.
 - **`conversation.shares`** reports each grant's role, its policy when it
   drives, and its policy revision (row J7). `conversation.unshare` names no
   role and ends a grant of any role (row J8).
@@ -215,9 +237,13 @@ sequenceDiagram
     Owner->>Socket: conversation.share {role: drive, policy}
     Socket->>Domain: ShareAccess::new(role, policy)
     Domain-->>Socket: refused when drive has no policy, or read/comment has one
-    Socket->>Grants: change Grant(access)
+    Socket->>Grants: change Grant(access), expected revision when named
+    Grants->>Grants: a retried request answers its first receipt
+    Grants->>Grants: expected revision not held: refused share_grant_changed, nothing written
     Grants->>Grants: journal role and policy before/after, set policy_revision
     Note over Grants: role change only: no catalogue revision, no notice
+    Grants-->>Socket: applied, policy revision held now
+    Socket-->>Owner: {requestId, applied, policyRevision}
     Device->>Socket: recordsHead / conversation.read
     Socket->>Socket: PairedAccess: conversation.read (any role)
     Socket-->>Device: records, exactly as for Read
@@ -656,7 +682,30 @@ Each refusal is a sentence, never a wire code, by total tables: the
 conversation codes and the session's (`forbidden`, `unauthorized`) map to
 a kind (`sharing-gateway.ts`), and each kind to words for a change and for a
 read (`share-copy.ts`). An answer that never came is said as unknown, and
-the list read again says where things stand.
+the list read again says where things stand; an answer the client could not
+validate is logged as well, so a schema drift is seen and not only said as
+unknown.
+
+The dialog reads its grants (`conversation.shares`) apart from what the form
+offers (`auth.session`, for the window's own credential, `credential.list`
+and `agents.list`), so a failure in the second still lists the grants and
+lets one be revoked. Each change names the revision it was built on: a
+Change the revision of the grant as listed, a share to a device holding no
+grant 0, and a Revoke the revision listed when the person was asked to
+confirm it. That ask is workspace state, ended by any change beginning and
+by a read listing that device at another revision, so it never outlives the
+grant it asked about (row D11). A refusal for a changed grant says the grant
+changed since the list was read and names no cause: it may be this window's
+own change whose answer, or the read after it, was lost. The draft's basis
+is then the revision the gateway answered for this window's own change,
+never a later read, which may hold another window's change the draft has not
+seen (row D10).
+
+One rule says whether the list and the form may be acted on (`formHeld`):
+not while a change is on its way, not while a read is, and not while the
+grants listed predate this window's last settled change, until a read of
+them answers. Every edit, Change, Revoke and its confirm, Start Again,
+Share, and the reason beside it derive from that rule alone.
 
 ### Dialog state and order
 
@@ -670,16 +719,17 @@ row's tests are named by the row: the transitions in
 
 | Row | State and input | Result | Test |
 |---|---|---|---|
-| D1 | Share… on a session, with a sharing source | One dialog for that session, named by a new opening, reading its grants; nothing shown as read yet. A window with no source offers no Share… and opens nothing | `sharing.test.ts` (*D1: opens for one session…*); `sharing-commands.test.ts` (*D1: a window without sharing…*, *D1, D5: opens, reads, shares…*) |
+| D1 | Share… on a session, with a sharing source | One dialog for that session, named by a new opening, reading its grants and what the form offers; nothing shown as read yet. A window with no source offers no Share… and opens nothing | `sharing.test.ts` (*D1: opens for one session…*); `sharing-commands.test.ts` (*D1: a window without sharing…*, *D1, D5, D10: opens, reads, shares…*) |
 | D2 | A read on its way; another read asked (Try Again, or after a change) | Only the newest read is applied; the older answer is let go whenever it lands | `sharing.test.ts` (*D2*); `sharing-commands.test.ts` (*D2*) |
 | D3 | A read or a change answers for an opening that is no longer the dialog's | Let go | `sharing.test.ts` (*D3, D7*) |
-| D4 | The newest read fails | Why, in words, with Try Again; what was read before stays | `sharing.test.ts` (*D4*); `sharing-commands.test.ts` (*D4*); `share-dialog.test.tsx` (*says a failed read with Try Again…*) |
-| D5 | A share or a revoke settles, done or refused | It is no longer on its way, for the window. A dialog open on its session — the one that began it or one opened since — says its outcome in words, never a code, and its grants are read again whatever it was; only that read says what the session holds | `sharing.test.ts` (*D5*, *D6: a dialog opened while…*); `sharing-commands.test.ts` (*D1, D5*, *D5: a refused change…*, *D6: a dialog opened again…*); `share-dialog.test.tsx` (*says a refusal in words…*) |
-| D6 | A change asked while another is on its way — from this opening or any other, for any session — or before anything was read | Not begun; nothing is sent. The change on its way is the window's, not the dialog's; a dialog open on another session says it waits on that change | `sharing.test.ts` (*D6*, three); `sharing-commands.test.ts` (*D6*, three); `share-dialog.test.tsx` (*says why it waits while another conversation's change…*) |
+| D4 | The newest read fails, in its grants or in what the form offers (the linked devices and hosts) | Why, in words, with Try Again, naming which part failed; each part that answered replaces what was read before, a part that failed keeps it. With the grants read and the offer not, the grants are listed and may be revoked, and the form is not shown | `sharing.test.ts` (*D4*, two); `sharing-commands.test.ts` (*D4*, two); `sharing-gateway.test.ts` (*is refused as a typed kind when a part is…*); `share-dialog.test.tsx` (*says a failed read with Try Again…*, *keeps the grants and Revoke when the linked devices cannot be read*) |
+| D5 | A share or a revoke settles: made, refused (another window changed the grant since it was read among the refusals), or unanswered | It is no longer on its way, for the window. A dialog open on its session — the one that began it or one opened since — keeps one record of how it settled and says it in words, never a code, and its grants are read again whatever it was; only that read says what the session holds | `sharing.test.ts` (*D5*, *D6: a dialog opened while…*); `sharing-commands.test.ts` (*D1, D5, D10*, *D5: a refused change…*, *D5, D10: a change to a grant another window moved…*, *D6: a dialog opened again…*); `share-dialog.test.tsx` (*says a refusal in words…*) |
+| D6 | A change asked while another is on its way — from this opening or any other, for any session — or before the grants were read | Not begun; nothing is sent. The change on its way is the window's, not the dialog's; the dialog says why it waits: on this conversation's own change, or on another conversation's | `sharing.test.ts` (*D6*, three); `sharing-commands.test.ts` (*D6*, three); `share-dialog.test.tsx` (*says why it waits while another conversation's change…*, *says why it waits while its own conversation's earlier change…*); `share-dialog.mjs` (`held`) |
 | D7 | Closed, or opened for another session, while a read or a change is on its way | Closed at once; the change still settles at the gateway and is no longer on its way; nothing on screen changes and no read follows it | `sharing.test.ts` (*D3, D7*, *D7*); `sharing-commands.test.ts` (*D7*) |
 | D8 | Opened again, for the same session or another, while an earlier opening's answers are on their way | A new opening; the earlier answers are let go, and the form starts empty | `sharing.test.ts` (*D8*); `sharing-commands.test.ts` (*D8*); `share-dialog.test.tsx` (*starts a new draft for a new opening*) |
 | D9 | A Drive draft whose patterns leave less room than the hosts checked; a custom policy naming no pattern; a change to a grant holding a host the gateway does not offer now, or a pattern holding a comma; another device chosen after Change | Share disabled with why; the hosts' `max` is the room left; the held host is shown, checked and sent unless unchecked; the grant's patterns are sent exactly while their field is unchanged; a device without a grant starts from an empty form | `model/sharing.test.ts` (*D9*, *carries a preset and every host checked…*, *a grant's patterns*); `share-dialog.test.tsx` (*holds the host list…*, *keeps, and shows, a held host…*, *starts from nothing for a device without a grant…*) |
-| D10 | The form while a change is on its way, and after it settles until a read asked after it answers; a draft whose device's grant changed under it (its policy revision moved, from another window) | The form, Share and Revoke are held; a failed read keeps them held beside Try Again, since what is shown may be from before the change. When that read answers, a change to the draft's own device that was done or went unanswered moves the draft's basis onto what the device holds, keeping what the form showed; a refusal leaves it as it was. A draft changed under it is held as changed, with Start Again, which starts it from what the last read holds | `sharing.test.ts` (*D10*, three); `model/sharing.test.ts` (*builds on what its own device holds…*, *starts again…*); `share-dialog.test.tsx` (*shares Read with a chosen device…*, *holds the form while a change is on its way…*); `share-dialog.mjs` (`held`) |
+| D10 | The list and the form while a change is on its way, while any read is, or while the grants listed predate this window's last settled change (made, refused or unanswered) because no read of them has answered since — the read after it on its way or failed | Held, by one rule (`formHeld`): no edit is taken, the fieldset, Share, Change, Revoke and its confirm are disabled, Start Again does nothing, and no reason is said, since the draft is not compared with a list that predates it; a failed read offers only Try Again. A change made to the draft's own device builds the draft on the revision the gateway answered, keeping what the form showed; a revoke leaves no basis; a refused or unanswered change, or one to another device, leaves the draft as it was. Once the grants are read after the change, a draft whose basis the listed grant no longer holds is held as changed, with Start Again, which starts it from what that read holds. Share sends the draft as the store holds it then, built by `requestFrom`, so what is sent and the basis the answer moves the draft onto are one; a change names its basis, 0 for a first grant; one sent on a basis another window moved is refused by the gateway (`share_grant_changed`), said in words naming no cause, and changes nothing | `sharing.test.ts` (*D10*, eight, among them *after %s, the list and the form are held…* and *a read that fails after any settled change…*); `model/sharing.test.ts` (*D9: is held when the device's grant changed…*, *D10: builds on the revision the gateway answered…*, *starts again…*); `sharing-commands.test.ts` (*D5, D10: a change to a grant another window moved…*, *D10: a first grant names revision 0…*, *D10: Share sends the draft as the store holds it…*); `share-dialog.test.tsx` (*holds the form while a change is on its way…*, *says a change refused because another window changed the grant…*, *holds the list and the form during the read after %s…*); `share-dialog.mjs` (`held`, `changed`, `stale`) |
+| D11 | Revoke asked to confirm; then the person confirms, cancels, begins any change (an Update to the same device among them), or a read answers | The ask is the dialog's state (`confirming`), holding the device and the revision listed when the person was asked, and begins only when a change could. Confirmed, the revoke names that revision, so a grant moved since is refused `changed`. Cancelled, or any change beginning, ends it; a read listing that device at another revision, or not at all, ends it, while one listing it as it was, or failing, keeps it | `sharing.test.ts` (*D11: a Revoke asked keeps the revision listed then…*); `sharing-commands.test.ts` (*D11: a Revoke names the revision listed when it was asked…*); `share-dialog.test.tsx` (*stops asking about a Revoke once a read lists the grant changed…*, *stops asking about a Revoke when this window's own change…*) |
 
 ## What this slice does not do
 
@@ -750,11 +800,15 @@ row's tests are named by the row: the transitions in
   busy, or driven only by an app, notes wait until they expire.
 - **The view lists the newest 64 notes.** Older ones stay in the records
   and in `conversation.messageStatus`; the view does not page them.
-- **A share does not name the policy revision it replaces.** The dialog
-  holds a draft whose device's grant changed under it (row D10), but only
-  for changes it has read: two windows sending at once each replace the
-  grant, and the later one wins. Holding that needs the gateway to take an
-  expected policy revision on `conversation.share`.
+- **A change that names no revision overwrites.** `expectedPolicyRevision`
+  is optional on the wire, so a caller that leaves it out still replaces
+  whatever the device holds, and the later of two such changes wins. The
+  desktop dialog always names one: the listed revision, or 0 for a first
+  grant (row J30).
+- **A grant revoked while a turn is admitted can still start that turn**
+  (#839). The turn is saved by the agent session's store and the grant by
+  the gateway's metadata, so the policy revision cannot be compared in the
+  transaction that saves the turn as it is for a grant change (row J30).
 - **A driver cannot attach.** Uploading an image (`attachment.begin`) and
   linking a file are refused to a paired session; a shared upload needs its
   own store scoped to the conversation.
@@ -812,3 +866,5 @@ otherwise.
 | J26 | A driver's send or steer with the conversation in Auto; with its agent's own hooks allowed; with no Drive tools bound, on OpenCode, or with no journal entry for the revision; back in Ask; a retry of an admitted turn in Auto; a queued checked turn whose agent allows its own hooks by the time it is sent; a grant's turn saved unchecked by an older gateway; the owner's message meanwhile; a revision's policy read after later changes and a revoke | `drive_policy_unenforceable`, nothing saved; admitted in Ask; the retry answered from what was saved; the queued turn settled unsent, never reaching the agent; a grant's turn not saved as checked settled unsent; the owner's admitted; each revision's policy as its journal entry says, `None` for a revision that is no Drive grant of that party there | `a_drive_turn_is_refused_where_its_tools_cannot_be_checked`; `a_queued_drive_turn_is_not_sent_where_its_tools_can_no_longer_be_checked`; `j26_a_drive_turn_nothing_can_check_is_refused_and_reaches_no_agent` (`tests/conversation/leases.rs`); `a_grant_turn_not_saved_as_checked_is_not_sent` (`nessa-sdk` `hooks/observation_window.rs`); `only_agents_that_ask_have_a_checked_source` (`tests/conversation/drive_tools.rs`); `a_revisions_policy_is_read_from_its_journal_entry` (`tests/conversation/store.rs`) |
 | J27 | A driver's turn asks permission for a tool its grant's policy refuses; one it allows (`all`); the owner's turn asks the same; a policy not kept, unbound, or that cannot be evaluated; another initiator steers a running turn | Refused as the hook, the turn goes on, the reason naming the grant, revision, tool and rules; left to the person; left to the person; refused; queued as a turn of its own, never injected | `a_drivers_tool_call_is_checked_against_the_grants_policy`; `a_grants_call_is_decided_by_its_policy_at_the_turns_revision`, `a_grants_call_nothing_can_check_is_refused`, `the_owners_turn_is_never_refused` (`tests/conversation/drive_tools.rs`); `native_steering_from_another_initiator_waits_for_its_own_turn` (`nessa-sdk` `contracts/agents.rs`) |
 | J28 | A driver's turn calls the gateway's `run`, `artifacts_publish` or `artifacts_fetch` under `read_only_tools`; `run` under `all`; `run` under `all` with the Drive tool audit unavailable | Refused with why, each decision in the audit, no lease record, the host asked nothing; runs as the owner's would, after its decision and rule are in the audit, but only on a host both the gateway grants commands on and the grant's own `commandHosts` names (a grant naming none runs nowhere); refused, nothing run | `j28_the_gateways_own_tools_are_checked_against_a_drive_grants_policy`, `j28_a_drive_grant_allowed_run_runs_a_command_as_the_owner_would`, `a_drive_grants_run_goes_only_to_the_hosts_its_policy_names`, `j28_an_allowed_run_whose_decision_cannot_be_recorded_is_refused` (`tests/conversation/leases.rs`); `a_decision_is_written_once_and_acknowledged_again`, `a_contradicting_record_for_the_same_decision_is_refused` (`conversation/infrastructure/drive_tool_audit.rs`) |
+| J29 | A share made, one changing nothing, its retries after later changes, a revoke, and a grant after that revoke | Answers the revision the grant holds once made: the new one, or the one kept; a retry answers its first answer, not what is held now; a revoke answers no revision; the grant after it takes a revision past every one before | `a_share_answers_the_policy_revision_it_left_and_a_retry_answers_the_same` (`tests/conversation/store.rs`); `share_answers_its_revision_and_refuses_a_stale_expected_one` (`tests/product/socket/subscriptions.rs`) |
+| J30 | A share or unshare naming `expectedPolicyRevision`: the one held; another (the grant changed or revoked since); 0 with no grant held, and 0 once one is; a retry of the share or the revoke that moved it; past 2^53 − 1; none named | Made, and the share answers the new revision; refused `share_grant_changed` in the transaction, the grant, journal and catalogue unchanged; 0 is made as a first grant and refused once a grant is held; the retry answered from its journal row before the comparison; `invalid_request`; made whatever is held, as before | `a_change_naming_a_revision_the_grant_no_longer_holds_is_refused_and_writes_nothing`, `a_first_grant_naming_no_revision_is_refused_once_another_landed` (`tests/conversation/store.rs`); `share_answers_its_revision_and_refuses_a_stale_expected_one` (`tests/product/socket/subscriptions.rs`) |

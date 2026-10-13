@@ -10,6 +10,7 @@ import type {
   ConversationMutationResult,
   ConversationReorderResult,
   ConversationSetApprovalModeResult,
+  ConversationShareResult,
   ConversationSharesResult,
   ApprovalMode,
   ImageAttachment,
@@ -197,6 +198,36 @@ export function conversationMutation(
   flag(item, "applied")
   return item as unknown as ConversationMutationResult
 }
+/** Confirm a share's answer belongs to its request and names the grant's revision. */
+export function conversationShareResult(
+  value: unknown,
+  requestId: string,
+): ConversationShareResult {
+  const item = record(value)
+  exact(item, ["requestId", "applied", "policyRevision"])
+  if (identity(item, "requestId") !== requestId)
+    throw new Error("Conversation receipt belongs to another action")
+  flag(item, "applied")
+  // A safe integer, so at most `maxPolicyRevision`; never below the first.
+  if (time(item, "policyRevision") < minPolicyRevision)
+    throw new Error("Invalid conversation policyRevision")
+  return item as unknown as ConversationShareResult
+}
+/**
+ * The largest policy revision the schema carries: `expectedPolicyRevision`
+ * on a share or revoke and `policyRevision` on a share's answer, a JSON safe
+ * integer (tied to the schema in `conversation-validate.test.ts`).
+ */
+export const maxPolicyRevision = Number.MAX_SAFE_INTEGER
+/** The least revision a change may name: 0, which names no grant held. */
+export const minExpectedPolicyRevision = 0
+/**
+ * The least policy revision a share answers or a grant is listed at: a
+ * revision is the gateway's journal sequence, which starts at 1, so 0 only
+ * ever names "no grant held" in what a change sends.
+ */
+export const minPolicyRevision = 1
+
 /** Confirm the reply belongs to the requested change and names the exact preset. */
 export function conversationApprovalMode(
   value: unknown,
@@ -1226,7 +1257,9 @@ export function conversationShares(value: unknown): ConversationSharesResult {
     if ((role === ConversationShareRole.Drive) !== (item.policy !== undefined))
       throw new Error("Invalid conversation share policy")
     if (item.policy !== undefined) toolPolicy(item.policy)
-    time(item, "policyRevision")
+    // A listed grant holds a revision the journal gave, never 0 (no grant held).
+    if (time(item, "policyRevision") < minPolicyRevision)
+      throw new Error("Invalid conversation share policy revision")
     time(item, "grantedAtMs")
   }
   return result as unknown as ConversationSharesResult

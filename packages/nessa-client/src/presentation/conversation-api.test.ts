@@ -1670,17 +1670,28 @@ const drivePolicy: ConversationToolPolicy = {
 }
 
 it("grants, changes and revokes a share under a stable request id", async () => {
-  const request = vi.fn(async (_method: string, params: unknown) => ({
+  const request = vi.fn(async (method: string, params: unknown) => ({
     requestId: (params as { requestId: string }).requestId,
     applied: true,
+    ...(method === "conversation.share" ? { policyRevision: 7 } : {}),
   }))
   const api = createConversationApi({ request }, () => "action")
   const policy = { preset: "read_only_tools" as const, commandHosts: ["devbox"] }
-  await api.share(conversationId, credentialId, "drive", policy)
+  expect(await api.share(conversationId, credentialId, "drive", policy)).toEqual({
+    requestId: "action",
+    applied: true,
+    policyRevision: 7,
+  })
   // Changing the caller's own object after the call changes nothing sent.
   policy.commandHosts.push("other")
-  await api.share(conversationId, credentialId, "read")
+  await api.share(conversationId, credentialId, "read", undefined, {
+    expectedPolicyRevision: 7,
+  })
   await api.unshare(conversationId, credentialId, { requestId: "revoke" })
+  await api.unshare(conversationId, credentialId, {
+    requestId: "revoke-built",
+    expectedPolicyRevision: 0,
+  })
   expect(request.mock.calls).toEqual([
     [
       "conversation.share",
@@ -1694,9 +1705,24 @@ it("grants, changes and revokes a share under a stable request id", async () => 
     ],
     [
       "conversation.share",
-      { conversationId, requestId: "action", credentialId, role: "read" },
+      {
+        conversationId,
+        requestId: "action",
+        credentialId,
+        role: "read",
+        expectedPolicyRevision: 7,
+      },
     ],
     ["conversation.unshare", { conversationId, requestId: "revoke", credentialId }],
+    [
+      "conversation.unshare",
+      {
+        conversationId,
+        requestId: "revoke-built",
+        credentialId,
+        expectedPolicyRevision: 0,
+      },
+    ],
   ])
 })
 
@@ -1710,6 +1736,16 @@ it("refuses a malformed share before anything is sent", async () => {
   expect(() =>
     api.share(conversationId, credentialId, "read", undefined, { requestId: "" }),
   ).toThrow(TypeError)
+  for (const expectedPolicyRevision of [-1, 1.5, Number.NaN, 2 ** 53]) {
+    expect(() =>
+      api.share(conversationId, credentialId, "read", undefined, {
+        expectedPolicyRevision,
+      }),
+    ).toThrow(TypeError)
+    expect(() =>
+      api.unshare(conversationId, credentialId, { expectedPolicyRevision }),
+    ).toThrow(TypeError)
+  }
   expect(request).not.toHaveBeenCalled()
 })
 
@@ -1719,7 +1755,7 @@ it("keeps a share's typed refusal and retries it as the same grant", async () =>
     .mockRejectedValueOnce(
       new NessaRpcError("share_target_not_paired", "share_target_not_paired"),
     )
-    .mockResolvedValueOnce({ requestId: "action", applied: false })
+    .mockResolvedValueOnce({ requestId: "action", applied: false, policyRevision: 3 })
   const api = createConversationApi({ request }, () => "action")
   const refused = await api
     .share(conversationId, credentialId, "drive", drivePolicy)
@@ -1728,11 +1764,59 @@ it("keeps a share's typed refusal and retries it as the same grant", async () =>
   const error = refused as NessaConversationMutationError<unknown>
   expect(error.code).toBe(ConversationErrorCode.ShareTargetNotPaired)
   expect(error.uncertain).toBe(false)
-  expect(await error.retry()).toEqual({ requestId: "action", applied: false })
+  expect(await error.retry()).toEqual({
+    requestId: "action",
+    applied: false,
+    policyRevision: 3,
+  })
   expect(request.mock.calls[1]).toEqual(request.mock.calls[0])
 })
 
-it("rejects a share answer for another request", async () => {
+it("keeps a refusal for a grant changed since its revision as its own code", async () => {
+  const request = vi
+    .fn()
+    .mockRejectedValue(new NessaRpcError("share_grant_changed", "share_grant_changed"))
+  const api = createConversationApi({ request }, () => "action")
+  for (const call of [
+    () =>
+      api.share(conversationId, credentialId, "read", undefined, {
+        expectedPolicyRevision: 2,
+      }),
+    () => api.unshare(conversationId, credentialId, { expectedPolicyRevision: 2 }),
+  ]) {
+    const error = (await call().catch(
+      (caught: unknown) => caught,
+    )) as NessaConversationMutationError<unknown>
+    expect(error).toBeInstanceOf(NessaConversationMutationError)
+    expect(error.code).toBe(ConversationErrorCode.ShareGrantChanged)
+    expect(error.uncertain).toBe(false)
+  }
+})
+
+it.each([
+  ["another request", { requestId: "other", applied: true, policyRevision: 1 }],
+  ["no revision", { requestId: "action", applied: true }],
+  ["a negative revision", { requestId: "action", applied: true, policyRevision: -1 }],
+  [
+    "revision 0, which no grant holds",
+    { requestId: "action", applied: true, policyRevision: 0 },
+  ],
+  ["a fractional revision", { requestId: "action", applied: true, policyRevision: 1.5 }],
+  [
+    "an unknown field",
+    { requestId: "action", applied: true, policyRevision: 1, extra: true },
+  ],
+])("rejects a share answer with %s", async (_name, answer) => {
+  const api = createConversationApi(
+    { request: vi.fn().mockResolvedValue(answer) },
+    () => "action",
+  )
+  await expect(api.share(conversationId, credentialId, "read")).rejects.toThrow(
+    NessaConversationMutationError,
+  )
+})
+
+it("rejects an unshare answer for another request", async () => {
   const api = createConversationApi(
     { request: vi.fn().mockResolvedValue({ requestId: "other", applied: true }) },
     () => "action",
@@ -1754,7 +1838,7 @@ it("lists a conversation's grants within the published bounds", async () => {
   const request = vi.fn().mockResolvedValue({
     items: [
       grant,
-      { credentialId: "phone", role: "read", policyRevision: 0, grantedAtMs: 1 },
+      { credentialId: "phone", role: "read", policyRevision: 1, grantedAtMs: 1 },
     ],
   })
   const api = createConversationApi({ request }, () => "action")
@@ -1784,6 +1868,10 @@ it("lists a conversation's grants within the published bounds", async () => {
 
 it.each([
   ["a repeated grant", { items: [grant, grant] }],
+  [
+    "a grant at revision 0, which names no grant held",
+    { items: [{ ...grant, policyRevision: 0 }] },
+  ],
   ["a drive grant without a policy", { items: [{ ...grant, policy: undefined }] }],
   ["a read grant with a policy", { items: [{ ...grant, role: "read" }] }],
   ["an unknown role", { items: [{ ...grant, role: "owner" }] }],
@@ -1841,7 +1929,7 @@ it.each([
       items: Array.from({ length: bounds.maxShareGrants + 1 }, (_, n) => ({
         credentialId: `c${n}`,
         role: "read",
-        policyRevision: 0,
+        policyRevision: 1,
         grantedAtMs: 0,
       })),
     },

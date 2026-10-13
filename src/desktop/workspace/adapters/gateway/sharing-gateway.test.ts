@@ -38,7 +38,7 @@ function credential(id: string, actions: string[], revokedAt: number | null = nu
 
 const shares: ConversationSharesResult = {
   items: [
-    { credentialId: "phone", role: "read", policyRevision: 0, grantedAtMs: 5 },
+    { credentialId: "phone", role: "read", policyRevision: 1, grantedAtMs: 5 },
     {
       credentialId: "tablet",
       role: "drive",
@@ -56,23 +56,31 @@ const shares: ConversationSharesResult = {
   ],
 }
 
-function client(partial: { shares?: SharingClient["conversation"]["shares"] } = {}) {
+function client(
+  partial: {
+    shares?: SharingClient["conversation"]["shares"]
+    list?: SharingClient["credentials"]["list"]
+  } = {},
+) {
   const fake = {
     conversation: {
       shares: vi.fn(partial.shares ?? (async () => shares)),
-      share: vi.fn(async () => ({ requestId: "r", applied: true })),
+      share: vi.fn(async () => ({ requestId: "r", applied: true, policyRevision: 9 })),
       unshare: vi.fn(async () => ({ requestId: "r", applied: true })),
     },
     credentials: {
-      list: vi.fn(async () => ({
-        credentials: [
-          credential("session-credential", ["conversation.read"]),
-          credential("phone", ["conversation.read"]),
-          credential("revoked", ["conversation.read"], 1_700_000_100),
-          credential("admin", ["conversation.read", "conversation.write"]),
-          credential("tablet", ["conversation.read"]),
-        ],
-      })),
+      list: vi.fn(
+        partial.list ??
+          (async () => ({
+            credentials: [
+              credential("session-credential", ["conversation.read"]),
+              credential("phone", ["conversation.read"]),
+              credential("revoked", ["conversation.read"], 1_700_000_100),
+              credential("admin", ["conversation.read", "conversation.write"]),
+              credential("tablet", ["conversation.read"]),
+            ],
+          })),
+      ),
     },
     auth: {
       session: vi.fn(async () => ({
@@ -106,10 +114,12 @@ function client(partial: { shares?: SharingClient["conversation"]["shares"] } = 
 describe("reading a session's sharing", () => {
   it("reads its grants, the linked devices, the owner's command hosts and the schema's bounds", async () => {
     const gateway = client()
-    const read = await sharingGateway({ connected: async () => gateway }).read("c1")
+    const source = sharingGateway({ connected: async () => gateway })
+    const grants = await source.grants("c1")
+    const read = await source.choices()
     expect(gateway.conversation.shares).toHaveBeenCalledWith("c1")
-    expect(read.grants).toEqual([
-      { credentialId: "phone", role: "read", policyRevision: 0, grantedAtMs: 5 },
+    expect(grants).toEqual([
+      { credentialId: "phone", role: "read", policyRevision: 1, grantedAtMs: 5 },
       {
         credentialId: "tablet",
         role: "drive",
@@ -137,22 +147,71 @@ describe("reading a session's sharing", () => {
     })
   })
 
-  it("is refused as a typed kind when any part is", async () => {
+  it("is refused as a typed kind when a part is, and the other part still reads", async () => {
     const gateway = client({
       shares: async () => {
         throw new NessaRpcError("conversation_not_found", "no")
       },
+      list: async () => {
+        throw new NessaRpcError("forbidden", "no")
+      },
     })
-    await expect(
-      sharingGateway({ connected: async () => gateway }).read("c1"),
-    ).rejects.toEqual(new SharingError("not-found"))
+    const source = sharingGateway({ connected: async () => gateway })
+    await expect(source.grants("c1")).rejects.toEqual(new SharingError("not-found"))
+    await expect(source.choices()).rejects.toEqual(new SharingError("refused"))
+    const grantsOnly = sharingGateway({
+      connected: async () =>
+        client({
+          list: async () => {
+            throw new NessaRpcError("forbidden", "no")
+          },
+        }),
+    })
+    await expect(grantsOnly.grants("c1")).resolves.toHaveLength(3)
   })
 
-  it("is unanswered when no connection could be made", async () => {
-    const source = sharingGateway({
-      connected: () => Promise.reject(new Error("offline")),
-    })
-    await expect(source.read("c1")).rejects.toEqual(new SharingError("unanswered"))
+  it("is unanswered, and logged, when no connection could be made or an answer failed the client's validation", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      const offline = new Error("offline")
+      const source = sharingGateway({ connected: () => Promise.reject(offline) })
+      await expect(source.grants("c1")).rejects.toEqual(new SharingError("unanswered"))
+      expect(warn).toHaveBeenLastCalledWith(
+        "Sharing got no answer it could read",
+        offline,
+      )
+      // The client refuses an answer it cannot validate as a mutation error
+      // with no code; the dialog says only that no answer came.
+      const invalid = new NessaConversationMutationError(
+        "c1",
+        "r",
+        undefined,
+        new Error("Invalid conversation policyRevision"),
+        async () => undefined,
+      )
+      const gateway = client()
+      gateway.conversation.share.mockRejectedValueOnce(invalid)
+      await expect(
+        sharingGateway({ connected: async () => gateway }).share(
+          "c1",
+          { credentialId: "phone", role: "read", expectedPolicyRevision: 0 },
+          "r",
+        ),
+      ).rejects.toEqual(new SharingError("unanswered"))
+      expect(warn).toHaveBeenLastCalledWith(
+        "Sharing got no answer it could read",
+        invalid,
+      )
+      // A refusal the dialog has words for is not logged.
+      warn.mockClear()
+      gateway.conversation.unshare.mockRejectedValueOnce(rpc("forbidden"))
+      await expect(
+        sharingGateway({ connected: async () => gateway }).unshare("c1", "x", 1, "r"),
+      ).rejects.toEqual(new SharingError("refused"))
+      expect(warn).not.toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it("lets a fault in reading an answer through as one, not as the gateway's refusal", async () => {
@@ -162,23 +221,30 @@ describe("reading a session's sharing", () => {
       credentials: { list: async () => ({}) },
     } as unknown as SharingClient
     const failure = await sharingGateway({ connected: async () => gateway })
-      .read("c1")
+      .choices()
       .catch((error: unknown) => error)
     expect(failure).toBeInstanceOf(TypeError)
   })
 })
 
 describe("sharing and revoking", () => {
-  it("sends the role, the policy as the wire takes it, and the request id", async () => {
+  it("sends the role, the policy as the wire takes it, the revision it was built on and the request id, and answers the grant's revision", async () => {
     const gateway = client()
     const source = sharingGateway({ connected: async () => gateway })
-    await source.share("c1", { credentialId: "phone", role: "read" }, "req-1")
+    expect(
+      await source.share(
+        "c1",
+        { credentialId: "phone", role: "read", expectedPolicyRevision: 0 },
+        "req-1",
+      ),
+    ).toBe(9)
     expect(gateway.conversation.share).toHaveBeenLastCalledWith(
       "c1",
       "phone",
       "read",
       undefined,
-      { requestId: "req-1" },
+      // 0: a first grant, built on a list where the device held none.
+      { requestId: "req-1", expectedPolicyRevision: 0 },
     )
     await source.share(
       "c1",
@@ -186,6 +252,7 @@ describe("sharing and revoking", () => {
         credentialId: "phone",
         role: "drive",
         policy: { kind: "rules", allow: ["Read"], deny: [], commandHosts: ["devbox"] },
+        expectedPolicyRevision: 4,
       },
       "req-2",
     )
@@ -194,11 +261,12 @@ describe("sharing and revoking", () => {
       "phone",
       "drive",
       { allow: ["Read"], deny: [], commandHosts: ["devbox"] },
-      { requestId: "req-2" },
+      { requestId: "req-2", expectedPolicyRevision: 4 },
     )
-    await source.unshare("c1", "phone", "req-3")
+    await source.unshare("c1", "phone", 9, "req-3")
     expect(gateway.conversation.unshare).toHaveBeenCalledWith("c1", "phone", {
       requestId: "req-3",
+      expectedPolicyRevision: 9,
     })
   })
 
@@ -212,13 +280,15 @@ describe("sharing and revoking", () => {
   })
 })
 
+const rpc = (code: string) => new NessaRpcError(code, "refused")
+
 describe("a refusal", () => {
-  const rpc = (code: string) => new NessaRpcError(code, "refused")
   const mutation = (cause: unknown) =>
     new NessaConversationMutationError("c1", "r", undefined, cause, async () => undefined)
 
   it.each([
     [ConversationErrorCode.ShareTargetNotPaired, "not-paired"],
+    [ConversationErrorCode.ShareGrantChanged, "changed"],
     [ConversationErrorCode.InvalidRequest, "invalid"],
     [ConversationErrorCode.ConversationDeleted, "deleted"],
     [ConversationErrorCode.ConversationNotFound, "not-found"],
@@ -263,9 +333,13 @@ describe("a refusal", () => {
     gateway.conversation.unshare.mockRejectedValueOnce(rpc("forbidden"))
     const source = sharingGateway({ connected: async () => gateway })
     await expect(
-      source.share("c1", { credentialId: "x", role: "read" }, "r"),
+      source.share(
+        "c1",
+        { credentialId: "x", role: "read", expectedPolicyRevision: 0 },
+        "r",
+      ),
     ).rejects.toEqual(new SharingError("not-paired"))
-    await expect(source.unshare("c1", "x", "r")).rejects.toEqual(
+    await expect(source.unshare("c1", "x", 1, "r")).rejects.toEqual(
       new SharingError("refused"),
     )
   })

@@ -5313,7 +5313,10 @@ impl super::ShareGrants for EveryRevisionHeld {
     ) -> super::ConversationFuture<'a, Option<super::HeldGrant>> {
         Box::pin(async { Err(ConversationError::Unavailable) })
     }
-    fn change(&self, _: super::ShareGrantChange) -> super::ConversationFuture<'_, bool> {
+    fn change(
+        &self,
+        _: super::ShareGrantChange,
+    ) -> super::ConversationFuture<'_, crate::conversation::application::ShareGrantReceipt> {
         Box::pin(async { Err(ConversationError::Unavailable) })
     }
     fn grants<'a>(
@@ -5819,7 +5822,10 @@ impl super::ShareGrants for NoEntry {
     ) -> super::ConversationFuture<'a, Option<super::HeldGrant>> {
         Box::pin(async { Err(ConversationError::Unavailable) })
     }
-    fn change(&self, _: super::ShareGrantChange) -> super::ConversationFuture<'_, bool> {
+    fn change(
+        &self,
+        _: super::ShareGrantChange,
+    ) -> super::ConversationFuture<'_, crate::conversation::application::ShareGrantReceipt> {
         Box::pin(async { Err(ConversationError::Unavailable) })
     }
     fn grants<'a>(

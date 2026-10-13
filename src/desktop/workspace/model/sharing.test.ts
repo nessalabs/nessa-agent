@@ -4,8 +4,8 @@
  */
 import { describe, expect, it } from "vitest"
 import {
-  draftRebased,
   draftRestarted,
+  draftSettled,
   draftFromGrant,
   draftPatternCount,
   emptyDraft,
@@ -18,7 +18,7 @@ import {
 } from "./sharing"
 
 const limits = { patterns: 16, hosts: 16, hostBytes: 96, entries: 32 }
-const read = { grants: [], limits }
+const none: readonly ShareGrant[] = []
 
 describe("a Drive grant's hosts", () => {
   it("have the hosts' own bound, or what the patterns leave, never below zero", () => {
@@ -84,7 +84,7 @@ const grant = (change: Partial<ShareGrant> = {}): ShareGrant => ({
 
 describe("a draft's request", () => {
   it("needs a device", () => {
-    expect(requestFrom(emptyDraft(null), read)).toEqual({
+    expect(requestFrom(emptyDraft(null), none, limits)).toEqual({
       ok: false,
       reason: "no-target",
     })
@@ -92,16 +92,21 @@ describe("a draft's request", () => {
 
   it("carries no policy for Read or Comment", () => {
     expect(
-      requestFrom({ ...emptyDraft("phone"), role: "comment", hosts: ["x"] }, read),
+      requestFrom(
+        { ...emptyDraft("phone"), role: "comment", hosts: ["x"] },
+        none,
+        limits,
+      ),
     ).toEqual({
       ok: true,
-      request: { credentialId: "phone", role: "comment" },
+      // 0: built on a list where the device held no grant.
+      request: { credentialId: "phone", role: "comment", expectedPolicyRevision: 0 },
     })
   })
 
   it("carries a preset and every host checked, one not offered now included", () => {
     const draft = drive({ preset: "no_shell", hosts: ["build", "gone", "devbox"] })
-    expect(requestFrom(draft, read)).toEqual({
+    expect(requestFrom(draft, none, limits)).toEqual({
       ok: true,
       request: {
         credentialId: "phone",
@@ -111,14 +116,15 @@ describe("a draft's request", () => {
           preset: "no_shell",
           commandHosts: ["build", "gone", "devbox"],
         },
+        expectedPolicyRevision: 0,
       },
     })
   })
 
   it("D9: needs a pattern for custom rules, and no more in a list than the schema allows", () => {
     const draft = drive({ preset: "custom" })
-    expect(requestFrom(draft, read)).toEqual({ ok: false, reason: "no-pattern" })
-    expect(requestFrom({ ...draft, deny: "Write" }, read)).toMatchObject({
+    expect(requestFrom(draft, none, limits)).toEqual({ ok: false, reason: "no-pattern" })
+    expect(requestFrom({ ...draft, deny: "Write" }, none, limits)).toMatchObject({
       ok: true,
       request: {
         policy: { kind: "rules", allow: [], deny: ["Write"], commandHosts: [] },
@@ -126,8 +132,8 @@ describe("a draft's request", () => {
     })
     const many = (count: number) =>
       Array.from({ length: count }, (_, at) => `p${at}`).join(",")
-    expect(requestFrom({ ...draft, allow: many(16) }, read).ok).toBe(true)
-    expect(requestFrom({ ...draft, allow: many(17) }, read)).toEqual({
+    expect(requestFrom({ ...draft, allow: many(16) }, none, limits).ok).toBe(true)
+    expect(requestFrom({ ...draft, allow: many(17) }, none, limits)).toEqual({
       ok: false,
       reason: "too-many-patterns",
     })
@@ -138,8 +144,10 @@ describe("a draft's request", () => {
     const draft = drive({ preset: "custom", hosts })
     const patterns = (count: number) =>
       Array.from({ length: count }, (_, at) => `p${at}`).join(",")
-    expect(requestFrom({ ...draft, allow: patterns(16) }, read).ok).toBe(true)
-    expect(requestFrom({ ...draft, allow: patterns(16), deny: "x" }, read)).toEqual({
+    expect(requestFrom({ ...draft, allow: patterns(16) }, none, limits).ok).toBe(true)
+    expect(
+      requestFrom({ ...draft, allow: patterns(16), deny: "x" }, none, limits),
+    ).toEqual({
       ok: false,
       reason: "too-many-hosts",
     })
@@ -147,14 +155,23 @@ describe("a draft's request", () => {
 
   it("D9: is held when the device's grant changed since the draft began", () => {
     const draft = draftFromGrant(grant())
-    expect(requestFrom(draft, { grants: [grant()], limits }).ok).toBe(true)
+    // Built on the grant: it names the revision it was built on.
+    expect(requestFrom(draft, [grant()], limits)).toEqual({
+      ok: true,
+      request: {
+        credentialId: "phone",
+        role: "drive",
+        policy: grant().policy,
+        expectedPolicyRevision: 2,
+      },
+    })
     for (const grants of [[grant({ policyRevision: 3 })], []])
-      expect(requestFrom(draft, { grants, limits })).toEqual({
+      expect(requestFrom(draft, grants, limits)).toEqual({
         ok: false,
         reason: "changed",
       })
     // A device that held nothing, and now holds a grant made elsewhere.
-    expect(requestFrom(emptyDraft("phone"), { grants: [grant()], limits })).toEqual({
+    expect(requestFrom(emptyDraft("phone"), [grant()], limits)).toEqual({
       ok: false,
       reason: "changed",
     })
@@ -169,14 +186,11 @@ describe("a draft from a grant", () => {
     const draft = draftFromGrant(comma)
     expect(draft).toMatchObject({ basis: 2, preset: "custom", allow: "mcp__a,b, Read" })
     expect(draftPatternCount(draft)).toBe(2)
-    expect(requestFrom(draft, { grants: [comma], limits })).toMatchObject({
+    expect(requestFrom(draft, [comma], limits)).toMatchObject({
       request: { policy: { allow: ["mcp__a,b", "Read"] } },
     })
     expect(
-      requestFrom(
-        { ...draft, allow: `${draft.allow}, Grep` },
-        { grants: [comma], limits },
-      ),
+      requestFrom({ ...draft, allow: `${draft.allow}, Grep` }, [comma], limits),
     ).toMatchObject({ request: { policy: { allow: ["mcp__a,b", "Read", "Grep"] } } })
     expect(draftFromGrant(grant({ role: "comment", policy: undefined }))).toEqual({
       ...emptyDraft("phone"),
@@ -185,14 +199,25 @@ describe("a draft from a grant", () => {
     })
   })
 
-  it("builds on what its own device holds once the window's change to it settles, keeping what was set", () => {
+  it("D10: builds on the revision the gateway answered its own device's change with, keeping what was set", () => {
     const draft = drive({ preset: "all", hosts: ["devbox"] })
-    expect(draftRebased(draft, "tablet", [grant()])).toBe(draft)
-    expect(draftRebased(draft, "phone", [grant()])).toEqual({ ...draft, basis: 2 })
-    expect(draftRebased({ ...draft, basis: 2 }, "phone", [])).toEqual(draft)
+    expect(draftSettled(draft, "tablet", 2)).toBe(draft)
+    expect(draftSettled(draft, "phone", 2)).toEqual({ ...draft, basis: 2 })
+    expect(draftSettled({ ...draft, basis: 2 }, "phone", null)).toEqual(draft)
+    expect(requestFrom(draftSettled(draft, "phone", 2), [grant()], limits)).toMatchObject(
+      {
+        ok: true,
+        request: { expectedPolicyRevision: 2 },
+      },
+    )
+    // A list read later that holds another window's change shows it as changed.
     expect(
-      requestFrom(draftRebased(draft, "phone", [grant()]), { grants: [grant()], limits }),
-    ).toMatchObject({ ok: true })
+      requestFrom(
+        draftSettled(draft, "phone", 2),
+        [grant({ policyRevision: 5 })],
+        limits,
+      ),
+    ).toEqual({ ok: false, reason: "changed" })
   })
 
   it("starts again from what its device holds, for Start Again", () => {

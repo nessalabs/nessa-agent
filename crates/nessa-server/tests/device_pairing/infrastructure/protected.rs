@@ -673,7 +673,15 @@ async fn an_environment_is_paired_but_never_shared_with() {
     };
     assert!(matches!(
         shares
-            .share(caller, id.clone(), credential, ShareRole::Read, None, 110)
+            .share(
+                caller,
+                id.clone(),
+                credential,
+                ShareRole::Read,
+                None,
+                None,
+                110
+            )
             .await,
         Err(ConversationError::ShareTargetNotPaired)
     ));
@@ -734,17 +742,21 @@ async fn k3_a_worker_reads_nothing_on_the_gateway_it_serves() {
         surface_id: "panel".into(),
         action_id: "share-device".into(),
     };
-    assert!(shares
-        .share(
-            caller,
-            id.clone(),
-            CredentialId::new(device.credential.clone()).unwrap(),
-            ShareRole::Read,
-            None,
-            110
-        )
-        .await
-        .unwrap());
+    assert!(
+        shares
+            .share(
+                caller,
+                id.clone(),
+                CredentialId::new(device.credential.clone()).unwrap(),
+                ShareRole::Read,
+                None,
+                None,
+                110
+            )
+            .await
+            .unwrap()
+            .applied
+    );
     // The same calls, made by `paired`: its session's answer, and each
     // call's.
     let calls = |paired: &Paired| {
@@ -895,6 +907,7 @@ async fn a_peer_reads_only_what_it_was_granted() {
                     peer_credential.clone(),
                     ShareRole::Read,
                     None,
+                    None,
                     110,
                 )
                 .await,
@@ -911,17 +924,21 @@ async fn a_peer_reads_only_what_it_was_granted() {
         gateway: &gateway(),
         policy: policy.as_ref(),
     };
-    assert!(shares
-        .share(
-            caller("share-peer"),
-            id.clone(),
-            peer_credential.clone(),
-            ShareRole::Read,
-            None,
-            110
-        )
-        .await
-        .unwrap());
+    assert!(
+        shares
+            .share(
+                caller("share-peer"),
+                id.clone(),
+                peer_credential.clone(),
+                ShareRole::Read,
+                None,
+                None,
+                110
+            )
+            .await
+            .unwrap()
+            .applied
+    );
     assert!(metadata.is_granted(&id, &peer.receiver).await.unwrap());
     let reads = |paired: &Paired| {
         let credential = paired.credential.clone();
@@ -1004,17 +1021,21 @@ async fn a_peer_reads_only_what_it_was_granted() {
     }
     // The owner's work on a conversation the peer was not granted moves the
     // owner's head (here, a share to the device) and not the peer's.
-    assert!(shares
-        .share(
-            caller("share-device"),
-            ungranted.clone(),
-            CredentialId::new(device.credential.clone()).unwrap(),
-            ShareRole::Read,
-            None,
-            110,
-        )
-        .await
-        .unwrap());
+    assert!(
+        shares
+            .share(
+                caller("share-device"),
+                ungranted.clone(),
+                CredentialId::new(device.credential.clone()).unwrap(),
+                ShareRole::Read,
+                None,
+                None,
+                110,
+            )
+            .await
+            .unwrap()
+            .applied
+    );
     let (head, _, calls) = reads(&device).await;
     assert_ne!(head["payload"]["head"].as_str().unwrap(), peer_head);
     // The device signs in as the owner, so its catalogue watch is admitted
@@ -1097,7 +1118,13 @@ async fn a_peer_reads_only_what_it_was_granted() {
     assert_eq!(code(&page), "wrong_owner", "{page}");
     // An unshare takes it away, and moves the peer's head forward.
     assert!(shares
-        .unshare(caller("unshare-peer"), id.clone(), peer_credential, 110)
+        .unshare(
+            caller("unshare-peer"),
+            id.clone(),
+            peer_credential,
+            None,
+            110
+        )
         .await
         .unwrap());
     let (head, manifest, calls) = reads(&peer).await;

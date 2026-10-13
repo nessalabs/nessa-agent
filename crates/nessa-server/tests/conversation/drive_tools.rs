@@ -51,7 +51,10 @@ impl ShareGrants for NoJournal {
     ) -> ConversationFuture<'a, Option<HeldGrant>> {
         Box::pin(async { Err(ConversationError::Unavailable) })
     }
-    fn change(&self, _: ShareGrantChange) -> ConversationFuture<'_, bool> {
+    fn change(
+        &self,
+        _: ShareGrantChange,
+    ) -> ConversationFuture<'_, crate::conversation::application::ShareGrantReceipt> {
         Box::pin(async { Err(ConversationError::Unavailable) })
     }
     fn grants<'a>(&'a self, _: &'a ConversationId) -> ConversationFuture<'a, Vec<ShareGrant>> {

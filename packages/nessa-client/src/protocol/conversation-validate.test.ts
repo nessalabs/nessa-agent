@@ -7,6 +7,9 @@ import {
   conversationReceipt,
   conversationReorder,
   conversationView,
+  maxPolicyRevision,
+  minExpectedPolicyRevision,
+  minPolicyRevision,
 } from "./conversation-validate.js"
 import { bounds } from "../generated/product.js"
 
@@ -1227,5 +1230,29 @@ describe("the view's artifacts", () => {
     const defs = protocolFile("v1.json").$defs
     const keys = Object.keys(defs.ConversationArtifact.properties).sort()
     expect(keys).toEqual(Object.keys(artifact).sort())
+  })
+})
+
+describe("a share's policy revision", () => {
+  it("is bounded as the schema states, for what a change names and what a share answers", () => {
+    const defs = protocolFile("v1.json").$defs
+    for (const params of ["ConversationShareParams", "ConversationUnshareParams"])
+      expect(defs[params].properties.expectedPolicyRevision.maximum, params).toBe(
+        maxPolicyRevision,
+      )
+    expect(defs.ConversationShareResult.properties.policyRevision.maximum).toBe(
+      maxPolicyRevision,
+    )
+    for (const params of ["ConversationShareParams", "ConversationUnshareParams"])
+      expect(defs[params].properties.expectedPolicyRevision.minimum, params).toBe(
+        minExpectedPolicyRevision,
+      )
+    // A share answers, and a grant is listed at, a revision the journal gave, never 0.
+    expect(defs.ConversationShareResult.properties.policyRevision.minimum).toBe(
+      minPolicyRevision,
+    )
+    expect(defs.ConversationShare.properties.policyRevision.minimum).toBe(
+      minPolicyRevision,
+    )
   })
 })

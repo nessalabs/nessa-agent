@@ -1594,7 +1594,8 @@ the table in `docs/design/read-grants.md` › "Dialog state and order".
 - [ ] **A Drive grant is sent as the wire takes it, and listed as the
   gateway reads it back.** _Check:_ `drive`. One `conversation.share` with
   `{ preset: "no_shell", commandHosts: ["devbox", "ci-runner"] }` and a
-  request id; the count reads "2 of 16"; the notice says "Shared."; the
+  request id and `expectedPolicyRevision` 0 (a first grant); the count reads
+  "2 of 16"; the notice says "Shared."; the
   notes say what a policy does not stop (unasked calls, hosts named and
   allowed or nowhere, Ask mode / hooks off / not OpenCode).
 - [ ] **The hosts are held to the room the tool patterns leave.** _Check:_
@@ -1606,12 +1607,27 @@ the table in `docs/design/read-grants.md` › "Dialog state and order".
 - [ ] **While a change is on its way, and the read after it, the form,
   Share and Revoke are held, and take input again once that read answers.**
   _Check:_ `held` (row D10), which holds the gateway's share answer and then
-  its read. Start Again, for a draft whose grant changed in another window, is
-  in `share-dialog.test.tsx`.
-- [ ] **Revoke asks first, then sends one unshare, and the row goes when the
-  list is read again.** _Check:_ `revoke`.
+  its read; the footer says it waits on this conversation's own change
+  (`this-session`), and says no reason while the read after it is on its
+  way, since the list then predates the share (row D10).
+- [ ] **After this window's own change, a failed read leaves the list held,
+  not stale and actionable.** _Check:_ `stale` (row D10). The read after an
+  Update is refused: the dialog reads as `held`, the form, Share, Change and
+  Revoke are disabled, no reason is said and Start Again is not offered; Try
+  Again reads the list, which shows Comment, with no reason.
+- [ ] **Revoke asks first, then sends one unshare naming the revision it
+  read, and the row goes when the list is read again.** _Check:_ `revoke`
+  (`expectedPolicyRevision` 2).
+- [ ] **A change built on a grant another window changed since is refused
+  in words, nothing changes, and Start Again builds on what it holds now.**
+  _Check:_ `changed` (rows D5, D10). The phone's grant is changed to Comment
+  elsewhere (revision 3) after this window read revision 2; the share naming
+  2 is refused `share_grant_changed`, the notice says it "changed since this
+  list was read" (no cause named: it may be this window's own change), Share
+  is held with the reason `changed`; Start Again shows Comment, and a share
+  naming 3 answers "Shared.".
 - [ ] **Tab stays in the dialog; Escape closes it and focus is back on the
   session's row.** _Check:_ `focus` (waits for that end state, 3 s).
 - [ ] **The panel fits the window.** _Check:_ `fit-1200`, `fit-420`; with
-  `--shots <dir>`, screenshots of the grants, Drive form, budget, refusal and
-  the narrow panel.
+  `--shots <dir>`, screenshots of the grants, Drive form, budget, refusal,
+  changed refusal and the narrow panel.

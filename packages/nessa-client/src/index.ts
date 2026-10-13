@@ -173,6 +173,7 @@ export type {
   ConversationCreateOptions,
   ConversationListOptions,
   ConversationSendOptions,
+  ConversationShareOptions,
   ConversationSubmission,
 } from "./presentation/conversation-api.js"
 export type {
@@ -329,6 +330,7 @@ export type {
   ConversationReceipt,
   ConversationPermissionSelectionState,
   ConversationShare,
+  ConversationShareResult,
   ConversationSharesResult,
   ConversationToolPolicy,
 } from "./generated/product.js"

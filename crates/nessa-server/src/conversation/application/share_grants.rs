@@ -250,6 +250,13 @@ impl ShareGrantTransition {
     }
 }
 
+/// The largest policy revision the protocol carries, a JSON safe integer,
+/// so every client reads it back exactly. The schema states it as the
+/// `maximum` of `expectedPolicyRevision` and of `policyRevision`
+/// (`tests/conversation/agreement.rs`); an expected revision past it is
+/// refused `InvalidInput` (row J30).
+pub const MAX_POLICY_REVISION: u64 = 9_007_199_254_740_991;
+
 /// The most grants one conversation holds, so its `conversation.shares`
 /// answer always fits one socket frame. A grant past it is refused
 /// `InvalidInput` (`docs/limits.md`).
@@ -273,8 +280,27 @@ pub struct ShareGrantChange {
     /// is then found by its credential.
     pub receiver_id: Option<String>,
     pub credential_id: CredentialId,
+    /// The policy revision the caller read the party's grant at, when it
+    /// built this change on it. The store makes the change only while the
+    /// grant is still at that revision, in the transaction that writes it,
+    /// and refuses it `ShareGrantChanged` otherwise (rows J29, J30). `None`
+    /// makes the change whatever the party holds.
+    pub expected_policy_revision: Option<u64>,
     pub initiator: ConversationCaller,
     pub at_ms: u64,
+}
+
+/// What one change answered: whether it changed anything, and the policy
+/// revision the party's grant holds once it was made. A grant always has
+/// one: the new revision when applied, the one it kept when not. A revoke
+/// leaves no grant, so it names none; a later grant takes a revision of its
+/// own, past every one before it. A retried request answers what its first
+/// answer said (row J29).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[must_use]
+pub struct ShareGrantReceipt {
+    pub applied: bool,
+    pub policy_revision: Option<u64>,
 }
 
 /// The gateway's table of share grants. Grants and follow rules are separate
@@ -310,15 +336,18 @@ pub trait ShareGrants: Send + Sync {
     ) -> ConversationFuture<'a, bool> {
         Box::pin(async move { Ok(self.held_role(id, receiver_id).await?.is_some()) })
     }
-    /// Apply one change. `false` when it changed nothing (granting the role
-    /// and policy already held, revoking a grant not held). A grant naming
-    /// another role or policy than the one held replaces them and is `true`
-    /// (row J4). Every admitted request is journaled under its request id, a
-    /// no-op too (before equal to after), and a retry of the same request
-    /// answers from that row and changes nothing (rows G9, G16, J5, J6). A
-    /// retry is admitted like a new request first: ownership for both, and
-    /// not deleted for a grant.
-    fn change(&self, change: ShareGrantChange) -> ConversationFuture<'_, bool>;
+    /// Apply one change. Not `applied` when it changed nothing (granting the
+    /// role and policy already held, revoking a grant not held). A grant
+    /// naming another role or policy than the one held replaces them and is
+    /// `applied` (row J4). Every admitted request is journaled under its
+    /// request id, a no-op too (before equal to after), and a retry of the
+    /// same request answers from that row and changes nothing (rows G9, G16,
+    /// J5, J6), before any expected revision is compared. A retry is
+    /// admitted like a new request first: ownership for both, and not
+    /// deleted for a grant. A change naming an expected policy revision the
+    /// grant no longer holds is refused `ShareGrantChanged` and writes
+    /// nothing (row J30).
+    fn change(&self, change: ShareGrantChange) -> ConversationFuture<'_, ShareGrantReceipt>;
     /// The grants on one conversation, oldest first.
     fn grants<'a>(&'a self, id: &'a ConversationId) -> ConversationFuture<'a, Vec<ShareGrant>>;
     /// The tool policy `receiver_id`'s grant on `id` held at
@@ -332,6 +361,14 @@ pub trait ShareGrants: Send + Sync {
         receiver_id: &'a str,
         policy_revision: u64,
     ) -> ConversationFuture<'a, Option<ToolPolicy>>;
+}
+
+/// What `conversation.share` answers: whether it changed anything, and the
+/// grant's policy revision once it was made.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GrantedShare {
+    pub applied: bool,
+    pub policy_revision: u64,
 }
 
 /// The owner's share commands: `conversation.share`, `.unshare`, `.shares`.
@@ -366,6 +403,10 @@ impl ShareConversation<'_> {
     /// refuses. The store asks ownership again in the transaction that
     /// writes the grant (row G8). Either kind of party reads only what it is
     /// granted (`docs/design/auth/peer-gateways.md`, row H8).
+    ///
+    /// Answers the grant's policy revision once the share is made, which a
+    /// later change to it names as `expected_policy_revision` (row J29).
+    #[allow(clippy::too_many_arguments)]
     pub async fn share(
         &self,
         caller: ConversationCaller,
@@ -373,8 +414,9 @@ impl ShareConversation<'_> {
         credential: CredentialId,
         role: ShareRole,
         policy: Option<ToolPolicy>,
+        expected_policy_revision: Option<u64>,
         at_ms: u64,
-    ) -> Result<bool, ConversationError> {
+    ) -> Result<GrantedShare, ConversationError> {
         caller.actor()?;
         let access = ShareAccess::new(role, policy).map_err(|_| ConversationError::InvalidInput)?;
         // The caller's own conversation is asked about first, so what it is
@@ -437,39 +479,56 @@ impl ShareConversation<'_> {
                 return Err(ConversationError::ShareTargetNotPaired);
             }
         }
-        self.grants
+        let receipt = self
+            .grants
             .change(ShareGrantChange {
                 transition: ShareGrantTransition::Grant(access),
                 conversation_id: id,
                 receiver_id: Some(binding.receiver_id),
                 credential_id: credential,
+                expected_policy_revision,
                 initiator: caller,
                 at_ms,
             })
-            .await
+            .await?;
+        // A grant always holds a revision once it is made; a store that
+        // answers none for one has broken its own contract.
+        let Some(policy_revision) = receipt.policy_revision else {
+            tracing::error!("the share grant store answered a grant with no policy revision");
+            return Err(ConversationError::Metadata);
+        };
+        Ok(GrantedShare {
+            applied: receipt.applied,
+            policy_revision,
+        })
     }
 
     /// Revoke `credential`'s grant on `id`, whatever its role. Allowed on a deleted conversation
     /// and for a device since unpaired: taking access away needs no more
-    /// than ownership, which the store checks as it writes.
+    /// than ownership, which the store checks as it writes. `true` when a
+    /// grant was taken away; either way the party holds none afterwards.
     pub async fn unshare(
         &self,
         caller: ConversationCaller,
         id: ConversationId,
         credential: CredentialId,
+        expected_policy_revision: Option<u64>,
         at_ms: u64,
     ) -> Result<bool, ConversationError> {
         caller.actor()?;
-        self.grants
+        Ok(self
+            .grants
             .change(ShareGrantChange {
                 transition: ShareGrantTransition::Revoke,
                 conversation_id: id,
                 receiver_id: None,
                 credential_id: credential,
+                expected_policy_revision,
                 initiator: caller,
                 at_ms,
             })
-            .await
+            .await?
+            .applied)
     }
 
     /// The grants on `id`, for its owner.

@@ -32,9 +32,11 @@ export const changeFailureCopy: Record<SharingFailure, string> = {
   "signed-out": "The gateway no longer accepts this window’s sign-in. Sign in again.",
   unenforceable:
     "The gateway can’t hold Drive to its tool policy in this conversation: it needs Ask mode, the agent’s own hooks off, and an agent other than OpenCode.",
+  changed:
+    "This device’s sharing changed since this list was read, so nothing was changed here. Reading the list again shows what it holds now.",
   other: "The gateway refused this change.",
   unanswered:
-    "No answer this window could read came from the gateway, so whether it happened isn’t known. The list shows where sharing stands now.",
+    "No answer this window could read came from the gateway, so whether it happened isn’t known. Reading the list again shows where sharing stands.",
 }
 
 /** Why the dialog could not read who the conversation is shared with. */
@@ -50,8 +52,33 @@ export const readFailureCopy: Record<SharingFailure, string> = {
   refused: "This sign-in isn’t allowed to share conversations.",
   "signed-out": "The gateway no longer accepts this window’s sign-in. Sign in again.",
   unenforceable: "The gateway couldn’t read who this conversation is shared with.",
+  changed: "The gateway couldn’t read who this conversation is shared with.",
   other: "The gateway couldn’t read who this conversation is shared with.",
   unanswered: "No answer this window could read came from the gateway.",
+}
+
+/**
+ * Why the dialog could not read the linked devices and hosts it offers. The
+ * grants it did read stay, and each can still be revoked.
+ */
+const choicesUnread =
+  "The gateway couldn’t list your linked devices and the hosts they could use. You can still revoke a device below."
+export const choicesFailureCopy: Record<SharingFailure, string> = {
+  "not-paired": choicesUnread,
+  invalid: choicesUnread,
+  deleted: choicesUnread,
+  "not-found": choicesUnread,
+  busy: "The gateway is busy and couldn’t list your linked devices. Try again in a moment.",
+  storage: choicesUnread,
+  audit: choicesUnread,
+  "not-configured": choicesUnread,
+  refused: "This sign-in isn’t allowed to list linked devices.",
+  "signed-out": "The gateway no longer accepts this window’s sign-in. Sign in again.",
+  unenforceable: choicesUnread,
+  changed: choicesUnread,
+  other: choicesUnread,
+  unanswered:
+    "No answer this window could read came from the gateway about your linked devices.",
 }
 
 export const roleCopy: Record<ShareRole, { label: string; description: string }> = {
@@ -130,7 +157,7 @@ export function draftReasonCopy(reason: DraftHold, limits: SharingLimits): strin
   const said: Record<DraftHold, string> = {
     "no-target": "Choose a device to share with.",
     changed:
-      "This device’s sharing changed since you began. Start again from what it holds now.",
+      "This device’s sharing changed since this draft began. Start again from what it holds now.",
     "no-pattern": "Name at least one tool to allow or deny.",
     "too-many-patterns": `At most ${limits.patterns} tools in each of Allow and Deny.`,
     "too-many-hosts":
@@ -139,8 +166,11 @@ export function draftReasonCopy(reason: DraftHold, limits: SharingLimits): strin
   return said[reason]
 }
 
-/** Why the form waits on a change to another conversation's sharing (one change at a time). */
-export const heldElsewhereCopy =
-  "Waiting for a change to another conversation’s sharing to finish. One change is made at a time."
+/** Why the form waits on a change on its way (one change at a time), by whose sharing it changes. */
+export const waitingCopy = {
+  "this-session": "Waiting for your change to this conversation’s sharing to finish.",
+  "another-session":
+    "Waiting for a change to another conversation’s sharing to finish. One change is made at a time.",
+} as const
 
 export const doneCopy = { share: "Shared.", revoke: "No longer shared." } as const

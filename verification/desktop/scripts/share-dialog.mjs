@@ -4,13 +4,15 @@
  * session: Share… on a session's menu, its grants and what each holds, a
  * Drive grant with a preset and hosts sent as the wire takes it, the host
  * list held to the room the tool patterns leave, a refusal said in words,
- * a revoke, focus kept in the dialog and given back, and the panel within
- * the window. Chromium and WebKit.
+ * a revoke, a change refused because another window changed the grant and
+ * started again from what it holds, a list held while it predates this
+ * window's own change, focus kept in the dialog and given back,
+ * and the panel within the window. Chromium and WebKit.
  *
  * The page is the dev server's, opened with `?gateway` so it uses the browser
  * session. `/browser/check` is answered here, and so is the product socket:
- * no gateway binary. Rows D1, D4–D6 and D9 of `docs/design/read-grants.md`
- * › "Dialog state and order".
+ * no gateway binary. Rows D1, D4–D6, D9 to D11 of
+ * `docs/design/read-grants.md` › "Dialog state and order".
  */
 import { mkdirSync, readFileSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
@@ -27,6 +29,9 @@ const fixtures = JSON.parse(
 
 const wireCodes = [
   "share_target_not_paired",
+  "share_grant_changed",
+  "this-session",
+  "another-session",
   "invalid_request",
   "conversation_not_found",
   "drive_policy_unenforceable",
@@ -109,16 +114,22 @@ const hosts = ["devbox", "me@build.example", "ci-runner", "staging"]
  * `scenario.refuseShare` refuses every share with that code;
  * `scenario.holdShare` answers each share only once `release()` is called;
  * after `holdReads()`, each `conversation.shares` read waits for it too.
+ * As the gateway does, a policy revision comes from one count that only goes
+ * up, a share answers the grant's revision, and a share or unshare naming an
+ * `expectedPolicyRevision` the grant no longer holds is refused
+ * `share_grant_changed`, changing nothing. `changeElsewhere` is another
+ * window's share, which this window has not read.
  * `sent` keeps each share and unshare's params; `unexpected` names any method this check
  * does not answer, so a new call does not pass by being ignored.
  */
 function scriptedGateway(scenario = {}) {
+  let revision = 2
   let grants = [
     {
       credentialId: "device-phone-0001",
       role: "drive",
       policy: { preset: "read_only_tools", commandHosts: ["devbox"] },
-      policyRevision: 2,
+      policyRevision: revision,
       grantedAtMs: 1_700_000_000_000,
     },
   ]
@@ -127,20 +138,53 @@ function scriptedGateway(scenario = {}) {
   const unexpected = []
   const held = []
   let holdingReads = false
+  let failingReads = false
+
+  /** The grant `params` names, or a refusal when it is not at the revision expected. */
+  function expected(params) {
+    const before = grants.find((each) => each.credentialId === params.credentialId)
+    // As the gateway: 0 names no grant held, since a revision starts at 1.
+    const stale =
+      params.expectedPolicyRevision !== undefined &&
+      (before?.policyRevision ?? 0) !== params.expectedPolicyRevision
+    return { before, stale }
+  }
+  const changed = {
+    ok: false,
+    error: { code: "share_grant_changed", message: "changed" },
+  }
 
   function share(params) {
-    const before = grants.find((each) => each.credentialId === params.credentialId)
+    const { before, stale } = expected(params)
+    if (stale) return changed
+    const same =
+      before &&
+      before.role === params.role &&
+      JSON.stringify(before.policy) === JSON.stringify(params.policy)
+    if (same)
+      return {
+        ok: true,
+        payload: {
+          requestId: params.requestId,
+          applied: false,
+          policyRevision: before.policyRevision,
+        },
+      }
+    revision += 1
     const next = {
       credentialId: params.credentialId,
       role: params.role,
       ...(params.policy ? { policy: params.policy } : {}),
-      policyRevision: before ? before.policyRevision + 1 : 0,
+      policyRevision: revision,
       grantedAtMs: before?.grantedAtMs ?? 1_760_000_000_000,
     }
     grants = before
       ? grants.map((each) => (each === before ? next : each))
       : [...grants, next]
-    return { ok: true, payload: { requestId: params.requestId, applied: true } }
+    return {
+      ok: true,
+      payload: { requestId: params.requestId, applied: true, policyRevision: revision },
+    }
   }
 
   function reply(method, params) {
@@ -173,6 +217,11 @@ function scriptedGateway(scenario = {}) {
           },
         }
       case "conversation.shares":
+        if (failingReads)
+          return {
+            ok: false,
+            error: { code: "temporarily_unavailable", message: "busy" },
+          }
         if (!holdingReads) return { ok: true, payload: { items: grants } }
         return new Promise((resolve) =>
           held.push(() => resolve({ ok: true, payload: { items: grants } })),
@@ -184,10 +233,16 @@ function scriptedGateway(scenario = {}) {
         if (!scenario.holdShare) return share(params)
         return new Promise((resolve) => held.push(() => resolve(share(params))))
       }
-      case "conversation.unshare":
+      case "conversation.unshare": {
         sent.push({ method, params })
-        grants = grants.filter((each) => each.credentialId !== params.credentialId)
-        return { ok: true, payload: { requestId: params.requestId, applied: true } }
+        const { before, stale } = expected(params)
+        if (stale) return changed
+        grants = grants.filter((each) => each !== before)
+        return {
+          ok: true,
+          payload: { requestId: params.requestId, applied: before !== undefined },
+        }
+      }
       default:
         unexpected.push(method)
         return {
@@ -258,7 +313,13 @@ function scriptedGateway(scenario = {}) {
   const holdReads = () => {
     holdingReads = true
   }
-  return { route, sent, unexpected, release, holdReads }
+  /** While on, each `conversation.shares` read is refused, as a busy gateway would. */
+  const failReads = (on) => {
+    failingReads = on
+  }
+  /** Another window's share, unseen by this one until it reads again. */
+  const changeElsewhere = (params) => share({ ...params, requestId: "elsewhere" })
+  return { route, sent, unexpected, release, holdReads, failReads, changeElsewhere }
 }
 
 function gatewayUrl(url) {
@@ -350,13 +411,22 @@ Per engine, against a scripted product session:
   open      Share… on a session's menu opens one dialog, focus inside it,
             its grant listed with role, tools and hosts in words
   drive     a Drive grant with a preset and two hosts is sent as the wire
-            takes it, said as done, and listed as the gateway read it back
+            takes it, naming revision 0 as a first grant, said as done, and
+            listed as the gateway read it back
   budget    29 tool patterns leave room for 3 of the 4 hosts: the 4th is
             unavailable, and Share is held until the hosts fit
   refusal   a refused share is said in words; no wire code on the page
   held      while a share is on its way, and the read after it, the form,
             Share and Revoke are held; once that read answers they take input
-  revoke    Revoke asks first, then sends one unshare; the row goes when the list is read
+  revoke    Revoke asks first, then sends one unshare naming the revision it
+            read; the row goes when the list is read
+  changed   a change to a grant another window changed since it was read
+            names the revision it was built on and is refused: said in
+            words, Share held as changed, Start Again starts from what it
+            holds, and the next share names that revision and is made
+  stale     the read after a change fails: the list, the form, Share,
+            Change and Revoke are held, no reason and no Start Again, and
+            Try Again reads it, with no reason after
   focus     Tab stays in the dialog; Escape closes it and focus comes back
             to the session's row
   fit-N     at 1200 and 420 wide the panel is inside the window and the page does not scroll sideways`,
@@ -450,6 +520,11 @@ await main(meta, async ({ options, rep, url }) => {
             ? null
             : `policy ${policy}`,
           typeof share?.params?.requestId === "string" ? null : "no request id",
+          // A first grant names 0: no grant held, so another window's first
+          // grant landing before it is refused rather than overwritten.
+          share?.params?.expectedPolicyRevision === 0
+            ? null
+            : `a first grant expected ${share?.params?.expectedPolicyRevision}`,
           count.includes("2 of 16") ? null : `the count read ${JSON.stringify(count)}`,
           notes.includes("Ask mode") &&
           notes.includes("nowhere") &&
@@ -549,6 +624,9 @@ await main(meta, async ({ options, rep, url }) => {
         timeout: 10_000,
       })
       const whileSending = await heldState(page)
+      const reasonWhileSending = await page
+        .locator(css.shareReason)
+        .getAttribute("data-share-reason")
       // The share is answered; the read after it is not, yet.
       gate.release()
       await page.waitForFunction(
@@ -557,6 +635,9 @@ await main(meta, async ({ options, rep, url }) => {
         { timeout: 10_000 },
       )
       const whileReading = await heldState(page)
+      // The draft is on the share's answer and the list predates it: nothing
+      // is said as changed under it until the list is read again.
+      const reasonsWhileReading = await page.locator(css.shareReason).count()
       const stateWhileReading = await page
         .locator(css.shareDialog)
         .getAttribute("data-share-state")
@@ -572,9 +653,15 @@ await main(meta, async ({ options, rep, url }) => {
           heldAll(whileSending)
             ? null
             : `not held while sending: ${JSON.stringify(whileSending)}`,
+          reasonWhileSending === "this-session"
+            ? null
+            : `the wait was said as ${reasonWhileSending}`,
           heldAll(whileReading) && stateWhileReading === "held"
             ? null
             : `not held while the read after it was on its way: ${JSON.stringify(whileReading)} ${stateWhileReading}`,
+          reasonsWhileReading === 0
+            ? null
+            : "a reason was shown while the read after the share was on its way",
           after.form || after.submit || after.revoke
             ? `still held once read again: ${JSON.stringify(after)}`
             : null,
@@ -603,7 +690,132 @@ await main(meta, async ({ options, rep, url }) => {
           unshare?.params?.credentialId === "device-phone-0001"
             ? null
             : `unshare named ${unshare?.params?.credentialId}`,
+          unshare?.params?.expectedPolicyRevision === 2
+            ? null
+            : `unshare expected revision ${unshare?.params?.expectedPolicyRevision}`,
           notice === "No longer shared." ? null : `the notice read ${notice}`,
+        ].filter(Boolean),
+      }
+    })
+
+    await check("changed", {}, async (page, gate) => {
+      const row = selectorFor.shareGrant("device-phone-0001")
+      await page.locator(`${row} ${selectorFor.shareAction("change")}`).click()
+      await choose(page, css.sharePresets, "No shell")
+      // Another window changes the grant after this one read it.
+      gate.changeElsewhere({ credentialId: "device-phone-0001", role: "comment" })
+      await page.locator(selectorFor.shareAction("submit")).click()
+      await page.waitForSelector(`${css.shareNotice}[data-share-notice="changed"]`, {
+        timeout: 10_000,
+      })
+      await settled(page)
+      const notice = await page.locator(css.shareNotice).innerText()
+      const reason = await page.locator(css.shareReason).getAttribute("data-share-reason")
+      const heldAsChanged = await page
+        .locator(selectorFor.shareAction("submit"))
+        .isDisabled()
+      const listed = await page.locator(row).innerText()
+      const evidence = await shot(page, options, engine, "changed")
+      await page.locator(selectorFor.shareAction("restart")).click()
+      const restarted = {
+        reason: await page.locator(css.shareReason).count(),
+        role: await page
+          .locator(`${css.shareRole} [aria-pressed="true"]`)
+          .innerText()
+          .catch(() => null),
+      }
+      await choose(page, css.shareRole, "Read")
+      await page.locator(selectorFor.shareAction("submit")).click()
+      await page.waitForFunction(
+        (selector) => document.querySelector(selector)?.textContent === "Shared.",
+        css.shareNotice,
+        { timeout: 10_000 },
+      )
+      await settled(page)
+      const after = await page.locator(row).innerText()
+      const [refused, made] = gate.sent
+      return {
+        notice,
+        reason,
+        restarted,
+        evidence,
+        failures: [
+          refused?.params?.expectedPolicyRevision === 2
+            ? null
+            : `the refused share expected ${refused?.params?.expectedPolicyRevision}`,
+          notice.includes("changed since this list was read")
+            ? null
+            : `the notice read ${JSON.stringify(notice)}`,
+          reason === "changed" ? null : `the reason was ${reason}`,
+          heldAsChanged ? null : "Share could send a draft changed under it",
+          listed.includes("Comment") ? null : `the grant read ${JSON.stringify(listed)}`,
+          restarted.reason === 0 ? null : "still held as changed after Start Again",
+          restarted.role === "Comment"
+            ? null
+            : `Start Again began from ${restarted.role}`,
+          made?.params?.expectedPolicyRevision === 3
+            ? null
+            : `the next share expected ${made?.params?.expectedPolicyRevision}`,
+          after.includes("Read") && !after.includes("Comment")
+            ? null
+            : `the grant read ${JSON.stringify(after)}`,
+          gate.sent.length === 2 ? null : `${gate.sent.length} changes were sent`,
+        ].filter(Boolean),
+      }
+    })
+
+    await check("stale", {}, async (page, gate) => {
+      const row = selectorFor.shareGrant("device-phone-0001")
+      await page.locator(`${row} ${selectorFor.shareAction("change")}`).click()
+      await choose(page, css.shareRole, "Comment")
+      // The read after this window's own change fails: the list predates it.
+      gate.failReads(true)
+      await page.locator(selectorFor.shareAction("submit")).click()
+      await page.waitForSelector(
+        `${css.shareReadFailure}[data-share-read-failure="grants"]`,
+        {
+          timeout: 10_000,
+        },
+      )
+      const stale = {
+        state: await page.locator(css.shareDialog).getAttribute("data-share-state"),
+        notice: await page.locator(css.shareNotice).getAttribute("data-share-notice"),
+        reasons: await page.locator(css.shareReason).count(),
+        restart: await page.locator(selectorFor.shareAction("restart")).count(),
+        ...(await heldState(page)),
+        change: await page
+          .locator(`${row} ${selectorFor.shareAction("change")}`)
+          .isDisabled(),
+      }
+      gate.failReads(false)
+      await page.locator(selectorFor.shareAction("retry")).click()
+      await page.waitForSelector(css.shareReadFailure, {
+        state: "detached",
+        timeout: 10_000,
+      })
+      await settled(page)
+      const after = {
+        state: await page.locator(css.shareDialog).getAttribute("data-share-state"),
+        reasons: await page.locator(css.shareReason).count(),
+        row: await page.locator(row).innerText(),
+      }
+      return {
+        stale,
+        after,
+        failures: [
+          stale.state === "held" ? null : `the stale list read as ${stale.state}`,
+          stale.notice === "done" ? null : `the change settled ${stale.notice}`,
+          stale.form && stale.submit && stale.revoke && stale.change
+            ? null
+            : `a stale list could be acted on: ${JSON.stringify(stale)}`,
+          stale.reasons === 0 ? null : "a reason was said beside a stale list",
+          stale.restart === 0 ? null : "Start Again was offered on a stale list",
+          after.state === "read" ? null : `after Try Again it read as ${after.state}`,
+          after.reasons === 0 ? null : "a reason was said once read again",
+          after.row.includes("Comment")
+            ? null
+            : `the grant read ${JSON.stringify(after.row)}`,
+          gate.sent.length === 1 ? null : `${gate.sent.length} changes were sent`,
         ].filter(Boolean),
       }
     })

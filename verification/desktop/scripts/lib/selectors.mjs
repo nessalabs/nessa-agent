@@ -270,17 +270,17 @@ export const css = {
   fingerprint: '[data-slot="key-fingerprint"]',
 
   // The owner's share dialog (src/desktop/workspace/ui/share/share-dialog.tsx)
-  shareDialog: "[data-share-dialog]", // its panel; data-share-state: unread | reading | read | pending
-  shareNotice: "[data-share-notice]", // how the last change settled, in words
-  shareForm: "[data-share-form]", // the fieldset that holds the form while a change is on its way
-  shareReadFailure: "[data-share-read-failure]",
+  shareDialog: "[data-share-dialog]", // its panel; data-share-state: unread | reading | read | held
+  shareNotice: "[data-share-notice]", // how the last change settled, in words; data-share-notice: its outcome
+  shareForm: "[data-share-form]", // the fieldset that holds the form while a change or a read is on its way
+  shareReadFailure: "[data-share-read-failure]", // data-share-read-failure: grants | choices
   shareTargets: "[data-share-targets]", // the device cards
   shareRole: "[data-share-role]", // the role's segmented control
   sharePresets: "[data-share-presets]", // the Drive tool policy's cards
   shareHosts: "[data-share-hosts]", // the Drive grant's host list
   shareHostCount: '[data-share-hosts] [data-slot="checkbox-list-count"]',
   shareNotes: "[data-share-notes]", // what a tool policy does not stop
-  shareReason: "[data-share-reason]", // why Share cannot send yet
+  shareReason: "[data-share-reason]", // why Share cannot send yet: this-session | another-session, or the draft's reason (changed, …)
   mcpServers: "[data-mcp-servers]", // the tab; its value: loading | listed | not-configured | failed | too-large | not-admin
   mcpRow: "[data-mcp-server]", // a server's row; its value is the server's name
   mcpStoredRow: "[data-mcp-server]:not([data-managed])",
@@ -341,7 +341,7 @@ export const selectorFor = {
   reviewOutput: (name) => `#${name}`, // what the review app heard back: result, first, hidden-no-ui, hidden-with-ui, again
   linkedAction: (action) => `[data-linked-action="${action}"]`,
   sessionListRowFor: (id) => `.workspace-list [data-session-row="${id}"]`, // one session's row in the session list
-  shareAction: (action) => `[data-share-action="${action}"]`, // submit | change | revoke | confirm-revoke | cancel-revoke | retry | close
+  shareAction: (action) => `[data-share-action="${action}"]`, // submit | change | revoke | confirm-revoke | cancel-revoke | restart | retry | close
   shareGrant: (credentialId) => `[data-share-grant="${credentialId}"]`,
   sharePattern: (list) => `[data-share-pattern="${list}"]`, // allow | deny
   mcpServersIn: (phase) => `[data-mcp-servers="${phase}"]`,

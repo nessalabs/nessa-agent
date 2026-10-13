@@ -34,7 +34,12 @@ import type { ModelRef, WorkspaceIndex, SessionSummary } from "../model/workspac
 import type { PaneRoom } from "../../split-panes/model/pane-sizing"
 import type { Transcript } from "../model/transcript"
 import type { AgentsFilter } from "../model/overview/filter"
-import type { ShareRequest, SharingFailure, SharingRead } from "../model/sharing"
+import type {
+  ShareGrant,
+  ShareRequest,
+  SharingChoices,
+  SharingFailure,
+} from "../model/sharing"
 
 /**
  * A message sent to a session, as the source is asked to deliver it. Sent
@@ -205,15 +210,30 @@ export function failureStages(error: unknown): StageMismatch | null {
  * `SharingError`, `unanswered` when no answer came and it is not known
  * whether the change was made. A share or revoke is retried under the same
  * `requestId` only by asking again with it; the window does not, and reads
- * the grants again after either outcome instead.
+ * the grants again after either outcome instead. A share or revoke built on
+ * a grant names its policy revision, and is refused `changed` when the grant
+ * has moved since.
  */
 export interface SharingSource {
-  /** The session's grants, the devices it may be shared with, and the hosts and bounds a Drive grant is held to. */
-  read(sessionId: string): Promise<SharingRead>
-  /** Grant `request.role` to its device, or replace what that device holds. */
-  share(sessionId: string, request: ShareRequest, requestId: string): Promise<void>
-  /** Take away whatever the device holds on the session. */
-  unshare(sessionId: string, credentialId: string, requestId: string): Promise<void>
+  /** The session's grants, oldest first. */
+  grants(sessionId: string): Promise<readonly ShareGrant[]>
+  /** The devices a session may be shared with, and the hosts and bounds a Drive grant is held to. */
+  choices(): Promise<SharingChoices>
+  /**
+   * Grant `request.role` to its device, or replace what that device holds.
+   * Answers the grant's policy revision once the share is made.
+   */
+  share(sessionId: string, request: ShareRequest, requestId: string): Promise<number>
+  /**
+   * Take away what the device holds on the session, while it still holds
+   * the grant at `expectedPolicyRevision`.
+   */
+  unshare(
+    sessionId: string,
+    credentialId: string,
+    expectedPolicyRevision: number,
+    requestId: string,
+  ): Promise<void>
 }
 
 /** A sharing call's refusal, by kind (`model/sharing.ts`), never a sentence. */

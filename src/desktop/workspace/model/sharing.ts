@@ -42,7 +42,12 @@ export interface ShareGrant {
   readonly role: ShareRole
   /** Present exactly on a Drive grant. */
   readonly policy?: ToolPolicy
-  /** Moves each time the owner changes this grant's role or policy. */
+  /**
+   * Moves each time the owner changes this grant's role or policy, and only
+   * ever up: a grant made after a revoke takes one past every one before.
+   * A change built on the grant names it, and the gateway refuses the change
+   * if the grant has moved since (`changed`).
+   */
   readonly policyRevision: number
   readonly grantedAtMs: number
 }
@@ -62,9 +67,11 @@ export interface SharingLimits {
   readonly entries: number
 }
 
-/** What the dialog reads when it opens, and again after each change. */
-export interface SharingRead {
-  readonly grants: readonly ShareGrant[]
+/**
+ * What the form offers, read beside the grants but apart from them, so a
+ * failure here leaves the grant list and its Revoke in place.
+ */
+export interface SharingChoices {
   readonly targets: readonly ShareTarget[]
   /**
    * The hosts the owner's own turns may run commands on (`agents.list`'s
@@ -80,6 +87,13 @@ export interface ShareRequest {
   readonly role: ShareRole
   /** Present exactly when `role` is drive. */
   readonly policy?: ToolPolicy
+  /**
+   * The policy revision of the grant this request was built on, 0 when the
+   * device held none (a revision starts at 1). The gateway makes the change
+   * only while the device still holds exactly that, so a grant made or
+   * changed since — a first grant from another window too — is refused.
+   */
+  readonly expectedPolicyRevision: number
 }
 
 /**
@@ -96,7 +110,11 @@ export interface ShareRequest {
  * `signed-out`: the gateway no longer accepts this window's sign-in.
  * `unenforceable`: a Drive grant's turns could not be held to its policy
  * here — the conversation is not in Ask mode, its agent's own hooks are on,
- * or its agent is OpenCode. `other`: a refusal this dialog has no words of its own for. `unanswered`:
+ * or its agent is OpenCode. `changed`: the device's grant moved since the
+ * revision the change was built on — in another window, or by this
+ * window's own change whose answer, or the read after it, was lost — so
+ * nothing was changed. Its words name no cause. `other`: a
+ * refusal this dialog has no words of its own for. `unanswered`:
  * no answer came, so whether it happened is not known — the list, read
  * again, says where it stands.
  */
@@ -112,6 +130,7 @@ export type SharingFailure =
   | "refused"
   | "signed-out"
   | "unenforceable"
+  | "changed"
   | "other"
   | "unanswered"
 
@@ -178,9 +197,11 @@ export function patternsFrom(text: string, kept: readonly string[] = []): string
 export interface ShareDraft {
   readonly credentialId: string | null
   /**
-   * The policy revision of the grant the draft started from, or `null` when
-   * the device held none. When the list reads otherwise, the grant changed
-   * under the draft, and sending it would overwrite what is there unseen.
+   * The policy revision of the grant the draft builds on, or `null` when the
+   * device held none: from the list when the draft started from it, and from
+   * the gateway's answer to this window's own change to it, never from a
+   * later read. It is sent as the expected revision; when the list reads
+   * otherwise, the grant changed under the draft (`changed`).
    */
   readonly basis: number | null
   readonly role: ShareRole
@@ -242,16 +263,21 @@ export type DraftHold =
  */
 export function requestFrom(
   draft: ShareDraft,
-  read: Pick<SharingRead, "grants" | "limits">,
+  grants: readonly ShareGrant[],
+  limits: SharingLimits,
 ):
   | { readonly ok: true; readonly request: ShareRequest }
   | { readonly ok: false; readonly reason: DraftHold } {
   if (draft.credentialId === null) return { ok: false, reason: "no-target" }
-  const held = read.grants.find((grant) => grant.credentialId === draft.credentialId)
+  const held = grants.find((grant) => grant.credentialId === draft.credentialId)
   if ((held?.policyRevision ?? null) !== draft.basis)
     return { ok: false, reason: "changed" }
+  const expected = { expectedPolicyRevision: draft.basis ?? 0 }
   if (draft.role !== "drive")
-    return { ok: true, request: { credentialId: draft.credentialId, role: draft.role } }
+    return {
+      ok: true,
+      request: { credentialId: draft.credentialId, role: draft.role, ...expected },
+    }
   const commandHosts = [...draft.hosts]
   const policy: ToolPolicy =
     draft.preset === "custom"
@@ -259,14 +285,14 @@ export function requestFrom(
       : { kind: "preset", preset: draft.preset, commandHosts }
   if (policy.kind === "rules") {
     if (patternCount(policy) === 0) return { ok: false, reason: "no-pattern" }
-    if (Math.max(policy.allow.length, policy.deny.length) > read.limits.patterns)
+    if (Math.max(policy.allow.length, policy.deny.length) > limits.patterns)
       return { ok: false, reason: "too-many-patterns" }
   }
-  if (commandHosts.length > hostRoom(read.limits, patternCount(policy)))
+  if (commandHosts.length > hostRoom(limits, patternCount(policy)))
     return { ok: false, reason: "too-many-hosts" }
   return {
     ok: true,
-    request: { credentialId: draft.credentialId, role: "drive", policy },
+    request: { credentialId: draft.credentialId, role: "drive", policy, ...expected },
   }
 }
 
@@ -293,20 +319,19 @@ export function draftFromGrant(grant: ShareGrant): ShareDraft {
 }
 
 /**
- * The draft once the list is read again after this window's own change to
- * `changed` settled, done or unanswered: it now builds on what that device
- * holds, so it is not held as changed under it, and keeps what the person
- * set — what was sent, or, after a revoke, what the form still showed.
- * Another device's change leaves the draft as it is.
+ * The draft once this window's own change to device `changed` was made, as
+ * the gateway answered it: it builds on the revision that answer named —
+ * `held`, or `null` after a revoke — and keeps what the person set. A
+ * change refused or unanswered names nothing, so it moves no draft: what was
+ * made, if anything, shows as changed under it, with Start Again. Another
+ * device's change leaves the draft as it is.
  */
-export function draftRebased(
+export function draftSettled(
   draft: ShareDraft,
   changed: string,
-  grants: readonly ShareGrant[],
+  held: number | null,
 ): ShareDraft {
-  if (draft.credentialId !== changed) return draft
-  const grant = grants.find((each) => each.credentialId === changed)
-  return { ...draft, basis: grant ? grant.policyRevision : null }
+  return draft.credentialId === changed ? { ...draft, basis: held } : draft
 }
 
 /** The draft started again from what its device holds: Start Again, for a draft changed under it. */

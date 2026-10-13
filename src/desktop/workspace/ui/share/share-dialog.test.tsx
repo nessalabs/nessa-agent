@@ -10,7 +10,7 @@ import { createRoot, type Root } from "react-dom/client"
 import { Provider } from "react-redux"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { makeDesktopStore } from "../../../store"
-import type { SharingSource } from "../../application/ports"
+import { SharingError, type SharingSource } from "../../application/ports"
 import { inMemorySharing } from "../../adapters/in-memory/in-memory-sharing"
 import { closeShare, openShare, readShares } from "../../adapters/store/commands"
 import { fakeSource, keptFilter, roomyGrid, settle } from "../../testing"
@@ -122,7 +122,10 @@ const within = (scope: HTMLElement, selector: string) => {
   return found
 }
 const wireCodes =
-  /share_target_not_paired|invalid_request|drive_policy_unenforceable|not-paired|unanswered/
+  /share_target_not_paired|share_grant_changed|invalid_request|drive_policy_unenforceable|not-paired|unanswered|this-session|another-session/
+/** The source's calls, by method, a read being its grants and its choices. */
+const methods = (sharing: ReturnType<typeof inMemorySharing>) =>
+  sharing.calls.map((call) => call.method)
 
 describe("the share dialog", () => {
   it("draws nothing until opened, and goes when closed", async () => {
@@ -158,15 +161,23 @@ describe("the share dialog", () => {
     await click(within(row, '[data-share-action="revoke"]'))
     // Asked first; nothing is sent until it is confirmed.
     expect(row.textContent).toContain("Revoke this device’s access")
-    expect(sharing.calls.map((call) => call.method)).toEqual(["read", "share", "read"])
+    expect(methods(sharing)).toEqual(["grants", "choices", "share", "grants", "choices"])
     await click(within(row, '[data-share-action="confirm-revoke"]'))
-    expect(sharing.calls.map((call) => call.method)).toEqual([
-      "read",
+    expect(methods(sharing)).toEqual([
+      "grants",
+      "choices",
       "share",
-      "read",
+      "grants",
+      "choices",
       "unshare",
-      "read",
+      "grants",
+      "choices",
     ])
+    // The revoke names the revision the share was answered with.
+    expect(sharing.calls.find((call) => call.method === "unshare")).toMatchObject({
+      credentialId: "sample-phone",
+      expectedPolicyRevision: 1,
+    })
     expect(find("[data-share-notice]").textContent).toBe("No longer shared.")
     expect(dialog()?.querySelector("[data-share-grant]")).toBeNull()
   })
@@ -230,6 +241,8 @@ describe("the share dialog", () => {
           preset: "no_shell",
           commandHosts: ["me@build.example"],
         },
+        // A first grant: built on a list where the device held none.
+        expectedPolicyRevision: 0,
       },
     ])
     expect(find('[data-share-grant="sample-phone"]').textContent).toContain(
@@ -242,7 +255,7 @@ describe("the share dialog", () => {
     const memory = inMemorySharing({ commandHosts: ["a", "b", "c", "much-too-long"] })
     const sharing: SharingSource = {
       ...memory,
-      read: async (sessionId) => ({ ...(await memory.read(sessionId)), limits }),
+      choices: async () => ({ ...(await memory.choices()), limits }),
     }
     const store = await render(sharing)
     await open(store)
@@ -275,6 +288,7 @@ describe("the share dialog", () => {
         credentialId: "sample-phone",
         role: "drive",
         policy: { kind: "preset", preset: "all", commandHosts: ["offline-peer"] },
+        expectedPolicyRevision: 0,
       },
       "seed",
     )
@@ -295,6 +309,7 @@ describe("the share dialog", () => {
     const sent: unknown[] = []
     sharing.share = async (_sessionId, request) => {
       sent.push(request)
+      return 2
     }
     await click(submit())
     expect(sent).toEqual([
@@ -302,6 +317,7 @@ describe("the share dialog", () => {
         credentialId: "sample-phone",
         role: "drive",
         policy: { kind: "preset", preset: "no_shell", commandHosts: ["offline-peer"] },
+        expectedPolicyRevision: 1,
       },
     ])
   })
@@ -315,6 +331,7 @@ describe("the share dialog", () => {
         credentialId: "sample-phone",
         role: "drive",
         policy: { kind: "preset", preset: "all", commandHosts: ["devbox"] },
+        expectedPolicyRevision: 0,
       },
       "seed",
     )
@@ -344,7 +361,7 @@ describe("the share dialog", () => {
     const share = sharing.share
     let release: () => void = () => {}
     sharing.share = (sessionId, request, requestId) =>
-      new Promise<void>((resolve) => {
+      new Promise<number>((resolve) => {
         release = () => resolve(share(sessionId, request, requestId))
       })
     const store = await render(sharing)
@@ -361,7 +378,15 @@ describe("the share dialog", () => {
     expect(find<HTMLFieldSetElement>("[data-share-form]").disabled).toBe(false)
     // Another window changes what the device holds; the next read shows it.
     sharing.share = share
-    await share("a", { credentialId: "sample-phone", role: "comment" }, "elsewhere")
+    await share(
+      "a",
+      {
+        credentialId: "sample-phone",
+        role: "comment",
+        expectedPolicyRevision: 1, // the revision this window listed
+      },
+      "elsewhere",
+    )
     await choose("[data-share-role]", "Drive")
     await act(async () => {
       await store.dispatch(readShares())
@@ -375,12 +400,88 @@ describe("the share dialog", () => {
     ).toBe("Comment")
   })
 
+  it.each([
+    ["a change", true, "change"],
+    ["a first share", false, "share"],
+    ["a revoke", true, "revoke"],
+  ] as const)(
+    "holds the list and the form during the read after %s, and once that read fails, until Try Again",
+    async (_, seeded, act_) => {
+      const sharing = inMemorySharing()
+      if (seeded)
+        await sharing.share(
+          "a",
+          { credentialId: "sample-phone", role: "read", expectedPolicyRevision: 0 },
+          "seed",
+        )
+      const store = await render(sharing)
+      await open(store)
+      const row = () => find('[data-share-grant="sample-phone"]')
+      if (seeded) await click(within(row(), '[data-share-action="change"]'))
+      else await choose("[data-share-targets]", "-phone")
+      // The read after the change waits, and then fails, until let go.
+      const grants = sharing.grants
+      let fail: () => void = () => {}
+      sharing.grants = () =>
+        new Promise((_resolve, reject) => {
+          fail = () => reject(new SharingError("busy"))
+        })
+      if (act_ === "revoke") {
+        await click(within(row(), '[data-share-action="revoke"]'))
+        await click(within(row(), '[data-share-action="confirm-revoke"]'))
+      } else {
+        if (act_ === "change") await choose("[data-share-role]", "Comment")
+        await click(submit())
+      }
+      expect(find("[data-share-notice]").getAttribute("data-share-notice")).toBe("done")
+      expect(dialog()?.querySelector("[data-share-reason]")).toBeNull()
+      await act(async () => {
+        fail()
+        await settle()
+      })
+      expect(
+        find("[data-share-read-failure]").getAttribute("data-share-read-failure"),
+      ).toBe("grants")
+      expect(dialog()?.querySelector("[data-share-reason]")).toBeNull()
+      expect(dialog()?.querySelector('[data-share-action="restart"]')).toBeNull()
+      expect(submit().disabled).toBe(true)
+      // The list is stale: held as a whole, so the person cannot build on it.
+      expect(dialog()?.getAttribute("data-share-state")).toBe("held")
+      expect(find<HTMLFieldSetElement>("[data-share-form]").disabled).toBe(true)
+      const draft = store.getState().workspace.share?.draft
+      await choose("[data-share-targets]", "-phone")
+      const listed = dialog()?.querySelector<HTMLElement>(
+        '[data-share-grant="sample-phone"]',
+      )
+      if (listed) {
+        const change = listed.querySelector<HTMLButtonElement>(
+          '[data-share-action="change"]',
+        )
+        const revoke = listed.querySelector<HTMLButtonElement>(
+          '[data-share-action="revoke"]',
+        )
+        expect(change?.disabled ?? true).toBe(true)
+        expect(revoke?.disabled).toBe(true)
+        if (change) await click(change)
+      }
+      expect(store.getState().workspace.share?.draft).toEqual(draft)
+      // Try Again reads the list after the change; the draft is as the
+      // change left it, and agrees with the list.
+      sharing.grants = grants
+      await click(find('[data-share-action="retry"]'))
+      expect(dialog()?.querySelector("[data-share-read-failure]")).toBeNull()
+      expect(dialog()?.querySelector("[data-share-reason]")).toBeNull()
+      expect(dialog()?.getAttribute("data-share-state")).toBe("read")
+      expect(store.getState().workspace.share?.draft).toEqual(draft)
+    },
+  )
+
   it("says why it waits while another conversation's change is on its way", async () => {
     const sharing = inMemorySharing()
     const share = sharing.share
     let release: () => void = () => {}
     sharing.share = (sessionId, request, requestId) =>
-      new Promise<void>((resolve) => {
+      new Promise<number>((resolve) => {
         release = () => resolve(share(sessionId, request, requestId))
       })
     const store = await render(sharing)
@@ -392,7 +493,7 @@ describe("the share dialog", () => {
     })
     await open(store, "b")
     expect(find("[data-share-reason]").getAttribute("data-share-reason")).toBe(
-      "elsewhere",
+      "another-session",
     )
     expect(find("[data-share-reason]").textContent).toContain(
       "One change is made at a time",
@@ -402,9 +503,181 @@ describe("the share dialog", () => {
       release()
       await settle()
     })
-    expect(dialog()?.querySelector('[data-share-reason="elsewhere"]')).toBeNull()
+    expect(dialog()?.querySelector('[data-share-reason="another-session"]')).toBeNull()
     expect(find<HTMLFieldSetElement>("[data-share-form]").disabled).toBe(false)
     // Not this conversation's change: nothing to say of it here.
     expect(find("[data-share-notice]").textContent).toBe("")
+  })
+
+  it("says why it waits while its own conversation's earlier change is on its way", async () => {
+    const sharing = inMemorySharing()
+    const share = sharing.share
+    let release: () => void = () => {}
+    sharing.share = (sessionId, request, requestId) =>
+      new Promise<number>((resolve) => {
+        release = () => resolve(share(sessionId, request, requestId))
+      })
+    const store = await render(sharing)
+    await open(store)
+    await choose("[data-share-targets]", "-phone")
+    await click(submit())
+    expect(find("[data-share-reason]").getAttribute("data-share-reason")).toBe(
+      "this-session",
+    )
+    await act(async () => {
+      store.dispatch(closeShare())
+    })
+    await open(store)
+    const reason = find("[data-share-reason]")
+    expect(reason.getAttribute("data-share-reason")).toBe("this-session")
+    expect(reason.textContent).toContain("your change to this conversation")
+    expect(find<HTMLFieldSetElement>("[data-share-form]").disabled).toBe(true)
+    await act(async () => {
+      release()
+      await settle()
+    })
+    expect(dialog()?.querySelector("[data-share-reason]")).toBeNull()
+    expect(find("[data-share-notice]").textContent).toBe("Shared.")
+  })
+
+  it("stops asking about a Revoke once a read lists the grant changed, and asks again about what it holds", async () => {
+    const sharing = inMemorySharing()
+    const store = await render(sharing)
+    await sharing.share(
+      "a",
+      { credentialId: "sample-phone", role: "read", expectedPolicyRevision: 0 },
+      "seed",
+    )
+    await open(store)
+    const row = () => find('[data-share-grant="sample-phone"]')
+    await click(within(row(), '[data-share-action="revoke"]'))
+    expect(row().textContent).toContain("Revoke this device")
+    // While it asks, another window changes the grant, and a read lists it.
+    await sharing.share(
+      "a",
+      {
+        credentialId: "sample-phone",
+        role: "comment",
+        expectedPolicyRevision: 1,
+      },
+      "elsewhere",
+    )
+    await act(async () => {
+      await store.dispatch(readShares())
+    })
+    // The person was asked about a grant the list no longer holds: not asked now.
+    expect(row().textContent).not.toContain("Revoke this device")
+    expect(row().textContent).toContain("Comment")
+    expect(methods(sharing)).not.toContain("unshare")
+    // Asked again, it is about what the device holds now.
+    await click(within(row(), '[data-share-action="revoke"]'))
+    await click(within(row(), '[data-share-action="confirm-revoke"]'))
+    expect(sharing.calls.filter((call) => call.method === "unshare")).toMatchObject([
+      { credentialId: "sample-phone", expectedPolicyRevision: 2 },
+    ])
+    expect(find("[data-share-notice]").getAttribute("data-share-notice")).toBe("done")
+  })
+
+  it("stops asking about a Revoke when this window's own change to that device begins", async () => {
+    const sharing = inMemorySharing()
+    const store = await render(sharing)
+    await sharing.share(
+      "a",
+      { credentialId: "sample-phone", role: "read", expectedPolicyRevision: 0 },
+      "seed",
+    )
+    await open(store)
+    const row = () => find('[data-share-grant="sample-phone"]')
+    await click(within(row(), '[data-share-action="change"]'))
+    await click(within(row(), '[data-share-action="revoke"]'))
+    expect(row().textContent).toContain("Revoke this device")
+    // With the Revoke still asked, the person updates the same device.
+    await choose("[data-share-role]", "Comment")
+    await click(submit())
+    expect(find("[data-share-notice]").getAttribute("data-share-notice")).toBe("done")
+    // The ask ended with that change: the old revision can no longer be sent.
+    expect(row().textContent).not.toContain("Revoke this device")
+    expect(store.getState().workspace.share?.confirming).toBeNull()
+    await click(within(row(), '[data-share-action="revoke"]'))
+    await click(within(row(), '[data-share-action="confirm-revoke"]'))
+    expect(sharing.calls.filter((call) => call.method === "unshare")).toMatchObject([
+      { credentialId: "sample-phone", expectedPolicyRevision: 2 },
+    ])
+    expect(find("[data-share-notice]").getAttribute("data-share-notice")).toBe("done")
+  })
+
+  it("says a change refused because another window changed the grant, and starts again from what it holds", async () => {
+    const sharing = inMemorySharing()
+    const store = await render(sharing)
+    await sharing.share(
+      "a",
+      { credentialId: "sample-phone", role: "read", expectedPolicyRevision: 0 },
+      "seed",
+    )
+    await open(store)
+    await click(
+      within(find('[data-share-grant="sample-phone"]'), '[data-share-action="change"]'),
+    )
+    await choose("[data-share-role]", "Comment")
+    // Another window changes the grant after this one read it.
+    await sharing.share(
+      "a",
+      {
+        credentialId: "sample-phone",
+        role: "drive",
+        policy: { kind: "preset", preset: "all", commandHosts: [] },
+        expectedPolicyRevision: 1, // the revision this window listed
+      },
+      "elsewhere",
+    )
+    await click(submit())
+    const shares = sharing.calls.filter((call) => call.method === "share")
+    expect(shares.at(-1)).toMatchObject({ expectedPolicyRevision: 1 })
+    expect(find("[data-share-notice]").getAttribute("data-share-notice")).toBe("changed")
+    expect(find("[data-share-notice]").textContent).toContain(
+      "changed since this list was read",
+    )
+    // It does not claim the list is current: the read after it may fail.
+    expect(find("[data-share-notice]").textContent).toContain("Reading the list again")
+    expect(dialog()?.textContent).not.toMatch(wireCodes)
+    // Nothing was changed: the list shows the other window's grant.
+    expect(find('[data-share-grant="sample-phone"]').textContent).toContain("Drive")
+    expect(find("[data-share-reason]").getAttribute("data-share-reason")).toBe("changed")
+    expect(submit().disabled).toBe(true)
+    await click(find('[data-share-action="restart"]'))
+    expect(
+      find("[data-share-role]").querySelector('[aria-pressed="true"]')?.textContent,
+    ).toBe("Drive")
+    await choose("[data-share-role]", "Comment")
+    await click(submit())
+    expect(sharing.calls.filter((call) => call.method === "share").at(-1)).toMatchObject({
+      expectedPolicyRevision: 2,
+    })
+    expect(find("[data-share-notice]").textContent).toBe("Shared.")
+    expect(find('[data-share-grant="sample-phone"]').textContent).toContain("Comment")
+  })
+
+  it("keeps the grants and Revoke when the linked devices cannot be read", async () => {
+    const sharing = inMemorySharing({
+      refuse: (method) => (method === "choices" ? "busy" : undefined),
+    })
+    const store = await render(sharing)
+    await sharing.share(
+      "a",
+      { credentialId: "sample-phone", role: "read", expectedPolicyRevision: 0 },
+      "seed",
+    )
+    await open(store)
+    const failure = find("[data-share-read-failure]")
+    expect(failure.getAttribute("data-share-read-failure")).toBe("choices")
+    expect(failure.textContent).toContain("couldn’t list your linked devices")
+    expect(dialog()?.querySelector("[data-share-form]")).toBeNull()
+    expect(submit().disabled).toBe(true)
+    const row = find('[data-share-grant="sample-phone"]')
+    expect(row.querySelector('[data-share-action="change"]')).toBeNull()
+    await click(within(row, '[data-share-action="revoke"]'))
+    await click(within(row, '[data-share-action="confirm-revoke"]'))
+    expect(find("[data-share-notice]").textContent).toBe("No longer shared.")
+    expect(dialog()?.querySelector("[data-share-grant]")).toBeNull()
   })
 })

@@ -10,11 +10,12 @@
  * The rules are the gateway's. The dialog holds the hosts a person may check
  * to the room the published bounds leave (`hostRoom`) and lets the gateway
  * refuse the rest; after every change it shows the list as the gateway reads
- * it again, never a guess from the outcome.
+ * it again, never a guess from the outcome. Change and Revoke name the
+ * revision they were built on, so a grant changed in another window is
+ * refused rather than overwritten.
  *
  * Mounted once by the shell; it draws nothing while no dialog is open.
  */
-import { useState } from "react"
 import { shallowEqual } from "react-redux"
 import { Button } from "@nessa-ui/react/button"
 import { CheckboxList } from "@nessa-ui/react/checkbox-list"
@@ -28,6 +29,8 @@ import {
 import { SettingsGroup, SettingsRow } from "@nessa-ui/react/settings-group"
 import type { ShareDialog as ShareDialogState } from "../../application/workspace-state"
 import {
+  askRevoke,
+  cancelRevoke,
   closeShare,
   draftShare,
   readShares,
@@ -41,7 +44,7 @@ import {
   selectShareCanChange,
   selectShareDialog,
   selectShareHeld,
-  selectShareHeldElsewhere,
+  selectShareWaitingOn,
 } from "../../adapters/store/selectors"
 import {
   draftFromGrant,
@@ -51,21 +54,23 @@ import {
   draftPatternCount,
   requestFrom,
   type ShareDraft,
+  type ShareGrant,
   type ShareRole,
-  type SharingRead,
+  type SharingChoices,
   type ToolPreset,
 } from "../../model/sharing"
 import {
   changeFailureCopy,
+  choicesFailureCopy,
   deviceDetail,
   doneCopy,
   draftReasonCopy,
   driveNotes,
   grantSummary,
-  heldElsewhereCopy,
   presetCopy,
   readFailureCopy,
   roleCopy,
+  waitingCopy,
 } from "./share-copy"
 import "./share-dialog.css"
 
@@ -78,7 +83,7 @@ const presets: readonly (ToolPreset | "custom")[] = [
   "custom",
 ]
 
-/** The dialog, while one is open; one per opening, so its local asks (a Revoke being confirmed) go with it. */
+/** The dialog, while one is open; one per opening, so nothing of an earlier opening's is drawn in it. */
 export function ShareDialogHost() {
   const dialog = useWorkspaceSelector(selectShareDialog)
   if (!dialog) return null
@@ -91,21 +96,21 @@ function ShareDialog({ dialog }: { dialog: ShareDialogState }) {
     (state) => selectSession(state, dialog.sessionId)?.title,
     shallowEqual,
   )
-  // Held while a change, or the read that starts the draft again after it,
-  // is on its way (`formHeld`): an edit then would be lost to that read.
+  // The one rule for whether the list and the form may be acted on
+  // (`formHeld`): a change or a read on its way, or a list that predates
+  // this window's last change. Everything below derives from it.
   const held = useWorkspaceSelector(selectShareHeld)
-  const elsewhere = useWorkspaceSelector(selectShareHeldElsewhere)
+  const waiting = useWorkspaceSelector(selectShareWaitingOn)
   // Whether a change may begin is the use case's rule (`canChange`), not this view's.
   const changeable = useWorkspaceSelector(selectShareCanChange)
-  const { draft } = dialog
-  const read = dialog.value
-  const outcome = requestFrom(draft, read ?? { grants: [], limits: noRoom })
+  const { draft, grants, choices } = dialog
+  const outcome = requestFrom(draft, grants ?? [], choices?.limits ?? noRoom)
   const onDraft = (next: ShareDraft) => void dispatch(draftShare({ draft: next }))
-  const holds = read?.grants.find((grant) => grant.credentialId === draft.credentialId)
+  const holds = grants?.find((grant) => grant.credentialId === draft.credentialId)
   // Choosing a device starts from what it holds, or from nothing: never
   // from what another device's grant left in the form.
   const choose = (credentialId: string) => {
-    const grant = read?.grants.find((each) => each.credentialId === credentialId)
+    const grant = grants?.find((each) => each.credentialId === credentialId)
     onDraft(grant ? draftFromGrant(grant) : emptyDraft(credentialId))
   }
   return (
@@ -119,18 +124,22 @@ function ShareDialog({ dialog }: { dialog: ShareDialogState }) {
       description="Linked devices you share this conversation with can follow it from there."
       data-share-dialog=""
       data-share-state={
-        held ? "held" : dialog.reading ? "reading" : read ? "read" : "unread"
+        grants === null ? (dialog.reading ? "reading" : "unread") : held ? "held" : "read"
       }
       footer={
         <>
           {/* Beside the button it holds back, so it is read where it matters. */}
-          {elsewhere ? (
-            <p className="share-reason nessa-text-2" data-share-reason="elsewhere">
-              {heldElsewhereCopy}
+          {waiting ? (
+            <p className="share-reason nessa-text-2" data-share-reason={waiting}>
+              {waitingCopy[waiting]}
             </p>
-          ) : read && !outcome.ok && outcome.reason !== "no-target" ? (
+          ) : grants &&
+            choices &&
+            !held &&
+            !outcome.ok &&
+            outcome.reason !== "no-target" ? (
             <p className="share-reason nessa-text-2" data-share-reason={outcome.reason}>
-              {draftReasonCopy(outcome.reason, read.limits)}
+              {draftReasonCopy(outcome.reason, choices.limits)}
               {outcome.reason === "changed" ? (
                 <>
                   {" "}
@@ -154,9 +163,10 @@ function ShareDialog({ dialog }: { dialog: ShareDialogState }) {
           </DialogClose>
           <Button
             data-share-action="submit"
-            disabled={!outcome.ok || !changeable}
+            disabled={!outcome.ok || !changeable || choices === null}
             onClick={() => {
-              if (outcome.ok) void dispatch(shareSession({ request: outcome.request }))
+              // Sends the draft as the store holds it, not this render's copy.
+              void dispatch(shareSession())
             }}
           >
             {holds ? "Update" : "Share"}
@@ -169,9 +179,13 @@ function ShareDialog({ dialog }: { dialog: ShareDialogState }) {
           <div
             className="share-alert nessa-text-2"
             role="alert"
-            data-share-read-failure=""
+            data-share-read-failure={dialog.readFailure.part}
           >
-            <p>{readFailureCopy[dialog.readFailure]}</p>
+            <p>
+              {dialog.readFailure.part === "grants"
+                ? readFailureCopy[dialog.readFailure.reason]
+                : choicesFailureCopy[dialog.readFailure.reason]}
+            </p>
             <Button
               variant="outline"
               size="sm"
@@ -183,24 +197,39 @@ function ShareDialog({ dialog }: { dialog: ShareDialogState }) {
             </Button>
           </div>
         ) : null}
-        <p className="share-notice nessa-text-2" role="status" data-share-notice="">
-          {dialog.notice
-            ? dialog.notice.outcome === "done"
-              ? doneCopy[dialog.notice.change.kind]
-              : changeFailureCopy[dialog.notice.outcome]
+        <p
+          className="share-notice nessa-text-2"
+          role="status"
+          data-share-notice={dialog.settled?.outcome ?? ""}
+        >
+          {dialog.settled
+            ? dialog.settled.outcome === "done"
+              ? doneCopy[dialog.settled.change.kind]
+              : changeFailureCopy[dialog.settled.outcome]
             : ""}
         </p>
-        {read ? (
+        {grants ? (
           <>
             <Grants
-              read={read}
+              grants={grants}
+              choices={choices}
               busy={!changeable}
               onChange={choose}
-              onRevoke={(credentialId) => void dispatch(revokeShare({ credentialId }))}
+              confirming={dialog.confirming?.credentialId ?? null}
+              onAsk={(credentialId) => void dispatch(askRevoke({ credentialId }))}
+              onCancel={() => void dispatch(cancelRevoke())}
+              onRevoke={() => void dispatch(revokeShare())}
             />
-            <fieldset className="share-fieldset" disabled={held} data-share-form="">
-              <Form read={read} draft={draft} onDraft={onDraft} onChoose={choose} />
-            </fieldset>
+            {choices ? (
+              <fieldset className="share-fieldset" disabled={held} data-share-form="">
+                <Form
+                  choices={choices}
+                  draft={draft}
+                  onDraft={onDraft}
+                  onChoose={choose}
+                />
+              </fieldset>
+            ) : null}
           </>
         ) : dialog.readFailure ? null : (
           <p className="share-quiet nessa-text-2" data-share-loading="">
@@ -216,18 +245,28 @@ function ShareDialog({ dialog }: { dialog: ShareDialogState }) {
 const noRoom = { patterns: 0, hosts: 0, hostBytes: 0, entries: 0 }
 
 function Grants({
-  read,
+  grants,
+  choices,
   busy,
   onChange,
+  confirming,
+  onAsk,
+  onCancel,
   onRevoke,
 }: {
-  read: SharingRead
+  grants: readonly ShareGrant[]
+  /** What the form offers, when it could be read: without it, a grant can still be revoked. */
+  choices: SharingChoices | null
   busy: boolean
   onChange: (credentialId: string) => void
-  onRevoke: (credentialId: string) => void
+  /** The device whose Revoke is being asked (workspace state, `confirming`). */
+  confirming: string | null
+  onAsk: (credentialId: string) => void
+  onCancel: () => void
+  /** Revoke what was asked about, naming its revision as it was then. */
+  onRevoke: () => void
 }) {
-  const [confirming, setConfirming] = useState<string | null>(null)
-  if (read.grants.length === 0)
+  if (grants.length === 0)
     return (
       <p className="share-quiet nessa-text-2" data-share-grants="none">
         Not shared with any device yet.
@@ -235,14 +274,20 @@ function Grants({
     )
   return (
     <SettingsGroup title="Shared with" data-share-grants="">
-      {read.grants.map((grant) => {
-        const target = read.targets.find(
+      {grants.map((grant) => {
+        const target = choices?.targets.find(
           (each) => each.credentialId === grant.credentialId,
         )
         return (
           <SettingsRow
             key={grant.credentialId}
-            label={target ? "Linked device" : "Not a linked device"}
+            label={
+              choices === null
+                ? "Device"
+                : target
+                  ? "Linked device"
+                  : "Not a linked device"
+            }
             detail={
               confirming === grant.credentialId
                 ? "Revoke this device’s access to the conversation?"
@@ -262,7 +307,7 @@ function Grants({
                     variant="ghost"
                     size="sm"
                     data-share-action="cancel-revoke"
-                    onClick={() => setConfirming(null)}
+                    onClick={onCancel}
                   >
                     Cancel
                   </Button>
@@ -272,10 +317,7 @@ function Grants({
                     className="share-revoke"
                     data-share-action="confirm-revoke"
                     disabled={busy}
-                    onClick={() => {
-                      setConfirming(null)
-                      onRevoke(grant.credentialId)
-                    }}
+                    onClick={onRevoke}
                   >
                     Revoke
                   </Button>
@@ -299,7 +341,7 @@ function Grants({
                     className="share-revoke"
                     data-share-action="revoke"
                     disabled={busy}
-                    onClick={() => setConfirming(grant.credentialId)}
+                    onClick={() => onAsk(grant.credentialId)}
                   >
                     Revoke
                   </Button>
@@ -314,17 +356,17 @@ function Grants({
 }
 
 function Form({
-  read,
+  choices,
   draft,
   onDraft,
   onChoose,
 }: {
-  read: SharingRead
+  choices: SharingChoices
   draft: ShareDraft
   onDraft: (draft: ShareDraft) => void
   onChoose: (credentialId: string) => void
 }) {
-  if (read.targets.length === 0)
+  if (choices.targets.length === 0)
     return (
       <p className="share-quiet nessa-text-2" data-share-targets="none">
         No linked device can be shared with. Link one in Settings › Linked devices.
@@ -336,7 +378,7 @@ function Form({
       <Choices
         aria-label="Device"
         data-share-targets=""
-        options={read.targets.map((target) => ({
+        options={choices.targets.map((target) => ({
           value: target.credentialId,
           label: "Linked device",
           description: deviceDetail(target.credentialId, target.issuedAt),
@@ -362,26 +404,26 @@ function Form({
       </SegmentedControl>
       <p className="share-quiet nessa-text-2">{roleCopy[draft.role].description}</p>
       {draft.role === "drive" ? (
-        <DriveFields read={read} draft={draft} onDraft={onDraft} />
+        <DriveFields choices={choices} draft={draft} onDraft={onDraft} />
       ) : null}
     </section>
   )
 }
 
 function DriveFields({
-  read,
+  choices,
   draft,
   onDraft,
 }: {
-  read: SharingRead
+  choices: SharingChoices
   draft: ShareDraft
   onDraft: (draft: ShareDraft) => void
 }) {
   const custom = draft.preset === "custom"
-  const room = hostRoom(read.limits, draftPatternCount(draft))
+  const room = hostRoom(choices.limits, draftPatternCount(draft))
   // The hosts on offer, then any the grant holds that are not on offer now:
   // shown, so they can be kept or unchecked, never dropped unseen.
-  const away = draft.hosts.filter((host) => !read.commandHosts.includes(host))
+  const away = draft.hosts.filter((host) => !choices.commandHosts.includes(host))
   return (
     <div className="share-drive" data-share-drive="">
       <h3 className="share-heading nessa-text-2">Tools</h3>
@@ -429,8 +471,8 @@ function DriveFields({
         label="Hosts it may run commands on"
         data-share-hosts=""
         options={[
-          ...read.commandHosts.map((host) => {
-            const fits = hostFits(read.limits, host)
+          ...choices.commandHosts.map((host) => {
+            const fits = hostFits(choices.limits, host)
             return {
               value: host,
               label: host,
@@ -455,7 +497,7 @@ function DriveFields({
             : `${selected} of ${max} selected`
         }
         limitReason={
-          room < read.limits.hosts
+          room < choices.limits.hosts
             ? "No more room: hosts and tool patterns share one limit"
             : "No more room for hosts"
         }

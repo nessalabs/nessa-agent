@@ -11,7 +11,11 @@
  * over the codes the session answers before a conversation command is
  * dispatched — so a code the protocol adds is a type error here rather than
  * a sentence nobody wrote. An answer that never came, a code this build does
- * not know, or a connection that could not be made is `unanswered`.
+ * not know, an answer the client's own validation refused, or a connection
+ * that could not be made is `unanswered`, and is logged.
+ *
+ * The grants are read apart from the devices and hosts, so a failure in
+ * those leaves the grant list and its Revoke (D4).
  *
  * A session's id is its conversation's (`gateway-source.ts`).
  */
@@ -34,8 +38,8 @@ import { SharingError, type SharingSource } from "../../application/ports"
 import type {
   ShareGrant,
   ShareRequest,
+  SharingChoices,
   SharingFailure,
-  SharingRead,
   ToolPolicy,
 } from "../../model/sharing"
 
@@ -50,6 +54,7 @@ export interface SharingClient {
 /** Every conversation code, as what it means to sharing. */
 const conversationFailure: Record<ConversationErrorCode, SharingFailure> = {
   [ConversationErrorCode.ShareTargetNotPaired]: "not-paired",
+  [ConversationErrorCode.ShareGrantChanged]: "changed",
   [ConversationErrorCode.InvalidRequest]: "invalid",
   [ConversationErrorCode.ConversationDeleted]: "deleted",
   [ConversationErrorCode.ConversationNotFound]: "not-found",
@@ -181,22 +186,20 @@ function grantOf(share: ConversationShare): ShareGrant {
   }
 }
 
-/** The four answers a read is made of, asked together. */
-function answersFor(client: SharingClient, sessionId: string) {
+/** The three answers what the form offers is made of, asked together. */
+function choicesFor(client: SharingClient) {
   return Promise.all([
-    client.conversation.shares(sessionId),
     client.auth.session(),
     client.credentials.list(),
     client.agents.list(),
   ])
 }
 
-/** The read, from the gateway's answers. A fault here is this build's, not the gateway's refusal. */
-function readOf([shares, session, credentials, catalog]: Awaited<
-  ReturnType<typeof answersFor>
->): SharingRead {
+/** What the form offers, from the gateway's answers. A fault here is this build's, not the gateway's refusal. */
+function choicesOf([session, credentials, catalog]: Awaited<
+  ReturnType<typeof choicesFor>
+>): SharingChoices {
   return {
-    grants: shares.items.map(grantOf),
     targets: credentials.credentials.flatMap((credential) => {
       const device = linkedDeviceOf(credential, session.credentialId)
       return device ? [device] : []
@@ -210,12 +213,18 @@ function readOf([shares, session, credentials, catalog]: Awaited<
  * Run `call` — the connection and the gateway's calls only — its refusal as
  * a typed `SharingError`. What the window makes of an answer runs outside
  * it, so a fault of this build reaches `sharingFailure` as one and is logged.
+ * An `unanswered` is logged here, with what made it so: no connection, an
+ * answer the client's own validation refused, or a code this build does not
+ * know. The dialog says only that no answer came.
  */
 async function typed<T>(call: () => Promise<T>): Promise<T> {
   try {
     return await call()
   } catch (error) {
-    throw new SharingError(failureOf(error))
+    const reason = failureOf(error)
+    if (reason === "unanswered")
+      console.warn("Sharing got no answer it could read", error)
+    throw new SharingError(reason)
   }
 }
 
@@ -224,23 +233,32 @@ export function sharingGateway(options: {
 }): SharingSource {
   const { connected } = options
   return {
-    read: async (sessionId) =>
-      readOf(await typed(async () => answersFor(await connected(), sessionId))),
-    share: (sessionId, request: ShareRequest, requestId) =>
-      typed(async () => {
-        const client = await connected()
-        await client.conversation.share(
+    grants: async (sessionId) =>
+      (
+        await typed(async () => (await connected()).conversation.shares(sessionId))
+      ).items.map(grantOf),
+    choices: async () =>
+      choicesOf(await typed(async () => choicesFor(await connected()))),
+    share: async (sessionId, request: ShareRequest, requestId) => {
+      const answer = await typed(async () =>
+        (await connected()).conversation.share(
           sessionId,
           request.credentialId,
           request.role,
           request.policy ? wirePolicy(request.policy) : undefined,
-          { requestId },
-        )
-      }),
-    unshare: (sessionId, credentialId, requestId) =>
+          { requestId, expectedPolicyRevision: request.expectedPolicyRevision },
+        ),
+      )
+      return answer.policyRevision
+    },
+    unshare: (sessionId, credentialId, expectedPolicyRevision, requestId) =>
       typed(async () => {
-        const client = await connected()
-        await client.conversation.unshare(sessionId, credentialId, { requestId })
+        await (
+          await connected()
+        ).conversation.unshare(sessionId, credentialId, {
+          requestId,
+          expectedPolicyRevision,
+        })
       }),
   }
 }

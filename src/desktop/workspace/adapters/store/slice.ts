@@ -38,7 +38,7 @@ import * as panes from "../../application/usecases/panes"
 import * as sessions from "../../application/usecases/sessions"
 import * as updates from "../../application/usecases/updates"
 import * as sharing from "../../application/usecases/sharing"
-import type { ShareDraft, SharingFailure, SharingRead } from "../../model/sharing"
+import type { ShareDraft, ShareGrant, SharingChoices } from "../../model/sharing"
 import type { ShareChange } from "../../application/workspace-state"
 
 type Payload<T> = PayloadAction<T>
@@ -274,22 +274,33 @@ const workspaceSlice = createSlice({
       sharing.sharesReading(state, payload),
     sharesRead: (
       state,
-      { payload }: Payload<{ opening: string; read: string; value: SharingRead }>,
+      {
+        payload,
+      }: Payload<{
+        opening: string
+        read: string
+        grants: sharing.ReadAnswer<readonly ShareGrant[]>
+        choices: sharing.ReadAnswer<SharingChoices>
+      }>,
     ) => sharing.sharesRead(state, payload),
-    sharesReadFailed: (
-      state,
-      { payload }: Payload<{ opening: string; read: string; reason: SharingFailure }>,
-    ) => sharing.sharesReadFailed(state, payload),
     shareChanging: (
       state,
       { payload }: Payload<{ opening: string; change: ShareChange }>,
     ) => sharing.shareChanging(state, payload),
-    shareChanged: (state, { payload }: Payload<{ outcome: "done" | SharingFailure }>) =>
-      sharing.shareChanged(state, payload),
+    shareChanged: (
+      state,
+      { payload }: Payload<{ settled: sharing.ChangeSettled; read: string }>,
+    ) => sharing.shareChanged(state, payload),
     shareDrafted: (state, { payload }: Payload<{ opening: string; draft: ShareDraft }>) =>
       sharing.shareDrafted(state, payload),
     shareRestarted: (state, { payload }: Payload<{ opening: string }>) =>
       sharing.shareRestarted(state, payload),
+    shareConfirming: (
+      state,
+      { payload }: Payload<{ opening: string; credentialId: string }>,
+    ) => sharing.shareConfirming(state, payload),
+    shareConfirmCancelled: (state, { payload }: Payload<{ opening: string }>) =>
+      sharing.shareConfirmCancelled(state, payload),
   },
 })
 

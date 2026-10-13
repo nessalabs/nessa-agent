@@ -688,6 +688,8 @@ export const providerLoginAvailable =
     (await (dependencies.providerLoginAvailable?.() ?? true))
 
 export {
+  askRevoke,
+  cancelRevoke,
   draftShare,
   openShare,
   readShares,

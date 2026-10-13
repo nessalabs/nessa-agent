@@ -28,9 +28,10 @@ import { keepShownDrafts, type Draft } from "../model/session-lifecycle"
 import { unconfirmed, type Transcript, type TurnMessage } from "../model/transcript"
 import type {
   ShareDraft,
+  ShareGrant,
   ShareRequest,
+  SharingChoices,
   SharingFailure,
-  SharingRead,
 } from "../model/sharing"
 
 /** An answer given to one approval: on its way, or refused with the reason. */
@@ -193,36 +194,66 @@ export interface WorkspaceState {
 export interface ShareDialog {
   readonly sessionId: string
   readonly opening: string
-  /** What the gateway last said; `null` until the first read answers. */
-  readonly value: SharingRead | null
-  /** The read on its way, by name; only the newest is applied. */
+  /** The grants the gateway last listed; `null` until a read of them answers. */
+  readonly grants: readonly ShareGrant[] | null
+  /** What the form offers, as last read; `null` until a read of it answers. */
+  readonly choices: SharingChoices | null
+  /**
+   * The read on its way, by name; only the newest is applied. While one is
+   * on its way the form, Share and Revoke are held (D10).
+   */
   readonly reading: string | null
-  /** Why the newest read failed, until another answers. */
-  readonly readFailure: SharingFailure | null
+  /** Which part of the newest read failed, and why, until another answers. */
+  readonly readFailure: ShareReadFailure | null
   /** How the last change to this session settled, until the next begins. */
-  readonly notice: ShareSettled | null
+  readonly settled: ShareSettled | null
+  /**
+   * The Revoke the person is being asked to confirm: the device, and the
+   * revision its grant was listed at when they were asked, which is what the
+   * revoke names. Any change beginning ends it, and so does a read listing
+   * that device at another revision, or not at all (D11).
+   */
+  readonly confirming: ShareConfirming | null
   /** The grant the person is making or changing. */
   readonly draft: ShareDraft
-  /**
-   * A change to this session that settled after `value` was read. Until a
-   * read asked after it answers, what is shown may be from before it, so
-   * the form, Share and Revoke are held; a failed read keeps them held,
-   * beside Try Again. That read then moves the draft onto what its device
-   * holds, when this change was to that device and may have been made (D10).
-   */
-  readonly stale: ShareSettled | null
+}
+
+/**
+ * A part of a read that failed: the grants, or what the form offers. The
+ * grants' failure is said when both failed.
+ */
+export interface ShareReadFailure {
+  readonly part: "grants" | "choices"
+  readonly reason: SharingFailure
+}
+
+/** A Revoke being confirmed: the device, and its grant's revision when asked. */
+export interface ShareConfirming {
+  readonly credentialId: string
+  readonly policyRevision: number
 }
 
 /** A change, and how it settled. */
 export interface ShareSettled {
   readonly change: ShareChange
   readonly outcome: "done" | SharingFailure
+  /**
+   * Whether a read of the grants has answered since it settled. Until one
+   * has, the grants listed predate the change, so a draft built on its
+   * answer is not compared with them (D10).
+   */
+  readonly listed: boolean
 }
 
 /** A change to who a session is shared with: a grant to make, or one to take away. */
 export type ShareChange =
   | { readonly kind: "share"; readonly request: ShareRequest }
-  | { readonly kind: "revoke"; readonly credentialId: string }
+  | {
+      readonly kind: "revoke"
+      readonly credentialId: string
+      /** The revision of the grant as listed when Revoke was chosen. */
+      readonly expectedPolicyRevision: number
+    }
 
 /**
  * The content region's view: the chat panes; every agent at a glance, over
