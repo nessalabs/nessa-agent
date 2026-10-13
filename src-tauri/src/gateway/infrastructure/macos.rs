@@ -1341,7 +1341,6 @@ impl Drop for HeldRegistration {
 }
 
 fn publish_deferred(stage: DeferredStage, lock: Option<control::NamespaceLock>) {
-    let _lock = lock;
     #[cfg(test)]
     let pause = stage.pause.clone();
     #[cfg(test)]
@@ -1361,6 +1360,9 @@ fn publish_deferred(stage: DeferredStage, lock: Option<control::NamespaceLock>) 
             );
         }
     }
+    // Release the label lock before telling a test the publication finished,
+    // so "finished" means pruning is allowed to look at the directory.
+    drop(lock);
     #[cfg(test)]
     if let Some(pause) = pause {
         pause.finish(result.map(|_| ()));
