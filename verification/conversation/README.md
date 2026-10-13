@@ -11,7 +11,7 @@ only.
 
 `fixture.html` mounts the production `ConversationControls` and `applyView` with
 current published gateway views. Every case passes the actual client decoder
-before `applyView`; its review has a correlated running message and offered mode. Server projection tests own exact live execution
+and the production gateway-to-panel conversion before `applyView`; its review has a correlated running message and offered mode. Server projection tests own exact live execution
 and command authority. This fixture checks the browser's presentation of their
 published result, including re-enabling controls after an incomplete view.
 
