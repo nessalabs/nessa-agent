@@ -207,6 +207,10 @@ const failures: Partial<Record<ConversationErrorCode, CommandFailure>> = {
   // Answers only `conversation.share`, which the panel never sends; one that
   // met a command would be a request this panel had no business making.
   share_target_not_paired: "invalid-request",
+  // Answer only `conversation.message`, which the panel does not send yet;
+  // either meeting another command is a request it had no business making.
+  idempotency_conflict: "invalid-request",
+  message_quota_exceeded: "invalid-request",
 }
 
 /**
