@@ -10,9 +10,11 @@ import { maskRustNonCode, normalizedPath } from "./rust-boundaries.mjs"
  * check can see: where the engine is. It refuses the `cedar_policy` crate
  * anywhere in a crate's `src/` outside a `cedar` directory, test modules
  * included, so the engine
- * cannot leak past its adapter. It refuses an implementation of a
- * `…PolicyEvaluator` port outside one, so a port meant for Cedar cannot be
- * answered by hand-written Rust instead; only test code may substitute it.
+ * cannot leak past its adapter, and a dependency that renames the crate. It
+ * refuses an implementation of a `…PolicyEvaluator` port outside one, so a
+ * port meant for Cedar cannot be answered by hand-written Rust instead; only
+ * test code may substitute it. A port is never renamed on import, so its
+ * implementations stay findable by name.
  *
  * It cannot tell a hand-written policy decision — a role compared, a grant
  * list scanned — from any other Rust, and does not pretend to; review holds
@@ -40,28 +42,50 @@ const ENGINE = /\bcedar_policy\b/
  * An implementation of a policy port, generic or through a qualified path:
  * `impl PolicyEvaluator for X`, `impl<T> ports::ToolPolicyEvaluator<T> for X`.
  */
-const implementing = (name) =>
-  new RegExp(
-    String.raw`\bimpl\s*(?:<[^{;]*?>\s*)?(?:[\w:]*::)?${name}\s*(?:<[^{;]*?>\s*)?\s+for\b`,
-  )
-const IMPLEMENTS = implementing(String.raw`\w*PolicyEvaluator`)
+const IMPLEMENTS =
+  /\bimpl\s*(?:<[^{;]*?>\s*)?(?:[\w:]*::)?\w*PolicyEvaluator\s*(?:<[^{;]*?>\s*)?\s+for\b/
 
-/** A policy port imported under another name: `use ports::PolicyEvaluator as Rules;`. */
-const ALIAS = /\b\w*PolicyEvaluator\s+as\s+(\w+)/g
+/**
+ * A policy port renamed on import or re-export: `use ports::PolicyEvaluator as
+ * Rules;`. A renamed port could be implemented under a name this check cannot
+ * follow across files, so a port keeps its name (`as _` aside).
+ */
+const RENAMED = /\b\w*PolicyEvaluator\s+as\s+(?!_\b)\w+/
 
-/** Whether `text` implements a policy port, under its own name or an alias. */
-function implementsPort(text) {
-  if (IMPLEMENTS.test(text)) return true
-  for (const [, alias] of text.matchAll(ALIAS))
-    if (alias !== "_" && implementing(alias).test(text)) return true
+/**
+ * Whether a cfg predicate holds only under test: `test`, or an `all(…)` with
+ * `test` among its operands. `not(…)` and `any(…)` never do.
+ */
+function testOnlyCfg(predicate) {
+  const text = predicate.trim()
+  if (text === "test") return true
+  const all = /^all\s*\(([\s\S]*)\)$/.exec(text)
+  if (!all) return false
+  const operands = []
+  let depth = 0
+  let start = 0
+  for (let index = 0; index < all[1].length; index += 1) {
+    const char = all[1][index]
+    if (char === "(") depth += 1
+    else if (char === ")") depth -= 1
+    else if (char === "," && depth === 0) {
+      operands.push(all[1].slice(start, index))
+      start = index + 1
+    }
+  }
+  operands.push(all[1].slice(start))
+  return operands.some(testOnlyCfg)
+}
+
+/** Whether a run of attributes holds a test-only `#[cfg(…)]`. */
+function hasTestCfg(attributes) {
+  for (const [, predicate] of attributes.matchAll(/#\[\s*cfg\s*\(([^\]]*)\)\s*\]/g))
+    if (testOnlyCfg(predicate)) return true
   return false
 }
 
-/** `#[cfg(test)]`, or a `cfg(all(test, …))`. */
-const TEST_CFG = String.raw`#\[cfg\((?:test|all\(\s*test\b[^\]]*)\)\]`
-
-/** A test cfg, then any further attributes. */
-const TEST_ATTRIBUTES = String.raw`${TEST_CFG}\s*((?:#\[[^\]]*\]\s*)*)`
+/** A run of attributes. */
+const ATTRIBUTES = String.raw`((?:#\[[^\]]*\]\s*)*)`
 
 /** The `mod` keyword after a visibility, if any. */
 const MOD = String.raw`(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*`
@@ -69,8 +93,12 @@ const MOD = String.raw`(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*`
 /** `text` with each inline `#[cfg(test)]` module's body blanked, lines kept. */
 function withoutTestModules(text) {
   const out = text.split("")
-  const opening = new RegExp(`${TEST_ATTRIBUTES}${MOD}\\{`, "g")
+  const opening = new RegExp(`${ATTRIBUTES}${MOD}\\{`, "g")
   for (let match; (match = opening.exec(text));) {
+    if (!hasTestCfg(match[1])) {
+      opening.lastIndex = match.index + match[0].length
+      continue
+    }
     let depth = 1
     let index = match.index + match[0].length
     for (; index < text.length && depth > 0; index += 1) {
@@ -85,7 +113,7 @@ function withoutTestModules(text) {
 }
 
 /** Any out-of-line `mod name;`, its attributes captured. */
-const DECLARATION = new RegExp(String.raw`((?:#\[[^\]]*\]\s*)*)${MOD};`, "g")
+const DECLARATION = new RegExp(`${ATTRIBUTES}${MOD};`, "g")
 
 /** The `{ }` nesting depth at each index of masked `text`. */
 function braceDepths(text) {
@@ -98,9 +126,6 @@ function braceDepths(text) {
   }
   return depths
 }
-
-/** Whether a declaration's attributes put it behind a test cfg. */
-const IS_TEST = new RegExp(TEST_CFG)
 
 /**
  * The out-of-line modules `path` declares, as the files rustc would load for
@@ -128,7 +153,7 @@ export function moduleDeclarations(
   for (const match of source.matchAll(DECLARATION)) {
     const at = match.index + match[0].search(/\S/)
     if (masked[at] !== source[at] || depth[at] !== 0) continue
-    const test = IS_TEST.test(match[1])
+    const test = hasTestCfg(match[1])
     if (testOnly && !test) continue
     const pathAttribute = /#\[path\s*=\s*"([^"]+)"\s*\]/.exec(match[1])
     modules.push(
@@ -152,12 +177,13 @@ export function moduleDeclarations(
 /**
  * Every file under `sources` (a map of repository-relative path to text) that
  * only test code loads. Product code is what a crate root reaches through
- * declarations without a test cfg; a root is any file nothing declares, so a
- * file this check cannot place counts as product code. Every other file is
+ * declarations without a test cfg. The roots are Cargo's target sources
+ * (`roots`) and any file nothing declares, so a file this check cannot place
+ * counts as product code. Every other file is
  * reached only through a `cfg(test)` declaration: test code. A file loaded
  * both ways is product code, because the product build compiles it.
  */
-export function testCodeFiles(sources) {
+export function testCodeFiles(sources, roots = []) {
   // A file loaded through #[path] owns its own directory, so its own
   // declarations resolve only once the #[path] loads are known.
   const byPath = new Set()
@@ -174,7 +200,12 @@ export function testCodeFiles(sources) {
     [...declarations.values()].flat().map((candidate) => candidate.path),
   )
   const product = new Set()
-  const queue = [...sources.keys()].filter((path) => !declared.has(path))
+  const queue = [
+    ...new Set([
+      ...roots.filter((path) => sources.has(path)),
+      ...[...sources.keys()].filter((path) => !declared.has(path)),
+    ]),
+  ]
   for (const root of queue) product.add(root)
   while (queue.length)
     for (const candidate of declarations.get(queue.shift()))
@@ -202,9 +233,27 @@ export function policyEngineViolations(path, source, test = false) {
     violations.push(
       "the cedar_policy crate is named only inside a `cedar` adapter directory; the rest of the code asks its policy port (CODING_STANDARDS.md#policy-goes-through-cedar)",
     )
-  if (!test && implementsPort(withoutTestModules(text)))
+  if (RENAMED.test(text))
+    violations.push(
+      "a policy port keeps its name: renamed, it could be implemented where this check cannot see (CODING_STANDARDS.md#policy-goes-through-cedar)",
+    )
+  if (!test && IMPLEMENTS.test(withoutTestModules(text)))
     violations.push(
       "a policy port is implemented by a Cedar adapter in a `cedar` directory, not by hand-written Rust (CODING_STANDARDS.md#policy-goes-through-cedar)",
     )
   return violations
+}
+
+/**
+ * Violations in a package's dependencies, as `cargo metadata` lists them: the
+ * engine is depended on under its own name, so the source check above can
+ * find every use of it.
+ */
+export function policyEngineDependencyViolations(dependencies) {
+  return dependencies
+    .filter((dependency) => dependency.name === "cedar-policy" && dependency.rename)
+    .map(
+      (dependency) =>
+        `the cedar-policy dependency is not renamed (here \`${dependency.rename}\`), so the engine is always named cedar_policy (CODING_STANDARDS.md#policy-goes-through-cedar)`,
+    )
 }

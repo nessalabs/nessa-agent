@@ -15,7 +15,11 @@ import { overlayPlacementViolations } from "./architecture/overlay-placement.mjs
 import { setupGatePlacementViolations } from "./architecture/setup-gate-placement.mjs"
 import { standDownPlacementViolations } from "./architecture/stand-down-placement.mjs"
 import { environmentPortViolations } from "./architecture/environment-port.mjs"
-import { policyEngineViolations, testCodeFiles } from "./architecture/policy-engine.mjs"
+import {
+  policyEngineDependencyViolations,
+  policyEngineViolations,
+  testCodeFiles,
+} from "./architecture/policy-engine.mjs"
 import { composerBudgetViolations } from "./architecture/composer-budget.mjs"
 import { wholeWorkspaceViolations } from "./architecture/whole-workspace.mjs"
 import { importedPaths } from "./architecture/imported-paths.mjs"
@@ -76,7 +80,13 @@ for (const rustRoot of workspaceRustSourceRoots(root, metadata)) {
   for (const file of rustFiles(source))
     rustSources.set(rel(file), readFileSync(file, "utf8"))
 }
-const rustTests = testCodeFiles(rustSources)
+const rustTargetRoots = metadata.packages.flatMap((pkg) =>
+  pkg.targets.map((target) => rel(target.src_path)),
+)
+const rustTests = testCodeFiles(rustSources, rustTargetRoots)
+for (const pkg of metadata.packages)
+  for (const violation of policyEngineDependencyViolations(pkg.dependencies))
+    fail(pkg.manifest_path, violation)
 for (const rustRoot of workspaceRustSourceRoots(root, metadata)) {
   const source = join(rustRoot, "src")
   if (!existsSync(source)) continue

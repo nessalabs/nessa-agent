@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import {
   moduleDeclarations,
+  policyEngineDependencyViolations,
   policyEngineViolations,
   testCodeFiles,
 } from "./policy-engine.mjs"
@@ -244,5 +245,59 @@ test("a policy port implemented under an alias is refused", () => {
       "use ports::PolicyEvaluator as _;\nimpl Display for X {}",
     ),
     [],
+  )
+})
+
+test("a policy port keeps its name, so a re-export cannot hide it", () => {
+  for (const source of [
+    "pub use crate::ports::PolicyEvaluator as Rules;",
+    "pub use ports::{ToolPolicyEvaluator as Tools};",
+  ])
+    assert.equal(policyEngineViolations(product, source).length, 1, source)
+})
+
+test("test anywhere among all(...)'s operands is a test cfg; not(test) and any(...) are not", () => {
+  const body = "mod tests {\n    impl PolicyEvaluator for AllowAll {}\n}"
+  for (const cfg of [
+    "#[cfg(all(unix, test))]",
+    '#[cfg(all(unix, all(feature = "x", test)))]',
+  ])
+    assert.deepEqual(policyEngineViolations(product, `${cfg}\n${body}`), [], cfg)
+  for (const cfg of [
+    "#[cfg(all(unix, not(test)))]",
+    "#[cfg(any(test, unix))]",
+    "#[cfg(not(test))]",
+  ])
+    assert.equal(policyEngineViolations(product, `${cfg}\n${body}`).length, 1, cfg)
+  assert.equal(
+    moduleDeclarations(product, "#[cfg(all(unix, test))]\nmod tests;", { testOnly: true })
+      .length,
+    1,
+  )
+})
+
+test("a Cargo target root is product code even when a test module also loads it", () => {
+  const sources = new Map([
+    ["crates/x/src/lib.rs", '#[cfg(test)]\n#[path = "main.rs"]\nmod binary;'],
+    ["crates/x/src/main.rs", ""],
+  ])
+  assert.deepEqual([...testCodeFiles(sources)], ["crates/x/src/main.rs"])
+  assert.deepEqual(
+    [...testCodeFiles(sources, ["crates/x/src/lib.rs", "crates/x/src/main.rs"])],
+    [],
+  )
+})
+
+test("the engine dependency is never renamed", () => {
+  assert.deepEqual(
+    policyEngineDependencyViolations([
+      { name: "cedar-policy", rename: null },
+      { name: "serde", rename: "serde_renamed" },
+    ]),
+    [],
+  )
+  assert.equal(
+    policyEngineDependencyViolations([{ name: "cedar-policy", rename: "rules" }]).length,
+    1,
   )
 })

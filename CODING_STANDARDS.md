@@ -706,7 +706,8 @@ Cedar.
   shape to copy for those parts; its context booleans and its policies without
   `@id` are what ADR 803 removes next, not a pattern. No code under a crate's
   `src/` outside a `cedar` directory names the `cedar_policy` crate, test
-  modules included.
+  modules included, and neither the dependency nor a port is renamed, so both
+  stay findable by name.
 - **Cedar sees the facts, not a verdict.** Entities and context carry what is
   true — the role, the grants held, the owner, the principal's kind, the tool's
   name — and the policy draws the conclusion. A context value such as
