@@ -1151,13 +1151,19 @@ reusing an earlier startup error.
 
 ### Automated dependency guard
 
-`pnpm architecture` checks frontend vertical imports and explicit Rust imports in
-SDK, auth, server, MCP, and desktop gateway domain/application modules. Domain imports cannot reach
-application DTOs, adapters, runtime libraries, or OS effects; application modules
-cannot import concrete infrastructure/composition. The guard and its negative
-fixtures run in CI. It is a source-level import check, not a Rust module resolver:
-macros, fully qualified expressions, transitive re-exports, lifecycle ownership,
-and semantic DTO relationships still require compilation and review.
+`pnpm architecture` checks frontend vertical imports and explicit Rust imports and
+qualified references in SDK, auth, server, MCP, and desktop gateway
+domain/application modules. Domain references cannot reach application DTOs,
+adapters, runtime libraries, or OS effects; application modules
+cannot reference concrete infrastructure/composition. Imports, expressions, types,
+and attributes use the same boundary policy; comments and literals are masked.
+The guard and its negative fixtures run in CI with bare Node. Standalone Tauri
+discovery excludes local agent worktree copies. The retirement-refusal protocol
+agreement test lives in `src-tauri/tests/gateway/infrastructure/retirement_refusal.rs`,
+outside its domain value. This is a source-level path check, not a Rust module
+resolver: macro expansion, names reached through aliases or transitive re-exports,
+lifecycle ownership, and semantic DTO relationships still require compilation
+and review.
 
 `scripts/check-runtime-dependencies.mjs` separately follows Cargo's resolved
 package IDs from the server, SDK, auth, local-storage, local-database, images, and MCP packages.
