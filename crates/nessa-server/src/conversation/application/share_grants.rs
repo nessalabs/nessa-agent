@@ -131,24 +131,32 @@ pub async fn paired_facts(
     Ok((conversation, held))
 }
 
-/// The host's verdict on the notes waiting in `conversation` for its next
-/// turn (ADR 0011 phase B, row J23): each `notes` entry pending delivery is
-/// authorized, revoked, or left out. An owner's note is authorized. A grant's
-/// note is asked of the access policy (`note.deliver`) with the role its
-/// grant holds now: allowed, authorized; refused (revoked, lowered below
-/// Comment, or the conversation deleted), revoked, and the turn retires it; a
-/// grant that could not be read, or a policy that could not decide, left out,
-/// so the note waits for a turn that can check it. A change of policy that
-/// keeps the role changes nothing: the note keeps the revision it was left
-/// under, as its attribution.
+/// The host's verdict on the notes waiting in conversation `id` for its
+/// next turn (ADR 0011 phase B, row J23): each `notes` entry pending
+/// delivery is authorized, revoked, or left out. An owner's note is
+/// authorized. A grant's note is asked of the access policy (`note.deliver`)
+/// about the conversation as it is stored now, with the role its grant
+/// holds now: allowed, authorized; refused (revoked, lowered below Comment,
+/// or the conversation deleted), revoked, and the turn retires it; a
+/// conversation or grant that could not be read, or a policy that could not
+/// decide, left out, so the note waits for a turn that can check it. A
+/// change of policy that keeps the role changes nothing: the note keeps the
+/// revision it was left under, as its attribution.
 ///
-/// Each grant is read and asked once, whatever number of notes it left.
+/// The conversation is read only when a grant left a note, and each grant
+/// is read and asked once, whatever number of notes it left.
 pub async fn note_candidates(
     policy: &dyn ConversationAccessPolicyEvaluator,
+    conversations: &dyn ConversationRepository,
     grants: &dyn ShareGrants,
-    conversation: &Conversation,
+    id: &ConversationId,
     notes: &[NoteRecord],
 ) -> NoteCandidates {
+    let conversation = if notes.iter().any(|note| note.author != Initiator::Owner) {
+        load_conversation(conversations, id).await.ok().flatten()
+    } else {
+        None
+    };
     let mut candidates = NoteCandidates::default();
     let mut verdicts: Vec<(&str, Option<bool>)> = Vec::new();
     for note in notes {
@@ -160,7 +168,12 @@ pub async fn note_candidates(
             {
                 Some((_, verdict)) => *verdict,
                 None => {
-                    let verdict = deliverable(policy, grants, conversation, grant.grant()).await;
+                    let verdict = match &conversation {
+                        Some(conversation) => {
+                            deliverable(policy, grants, conversation, grant.grant()).await
+                        }
+                        None => None,
+                    };
                     verdicts.push((grant.grant(), verdict));
                     verdict
                 }
@@ -334,11 +347,13 @@ impl ShareConversation<'_> {
     /// the conversation the caller's and not deleted, the party paired by
     /// the caller in its organization, holding `conversation.read` on this
     /// gateway (an environment's credential serves and can never read, so a
-    /// share to it would record a reader that is not one). Refused, the
-    /// caller is told what acting on the conversation would tell it
-    /// (`NotFound`, `Deleted`), or `ShareTargetNotPaired` when it may act on
-    /// it. The store asks ownership again in the transaction that writes
-    /// the grant (row G8). Either kind of party reads only what it is
+    /// share to it would record a reader that is not one). Ownership is
+    /// asked first (`conversation.act`), before the credential is looked
+    /// at, so a caller that may not act on `id` is told what acting on it
+    /// would tell it (`NotFound`, `Deleted`) whatever credential it names;
+    /// one that may is told `ShareTargetNotPaired` for a party the policy
+    /// refuses. The store asks ownership again in the transaction that
+    /// writes the grant (row G8). Either kind of party reads only what it is
     /// granted (`docs/design/auth/peer-gateways.md`, row H8).
     pub async fn share(
         &self,
@@ -351,6 +366,13 @@ impl ShareConversation<'_> {
     ) -> Result<bool, ConversationError> {
         caller.actor()?;
         let access = ShareAccess::new(role, policy).map_err(|_| ConversationError::InvalidInput)?;
+        // The caller's own conversation is asked about first, so what it is
+        // told about an id it may not act on (`NotFound`, `Deleted`) never
+        // depends on the credential it names.
+        let conversation = load_conversation(self.conversations, &id)
+            .await?
+            .ok_or(ConversationError::NotFound)?;
+        OwnerAccess::new(self.policy).admit(&conversation, &caller)?;
         let binding = self
             .receivers
             .resolve(&credential)
@@ -376,9 +398,6 @@ impl ShareConversation<'_> {
         {
             return Err(ConversationError::ShareTargetNotPaired);
         }
-        let conversation = load_conversation(self.conversations, &id)
-            .await?
-            .ok_or(ConversationError::NotFound)?;
         let ask = AccessAsk {
             subject: AccessSubject::Person {
                 organization: &caller.organization_id,
@@ -400,11 +419,10 @@ impl ShareConversation<'_> {
             AccessDecision::Deny(AccessDenial::Unavailable) => {
                 return Err(ConversationError::Metadata)
             }
+            // The caller may act on the conversation, so the refusal is
+            // for the party it names.
             AccessDecision::Deny(denial) => {
                 tracing::debug!(?denial, "a share was refused");
-                // Told what acting on the conversation tells the caller;
-                // one it may act on was refused for the party it names.
-                OwnerAccess::new(self.policy).admit(&conversation, &caller)?;
                 return Err(ConversationError::ShareTargetNotPaired);
             }
         }

@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::conversation::domain::ConversationDeletion;
-use crate::conversation_test_support::access_policy_ref;
+use crate::conversation_test_support::{access_policy_ref, MemoryRepository, ObservedPolicy};
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationModelId};
@@ -88,6 +88,25 @@ fn conversation(deleted: bool) -> Conversation {
     .unwrap()
 }
 
+/// A store holding `conversation`.
+fn stored(conversation: Conversation) -> MemoryRepository {
+    let repository = MemoryRepository::default();
+    repository
+        .records
+        .lock()
+        .unwrap()
+        .insert(conversation.id().clone(), conversation);
+    repository
+}
+
+fn id() -> ConversationId {
+    conversation(false).id().clone()
+}
+
+fn ids(values: &[&str]) -> Vec<NoteId> {
+    values.iter().map(|id| NoteId::new(*id).unwrap()).collect()
+}
+
 #[tokio::test]
 async fn a_note_is_allowed_while_its_author_holds_comment_and_revoked_once_it_does_not() {
     let grants = Scripted(Mutex::new(Vec::new()));
@@ -102,11 +121,14 @@ async fn a_note_is_allowed_while_its_author_holds_comment_and_revoked_once_it_do
         note("unknown", by("unreadable", 1)),
         note("comment-again", by("commenter", 2)),
     ];
-    let candidates =
-        note_candidates(access_policy_ref(), &grants, &conversation(false), &notes).await;
-    let ids = |values: &[&str]| -> Vec<NoteId> {
-        values.iter().map(|id| NoteId::new(*id).unwrap()).collect()
-    };
+    let candidates = note_candidates(
+        access_policy_ref(),
+        &stored(conversation(false)),
+        &grants,
+        &id(),
+        &notes,
+    )
+    .await;
     assert_eq!(
         candidates.authorized,
         ids(&["owner", "comment", "drive", "comment-again"])
@@ -130,11 +152,103 @@ async fn a_deleted_conversation_delivers_no_grants_note() {
         note("drive", by("driver", 1)),
         note("unknown", by("unreadable", 1)),
     ];
-    let candidates =
-        note_candidates(access_policy_ref(), &grants, &conversation(true), &notes).await;
-    let ids = |values: &[&str]| -> Vec<NoteId> {
-        values.iter().map(|id| NoteId::new(*id).unwrap()).collect()
-    };
+    let candidates = note_candidates(
+        access_policy_ref(),
+        &stored(conversation(true)),
+        &grants,
+        &id(),
+        &notes,
+    )
+    .await;
     assert_eq!(candidates.authorized, ids(&["owner"]));
     assert_eq!(candidates.revoked, ids(&["comment", "drive"]));
+}
+
+/// A conversation that cannot be read, or is no longer stored, judges no
+/// grant's note: each waits, none is revoked, and the owner's is allowed.
+/// Neither is a refusal by the policy.
+#[tokio::test]
+async fn a_grants_note_waits_while_its_conversation_cannot_be_read() {
+    let notes = vec![
+        note("owner", Initiator::Owner),
+        note("comment", by("commenter", 1)),
+        note("read", by("reader", 1)),
+    ];
+    // A row that answers for another id fails `load_conversation`'s check.
+    let unreadable = stored(conversation(false));
+    let other = Conversation::new(
+        ConversationId::new("00000000-0000-4000-8000-000000000002").unwrap(),
+        OrganizationId::new("org").unwrap(),
+        PrincipalId::new("owner").unwrap(),
+        "panel".into(),
+        "create".into(),
+        1,
+        AgentId::Claude,
+        ConversationModelId::new("test-model").unwrap(),
+        ConversationApprovalMode::Ask,
+    )
+    .unwrap();
+    *unreadable.mode_loaded_reply.lock().unwrap() = Some(other);
+    for (repository, case) in [
+        (unreadable, "unreadable"),
+        (MemoryRepository::default(), "missing"),
+    ] {
+        let grants = Scripted(Mutex::new(Vec::new()));
+        let candidates =
+            note_candidates(access_policy_ref(), &repository, &grants, &id(), &notes).await;
+        assert_eq!(candidates.authorized, ids(&["owner"]), "{case}");
+        assert!(candidates.revoked.is_empty(), "{case}");
+        assert!(grants.0.lock().unwrap().is_empty(), "{case}: no grant read");
+    }
+}
+
+/// A policy that cannot decide `note.deliver` leaves a grant's note
+/// waiting, never revoked; the owner's is still allowed.
+#[tokio::test]
+async fn a_grants_note_waits_while_the_policy_cannot_decide() {
+    let policy = ObservedPolicy::default();
+    policy.undecide();
+    let grants = Scripted(Mutex::new(Vec::new()));
+    let notes = vec![
+        note("owner", Initiator::Owner),
+        note("comment", by("commenter", 1)),
+        note("read", by("reader", 1)),
+    ];
+    let candidates = note_candidates(
+        &policy,
+        &stored(conversation(false)),
+        &grants,
+        &id(),
+        &notes,
+    )
+    .await;
+    assert_eq!(candidates.authorized, ids(&["owner"]));
+    assert!(candidates.revoked.is_empty());
+    assert!(policy.asked() > 0);
+}
+
+/// The facts a paired party is asked with: a grant store that cannot be
+/// read is unavailable, never a grant not held; a missing conversation is
+/// not found.
+#[tokio::test]
+async fn paired_facts_are_unavailable_while_the_grant_store_fails() {
+    let grants = Scripted(Mutex::new(Vec::new()));
+    let repository = stored(conversation(false));
+    assert_eq!(
+        paired_facts(&repository, &grants, "unreadable", &id())
+            .await
+            .map(|(_, held)| held),
+        Err(PairedRefusal::Unavailable)
+    );
+    let (found, held) = paired_facts(&repository, &grants, "commenter", &id())
+        .await
+        .unwrap();
+    assert_eq!(found.id(), &id());
+    assert_eq!(held.map(|held| held.role), Some(ShareRole::Comment));
+    assert_eq!(
+        paired_facts(&MemoryRepository::default(), &grants, "commenter", &id())
+            .await
+            .map(|(_, held)| held),
+        Err(PairedRefusal::NotFound)
+    );
 }

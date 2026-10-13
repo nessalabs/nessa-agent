@@ -113,7 +113,7 @@ table survives edits.
 | | `nessa-auth` `application/pairing/admission.rs`, `domain/pairing/value_objects/values.rs` `ConsentIntent::matches_owner` | The invitation's owner must be the session's principal (Cedar is asked the rest) |
 | **B. Conversation access** | `nessa-server` `conversation/domain/entities/conversation.rs` `allows`, `check_access` (deleted in step 3) | A conversation is acted on only by its owner in its org; deleted ones are told only to the owner. Step 3 moved every owner command, `note_status`, the list filters, the delete fence and the store's share change to `ConversationAccessPolicyEvaluator`; `allows` stays as a record-integrity check |
 | | `conversation/application/share_grants.rs` `admit_read`, `admit_role`, `binding_of`; `domain/value_objects/share_access.rs` `ShareRole::at_least` | A paired reader reads with any grant, comments with Comment or Drive, drives with Drive; role ordering. Step 3 moved them to `conversation.read`, `.comment`, `.drive` and `note.deliver` behind `PairedAccess`, and deleted `at_least` and the role ordering; `binding_of` stays as identity and binding lifecycle |
-| | `product/read_access.rs` `admit_request`, `admit_list`, `admit_conversation`, `drives_only_text`, `dispatch_share` | Which methods a paired reader may call; a peer gateway never drives; Drive carries text only; paired readers may not list or share. Step 3 made the method sets one `paired_action` table and one evaluation, with the request's attachments, files and receipt operation as facts (`drive.text_only`), the peer rule `paired.peer_gateway`, lists `conversation.list` and shares `conversation.share`, `.unshare`, `.shares`; which refusal is told is asked of the policy too |
+| | `product/read_access.rs` `admit_request`, `admit_list`, `admit_conversation`, `drives_only_text`, `dispatch_share` | Which methods a paired reader may call; a peer gateway never drives; Drive carries text only; paired readers may not list or share. Step 3 made the method sets one `paired_action` table and one evaluation, with the request's attachments, files and receipt operation as facts (`drive.text_only`), the peer rule `paired.peer_gateway`, every other owner command `conversation.write`, lists `conversation.list` and shares `conversation.share`, `.unshare`, `.shares`; which refusal is told is asked of the policy too |
 | | `conversation/application/share_grants.rs` `ShareConversation::share`; `infrastructure/store/share_grants.rs` `change` | A share target must be the caller's receiver and hold `conversation.read` (grant list scanned by hand); grant and revoke need ownership, inside the transaction. Step 3 moved the target predicate to `conversation.share` with the target's binding and grants as facts, and `owner_of` to `conversation.shares`; binding lifecycle and credential identity agreement stay in Rust, and the store still asks ownership inside the transaction |
 | | `conversation/application/passive_read.rs` `binding`; `product/change_watch/registration.rs` `admit_current` | Owner and grant checks after Cedar; a catalogue watch is refused to a peer gateway. Step 3 moved the read and the watch to the access policy; `binding` stays as identity and binding lifecycle |
 | | `attachments/application/held_reads.rs` `HeldReads::read` | Artifact bytes only for the conversation's owner. Step 3 moved it to the access policy (`artifact.read`) |
@@ -169,9 +169,16 @@ request, `Part of #803`, because each pull request costs a full CI run (Saurav,
    policy's answer to a wire code. Whether a paired party is told `forbidden`,
    `conversation_not_found` or `conversation_deleted` is itself asked of the
    policy (`conversation.read`, `catalogue.entry`, `conversation.locate`).
-   Known edges: a role below the action's on a deleted conversation is told it
-   was deleted, and a peer gateway's malformed drive command is told what a
-   device's is, because the peer rule needs the conversation to be asked about.
+   A peer gateway's refused drive or note is told what its read would be, so
+   a missing id and an ungranted one answer alike; any other owner command a
+   paired reader sends is `conversation.write` on its binding's catalogue,
+   refused `forbidden` before a conversation is read. A share asks ownership
+   before it reads the target credential. Known edges: a role below the
+   action's on a deleted conversation is told it was deleted; a peer gateway's
+   malformed drive command is told what a device's is, because the peer rule
+   needs the conversation to be asked about; and a share's target binding is
+   compared with the caller only by `conversation.share`, after the registry
+   read, so a registry outage shows for another owner's credential too.
 4. **C: agent tools,** after slice J4 lands its tool-policy adapter.
    `CommandPolicy` and MCP App call admission become policies beside that
    bundle, keyed on who started the turn. The turn's initiation and its share

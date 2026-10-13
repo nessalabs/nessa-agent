@@ -14,13 +14,14 @@
 //!   ──▶ Unavailable on either ──▶ Unavailable
 //! PairedAccess::admit(action, conversation, held, request)
 //!   ──▶ action ── Allow ──▶ Ok
-//!              └─ Deny ──▶ forbidden by `paired.peer_gateway` ──▶ Forbidden
-//!                       └─ conversation.read ── Allow ──▶ Forbidden
-//!                                            └─ Deny ──▶ catalogue.entry ── Deny ──▶ NotFound
-//!                                                                         └─ Allow ──▶ locate (Person)
-//!                                                                                ── Allow ──▶ Deleted
-//!                                                                                └─ Deny ──▶ NotFound
+//!              └─ Deny ──▶ conversation.read ── Allow ──▶ Forbidden
+//!                       └─ Deny ──▶ catalogue.entry ── Deny ──▶ NotFound
+//!                                                    └─ Allow ──▶ locate (Person)
+//!                                                           ── Allow ──▶ Deleted
+//!                                                           └─ Deny ──▶ NotFound
 //!   ──▶ Unavailable on any ──▶ Unavailable
+//! PairedAccess::admit_catalogue(action) on the binding owner's catalogue
+//!   ──▶ Allow ──▶ Ok | Deny ──▶ Forbidden | Unavailable
 //! ```
 //!
 //! Arrows are calls. The facts are what is true: who asks (an owner's own
@@ -86,8 +87,9 @@ pub enum AccessAction {
     Comment,
     /// Start, steer and stop turns in the conversation.
     Drive,
-    /// Any other owner command on the conversation, asked by a paired
-    /// reader.
+    /// Any other owner command, asked by a paired reader on the catalogue
+    /// its binding reads: one no grant role names, whatever conversation it
+    /// would act on.
     Write,
     /// Grant a paired party a share of the conversation.
     Share,
@@ -417,11 +419,6 @@ impl<'a> OwnerAccess<'a> {
     }
 }
 
-/// The policy id of the rule that a peer gateway never comments or drives.
-/// A refusal it decided is told `Forbidden` before anything else, as the
-/// socket refused a peer before it read any grant.
-const PEER_GATEWAY_POLICY: &str = "paired.peer_gateway";
-
 /// A paired party reading through its receiver binding, as the session and
 /// the binding say who it is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -502,31 +499,10 @@ impl<'a> PairedAccess<'a> {
         request: RequestShape<'_>,
     ) -> Result<(), PairedRefusal> {
         let resource = AccessResource::of(conversation);
-        match self
-            .policy
-            .evaluate(&self.ask(action, resource, held, request))
-        {
-            AccessDecision::Allow { .. } => return Ok(()),
-            AccessDecision::Deny(AccessDenial::Unavailable) => {
-                return Err(PairedRefusal::Unavailable)
-            }
-            AccessDecision::Deny(AccessDenial::Forbidden { policies })
-                if policies.iter().any(|id| id == PEER_GATEWAY_POLICY) =>
-            {
-                tracing::debug!(
-                    action = action.name(),
-                    ?policies,
-                    "a paired party was forbidden"
-                );
-                return Err(PairedRefusal::Forbidden);
-            }
-            AccessDecision::Deny(denial) => {
-                tracing::debug!(
-                    action = action.name(),
-                    ?denial,
-                    "a paired party was refused"
-                );
-            }
+        match answer(self.policy, &self.ask(action, resource, held, request)) {
+            Answer::Allowed => return Ok(()),
+            Answer::Unavailable => return Err(PairedRefusal::Unavailable),
+            Answer::Refused => {}
         }
         if action != AccessAction::Read && self.allows(AccessAction::Read, conversation, held)? {
             return Err(PairedRefusal::Forbidden);
@@ -572,7 +548,8 @@ impl<'a> PairedAccess<'a> {
     }
 
     /// Whether the party may take `action` on the owner's catalogue its
-    /// binding reads: `conversation.list` or `catalogue.watch`.
+    /// binding reads: `conversation.list`, `catalogue.watch`, or
+    /// `conversation.write` for a command no grant role names.
     ///
     /// # Errors
     /// `Forbidden` when the policy refuses, `Unavailable` when it could not

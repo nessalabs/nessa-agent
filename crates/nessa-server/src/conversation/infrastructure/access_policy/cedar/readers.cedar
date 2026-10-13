@@ -125,3 +125,7 @@ when {
     ["comment", "drive"].contains(context.role) &&
     !resource.deleted
 };
+
+// Any other owner command a paired reader sends is `conversation.write` on
+// the catalogue its binding reads. No role names one, so no permit does:
+// a device never deletes, archives, exports, re-shares or changes the model.

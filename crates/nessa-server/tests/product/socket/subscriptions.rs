@@ -1941,14 +1941,56 @@ impl ReceiverAuthority for Devices {
 impl SubscriptionFixture {
     /// Compose `devices` as the receiver authority and the fixture's store
     /// as the grant table, as `composition::local_auth` does.
-    fn with_devices(mut self, devices: Arc<Devices>) -> Self {
+    fn with_devices(self, devices: Arc<Devices>) -> Self {
+        self.with_devices_asking(devices, crate::conversation_test_support::access_policy())
+    }
+
+    /// [`Self::with_devices`], with the socket asking `policy` about every
+    /// paired party; the conversation service and store keep the checked-in
+    /// policy.
+    fn with_devices_asking(
+        mut self,
+        devices: Arc<Devices>,
+        policy: Arc<dyn crate::conversation::application::ConversationAccessPolicyEvaluator>,
+    ) -> Self {
         let metadata = self.metadata.clone();
-        self.state = self.state.clone().with_passive_read(
-            devices,
-            metadata.clone(),
-            metadata,
-            crate::conversation_test_support::access_policy(),
-        );
+        self.state =
+            self.state
+                .clone()
+                .with_passive_read(devices, metadata.clone(), metadata, policy);
+        self
+    }
+
+    /// This fixture's session signed in again as `gateway:peer`, holding
+    /// `actions`: a principal other than the owner of the conversations its
+    /// binding reads, as a peer gateway signs in. Grants are written before,
+    /// by the owner.
+    async fn signed_in_as_peer(mut self, actions: &[&str]) -> Self {
+        grants(&self.authority, actions);
+        {
+            let mut snapshot = self.authority.snapshot.lock().unwrap();
+            let peer = PrincipalId::new("gateway:peer").unwrap();
+            let named = snapshot.credential.clone();
+            snapshot.credential = Credential::new(
+                named.id().clone(),
+                peer.clone(),
+                named.organization_id().clone(),
+                named.audience_id().clone(),
+                named.issued_at(),
+                named.expires_at(),
+                named.grants().to_vec(),
+            )
+            .unwrap();
+            let membership = snapshot.membership.clone();
+            snapshot.membership = Membership::new(
+                membership.id().clone(),
+                peer,
+                membership.organization_id().clone(),
+                membership.role(),
+                membership.status(),
+            );
+        }
+        self.session = authenticate(&self.state).await;
         self
     }
 
@@ -2344,12 +2386,24 @@ async fn share_refuses_what_the_owner_cannot_grant() {
     }
     let missing = Uuid::new_v4().to_string();
     let answer = fixture
-        .call("conversation.share", share(missing, "phone"))
+        .call("conversation.share", share(missing.clone(), "phone"))
         .await;
     assert_eq!(
         answer["error"]["code"], "conversation_not_found",
         "{answer}"
     );
+    // Ownership is asked before the credential is looked at: a missing id
+    // answers the same whether the credential names another owner's active
+    // device or nothing at all.
+    for credential in ["stranger", "nobody"] {
+        let answer = fixture
+            .call("conversation.share", share(missing.clone(), credential))
+            .await;
+        assert_eq!(
+            answer["error"]["code"], "conversation_not_found",
+            "{credential}: {answer}"
+        );
+    }
     let shares = fixture
         .call(
             "conversation.shares",
@@ -2547,8 +2601,9 @@ async fn a_drive_grant_drives_only_the_conversation_it_names() {
 }
 
 /// Row J12: a paired session is refused `forbidden` every other method whose
-/// grant is `conversation.write`, even holding that grant, so a device can
-/// never act as its owner beyond what its share grants admit. The methods
+/// grant is `conversation.write`, even holding that grant and whatever
+/// conversation it names, so a device can never act as its owner beyond
+/// what its share grants admit. The methods
 /// are every published one, not a list kept here. A Read or Comment grant
 /// drives nothing.
 #[tokio::test]
@@ -2565,6 +2620,7 @@ async fn a_paired_session_writes_only_what_a_drive_grant_admits() {
     ];
     let fixture = SubscriptionFixture::new().await;
     fixture.turn("first").await;
+    let ungranted = fixture.create().await;
     let fixture = fixture.with_devices(this_device(true));
     fixture
         .grant_to(ShareGrantTransition::Grant(drive_access()))
@@ -2590,11 +2646,17 @@ async fn a_paired_session_writes_only_what_a_drive_grant_admits() {
     ] {
         assert!(others.contains(&method), "{method} is refused to a driver");
     }
+    // Refused before any conversation is read: the granted id, an
+    // ungranted one and a missing one answer alike.
+    let missing = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
     for method in others {
-        let answer = fixture
-            .call(method, drive_params(method, &fixture.id, "other"))
-            .await;
-        assert_eq!(answer["error"]["code"], "forbidden", "{method}: {answer}");
+        for id in [&fixture.id, &ungranted, &missing] {
+            let answer = fixture.call(method, drive_params(method, id, "other")).await;
+            assert_eq!(
+                answer["error"]["code"], "forbidden",
+                "{method} {id}: {answer}"
+            );
+        }
     }
     use crate::conversation::domain::{ShareAccess, ShareRole};
     for role in [ShareRole::Read, ShareRole::Comment] {
@@ -2612,12 +2674,14 @@ async fn a_paired_session_writes_only_what_a_drive_grant_admits() {
             );
         }
     }
-    // A party signed in as a principal other than its grantor, as a peer
-    // gateway is, drives nothing here even holding Drive.
-    let fixture =
-        fixture.with_devices(Devices::new(&[("credential", "receiver", "grantor", true)]));
+    // A peer gateway, signed in as its own principal, drives nothing here
+    // even holding Drive; it may read the conversation, so it is told
+    // `forbidden`.
     fixture
         .grant_to(ShareGrantTransition::Grant(drive_access()))
+        .await;
+    let fixture = fixture
+        .signed_in_as_peer(&["conversation.write", "conversation.read", "server.read"])
         .await;
     for method in DRIVE_COMMANDS {
         let answer = fixture
@@ -2628,6 +2692,204 @@ async fn a_paired_session_writes_only_what_a_drive_grant_admits() {
             "peer {method}: {answer}"
         );
     }
+}
+
+/// A peer gateway signs in as its own principal and neither drives nor
+/// comments, but what it is told of a refused command is what a read would
+/// tell it: a missing id and a conversation it holds no grant on both answer
+/// `conversation_not_found`, so a command is no oracle for which ids exist;
+/// only a conversation it may read answers `forbidden`.
+#[tokio::test]
+async fn a_peer_gateway_learns_no_more_from_a_refused_command_than_from_a_read() {
+    use crate::conversation::application::ShareGrantTransition;
+    let fixture = SubscriptionFixture::new().await;
+    fixture.turn("first").await;
+    let ungranted = fixture.create().await;
+    let fixture = fixture.with_devices(this_device(true));
+    fixture
+        .grant_to(ShareGrantTransition::Grant(drive_access()))
+        .await;
+    let fixture = fixture
+        .signed_in_as_peer(&["conversation.write", "conversation.read", "server.read"])
+        .await;
+    let missing = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    let commands = DRIVE_COMMANDS
+        .iter()
+        .map(|method| (*method, drive_params(method, &missing, "peer")))
+        .chain(
+            COMMENT_COMMANDS
+                .iter()
+                .map(|method| (*method, comment_params(method, &missing, "peer"))),
+        );
+    for (method, params) in commands {
+        let on = |id: &ConversationId| {
+            let mut params = params.clone();
+            params["conversationId"] = json!(id.to_string());
+            params
+        };
+        let absent = fixture.call(method, on(&missing)).await;
+        let ungranted = fixture.call(method, on(&ungranted)).await;
+        let granted = fixture.call(method, on(&fixture.id)).await;
+        assert_eq!(
+            absent["error"]["code"], "conversation_not_found",
+            "{method} missing: {absent}"
+        );
+        assert_eq!(
+            ungranted["error"]["code"], absent["error"]["code"],
+            "{method} ungranted: {ungranted}"
+        );
+        assert_eq!(
+            granted["error"]["code"], "forbidden",
+            "{method} granted: {granted}"
+        );
+    }
+}
+
+/// A paired party the access policy cannot decide about is told
+/// `temporarily_unavailable` by every question the socket asks for it: a
+/// read, a Drive command, a note, the owner's list, and any other owner
+/// command. None is told it is refused, or that a conversation is missing.
+#[tokio::test]
+async fn a_paired_party_the_policy_cannot_decide_is_told_temporarily_unavailable() {
+    use crate::conversation::application::ShareGrantTransition;
+    use crate::conversation_test_support::ObservedPolicy;
+    let fixture = SubscriptionFixture::new().await;
+    fixture.turn("first").await;
+    let policy = Arc::new(ObservedPolicy::default());
+    policy.undecide();
+    let fixture = fixture.with_devices_asking(this_device(true), policy.clone());
+    fixture
+        .grant_to(ShareGrantTransition::Grant(drive_access()))
+        .await;
+    grants(
+        &fixture.authority,
+        &["conversation.write", "conversation.read", "server.read"],
+    );
+    let id = json!({"conversationId": fixture.id.to_string()});
+    for (method, params) in [
+        ("conversation.read", id.clone()),
+        (
+            "conversation.send",
+            drive_params("conversation.send", &fixture.id, "undecided"),
+        ),
+        (
+            "conversation.message",
+            note_params(&fixture.id, "undecided", "x"),
+        ),
+        ("conversation.list", json!({})),
+        (
+            "conversation.delete",
+            json!({"conversationId": fixture.id.to_string(), "requestId": "delete"}),
+        ),
+    ] {
+        let answer = fixture.call(method, params).await;
+        assert_eq!(
+            answer["error"]["code"], "temporarily_unavailable",
+            "{method}: {answer}"
+        );
+    }
+    assert!(policy.asked() > 0);
+}
+
+/// A paired device holding `credential.manage` still shares, unshares and
+/// lists the shares of nothing: the policy refuses every one, on a
+/// conversation it was granted and on a missing id alike, `forbidden`.
+#[tokio::test]
+async fn a_paired_device_shares_nothing_whatever_id_it_names() {
+    use crate::conversation::application::ShareGrantTransition;
+    let fixture = SubscriptionFixture::new()
+        .await
+        .with_devices(this_device(true));
+    fixture
+        .grant_to(ShareGrantTransition::Grant(drive_access()))
+        .await;
+    *fixture.authority.snapshot.lock().unwrap() =
+        snapshot(MembershipRole::Admin, MembershipStatus::Active);
+    grants(
+        &fixture.authority,
+        &[
+            "conversation.write",
+            "conversation.read",
+            "server.read",
+            "credential.manage",
+        ],
+    );
+    let missing = Uuid::new_v4().to_string();
+    for id in [fixture.id.to_string(), missing] {
+        for (method, params) in [
+            (
+                "conversation.share",
+                json!({"conversationId": id, "requestId": "share", "credentialId": "credential", "role": "read"}),
+            ),
+            (
+                "conversation.unshare",
+                json!({"conversationId": id, "requestId": "unshare", "credentialId": "credential"}),
+            ),
+            ("conversation.shares", json!({"conversationId": id})),
+        ] {
+            let answer = fixture.call(method, params).await;
+            assert_eq!(
+                answer["error"]["code"], "forbidden",
+                "{method} {id}: {answer}"
+            );
+        }
+    }
+}
+
+/// The checked-in policy, except that it cannot decide `action`.
+struct UndecidedOn(crate::conversation::application::AccessAction);
+impl crate::conversation::application::ConversationAccessPolicyEvaluator for UndecidedOn {
+    fn evaluate(
+        &self,
+        ask: &crate::conversation::application::AccessAsk<'_>,
+    ) -> crate::conversation::application::AccessDecision {
+        if ask.action == self.0 {
+            return crate::conversation::application::AccessDecision::Deny(
+                crate::conversation::application::AccessDenial::Unavailable,
+            );
+        }
+        crate::conversation_test_support::access_policy_ref().evaluate(ask)
+    }
+}
+
+/// A share the policy cannot decide is a storage failure the owner may
+/// retry, never a party refused, and writes nothing.
+#[tokio::test]
+async fn a_share_the_policy_cannot_decide_is_unavailable() {
+    let fixture = SubscriptionFixture::new().await.with_devices_asking(
+        Devices::new(&[("phone", "phone", "principal", true)]),
+        Arc::new(UndecidedOn(
+            crate::conversation::application::AccessAction::Share,
+        )),
+    );
+    *fixture.authority.snapshot.lock().unwrap() =
+        snapshot(MembershipRole::Admin, MembershipStatus::Active);
+    grants(
+        &fixture.authority,
+        &[
+            "conversation.write",
+            "conversation.read",
+            "server.read",
+            "credential.manage",
+        ],
+    );
+    let answer = fixture
+        .call(
+            "conversation.share",
+            json!({"conversationId": fixture.id.to_string(), "requestId": "share", "credentialId": "phone", "role": "read"}),
+        )
+        .await;
+    assert_eq!(
+        answer["error"]["code"], "conversation_storage_unavailable",
+        "{answer}"
+    );
+    let shares = fixture
+        .call(
+            "conversation.shares",
+            json!({"conversationId": fixture.id.to_string()}),
+        )
+        .await;
+    assert_eq!(shares["payload"]["items"], json!([]), "{shares}");
 }
 
 /// Row J13: the role is read at each command. Lowered to Read, the next
@@ -3081,11 +3343,12 @@ async fn a_comment_or_drive_grant_leaves_notes_on_the_conversation_it_names() {
             ("drive".to_owned(), grant(driven)),
         ]
     );
-    // A party signed in as a principal other than its grantor, as a peer
-    // gateway is, leaves no note here even holding Comment.
-    let fixture =
-        fixture.with_devices(Devices::new(&[("credential", "receiver", "grantor", true)]));
+    // A peer gateway, signed in as its own principal, leaves no note here
+    // even holding Comment.
     fixture.grant_to(ShareGrantTransition::Grant(comment)).await;
+    let fixture = fixture
+        .signed_in_as_peer(&["conversation.write", "conversation.read", "server.read"])
+        .await;
     let answer = fixture
         .call(
             "conversation.message",

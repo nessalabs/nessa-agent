@@ -39,9 +39,9 @@ impl ConversationService {
 
     /// The verdict on each note waiting in `live`'s committed records for a
     /// turn ([`note_candidates`]), asked of the conversation as it is stored
-    /// now. Without bound grants, or with the conversation unreadable, only
-    /// the owner's notes are allowed and a grant's wait; the records
-    /// unreadable, none is judged and every note waits.
+    /// now. Without bound grants, only the owner's notes are allowed and a
+    /// grant's wait; the records unreadable, none is judged and every note
+    /// waits.
     pub(super) async fn note_candidates(
         &self,
         id: &ConversationId,
@@ -67,22 +67,14 @@ impl ConversationService {
         let Some(grants) = self.inner.note_authors.get() else {
             return owners_only();
         };
-        // Only a grant's note is asked about, and only it needs the record.
-        if waiting.iter().all(|note| note.author == Initiator::Owner) {
-            return owners_only();
-        }
-        match load_conversation(self.inner.metadata.as_ref(), id).await {
-            Ok(Some(record)) => {
-                note_candidates(
-                    self.inner.access_policy.as_ref(),
-                    grants.as_ref(),
-                    &record,
-                    &waiting,
-                )
-                .await
-            }
-            Ok(None) | Err(_) => owners_only(),
-        }
+        note_candidates(
+            self.inner.access_policy.as_ref(),
+            self.inner.metadata.as_ref(),
+            grants.as_ref(),
+            id,
+            &waiting,
+        )
+        .await
     }
 
     /// Leave a note in conversation `id`, from `caller` under `author`, the

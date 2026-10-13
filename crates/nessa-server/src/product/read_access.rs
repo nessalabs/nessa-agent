@@ -129,15 +129,16 @@ pub(super) async fn admit_list(
         .map_err(paired_code)
 }
 
-/// The action a paired party's `conversation.write` method is, for the
-/// methods a grant can admit: a Drive grant starts and steers a turn, stops
-/// it, answers or cancels its permission request, answers its question, and
-/// looks up those commands' receipts (row J11); a Comment grant leaves a
-/// note and reads where the caller's own note stands (row J17). Which role
-/// allows which is the policy's. No other method has a paired action: Drive
-/// never deletes, archives, exports, re-shares or changes the model (issue
-/// 707), and no policy is asked about what it cannot name.
-fn paired_action(method: &str) -> Option<AccessAction> {
+/// The action a paired party's `conversation.write` method is: a Drive
+/// command starts and steers a turn, stops it, answers or cancels its
+/// permission request, answers its question, or looks up those commands'
+/// receipts (row J11); a Comment command leaves a note or reads where the
+/// caller's own note stands (row J17); any other is `conversation.write`
+/// (deleting, archiving, exporting, re-sharing, changing the model, issue
+/// 707), asked on the catalogue the binding reads because not every such
+/// method names a conversation. Which role allows which, and that none
+/// allows the rest, is the policy's.
+fn paired_action(method: &str) -> AccessAction {
     match method {
         "conversation.send"
         | "conversation.steer"
@@ -145,9 +146,9 @@ fn paired_action(method: &str) -> Option<AccessAction> {
         | "conversation.answer"
         | "conversation.answerQuestion"
         | "conversation.cancel"
-        | "conversation.receipt" => Some(AccessAction::Drive),
-        "conversation.message" | "conversation.messageStatus" => Some(AccessAction::Comment),
-        _ => None,
+        | "conversation.receipt" => AccessAction::Drive,
+        "conversation.message" | "conversation.messageStatus" => AccessAction::Comment,
+        _ => AccessAction::Write,
     }
 }
 
@@ -169,17 +170,21 @@ const ADMITTED_BY_ITS_OWN_CHECK: [&str; 6] = [
 /// `conversation.write`, are admitted by the method's grant as before.
 ///
 /// A paired session holding `conversation.write` would otherwise act as its
-/// owner, so for it every `conversation.write` method is refused unless it
-/// is one its grants admit again ([`ADMITTED_BY_ITS_OWN_CHECK`]) or has a
-/// paired action ([`paired_action`], rows J12, J17). That asks Cedar for the
-/// grant pairing mints, `conversation.read`, and then the access policy for
-/// the action on the one conversation the command names, with the role its
-/// receiver holds there and what the command carries, so a Drive grant is
-/// what lets the device drive that conversation and no other (row J11), a
-/// Comment or Drive grant what lets it leave notes there, a driver sends
-/// text only (row J14), and a peer gateway does neither. Refused, it is told
-/// `forbidden` when it may read the conversation or is a peer gateway, and
-/// otherwise what a read would tell it.
+/// owner, so for it every `conversation.write` method that its grants do
+/// not admit again ([`ADMITTED_BY_ITS_OWN_CHECK`]) asks the access policy
+/// for its paired action ([`paired_action`], rows J12, J17). A method no
+/// role names is asked `conversation.write` on the binding's catalogue, and
+/// refused `forbidden` before anything about a conversation is read. A
+/// Drive or Comment command asks Cedar for the grant pairing mints,
+/// `conversation.read`, and then the access policy for the action on the
+/// one conversation the command names, with the role its receiver holds
+/// there and what the command carries, so a Drive grant is what lets the
+/// device drive that conversation and no other (row J11), a Comment or
+/// Drive grant what lets it leave notes there, a driver sends text only
+/// (row J14), and a peer gateway does neither. Refused, it is told
+/// `forbidden` when it may read the conversation, and otherwise what a read
+/// would tell it: a peer gateway learns no more from a refused command than
+/// from a refused read.
 ///
 /// Admitted, a request is answered with who it is from: a turn it starts, or
 /// a note it leaves, is saved with the grant that admitted it and the
@@ -209,10 +214,16 @@ pub(super) async fn admit_request(
     // A device signs in as its owner, so its command is the owner's from
     // the device's surface. A peer gateway signs in as its own principal
     // and forwards its people's commands in a later slice.
-    let action = paired_action(method).ok_or("forbidden")?;
+    let access = PairedAccess::new(access_policy(state)?, party(&binding, session));
+    let action = paired_action(method);
+    if action == AccessAction::Write {
+        access.admit_catalogue(action).map_err(paired_code)?;
+        // No policy permits it today; one that did would let the party
+        // send this command as the owner's surface does.
+        return as_owner().await;
+    }
     admit_grant(state, session, PAIRING_GRANT).await?;
     let id = drive_target(frame)?;
-    let access = PairedAccess::new(access_policy(state)?, party(&binding, session));
     let (conversation, held) = paired_facts(
         conversations.as_ref(),
         grants.as_ref(),

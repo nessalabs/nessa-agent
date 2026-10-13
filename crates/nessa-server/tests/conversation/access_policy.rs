@@ -176,10 +176,12 @@ fn the_checked_in_bundle_validates_and_names_every_action() {
     let (org, owner) = (organization("org"), principal("owner"));
     for action in AccessAction::ALL {
         let resource = match action {
-            AccessAction::List | AccessAction::CatalogueWatch => AccessResource::Catalogue {
-                organization: &org,
-                owner: &owner,
-            },
+            AccessAction::List | AccessAction::CatalogueWatch | AccessAction::Write => {
+                AccessResource::Catalogue {
+                    organization: &org,
+                    owner: &owner,
+                }
+            }
             _ => on(&live),
         };
         let subject = match action {
@@ -585,11 +587,15 @@ fn grant_note_deliver_needs_comment_or_drive_on_a_live_conversation() {
 #[test]
 fn a_paired_reader_writes_nothing_else() {
     let policy = policy();
+    let (org, owner) = (organization("org"), principal("owner"));
     assert_eq!(
         paired(
             &policy,
             AccessAction::Write,
-            on(&conversation("org", "owner", false)),
+            AccessResource::Catalogue {
+                organization: &org,
+                owner: &owner,
+            },
             &Paired {
                 held: Some(ShareRole::Drive),
                 ..Paired::default()
@@ -801,7 +807,6 @@ fn paired_access_answers_its_truth_table() {
                     // `admit_list` and the share commands refuse a paired
                     // device by what it is.
                     for action in [
-                        AccessAction::Write,
                         AccessAction::Share,
                         AccessAction::Unshare,
                         AccessAction::Shares,
@@ -809,11 +814,18 @@ fn paired_access_answers_its_truth_table() {
                         assert!(!allowed(&paired(&policy, action, on(&record), &facts)));
                     }
                     // A catalogue watch is refused unless the binding's
-                    // owner is who signed in.
+                    // owner is who signed in; no other owner command is
+                    // ever a paired reader's.
                     let catalogue = AccessResource::Catalogue {
                         organization: &borg,
                         owner: &bowner,
                     };
+                    assert!(!allowed(&paired(
+                        &policy,
+                        AccessAction::Write,
+                        catalogue,
+                        &facts
+                    )));
                     assert_eq!(
                         allowed(&paired(
                             &policy,
@@ -937,11 +949,13 @@ fn owner_share_answers_its_truth_table() {
 }
 
 /// What a paired party is told, for every signer, role held, deletion and
-/// request: allowed; a peer gateway forbidden before anything else; a party
-/// that may read the conversation forbidden what its role or request does
-/// not allow; a granted tombstone told it was deleted when the party signed
-/// in as its owner, as the socket's owner check told it; and anything else
-/// told it does not exist, as an ungranted id is (rows G1, J11 to J14).
+/// request: allowed; a party that may read the conversation, a peer gateway
+/// included, forbidden what its role, request or signer does not allow; a
+/// granted tombstone told it was deleted when the party signed in as its
+/// owner, as the socket's owner check told it; and anything else told it
+/// does not exist, as an ungranted id is (rows G1, J11 to J14). A peer
+/// without a grant, or with one on a deleted conversation, learns no more
+/// than from a missing id.
 #[test]
 fn paired_access_tells_each_refusal_as_its_table_says() {
     use PairedRefusal::{Deleted, Forbidden, NotFound};
@@ -966,7 +980,7 @@ fn paired_access_tells_each_refusal_as_its_table_says() {
         Result<(), PairedRefusal>,
     );
     // (peer, action, held, deleted, request, told)
-    let table: [Row<'_>; 30] = [
+    let table: [Row<'_>; 32] = [
         (false, AccessAction::Read, None, false, text, Err(NotFound)),
         (false, AccessAction::Read, Some(Read), false, text, Ok(())),
         (false, AccessAction::Read, Some(Drive), false, text, Ok(())),
@@ -1114,7 +1128,7 @@ fn paired_access_tells_each_refusal_as_its_table_says() {
             None,
             false,
             text,
-            Err(Forbidden),
+            Err(NotFound),
         ),
         (
             true,
@@ -1124,7 +1138,15 @@ fn paired_access_tells_each_refusal_as_its_table_says() {
             text,
             Err(Forbidden),
         ),
-        (true, AccessAction::Drive, None, true, text, Err(Forbidden)),
+        (true, AccessAction::Drive, None, true, text, Err(NotFound)),
+        (
+            true,
+            AccessAction::Drive,
+            Some(Drive),
+            true,
+            text,
+            Err(NotFound),
+        ),
         (
             true,
             AccessAction::Drive,
@@ -1133,13 +1155,14 @@ fn paired_access_tells_each_refusal_as_its_table_says() {
             attachments,
             Err(Forbidden),
         ),
+        (true, AccessAction::Comment, None, true, text, Err(NotFound)),
         (
             true,
             AccessAction::Comment,
-            None,
+            Some(Comment),
             true,
             text,
-            Err(Forbidden),
+            Err(NotFound),
         ),
     ];
     for (is_peer, action, held, deleted, request, told) in table {
@@ -1162,7 +1185,8 @@ fn paired_access_tells_each_refusal_as_its_table_says() {
     }
 }
 
-/// A paired party lists nothing of the owner's and shares nothing, and an
+/// A paired party lists nothing of the owner's, sends no other owner
+/// command and shares nothing, and an
 /// evaluator that cannot decide makes every paired question unavailable.
 #[test]
 fn paired_access_lists_and_shares_nothing_and_fails_closed() {
@@ -1182,10 +1206,12 @@ fn paired_access_lists_and_shares_nothing_and_fails_closed() {
     };
     let record = conversation("org", "owner", false);
     let access = PairedAccess::new(&policy, party);
-    assert_eq!(
-        access.admit_catalogue(AccessAction::List),
-        Err(PairedRefusal::Forbidden)
-    );
+    for action in [AccessAction::List, AccessAction::Write] {
+        assert_eq!(
+            access.admit_catalogue(action),
+            Err(PairedRefusal::Forbidden)
+        );
+    }
     for action in [
         AccessAction::Share,
         AccessAction::Unshare,
@@ -1206,8 +1232,10 @@ fn paired_access_lists_and_shares_nothing_and_fails_closed() {
         ),
         Err(PairedRefusal::Unavailable)
     );
-    assert_eq!(
-        undecided.admit_catalogue(AccessAction::List),
-        Err(PairedRefusal::Unavailable)
-    );
+    for action in [AccessAction::List, AccessAction::Write] {
+        assert_eq!(
+            undecided.admit_catalogue(action),
+            Err(PairedRefusal::Unavailable)
+        );
+    }
 }
