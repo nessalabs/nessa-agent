@@ -271,43 +271,57 @@ export function prepareSubmission(input: SubmissionInput): PreparedSubmission {
     throw new TypeError("Invalid submission mode")
   const executionId = boundedText(input.executionId, "Execution ID", 256)
   const requestId = boundedText(input.requestId, "Request ID", 256)
-  const problem = imageAttachmentsProblem(attachments)
+  // Capture into owned plain arrays, not caller slice/map/iterator results.
+  // Bounds cap the copy before any entry is retained; final validation remains
+  // with the published attachment validators (PS19).
+  const imageCount = Array.isArray(attachments) ? attachments.length : NaN
+  const fileCount = Array.isArray(linked) ? linked.length : NaN
+  if (
+    !Number.isSafeInteger(imageCount) ||
+    imageCount < 0 ||
+    imageCount > bounds.maxMessageImages
+  )
+    throw new TypeError("Invalid message attachments: too many images or not a list")
+  if (
+    !Number.isSafeInteger(fileCount) ||
+    fileCount < 0 ||
+    fileCount > bounds.maxMessageFiles
+  )
+    throw new TypeError("Invalid message files: too many files or not a list")
+  const images: Readonly<ImageAttachment>[] = []
+  const files: Readonly<LinkedFile>[] = []
+  for (let index = 0; index < imageCount; index++) {
+    const item = attachments[index]
+    images.push(
+      item && typeof item === "object" && !Array.isArray(item)
+        ? Object.freeze({ ...item })
+        : item,
+    )
+  }
+  for (let index = 0; index < fileCount; index++) {
+    const item = linked[index]
+    files.push(
+      item && typeof item === "object" && !Array.isArray(item)
+        ? Object.freeze({ ...item })
+        : item,
+    )
+  }
+  const problem = imageAttachmentsProblem(images)
   if (problem) throw new TypeError(`Invalid message attachments: ${problem}`)
-  const filesProblem = linkedFilesProblem(linked)
+  const filesProblem = linkedFilesProblem(files)
   if (filesProblem) throw new TypeError(`Invalid message files: ${filesProblem}`)
-  // Text may be blank only beside an image or a linked file: the message has
-  // to say something.
-  if (attachments.length === 0 && linked.length === 0) boundedText(text, "Message", 8192)
+  // The copied payload decides whether text may be blank, not a changing source.
+  if (images.length === 0 && files.length === 0) boundedText(text, "Message", 8192)
   else if (typeof text !== "string" || utf8.encode(text).byteLength > 8192)
     throw new TypeError("Message must contain at most 8192 UTF-8 bytes")
-  // Copied and frozen with the command, so editing the caller's list between a
-  // failure and its retry cannot turn one execution ID into two messages.
-  const images = Object.freeze(
-    attachments
-      .slice(0, bounds.maxMessageImages + 1)
-      .map(({ digest, mimeType, size }) => Object.freeze({ digest, mimeType, size })),
-  )
-  const files = Object.freeze(
-    linked
-      .slice(0, bounds.maxMessageFiles + 1)
-      .map(({ path }) => Object.freeze({ path })),
-  )
-  // Check the exact frozen values that will be sent as well: a caller-supplied
-  // getter can change between the first bounded inspection and the copy (PS14).
-  const copiedImagesProblem = imageAttachmentsProblem(images)
-  if (copiedImagesProblem)
-    throw new TypeError(`Invalid message attachments: ${copiedImagesProblem}`)
-  const copiedFilesProblem = linkedFilesProblem(files)
-  if (copiedFilesProblem)
-    throw new TypeError(`Invalid message files: ${copiedFilesProblem}`)
   const prepared = Object.freeze({
     conversationId,
     executionId,
     requestId,
     mode,
     text,
-    attachments: images,
-    files,
+    attachments: Object.freeze(images),
+    files: Object.freeze(files),
     target: issueExecutionTarget(conversationId, executionId),
   }) as PreparedSubmission
   preparedValues.add(prepared)

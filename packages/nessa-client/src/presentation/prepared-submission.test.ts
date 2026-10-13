@@ -182,7 +182,10 @@ it("validates copied image references when source getters change (PS14)", () => 
       return ++reads <= 2 ? 1 : 99_999_999
     },
   }
-  expect(() => prepareSubmission({ ...intent, attachments: [image] })).toThrow(TypeError)
+  expect(
+    prepareSubmission({ ...intent, attachments: [image] }).attachments[0]!.size,
+  ).toBe(1)
+  expect(reads).toBe(1)
 })
 it("validates copied file paths when source getters change (PS14)", () => {
   let paths = 0
@@ -191,7 +194,10 @@ it("validates copied file paths when source getters change (PS14)", () => {
       return ++paths <= 3 ? "/tmp/valid" : "relative"
     },
   }
-  expect(() => prepareSubmission({ ...intent, files: [file] })).toThrow(TypeError)
+  expect(prepareSubmission({ ...intent, files: [file] }).files[0]!.path).toBe(
+    "/tmp/valid",
+  )
+  expect(paths).toBe(1)
 })
 
 it("captures enclosing conversation before reading its child execution identities (PS18)", () => {
@@ -209,4 +215,97 @@ it("captures enclosing conversation before reading its child execution identitie
   }
   const captured = executionTargets(view)
   expect(captured).toEqual([{ conversationId: first, executionId: "captured" }])
+})
+
+it("captures owned arrays without calling caller slice, map, species or iterator (PS19)", async () => {
+  const image = {
+    digest: `sha256:${"a".repeat(64)}`,
+    mimeType: "image/png" as const,
+    size: 1,
+  }
+  const file = { path: "/original" }
+  const images = [image],
+    files = [file]
+  for (const list of [images, files]) {
+    Object.defineProperty(list, "slice", {
+      value: () => {
+        throw new Error("caller slice")
+      },
+    })
+    Object.defineProperty(list, "map", {
+      value: () => {
+        throw new Error("caller map")
+      },
+    })
+    Object.defineProperty(list, Symbol.iterator, {
+      value: () => {
+        throw new Error("caller iterator")
+      },
+    })
+    Object.defineProperty(list, "constructor", {
+      value: {
+        get [Symbol.species]() {
+          throw new Error("caller species")
+        },
+      },
+    })
+  }
+  const prepared = prepareSubmission({ ...intent, attachments: images, files })
+  expect(prepared.attachments).not.toBe(images)
+  expect(prepared.files).not.toBe(files)
+  image.size = 2
+  file.path = "/edited"
+  const request = vi.fn(async (_method: string, _fields: unknown) => ({
+    executionId: intent.executionId,
+    disposition: "queued",
+  }))
+  const api = createConversationApi({ request }, () => "id")
+  await api.submit(prepared)
+  expect(request.mock.calls[0]![1]).toMatchObject({
+    attachments: [{ size: 1 }],
+    files: [{ path: "/original" }],
+  })
+})
+
+it("rejects oversized source lists before reading their entries and accepts the published bound (PS19)", () => {
+  const images = new Array(11)
+  Object.defineProperty(images, 0, {
+    get() {
+      throw new Error("entry read before capacity")
+    },
+  })
+  expect(() => prepareSubmission({ ...intent, attachments: images })).toThrow(TypeError)
+  const image = {
+    digest: `sha256:${"a".repeat(64)}`,
+    mimeType: "image/png" as const,
+    size: 1,
+  }
+  expect(
+    prepareSubmission({ ...intent, attachments: Array.from({ length: 10 }, () => image) })
+      .attachments,
+  ).toHaveLength(10)
+})
+
+it("publishes one validated receipt snapshot without rereading adapter getters (PS20)", async () => {
+  let identities = 0,
+    dispositions = 0
+  const request = vi.fn(async () => ({
+    get executionId() {
+      return ++identities === 1 ? intent.executionId : "other"
+    },
+    get disposition() {
+      return ++dispositions === 1 ? "queued" : "invalid"
+    },
+  }))
+  const api = createConversationApi({ request }, () => "id")
+  const prepared = prepareSubmission(intent)
+  const receipt = await api.submit(prepared)
+  expect(receipt).toMatchObject({
+    conversationId: first,
+    executionId: intent.executionId,
+    disposition: "queued",
+  })
+  expect(receipt.target).toBe(prepared.target)
+  expect(identities).toBe(1)
+  expect(dispositions).toBe(1)
 })

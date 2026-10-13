@@ -1,4 +1,8 @@
-import { executionTargets, type PreparedSubmission } from "@nessa/client"
+import {
+  permissionTargets,
+  executionTargets,
+  type PreparedSubmission,
+} from "@nessa/client"
 import { expect, it, vi } from "vitest"
 import { createDependencies } from "../../../composition/dependencies"
 import { makeStore } from "../../../store"
@@ -14,6 +18,7 @@ import {
   setActive,
   setDraft,
   stopGenerating,
+  type Control,
 } from "./slice"
 
 const first = "00000000-0000-4000-8000-000000000001"
@@ -321,4 +326,136 @@ it("an immediate pre-admission Stop refusal retains intent for that later admiss
   expect(admitted.meta.requestStatus).toBe("fulfilled")
   expect(stop).toHaveBeenCalledTimes(2)
   expect(stop.mock.calls[1]![0]).toBe(captured)
+})
+
+it.each([false, true])(
+  "retains retry intent before create even when tab closure prunes the table (PS22 closed=%s)",
+  async (closed) => {
+    const waiting = gate(),
+      echo = scenarioEffects("echo")
+    let creates = 0
+    const create = vi.fn(async (id: string) => {
+      if (creates++ === 1) await waiting.promise
+      return echo.create(id)
+    })
+    const submit = vi.fn(echo.submit).mockRejectedValueOnce(new Error("unknown receipt"))
+    const stop = vi
+      .fn<ConversationEffects["stop"]>()
+      .mockRejectedValueOnce(new ControlFailedError("conversation-not-found", "refused"))
+      .mockResolvedValueOnce()
+    const { store } = fixture({ create, submit, stop }, echo)
+    await store.dispatch(sendDraft({ content: textContent("original") }))
+    const prepared = submit.mock.calls[0]![0]
+    const retryCommand: Control = { kind: "retry", target: prepared.target }
+    const retrying = store.dispatch(
+      controlConversation({ id: "c0", control: retryCommand }),
+    )
+    Object.assign(retryCommand, { kind: "close" })
+    expect(create).toHaveBeenCalledTimes(2)
+    await store.dispatch(stopGenerating())
+    if (closed) store.dispatch(closeConversation("c0"))
+    // Opening another operation invokes normal pruning of the closed tab's table.
+    store.dispatch(openConversation())
+    await store.dispatch(sendDraft({ content: textContent("new operation") }))
+    waiting.resolve()
+    await retrying
+    expect(submit.mock.calls.at(-1)![0]).toBe(prepared)
+    expect(stop.mock.calls.map((call) => call[0])).toEqual([
+      prepared.target,
+      prepared.target,
+    ])
+  },
+)
+
+it.each([
+  "close",
+  "remove",
+  "answer",
+  "cancel",
+  "setApprovalMode",
+  "reorder",
+  "answerQuestion",
+] as const)("captures %s command before create can suspend it (PS21)", async (kind) => {
+  const waiting = gate(),
+    echo = scenarioEffects("echo")
+  const target = executionTargets({
+    conversationId: first,
+    messages: [],
+    pending: [{ executionId: "original" }],
+  })[0]!
+  const permission = permissionTargets({
+    conversationId: first,
+    permissions: [
+      { executionId: "original", permissionId: "review", options: [{ id: "allow" }] },
+    ],
+  })[0]!
+  const create = vi.fn(async (id: string) => {
+    await waiting.promise
+    return echo.create(id)
+  })
+  const remove = vi.fn<ConversationEffects["remove"]>(async () => {})
+  const answer = vi.fn<ConversationEffects["answer"]>(async () => {})
+  const cancel = vi.fn<ConversationEffects["cancel"]>(async () => {})
+  const setApprovalMode = vi.fn<ConversationEffects["setApprovalMode"]>(
+    async (_id, mode) => mode,
+  )
+  const reorder = vi.fn<ConversationEffects["reorder"]>(async () => "applied")
+  const answerQuestion = vi.fn<ConversationEffects["answerQuestion"]>(async () => {})
+  const close = vi.fn<ConversationEffects["close"]>(async () => {})
+  const { store } = fixture(
+    { create, remove, answer, cancel, setApprovalMode, reorder, answerQuestion, close },
+    echo,
+  )
+  const command: Control =
+    kind === "close"
+      ? { kind }
+      : kind === "remove"
+        ? { kind, target }
+        : kind === "answer"
+          ? { kind, target: permission, optionId: "allow" }
+          : kind === "cancel"
+            ? { kind, target: permission }
+            : kind === "setApprovalMode"
+              ? { kind, mode: "ask" }
+              : kind === "reorder"
+                ? { kind, executionIds: ["original"] }
+                : {
+                    kind,
+                    executionId: "original",
+                    questionId: "question",
+                    choices: [{ key: "key", values: ["original"] }],
+                  }
+  const pending = store.dispatch(controlConversation({ id: "c0", control: command }))
+  if (command.kind === "reorder") command.executionIds[0] = "changed"
+  if (command.kind === "answerQuestion") command.choices![0]!.values[0] = "changed"
+  // Replacing the discriminant after route checks must not select a new effect.
+  Object.assign(command, {
+    kind: kind === "close" ? "remove" : "close",
+    target: executionTargets({
+      conversationId: second,
+      messages: [],
+      pending: [{ executionId: "other" }],
+    })[0]!,
+    optionId: "changed",
+    mode: "dontAsk",
+  })
+  waiting.resolve()
+  await pending
+  if (kind === "close") expect(close).toHaveBeenCalledExactlyOnceWith(first)
+  else expect(close).not.toHaveBeenCalled()
+  if (kind === "remove") expect(remove).toHaveBeenCalledExactlyOnceWith(target)
+  if (kind === "answer")
+    expect(answer).toHaveBeenCalledExactlyOnceWith(permission, "allow")
+  if (kind === "cancel") expect(cancel).toHaveBeenCalledExactlyOnceWith(permission)
+  if (kind === "setApprovalMode")
+    expect(setApprovalMode).toHaveBeenCalledExactlyOnceWith(first, "ask")
+  if (kind === "reorder")
+    expect(reorder).toHaveBeenCalledExactlyOnceWith(first, ["original"])
+  if (kind === "answerQuestion")
+    expect(answerQuestion).toHaveBeenCalledExactlyOnceWith(
+      first,
+      "original",
+      "question",
+      [{ key: "key", values: ["original"], ownWords: undefined }],
+    )
 })

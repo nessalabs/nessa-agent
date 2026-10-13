@@ -519,148 +519,193 @@ export type Control =
   | { kind: "cancel"; target: PermissionTarget }
   | { kind: "stop"; target: ExecutionTarget }
   | { kind: "retry"; target: ExecutionTarget }
+/** Capture the deliberate command before a creation/retry can suspend it (PS21). */
+function captureControl(source: Control): Control {
+  const command = { ...source }
+  if (command.kind === "reorder") {
+    const executionIds: string[] = []
+    for (let index = 0; index < command.executionIds.length; index++)
+      executionIds.push(command.executionIds[index])
+    command.executionIds = executionIds
+  }
+  if (command.kind === "answerQuestion" && command.choices !== null) {
+    const choices: NonNullable<typeof command.choices> = []
+    for (let index = 0; index < command.choices.length; index++) {
+      const source = command.choices[index]
+      const values: string[] = []
+      for (let value = 0; value < source.values.length; value++)
+        values.push(source.values[value])
+      choices.push({ key: source.key, values, ownWords: source.ownWords })
+    }
+    command.choices = choices
+  }
+  return Object.freeze(command)
+}
+
 export const controlConversation = createAsyncThunk<
   void,
   { id: string; control: Control },
   ThunkConfig
->("conversation/control", async ({ id, control }, { dispatch, getState, extra }) => {
-  const current = getState().conversation.conversations.find((item) => item.id === id)
-  if (!current?.serverConversationId) return
-  const serverId = current.serverConversationId
-  // A delayed action belongs to the conversation captured on the approval
-  // card, even if its local tab has since been rebound. No create/control
-  // runs for that other conversation (permission-targets tests, PT4).
-  if (
-    (control.kind === "answer" || control.kind === "cancel") &&
-    permissionTargetConversation(control.target) !== serverId
-  )
-    return
-  if (
-    (control.kind === "stop" || control.kind === "remove" || control.kind === "retry") &&
-    executionTargetConversation(control.target) !== serverId
-  )
-    return
-  if (control.kind === "stop") {
-    const operation = operationsOf(getState).get(id)?.get(control.target.executionId)
-    if (operation) operation.stopRequested = true
-    // Cancellation can overtake creation or a retry; it never owns the ordinary
-    // control busy state (PS6/PS12). The gateway resolves current authority.
+>(
+  "conversation/control",
+  async ({ id, control: source }, { dispatch, getState, extra }) => {
+    const control = captureControl(source)
+    const current = getState().conversation.conversations.find((item) => item.id === id)
+    if (!current?.serverConversationId) return
+    const serverId = current.serverConversationId
+    // A delayed action belongs to the conversation captured on the approval
+    // card, even if its local tab has since been rebound. No create/control
+    // runs for that other conversation (permission-targets tests, PT4).
+    if (
+      (control.kind === "answer" || control.kind === "cancel") &&
+      permissionTargetConversation(control.target) !== serverId
+    )
+      return
+    if (
+      (control.kind === "stop" ||
+        control.kind === "remove" ||
+        control.kind === "retry") &&
+      executionTargetConversation(control.target) !== serverId
+    )
+      return
+    if (control.kind === "stop") {
+      const operation = operationsOf(getState).get(id)?.get(control.target.executionId)
+      if (operation) operation.stopRequested = true
+      // Cancellation can overtake creation or a retry; it never owns the ordinary
+      // control busy state (PS6/PS12). The gateway resolves current authority.
+      try {
+        await extra.conversation.stop(control.target)
+      } catch (error) {
+        dispatch(
+          showError({
+            id,
+            message: controlDetail(error),
+            failure: commandFailure(error),
+          }),
+        )
+        throw error
+      } finally {
+        await dispatch(refollowConversation(id))
+      }
+      return
+    }
+    if (current.controlPending) return
+    const retryOperation =
+      control.kind === "retry"
+        ? operationsOf(getState).get(id)?.get(control.target.executionId)
+        : undefined
+    if (
+      control.kind === "retry" &&
+      (!retryOperation ||
+        !current.turns.some(
+          (turn) =>
+            turn.from === "user" &&
+            turn.executionId === control.target.executionId &&
+            turn.receipt === "unknown",
+        ))
+    )
+      return
+    const requestedOrder = control.kind === "reorder" ? control.executionIds : []
+    dispatch(controlStarted(id))
+    if (control.kind === "close")
+      dispatch(cancellationChanged({ id, status: "cancelling" }))
     try {
-      await extra.conversation.stop(control.target)
+      const created = await extra.conversation.create(serverId, current.selection)
+      if (created.conversationId !== serverId)
+        throw new Error("Gateway returned a different conversation identity.")
+      dispatch(conversationReady(id))
+      switch (control.kind) {
+        case "setApprovalMode":
+          await extra.conversation.setApprovalMode(serverId, control.mode)
+          break
+        case "close":
+          await extra.conversation.close(serverId)
+          dispatch(cancellationChanged({ id, status: "cancelled" }))
+          // Closing releases every file the conversation was keeping, so the
+          // draft's stored images name nothing now. Back to not-started they go,
+          // and the panel uploads them again before the next send.
+          dispatch(uploadsReleased(id))
+          break
+        case "reorder": {
+          const result = await extra.conversation.reorder(serverId, requestedOrder)
+          if (result === "queue_changed")
+            dispatch(
+              showError({
+                id,
+                message:
+                  "The queue changed before the move. Its current order has been refreshed.",
+              }),
+            )
+          if (result === "priority_conflict")
+            dispatch(
+              showError({
+                id,
+                message: "Steering messages must stay ahead of ordinary queued messages.",
+              }),
+            )
+          break
+        }
+        case "remove":
+          await extra.conversation.remove(control.target)
+          break
+        case "answer":
+          await extra.conversation.answer(control.target, control.optionId)
+          break
+        case "answerQuestion":
+          await extra.conversation.answerQuestion(
+            serverId,
+            control.executionId,
+            control.questionId,
+            control.choices,
+          )
+          break
+        case "cancel":
+          await extra.conversation.cancel(control.target)
+          break
+        case "retry": {
+          const executionId = control.target.executionId
+          const operation = retryOperation
+          if (!operation) throw new Error("Retry intent was not captured.")
+          dispatch(submissionReattempted({ id, executionId }))
+          const receipt = await extra.conversation.submit(operation.prepared)
+          if (
+            receipt.conversationId !== operation.prepared.conversationId ||
+            receipt.executionId !== executionId
+          )
+            throw new Error("Gateway returned a different submission identity.")
+          dispatch(submissionAccepted({ id, executionId }))
+          await stopAfterAdmission(operation, id, { dispatch, extra })
+          operationsOf(getState).get(id)?.delete(executionId)
+          break
+        }
+      }
+      await dispatch(refollowConversation(id))
     } catch (error) {
+      if (control.kind === "close") {
+        dispatch(cancellationChanged({ id }))
+        // The close may have applied — a lost acknowledgement, or a gateway that
+        // closed and then could not finish cleaning up. Forgetting is safe either
+        // way: uploading bytes the conversation still holds answers `stored`
+        // without sending them again.
+        dispatch(uploadsReleased(id))
+      }
+      // A lost acknowledgement may follow an applied control. Follow authority
+      // again; never replay the control or infer that the previous order still holds.
+      await dispatch(refollowConversation(id))
+      // Every control, retry included. A retry does re-send a message, but it
+      // does not act on a refusal the way `sendDraft` does — the turn keeps its
+      // receipt and the draft is untouched — so a message's sentences, which
+      // promise the draft is back with its images, would describe something that
+      // did not happen here.
       dispatch(
         showError({ id, message: controlDetail(error), failure: commandFailure(error) }),
       )
       throw error
     } finally {
-      await dispatch(refollowConversation(id))
+      dispatch(controlFinished(id))
     }
-    return
-  }
-  if (current.controlPending) return
-  const requestedOrder = control.kind === "reorder" ? [...control.executionIds] : []
-  dispatch(controlStarted(id))
-  if (control.kind === "close")
-    dispatch(cancellationChanged({ id, status: "cancelling" }))
-  try {
-    const created = await extra.conversation.create(serverId, current.selection)
-    if (created.conversationId !== serverId)
-      throw new Error("Gateway returned a different conversation identity.")
-    dispatch(conversationReady(id))
-    switch (control.kind) {
-      case "setApprovalMode":
-        await extra.conversation.setApprovalMode(serverId, control.mode)
-        break
-      case "close":
-        await extra.conversation.close(serverId)
-        dispatch(cancellationChanged({ id, status: "cancelled" }))
-        // Closing releases every file the conversation was keeping, so the
-        // draft's stored images name nothing now. Back to not-started they go,
-        // and the panel uploads them again before the next send.
-        dispatch(uploadsReleased(id))
-        break
-      case "reorder": {
-        const result = await extra.conversation.reorder(serverId, requestedOrder)
-        if (result === "queue_changed")
-          dispatch(
-            showError({
-              id,
-              message:
-                "The queue changed before the move. Its current order has been refreshed.",
-            }),
-          )
-        if (result === "priority_conflict")
-          dispatch(
-            showError({
-              id,
-              message: "Steering messages must stay ahead of ordinary queued messages.",
-            }),
-          )
-        break
-      }
-      case "remove":
-        await extra.conversation.remove(control.target)
-        break
-      case "answer":
-        await extra.conversation.answer(control.target, control.optionId)
-        break
-      case "answerQuestion":
-        await extra.conversation.answerQuestion(
-          serverId,
-          control.executionId,
-          control.questionId,
-          control.choices,
-        )
-        break
-      case "cancel":
-        await extra.conversation.cancel(control.target)
-        break
-      case "retry": {
-        const executionId = control.target.executionId
-        const operation = operationsOf(getState).get(id)?.get(executionId)
-        const turn = current.turns.find(
-          (turn) => turn.from === "user" && turn.executionId === executionId,
-        )
-        if (!operation || turn?.from !== "user" || turn.receipt !== "unknown") return
-        dispatch(submissionReattempted({ id, executionId }))
-        const receipt = await extra.conversation.submit(operation.prepared)
-        if (
-          receipt.conversationId !== operation.prepared.conversationId ||
-          receipt.executionId !== executionId
-        )
-          throw new Error("Gateway returned a different submission identity.")
-        dispatch(submissionAccepted({ id, executionId }))
-        await stopAfterAdmission(operation, id, { dispatch, extra })
-        operationsOf(getState).get(id)?.delete(executionId)
-        break
-      }
-    }
-    await dispatch(refollowConversation(id))
-  } catch (error) {
-    if (control.kind === "close") {
-      dispatch(cancellationChanged({ id }))
-      // The close may have applied — a lost acknowledgement, or a gateway that
-      // closed and then could not finish cleaning up. Forgetting is safe either
-      // way: uploading bytes the conversation still holds answers `stored`
-      // without sending them again.
-      dispatch(uploadsReleased(id))
-    }
-    // A lost acknowledgement may follow an applied control. Follow authority
-    // again; never replay the control or infer that the previous order still holds.
-    await dispatch(refollowConversation(id))
-    // Every control, retry included. A retry does re-send a message, but it
-    // does not act on a refusal the way `sendDraft` does — the turn keeps its
-    // receipt and the draft is untouched — so a message's sentences, which
-    // promise the draft is back with its images, would describe something that
-    // did not happen here.
-    dispatch(
-      showError({ id, message: controlDetail(error), failure: commandFailure(error) }),
-    )
-    throw error
-  } finally {
-    dispatch(controlFinished(id))
-  }
-})
+  },
+)
 function capturedTurn(turns: readonly Turn[]): string | undefined {
   const running = [...turns]
     .reverse()

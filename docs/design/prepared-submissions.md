@@ -72,11 +72,16 @@ flowchart TD
 | --- | --- | --- | --- |
 | PS12 | Stop while retry owns ordinary busy state | Immediate exact-target Stop, then Stop after admission; original busy state remains until retry finishes | `prepared-operations.test.ts` |
 | PS13 | Message admitted, separately requested Stop loses acknowledgement | Preserve known admission and show the control error | `prepared-operations.test.ts` |
-| PS14 | Source accessor changes a file/image field between inspection and copying | Validate copied payload before issuing any prepared value | `prepared-submission.test.ts` |
+| PS14 | Source accessor changes a file/image field while capturing | Capture fields once into owned arrays and validate that final payload | `prepared-submission.test.ts` |
 | PS15 | Earlier operation admits after newer work appears | Repeated Stop names only the earlier operation | `prepared-operations.test.ts` |
 | PS16 | Workspace caller changes conversation/text/model while create awaits | Prepared message and copied model still name the original conversation and intent | `gateway-source.test.ts` |
 | PS17 | Immediate Stop is refused before admission exists | Keep operation intent and repeat the same target after later admission | `prepared-operations.test.ts` |
 | PS18 | Reading a child ID changes its source view | Targets retain the enclosing conversation captured before traversal | `prepared-submission.test.ts` |
+| PS19 | Caller overrides array methods/species/iterator | Retain owned plain arrays; check capacity before entry reads; validate the final payload | `prepared-submission.test.ts` |
+| PS20 | Adapter receipt getters change after validation | Publish the captured validated receipt and original target, with no reread | `prepared-submission.test.ts` |
+| PS21 | Caller replaces a control variant/target/values during create | Execute the captured command and copied values | `prepared-operations.test.ts` |
+| PS22 | Retry awaits create; tab closes and operation table is pruned | Retain eligible operation before await; submit original intent and repeat its requested Stop | `prepared-operations.test.ts` |
+
 
 Existing scenarios and gateway fakes consume the same prepared contract. Their
 fixture IDs are canonical UUIDs; display labels stay separate. A fake bypass of
