@@ -110,7 +110,8 @@ Local enrollment correlation uses the existing admitted driver and single-record
 ClientPendingStore contract. Sequential pending/credential reads do not establish
 an atomic snapshot against out-of-band writers. Auth's pairing adapter owns
 SPKI-to-DeviceKey conversion for local identity, TLS proof, OPAQUE confirmation
-and gateway audit. Known-seed ring derivation and actual authenticated gateway
+and gateway audit. The relay raw-key getter delegates to that same owner;
+known-seed ring derivation checks both public representations. Known-seed ring derivation and actual authenticated gateway
 claim bytes are the independent correlation expectations. The phone still needs
 owner-status corroboration and persisted principal/membership binding.
 

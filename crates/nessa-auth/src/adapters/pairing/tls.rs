@@ -95,9 +95,7 @@ impl NativeIdentity {
     /// The raw Ed25519 public key: the id a relay registers this identity
     /// under (`docs/design/auth/relay.md`).
     pub fn public_key(&self) -> [u8; 32] {
-        let mut key = [0; 32];
-        key.copy_from_slice(&self.spki[12..]);
-        key
+        *self.device_key().bytes()
     }
     /// Prove this key to a relay: an Ed25519 signature over the relay proof
     /// message for `challenge`, the relay's fresh nonce. The message starts

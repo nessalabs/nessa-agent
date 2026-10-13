@@ -26,6 +26,7 @@ fn local_device_key_matches_independent_ed25519_public_bytes() {
             expected.public_key().as_ref()
         );
         assert_eq!(identity.device_key(), device_key(&identity.public_spki()));
+        assert_eq!(identity.public_key().as_slice(), expected.public_key().as_ref());
     }
 }
 
