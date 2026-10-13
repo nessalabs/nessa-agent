@@ -462,7 +462,7 @@ async fn a_read_that_panics_still_reports_what_it_withdrew() {
 /// Two cycles on the reset path each hand over [`RECORDS_PER_CYCLE`] records.
 /// A queue of 64, the old depth, refuses that burst while the writer is
 /// stalled on the first record. The queue the gateway builds holds every
-/// cycle that can run at once plus one owner record, and keeps them.
+/// cycle that can run at once plus the owner headroom, and keeps them.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_queue_of_64_refuses_two_full_cycles_and_the_sized_queue_keeps_every_cycle_and_an_owner_record(
 ) {

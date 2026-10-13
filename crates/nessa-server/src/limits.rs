@@ -432,7 +432,7 @@ fn catalogue() -> &'static [Limit] {
             id: "peer.audit_queue",
             tier: "fixed",
             owner: "AUDIT_QUEUE in crates/nessa-server/src/peer_gateways/infrastructure/audit.rs",
-            meaning: "the most peer audit records waiting to be written, one at a time in the order they were handed over; sized for every read running at once plus one owner command's record, and a further owner command waits for that place inside its 5 s audit deadline; a record past it is refused at once, its sequence left as a gap, so peer.enroll, peer.forget or peer.relay answers peer_audit_unavailable before any effect and a peer read's change stands with its record logged as not kept",
+            meaning: "the most peer audit records waiting to be written, one at a time in the order they were handed over; sized for every read running at once plus two owner records, and a further owner command waits for a place inside its 5 s audit deadline; a record past it is refused at once, its sequence left as a gap, so peer.enroll, peer.forget or peer.relay answers peer_audit_unavailable before any effect and a peer read's change stands with its record logged as not kept",
         },
         Limit {
             id: "peer.reads_at_once",

@@ -63,11 +63,11 @@ use tokio::sync::{oneshot, watch};
 use uuid::Uuid;
 
 /// How many owner-command records may be handed to the queue at once.
-/// The peer commands admit this many; the rest wait, inside the command's
-/// own audit deadline. One is enough for the record behind every poller
-/// cycle, because a command's outcome is handed over only after its intent
-/// has been written.
-pub const AUDIT_HEADROOM: usize = 1;
+/// Enroll and forget both hand an intent over before either is written, so
+/// two fit behind the poller cycles. The peer commands admit this many; a
+/// further command waits, inside its own audit deadline. A command's
+/// outcome is handed over only after its intent has been written.
+pub const AUDIT_HEADROOM: usize = 2;
 /// The most records waiting to be written. Every read running at once may
 /// hand its cycle's records over before the writer drains them, and the
 /// owner headroom ([`AUDIT_HEADROOM`]) still fits behind that; the poller
@@ -75,7 +75,7 @@ pub const AUDIT_HEADROOM: usize = 1;
 /// command's record can wait behind this many: at about 20 ms a synced
 /// write, about 2.8 s, inside the command's own [`super::AUDIT_DEADLINE`]
 /// (5 s).
-pub const AUDIT_QUEUE: usize = 141;
+pub const AUDIT_QUEUE: usize = 142;
 
 /// Called by the writer with each record's sequence before it writes it; a
 /// test stalls the store with it.

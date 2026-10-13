@@ -107,7 +107,7 @@ pub const WITHDRAWN_PER_READ: usize = 16 * WITHDRAWN_PER_RECORD;
 /// and the two reads around it.
 const RECORDS_PER_CYCLE: usize = 3 + 2 * WITHDRAWN_PER_READ.div_ceil(WITHDRAWN_PER_RECORD);
 /// The queue holds every cycle that can be enqueueing plus
-/// [`AUDIT_HEADROOM`] owner record. A full queue still refuses at once
+/// [`AUDIT_HEADROOM`] owner records. A full queue still refuses at once
 /// (design row R22).
 const _: () = assert!(READS_AT_ONCE * RECORDS_PER_CYCLE + AUDIT_HEADROOM <= AUDIT_QUEUE);
 /// How this gateway names itself to a peer's product session.

@@ -215,9 +215,11 @@ async fn a_peer_turn_is_dropped_when_its_wait_ends_after_the_cycle() {
     );
 }
 
-/// The queue holds one owner record behind every poller cycle. A second
-/// command waits for that place while the writer is stalled, and is kept
-/// once the writer goes on, rather than being refused at once.
+/// The queue holds [`AUDIT_HEADROOM`] owner records behind every poller
+/// cycle, so an enroll and a forget can both hand an intent over before
+/// either is written. One more command waits for a place while the writer
+/// is stalled, and is kept once the writer goes on, rather than being
+/// refused at once.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_second_owner_record_waits_for_the_headroom() {
     let root = tempfile::tempdir().unwrap();
@@ -252,24 +254,34 @@ async fn a_second_owner_record_waits_for_the_headroom() {
     for _ in 0..(AUDIT_QUEUE - AUDIT_HEADROOM) {
         drop(audit.record(owner_intent()));
     }
-    let first = tokio::spawn({
+    let mut held = Vec::new();
+    for _ in 0..AUDIT_HEADROOM {
         let commands = commands.clone();
-        async move { commands.keep(owner_intent()).await }
-    });
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    let second = tokio::spawn({
+        held.push(tokio::spawn(
+            async move { commands.keep(owner_intent()).await },
+        ));
+    }
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let extra = tokio::spawn({
         let commands = commands.clone();
         async move { commands.keep(owner_intent()).await }
     });
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert!(
-        !second.is_finished(),
-        "the second owner record was refused while one already filled the headroom"
+        !extra.is_finished(),
+        "an owner record past the headroom was refused while the writer was stalled"
     );
     drop(release);
-    let (first, second) = tokio::join!(first, second);
-    assert!(first.unwrap(), "the first owner record was not kept");
-    assert!(second.unwrap(), "the second owner record was not kept");
+    for (index, kept) in held.into_iter().enumerate() {
+        assert!(
+            kept.await.unwrap(),
+            "owner record {index} inside the headroom was not kept"
+        );
+    }
+    assert!(
+        extra.await.unwrap(),
+        "the owner record past the headroom was not kept"
+    );
 }
 
 fn owner_intent() -> PeerAuditRecord {

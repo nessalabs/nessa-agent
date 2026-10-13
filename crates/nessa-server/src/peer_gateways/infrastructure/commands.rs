@@ -194,9 +194,10 @@ pub struct PeerCommands {
     /// does not hold it.
     record_set: Arc<Semaphore>,
     /// How many owner records may be handed to the audit at once: the
-    /// queue's headroom behind every poller cycle. A command waits for a
-    /// place inside its audit deadline, rather than being refused while the
-    /// cycles' records are still queued.
+    /// queue's headroom behind every poller cycle. Enroll and forget both
+    /// hand an intent over before either is written. A further command waits
+    /// for a place inside its audit deadline, rather than being refused
+    /// while the cycles' records are still queued.
     audit_room: Arc<Semaphore>,
     /// One turn per peer. The cycle reading that peer, or the owner command
     /// that names it, holds the permit. The cycle is registered under this
@@ -700,10 +701,9 @@ impl PeerCommands {
         }
     }
     /// Hand `record` to the audit, and whether it was kept within
-    /// [`AUDIT_DEADLINE`]. One owner record is handed over at a time, the
-    /// queue's headroom, so a second command waits for that place inside
-    /// the same deadline instead of being refused while poller cycles still
-    /// fill the queue
+    /// [`AUDIT_DEADLINE`]. At most the queue's headroom are handed over at
+    /// once, so a further command waits for a place inside the same deadline
+    /// instead of being refused while poller cycles still fill the queue
     /// (`a_second_owner_record_waits_for_the_headroom`). A record
     /// still on its way when the deadline passes counts as not kept.
     async fn keep(&self, record: PeerAuditRecord) -> bool {
