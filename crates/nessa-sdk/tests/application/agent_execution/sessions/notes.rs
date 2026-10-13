@@ -93,6 +93,9 @@ fn a_new_note_takes_a_fresh_id_and_the_time_it_was_accepted() {
     assert_eq!(saved.note("person", "comment"), Some(&second));
     assert_eq!(saved.note("someone", "note"), None);
     assert_eq!(saved.note("person", "other"), None);
+    // A clock past what a receipt can state holds at the latest it can.
+    let late = accept(&mut saved, request("late", "late"), u64::MAX);
+    assert_eq!(late.accepted_at_ms, NoteRecord::MAX_ACCEPTED_AT_MS);
 }
 
 /// Row J18: the same request again is answered by its record, unchanged;
@@ -220,6 +223,7 @@ fn a_saved_snapshot_keeps_one_note_per_id_and_request_within_its_bound() {
         (0..=NoteRecord::MAX_PER_CONVERSATION)
             .map(|index| record(&format!("id-{index}"), &format!("note-{index}"), 0))
             .collect(),
+        vec![record("a", "one", NoteRecord::MAX_ACCEPTED_AT_MS + 1)],
     ] {
         saved.notes = notes;
         assert!(matches!(
@@ -279,6 +283,18 @@ fn a_note_before_the_conversation_opened_or_past_its_bound_is_corrupt() {
         .collect();
     assert!(matches!(
         admit_saved(&full, &record("new", "new", 0)),
+        Err(StorageError::Corrupt(_))
+    ));
+    let empty = snapshot(Vec::new());
+    assert_eq!(
+        admit_saved(&empty, &record("a", "one", NoteRecord::MAX_ACCEPTED_AT_MS)),
+        Ok(())
+    );
+    assert!(matches!(
+        admit_saved(
+            &empty,
+            &record("a", "one", NoteRecord::MAX_ACCEPTED_AT_MS + 1)
+        ),
         Err(StorageError::Corrupt(_))
     ));
 }

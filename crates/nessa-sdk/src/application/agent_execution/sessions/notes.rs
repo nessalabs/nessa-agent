@@ -153,6 +153,10 @@ impl NoteRecord {
     pub const MAX_PER_AUTHOR_IN_WINDOW: usize = 20;
     /// The window [`Self::MAX_PER_AUTHOR_IN_WINDOW`] counts over.
     pub const RATE_WINDOW_MS: u64 = 60_000;
+    /// Latest accepted time a note may carry: the largest integer a JSON
+    /// number holds exactly, so a receipt reads back unchanged on every
+    /// client.
+    pub const MAX_ACCEPTED_AT_MS: u64 = (1 << 53) - 1;
 
     /// Where the note stands.
     pub fn state(&self) -> NoteState {
@@ -258,6 +262,8 @@ pub(super) fn admit(
     if recent >= NoteRecord::MAX_PER_AUTHOR_IN_WINDOW {
         return Err(NoteRefusal::RateLimited);
     }
+    // A clock past the latest time a receipt can state holds there.
+    let now_ms = now_ms.min(NoteRecord::MAX_ACCEPTED_AT_MS);
     Ok(NoteAdmission::New(NoteRecord {
         id: NoteId::mint(),
         text: request.text,
@@ -278,6 +284,11 @@ pub(super) fn admit_saved(
     if snapshot.notes.len() >= NoteRecord::MAX_PER_CONVERSATION {
         return Err(corrupt("the conversation keeps more notes than it may"));
     }
+    if record.accepted_at_ms > NoteRecord::MAX_ACCEPTED_AT_MS {
+        return Err(corrupt(
+            "a note was accepted later than a receipt can state",
+        ));
+    }
     let repeated = snapshot.notes.iter().any(|note| {
         note.id == record.id || note.answers(record.actor.principal_id(), record.actor.request_id())
     });
@@ -296,6 +307,11 @@ pub(super) fn validate_saved(snapshot: &SessionSnapshot) -> Result<(), StorageEr
     let mut ids = HashSet::new();
     let mut requests = HashSet::new();
     for note in &snapshot.notes {
+        if note.accepted_at_ms > NoteRecord::MAX_ACCEPTED_AT_MS {
+            return Err(corrupt(
+                "a note was accepted later than a receipt can state",
+            ));
+        }
         if !ids.insert(note.id.as_str())
             || !requests.insert((note.actor.principal_id(), note.actor.request_id()))
         {

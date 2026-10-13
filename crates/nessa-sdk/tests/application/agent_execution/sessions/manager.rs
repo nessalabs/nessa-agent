@@ -1746,6 +1746,22 @@ mod note_records {
         assert_eq!(saved.note("person", "note"), Some(&record));
     }
 
+    /// A note that waited for the session lock is dated when it is admitted,
+    /// not when it asked: a note dated earlier could leave the rate window at
+    /// once and let its author past the rate.
+    #[tokio::test]
+    async fn a_note_that_waited_for_the_lock_is_dated_when_it_is_admitted() {
+        let (manager, _, clock) = at(5_000).await;
+        let held = manager.evidence.lock().await;
+        let release = async move {
+            tokio::task::yield_now().await;
+            *clock.0.lock().unwrap() = std::time::Duration::from_millis(70_000);
+            drop(held);
+        };
+        let (record, ()) = tokio::join!(manager.record_note(request("note", "x")), release);
+        assert_eq!(record.unwrap().accepted_at_ms, 70_000);
+    }
+
     /// Row J18: the same request again is answered by its first record, even
     /// at a later time, and writes nothing; another under the same request is
     /// a conflict that retains nothing.

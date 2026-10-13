@@ -1301,8 +1301,11 @@ impl SessionManager {
     ///
     /// [`Agent::prepare`]: crate::application::agent_execution::agents::Agent::prepare
     pub async fn record_note(&self, request: NoteRequest) -> Result<NoteRecord, NoteRecordError> {
-        let now = self.message_commit_clock.unix_milliseconds();
         let mut evidence = self.evidence.lock().await;
+        // Read under the lock: a note that waited for it is accepted when it
+        // is admitted, never dated before, which would let it fall out of the
+        // rate window at once.
+        let now = self.message_commit_clock.unix_milliseconds();
         let snapshot = evidence
             .observed
             .as_mut()
