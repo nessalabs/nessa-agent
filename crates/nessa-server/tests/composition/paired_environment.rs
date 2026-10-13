@@ -1010,14 +1010,16 @@ async fn a_pending_pin_that_is_not_a_key_ends_waiting_through_a_relay() {
     let (_running, running) = watch::channel(false);
     let ended = tokio::time::timeout(
         WAIT,
-        approval(&pairing, Duration::from_millis(20), &TokioTimer::new(), running),
+        approval(
+            &pairing,
+            Duration::from_millis(20),
+            &TokioTimer::new(),
+            running,
+        ),
     )
     .await
     .expect("told at once, not asked again");
-    assert!(
-        matches!(ended, Err(NotApproved::Unusable(_))),
-        "{ended:?}"
-    );
+    assert!(matches!(ended, Err(NotApproved::Unusable(_))), "{ended:?}");
     pairing.shutdown().await;
 }
 
