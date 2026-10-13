@@ -421,7 +421,7 @@ impl Poller {
         // The same connect as an enrollment's: the injected connector, bounded
         // by the injected deadline clock. Its own error is kept.
         let stream = tokio::select! {
-            connected = self.commands.dial(record.address()) => match connected {
+            connected = self.commands.dial_peer(record) => match connected {
                 Ok(stream) => stream,
                 Err(error) => return AskedStatus::dial_failed(error),
             },
@@ -483,7 +483,11 @@ impl Poller {
     ) -> Option<Result<ReadReport, ReadFailure>> {
         let key = *record.key();
         let records = self.commands.records().clone();
-        let (address, receiver) = (record.address(), receiver.to_owned());
+        let (address, relay, receiver) = (
+            record.address(),
+            record.relay().cloned(),
+            receiver.to_owned(),
+        );
         let (wall, clock, stop, budget) = (
             self.inputs.wall.clone(),
             self.commands.clock.clone(),
@@ -504,7 +508,7 @@ impl Poller {
                 ReaderAccess {
                     role: ReaderRole::GrantedPeer,
                     address,
-                    relay: None,
+                    relay: relay.as_ref(),
                     identity: &identity,
                     pin,
                     credential: &id,

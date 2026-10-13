@@ -1158,6 +1158,7 @@ fn turn_record(turn: usize) -> (InvocationRecord, String, String) {
         },
         actor: ActionContext::new("bench", "bench", format!("turn-{turn}")).unwrap(),
         initiation: Initiation::owner(),
+        notes: Vec::new(),
         acknowledgement: SubmissionAcknowledgement::Pending,
         events: vec![
             ExecutionEvent::new(

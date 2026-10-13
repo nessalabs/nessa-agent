@@ -151,7 +151,12 @@ fn namespace_with_registry() -> (tempfile::TempDir, std::path::PathBuf, LocalCre
     let directory = tempfile::tempdir().unwrap();
     let namespace = directory.path().join("namespace");
     nessa_local_storage::create_directory(&namespace.join("auth")).unwrap();
-    let store = LocalCredentialStore::open(namespace.join("auth"), "credentials.json").unwrap();
+    let store = LocalCredentialStore::open(
+        namespace.join("auth"),
+        "credentials.json",
+        std::sync::Arc::new(nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap()),
+    )
+    .unwrap();
     store
         .bootstrap(BootstrapRequest {
             gateway_id: "gateway".into(),
@@ -261,7 +266,12 @@ fn a_failed_pending_pairings_read_is_authentication_and_creates_no_journal() {
     let directory = tempfile::tempdir().unwrap();
     let namespace = directory.path().join("namespace");
     nessa_local_storage::create_directory(&namespace.join("auth")).unwrap();
-    let store = LocalCredentialStore::open(namespace.join("auth"), "credentials.json").unwrap();
+    let store = LocalCredentialStore::open(
+        namespace.join("auth"),
+        "credentials.json",
+        std::sync::Arc::new(nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap()),
+    )
+    .unwrap();
     assert!(!store.is_initialized());
     let Err(error) = receiver_access(&namespace, &store, "policy") else {
         panic!("a journal was opened without a pairing read");

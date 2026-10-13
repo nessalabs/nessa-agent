@@ -154,6 +154,7 @@ mod retries;
 mod service;
 mod session_key;
 mod share_grants;
+mod tool_policy;
 pub use crate::conversation::domain::ReceiverBinding;
 pub use catalogue::{
     CatalogueDescriptor, CatalogueHead, CatalogueKey, CataloguePage, CataloguePageRequest,
@@ -242,10 +243,11 @@ pub use service::{
 };
 pub(crate) use session_key::conversation_session;
 pub use share_grants::{
-    admit_read, admit_role, binding_of, reader_of, HeldGrant, Reader, RoleRefusal,
+    admit_read, admit_role, binding_of, note_candidates, reader_of, HeldGrant, Reader, RoleRefusal,
     ShareConversation, ShareGrant, ShareGrantChange, ShareGrantTransition, ShareGrants,
     MAX_DRIVE_GRANTS_PER_CONVERSATION, MAX_SHARE_GRANTS_PER_CONVERSATION,
 };
+pub use tool_policy::{ToolDecision, ToolInitiator, ToolPolicyEvaluator, ToolPolicyUnavailable};
 
 #[cfg(test)]
 #[path = "../../../tests/conversation/application.rs"]

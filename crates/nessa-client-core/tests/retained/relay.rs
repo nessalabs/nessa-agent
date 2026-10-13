@@ -151,7 +151,7 @@ fn scripted_relay(
 ) -> (RelayRoute, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let route = RelayRoute {
-        address: listener.local_addr().unwrap().to_string(),
+        address: RelayAddress::try_from(listener.local_addr().unwrap().to_string()).unwrap(),
         key: [9; 32],
     };
     let serving = thread::spawn(move || {
@@ -206,7 +206,7 @@ fn a_relay_answering_a_gateways_frame_is_refused_as_invalid() {
 fn a_silent_relay_ends_the_leg_at_its_budget() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let route = RelayRoute {
-        address: listener.local_addr().unwrap().to_string(),
+        address: RelayAddress::try_from(listener.local_addr().unwrap().to_string()).unwrap(),
         key: [9; 32],
     };
     let started = Instant::now();

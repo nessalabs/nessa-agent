@@ -225,10 +225,12 @@ describe("run-all's sum", () => {
     assert.deepEqual(devServerOnlyChecks, [
       "panel-list-follow",
       "mode-publication",
+      "local-tab-lifetimes",
       "lease-details",
       "app-review",
       "gateway-states",
       "published-files",
+      "transcript-notes",
       "mcp-apps",
       "approval-deadline",
     ])

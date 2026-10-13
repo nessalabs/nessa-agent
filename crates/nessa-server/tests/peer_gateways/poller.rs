@@ -300,11 +300,17 @@ async fn stop_during_status(pairing: NativePairingStatus, stop_via_poller: bool)
 fn a_stopped_status_records_its_cause_and_does_not_read() {
     let address = "127.0.0.1:9".parse().unwrap();
     let before = PeerHolding {
-        record: PeerState::Pending { address },
+        record: PeerState::Pending {
+            address,
+            relay: None,
+        },
         cache: CacheState::Absent,
     };
     let after = PeerHolding {
-        record: PeerState::Revoked { address },
+        record: PeerState::Revoked {
+            address,
+            relay: None,
+        },
         cache: CacheState::Absent,
     };
     let recorded = status_record(

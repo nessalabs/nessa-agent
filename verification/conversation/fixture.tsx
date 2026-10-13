@@ -1,3 +1,4 @@
+import { conversationView as panelView } from "../../src/conversation/adapters/gateway/effects"
 import type { ConversationView as PublishedConversationView } from "@nessa/client"
 /** Browser inputs are published gateway views; authority is tested in the server projection. */
 import { configureStore } from "@reduxjs/toolkit"
@@ -45,10 +46,13 @@ const states: ConversationTranscriptState[] = [
   "complete_empty",
   "complete",
 ]
-function view(
+function decodePanelView(value: unknown, id: string): ConversationView {
+  return panelView(decodeView(value, id), 1_700_000_000_000)
+}
+function publishedView(
   state: ConversationTranscriptState,
   liveAuthority: boolean,
-): ConversationView {
+): PublishedConversationView {
   const actionable = state === "complete" && liveAuthority
   return decodeView(
     {
@@ -78,6 +82,7 @@ function view(
           : [],
       pending: [],
       artifacts: [],
+      notes: [],
       questions: [],
       tools: [],
       permissions: actionable
@@ -120,10 +125,16 @@ function view(
     "committed-conversation",
   )
 }
-function questionView(limited: boolean): ConversationView {
+function view(
+  state: ConversationTranscriptState,
+  liveAuthority: boolean,
+): ConversationView {
+  return panelView(publishedView(state, liveAuthority), 1_700_000_000_000)
+}
+function publishedQuestionView(limited: boolean): PublishedConversationView {
   return decodeView(
     {
-      ...view("complete", true),
+      ...publishedView("complete", true),
       revision: `questions:${limited}`,
       truncated: limited,
       interactionViewError: limited
@@ -149,6 +160,9 @@ function questionView(limited: boolean): ConversationView {
     "committed-conversation",
   )
 }
+function questionView(limited: boolean): ConversationView {
+  return panelView(publishedQuestionView(limited), 1_700_000_000_000)
+}
 /** Actual read projection, saved selection and close thunk; the remote port records dispatch. */
 function HistoryTabConsumer() {
   const [result, setResult] = useState<{
@@ -167,9 +181,9 @@ function HistoryTabConsumer() {
     const effects = {
       ...scenarioEffects("echo"),
       follow: followByReading(async (id: string) =>
-        decodeView(
+        decodePanelView(
           {
-            ...view(state, false),
+            ...publishedView(state, false),
             conversationId: id,
             messages: [],
             permissions: [],
@@ -261,7 +275,7 @@ function QuestionTargetConsumer() {
       ...scenarioEffects("echo"),
       create: async (conversationId: string) => ({ conversationId }),
       follow: followByReading(async (id: string) =>
-        decodeView({ ...questionView(false), conversationId: id }, id),
+        decodePanelView({ ...publishedQuestionView(false), conversationId: id }, id),
       ),
       answerQuestion: async (...args: Parameters<typeof client.answerQuestion>) => {
         await client.answerQuestion(...args)

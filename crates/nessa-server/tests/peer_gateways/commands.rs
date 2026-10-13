@@ -3,11 +3,13 @@
 //! the commands for shutdown leaves no effect without its outcome.
 use super::*;
 use crate::peer_gateways::application::{PeerAuditFuture, PeerConnectFuture};
-use nessa_auth::application::pairing::{GatewayKeyStore, PrivateKeyMaterial};
+use nessa_auth::application::pairing::{ClientPendingStore, GatewayKeyStore, PrivateKeyMaterial};
 use nessa_auth::application::ports::Clock as WallClock;
 use nessa_auth::domain::AudienceId;
+use nessa_protocol::pairing::socket::WAKE_TICK;
+use nessa_protocol::relay::{GatewayKey, DIRECT_HEAD_START};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::sync::watch;
 
 struct NoKey;
@@ -48,6 +50,13 @@ impl PeerAudit for Nothing {
 }
 impl PeerConnector for Nothing {
     fn connect(&self, _: SocketAddr) -> PeerConnectFuture<'_> {
+        Box::pin(async { Err(io::ErrorKind::ConnectionRefused.into()) })
+    }
+    fn relay<'a>(
+        &'a self,
+        _: &'a nessa_protocol::relay::RelayAddress,
+        _: nessa_protocol::relay::GatewayKey,
+    ) -> PeerConnectFuture<'a> {
         Box::pin(async { Err(io::ErrorKind::ConnectionRefused.into()) })
     }
 }
@@ -142,6 +151,13 @@ impl PeerConnector for Dials {
         self.0.fetch_add(1, Ordering::SeqCst);
         Box::pin(async { Err(io::ErrorKind::ConnectionRefused.into()) })
     }
+    fn relay<'a>(
+        &'a self,
+        _: &'a nessa_protocol::relay::RelayAddress,
+        _: nessa_protocol::relay::GatewayKey,
+    ) -> PeerConnectFuture<'a> {
+        Box::pin(async { Err(io::ErrorKind::ConnectionRefused.into()) })
+    }
 }
 
 /// MAJOR 1 of the shutdown review: an enroll and a forget whose intents were
@@ -169,7 +185,7 @@ async fn a_command_admitted_before_shutdown_ends_with_its_outcome_and_no_effect(
         async move {
             let code = nessa_auth::adapters::pairing::ManualCode::parse(b"ABCD-2345").unwrap();
             commands
-                .enroll("127.0.0.1:9".parse().unwrap(), code, &owner)
+                .enroll("127.0.0.1:9".parse().unwrap(), None, code, &owner)
                 .await
         }
     });
@@ -242,7 +258,7 @@ async fn a_command_asked_after_close_is_refused_before_its_intent() {
     let code = nessa_auth::adapters::pairing::ManualCode::parse(b"ABCD-2345").unwrap();
     assert_eq!(
         commands
-            .enroll("127.0.0.1:9".parse().unwrap(), code, &owner)
+            .enroll("127.0.0.1:9".parse().unwrap(), None, code, &owner)
             .await
             .err(),
         Some(PeerError::Unavailable)
@@ -264,6 +280,13 @@ impl PeerConnector for HeldDial {
             let _ = open.wait_for(|open| *open).await;
             Err(io::ErrorKind::ConnectionRefused.into())
         })
+    }
+    fn relay<'a>(
+        &'a self,
+        _: &'a nessa_protocol::relay::RelayAddress,
+        _: nessa_protocol::relay::GatewayKey,
+    ) -> PeerConnectFuture<'a> {
+        Box::pin(async { Err(io::ErrorKind::ConnectionRefused.into()) })
     }
 }
 
@@ -289,6 +312,7 @@ async fn close_waits_for_a_command_holding_the_turn_and_keeps_its_outcome() {
             commands
                 .enroll(
                     "127.0.0.1:9".parse().unwrap(),
+                    None,
                     code,
                     &PrincipalId::new("owner").unwrap(),
                 )
@@ -333,4 +357,214 @@ async fn close_waits_for_a_command_holding_the_turn_and_keeps_its_outcome() {
         "kept before close returned"
     );
     assert_eq!(enroll.await.unwrap().err(), Some(PeerError::Unreachable));
+}
+
+/// A gateway key store holding one fixed seed.
+struct Seed([u8; 32]);
+impl GatewayKeyStore for Seed {
+    fn restore_gateway_key(
+        &self,
+        _: &AudienceId,
+        _: &dyn WallClock,
+    ) -> Result<Option<PrivateKeyMaterial>, PrivateStateError> {
+        Ok(Some(PrivateKeyMaterial::new(zeroize::Zeroizing::new(
+            self.0,
+        ))))
+    }
+    fn save_gateway_key(
+        &self,
+        _: &PrivateKeyMaterial,
+        _: &AudienceId,
+        _: &dyn WallClock,
+    ) -> Result<(), PrivateStateError> {
+        Err(PrivateStateError::Unavailable)
+    }
+}
+
+/// What a [`ThroughRelay`] direct connect does.
+#[derive(Clone, Copy, PartialEq)]
+enum Direct {
+    Connects,
+    Refuses,
+    NeverAnswers,
+}
+
+/// A connector whose address does what `direct` says, and whose relay
+/// answers a stream of its own; either is a stream to `listener`. It notes
+/// each relay and key it was asked for.
+struct ThroughRelay {
+    direct: Direct,
+    asked: Mutex<Vec<(String, GatewayKey)>>,
+    listener: std::net::TcpListener,
+}
+impl ThroughRelay {
+    fn new(direct: Direct) -> Arc<Self> {
+        Arc::new(Self {
+            direct,
+            asked: Mutex::new(Vec::new()),
+            listener: std::net::TcpListener::bind("127.0.0.1:0").unwrap(),
+        })
+    }
+    fn asked(&self) -> Vec<(String, GatewayKey)> {
+        self.asked.lock().unwrap().clone()
+    }
+}
+impl PeerConnector for ThroughRelay {
+    fn connect(&self, _: SocketAddr) -> PeerConnectFuture<'_> {
+        let stream = match self.direct {
+            Direct::Connects => TcpStream::connect(self.listener.local_addr().unwrap()),
+            Direct::Refuses => Err(io::ErrorKind::ConnectionRefused.into()),
+            Direct::NeverAnswers => return Box::pin(std::future::pending()),
+        };
+        Box::pin(async move { stream })
+    }
+    fn relay<'a>(&'a self, relay: &'a RelayAddress, key: GatewayKey) -> PeerConnectFuture<'a> {
+        self.asked
+            .lock()
+            .unwrap()
+            .push((relay.as_str().to_owned(), key));
+        let stream = TcpStream::connect(self.listener.local_addr().unwrap());
+        Box::pin(async move { stream })
+    }
+}
+
+/// A readable record for a peer reached at `relay.example:443` as well as
+/// its address, the records holding it, and the key a relay is asked for.
+fn relayed_record() -> (tempfile::TempDir, Arc<PeerRecords>, PeerRecord, GatewayKey) {
+    use nessa_auth::adapters::pairing::{NativeIdentity, OsEntropy};
+    use nessa_auth::domain::pairing::{
+        AttemptId, ConsentClass, ConsentIntentId, InvitationId, PublicIntent,
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("root");
+    nessa_local_storage::create_directory(&root).unwrap();
+    nessa_local_storage::create_directory_beneath(&root, Path::new("peers")).unwrap();
+    let seed = [9; 32];
+    let records = Arc::new(
+        PeerRecords::open(
+            &root,
+            Path::new("peers"),
+            Arc::new(Seed(seed)),
+            AudienceId::new("gateway").unwrap(),
+            Arc::new(Wall),
+        )
+        .unwrap(),
+    );
+    let peer = NativeIdentity::generate(&mut OsEntropy).unwrap();
+    let pin = peer.public_spki();
+    let relay = RelayAddress::try_from("relay.example:443".to_owned()).unwrap();
+    let intent = PublicIntent::new(
+        InvitationId::new([1; InvitationId::LENGTH]),
+        AttemptId::new([2; AttemptId::LENGTH]),
+        ConsentIntentId::new([3; ConsentIntentId::LENGTH]),
+        1,
+        600_000,
+        ConsentClass::PeerRead,
+    )
+    .unwrap();
+    records
+        .enrolling("127.0.0.1:7443".parse().unwrap(), Some(relay))
+        .save_pending(
+            &PrivateKeyMaterial::new(zeroize::Zeroizing::new(seed)),
+            &pin,
+            intent,
+            None,
+        )
+        .unwrap();
+    let Ok([PeerEntry::Readable(record)]) = <[PeerEntry; 1]>::try_from(records.list().unwrap())
+    else {
+        panic!("one readable record");
+    };
+    let key: GatewayKey = pin[12..].try_into().unwrap();
+    (directory, records, *record, key)
+}
+
+fn relay_commands(
+    records: &Arc<PeerRecords>,
+    clock: Arc<dyn MonotonicClock>,
+    connector: Arc<ThroughRelay>,
+) -> PeerCommands {
+    PeerCommands::new(
+        records.clone(),
+        clock,
+        Arc::new(Nothing),
+        connector,
+        Arc::new(|| {
+            Box::new(nessa_auth::adapters::pairing::OsEntropy) as Box<dyn EnrollmentEntropy>
+        }),
+    )
+}
+
+/// A peer's status dial takes its relay leg from the injected connector, as
+/// it does its direct one, and asks it for the peer's pinned key; a direct
+/// connection that comes first never asks it at all.
+#[tokio::test]
+async fn a_status_dial_asks_the_injected_connector_for_the_peers_relay() {
+    let (_directory, records, record, key) = relayed_record();
+    for direct in [Direct::Refuses, Direct::Connects] {
+        let connector = ThroughRelay::new(direct);
+        let commands = relay_commands(&records, Arc::new(Still), connector.clone());
+        let stream = commands.dial_peer(&record).await.unwrap();
+        assert_eq!(
+            stream.peer_addr().unwrap(),
+            connector.listener.local_addr().unwrap()
+        );
+        if direct == Direct::Connects {
+            assert!(
+                connector.asked().is_empty(),
+                "a direct winner never asks the relay"
+            );
+        } else {
+            assert_eq!(
+                connector.asked(),
+                vec![("relay.example:443".to_owned(), key)]
+            );
+        }
+    }
+}
+
+/// A monotonic clock the test moves.
+struct Moved(AtomicU64);
+impl MonotonicClock for Moved {
+    fn elapsed_ms(&self) -> u64 {
+        self.0.load(Ordering::SeqCst)
+    }
+}
+
+/// The direct connect's head start is timed by the injected clock, as the
+/// connect deadline is: moving it past the head start starts the relay leg
+/// at once, and while it stands still the relay is never asked, however
+/// long the direct connect takes on the runtime's own clock.
+#[tokio::test]
+async fn the_relay_leg_starts_when_the_injected_clock_passes_the_head_start() {
+    let (_directory, records, record, key) = relayed_record();
+    let connector = ThroughRelay::new(Direct::NeverAnswers);
+    let still = relay_commands(&records, Arc::new(Still), connector.clone());
+    let waited = tokio::time::timeout(2 * DIRECT_HEAD_START, still.dial_peer(&record)).await;
+    assert!(waited.is_err(), "the direct connect still waits");
+    assert!(
+        connector.asked().is_empty(),
+        "the head start has not passed"
+    );
+
+    let clock = Arc::new(Moved(AtomicU64::new(0)));
+    let moved = relay_commands(&records, clock.clone(), connector.clone());
+    let head_start = u64::try_from(DIRECT_HEAD_START.as_millis()).unwrap();
+    let dialed = tokio::time::timeout(DIRECT_HEAD_START / 2, async {
+        tokio::join!(moved.dial_peer(&record), async {
+            tokio::time::sleep(WAKE_TICK).await;
+            clock.0.store(head_start, Ordering::SeqCst);
+        })
+        .0
+    })
+    .await
+    .expect("started by the injected clock, not the runtime's");
+    assert_eq!(
+        dialed.unwrap().peer_addr().unwrap(),
+        connector.listener.local_addr().unwrap()
+    );
+    assert_eq!(
+        connector.asked(),
+        vec![("relay.example:443".to_owned(), key)]
+    );
 }

@@ -40,6 +40,7 @@ const functional = [
   "safe-area",
   "columns",
   "committed-transcript",
+  "local-tab-lifetimes",
   "lease-details",
   "load-fallback",
   "gateway-states",
@@ -56,6 +57,7 @@ const functional = [
   "message-sync",
   "command-order",
   "published-files",
+  "transcript-notes",
 ]
 
 const options = cli({
