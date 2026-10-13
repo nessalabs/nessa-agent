@@ -4,8 +4,8 @@
 //! to Cedar expressions. Only `into_cedar` methods know Cedar's attribute keys.
 
 use crate::{
-    application::ports::{AccessError, AccessSnapshot},
-    domain::{Grant, MembershipRole, OrganizationId, Resource},
+    application::ports::{AccessError, AccessSnapshot, IssuePath},
+    domain::{Grant, MembershipRole, OrganizationId, PrincipalKind, Resource},
 };
 use cedar_policy::RestrictedExpression;
 use std::collections::HashMap;
@@ -34,10 +34,7 @@ impl<'a> From<&'a AccessSnapshot> for ActorAttributes<'a> {
 impl ActorAttributes<'_> {
     /// Encode exactly the fields and value types declared for Actor in schema.json.
     pub(super) fn into_cedar(self) -> Result<HashMap<String, RestrictedExpression>, AccessError> {
-        let role = match self.role {
-            MembershipRole::Admin => "admin",
-            MembershipRole::Member => "member",
-        };
+        let role = role(self.role);
         let grants = self
             .grants
             .iter()
@@ -104,5 +101,34 @@ impl ResourceAttributes<'_> {
                 ),
             ),
         ])
+    }
+}
+
+/// A membership role as the policies spell it.
+pub(super) fn role(role: MembershipRole) -> &'static str {
+    match role {
+        MembershipRole::Admin => "admin",
+        MembershipRole::Member => "member",
+    }
+}
+
+/// A principal kind as the policies spell it.
+pub(super) fn kind(kind: PrincipalKind) -> &'static str {
+    match kind {
+        PrincipalKind::Human => "human",
+        PrincipalKind::Agent => "agent",
+        PrincipalKind::Integration => "integration",
+        PrincipalKind::Gateway => "gateway",
+    }
+}
+
+/// An issuing path as the policies spell it in `context.path`.
+pub(super) fn path(path: IssuePath) -> &'static str {
+    match path {
+        IssuePath::Bootstrap => "bootstrap",
+        IssuePath::ProductIssue => "product",
+        IssuePath::SurfaceProvision => "provision",
+        IssuePath::OwnerRecovery => "recovery",
+        IssuePath::StoredOnLoad => "stored",
     }
 }

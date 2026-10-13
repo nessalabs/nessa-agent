@@ -1,4 +1,5 @@
 use super::*;
+use crate::application::ports::IssuePath;
 use crate::domain::{
     AudienceId, Credential, CredentialId, Grant, Membership, MembershipId, MembershipRole,
     MembershipStatus, OrganizationId, PrincipalId, PrincipalKind, ResourceId,
@@ -100,19 +101,38 @@ fn malformed_or_invalid_policy_is_rejected() {
     assert!(CedarPolicyEvaluator::from_sources(SCHEMA, "permit(").is_err());
     assert!(CedarPolicyEvaluator::from_sources(
         SCHEMA,
-        r#"permit(principal, action == Nessa::Action::"unknown", resource);"#,
+        r#"@id("unknown") permit(principal, action == Nessa::Action::"unknown", resource);"#,
     )
     .is_err());
+}
+
+/// Every decision names the policies that made it, so a policy without an
+/// `@id`, or with an empty one, refuses the whole bundle.
+#[test]
+fn a_policy_without_an_id_is_rejected() {
+    let permit = r#"permit(
+            principal is Nessa::Actor,
+            action == Nessa::Action::"server.read",
+            resource is Nessa::Resource
+        );"#;
+    assert!(
+        CedarPolicyEvaluator::from_sources(SCHEMA, &format!(r#"@id("read") {permit}"#)).is_ok()
+    );
+    assert!(CedarPolicyEvaluator::from_sources(SCHEMA, permit).is_err());
+    assert!(CedarPolicyEvaluator::from_sources(SCHEMA, &format!(r#"@id("") {permit}"#)).is_err());
+    assert!(CedarPolicyEvaluator::from_sources(SCHEMA, &format!("{POLICIES}\n{permit}")).is_err());
 }
 
 #[test]
 fn evaluation_diagnostics_fail_closed_even_when_another_policy_permits() {
     let policies = r#"
+        @id("read")
         permit(
             principal is Nessa::Actor,
             action == Nessa::Action::"server.read",
             resource is Nessa::Resource
         );
+        @id("overflow")
         permit(
             principal is Nessa::Actor,
             action == Nessa::Action::"server.read",
@@ -146,7 +166,9 @@ fn gateway_grant(action: &str) -> Grant {
 #[test]
 fn which_grants_each_kind_may_hold() {
     let evaluator = CedarPolicyEvaluator::new().unwrap();
-    let hold = |kind, action: &str| evaluator.may_hold(kind, &gateway_grant(action), true);
+    let hold = |kind, action: &str| {
+        evaluator.may_hold(kind, &gateway_grant(action), IssuePath::SurfaceProvision)
+    };
     for allowed in ["conversation.read", "environment.serve"] {
         assert_eq!(
             hold(PrincipalKind::Gateway, allowed),
@@ -193,22 +215,79 @@ fn which_grants_each_kind_may_hold() {
     }
 }
 
+const PATHS: [IssuePath; 5] = [
+    IssuePath::Bootstrap,
+    IssuePath::ProductIssue,
+    IssuePath::SurfaceProvision,
+    IssuePath::OwnerRecovery,
+    IssuePath::StoredOnLoad,
+];
+
+/// `hold.administration`: administration is refused only on the product
+/// path; every other path, and an ordinary grant on any path, is the kind's
+/// own answer.
 #[test]
-fn administration_is_held_only_where_the_issuing_path_may_hand_it_out() {
+fn administration_is_held_on_every_path_but_a_product_issue() {
     let evaluator = CedarPolicyEvaluator::new().unwrap();
     let manage = gateway_grant("credential.manage");
-    assert_eq!(
-        evaluator.may_hold(PrincipalKind::Human, &manage, true),
-        Ok(Decision::Allow)
-    );
-    assert_eq!(
-        evaluator.may_hold(PrincipalKind::Human, &manage, false),
-        Ok(Decision::Deny)
-    );
-    assert_eq!(
-        evaluator.may_hold(PrincipalKind::Human, &gateway_grant("server.read"), false),
-        Ok(Decision::Allow)
-    );
+    let read = gateway_grant("server.read");
+    for path in PATHS {
+        let expected = if path == IssuePath::ProductIssue {
+            Decision::Deny
+        } else {
+            Decision::Allow
+        };
+        assert_eq!(
+            evaluator.may_hold(PrincipalKind::Human, &manage, path),
+            Ok(expected),
+            "{path:?}"
+        );
+        assert_eq!(
+            evaluator.may_hold(PrincipalKind::Human, &read, path),
+            Ok(Decision::Allow),
+            "{path:?}"
+        );
+    }
+}
+
+/// `issue.member` and `issue.admin`: a member may be issued a credential on
+/// any path, an admin only by bootstrap or surface provisioning, and a peer
+/// gateway never, since only pairing enrolls one.
+#[test]
+fn who_may_be_issued_a_credential_on_each_path() {
+    let evaluator = CedarPolicyEvaluator::new().unwrap();
+    let gateway = gateway_grant("server.read").resource().clone();
+    let issue = |kind, role, path| evaluator.may_issue(kind, role, &gateway, path);
+    for path in PATHS {
+        for kind in [
+            PrincipalKind::Human,
+            PrincipalKind::Agent,
+            PrincipalKind::Integration,
+        ] {
+            assert_eq!(
+                issue(kind, MembershipRole::Member, path),
+                Ok(Decision::Allow),
+                "{kind:?} member {path:?}"
+            );
+            let admin = if matches!(path, IssuePath::Bootstrap | IssuePath::SurfaceProvision) {
+                Decision::Allow
+            } else {
+                Decision::Deny
+            };
+            assert_eq!(
+                issue(kind, MembershipRole::Admin, path),
+                Ok(admin),
+                "{kind:?} admin {path:?}"
+            );
+        }
+        for role in [MembershipRole::Member, MembershipRole::Admin] {
+            assert_eq!(
+                issue(PrincipalKind::Gateway, role, path),
+                Ok(Decision::Deny),
+                "gateway {role:?} {path:?}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -254,7 +333,7 @@ fn a_role_without_the_grant_is_denied_and_the_grant_without_the_role_too() {
 fn an_action_the_schema_does_not_give_an_actor_is_denied_not_unavailable() {
     let (context, _, resource, snapshot) = request_values();
     let evaluator = CedarPolicyEvaluator::new().unwrap();
-    for action in ["anything.else", "credential.hold"] {
+    for action in ["anything.else", "credential.hold", "credential.issue"] {
         assert_eq!(
             evaluator.evaluate(
                 &context,

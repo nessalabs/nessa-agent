@@ -75,6 +75,22 @@
           },
           "additionalAttributes": false
         }
+      },
+      "Recipient": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "kind": {
+              "type": "String",
+              "required": true
+            },
+            "role": {
+              "type": "String",
+              "required": true
+            }
+          },
+          "additionalAttributes": false
+        }
       }
     },
     "actions": {
@@ -168,8 +184,28 @@
                 "type": "String",
                 "required": true
               },
-              "administrative": {
-                "type": "Boolean",
+              "path": {
+                "type": "String",
+                "required": true
+              }
+            },
+            "additionalAttributes": false
+          }
+        }
+      },
+      "credential.issue": {
+        "appliesTo": {
+          "principalTypes": [
+            "Recipient"
+          ],
+          "resourceTypes": [
+            "Resource"
+          ],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "path": {
+                "type": "String",
                 "required": true
               }
             },

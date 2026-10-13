@@ -3212,6 +3212,7 @@ dependencies = [
  "sha2",
  "subtle",
  "tempfile",
+ "tracing",
  "zeroize",
 ]
 

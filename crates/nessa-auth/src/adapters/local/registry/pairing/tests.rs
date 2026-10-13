@@ -3822,7 +3822,7 @@ fn the_kind_alone_refuses_a_gateway_any_conversation_authority() {
                 &peer_credential(&changed).metadata,
                 crate::domain::PrincipalKind::Gateway,
                 &changed.gateway_id,
-                true,
+                crate::application::ports::IssuePath::StoredOnLoad,
             ),
             Err(LocalStoreError::Conflict)
         ));

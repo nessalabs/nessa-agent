@@ -12,7 +12,8 @@
 //!               schema.json + policies.cedar
 //!
 //! application --> PolicyEvaluator::evaluate(context, action, resource, snapshot)
-//!             --> GrantPolicyEvaluator::may_hold(kind, grant, administrative)
+//!             --> GrantPolicyEvaluator::may_hold(kind, grant, path)
+//!             --> GrantPolicyEvaluator::may_issue(kind, role, gateway, path)
 //!                     |
 //!               evaluator.rs  identity agreement + one Cedar request
 //!                     |
@@ -20,14 +21,22 @@
 //!                     |
 //!               entities.rs   attributes --> Cedar entities
 //!                     |
-//!               Cedar Authorizer --> Allow / Deny
+//!               Cedar Authorizer --> Allow / Deny (+ deciding @ids, logged)
 //! ```
 //!
 //! Cedar sees facts, not verdicts: the actor's grants are an entity attribute,
 //! and each `permit` requires the requested grant among them. Which grants a
-//! principal kind may hold is the `credential.hold` action. The one check
-//! made in Rust, before Cedar runs, is that the session and the snapshot name
-//! the same identity: that is authentication, and a mismatch denies.
+//! principal kind may hold is the `credential.hold` action, and who a new
+//! credential may be issued to is `credential.issue`; both read the issuing
+//! path (`IssuePath`) as the context string `path`, never a yes/no about it.
+//! The one check made in Rust, before Cedar runs, is that the session and the
+//! snapshot name the same identity: that is authentication, and a mismatch
+//! denies.
+//!
+//! Every policy carries an `@id`, and a bundle with one that does not is
+//! refused. The ports answer a bare Allow or Deny, so each refusal is logged
+//! (`tracing`, at debug) with the `@id`s of the policies that decided it, or
+//! as matched by none; an evaluation error is logged at error.
 //!
 //! `evaluator.rs` owns bundle loading, request evaluation, and fail-closed result
 //! mapping. `attributes.rs` owns ActorAttributes and ResourceAttributes, including
@@ -35,7 +44,7 @@
 //! `evaluator_tests.rs` checks bundle validation and diagnostic failures; the
 //! crate's `tests/cedar_flow.rs` exercises authorization through the public port.
 //!
-//! Attribute names such as `organizationId`, `role`, `grants` and `kind` match
+//! Attribute names such as `organizationId`, `role`, `grants`, `kind` and `path` match
 //! the checked-in schema. Rust identifiers and membership roles remain typed
 //! until this adapter translates them. Changing that representation requires
 //! updating the schema, policy, and mapping together.

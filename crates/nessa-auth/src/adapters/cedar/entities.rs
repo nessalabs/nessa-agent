@@ -6,14 +6,14 @@
 
 use crate::{
     application::ports::{AccessError, AccessSnapshot},
-    domain::{AuthContext, PrincipalKind, Resource},
+    domain::{AuthContext, MembershipRole, PrincipalKind, Resource},
 };
 use cedar_policy::{
     Entities, Entity, EntityId, EntityTypeName, EntityUid, RestrictedExpression, Schema,
 };
 use std::{collections::HashMap, str::FromStr};
 
-use super::attributes::{ActorAttributes, ResourceAttributes};
+use super::attributes::{self, ActorAttributes, ResourceAttributes};
 
 pub(super) fn cedar_uid(entity_type: &str, id: &str) -> Result<EntityUid, AccessError> {
     let entity_type =
@@ -46,27 +46,62 @@ pub(super) fn entities(
 }
 
 /// A `Nessa::Holder` of `kind` and the resource it would hold a grant on:
-/// what [`GrantPolicyEvaluator`] asks about.
+/// what [`GrantPolicyEvaluator::may_hold`] asks about.
 ///
-/// [`GrantPolicyEvaluator`]: crate::application::ports::GrantPolicyEvaluator
+/// [`GrantPolicyEvaluator::may_hold`]: crate::application::ports::GrantPolicyEvaluator::may_hold
 pub(super) fn holding(
     schema: &Schema,
     kind: PrincipalKind,
     resource: &Resource,
 ) -> Result<(EntityUid, EntityUid, Entities), AccessError> {
-    let kind = match kind {
-        PrincipalKind::Human => "human",
-        PrincipalKind::Agent => "agent",
-        PrincipalKind::Integration => "integration",
-        PrincipalKind::Gateway => "gateway",
-    };
-    let holder_uid = cedar_uid("Nessa::Holder", kind)?;
-    let holder = Entity::new(
-        holder_uid.clone(),
-        HashMap::from([(
-            "kind".to_owned(),
-            RestrictedExpression::new_string(kind.to_owned()),
-        )]),
+    let kind = attributes::kind(kind);
+    principal_and_resource(
+        schema,
+        cedar_uid("Nessa::Holder", kind)?,
+        [("kind", kind)],
+        resource,
+    )
+}
+
+/// A `Nessa::Recipient`, the principal kind and membership role a new
+/// credential would be issued to, and the gateway it would be good on: what
+/// [`GrantPolicyEvaluator::may_issue`] asks about.
+///
+/// [`GrantPolicyEvaluator::may_issue`]: crate::application::ports::GrantPolicyEvaluator::may_issue
+pub(super) fn recipient(
+    schema: &Schema,
+    kind: PrincipalKind,
+    role: MembershipRole,
+    gateway: &Resource,
+) -> Result<(EntityUid, EntityUid, Entities), AccessError> {
+    let (kind, role) = (attributes::kind(kind), attributes::role(role));
+    principal_and_resource(
+        schema,
+        cedar_uid("Nessa::Recipient", &format!("{kind}:{role}"))?,
+        [("kind", kind), ("role", role)],
+        gateway,
+    )
+}
+
+/// A principal with string attributes and the resource it is asked about, as
+/// schema-validated entities.
+fn principal_and_resource<const N: usize>(
+    schema: &Schema,
+    principal_uid: EntityUid,
+    attributes: [(&str, &str); N],
+    resource: &Resource,
+) -> Result<(EntityUid, EntityUid, Entities), AccessError> {
+    let principal = Entity::new(
+        principal_uid.clone(),
+        attributes
+            .into_iter()
+            .map(|(key, value)| {
+                (
+                    key.to_owned(),
+                    RestrictedExpression::new_string(value.to_owned()),
+                )
+            })
+            .collect::<HashMap<_, _>>(),
         Default::default(),
     )
     .map_err(|_| AccessError::Unavailable)?;
@@ -77,7 +112,7 @@ pub(super) fn holding(
         Default::default(),
     )
     .map_err(|_| AccessError::Unavailable)?;
-    let entities = Entities::from_entities([holder, resource], Some(schema))
+    let entities = Entities::from_entities([principal, resource], Some(schema))
         .map_err(|_| AccessError::Unavailable)?;
-    Ok((holder_uid, resource_uid, entities))
+    Ok((principal_uid, resource_uid, entities))
 }

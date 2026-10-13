@@ -107,9 +107,9 @@ table survives edits.
 
 | Area | Where | Decision made by hand |
 | --- | --- | --- |
-| **A. Gateway identity** | `nessa-auth` `adapters/cedar/evaluator.rs` `evaluate`, `credential_allows`, `identity_matches` | The five-action allowlist; whether a credential's grants cover the request; identity agreement (already enforced by `ReadCurrentSession`, so this copy goes) |
-| | `nessa-auth` `domain/models.rs` `PrincipalKind::may_hold`; `adapters/local/registry.rs` `validate_grants`, `validate_issue` | Which actions each principal kind may hold, checked only when a credential is issued; a manager may not mint an admin |
-| | `nessa-server` `product/socket.rs` `credential.issue`, `credential.revoke`, `credential.list` | An admin issues only active members in its own org, with grants limited to three actions; revoke and list are scoped to the caller's org and audience |
+| **A. Gateway identity** | `nessa-auth` `adapters/cedar/evaluator.rs` `evaluate`, `credential_allows`, `identity_matches` | The five-action allowlist; whether a credential's grants cover the request; identity agreement, which stays in Rust as authentication. Step 2 moved the first two into Cedar |
+| | `nessa-auth` `domain/models.rs` `PrincipalKind::may_hold`; `adapters/local/registry.rs` `validate_grants`, `validate_issue` | Which actions each principal kind may hold, checked only when a credential is issued; a manager may not mint an admin; a peer gateway is never issued a bearer credential. Step 2 moved these to Cedar `credential.hold` and `credential.issue` |
+| | `nessa-server` `product/socket.rs` `credential.issue`, `credential.revoke`, `credential.list` | An admin issues only active members in its own org, with grants limited to three actions; revoke and list are scoped to the caller's org and audience. Step 2 moved the role and grant checks; the socket keeps only frame-shape checks |
 | | `nessa-auth` `application/pairing/admission.rs`, `domain/pairing/value_objects/values.rs` `ConsentIntent::matches_owner` | The invitation's owner must be the session's principal (Cedar is asked the rest) |
 | **B. Conversation access** | `nessa-server` `conversation/domain/entities/conversation.rs` `allows`, `check_access` (about 30 callers) | A conversation is acted on only by its owner in its org; deleted ones are told only to the owner |
 | | `conversation/application/share_grants.rs` `admit_read`, `admit_drive`, `binding_of`; `domain/value_objects/share_access.rs` `ShareRole::at_least` | A paired reader reads with any grant and drives with Drive; role ordering |
@@ -136,16 +136,27 @@ request, `Part of #803`, because each pull request costs a full CI run (Saurav,
 2026-10-13). Each step deletes the Rust it replaces in the same change.
 
 1. **This record, the gate, and the placement check.** No behaviour change.
-2. **A: gateway identity.** Grants and principal kind become entity facts:
-   each `permit` requires `principal.grants` to contain the requested action on
-   this resource, so `credentialAllows` and the five-action allowlist go, and
-   an action no policy names is refused by Cedar. Which grants a credential may
-   carry becomes the `credential.hold` action (`GrantPolicyEvaluator`), asked by
-   the registry on issue and on every load; `PrincipalKind::may_hold`, the
-   registry's lists and `credential.issue`'s own action list in
-   `product/socket.rs` go. The identity agreement check stays in Rust, before
-   Cedar runs: it is authentication, not policy, and a mismatch denies. Revoke and list scoping (the caller's org and audience) stay as
-   record invariants of the caller's own registry.
+2. **A: gateway identity.** Grants become entity facts: each `permit`
+   requires `principal.grants` to contain the requested action on this
+   resource, so `credentialAllows` and the five-action allowlist go, and an
+   action no policy names is refused by Cedar. What a credential may be at all
+   becomes two actions behind `GrantPolicyEvaluator`: `credential.hold` (which
+   grants a principal kind may carry) and `credential.issue` (who a new
+   credential may be issued to, by kind and membership role). Both read the
+   issuing path (bootstrap, product issue, surface provisioning, owner
+   recovery, stored on load) as the fact `context.path`, never a Rust yes or
+   no. So "an issue over the product protocol hands out neither
+   `credential.manage` nor an admin membership" and "a peer gateway is enrolled
+   only by pairing" are policies. The registry asks on every issue and every
+   load, and any answer but Allow is a conflict. `PrincipalKind::may_hold`, the
+   registry's lists and role check, and `credential.issue`'s own checks in
+   `product/socket.rs` go. Every policy carries an `@id`, a bundle without one
+   is refused, and each refusal is logged with the ids that decided it; the
+   ports still return a bare Allow or Deny. The identity agreement check stays
+   in Rust, before Cedar runs: it is authentication, and a mismatch denies. A
+   new membership being active, revoke and list scoping (the caller's org and
+   audience), and the reserved `gateway:` id prefix stay as invariants of the
+   registry's own records.
 3. **B: conversation access.** A conversation becomes a Cedar resource (org,
    owner, deleted), a paired reader a principal with its kind and binding owner,
    and a share role a fact. `read_access.rs`'s method sets become actions.
@@ -172,7 +183,7 @@ request, `Part of #803`, because each pull request costs a full CI run (Saurav,
 6. **E: SDK artifacts. Dropped.** `admit` and `asked_by` check that the actor
    recording an artifact is the one the lease or turn was issued to. That is
    binding an action to the identity that holds it, the same kind of check as
-   `identityMatches`, not a choice a policy could make differently. Moving it
+   the identity agreement check, not a choice a policy could make differently. Moving it
    behind a port would add a second place to ask without a rule to write.
 
 ## Alternatives considered
