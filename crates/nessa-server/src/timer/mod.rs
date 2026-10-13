@@ -32,7 +32,6 @@ impl Moment {
         self.0
     }
     /// How long after `earlier` this moment is; zero when it is not after it.
-    #[cfg(any(unix, test))]
     pub(crate) fn since(self, earlier: Self) -> Duration {
         self.0.saturating_sub(earlier.0)
     }

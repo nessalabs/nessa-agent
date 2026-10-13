@@ -559,6 +559,8 @@ pub struct AttachmentRelease {
 /// whether *this* conversation holds exactly those bytes, so a digest learned
 /// elsewhere cannot be used to read another owner's upload.
 pub trait ConversationAttachments: Send + Sync {
+    /// Whether the configured upload store prepares images for conversations.
+    fn offers_images(&self) -> bool;
     /// Whether the conversation holds an upload whose digest, media type, and
     /// size all agree with `image`.
     fn holds<'a>(

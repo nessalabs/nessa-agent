@@ -1,4 +1,5 @@
 use super::*;
+use crate::attachments::application::ImageNormalizer;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use crate::desktop_runtime::application::ConversationData;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -97,6 +98,7 @@ fn agent_catalog_uses_binding_choices_for_each_catalog_model() {
         &HashSet::from([AgentId::Claude, AgentId::Codex]),
         None,
         &[],
+        true,
     )
     .unwrap();
     assert_eq!(offered.agents.len(), 2);
@@ -636,4 +638,46 @@ fn a_directory_sync_failure_leaves_the_move_unfinished() {
     assert_eq!(files.kind(&journal), Some(MemoryKind::File));
     assert_eq!(files.kind(&legacy_dir), Some(MemoryKind::Dir));
     assert!(files.synced().is_empty());
+}
+
+#[test]
+fn agent_catalog_intersects_model_images_with_the_shared_upload_offer() {
+    let catalog = Path::new(env!("CARGO_MANIFEST_DIR")).join("../nessa-sdk/data/models.json");
+    for (default_model, expected) in [("gpt-6-astra", false), ("gpt-5.6-terra", true)] {
+        let config: AgentsConfig = serde_json::from_value(serde_json::json!({
+            "catalog": catalog,
+            "workspace": "/workspace",
+            "selected": "codex",
+            "runtimes": {
+                "codex": {"command": "/codex", "model": default_model, "toolsEnabled": true}
+            }
+        }))
+        .unwrap();
+        let limits = super::super::agent::image_limits(&config, None).unwrap();
+        let normalizer = ModelImageNormalizer::new(limits.as_ref(), None).unwrap();
+        let offered = agent_catalog(
+            &config,
+            &HashSet::from([AgentId::Codex]),
+            None,
+            &[],
+            normalizer.offers_images(),
+        )
+        .unwrap();
+        let models = &offered.agents[0].models;
+        assert_eq!(
+            models
+                .iter()
+                .find(|model| model.model_id == "gpt-5.6-terra")
+                .unwrap()
+                .image_input,
+            expected
+        );
+        assert!(
+            !models
+                .iter()
+                .find(|model| model.model_id == "gpt-6-astra")
+                .unwrap()
+                .image_input
+        );
+    }
 }

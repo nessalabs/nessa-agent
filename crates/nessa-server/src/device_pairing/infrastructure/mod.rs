@@ -32,7 +32,10 @@ mod receivers;
 mod registration;
 mod runtime;
 mod tls_stream;
-pub use connection::{NativeConnectionError, NativeConnectionFailure, NativeEnrollmentConnections};
+pub(crate) use connection::RELAY_CAPACITY;
+pub use connection::{
+    NativeConnectionError, NativeConnectionFailure, NativeEnrollmentConnections, RelayPermit,
+};
 pub use environment_peers::EnvironmentPeers;
 pub use identity::{restore_gateway_identity, GatewayIdentityError};
 pub use listener::{Accepted, EnrollmentAccept, NativeEnrollmentListener, TcpEnrollmentAccept};

@@ -1724,7 +1724,9 @@ Scope discovery and each page have separate snapshots; pages carry their actual
 scope/progress/generation for consumers to compare. `retained/device.rs` composes
 the existing enrollment worker and purge policy, collecting status/purge effects
 inside physical admission and exposing original durable purge receipts separately.
-Native phone binding and linked runtime integration remain later ADR 782 slices.
+The native adapter below provides generated Swift binding and linked library
+execution. Phone repository/enrollment/authority wiring, artifact exports and
+durable deletion remain later ADR 782 slices.
 
 ### Retained read-only example
 
@@ -1870,3 +1872,39 @@ supervisor, four-case Docker orchestration and its substitute-runner tests.
 The [cleanup state](state/services/sdk/runtime/stop-cancels-owned-work-and-confirms-process-cleanup.md#linux-container-acceptance-630)
 owns its ordering table. Production SDK cleanup remains in
 `crates/nessa-sdk/src/infrastructure/process.rs`.
+
+## Native device foreign adapter (in development)
+
+`crates/nessa-device-client` generates C/Swift declarations over the no-CLI shared
+client core. `src/saved.rs` owns foreign historical selectors and immutable
+snapshot handles; it delegates cache/fold/progress decisions to the existing
+retained owner. `src/infrastructure.rs` provides injected platform clocks at the
+foreign construction boundary. Tests follow the same feature in `tests/saved`.
+The `bindgen` binary is optional host tooling, not a native runtime dependency.
+`src/session.rs` coordinates one physically admitted private scope and delegates
+status/purge/binding/read decisions to core. Its clock/socket/entropy inputs are
+injected; `src/native_session.rs` and `src/failures.rs` own immutable foreign
+representations. Public intent fields delegate to Auth's immutable historical
+correlation, and saved cursor restoration delegates Id validation to sync;
+neither creates authority. Admission/failure/correlation tests live in `tests/session`.
+The admitted `local_enrollment` publication transfers an owned private-record seed to
+the Auth native identity adapter and returns only public key/pin/intent and optional
+issued selectors. `tests/session/local_enrollment.rs` covers records, failures,
+reopen/retry and private admission/drain; Auth's TLS adapter owns the shared key
+representation conversion. The server's
+`tests/composition/read_only_online/native_session.rs` drives the actual paired
+gateway and the optional generated Swift probe under `verification/native-device`.
+Core's `retained/active.rs` validates fresh status against the current immutable
+issued record before product selection. Release Apple packaging is verified;
+the actual phone repository remains unfinished under issue 782. This module does not supply native
+authority from a panel token or an arbitrary saved cache target.
+
+`swift/NativeSessionWorker.swift` is the generated API's dispatch adapter: one
+admission reserved before enqueue, a per-call stop latch and a cancellation-independent
+close task. Per-operation capture overloads translate bounded immutable snapshots
+inside that same admission, including serialization/decoding. Verification holds
+actual private scope locks through physical calls and captures until drain.
+`scripts/build-native-device.sh` generates a local Apple Swift package/XCFramework
+from a frozen checkout; generated declarations remain build output, not hand-edited
+source. Nessa iOS embeds a reviewed dynamic package; its production native
+profile/enrollment and retained history repository remain unfinished.

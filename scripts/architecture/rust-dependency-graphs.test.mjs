@@ -76,6 +76,27 @@ test("a missing selected package makes the gate fail explicitly", () => {
   ])
 })
 
+test("the default portable selection rejects a renamed transitive desktop dependency from the native device client", () => {
+  const graph = metadata({
+    portable: [["bridge", "bridge"]],
+    bridge: [["desktop_shell", "tauri"]],
+  })
+  graph.packages.find((pkg) => pkg.name === "portable").name = "nessa-device-client"
+  for (const name of PORTABLE_RUST_PACKAGES) {
+    if (name === "nessa-device-client") continue
+    const id = `${name} 0.1.0`
+    graph.packages.push({ id, name, version: "0.1.0" })
+    graph.workspace_members.push(id)
+    graph.resolve.nodes.push({ id, deps: [] })
+  }
+
+  assert.deepEqual(rustDependencyGraphViolations(graph), [
+    '"nessa-device-client" reaches desktop framework package "tauri" through nessa-device-client@0.1.0 --bridge--> bridge@0.1.0 --desktop_shell (renamed)--> tauri@2.0.0',
+  ])
+  graph.resolve.nodes.find((node) => node.id === "bridge 0.1.0").deps = []
+  assert.deepEqual(rustDependencyGraphViolations(graph), [])
+})
+
 test("a package on the selected crate's denylist is rejected, transitively", () => {
   const graph = metadata({
     portable: [["bridge", "bridge"]],

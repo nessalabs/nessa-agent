@@ -1,6 +1,7 @@
 # Forwarding relay and the sleeping gateway — issue 266
 
-Status: design accepted; slice R1 (the relay service) in review. Part of
+Status: design accepted; slice R1 (the relay service) merged, R2a (the
+gateway serving through a relay) in review. Part of
 [#263](https://github.com/nessalabs/nessa-agent/issues/263); it also carries
 the relay half of slice I ([#706](https://github.com/nessalabs/nessa-agent/issues/706)),
 so one relay serves phones, peer gateways and paired environments. The map's
@@ -233,7 +234,9 @@ so typing it once at pairing is enough for the first relay.
 | Slice | What lands | Done when |
 | --- | --- | --- |
 | R1 | The relay protocol in `nessa-protocol`, the relay service and `nessa relay serve --listen ADDRESS` (not to be confused with the existing `nessa mcp-relay`), the gateway's proof signature, and the timer port moved out of `env_serve` so the relay waits on it too. Inert: nothing uses it yet | Two test parties join through it and exchange bytes; `Offline` for an absent K and `NoAnswer` for one that does not accept; a wrong or replayed proof refused; the newest registration wins; every limit and deadline holds on the injected clock |
-| R2 | The gateway's `native.relay` as a second source in its one listening socket with its own permit pool; the relay leg in the client core's connector; the peer record's relay and `peer.relay` | A reader reads through the relay to **the same checkpoint**, the same head and the same bytes, that a direct read reaches; a relay that flips, drops, or records and replays TLS records leaves the cache unchanged; revoking the reader still refuses it through the relay; repeated `Connect{K}` cannot starve a direct reader |
+| R2a | The gateway's `native.relay`: its registration, kept with a bounded backoff and dropped after two silent ping intervals, and each announced reader accepted on a relay permit from a pool of four, as a second source in its one listening socket | A reader that reaches only the relay completes TLS pinned to the gateway's key and is answered; four relay permits held leave direct readers admitted; no relay fault ends the listener; stop drains every relay permit |
+| R2b | The relay leg in the client core's connector, raced with the direct dial; the same in the peer gateways' connector; the peer record's relay and `peer.relay` | A reader whose direct dial hangs or is refused is joined through the relay; one whose direct dial connects first never dials the relay |
+| R2c | End to end over the real relay, gateway and reader | A reader reads through the relay to **the same checkpoint**, the same head and the same bytes, that a direct read reaches; a relay that flips, drops, or records and replays TLS records leaves the cache unchanged; revoking the reader still refuses it through the relay; repeated `Connect{K}` cannot starve a direct reader |
 | R3 | The honest state: `away` in the reader's outcome and in a peer's `sync.state`, with the cache kept and readable | A gateway that stops serving is `away` to its reader within the keepalive bound, its cached conversations still read, and it reads fresh again once it is back; a busy gateway is `unreachable`, never `away` |
 | R4 | `nessa env dial --relay` | A paired environment with no direct path dials through the relay and serves a lease; this is slice I's "Direct and relay converge" line |
 | R5 | Measurements | What the relay and a network observer see, the bytes each joined pair costs over direct, and what the idle serve connection costs the gateway, measured and written down here (below) |
@@ -251,13 +254,16 @@ so typing it once at pairing is enough for the first relay.
 | RL6 | A joined pair; either side closes | The other side is closed; nothing kept | R1 |
 | RL7 | A serve connection that misses three `Pong`s | Registration dropped; the next `Connect{K}` is `Offline` | R1 |
 | RL8 | Any limit reached, or a preamble that is malformed, too large or too slow | A connection past the connection limit closed unread; a new key past the registration limit closed after its proof; a reader past the waiting or joined limit answered `NoAnswer`; a bad or slow preamble closed. Every other registration and pair untouched | R1 |
-| RL9 | A reader whose direct dial fails and whose relay joins it | The same protected session as direct: same admission, same records, same checkpoint | R2 |
-| RL10 | A relay that alters, drops, reorders or replays bytes after the join, or answers as the gateway | The TLS session fails; the read is `unreachable`; nothing reaches the cache | R2 |
-| RL11 | A revoked reader through the relay | Refused by the gateway exactly as on a direct connection | R2 |
-| RL11b | `Connect{K}` asked repeatedly, faster than the gateway takes them | Past the gateway's few in-flight `Accept`s and its relay pool, readers get `NoAnswer`; a reader dialing directly is admitted as before | R2 |
+| RL9 | A reader whose direct dial fails and whose relay joins it | The same protected session as direct: same admission, same records, same checkpoint | R2c |
+| RL10 | A relay that alters, drops, reorders or replays bytes after the join, or answers as the gateway | The TLS session fails; the read is `unreachable`; nothing reaches the cache | R2c |
+| RL11 | A revoked reader through the relay | Refused by the gateway exactly as on a direct connection | R2c |
+| RL11b | `Connect{K}` asked repeatedly, faster than the gateway takes them | Past the gateway's few in-flight `Accept`s and its relay pool, readers get `NoAnswer`; a reader dialing directly is admitted as before | R2a (the pool), R2c (end to end) |
 | RL12 | Direct fails and the relay answers `Offline` | `away`; the cache unchanged and readable | R3 |
 | RL13 | Direct fails and the relay answers `NoAnswer`, cannot be reached, or no relay is set | `unreachable`, as today | R3 |
 | RL14 | A paired environment with only a relay path | Dials through it and serves leases as over a direct connection | R4 |
+| RL15 | The gateway's registration ends, or hears nothing for two ping intervals | Dropped and made again after a wait that doubles from 1 s to 60 s, starting over after a registration that lasted a minute; direct readers are served throughout | R2a |
+| RL16 | The relay announces a reader while the gateway's four relay permits are held | Nothing is dialed; the relay answers that reader `NoAnswer` at its join deadline; direct readers are admitted as before | R2a |
+| RL17 | The gateway key cannot make its relay proof | The gateway stops registering and logs it; it serves directly as before | R2a |
 
 ## What the relay sees
 
