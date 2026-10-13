@@ -1794,8 +1794,17 @@ under the existing private directory/operation/publisher owner. The core
 original signed proof and refusing missing/incomplete restoration. Matching
 fixtures live in Auth `tests/adapters/private_state/owner_phone.rs`, core
 `tests/pairing/owner_phone.rs` and protocol `tests/product/owner_phone.rs`.
-These owners do not implement remote authorization, native issued adoption or
-app Send.
+Auth's `application/pairing/owner_phone_adoption.rs` publishes the explicit local
+adoption port and independent acknowledgement/failure receipts.
+`adapters/pairing/private_state/owner_phone/adoption.rs` validates the actual
+original, binds its immutable public lineage, then publishes its pending/issued
+record. One shared public-field codec and joint relationship checker govern cold
+selection; cold getters acknowledge the named original, while adoption validates
+all offered selectors before its first acknowledgement. Generic enrollment writers
+remain excluded from original scopes. Actual storage regressions live in
+`tests/adapters/private_state/owner_phone_adoption.rs`. These Auth owners implement
+local historical adoption; remote recovery, current reader/product admission,
+generated Apple bindings and app Send remain consuming integration work.
 
 ### Shared product contract values
 

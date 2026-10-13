@@ -206,7 +206,7 @@ fn corrupt_or_mixed_original_is_refused_on_every_cold_read() {
         .unwrap()
         .prepare(&seed(9))
         .unwrap();
-    let valid = encode(&expected, Some(&seed(9))).unwrap();
+    let valid = encode(&expected, Some(&seed(9)), None).unwrap();
     for bytes in [
         valid[..valid.len() - 1].to_vec(),
         [valid.to_vec(), vec![0]].concat(),
@@ -268,8 +268,8 @@ fn seed_and_published_public_key_must_agree_before_cold_exposure() {
         .unwrap();
     let valid = fs::read(fixture.original_path()).unwrap();
     for offset in [
-        valid.len() - 2 * DeviceKey::LENGTH,
-        valid.len() - DeviceKey::LENGTH,
+        valid.len() - 1 - 2 * DeviceKey::LENGTH,
+        valid.len() - 1 - DeviceKey::LENGTH,
     ] {
         let mut changed = valid.clone();
         changed[offset] ^= 1;
@@ -324,7 +324,22 @@ fn largest_valid_original_fits_private_bound_and_round_trips_all_fields() {
         .unwrap()
         .prepare(&seed(9))
         .unwrap();
-    assert_eq!(fs::read(fixture.original_path()).unwrap().len(), MAX_BYTES);
+    assert_eq!(
+        fs::read(fixture.original_path()).unwrap().len(),
+        MAX_BYTES - PUBLIC_INTENT_BYTES
+    );
+    let public = PublicIntent::new(
+        InvitationId::new([1; 16]),
+        AttemptId::new([2; 16]),
+        ConsentIntentId::new([3; 16]),
+        u64::MAX,
+        u64::MAX,
+        ConsentClass::OwnerPhoneReadWrite,
+    )
+    .unwrap();
+    let bound = encode(&expected, Some(&seed(9)), Some(public)).unwrap();
+    assert_eq!(bound.len(), MAX_BYTES);
+    fs::write(fixture.original_path(), bound).unwrap();
     assert_eq!(
         fixture
             .store
@@ -387,6 +402,7 @@ fn changed_valid_reservation_or_prepared_record_cannot_take_live_creation_seed()
             } else {
                 None
             },
+            None,
         )
         .unwrap();
         fs::write(fixture.original_path(), &bytes).unwrap();

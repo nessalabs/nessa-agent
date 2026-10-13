@@ -6,7 +6,12 @@
 //! ```
 #![deny(missing_docs)]
 mod admission;
+mod owner_phone_adoption;
 mod owner_phone_private;
+pub use owner_phone_adoption::{
+    OwnerPhoneAdoption, OwnerPhoneAdoptionFailure, OwnerPhoneAdoptionPhase,
+    OwnerPhoneEnrollmentKind, OwnerPhoneEnrollmentStore,
+};
 pub use owner_phone_private::{
     OwnerPhoneOriginalCreation, OwnerPhoneOriginalStore, OwnerPhonePrivateOriginal,
     OwnerPhoneReservation,
