@@ -169,7 +169,7 @@ async fn a_command_admitted_before_shutdown_ends_with_its_outcome_and_no_effect(
         async move {
             let code = nessa_auth::adapters::pairing::ManualCode::parse(b"ABCD-2345").unwrap();
             commands
-                .enroll("127.0.0.1:9".parse().unwrap(), code, &owner)
+                .enroll("127.0.0.1:9".parse().unwrap(), None, code, &owner)
                 .await
         }
     });
@@ -242,7 +242,7 @@ async fn a_command_asked_after_close_is_refused_before_its_intent() {
     let code = nessa_auth::adapters::pairing::ManualCode::parse(b"ABCD-2345").unwrap();
     assert_eq!(
         commands
-            .enroll("127.0.0.1:9".parse().unwrap(), code, &owner)
+            .enroll("127.0.0.1:9".parse().unwrap(), None, code, &owner)
             .await
             .err(),
         Some(PeerError::Unavailable)
@@ -289,6 +289,7 @@ async fn close_waits_for_a_command_holding_the_turn_and_keeps_its_outcome() {
             commands
                 .enroll(
                     "127.0.0.1:9".parse().unwrap(),
+                    None,
                     code,
                     &PrincipalId::new("owner").unwrap(),
                 )

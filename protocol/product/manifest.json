@@ -230,6 +230,10 @@
       "params": "PeerForgetParams",
       "grant": "credential.manage"
     },
+    "peer.relay": {
+      "params": "PeerRelayParams",
+      "grant": "credential.manage"
+    },
     "conversation.watchRecords": {
       "params": "ConversationWatchRecordsParams",
       "grant": null

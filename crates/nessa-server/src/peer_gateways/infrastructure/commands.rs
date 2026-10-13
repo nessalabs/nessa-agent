@@ -23,13 +23,16 @@
 //! queues it at once, and waits for it to be kept only after it gives the
 //! turn back, so the evidence is in turn order and a slow audit never holds
 //! the turn.
+use super::connector::raced;
 use super::records::{
-    ForgetFailure, PeerEntry, PeerPhase, PeerRecords, PeerSlot, SlotFound, SlotRefusal, SlotSave,
+    ForgetFailure, PeerEntry, PeerPhase, PeerRecord, PeerRecords, PeerSlot, SlotFound, SlotRefusal,
+    SlotSave,
 };
 use crate::peer_gateways::application::{
     CacheState, PeerAudit, PeerAuditFuture, PeerAuditRecord, PeerConnector, PeerHolding, PeerState,
     PollerCause,
 };
+use nessa_auth::adapters::pairing::relay_key;
 use nessa_auth::{
     adapters::pairing::{rand, CryptoRng, ManualCode, PairingCryptoError, RngCore},
     application::pairing::PrivateStateError,
@@ -43,6 +46,7 @@ use nessa_client_core::retained::{ReadStop, HANDSHAKE};
 use nessa_protocol::clock::Clock as MonotonicClock;
 use nessa_protocol::pairing::socket::WAKE_TICK;
 use nessa_protocol::product::generated::PeerErrorCode;
+use nessa_protocol::relay::RelayAddress;
 use std::collections::HashMap;
 use std::sync::{Mutex, PoisonError};
 use std::{
@@ -397,13 +401,17 @@ impl PeerCommands {
     pub async fn enroll(
         &self,
         address: SocketAddr,
+        relay: Option<RelayAddress>,
         code: ManualCode,
         initiator: &PrincipalId,
     ) -> Result<PeerEntry, PeerError> {
         self.audited(
-            Command::Enroll { address },
+            Command::Enroll {
+                address,
+                relay: relay.clone(),
+            },
             initiator,
-            self.enroll_turn(address, code),
+            self.enroll_turn(address, relay, code),
         )
         .await
     }
@@ -411,15 +419,16 @@ impl PeerCommands {
     async fn enroll_turn(
         &self,
         address: SocketAddr,
+        relay: Option<RelayAddress>,
         code: ManualCode,
     ) -> (Result<PeerEntry, PeerError>, Evidence) {
         let _permit = match self.owner_turn().await {
             Ok(permit) => permit,
             Err(refused) => return (Err(refused), Evidence::not_read(None)),
         };
-        let slot = Arc::new(self.records.enrolling(address));
+        let slot = Arc::new(self.records.enrolling(address, relay.clone()));
         let outcome = self.enroll_with(address, code, slot.clone()).await;
-        (outcome, Evidence::of_slot(&slot, address))
+        (outcome, Evidence::of_slot(&slot, address, relay))
     }
     async fn enroll_with(
         &self,
@@ -463,6 +472,26 @@ impl PeerCommands {
         self.within(CONNECT, || self.connector.connect(address))
             .await
             .unwrap_or_else(|| Err(io::ErrorKind::TimedOut.into()))
+    }
+    /// A connection to the peer `record` names: its address, raced with its
+    /// relay when it keeps one (see [`raced`]), bounded like [`Self::dial`].
+    /// An enrollment dials only the address: until it, there is no pinned
+    /// key to ask a relay for.
+    pub(super) async fn dial_peer(&self, record: &PeerRecord) -> io::Result<TcpStream> {
+        let relay = record.relay().cloned().zip(relay_key(record.pin()));
+        let address = record.address();
+        let refused = Mutex::new(None);
+        let dialed = self
+            .within(CONNECT, || {
+                raced(self.connector.connect(address), relay, &refused)
+            })
+            .await;
+        dialed.unwrap_or_else(|| {
+            // The relay's refusal, when it gave one, says more than the
+            // deadline does.
+            let refused = refused.into_inner().unwrap_or_else(PoisonError::into_inner);
+            Err(refused.unwrap_or_else(|| io::ErrorKind::TimedOut.into()))
+        })
     }
     /// What the work `start` begins answers, or `None` once the injected
     /// clock has moved `limit` past the moment before it began: the one way
@@ -599,6 +628,87 @@ impl PeerCommands {
             },
         )
     }
+    /// Set the relay kept for `key` to `relay`, or clear it with `None`, for
+    /// `initiator`, and return the record as left. The relay is where this
+    /// gateway asks for the peer when its address does not answer; it
+    /// carries no trust, since the peer still has to present its pinned key.
+    /// Takes the owner's turn like an enrollment or a forget, so a read in
+    /// progress is stopped first and the next read uses the new relay.
+    /// Audited like every peer command (see [`Self::audited`]).
+    pub async fn relay(
+        &self,
+        key: DeviceKey,
+        relay: Option<RelayAddress>,
+        initiator: &PrincipalId,
+    ) -> Result<PeerEntry, PeerError> {
+        self.audited(
+            Command::Relay {
+                peer: key,
+                relay: relay.clone(),
+            },
+            initiator,
+            self.relay_turn(key, relay),
+        )
+        .await
+    }
+    /// The relay change, and what it found and left of the record.
+    async fn relay_turn(
+        &self,
+        key: DeviceKey,
+        relay: Option<RelayAddress>,
+    ) -> (Result<PeerEntry, PeerError>, Evidence) {
+        let not_read = Evidence::not_read(Some(key));
+        let _permit = match self.owner_turn().await {
+            Ok(permit) => permit,
+            Err(refused) => return (Err(refused), not_read),
+        };
+        let records = self.records.clone();
+        let set = tokio::task::spawn_blocking(move || records.set_relay(&key, relay))
+            .await
+            .unwrap_or(Err(PrivateStateError::Unavailable));
+        match set {
+            Ok(Some((found, written))) => {
+                let before = state_of(&PeerEntry::Readable(Box::new(found)));
+                match written {
+                    Ok(left) => {
+                        let entry = PeerEntry::Readable(Box::new(left));
+                        let after = state_of(&entry);
+                        (
+                            Ok(entry),
+                            Evidence {
+                                peer: Some(key),
+                                before,
+                                after,
+                            },
+                        )
+                    }
+                    // Written, then not confirmed durable.
+                    Err(PrivateStateError::Uncertain) => (
+                        Err(PeerError::Unavailable),
+                        Evidence {
+                            peer: Some(key),
+                            before,
+                            after: PeerState::Unknown,
+                        },
+                    ),
+                    Err(_) => (
+                        Err(PeerError::Unavailable),
+                        Evidence::unchanged(key, before),
+                    ),
+                }
+            }
+            Ok(None) => (
+                Err(PeerError::NotFound),
+                Evidence::unchanged(key, PeerState::Absent),
+            ),
+            // An unreadable record is left as it is: only forgetting it helps.
+            Err(PrivateStateError::Corrupt) => (
+                Err(PeerError::Unavailable),
+                Evidence::unchanged(key, PeerState::Unreadable),
+            ),
+            Err(_) => (Err(PeerError::Unavailable), not_read),
+        }
+    }
     /// Run one call of a peer command under its audit, the only way either
     /// command runs. The intent is kept before `turn` starts, so before any
     /// check, even whether another command holds the turn; no intent, and
@@ -635,16 +745,23 @@ impl PeerCommands {
         }
         let _running = Running(&self.running);
         let operation = Uuid::new_v4();
-        let requested = match command {
-            Command::Enroll { address } => PeerAuditRecord::EnrollRequested {
+        let requested = match &command {
+            Command::Enroll { address, relay } => PeerAuditRecord::EnrollRequested {
                 operation,
                 initiator: initiator.clone(),
-                address,
+                address: *address,
+                relay: relay.clone(),
             },
             Command::Forget { peer } => PeerAuditRecord::ForgetRequested {
                 operation,
                 initiator: initiator.clone(),
-                peer,
+                peer: *peer,
+            },
+            Command::Relay { peer, relay } => PeerAuditRecord::RelayRequested {
+                operation,
+                initiator: initiator.clone(),
+                peer: *peer,
+                relay: relay.clone(),
             },
         };
         if !self.keep(requested).await {
@@ -656,11 +773,12 @@ impl PeerCommands {
         let (outcome, evidence) = turn.await;
         let answer = outcome.as_ref().map(|_| ()).map_err(|error| error.code());
         let peer = evidence.peer.as_ref().map(hex).unwrap_or_default();
-        let finished = match command {
-            Command::Enroll { address } => PeerAuditRecord::EnrollFinished {
+        let finished = match &command {
+            Command::Enroll { address, relay } => PeerAuditRecord::EnrollFinished {
                 operation,
                 initiator: initiator.clone(),
-                address,
+                address: *address,
+                relay: relay.clone(),
                 peer: evidence.peer,
                 before: evidence.before,
                 after: evidence.after.clone(),
@@ -669,7 +787,16 @@ impl PeerCommands {
             Command::Forget { peer } => PeerAuditRecord::ForgetFinished {
                 operation,
                 initiator: initiator.clone(),
-                peer,
+                peer: *peer,
+                before: evidence.before,
+                after: evidence.after.clone(),
+                outcome: answer,
+            },
+            Command::Relay { peer, relay } => PeerAuditRecord::RelayFinished {
+                operation,
+                initiator: initiator.clone(),
+                peer: *peer,
+                relay: relay.clone(),
                 before: evidence.before,
                 after: evidence.after.clone(),
                 outcome: answer,
@@ -807,23 +934,34 @@ impl RngCore for Entropy {
 impl CryptoRng for Entropy {}
 
 /// One call of a peer command, as its audit names it.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum Command {
-    Enroll { address: SocketAddr },
-    Forget { peer: DeviceKey },
+    Enroll {
+        address: SocketAddr,
+        relay: Option<RelayAddress>,
+    },
+    Forget {
+        peer: DeviceKey,
+    },
+    Relay {
+        peer: DeviceKey,
+        relay: Option<RelayAddress>,
+    },
 }
 impl Command {
-    fn name(self) -> &'static str {
+    fn name(&self) -> &'static str {
         match self {
             Self::Enroll { .. } => "peer.enroll",
             Self::Forget { .. } => "peer.forget",
+            Self::Relay { .. } => "peer.relay",
         }
     }
-    /// What the owner named: the address dialed, or the peer forgotten.
-    fn target(self) -> String {
+    /// What the owner named: the address dialed, or the peer forgotten or
+    /// given a relay.
+    fn target(&self) -> String {
         match self {
-            Self::Enroll { address } => address.to_string(),
-            Self::Forget { peer } => hex(&peer),
+            Self::Enroll { address, .. } => address.to_string(),
+            Self::Forget { peer } | Self::Relay { peer, .. } => hex(peer),
         }
     }
 }
@@ -854,7 +992,7 @@ impl Evidence {
     }
     /// What an enrollment's slot noted: the peer from the moment its pin was
     /// seen, its record as first found, and what the save did to it.
-    fn of_slot(slot: &PeerSlot, address: SocketAddr) -> Self {
+    fn of_slot(slot: &PeerSlot, address: SocketAddr, relay: Option<RelayAddress>) -> Self {
         let Some((peer, found)) = slot.found() else {
             return Self::not_read(None);
         };
@@ -865,7 +1003,7 @@ impl Evidence {
         };
         let after = match slot.saved() {
             None => before.clone(),
-            Some(SlotSave::Created | SlotSave::Replaced) => PeerState::Pending { address },
+            Some(SlotSave::Created | SlotSave::Replaced) => PeerState::Pending { address, relay },
             Some(SlotSave::Uncertain) => PeerState::Unknown,
         };
         Self {
@@ -883,17 +1021,20 @@ fn state_of(entry: &PeerEntry) -> PeerState {
         PeerEntry::Readable(record) => match record.phase() {
             PeerPhase::Pending => PeerState::Pending {
                 address: record.address(),
+                relay: record.relay().cloned(),
             },
             PeerPhase::Active {
                 credential,
                 receiver,
             } => PeerState::Active {
                 address: record.address(),
+                relay: record.relay().cloned(),
                 credential: credential.as_str().to_owned(),
                 receiver: receiver.as_str().to_owned(),
             },
             PeerPhase::Revoked => PeerState::Revoked {
                 address: record.address(),
+                relay: record.relay().cloned(),
             },
         },
     }

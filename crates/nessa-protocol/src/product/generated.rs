@@ -2091,11 +2091,20 @@ impl PairingErrorCode {
 pub struct PeerEnrollParams {
     pub address: String,
     pub code: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay: Option<String>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PeerForgetParams {
     pub peer_key: [u8; DeviceKey::LENGTH],
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PeerRelayParams {
+    pub peer_key: [u8; DeviceKey::LENGTH],
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub relay: Option<String>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -2122,6 +2131,8 @@ pub struct PeerGateway {
     pub phase: PeerPhase,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub address: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credential_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2432,6 +2443,7 @@ pub mod product_method {
     pub const PEER_ENROLL: &str = "peer.enroll";
     pub const PEER_LIST: &str = "peer.list";
     pub const PEER_FORGET: &str = "peer.forget";
+    pub const PEER_RELAY: &str = "peer.relay";
     pub const CONVERSATION_WATCH_RECORDS: &str = "conversation.watchRecords";
     pub const CONVERSATION_WATCH_CATALOGUE: &str = "conversation.watchCatalogue";
     pub const CONVERSATION_UNWATCH: &str = "conversation.unwatch";
@@ -2630,7 +2642,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 65
+                items.len() <= 66
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -2711,6 +2723,7 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "peer.enroll",
     "peer.list",
     "peer.forget",
+    "peer.relay",
     "conversation.watchRecords",
     "conversation.watchCatalogue",
     "conversation.unwatch",
@@ -2757,6 +2770,7 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "peer.enroll"
         | "peer.list"
         | "peer.forget"
+        | "peer.relay"
         | "conversation.share"
         | "conversation.unshare"
         | "conversation.shares" => Some("credential.manage"),
