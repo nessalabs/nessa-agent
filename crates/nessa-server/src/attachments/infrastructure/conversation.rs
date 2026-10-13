@@ -46,6 +46,9 @@ impl ConversationHolds {
     }
 }
 impl ConversationAttachments for ConversationHolds {
+    fn offers_images(&self) -> bool {
+        self.service.offers_images()
+    }
     fn holds<'a>(
         &'a self,
         organization_id: &'a OrganizationId,

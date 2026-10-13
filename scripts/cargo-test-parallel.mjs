@@ -29,7 +29,7 @@ import { spawn } from "node:child_process"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 
-const TEST_KINDS = new Set(["lib", "bin", "test"])
+const TEST_KINDS = new Set(["lib", "rlib", "cdylib", "staticlib", "bin", "test"])
 const SKIPPED_KINDS = new Set(["custom-build", "example", "bench"])
 
 /** Split `--concurrency N -- cargo-args` from the process argument list. */

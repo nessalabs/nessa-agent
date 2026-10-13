@@ -224,6 +224,11 @@ pub struct AttachmentService {
 }
 
 impl AttachmentService {
+    /// Whether the configured upload normalizer can prepare images.
+    pub fn offers_images(&self) -> bool {
+        self.inner.normalizer.offers_images()
+    }
+
     pub fn new(dependencies: AttachmentDependencies, limits: AttachmentLimits) -> Self {
         let AttachmentDependencies {
             store,
@@ -580,7 +585,7 @@ impl AttachmentService {
         // An image nothing will ever be prepared from is refused here, before
         // a ticket for it exists. Issuing one would invite bytes to be
         // transferred, normalized and held that no message could ever name.
-        if upload.uploaded.media_type().is_image() && !self.inner.normalizer.offers_images() {
+        if upload.uploaded.media_type().is_image() && !self.offers_images() {
             return Err(BeginError::ImagesUnsupported);
         }
         if let Some(hold) = self
