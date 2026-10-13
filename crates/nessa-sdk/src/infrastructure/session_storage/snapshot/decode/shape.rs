@@ -5,8 +5,8 @@ use crate::application::agent_execution::executions::{
     ExecutionRequest,
 };
 use crate::application::agent_execution::sessions::{
-    ArtifactName, ArtifactRecord, CurrentLease, LeaseRecord as SavedLeaseRecord,
-    QueueHistoryRecord, SessionSnapshot,
+    ArtifactName, ArtifactRecord, CurrentLease, LeaseRecord as SavedLeaseRecord, NoteId,
+    NoteRecord, NoteText, QueueHistoryRecord, SessionSnapshot,
 };
 use crate::domain::agent_execution::{
     executions::{ExecutionId, GrantInitiator, QueueOrderChange},
@@ -65,6 +65,8 @@ pub(super) enum Shape {
     LeaseRecord,
     Artifacts,
     Artifact,
+    Notes,
+    Note,
     Metadata,
     Images,
     Image,
@@ -169,6 +171,13 @@ impl Shape {
             (Artifact, "name") => Text(ArtifactName::MAX_BYTES),
             (Artifact, "digest") => Text(DIGEST_BYTES),
             (Artifact, "media_type") => Text(MediaType::MAX_BYTES),
+            (Snapshot, "notes") => Notes,
+            (Semantic, "Note") => Note,
+            (Note, "id") => Text(NoteId::MAX_BYTES),
+            (Note, "text") => Text(NoteText::MAX_BYTES),
+            (Note, "delivery") => Text(KEY_BYTES),
+            (Note, "author") => Initiator,
+            (Note, "accepted_at_ms") => Number,
             (Invocation, "metadata") => Metadata,
             (Invocation, "scheduling") => Scheduling,
             (Invocation, "events") => Events,
@@ -324,6 +333,10 @@ impl Shape {
                 key,
                 "lease" | "turn" | "name" | "digest" | "media_type" | "size" | "actor"
             ),
+            Note => matches!(
+                key,
+                "id" | "text" | "delivery" | "actor" | "author" | "accepted_at_ms"
+            ),
             ProviderError => matches!(key, "code" | "diagnostic"),
             AuthenticationError => key == "diagnostic",
             FailedAcknowledgement => matches!(key, "audit" | "storage"),
@@ -349,6 +362,7 @@ impl Shape {
             Self::SemanticChanges => Self::Semantic,
             Self::LeaseRecords => Self::LeaseRecord,
             Self::Artifacts => Self::Artifact,
+            Self::Notes => Self::Note,
             Self::FinalizedComponents => Self::FinalizedComponent,
             Self::Hooks => Self::Hook,
             Self::QueueEntries => Self::QueueEntry,
@@ -372,6 +386,7 @@ impl Shape {
             Self::Hooks => 128,
             Self::LeaseRecords => CurrentLease::MAX_RECORDS,
             Self::Artifacts => ArtifactRecord::MAX_PER_CONVERSATION,
+            Self::Notes => NoteRecord::MAX_PER_CONVERSATION,
             Self::QueueEntries | Self::QueueIds => QueueOrderChange::MAX_PENDING,
             // The message's own constructor refuses more; refuse them here
             // before the excess references are built.

@@ -222,6 +222,7 @@ impl WatchFixture {
                     queue_history: Vec::new(),
                     lease: None,
                     artifacts: Vec::new(),
+                    notes: Vec::new(),
                 },
                 vec![SessionSaveUnit::new(changes).unwrap()],
             )

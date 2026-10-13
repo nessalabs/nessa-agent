@@ -5503,6 +5503,7 @@ pub use artifact_fetch::{
 mod artifact_publish;
 pub use artifact_publish::{PublishAnswer, PublishCall, PublishCallRefusal};
 mod environment_tools;
+mod notes;
 pub use environment_tools::{
     CommandAnswer, CommandCall, CommandCallError, EnvironmentListing, HERE,
 };

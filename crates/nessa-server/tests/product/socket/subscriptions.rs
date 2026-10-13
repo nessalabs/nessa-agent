@@ -573,6 +573,7 @@ impl SubscriptionFixture {
                         queue_history: Vec::new(),
                         lease: None,
                         artifacts: Vec::new(),
+                        notes: Vec::new(),
                     },
                     vec![SessionSaveUnit::new(vec![change]).unwrap()],
                 )
@@ -642,6 +643,7 @@ impl SubscriptionFixture {
                     queue_history: Vec::new(),
                     lease: None,
                     artifacts: Vec::new(),
+                    notes: Vec::new(),
                 },
                 vec![SessionSaveUnit::new(changes).unwrap()],
             )
@@ -2301,6 +2303,9 @@ const DRIVE_COMMANDS: [&str; 7] = [
     "conversation.receipt",
 ];
 
+/// The methods a Comment grant admits, and so a Drive grant too (row J17).
+const COMMENT_COMMANDS: [&str; 2] = ["conversation.message", "conversation.messageStatus"];
+
 /// A Drive grant with the widest policy, which nothing enforces yet.
 fn drive_access() -> crate::conversation::domain::ShareAccess {
     use crate::conversation::domain::{ShareAccess, ShareRole, ToolPolicy, ToolPreset};
@@ -2425,7 +2430,11 @@ async fn a_paired_session_writes_only_what_a_drive_grant_admits() {
         .iter()
         .copied()
         .filter(|method| action_for_method(method) == Some("conversation.write"))
-        .filter(|method| !DRIVE_COMMANDS.contains(method) && !own_checks.contains(method))
+        .filter(|method| {
+            !DRIVE_COMMANDS.contains(method)
+                && !COMMENT_COMMANDS.contains(method)
+                && !own_checks.contains(method)
+        })
         .collect();
     for method in ["conversation.create", "conversation.delete", "conversation.setApprovalMode"] {
         assert!(others.contains(&method), "{method} is refused to a driver");
@@ -2608,6 +2617,396 @@ async fn a_turn_is_saved_with_who_started_it() {
         .with_devices(Devices::new(&[("phone", "phone", "principal", true)]));
     owner.turn("paired").await;
     assert_eq!(owner.initiation_of("paired").await, Initiation::owner());
+}
+
+/// `conversation.message` params leaving `text` in conversation `id` under
+/// request `request`.
+fn note_params(id: &ConversationId, request: &str, text: &str) -> Value {
+    json!({
+        "conversationId": id.to_string(),
+        "requestId": request,
+        "text": text,
+        "delivery": "record_only",
+    })
+}
+
+/// Valid params for `method`, one of [`COMMENT_COMMANDS`]: a note, or the
+/// status of request `request`.
+fn comment_params(method: &str, id: &ConversationId, request: &str) -> Value {
+    match method {
+        "conversation.message" => note_params(id, request, "x"),
+        _ => json!({"conversationId": id.to_string(), "requestId": request}),
+    }
+}
+
+/// `method` called from the owner's own surface, on a gateway that may pair
+/// devices: the fixture's session with no receiver binding.
+async fn owner_call(fixture: &SubscriptionFixture, method: &str, params: Value) -> Value {
+    let mut owner = fixture.state.clone();
+    owner.passive_read = None;
+    let frame = RequestFrame::new("call", method, &params).unwrap();
+    let OutgoingMessage::Response(response) = dispatch(&owner, &fixture.session, frame).await
+    else {
+        panic!("a response")
+    };
+    serde_json::to_value(response).unwrap()
+}
+
+impl SubscriptionFixture {
+    /// The notes the fixture's conversation keeps, as its records hold them.
+    async fn notes(&self) -> Vec<nessa_sdk::application::agent_execution::sessions::NoteRecord> {
+        let session = crate::conversation::application::conversation_session(&self.id);
+        let committed = self.storage.read_committed(session).await.unwrap().unwrap();
+        committed.snapshot().unwrap().notes.clone()
+    }
+
+    /// How many turns the fixture's conversation's records hold.
+    async fn turns(&self) -> usize {
+        let session = crate::conversation::application::conversation_session(&self.id);
+        let committed = self.storage.read_committed(session).await.unwrap().unwrap();
+        committed.snapshot().unwrap().invocations.len()
+    }
+}
+
+/// Rows J16 and J21: the owner leaves a note. Its receipt names the note,
+/// when it was accepted and that it is recorded; the conversation's records
+/// keep it with the owner as author and the owner's surface and request as
+/// actor; and it starts no turn.
+#[tokio::test]
+async fn the_owner_leaves_a_note_saved_with_who_left_it_and_no_turn() {
+    use nessa_sdk::application::agent_execution::sessions::NoteState;
+    use nessa_sdk::domain::agent_execution::executions::Initiator;
+    let fixture = SubscriptionFixture::new().await;
+    fixture.turn("first").await;
+    let turns = fixture.turns().await;
+    let answer = fixture
+        .call(
+            "conversation.message",
+            note_params(&fixture.id, "note-1", "the parser review is ready"),
+        )
+        .await;
+    assert_eq!(answer["ok"], true, "{answer}");
+    let receipt = &answer["payload"];
+    assert_eq!(receipt["requestId"], "note-1");
+    assert_eq!(receipt["deliveryState"], "recorded");
+    let notes = fixture.notes().await;
+    assert_eq!(notes.len(), 1);
+    let note = &notes[0];
+    assert_eq!(receipt["messageId"], note.id.as_str());
+    assert_eq!(receipt["acceptedAtMs"], note.accepted_at_ms);
+    assert!(note.accepted_at_ms > 0);
+    assert_eq!(note.text.as_str(), "the parser review is ready");
+    assert_eq!(note.author, Initiator::Owner);
+    assert_eq!(note.actor.principal_id(), "principal");
+    assert_eq!(note.actor.surface_id(), "credential");
+    assert_eq!(note.actor.request_id(), "note-1");
+    assert_eq!(note.state(), NoteState::Recorded);
+    assert_eq!(fixture.turns().await, turns);
+    let view = fixture.settled_read(1).await;
+    assert!(
+        !view.to_string().contains("the parser review is ready"),
+        "a note is not a turn: {view}"
+    );
+}
+
+/// Row J17: a device holding pairing's `conversation.read` and a Comment
+/// grant leaves notes on the conversation it names, saved with the grant and
+/// the revision read for it; a Drive grant does too. A Read grant is
+/// refused `forbidden`; no grant, or another of the owner's conversations,
+/// `conversation_not_found`; a party signed in as another principal, or
+/// without pairing's grant, `forbidden`. A Comment grant drives nothing.
+#[tokio::test]
+async fn a_comment_or_drive_grant_leaves_notes_on_the_conversation_it_names() {
+    use crate::conversation::application::{ShareGrantTransition, ShareGrants};
+    use crate::conversation::domain::{ShareAccess, ShareRole};
+    use nessa_sdk::domain::agent_execution::executions::{GrantInitiator, Initiator};
+    let fixture = SubscriptionFixture::new().await;
+    fixture.turn("first").await;
+    let other = fixture.create().await;
+    let fixture = fixture.with_devices(this_device(true));
+    let comment = ShareAccess::new(ShareRole::Comment, None).unwrap();
+    fixture
+        .grant_to(ShareGrantTransition::Grant(comment.clone()))
+        .await;
+    grants(&fixture.authority, &["server.read"]);
+    let answer = fixture
+        .call("conversation.message", note_params(&fixture.id, "no-pairing", "x"))
+        .await;
+    assert_eq!(answer["error"]["code"], "forbidden", "{answer}");
+    grants(&fixture.authority, &["conversation.read", "server.read"]);
+    let revision = || async { fixture.metadata.grants(&fixture.id).await.unwrap()[0].policy_revision };
+    let commented = revision().await;
+    let answer = fixture
+        .call("conversation.message", note_params(&fixture.id, "comment", "from the phone"))
+        .await;
+    assert_eq!(answer["ok"], true, "{answer}");
+    let status = fixture
+        .call(
+            "conversation.messageStatus",
+            json!({"conversationId": fixture.id.to_string(), "requestId": "comment"}),
+        )
+        .await;
+    assert_eq!(status["payload"]["found"], true, "{status}");
+    for method in COMMENT_COMMANDS {
+        let answer = fixture
+            .call(method, comment_params(method, &other, "elsewhere"))
+            .await;
+        assert_eq!(answer["error"]["code"], "conversation_not_found", "{method}: {answer}");
+    }
+    for method in DRIVE_COMMANDS {
+        let answer = fixture
+            .call(method, drive_params(method, &fixture.id, "commenter"))
+            .await;
+        assert_eq!(answer["error"]["code"], "forbidden", "comment {method}: {answer}");
+    }
+    fixture
+        .grant_to(ShareGrantTransition::Grant(drive_access()))
+        .await;
+    let driven = revision().await;
+    let answer = fixture
+        .call("conversation.message", note_params(&fixture.id, "drive", "from a driver"))
+        .await;
+    assert_eq!(answer["ok"], true, "{answer}");
+    let status = fixture
+        .call("conversation.messageStatus", comment_params("status", &fixture.id, "drive"))
+        .await;
+    assert_eq!(status["payload"]["found"], true, "{status}");
+    fixture
+        .grant_to(ShareGrantTransition::Grant(
+            ShareAccess::new(ShareRole::Read, None).unwrap(),
+        ))
+        .await;
+    for method in COMMENT_COMMANDS {
+        let answer = fixture
+            .call(method, comment_params(method, &fixture.id, "read"))
+            .await;
+        assert_eq!(answer["error"]["code"], "forbidden", "read {method}: {answer}");
+    }
+    fixture.grant_to(ShareGrantTransition::Revoke).await;
+    let answer = fixture
+        .call("conversation.message", note_params(&fixture.id, "revoked", "x"))
+        .await;
+    assert_eq!(answer["error"]["code"], "conversation_not_found", "{answer}");
+    let grant = |revision| Initiator::Grant(GrantInitiator::new("receiver", revision).unwrap());
+    let saved: Vec<_> = fixture
+        .notes()
+        .await
+        .into_iter()
+        .map(|note| (note.actor.request_id().to_owned(), note.author))
+        .collect();
+    assert_eq!(
+        saved,
+        vec![
+            ("comment".to_owned(), grant(commented)),
+            ("drive".to_owned(), grant(driven)),
+        ]
+    );
+    // A party signed in as a principal other than its grantor, as a peer
+    // gateway is, leaves no note here even holding Comment.
+    let fixture = fixture.with_devices(Devices::new(&[("credential", "receiver", "grantor", true)]));
+    fixture.grant_to(ShareGrantTransition::Grant(comment)).await;
+    let answer = fixture
+        .call("conversation.message", note_params(&fixture.id, "peer", "x"))
+        .await;
+    assert_eq!(answer["error"]["code"], "forbidden", "{answer}");
+}
+
+/// Row J18: the same request again answers its first receipt, unchanged and
+/// saving nothing more; another note under the same request, from the same
+/// or another authority, is refused `idempotency_conflict`.
+#[tokio::test]
+async fn a_retried_note_answers_its_first_receipt_and_another_conflicts() {
+    use crate::conversation::application::{ShareGrantTransition, ShareGrants};
+    use crate::conversation::domain::{ShareAccess, ShareRole};
+    let fixture = SubscriptionFixture::new().await;
+    fixture.turn("first").await;
+    let first = fixture
+        .call("conversation.message", note_params(&fixture.id, "note", "hello"))
+        .await;
+    assert_eq!(first["ok"], true, "{first}");
+    let again = fixture
+        .call("conversation.message", note_params(&fixture.id, "note", "hello"))
+        .await;
+    assert_eq!(again["payload"], first["payload"]);
+    let changed = fixture
+        .call("conversation.message", note_params(&fixture.id, "note", "changed"))
+        .await;
+    assert_eq!(changed["error"]["code"], "idempotency_conflict", "{changed}");
+    // The same request from a device: another surface and authority.
+    let fixture = fixture.with_devices(this_device(true));
+    fixture
+        .grant_to(ShareGrantTransition::Grant(
+            ShareAccess::new(ShareRole::Comment, None).unwrap(),
+        ))
+        .await;
+    grants(&fixture.authority, &["conversation.read", "server.read"]);
+    let device = fixture
+        .call("conversation.message", note_params(&fixture.id, "note", "hello"))
+        .await;
+    assert_eq!(device["error"]["code"], "idempotency_conflict", "{device}");
+    // The device's own note, retried after the owner raised its grant to
+    // Drive, answers its first receipt and keeps the revision it was left
+    // under.
+    let left = fixture
+        .call("conversation.message", note_params(&fixture.id, "device-note", "hi"))
+        .await;
+    assert_eq!(left["ok"], true, "{left}");
+    let commented = fixture.metadata.grants(&fixture.id).await.unwrap()[0].policy_revision;
+    fixture
+        .grant_to(ShareGrantTransition::Grant(drive_access()))
+        .await;
+    assert_ne!(
+        fixture.metadata.grants(&fixture.id).await.unwrap()[0].policy_revision,
+        commented
+    );
+    let retried = fixture
+        .call("conversation.message", note_params(&fixture.id, "device-note", "hi"))
+        .await;
+    assert_eq!(retried["payload"], left["payload"], "{retried}");
+    let notes = fixture.notes().await;
+    assert_eq!(notes.len(), 2);
+    assert_eq!(
+        notes[1].author,
+        nessa_sdk::domain::agent_execution::executions::Initiator::Grant(
+            nessa_sdk::domain::agent_execution::executions::GrantInitiator::new(
+                "receiver", commented
+            )
+            .unwrap()
+        )
+    );
+}
+
+/// Row J19: one author leaves at most its rate of notes in any window; the
+/// next is refused `message_quota_exceeded` and saves nothing. Another
+/// author, a device under its grant, is counted apart.
+#[tokio::test]
+async fn an_author_past_its_note_rate_is_refused_and_another_is_not() {
+    use crate::conversation::application::ShareGrantTransition;
+    use crate::conversation::domain::{ShareAccess, ShareRole};
+    use nessa_sdk::application::agent_execution::sessions::NoteRecord;
+    let fixture = SubscriptionFixture::new().await;
+    fixture.turn("first").await;
+    for index in 0..NoteRecord::MAX_PER_AUTHOR_IN_WINDOW {
+        let answer = fixture
+            .call(
+                "conversation.message",
+                note_params(&fixture.id, &format!("note-{index}"), "x"),
+            )
+            .await;
+        assert_eq!(answer["ok"], true, "{index}: {answer}");
+    }
+    let refused = fixture
+        .call("conversation.message", note_params(&fixture.id, "one-more", "x"))
+        .await;
+    assert_eq!(refused["error"]["code"], "message_quota_exceeded", "{refused}");
+    let status = fixture
+        .call(
+            "conversation.messageStatus",
+            json!({"conversationId": fixture.id.to_string(), "requestId": "one-more"}),
+        )
+        .await;
+    assert_eq!(status["payload"]["found"], false, "{status}");
+    let fixture = fixture.with_devices(this_device(true));
+    fixture
+        .grant_to(ShareGrantTransition::Grant(
+            ShareAccess::new(ShareRole::Comment, None).unwrap(),
+        ))
+        .await;
+    // Both the device and the owner's own session may write.
+    grants(
+        &fixture.authority,
+        &["conversation.read", "conversation.write", "server.read"],
+    );
+    let device = fixture
+        .call("conversation.message", note_params(&fixture.id, "device", "x"))
+        .await;
+    assert_eq!(device["ok"], true, "{device}");
+    let owner = owner_call(
+        &fixture,
+        "conversation.message",
+        note_params(&fixture.id, "owner-again", "x"),
+    )
+    .await;
+    assert_eq!(owner["error"]["code"], "message_quota_exceeded", "{owner}");
+    assert_eq!(
+        fixture.notes().await.len(),
+        NoteRecord::MAX_PER_AUTHOR_IN_WINDOW + 1
+    );
+}
+
+/// Row J20: `conversation.messageStatus` finds the caller's own saved note
+/// by its request, with the receipt it was answered with, and answers
+/// `found: false` for a request that left none. It writes nothing.
+#[tokio::test]
+async fn message_status_finds_the_callers_own_note_by_its_request() {
+    let fixture = SubscriptionFixture::new().await;
+    fixture.turn("first").await;
+    let status = |request: &str| {
+        json!({"conversationId": fixture.id.to_string(), "requestId": request})
+    };
+    let unknown = fixture
+        .call("conversation.messageStatus", status("never"))
+        .await;
+    assert_eq!(
+        unknown["payload"],
+        json!({"found": false, "requestId": "never"}),
+        "{unknown}"
+    );
+    let receipt = fixture
+        .call("conversation.message", note_params(&fixture.id, "note", "hello"))
+        .await;
+    let found = fixture.call("conversation.messageStatus", status("note")).await;
+    assert_eq!(found["payload"]["found"], true, "{found}");
+    for key in ["requestId", "messageId", "acceptedAtMs", "deliveryState"] {
+        assert_eq!(found["payload"][key], receipt["payload"][key], "{key}");
+    }
+    assert_eq!(fixture.notes().await.len(), 1);
+}
+
+/// Row J21: a note's text is 1 to 8192 bytes and not all blank, and its
+/// delivery is `record_only`; anything else is refused `invalid_request`
+/// and saves nothing. A deleted conversation refuses a note
+/// `conversation_deleted`.
+#[tokio::test]
+async fn a_note_outside_its_bounds_or_on_a_deleted_conversation_is_refused() {
+    use nessa_sdk::application::agent_execution::sessions::NoteText;
+    let fixture = SubscriptionFixture::new().await;
+    fixture.turn("first").await;
+    let longest = "x".repeat(NoteText::MAX_BYTES);
+    let over = "x".repeat(NoteText::MAX_BYTES + 1);
+    for (request, text) in [("empty", ""), ("blank", " \n "), ("over", over.as_str())] {
+        let answer = fixture
+            .call("conversation.message", note_params(&fixture.id, request, text))
+            .await;
+        assert_eq!(answer["error"]["code"], "invalid_request", "{request}: {answer}");
+    }
+    let mut next_turn = note_params(&fixture.id, "next", "x");
+    next_turn["delivery"] = json!("next_turn");
+    let answer = fixture.call("conversation.message", next_turn).await;
+    assert_eq!(answer["error"]["code"], "invalid_request", "{answer}");
+    assert!(fixture.notes().await.is_empty());
+    let answer = fixture
+        .call("conversation.message", note_params(&fixture.id, "longest", &longest))
+        .await;
+    assert_eq!(answer["ok"], true, "{answer}");
+    let deleted = fixture
+        .call(
+            "conversation.delete",
+            json!({"conversationId": fixture.id.to_string(), "requestId": "delete"}),
+        )
+        .await;
+    assert_eq!(deleted["ok"], true, "{deleted}");
+    let message = fixture
+        .call("conversation.message", note_params(&fixture.id, "after", "x"))
+        .await;
+    assert_eq!(message["error"]["code"], "conversation_deleted", "{message}");
+    let status = fixture
+        .call(
+            "conversation.messageStatus",
+            json!({"conversationId": fixture.id.to_string(), "requestId": "longest"}),
+        )
+        .await;
+    assert_eq!(status["error"]["code"], "conversation_deleted", "{status}");
 }
 
 /// The owner's share fixture: a paired device `phone` and `tablet`, and the

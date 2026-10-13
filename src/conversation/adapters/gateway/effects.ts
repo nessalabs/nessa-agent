@@ -233,6 +233,10 @@ const failures: Partial<Record<ConversationErrorCode, CommandFailure>> = {
   // Answers only `conversation.share`, which the panel never sends; one that
   // met a command would be a request this panel had no business making.
   share_target_not_paired: "invalid-request",
+  // Answer only `conversation.message`, which the panel does not send yet;
+  // either meeting another command is a request it had no business making.
+  idempotency_conflict: "invalid-request",
+  message_quota_exceeded: "invalid-request",
 }
 
 /**
@@ -315,6 +319,9 @@ const readFailures: Record<ConversationErrorCode, ReadFailure> = {
   unknown_method: "unavailable",
   // A share is never a read; a read that met it would be no answer it knows.
   share_target_not_paired: "unavailable",
+  // A note's refusals; no read is ever answered with them.
+  idempotency_conflict: "unavailable",
+  message_quota_exceeded: "unavailable",
   model_unavailable: "unavailable",
   approval_mode_unavailable: "unavailable",
   approval_mode_not_applied: "unavailable",

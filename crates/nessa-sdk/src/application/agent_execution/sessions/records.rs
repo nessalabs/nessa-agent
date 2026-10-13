@@ -257,6 +257,7 @@ pub(super) enum ChangeUndo {
     Context(ProviderContext),
     Lease(Option<super::CurrentLease>),
     Artifact,
+    Note,
 }
 
 impl continuation::Continuation {
@@ -362,6 +363,7 @@ impl continuation::Continuation {
                     queue_history: Vec::new(),
                     lease: None,
                     artifacts: Vec::new(),
+                    notes: Vec::new(),
                 });
             }
             SessionChange::InputAccepted(record) => {
@@ -669,6 +671,14 @@ impl continuation::Continuation {
                 snapshot.artifacts.push(record.clone());
                 undo.push(ChangeUndo::Artifact);
             }
+            SessionChange::Note(record) => {
+                let snapshot = candidate
+                    .as_mut()
+                    .ok_or_else(|| corrupt("note record precedes session open"))?;
+                super::notes::admit_saved(snapshot, record)?;
+                snapshot.notes.push(record.clone());
+                undo.push(ChangeUndo::Note);
+            }
         }
 
         Ok(())
@@ -839,6 +849,18 @@ impl continuation::Continuation {
                 self.snapshot_bytes = self
                     .snapshot_bytes
                     .saturating_sub(super::retained::artifact(&record));
+            }
+            ChangeUndo::Note => {
+                let record = self
+                    .snapshot
+                    .as_mut()
+                    .expect("open")
+                    .notes
+                    .pop()
+                    .expect("note record");
+                self.snapshot_bytes = self
+                    .snapshot_bytes
+                    .saturating_sub(super::retained::note(&record));
             }
         }
     }

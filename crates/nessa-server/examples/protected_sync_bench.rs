@@ -1075,6 +1075,7 @@ fn seed(
             queue_history: Vec::new(),
             lease: None,
             artifacts: Vec::new(),
+            notes: Vec::new(),
         };
         let mut binding = lease.load().await.unwrap().binding().clone();
         let mut units = vec![SessionSaveUnit::new(vec![SessionChange::Opened {

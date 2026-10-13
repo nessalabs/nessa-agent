@@ -68,6 +68,7 @@ async fn worker_projection_after_reload(
         }],
         lease: None,
         artifacts: Vec::new(),
+        notes: Vec::new(),
     };
     let storage = InMemoryStorage::new();
     let lease = storage.open(session_id.clone()).await.unwrap();

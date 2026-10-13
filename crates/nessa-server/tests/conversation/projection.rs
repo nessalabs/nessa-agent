@@ -131,6 +131,9 @@ async fn gateway_record_view_waits_for_message_commit() {
         fn sleep_until(&self, _: Duration) -> MessageCommitSleep {
             Box::pin(std::future::pending())
         }
+        fn unix_milliseconds(&self) -> u64 {
+            0
+        }
     }
 
     let directory = tempfile::tempdir().unwrap();
@@ -320,6 +323,7 @@ fn review_snapshot(events: Vec<ExecutionEvent>) -> SessionSnapshot {
         }],
         lease: None,
         artifacts: Vec::new(),
+        notes: Vec::new(),
     }
 }
 

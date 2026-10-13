@@ -57,6 +57,7 @@ fn opened(id: &SessionId) -> (SessionChange, SessionSnapshot) {
             queue_history: Vec::new(),
             lease: None,
             artifacts: Vec::new(),
+            notes: Vec::new(),
         },
     )
 }
