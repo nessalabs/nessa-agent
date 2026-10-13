@@ -5326,6 +5326,16 @@ impl super::ShareGrants for EveryRevisionHeld {
         let policy = self.0.clone();
         Box::pin(async move { Ok(Some(policy)) })
     }
+    fn hold_revision<'a>(
+        &'a self,
+        _: &'a ConversationId,
+        _: &'a str,
+        _: u64,
+    ) -> super::ConversationFuture<'a, super::RevisionHold> {
+        // This double records no live grant row. The turns it admits are
+        // not testing revocation.
+        Box::pin(async { Ok(super::RevisionHold::vacant()) })
+    }
 }
 
 /// A Drive tool audit that keeps what it is given, or refuses it.
@@ -5831,6 +5841,14 @@ impl super::ShareGrants for NoEntry {
     ) -> super::ConversationFuture<'a, Option<crate::conversation::domain::ToolPolicy>> {
         Box::pin(async { Ok(None) })
     }
+    fn hold_revision<'a>(
+        &'a self,
+        _: &'a ConversationId,
+        _: &'a str,
+        _: u64,
+    ) -> super::ConversationFuture<'a, super::RevisionHold> {
+        Box::pin(async { Ok(super::RevisionHold::vacant()) })
+    }
 }
 
 /// Row J26: a Drive turn is refused `DrivePolicyUnenforceable`, and nothing
@@ -6165,6 +6183,133 @@ async fn a_grant_change_waits_until_the_turn_is_saved() {
         .await
         .unwrap()
         .is_empty());
+}
+
+/// Row J29: a stalled save on one conversation does not block another
+/// conversation's revoke or its Drive turn. The permit is the grant's, not
+/// the process's.
+#[tokio::test]
+async fn a_stalled_save_on_one_conversation_does_not_block_another() {
+    use crate::conversation::domain::{ShareAccess, ShareRole, ToolPolicy, ToolPreset};
+    let root = tempfile::tempdir().unwrap();
+    let harness = in_process(root.path(), DELETION_BUDGETS.stop);
+    bind_live_grants(
+        &harness,
+        Arc::clone(&harness.metadata) as Arc<dyn super::ShareGrants>,
+    );
+    harness.create().await;
+    let revision = grant_drive(&harness, "phone").await;
+    let other = ConversationId::new("6c0a9f2e-1d3b-4c7a-8e6f-2b9d4a1c7e31").unwrap();
+    harness
+        .service
+        .create(
+            other.clone(),
+            caller("create-other"),
+            RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    crate::conversation_test_support::grant_as(
+        &harness.metadata,
+        &other,
+        "phone",
+        ShareAccess::new(ShareRole::Drive, Some(ToolPolicy::preset(ToolPreset::All))).unwrap(),
+    )
+    .await;
+    let other_revision = super::ShareGrants::grants(&*harness.metadata, &other)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|grant| grant.receiver_id == "phone")
+        .expect("the other grant")
+        .policy_revision;
+    let (entered, release) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    *harness.storage.stall_input.lock().unwrap() =
+        Some((Arc::clone(&entered), Arc::clone(&release)));
+    let service = harness.service.clone();
+    let id = harness.id.clone();
+    let stalled = tokio::spawn(async move {
+        use nessa_sdk::domain::agent_execution::executions::{GrantInitiator, Initiation};
+        service
+            .submit_as(
+                id,
+                caller("driven-a"),
+                "driven-a".into(),
+                drive_message(),
+                SubmissionMode::Queue,
+                super::service::Writer::Person(Initiation::grant(
+                    GrantInitiator::new("phone", revision).unwrap(),
+                )),
+            )
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(10), entered.notified())
+        .await
+        .expect("conversation A's save is entered");
+    let release_when_done = ReleaseWhenDropped(Arc::clone(&release));
+    let sent = tokio::time::timeout(
+        Duration::from_secs(5),
+        submit_drive_on(&harness, &other, "driven-b", other_revision),
+    )
+    .await
+    .expect("conversation B's Drive turn is not blocked by A's save");
+    assert!(sent.is_ok(), "{sent:?}");
+    let metadata = Arc::clone(&harness.metadata);
+    let other_for_revoke = other.clone();
+    let revoked = tokio::time::timeout(Duration::from_secs(2), async move {
+        revoke_drive(&metadata, &other_for_revoke, "phone").await
+    })
+    .await
+    .expect("conversation B's revoke is not blocked by A's save");
+    assert!(revoked);
+    drop(release_when_done);
+    let stalled = tokio::time::timeout(Duration::from_secs(10), stalled)
+        .await
+        .expect("conversation A's send finishes")
+        .expect("conversation A's send task");
+    assert!(stalled.is_ok(), "{stalled:?}");
+    harness
+        .service
+        .close(harness.id.clone(), caller("close-a"))
+        .await
+        .unwrap();
+    harness
+        .service
+        .close(other, caller("close-b"))
+        .await
+        .unwrap();
+}
+
+/// Notifies when dropped, including when an assertion panics, so a stalled
+/// save does not outlive the test.
+struct ReleaseWhenDropped(Arc<Notify>);
+
+impl Drop for ReleaseWhenDropped {
+    fn drop(&mut self) {
+        self.0.notify_one();
+    }
+}
+
+async fn submit_drive_on(
+    harness: &Harness,
+    id: &ConversationId,
+    execution: &str,
+    revision: u64,
+) -> Result<nessa_protocol::conversation::view::SubmissionReceipt, super::service::SubmitFailure> {
+    use nessa_sdk::domain::agent_execution::executions::{GrantInitiator, Initiation};
+    harness
+        .service
+        .submit_as(
+            id.clone(),
+            caller(execution),
+            execution.into(),
+            drive_message(),
+            SubmissionMode::Queue,
+            super::service::Writer::Person(Initiation::grant(
+                GrantInitiator::new("phone", revision).unwrap(),
+            )),
+        )
+        .await
 }
 
 /// Row J29: a retry of a turn already saved is answered from that save

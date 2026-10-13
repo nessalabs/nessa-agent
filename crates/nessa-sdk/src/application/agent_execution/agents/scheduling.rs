@@ -10,8 +10,9 @@ use super::{Agent, AgentError, AttachmentPhase, AttachmentRequest};
 use crate::application::agent_execution::{
     caller_wake::{contain_caller_wake, CallerWaiter},
     executions::{
-        ExecutionAuditRecord, ExecutionRequest, QueueAdmissionRecord, QueueOrderRecord,
-        QueueSettlementRecord, SteeringAcknowledgementRecord, SubmissionMode, Submitter,
+        AfterSaveRefusal, ExecutionAuditRecord, ExecutionRequest, QueueAdmissionRecord,
+        QueueOrderRecord, QueueSettlementRecord, SteeringAcknowledgementRecord, SubmissionMode,
+        Submitter,
     },
     permissions::ActionContext,
     providers::{
@@ -1428,6 +1429,11 @@ impl Agent {
     /// delivery starts, only an explicit PromptRequired response allows queuing it
     /// as a new invocation. Timeouts, malformed replies and transport errors are
     /// never retried automatically.
+    /// When `submitter` carries [`Submitter::with_after_save`](crate::application::agent_execution::executions::Submitter::with_after_save),
+    /// that check runs after the input is saved and before this injects into
+    /// the provider or queues the turn. A refusal settles the saved attempt
+    /// and leaves the provider uncalled. The check is not held across the
+    /// provider's injection wait: it returns before that wait starts.
     /// Dropping the caller's wait does not abandon accepted steering delivery.
     /// Identical retries recover the original injection acknowledgement, queued
     /// receipt, or error; they never inject a second time. Conflicting retries return
@@ -1528,6 +1534,10 @@ impl Agent {
                 .is_some_and(|saved| saved.initiator() == submitter.initiation.initiator()),
             None => true,
         };
+        // Cloned before the save consumes its own copy. The host's check
+        // stays alive across that save and is asked once it has committed,
+        // before this task waits on the provider.
+        let after_save = submitter.after_save.clone();
         let index = self
             .inner
             .manager
@@ -1546,10 +1556,20 @@ impl Agent {
                 NoteIntake::default(),
             )
             .await?;
+        let refused = match after_save {
+            Some(check) => match check.after_save().await {
+                Ok(()) => None,
+                Err(AfterSaveRefusal::Refused) => Some(AgentError::RefusedAfterSave),
+                Err(AfterSaveRefusal::Unavailable) => Some(AgentError::AfterSaveUnavailable),
+            },
+            None => None,
+        };
         // WorkStatus persistence can be overtaken by close or provider settlement.
         // Revalidate the captured target before handing anything to the adapter.
         let mut activated = false;
-        let outcome = if !self.inner.lifecycle.accepts_queued()
+        let outcome = if let Some(error) = refused {
+            Err(error)
+        } else if !self.inner.lifecycle.accepts_queued()
             || close_notice.has_changed().unwrap_or(true)
         {
             Err(AgentError::Closed)

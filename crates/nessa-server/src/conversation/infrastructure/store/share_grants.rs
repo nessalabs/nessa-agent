@@ -27,6 +27,90 @@ use nessa_auth::domain::{CredentialId, MAX_IDENTIFIER_BYTES};
 use nessa_local_database::rusqlite::{params, OptionalExtension, Transaction, TransactionBehavior};
 use nessa_protocol::conversation::domain::ConversationId;
 use serde_json::{json, Value};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, PoisonError};
+
+/// One admission mutex, shared by every permit for that grant.
+type GrantGate = Arc<tokio::sync::Mutex<()>>;
+
+/// `(conversation, receiver)` as the map stores it.
+type GrantKey = (String, String);
+
+/// Per-grant admission. The map holds one mutex per `(conversation, receiver)`
+/// that a hold or a change is using, and drops the entry when the last permit
+/// drops so a grant that is gone does not stay in the map.
+pub(super) struct GrantGates {
+    gates: Mutex<HashMap<GrantKey, GrantGate>>,
+}
+
+/// The permit `hold_revision` keeps until the turn's save has been decided.
+struct GrantPermit {
+    key: (String, String),
+    gates: Arc<GrantGates>,
+    gate: Arc<tokio::sync::Mutex<()>>,
+    guard: Option<tokio::sync::OwnedMutexGuard<()>>,
+}
+
+impl GrantGates {
+    pub(super) fn new() -> Arc<Self> {
+        Arc::new(Self {
+            gates: Mutex::new(HashMap::new()),
+        })
+    }
+
+    /// Lock `(conversation, receiver)`. A caller that already holds the
+    /// metadata connection must not call this: the connection is taken only
+    /// after the permit, inside `run`.
+    ///
+    /// A wait cancelled before the permit is built leaves the map entry. The
+    /// next permit for that key reuses it, and the last permit removes it.
+    async fn lock(self: &Arc<Self>, conversation: String, receiver: String) -> GrantPermit {
+        let key = (conversation, receiver);
+        let gate = {
+            let mut gates = self.gates.lock().unwrap_or_else(PoisonError::into_inner);
+            if let Some(existing) = gates.get(&key) {
+                Arc::clone(existing)
+            } else {
+                let gate = Arc::new(tokio::sync::Mutex::new(()));
+                gates.insert(key.clone(), Arc::clone(&gate));
+                gate
+            }
+        };
+        let guard = Arc::clone(&gate).lock_owned().await;
+        GrantPermit {
+            key,
+            gates: Arc::clone(self),
+            gate,
+            guard: Some(guard),
+        }
+    }
+}
+
+impl Drop for GrantPermit {
+    fn drop(&mut self) {
+        // Release the waiters before deciding whether this gate is still in
+        // use. The map lock makes that decision atomic with a later lookup.
+        self.guard.take();
+        let mut gates = self
+            .gates
+            .gates
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let last = gates.get(&self.key).is_some_and(|current| {
+            Arc::ptr_eq(current, &self.gate) && Arc::strong_count(&self.gate) == 2
+        });
+        if last {
+            gates.remove(&self.key);
+        }
+    }
+}
+
+/// What one attempt to write a grant change did.
+enum ChangeAttempt {
+    Applied(bool),
+    /// The receiver this attempt locked is not the row it would write.
+    Retry,
+}
 
 /// SQL naming the one grant row the receiver bound to parameter `receiver`
 /// holds on the conversation whose id is `conversation`, as `g`. Both are
@@ -225,13 +309,169 @@ impl ShareGrants for LocalConversationStore {
     }
 
     fn change(&self, change: ShareGrantChange) -> ConversationFuture<'_, bool> {
-        let admission = std::sync::Arc::clone(&self.admission);
+        Box::pin(async move {
+            // The receiver a hold locks is the live row's, which a revoke
+            // names only by credential. Look it up, lock that grant, and
+            // write. If the row's receiver is no longer the one locked, the
+            // attempt writes nothing and tries the receiver it found.
+            for _ in 0..4 {
+                let key = self.receiver_to_lock(&change).await?;
+                let _permit = match &key {
+                    Some(receiver) => Some(
+                        self.grant_gates
+                            .lock(change.conversation_id.to_string(), receiver.clone())
+                            .await,
+                    ),
+                    None => None,
+                };
+                match self.apply_change(change.clone(), key).await? {
+                    ChangeAttempt::Applied(applied) => return Ok(applied),
+                    ChangeAttempt::Retry => continue,
+                }
+            }
+            tracing::error!("a share grant change could not lock the receiver it writes");
+            Err(ConversationError::Metadata)
+        })
+    }
+    fn hold_revision<'a>(
+        &'a self,
+        id: &'a ConversationId,
+        receiver_id: &'a str,
+        policy_revision: u64,
+    ) -> ConversationFuture<'a, crate::conversation::application::RevisionHold> {
+        let gates = Arc::clone(&self.grant_gates);
+        let key = (id.to_string(), receiver_id.to_owned());
+        let read = self.live_revision(id, receiver_id);
+        Box::pin(async move {
+            let permit = gates.lock(key.0, key.1).await;
+            match read.await? {
+                Some(live) if live == policy_revision => {
+                    Ok(crate::conversation::application::RevisionHold::held(permit))
+                }
+                _ => Err(ConversationError::Revoked),
+            }
+        })
+    }
+
+    fn grants<'a>(&'a self, id: &'a ConversationId) -> ConversationFuture<'a, Vec<ShareGrant>> {
+        let id = id.clone();
+        self.run(move |connection| {
+            let mut statement = connection
+                .prepare(&format!(
+                    "SELECT receiver_id, {}, role, {}, policy_revision, granted_at_ms
+                     FROM share_grants
+                     WHERE conversation_id = ?1 ORDER BY granted_at_ms, credential_id",
+                    super::acquisition::text("credential_id", MAX_IDENTIFIER_BYTES, false),
+                    super::acquisition::text("policy", MAX_POLICY_TEXT_BYTES, true),
+                ))
+                .map_err(failed)?;
+            let mut rows = statement.query([id.to_string()]).map_err(failed)?;
+            let mut grants = Vec::new();
+            while let Some(row) = rows.next().map_err(failed)? {
+                let stored = cells((|| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, i64>(5)?,
+                    ))
+                })())?;
+                let grant = stored.and_then(
+                    |(receiver_id, credential, role, policy, policy_revision, granted_at)| {
+                        let policy = match policy {
+                            Some(text) => Some(policy_from(&text)?),
+                            None => None,
+                        };
+                        Some(ShareGrant {
+                            conversation_id: id.clone(),
+                            receiver_id,
+                            credential_id: CredentialId::new(credential).ok()?,
+                            access: ShareAccess::new(role_named(&role)?, policy).ok()?,
+                            policy_revision: sequence(policy_revision)?,
+                            granted_at_ms: time(granted_at)?,
+                        })
+                    },
+                );
+                grants.push(grant.ok_or_else(|| unreadable("share_grants", &id.to_string()))?);
+            }
+            Ok(grants)
+        })
+    }
+
+    fn policy_at<'a>(
+        &'a self,
+        id: &'a ConversationId,
+        receiver_id: &'a str,
+        policy_revision: u64,
+    ) -> ConversationFuture<'a, Option<ToolPolicy>> {
+        let (id, receiver_id) = (id.to_string(), receiver_id.to_owned());
+        self.run(move |connection| {
+            // A revision past what SQLite numbers names no entry.
+            let Ok(sequence) = i64::try_from(policy_revision) else {
+                return Ok(None);
+            };
+            let entry: Option<(String, Option<String>)> = connection
+                .query_row(
+                    &format!(
+                        "SELECT after, {} FROM share_grant_changes
+                         WHERE sequence = ?1 AND conversation_id = ?2 AND receiver_id = ?3",
+                        super::acquisition::text("policy_after", MAX_POLICY_TEXT_BYTES, true),
+                    ),
+                    params![sequence, id, receiver_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()
+                .map_err(failed)?;
+            match entry {
+                Some((after, Some(text))) if after == role_name(ShareRole::Drive) => {
+                    policy_from(&text)
+                        .map(Some)
+                        .ok_or_else(|| unreadable("share_grant_changes", &id))
+                }
+                _ => Ok(None),
+            }
+        })
+    }
+}
+
+impl LocalConversationStore {
+    /// The receiver `hold_revision` would lock for `change`: the live row's
+    /// receiver, or the one a new grant names. `None` when a revoke finds no
+    /// row and names no receiver, so there is no grant to exclude.
+    fn receiver_to_lock<'a>(
+        &'a self,
+        change: &'a ShareGrantChange,
+    ) -> ConversationFuture<'a, Option<String>> {
+        let id = change.conversation_id.to_string();
+        let named = change.receiver_id.clone();
+        let credential = change.credential_id.as_str().to_owned();
+        self.run(move |connection| {
+            let found: Option<String> = connection
+                .query_row(
+                    "SELECT receiver_id FROM share_grants
+                     WHERE conversation_id = ?1 AND (receiver_id = ?2 OR credential_id = ?3)",
+                    params![id, named.clone(), credential],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(failed)?;
+            Ok(found.or(named))
+        })
+    }
+
+    /// Write `change` while `expected` is the receiver the caller has locked.
+    /// `Retry` when that is not the row this write would touch; nothing is
+    /// committed. The connection is taken here, after the grant lock.
+    fn apply_change(
+        &self,
+        change: ShareGrantChange,
+        expected: Option<String>,
+    ) -> ConversationFuture<'_, ChangeAttempt> {
         let changes = self.changes.clone();
         let access = self.access.clone();
-        // Built first and polled only after the admission lock: the lock is
-        // held across the transaction, and the connection is taken inside
-        // `run`, so admission stays outside the connection.
-        let write = self.run(move |connection| {
+        self.run(move |connection| {
             let transaction = connection
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .map_err(failed)?;
@@ -291,7 +531,7 @@ impl ShareGrants for LocalConversationStore {
                 .map_err(failed)?;
             if let Some((credential, journaled_before, journaled_after)) = replayed {
                 return if credential == change.credential_id.as_str() && journaled_after == after {
-                    Ok(journaled_before != journaled_after)
+                    Ok(ChangeAttempt::Applied(journaled_before != journaled_after))
                 } else {
                     Err(ConversationError::InvalidInput)
                 };
@@ -309,6 +549,7 @@ impl ShareGrants for LocalConversationStore {
                 )
                 .optional()
                 .map_err(failed)?;
+            let row_present = existing.is_some();
             let (receiver, before) = match existing {
                 Some((receiver, held)) => (receiver, held),
                 None => match &change.transition {
@@ -325,6 +566,17 @@ impl ShareGrants for LocalConversationStore {
                     ),
                 },
             };
+            // The permit the caller holds is for `expected`. A row that names
+            // another receiver, or one that appeared after a revoke looked
+            // and found nothing, is written on the next attempt under that
+            // receiver's permit. Nothing is committed here.
+            let covered = match &expected {
+                Some(locked) => locked == &receiver,
+                None => !row_present,
+            };
+            if !covered {
+                return Ok(ChangeAttempt::Retry);
+            }
             let applied = before != after;
             // The bounds a new grant, and a change to Drive, must fit (rows
             // G17 and J9), checked before anything is written.
@@ -436,7 +688,7 @@ impl ShareGrants for LocalConversationStore {
             }
             transaction.commit().map_err(failed)?;
             if !applied {
-                return Ok(false);
+                return Ok(ChangeAttempt::Applied(false));
             }
             tracing::info!(
                 conversation_id = %change.conversation_id,
@@ -455,112 +707,7 @@ impl ShareGrants for LocalConversationStore {
                     conversation.owner().clone(),
                 ));
             }
-            Ok(true)
-        });
-        Box::pin(async move {
-            let _hold = admission.lock().await;
-            write.await
-        })
-    }
-
-    fn hold_revision<'a>(
-        &'a self,
-        id: &'a ConversationId,
-        receiver_id: &'a str,
-        policy_revision: u64,
-    ) -> ConversationFuture<'a, crate::conversation::application::RevisionHold> {
-        let admission = std::sync::Arc::clone(&self.admission);
-        let read = self.live_revision(id, receiver_id);
-        Box::pin(async move {
-            let guard = admission.lock_owned().await;
-            match read.await? {
-                Some(live) if live == policy_revision => {
-                    Ok(crate::conversation::application::RevisionHold::held(guard))
-                }
-                _ => Err(ConversationError::Revoked),
-            }
-        })
-    }
-
-    fn grants<'a>(&'a self, id: &'a ConversationId) -> ConversationFuture<'a, Vec<ShareGrant>> {
-        let id = id.clone();
-        self.run(move |connection| {
-            let mut statement = connection
-                .prepare(&format!(
-                    "SELECT receiver_id, {}, role, {}, policy_revision, granted_at_ms
-                     FROM share_grants
-                     WHERE conversation_id = ?1 ORDER BY granted_at_ms, credential_id",
-                    super::acquisition::text("credential_id", MAX_IDENTIFIER_BYTES, false),
-                    super::acquisition::text("policy", MAX_POLICY_TEXT_BYTES, true),
-                ))
-                .map_err(failed)?;
-            let mut rows = statement.query([id.to_string()]).map_err(failed)?;
-            let mut grants = Vec::new();
-            while let Some(row) = rows.next().map_err(failed)? {
-                let stored = cells((|| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, Option<String>>(3)?,
-                        row.get::<_, i64>(4)?,
-                        row.get::<_, i64>(5)?,
-                    ))
-                })())?;
-                let grant = stored.and_then(
-                    |(receiver_id, credential, role, policy, policy_revision, granted_at)| {
-                        let policy = match policy {
-                            Some(text) => Some(policy_from(&text)?),
-                            None => None,
-                        };
-                        Some(ShareGrant {
-                            conversation_id: id.clone(),
-                            receiver_id,
-                            credential_id: CredentialId::new(credential).ok()?,
-                            access: ShareAccess::new(role_named(&role)?, policy).ok()?,
-                            policy_revision: sequence(policy_revision)?,
-                            granted_at_ms: time(granted_at)?,
-                        })
-                    },
-                );
-                grants.push(grant.ok_or_else(|| unreadable("share_grants", &id.to_string()))?);
-            }
-            Ok(grants)
-        })
-    }
-
-    fn policy_at<'a>(
-        &'a self,
-        id: &'a ConversationId,
-        receiver_id: &'a str,
-        policy_revision: u64,
-    ) -> ConversationFuture<'a, Option<ToolPolicy>> {
-        let (id, receiver_id) = (id.to_string(), receiver_id.to_owned());
-        self.run(move |connection| {
-            // A revision past what SQLite numbers names no entry.
-            let Ok(sequence) = i64::try_from(policy_revision) else {
-                return Ok(None);
-            };
-            let entry: Option<(String, Option<String>)> = connection
-                .query_row(
-                    &format!(
-                        "SELECT after, {} FROM share_grant_changes
-                         WHERE sequence = ?1 AND conversation_id = ?2 AND receiver_id = ?3",
-                        super::acquisition::text("policy_after", MAX_POLICY_TEXT_BYTES, true),
-                    ),
-                    params![sequence, id, receiver_id],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .optional()
-                .map_err(failed)?;
-            match entry {
-                Some((after, Some(text))) if after == role_name(ShareRole::Drive) => {
-                    policy_from(&text)
-                        .map(Some)
-                        .ok_or_else(|| unreadable("share_grant_changes", &id))
-                }
-                _ => Ok(None),
-            }
+            Ok(ChangeAttempt::Applied(true))
         })
     }
 }

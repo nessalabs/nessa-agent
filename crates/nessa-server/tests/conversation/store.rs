@@ -3876,6 +3876,31 @@ async fn a_turn_is_saved_only_while_its_grant_stays_at_the_admitted_revision() {
             .is_err(),
         "a revoke committed while the revision was held"
     );
+    // Another conversation's grant is not this permit. Its revoke finishes
+    // while the first conversation's revision is still held.
+    let other = new_id();
+    store.create(owned(&other)).await.unwrap();
+    assert!(share_as(&store, &other, "phone", no_shell(), "other-share")
+        .await
+        .unwrap());
+    let other_store = Arc::clone(&store);
+    let other_id = other.clone();
+    let other_revoke = tokio::spawn(async move {
+        other_store
+            .change(grant_change(
+                ShareGrantTransition::Revoke,
+                &other_id,
+                Some("phone"),
+                "phone-credential",
+                "revoke-other",
+            ))
+            .await
+    });
+    assert!(tokio::time::timeout(Duration::from_secs(2), other_revoke)
+        .await
+        .expect("another conversation's revoke is not blocked by this hold")
+        .expect("the other revoke task")
+        .unwrap());
     drop(hold);
     assert!(tokio::time::timeout(Duration::from_secs(5), &mut revoke)
         .await

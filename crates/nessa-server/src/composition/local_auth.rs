@@ -1227,8 +1227,10 @@ async fn conversations(
     service.bind_note_authors(metadata.clone());
     // A Drive grant's turn runs only where its tools are checked: against
     // the grant journal's policy, by the Cedar evaluator (slice J4 of #707).
-    // The same table's revision hold refuses the turn when that grant is
-    // revoked or changed before the turn is saved (row J29).
+    // The same table's revision hold is that one grant. It refuses the turn
+    // when that grant is revoked or changed before the turn is saved, and a
+    // native steer compares the revision again after the save, before the
+    // provider is asked (row J29).
     let evaluator = CedarToolPolicyEvaluator::new()
         .map_err(|_| RunError::Agent("the tool policy bundle does not validate".into()))?;
     let drive_audit =

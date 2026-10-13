@@ -1901,6 +1901,14 @@ impl crate::conversation::application::ShareGrants for EveryConversationGranted 
     ) -> ConversationFuture<'a, Option<crate::conversation::domain::ToolPolicy>> {
         Box::pin(async { Ok(None) })
     }
+    fn hold_revision<'a>(
+        &'a self,
+        _: &'a ConversationId,
+        _: &'a str,
+        _: u64,
+    ) -> ConversationFuture<'a, crate::conversation::application::RevisionHold> {
+        Box::pin(async { Ok(crate::conversation::application::RevisionHold::vacant()) })
+    }
 }
 
 /// Grant `receiver` Read on `id` in a real grant table, as the owner's

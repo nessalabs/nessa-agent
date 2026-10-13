@@ -250,13 +250,17 @@ request, `Part of #803`, because each pull request costs a full CI run (Saurav,
   held), which costs well under a millisecond: a 256-entry page reads in 1.4 ms
   against 1.1 ms with no check.
 - Known limit, closed for a Drive grant's own turn by #839: moving a check
-  into Cedar does not change when it runs. A Drive turn is saved only while
+  into Cedar does not change when it runs. A Drive turn proceeds only while
   `hold_revision` still finds that grant at the revision Cedar was asked
-  about. The grant table and the turn's records are two databases, so the
-  check and the save share one lock rather than one SQL transaction; the
-  lock is dropped once the turn is saved, and a revoke that waited then
-  applies. A note taken by the owner's turn still has the window (row J23):
-  a revoke that lands while that turn is being admitted stops the next turn,
-  not that one.
+  about. The permit is that one `(conversation, receiver)` pair, removed
+  when the last permit drops, not one lock for every conversation. The
+  grant table and the turn's records are two databases, so the check and
+  the save share that permit rather than one SQL transaction. A queued
+  turn keeps it until enqueue returns. A native steer drops it after the
+  save, compares the live revision again, and does not inject when it
+  moved; the permit is not held across the provider's injection wait. A
+  note taken by the owner's turn still has the window (row J23): a revoke
+  that lands while that turn is being admitted stops the next turn, not
+  that one.
 - Watch for: a context value that is really a verdict, and a `cedar` directory
   used to hide hand-written matching. Both are review findings under gate 18.

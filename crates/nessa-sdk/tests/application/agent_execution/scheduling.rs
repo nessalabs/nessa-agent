@@ -409,6 +409,67 @@ async fn scheduling_native_injection_saves_input_and_correlates_with_active_exec
     agent.close(close_action()).await.unwrap();
 }
 
+/// The host's check runs after the input is saved and before the provider is
+/// asked. A refusal leaves the provider uncalled.
+struct RefuseSaved {
+    saved_before_injection: Mutex<bool>,
+    provider: Arc<GatedProvider>,
+}
+
+impl AfterSaveCheck for RefuseSaved {
+    fn after_save<'a>(
+        &'a self,
+    ) -> std::pin::Pin<Box<dyn Future<Output = Result<(), AfterSaveRefusal>> + Send + 'a>> {
+        Box::pin(async move {
+            let snapshot = self.provider.storage.snapshot();
+            let saved = snapshot
+                .invocations
+                .iter()
+                .any(|record| record.request.execution_id.as_str() == "correction");
+            *self.saved_before_injection.lock().unwrap() = saved;
+            assert!(
+                self.provider.steered.lock().unwrap().is_empty(),
+                "the provider was asked before the saved turn was re-checked"
+            );
+            Err(AfterSaveRefusal::Refused)
+        })
+    }
+}
+
+#[tokio::test]
+async fn scheduling_a_refused_save_check_is_not_injected() {
+    let (agent, storage, provider, mut calls) = fixture(Ok(SteeringOutcome::Injected)).await;
+    let first = agent
+        .enqueue(request("active"), Submitter::owner(actor()))
+        .await
+        .unwrap();
+    let running = started(&mut calls, "active").await;
+    let check = Arc::new(RefuseSaved {
+        saved_before_injection: Mutex::new(false),
+        provider: Arc::clone(&provider),
+    });
+    let refused = agent
+        .steer(
+            request("correction"),
+            Submitter::owner(actor()).with_after_save(check.clone()),
+        )
+        .await;
+    match refused {
+        Err(AgentError::RefusedAfterSave) => {}
+        Err(error) => panic!("steer refused as {error:?}"),
+        Ok(_) => panic!("steer injected a turn the save check refused"),
+    }
+    assert!(*check.saved_before_injection.lock().unwrap());
+    assert!(provider.steered.lock().unwrap().is_empty());
+    assert_eq!(
+        record(&storage, "correction").result,
+        Some(Err(AgentError::RefusedAfterSave))
+    );
+    complete(running);
+    within(first.wait()).await.unwrap();
+    agent.close(close_action()).await.unwrap();
+}
+
 #[tokio::test]
 async fn scheduling_unsupported_and_ambiguous_steering_are_never_replayed() {
     for error in [
