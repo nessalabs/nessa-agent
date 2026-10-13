@@ -23,6 +23,7 @@ import type {
   PairingApi,
 } from "@nessa/client"
 import * as React from "react"
+import { flushSync } from "react-dom"
 import { createRoot, type Root } from "react-dom/client"
 import { Provider } from "react-redux"
 import { conversationView } from "../../../../packages/nessa-client/src/protocol/conversation-validate"
@@ -240,7 +241,9 @@ function showPanel() {
     </React.StrictMode>
   )
   if (!panelRoot) panelRoot = createRoot(panelElement)
-  panelRoot.render(tree)
+  // The page calls this from outside React. Flush so a frame that dropped a
+  // question is on the panel before the caller looks.
+  flushSync(() => panelRoot?.render(tree))
 }
 
 showPanel()
