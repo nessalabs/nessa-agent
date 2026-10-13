@@ -860,6 +860,31 @@ it("shows auth recovery without duplicating its diagnostic and preserves unrelat
   expect(JSON.stringify(transcript)).not.toContain("OAuth session expired")
 })
 
+it("keeps an independent failure beside authentication recovery", () => {
+  const transcript = transcriptFrom(
+    view("auth", {
+      messages: [
+        turn({
+          status: "failed",
+          authenticationRequired: true,
+          error: "The turn could not complete all required work.",
+        }),
+      ],
+    }),
+    1,
+    at,
+    GATEWAY_NOW_MS,
+  )
+  expect(recovery(transcript)).toBe(true)
+  expect(transcript.messages[0]).toMatchObject({
+    role: "user",
+    terminal: {
+      status: "failed",
+      error: "The turn could not complete all required work.",
+    },
+  })
+})
+
 it("keeps a Failed mark on an authentication refusal once another turn has followed", () => {
   const refusal = turn({
     status: "failed",

@@ -454,27 +454,37 @@ export function transcriptFrom(
 }
 
 /**
+ * The notice `failure_notice` adds when a typed authentication refusal also
+ * has a separate cleanup or storage failure. An authentication-only refusal
+ * leaves `error` empty. The text is the gateway's; it is not rewritten.
+ */
+const REQUIRED_WORK_FAILURE = "The turn could not complete all required work."
+
+/**
  * A terminal status the gateway reported. A typed authentication refusal
  * that recovery still owns — it is the latest input — does not also carry
- * the mark or its diagnostic. An earlier refusal keeps both. Any other
- * status is still running or finished and has no mark. A blank diagnostic
- * is left off; the text itself is not rewritten.
+ * the mark when that refusal is the only failure. The gateway's independent
+ * required-work failure stays on that refusal, beside sign-in. An earlier
+ * refusal keeps its mark and diagnostic, including the authentication
+ * diagnostic. Any other status is still running or finished and has no
+ * mark. A blank diagnostic is left off; the text itself is not rewritten.
  */
 function turnTerminal(
   turn: ConversationView["messages"][number],
   /** This turn is the conversation's latest input, pending ones included. */
   latestInput: boolean,
 ): TurnTerminal | undefined {
-  if (turn.authenticationRequired && latestInput) return undefined
+  const error = reportedText(turn.error)
+  if (turn.authenticationRequired && latestInput && error !== REQUIRED_WORK_FAILURE) {
+    return undefined
+  }
   switch (turn.status) {
     case "failed":
     case "cancelled":
-    case "unresolved": {
-      const error = reportedText(turn.error)
+    case "unresolved":
       return error === undefined
         ? { status: turn.status }
         : { status: turn.status, error }
-    }
     case "queued":
     case "running":
     case "completed":
