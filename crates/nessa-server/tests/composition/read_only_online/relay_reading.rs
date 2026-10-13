@@ -656,3 +656,240 @@ fn a_gateway_that_stops_is_away_with_the_cache_kept_and_reads_again_once_back() 
     assert!(again.complete);
     assert_eq!(cache.conversation_ids(&device.receiver).unwrap(), held);
 }
+
+/// One connection through a [`Tap`]: the relay frame it opened with, and
+/// the bytes each way, final once `closed` is.
+struct Tapped {
+    kind: u8,
+    up: Arc<AtomicUsize>,
+    down: Arc<AtomicUsize>,
+    closed: Arc<AtomicUsize>,
+}
+impl Tapped {
+    fn ended(&self) -> bool {
+        self.closed.load(Ordering::SeqCst) == 2
+    }
+    fn bytes(&self) -> (usize, usize) {
+        (
+            self.up.load(Ordering::SeqCst),
+            self.down.load(Ordering::SeqCst),
+        )
+    }
+}
+
+/// Passes every connection it takes on to `upstream` untouched, counting
+/// the bytes each way, as a network observer between the two would see
+/// them. Dropping it stops taking connections; those it took end when
+/// either side closes.
+struct Tap {
+    address: SocketAddr,
+    connections: Arc<std::sync::Mutex<Vec<Tapped>>>,
+    stopped: Arc<std::sync::atomic::AtomicBool>,
+    accepting: Option<JoinHandle<()>>,
+}
+impl Tap {
+    fn start(upstream: String) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let connections = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let stopped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let accepting = {
+            let (connections, stopped) = (connections.clone(), stopped.clone());
+            thread::spawn(move || {
+                for taken in listener.incoming() {
+                    if stopped.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    let Ok(near) = taken else { continue };
+                    let Ok(far) = TcpStream::connect(&upstream) else {
+                        continue;
+                    };
+                    // The first frame's type byte names the connection;
+                    // peeking leaves it to be forwarded with the rest.
+                    let mut head = [0; 2];
+                    let kind = match near.peek(&mut head) {
+                        Ok(2) => head[1],
+                        _ => 0,
+                    };
+                    let tapped = Tapped {
+                        kind,
+                        up: Arc::default(),
+                        down: Arc::default(),
+                        closed: Arc::default(),
+                    };
+                    for (from, to, count) in [
+                        (near.try_clone(), far.try_clone(), tapped.up.clone()),
+                        (far.try_clone(), near.try_clone(), tapped.down.clone()),
+                    ] {
+                        let (Ok(from), Ok(to)) = (from, to) else {
+                            continue;
+                        };
+                        let closed = tapped.closed.clone();
+                        thread::spawn(move || {
+                            count_through(from, to, &count);
+                            closed.fetch_add(1, Ordering::SeqCst);
+                        });
+                    }
+                    connections.lock().unwrap().push(tapped);
+                }
+            })
+        };
+        Self {
+            address,
+            connections,
+            stopped,
+            accepting: Some(accepting),
+        }
+    }
+    fn relay(&self) -> RelayAddress {
+        RelayAddress::try_from(self.address.to_string()).unwrap()
+    }
+    /// Wait until every connection it took that opened with `kind` (any,
+    /// for `None`) has ended, then their bytes, in the order they came.
+    fn ended(&self, kind: Option<u8>) -> Vec<(usize, usize)> {
+        let until = Instant::now() + Duration::from_secs(20);
+        loop {
+            let connections = self.connections.lock().unwrap();
+            let of_kind: Vec<_> = connections
+                .iter()
+                .filter(|c| kind.is_none_or(|kind| c.kind == kind))
+                .collect();
+            if of_kind.iter().all(|c| c.ended()) {
+                return of_kind.iter().map(|c| c.bytes()).collect();
+            }
+            drop(connections);
+            assert!(Instant::now() < until, "a tapped connection never ended");
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+    /// The bytes so far of every connection it took that opened with `kind`.
+    fn so_far(&self, kind: u8) -> Vec<(usize, usize)> {
+        let connections = self.connections.lock().unwrap();
+        connections
+            .iter()
+            .filter(|c| c.kind == kind)
+            .map(Tapped::bytes)
+            .collect()
+    }
+}
+impl Drop for Tap {
+    fn drop(&mut self) {
+        self.stopped.store(true, Ordering::SeqCst);
+        // Wakes the accept, which then sees the stop.
+        let _ = TcpStream::connect(self.address);
+        if let Some(accepting) = self.accepting.take() {
+            let _ = accepting.join();
+        }
+    }
+}
+
+/// Copy `from` into `to` until either ends, adding each chunk's length to
+/// `count`, then close both for the direction copied.
+fn count_through(mut from: TcpStream, mut to: TcpStream, count: &AtomicUsize) {
+    let mut buffer = [0; 16 * 1024];
+    while let Ok(read) = from.read(&mut buffer) {
+        if read == 0 {
+            break;
+        }
+        count.fetch_add(read, Ordering::SeqCst);
+        if to.write_all(&buffer[..read]).is_err() {
+            break;
+        }
+    }
+    let _ = to.shutdown(Shutdown::Write);
+    let _ = from.shutdown(Shutdown::Read);
+}
+
+/// R5 (`docs/design/auth/relay.md`, "What the relay sees"): what a joined
+/// pair costs over a direct read, counted by taps in front of the relay
+/// and of the gateway. The relay adds exactly its preamble frames, and
+/// copies every other byte each way unchanged: the reader's leg carries
+/// what the gateway's accept leg carries, but for `Connect` where the
+/// gateway sends `Accept` (each is then told `Joined`), and
+/// the gateway's serve connection carries its registration, one
+/// `Incoming` per join, and a `Ping` and `Pong` per interval.
+#[test]
+fn a_joined_pair_costs_its_preamble_frames_over_a_direct_read() {
+    let key = [0; 32];
+    let kind = |frame: RelayFrame| frame.encode()[1];
+    let length = |frame: RelayFrame| frame.encode().len();
+    let token = [0; 16];
+    let (connect, joined) = (
+        length(RelayFrame::Connect { key }),
+        length(RelayFrame::Joined),
+    );
+    let accept = length(RelayFrame::Accept { key, token });
+    let incoming = length(RelayFrame::Incoming { token });
+    let registration_up =
+        length(RelayFrame::Serve { key }) + length(RelayFrame::Proof { signature: [0; 64] });
+    let registration_down =
+        length(RelayFrame::Challenge { nonce: [0; 32] }) + length(RelayFrame::Registered);
+    let ping = length(RelayFrame::Ping);
+    assert_eq!(ping, length(RelayFrame::Pong));
+
+    let relay = TestRelay::start();
+    let tap = Tap::start(relay.address.as_str().to_owned());
+    let at = tap.relay();
+    let directory = tempfile::tempdir().unwrap();
+    let (_gateway, device) = Device::start_with(directory.path(), |root| {
+        Gateway::start_relayed_at(root, "", at.as_str())
+    });
+    let direct_tap = Tap::start(device.address.to_string());
+
+    let mut relayed = device.cache("relayed.sqlite3");
+    assert!(
+        device
+            .read_once_registered(&mut relayed, &at)
+            .unwrap()
+            .complete
+    );
+    let mut direct = device.cache("direct.sqlite3");
+    assert!(
+        device
+            .read(&mut direct, direct_tap.address, None)
+            .unwrap()
+            .complete
+    );
+
+    // Reads asked before the gateway registered were answered `Offline`;
+    // the last reader leg is the one joined.
+    let readers = tap.ended(Some(kind(RelayFrame::Connect { key })));
+    let accepts = tap.ended(Some(kind(RelayFrame::Accept { key, token })));
+    let [.., (reader_up, reader_down)] = readers[..] else {
+        panic!("no reader dialed the relay")
+    };
+    let [(accept_up, accept_down)] = accepts[..] else {
+        panic!("one join, one accept: {accepts:?}")
+    };
+    // Each side is told `Joined`, then is given the other's bytes.
+    assert_eq!(
+        reader_up - connect,
+        accept_down - joined,
+        "the reader's bytes, unchanged"
+    );
+    assert_eq!(
+        reader_down - joined,
+        accept_up - accept,
+        "the gateway's bytes, unchanged"
+    );
+    let [(serve_up, serve_down)] = tap.so_far(kind(RelayFrame::Serve { key }))[..] else {
+        panic!("one serve connection")
+    };
+    let pongs = (serve_up - registration_up) / ping;
+    assert_eq!(serve_up, registration_up + pongs * ping);
+    // The relay may have pinged once more than the gateway has answered.
+    let pings = (serve_down - registration_down - incoming) / ping;
+    assert_eq!(serve_down, registration_down + incoming + pings * ping);
+    assert!(pings == pongs || pings == pongs + 1);
+
+    let [(direct_up, direct_down)] = direct_tap.ended(None)[..] else {
+        panic!("one direct read")
+    };
+    eprintln!(
+        "R5: direct read {direct_up} B up, {direct_down} B down; through the relay the \
+         reader's leg {reader_up} B up, {reader_down} B down, the gateway's accept leg \
+         {accept_up} B up, {accept_down} B down; one Incoming of {incoming} B; \
+         registration {registration_up} B up, {registration_down} B down; Ping and Pong \
+         {ping} B each"
+    );
+}

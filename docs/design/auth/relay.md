@@ -189,7 +189,7 @@ Every paired reader gets the same order: **direct, then relay**.
 | --- | --- | --- |
 | Gateway | `native.relay: "host:port"` in `config.json`. While set, the gateway keeps its serve connection, redialing with a bounded backoff | `device_pairing` listener: see below |
 | Phone and peer-gateway reader | The record of the gateway carries an optional relay beside its address; `peer.enroll` takes it, and `peer.relay` sets or clears it on a peer already kept | `nessa-client-core`'s retained reader: its connector carries the optional relay |
-| Paired environment | `nessa env dial ADDRESS --relay host:port` | `env_serve`'s dial |
+| Paired environment | `nessa env dial ADDRESS --relay host:port`. Asking whether the owner approved it, and every dial after, go direct, then through the relay; enrolling needs ADDRESS itself, since the relay is asked for a key the machine learns only by enrolling | `env_serve`'s dial and its pairing's status request, through the client core's `dial_gateway` |
 
 **On the gateway, the relay is a second source inside the one listening
 socket**, not a second listener. `NativeEnrollmentListener::run` takes one
@@ -274,8 +274,11 @@ so typing it once at pairing is enough for the first relay.
 
 ## What the relay sees
 
-Written now as the expectation, and replaced with measured numbers in R5.
-The relay sees: each gateway's public key K and the address it connects
+Measured in R5 by `a_joined_pair_costs_its_preamble_frames_over_a_direct_read`,
+which puts a counting tap in front of a real relay and another in front
+of the gateway, then reads the same gateway once each way.
+
+**What it sees.** Each gateway's public key K and the address it connects
 from; each reader's address, the K it asks for and when; how long each
 joined pair lasts and how many bytes go each way. It does not see who the
 reader is (its key travels inside TLS), what it reads, or anything of the
@@ -283,6 +286,28 @@ records. Because the preamble is not encrypted, a network observer between
 either side and the relay sees the same K; putting the preamble inside its
 own TLS is an option if that matters later. The gateway's native
 connection owner reports the relay's address for every joined connection.
+
+**What a joined pair costs.** The relay adds only its preamble frames and
+copies every other byte unchanged, each way; the test asserts both
+exactly. In the measured read, the reader sent 8,559 bytes and received
+229,326 directly, and through the relay 8,594 and 229,329: its 35-byte
+`Connect` and 3-byte `Joined` more, the TLS bytes the same.
+
+| Who | Over a direct read |
+| --- | --- |
+| Reader | 38 bytes: `Connect` (35) out, `Joined` (3) in. One TCP connection, to the relay instead of the gateway |
+| Gateway | 73 bytes: `Incoming` (19) on its serve connection, `Accept` (51) out and `Joined` (3) in on a new TCP connection it dials to the relay for the reader |
+| Relay | Every byte of the session twice, in from one side and out to the other, plus the frames above |
+
+**What staying registered costs.** Registering is 102 bytes out (`Serve`,
+`Proof`) and 38 in (`Challenge`, `Registered`), again after each lost
+serve connection. Then the relay sends a 3-byte `Ping` every 15 s and the
+gateway answers a 3-byte `Pong`: 6 bytes of frames a ping interval, which
+the test counts. On the wire each is one small TCP segment, so with
+headers and acknowledgements that is a few hundred bytes every 15 s,
+under two megabytes a day, worked out from the frame sizes rather than measured
+on a link. The gateway holds one TCP connection and one task for it, and
+no relay permit: permits are taken only for announced readers.
 
 ## What this does not do
 
@@ -294,6 +319,9 @@ connection owner reports the relay's address for every joined connection.
 - Authenticate `Offline`. The relay, or anyone between a reader and it,
   can make a gateway that is up look `away`. Putting the preamble inside
   TLS to a relay key the reader pins is the fix if that matters later.
+- Enroll through the relay. A reader or environment learns the gateway's
+  key by pairing, which needs the gateway's own address once; only then
+  can it ask a relay for that key.
 - Find a relay, or move a joined connection back to direct when direct
   starts working. The next read dials direct first again.
 - Change the pairing or product protocol. What crosses the relay is

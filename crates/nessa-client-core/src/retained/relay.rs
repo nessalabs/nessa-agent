@@ -143,19 +143,7 @@ pub(super) fn relay_leg(route: &RelayRoute, timeout: Duration) -> IoResult<TcpSt
             .filter(|left| !left.is_zero())
             .ok_or_else(|| Error::from(ErrorKind::TimedOut))
     };
-    let mut refused = None;
-    let mut stream = None;
-    for address in route.address.as_str().to_socket_addrs()? {
-        match TcpStream::connect_timeout(&address, left()?) {
-            Ok(connected) => {
-                stream = Some(connected);
-                break;
-            }
-            Err(error) => refused = Some(error),
-        }
-    }
-    let mut stream =
-        stream.ok_or_else(|| refused.unwrap_or_else(|| Error::from(ErrorKind::NotFound)))?;
+    let mut stream = connect_any(route.address.as_str(), deadline)?;
     // Small preamble frames go out at once.
     stream.set_nodelay(true)?;
     stream.set_write_timeout(Some(left()?))?;
@@ -169,6 +157,25 @@ pub(super) fn relay_leg(route: &RelayRoute, timeout: Duration) -> IoResult<TcpSt
         other => Err(RelayRefusal::of(other)
             .map_or_else(|| Error::from(ErrorKind::InvalidData), Error::from)),
     }
+}
+
+/// Look up `address` (`host:port`) and connect to the first address it
+/// resolves to that answers before `deadline`, trying each in turn, as a
+/// TCP connect by name does. The lookup itself waits as long as the system
+/// resolver does.
+pub(super) fn connect_any(address: &str, deadline: Instant) -> IoResult<TcpStream> {
+    let mut refused = None;
+    for address in address.to_socket_addrs()? {
+        let left = deadline
+            .checked_duration_since(Instant::now())
+            .filter(|left| !left.is_zero())
+            .ok_or_else(|| Error::from(ErrorKind::TimedOut))?;
+        match TcpStream::connect_timeout(&address, left) {
+            Ok(connected) => return Ok(connected),
+            Err(error) => refused = Some(error),
+        }
+    }
+    Err(refused.unwrap_or_else(|| Error::from(ErrorKind::NotFound)))
 }
 
 #[cfg(test)]

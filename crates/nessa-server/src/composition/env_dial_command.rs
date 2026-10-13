@@ -11,6 +11,9 @@
 //!   ──▶ compose, as env serve does (lock, ledger, launcher)
 //!   ──▶ redial(dial, Composed::serve as the gateway the pin names) until
 //!   SIGINT or SIGTERM ──▶ finish
+//! with --relay, each ask and each dial that does not connect directly goes
+//!   through the relay (enrolling does not: nothing knows the gateway's key
+//!   before it)
 //! with --enroll-code-file, before all of it: enroll_once(the file) ──▶
 //!   enrolled with its code when nothing is paired here, nothing sent when
 //!   paired with the gateway at ADDRESS, refused when paired with another
@@ -39,7 +42,7 @@ use crate::{
     timer::TokioTimer,
 };
 use nessa_auth::adapters::pairing::{ManualCode, NativeIdentity};
-use nessa_protocol::clock::Clock;
+use nessa_protocol::{clock::Clock, relay::RelayAddress};
 use std::{
     future::Future,
     io::{self, Write},
@@ -75,8 +78,10 @@ pub(super) async fn enroll(address: &str, code: &str) -> Result<(), RunError> {
     Ok(())
 }
 
-/// `nessa env dial ADDRESS [--drain-deadline DURATION] [--enroll-code-file
-/// PATH]`: with `enroll_code_file`, enrolled first when nothing is paired
+/// `nessa env dial ADDRESS [--relay RELAY] [--drain-deadline DURATION]
+/// [--enroll-code-file PATH]`: with `relay`, the gateway is asked for there
+/// whenever a direct dial does not connect (enrolling still needs the direct
+/// path, since only a pairing knows the gateway's key); with `enroll_code_file`, enrolled first when nothing is paired
 /// here ([`enroll_once`]); then, once the owner has
 /// approved this machine, serve the gateway at `address` over connections
 /// this machine dials, until SIGINT or SIGTERM. With `drain_deadline`, that
@@ -93,6 +98,7 @@ pub(super) async fn enroll(address: &str, code: &str) -> Result<(), RunError> {
 /// host cannot serve, or its pairing cannot dial.
 pub(super) async fn dial_in(
     address: &str,
+    relay: Option<&RelayAddress>,
     drain_deadline: Option<Duration>,
     enroll_code_file: Option<&Path>,
 ) -> Result<(), RunError> {
@@ -136,7 +142,7 @@ pub(super) async fn dial_in(
     // Without a deadline nothing drains: the signal stops, as before.
     let drain = drain_deadline.is_some().then_some(drain);
     let signals = tokio::spawn(on_signal(stop, drain));
-    let served = approved_then_served(address, enroll_code_file, stopping, draining).await;
+    let served = approved_then_served(address, relay, enroll_code_file, stopping, draining).await;
     signals.abort();
     if let Some(deadline) = deadline {
         deadline.abort();
@@ -148,6 +154,7 @@ pub(super) async fn dial_in(
 /// `env serve` is not locked out while the owner decides.
 async fn approved_then_served(
     address: &str,
+    relay: Option<&RelayAddress>,
     enroll_code_file: Option<&Path>,
     stopping: watch::Receiver<bool>,
     draining: watch::Receiver<bool>,
@@ -165,7 +172,7 @@ async fn approved_then_served(
         }
         let _ = asked.send(true);
     });
-    let approved = approval(address, enroll_code_file, &asking).await;
+    let approved = approval(address, relay, enroll_code_file, &asking).await;
     let Some((identity, pin)) = approved? else {
         either.abort();
         return Ok(());
@@ -184,7 +191,7 @@ async fn approved_then_served(
         return Ok(());
     };
     let composed = composed.map_err(|(_, failure)| failure)?;
-    let served = serve_dialing(&composed, address, identity, pin, stopping, draining).await;
+    let served = serve_dialing(&composed, address, relay, identity, pin, stopping, draining).await;
     composed.finish().await;
     served
 }
@@ -193,10 +200,13 @@ async fn approved_then_served(
 /// first. The pairing, and its directory's lock, is let go either way.
 async fn approval(
     address: &str,
+    relay: Option<&RelayAddress>,
     enroll_code_file: Option<&Path>,
     stopping: &watch::Receiver<bool>,
 ) -> Result<Option<Approved>, RunError> {
-    let pairing = open(address)?;
+    // Asked through the relay too: the pending pairing knows the gateway's
+    // key, as enrolling, before it, does not.
+    let pairing = open(address)?.through(relay.cloned());
     let approved = application::approval(
         &pairing,
         APPROVAL_POLL,
@@ -233,6 +243,7 @@ fn open(address: &str) -> Result<FilePairingEnvironment, RunError> {
 async fn serve_dialing(
     composed: &Composed,
     address: &str,
+    relay: Option<&RelayAddress>,
     identity: Arc<NativeIdentity>,
     pin: [u8; 44],
     stopping: watch::Receiver<bool>,
@@ -242,21 +253,10 @@ async fn serve_dialing(
     redial(
         || {
             let identity = identity.clone();
-            async move {
-                // Resolved on every dial, the gateway's address may move;
-                // each address is tried, as a TCP connect by name does.
-                let mut failed = io::Error::new(io::ErrorKind::NotFound, "no address");
-                for gateway in tokio::net::lookup_host(address).await? {
-                    match dial(gateway, identity.clone(), pin, clock()).await {
-                        Ok(stream) => return Ok(stream),
-                        Err(error) if error.kind() == io::ErrorKind::InvalidInput => {
-                            return Err(error)
-                        }
-                        Err(error) => failed = error,
-                    }
-                }
-                Err(failed)
-            }
+            // Resolved on every dial, the gateway's address may move; each
+            // address is tried, as a TCP connect by name does, and then the
+            // relay, when there is one.
+            dial(address.to_owned(), relay.cloned(), identity, pin, clock())
         },
         |stream, stopping| {
             // Each connection was dialed to the gateway holding this pin: its

@@ -65,14 +65,14 @@ use nessa_sync::replication::{
     },
     domain::{Id, Limits, Scope},
 };
-use relay::{race, relay_leg, RelayRoute};
+use relay::{connect_any, race, relay_leg, RelayRoute};
 use std::cell::Cell;
 use std::io::{Read, Result as IoResult, Write};
 use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 mod active;
 mod device;
@@ -268,6 +268,46 @@ impl Cancellation for Stopping {
         Some(self.until)
     }
 }
+/// Connect to the gateway at `address` (`host:port`, each address it
+/// resolves to tried in turn) within `timeout`, the same way a retained read
+/// does: direct, then, with a `relay`, through that relay for the gateway
+/// whose key is the pin beside it (`docs/design/auth/relay.md`, "Direct, then relay"). What
+/// connects is a plain stream; the caller's pinned TLS decides whether the
+/// gateway is the one it paired with. A paired environment dials its
+/// gateway with it.
+///
+/// # Errors
+/// Neither route connected in time: the relay's answer where it was asked
+/// ([`RelayRefusal::carried`] tells its refusals apart), else the direct
+/// dial's error.
+pub fn dial_gateway(
+    address: &str,
+    relay: Option<(&RelayAddress, &[u8; 44])>,
+    timeout: Duration,
+) -> IoResult<TcpStream> {
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+    // A pin that is no Ed25519 key fails TLS whatever the route.
+    let route = relay.and_then(|(address, pin)| {
+        Some(RelayRoute {
+            address: address.clone(),
+            key: relay_key(pin)?,
+        })
+    });
+    let Some(route) = route else {
+        return connect_any(address, deadline);
+    };
+    let address = address.to_owned();
+    race(
+        move |left| connect_any(&address, Instant::now() + left),
+        move |left| relay_leg(&route, left),
+        timeout,
+        DIRECT_HEAD_START,
+        &|| false,
+    )
+}
+
 struct StoppableConnector {
     /// The read's stop and its budget on the injected clock.
     ending: Arc<Stopping>,

@@ -527,6 +527,7 @@ cannot be reached.
 ```text
 nessa env enroll ADDRESS CODE   pair as an environment, with an environment invitation's code
 nessa env dial ADDRESS          wait for the owner's approval, then serve, dialing again whenever a connection ends
+                                [--relay HOST:PORT] asked for the gateway when a direct dial does not connect (relay.md, row RL14)
                                 [--drain-deadline 20s] a signal drains every lease before it stops (row K1)
                                 [--enroll-code-file PATH] enroll first when nothing is paired here (row K2)
 ```
@@ -575,7 +576,10 @@ sequenceDiagram
   an upgrade, fails the handshake and is dialed again too. Only a failure
   no dial can change stops it (`InvalidInput`: a pin that is not a key, a
   TLS setup this build cannot make). Each address the name resolves to is
-  tried in turn.
+  tried in turn. With `--relay`, the status asks and each dial go to the
+  relay for the gateway's pinned key when the direct dial has not
+  connected within a short head start, as a phone's read does
+  ([relay.md](relay.md#who-uses-it)); enrolling still needs the address.
 - **Stopping.** SIGINT or SIGTERM closes the connection being served, so its
   leases end as they do when a gateway goes away, and then dialing stops. A
   second signal while that drains exits at once. With `--drain-deadline`,

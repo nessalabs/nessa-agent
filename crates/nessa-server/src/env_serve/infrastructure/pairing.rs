@@ -7,6 +7,8 @@
 //! FilePairingEnvironment ──▶ FilePairingState (environment/pairing, locked)
 //!                       ──▶ environment/paired-with (the address enrolled with)
 //!                       ──▶ NativeEnrollmentClient ──▶ TCP to the gateway
+//!                           (a status request, with a relay: direct, then
+//!                           through the relay for the pending pin)
 //! ```
 //!
 //! Arrows are what it holds and reaches. It speaks the application's
@@ -22,6 +24,8 @@ use nessa_auth::{
     domain::pairing::ConsentClass,
 };
 use nessa_client_core::pairing::{NativeClientError, NativeEnrollmentClient};
+use nessa_client_core::retained::dial_gateway;
+use nessa_protocol::relay::RelayAddress;
 use nessa_protocol::{clock::Clock, pairing::wire::NativePairingStatus};
 use std::{
     io::{self, Read, Write},
@@ -54,6 +58,9 @@ pub(crate) struct FilePairingEnvironment {
     root: PathBuf,
     directory: PathBuf,
     address: String,
+    /// Where the gateway is asked for when a status request's direct dial
+    /// does not connect; `None` for direct only.
+    relay: Option<RelayAddress>,
 }
 
 impl FilePairingEnvironment {
@@ -91,7 +98,16 @@ impl FilePairingEnvironment {
             directory: root.join(PAIRING),
             root,
             address: address.to_owned(),
+            relay: None,
         })
+    }
+
+    /// Ask the pairing's status through `relay` too, when the direct dial
+    /// does not connect. Enrolling stays direct: the gateway's key, which
+    /// the relay is asked for, is learned by enrolling.
+    pub(crate) fn through(mut self, relay: Option<RelayAddress>) -> Self {
+        self.relay = relay;
+        self
     }
 
     /// The pin of the gateway this machine is paired with, once its owner
@@ -133,6 +149,23 @@ impl FilePairingEnvironment {
     /// Let go of the pairing client's worker.
     pub(crate) async fn shutdown(&self) {
         self.client.shutdown().await;
+    }
+
+    /// A blocking stream to the gateway for a status request: direct, then
+    /// through `relay` for the key the pending pairing pinned. With nothing
+    /// pending, there is no key to ask for: direct only.
+    async fn connect_or_relay(&self, relay: RelayAddress) -> io::Result<TcpStream> {
+        let (store, address) = (self.store.clone(), self.address.clone());
+        tokio::task::spawn_blocking(move || {
+            let pin = store
+                .load_pending()
+                .ok()
+                .flatten()
+                .map(|pending| *pending.gateway_pin());
+            dial_gateway(&address, pin.as_ref().map(|pin| (&relay, pin)), CONNECT)
+        })
+        .await
+        .map_err(|_| io::Error::other("the dialing worker failed"))?
     }
 
     fn enroll_failure(&self, error: NativeClientError) -> String {
@@ -185,7 +218,11 @@ impl EnvironmentPairing for FilePairingEnvironment {
     }
 
     async fn ask(&self) -> Answer {
-        let stream = match connect(&self.address).await {
+        let connected = match &self.relay {
+            None => connect(&self.address).await,
+            Some(relay) => self.connect_or_relay(relay.clone()).await,
+        };
+        let stream = match connected {
             Ok(stream) => stream,
             Err(error) => {
                 return Answer::Unanswered(format!(
