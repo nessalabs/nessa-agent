@@ -13,5 +13,7 @@ pub use public_intent::PublicIntent;
 
 mod disclosed_consent;
 pub use disclosed_consent::DisclosedConsent;
+mod owner_phone_context;
+pub use owner_phone_context::OwnerPhoneContext;
 mod owner_phone;
 pub use owner_phone::{OwnerPhoneRequest, OwnerPhoneRequestId, OwnerPhoneSource};

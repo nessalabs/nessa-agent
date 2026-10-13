@@ -16,7 +16,6 @@
 //! owner_commands --> runtime (owner side only; the product socket's handle)
 //! receivers --> conversation receiver authority (application's PairingReceivers)
 //! runtime  --> owner_admission (every owner command's lease; drained at shutdown)
-//! phone_dto --> Auth originals + published product DTOs (pure public mapping)
 //! ```
 //! Arrows are compile-time dependencies. Auth owns every enrollment phase; the
 //! runtime holds only the volatile PAKE setup of the one open invitation.
@@ -28,7 +27,6 @@ mod identity;
 mod listener;
 mod owner_admission;
 mod owner_commands;
-pub mod phone_dto;
 mod protected;
 mod receivers;
 mod registration;

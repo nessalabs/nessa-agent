@@ -1,9 +1,9 @@
-use super::{discovery, octets, original, request, PhoneDtoError};
+use super::{context, discovery, octets, original, request, PhoneDtoError};
+use crate::product::generated::PhoneOriginal;
 use nessa_auth::domain::{
     pairing::{ConsentClass, DeviceKey, OwnerPhoneRequest, OwnerPhoneRequestId, OwnerPhoneSource},
     AudienceId, CredentialId, MembershipId, OrganizationId, PrincipalId, Resource, ResourceId,
 };
-use nessa_protocol::product::generated::PhoneOriginal;
 use serde_json::{json, Value};
 use std::net::SocketAddr;
 
@@ -149,7 +149,7 @@ fn usable_endpoint_is_auth_owned_without_constructing_a_fake_request_or_key() {
         );
         let mut value = wire(&expected);
         value["discovery"]["nativeEndpoint"] = json!(endpoint);
-        assert_eq!(decoded(value).err(), Some(PhoneDtoError::Original));
+        assert_eq!(decoded(value).err(), Some(PhoneDtoError::Endpoint));
     }
     for endpoint in ["localhost:19744", "ws://127.0.0.1:19744", "127.0.0.1", ""] {
         let mut value = wire(&expected);
@@ -188,5 +188,30 @@ fn consent_compares_complete_ordered_auth_publication_without_retyped_actions() 
             Some(PhoneDtoError::Consent),
             "{alteration}"
         );
+    }
+}
+
+#[test]
+fn discovery_context_is_validated_before_a_device_key_exists() {
+    let expected = canonical("127.0.0.1:19744");
+    let mapped = discovery(
+        expected.source(),
+        expected.endpoint(),
+        *expected.gateway_pin(),
+    )
+    .unwrap();
+    let restored = context(mapped).unwrap();
+    assert_eq!(restored.source(), expected.source());
+    assert_eq!(restored.gateway_pin(), expected.gateway_pin());
+    assert_eq!(restored.endpoint(), expected.endpoint());
+    for endpoint in ["0.0.0.0:19744", "[::]:19744", "127.0.0.1:0", "[::1]:0"] {
+        let mut invalid = discovery(
+            expected.source(),
+            expected.endpoint(),
+            *expected.gateway_pin(),
+        )
+        .unwrap();
+        invalid.native_endpoint = endpoint.into();
+        assert_eq!(context(invalid).err(), Some(PhoneDtoError::Endpoint));
     }
 }

@@ -1694,6 +1694,19 @@ refuses a stale schema. The adjacent core-contract tests run through the existin
 product protocol check. Cargo's reported target directory owns artifact location;
 the export builds in its `wire-contract` subdirectory.
 
+The pure `crates/nessa-protocol/src/product/owner_phone.rs` mapper is shared by
+server phone routes and native preparation. It consumes Auth's immutable source,
+context/request constructors and complete consent publication.
+`nessa-auth`'s `application/pairing/owner_phone_private.rs` and
+`adapters/pairing/private_state/owner_phone.rs` reserve and restore original keys
+under the existing private directory/operation/publisher owner. The core
+`pairing/owner_phone.rs` consumes these ports without network, preserving the
+original signed proof and refusing missing/incomplete restoration. Matching
+fixtures live in Auth `tests/adapters/private_state/owner_phone.rs`, core
+`tests/pairing/owner_phone.rs` and protocol `tests/product/owner_phone.rs`.
+These owners do not implement remote authorization, native issued adoption or
+app Send.
+
 ### Shared product contract values
 
 `crates/nessa-protocol/src/product_contract/generated.rs` publishes the pure typed

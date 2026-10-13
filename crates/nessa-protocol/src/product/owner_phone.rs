@@ -1,15 +1,14 @@
 //! Public phone evidence mapping; fresh policy and signature verification stay in Auth.
+use super::generated::{PhoneConsent, PhoneDiscovery, PhoneOriginal, PhoneOwnerSource};
 use nessa_auth::{
     application::dto::{CredentialGrantDto, ResourceDto},
     domain::{
         pairing::{
-            ConsentClass, DeviceKey, OwnerPhoneRequest, OwnerPhoneRequestId, OwnerPhoneSource,
+            ConsentClass, DeviceKey, OwnerPhoneContext, OwnerPhoneRequest, OwnerPhoneRequestId,
+            OwnerPhoneSource,
         },
         AudienceId, CredentialId, MembershipId, OrganizationId, PrincipalId, Resource, ResourceId,
     },
-};
-use nessa_protocol::product::generated::{
-    PhoneConsent, PhoneDiscovery, PhoneOriginal, PhoneOwnerSource,
 };
 use std::net::SocketAddr;
 
@@ -93,14 +92,9 @@ pub fn original(request: &OwnerPhoneRequest) -> Result<PhoneOriginal, PhoneDtoEr
         device_key: *request.device_key().bytes(),
     })
 }
-/// Reconstruct Auth's immutable correlation value. The route must independently
-/// compare its current source and ask Auth to verify the signature before effects.
-pub fn request(value: PhoneOriginal) -> Result<OwnerPhoneRequest, PhoneDtoError> {
-    let PhoneOriginal {
-        request_id,
-        discovery,
-        device_key,
-    } = value;
+/// Validate discovery facts before any permanent device key exists. The route
+/// still owns fresh current-source policy and signature verification.
+pub fn context(discovery: PhoneDiscovery) -> Result<OwnerPhoneContext, PhoneDtoError> {
     let source = discovery.source;
     let resource = Resource::new(
         OrganizationId::new(source.organization_id).map_err(|_| PhoneDtoError::Source)?,
@@ -122,16 +116,20 @@ pub fn request(value: PhoneOriginal) -> Result<OwnerPhoneRequest, PhoneDtoError>
         .native_endpoint
         .parse::<SocketAddr>()
         .map_err(|_| PhoneDtoError::Endpoint)?;
-    OwnerPhoneRequest::new(
-        OwnerPhoneRequestId::new(octets(&request_id)?).map_err(|_| PhoneDtoError::Original)?,
-        source,
-        octets(&discovery.gateway_key)?,
-        endpoint,
-        DeviceKey::new(device_key),
-    )
-    .map_err(|_| PhoneDtoError::Original)
+    OwnerPhoneContext::new(source, octets(&discovery.gateway_key)?, endpoint)
+        .map_err(|_| PhoneDtoError::Endpoint)
+}
+/// Reconstruct Auth original using the same source/consent conversion as native preparation.
+pub fn request(value: PhoneOriginal) -> Result<OwnerPhoneRequest, PhoneDtoError> {
+    context(value.discovery)?
+        .request(
+            OwnerPhoneRequestId::new(octets(&value.request_id)?)
+                .map_err(|_| PhoneDtoError::Original)?,
+            DeviceKey::new(value.device_key),
+        )
+        .map_err(|_| PhoneDtoError::Original)
 }
 
 #[cfg(test)]
-#[path = "../../../tests/device_pairing/infrastructure/phone_dto.rs"]
+#[path = "../../tests/product/owner_phone.rs"]
 mod tests;
