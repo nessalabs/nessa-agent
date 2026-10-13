@@ -25,7 +25,7 @@ import { inGroup, type AgentsGroup } from "../model/overview/agents-glance"
 import { drawn, type SideColumn } from "../../model/side-column"
 import type { SessionView } from "../model/session-groups"
 import { keepShownDrafts, type Draft } from "../model/session-lifecycle"
-import { unconfirmed, type Message, type Transcript } from "../model/transcript"
+import { unconfirmed, type Message, type Transcript, type TurnMessage } from "../model/transcript"
 
 /** An answer given to one approval: on its way, or refused with the reason. */
 export interface Answer {
@@ -121,7 +121,7 @@ export interface WorkspaceState {
    * by session: sending, sent, or refused. Shown after the conversation until
    * it includes them; kept apart so no replacement from the source can lose one.
    */
-  readonly outbox: Readonly<Record<string, readonly Message[]>>
+  readonly outbox: Readonly<Record<string, readonly TurnMessage[]>>
   /** Why a conversation a pane shows could not be read, by session. */
   readonly transcriptFailures: Readonly<Record<string, WorkspaceFailureReason>>
   /**

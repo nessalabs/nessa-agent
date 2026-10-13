@@ -2,7 +2,8 @@
 #![deny(missing_docs)]
 
 use super::{
-    ArtifactRecord, CommittedStatus, CommittedViewState, CurrentLease, LeaseRecord, NoteRecord,
+    ArtifactRecord, CommittedStatus, CommittedViewState, CurrentLease, LeaseRecord, NoteDelivery,
+    NoteId, NoteRecord, NoteRetiredRecord, NoteState,
 };
 use crate::application::agent_execution::agents::{AgentError, DiagnosticTreeLimits};
 use crate::application::agent_execution::executions::{
@@ -389,6 +390,10 @@ pub enum SessionChange {
     /// Checked against the notes before it is committed and again when it is
     /// read back.
     Note(NoteRecord),
+    /// A pending `next_turn` note retired before any turn took it. Checked
+    /// against the notes before it is committed and again when it is read
+    /// back.
+    NoteRetired(NoteRetiredRecord),
 }
 impl SessionSnapshot {
     pub(crate) fn retained_bytes(&self) -> usize {
@@ -415,6 +420,23 @@ impl SessionSnapshot {
         self.notes
             .iter()
             .find(|note| note.answers(principal, request))
+    }
+
+    /// Where `note` stands, read from this snapshot: the turn whose saved
+    /// acceptance names it, its retirement, or neither.
+    pub fn note_state(&self, note: &NoteRecord) -> NoteState {
+        if note.delivery == NoteDelivery::RecordOnly {
+            return NoteState::Recorded;
+        }
+        if let Some(retirement) = note.retired {
+            return NoteState::Retired(retirement);
+        }
+        self.invocations
+            .iter()
+            .find(|record| record.notes.contains(&note.id))
+            .map_or(NoteState::Pending, |record| {
+                NoteState::Assigned(record.request.execution_id.clone())
+            })
     }
 
     /// Maximum durable invocation records retained by one conversation.
@@ -463,6 +485,10 @@ pub struct InvocationRecord {
     /// Whether the conversation's owner or a share grant started this turn, and
     /// whether its tools were checked. Retries must preserve it.
     pub initiation: Initiation,
+    /// The `next_turn` notes this turn took, in saved order, assigned by
+    /// saving this record. The conversation chooses them at admission; a
+    /// retry finds them here and chooses nothing again.
+    pub notes: Vec<NoteId>,
     /// Independent audit and durable-write acknowledgement for admission or
     /// confirmed native injection. This fact is retained even when delivery or
     /// execution has no terminal result.
@@ -1031,6 +1057,7 @@ mod committed_tests {
                 target_event_offset: None,
                 actor: ActionContext::new("user", "surface", "request").unwrap(),
                 initiation: Initiation::owner(),
+                notes: Vec::new(),
                 acknowledgement: SubmissionAcknowledgement::Pending,
                 events: Vec::new(),
                 scheduling: Vec::new(),

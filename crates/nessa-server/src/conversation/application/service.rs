@@ -735,6 +735,10 @@ struct Inner {
     /// Principal command receipts. Composition binds the shared record runtime.
     /// Absent storage refuses command admission rather than skipping the receipt.
     commands: Arc<OnceLock<Arc<dyn CreationStorage>>>,
+    /// The share grants a waiting note's author is checked against before a
+    /// turn takes it. Composition binds the gateway's table; without one, a
+    /// grant's note is never checked and waits, and an owner's is taken.
+    note_authors: Arc<OnceLock<Arc<dyn super::ShareGrants>>>,
 }
 /// Owns Agents independently of authenticated socket lifetimes. Clones share all owners.
 #[derive(Clone)]
@@ -1048,6 +1052,7 @@ impl ConversationService {
                 app_calls: Arc::new(Semaphore::new(app_calls::MAX_APP_CALLS)),
                 fetch_reads: Arc::new(Semaphore::new(artifact_fetch::FETCH_READS)),
                 commands: Arc::new(OnceLock::new()),
+                note_authors: Arc::new(OnceLock::new()),
             }),
         })
     }
@@ -2863,19 +2868,35 @@ impl ConversationService {
                 context: actor,
                 initiation: writer.initiation(),
             };
-            let delivery = match mode {
-                SubmissionMode::Queue => live
+            // A person's queued message admitted while idle starts the next
+            // turn, so it may take the notes waiting for one: each author is
+            // checked now, and the agent selects among those still allowed
+            // (row J23). Never a steer, an app's message, or a retry.
+            let notes = if idle && !writer.is_app() && matches!(mode, SubmissionMode::Queue) {
+                Some(service.note_candidates(&id, &live).await)
+            } else {
+                None
+            };
+            let delivery = match (mode, notes) {
+                (SubmissionMode::Queue, Some(candidates)) => live
+                    .agent
+                    .enqueue_with_notes(request, submitter, candidates)
+                    .await
+                    .map(SubmissionDelivery::Queued),
+                (SubmissionMode::Queue, None) => live
                     .agent
                     .enqueue(request, submitter)
                     .await
                     .map(SubmissionDelivery::Queued),
-                SubmissionMode::Steer if !live.agent.operation_capabilities().native_steering() => {
+                (SubmissionMode::Steer, _)
+                    if !live.agent.operation_capabilities().native_steering() =>
+                {
                     live.agent
                         .enqueue_steering(request, submitter)
                         .await
                         .map(SubmissionDelivery::Queued)
                 }
-                SubmissionMode::Steer => {
+                (SubmissionMode::Steer, _) => {
                     live.agent
                         .steer(request, submitter)
                         .await

@@ -7,6 +7,7 @@ import type {
   ConversationTranscriptState,
   ImageReference,
   LinkedFile,
+  Note,
   PublishedFile,
 } from "../model"
 import type { AgentPart } from "../model/types"
@@ -20,6 +21,11 @@ export type ConversationView = {
    * A record is history: it stays after the bytes are let go of.
    */
   artifacts: PublishedFile[]
+  /**
+   * Notes left in the conversation, the newest 64 in the order they were
+   * left: who left each, where it stands, and the turn it follows.
+   */
+  notes: Note[]
   approvalMode: ApprovalMode
   approvalModes: ApprovalModeChoice[]
   approvalModeChange?: {

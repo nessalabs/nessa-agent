@@ -17,7 +17,7 @@ import type {
 } from "../../../split-panes/model/pane-layout"
 import type { EdgeMove } from "../../../split-panes"
 import type { PaneRoom } from "../../../split-panes/model/pane-sizing"
-import type { Message, Transcript } from "../../model/transcript"
+import type { Transcript, TurnMessage } from "../../model/transcript"
 import type {
   Initiator,
   WorkspaceDependencies,
@@ -213,7 +213,9 @@ const workspaceSlice = createSlice({
       updates.transcriptRetried(state, payload),
     messageSent: (
       state,
-      { payload }: Payload<{ sessionId: string; message: Message; initiator: Initiator }>,
+      {
+        payload,
+      }: Payload<{ sessionId: string; message: TurnMessage; initiator: Initiator }>,
     ) => sessions.messageSent(state, payload),
     messageDelivered: (
       state,

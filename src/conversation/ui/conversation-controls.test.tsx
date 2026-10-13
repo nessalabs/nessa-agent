@@ -46,6 +46,7 @@ function waiting(dueAtMs: number): Conversation {
       approvalMode: "ask",
       approvalModes: [{ id: "ask", name: "Ask", description: "Ask first." }],
       artifacts: [],
+      notes: [],
       questions: [],
       running: true,
       permissions: [

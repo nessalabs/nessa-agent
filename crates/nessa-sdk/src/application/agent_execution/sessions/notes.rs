@@ -16,11 +16,30 @@
 //! note, at the time it is accepted: a saved note was accepted then, and a
 //! later clock cannot make it wrong.
 //!
-//! A `record_only` note is never handed to the model. Delivering a note to
-//! the next turn (`next_turn`) is slice J3b.
+//! A `record_only` note is never handed to the model. A `next_turn` note
+//! (slice J3b) waits, pending, for the next turn a person starts while the
+//! agent is idle ([`select`]):
+//!
+//! ```text
+//! pending ──turn admitted, author still allowed──▶ assigned(turn)
+//!    │
+//!    ├──lifetime over, at a turn's admission──▶ retired(expired)
+//!    └──host says the grant is gone──────────▶ retired(permission_lost)
+//! ```
+//!
+//! Each fact has one record: the note itself ([`SessionChange::Note`]), the
+//! turn that took it (its [`InvocationRecord::notes`]), and a retirement
+//! ([`SessionChange::NoteRetired`]). Where a note stands is read from those
+//! ([`SessionSnapshot::note_state`]) and never stored twice. An assigned
+//! note is never pending again, whatever becomes of its turn.
+//!
+//! [`SessionChange::Note`]: super::SessionChange::Note
+//! [`SessionChange::NoteRetired`]: super::SessionChange::NoteRetired
+//! [`InvocationRecord::notes`]: super::InvocationRecord::notes
 use super::{SessionSnapshot, StorageError};
 use crate::application::agent_execution::permissions::ActionContext;
-use crate::domain::agent_execution::executions::Initiator;
+use crate::domain::agent_execution::executions::{ExecutionId, Initiator};
+use crate::domain::agent_execution::prompts::{NoteAuthor, NoteContext, UserMessage};
 use std::{collections::HashSet, error::Error, fmt};
 use uuid::Uuid;
 
@@ -100,14 +119,66 @@ impl NoteText {
 pub enum NoteDelivery {
     /// Saved with its author, and never handed to the model by itself.
     RecordOnly,
+    /// Saved, and handed to the model with the next turn a person starts
+    /// while the agent is idle, if its author may still leave it then.
+    NextTurn,
 }
 
-/// Where a saved note stands. A `record_only` note is recorded, and stays
-/// recorded.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Where a saved note stands, read from the conversation's records.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NoteState {
-    /// Saved, with nothing waiting to deliver it.
+    /// A `record_only` note: saved, with nothing waiting to deliver it.
     Recorded,
+    /// A `next_turn` note waiting for a turn to take it.
+    Pending,
+    /// Taken by this turn, whose saved acceptance names it. It is never
+    /// pending again, whether or not the turn ran to its end.
+    Assigned(ExecutionId),
+    /// Retired before any turn took it.
+    Retired(NoteRetirement),
+}
+
+/// Why a pending note was retired.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NoteRetirementReason {
+    /// It waited past [`NoteRecord::PENDING_LIFETIME_MS`].
+    Expired,
+    /// Its author's grant was revoked, or lowered below Comment, before a
+    /// turn took it.
+    PermissionLost,
+}
+
+/// A pending note's retirement: why, and when, on the conversation's wall
+/// clock.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NoteRetirement {
+    /// Why it was retired.
+    pub reason: NoteRetirementReason,
+    /// When, in milliseconds since the Unix epoch.
+    pub at_ms: u64,
+}
+
+/// One retirement as the records keep it: which note, and the retirement.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NoteRetiredRecord {
+    /// The note retired.
+    pub id: NoteId,
+    /// Why and when.
+    pub retirement: NoteRetirement,
+}
+
+/// The host's answer, for one turn, on which pending notes' authors may
+/// still leave them (ADR 0011 phase B): the conversation decides which of
+/// these a turn takes, and the host decides nothing more.
+///
+/// A note in neither list could not be checked now: it stays pending, and no
+/// turn takes it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NoteCandidates {
+    /// Notes whose author may still leave them.
+    pub authorized: Vec<NoteId>,
+    /// Notes whose author's grant is gone, or below Comment: retired.
+    pub revoked: Vec<NoteId>,
 }
 
 /// A note as its host admitted it, before the conversation accepts it: the
@@ -143,6 +214,13 @@ pub struct NoteRecord {
     /// When it was accepted, in milliseconds since the Unix epoch, on the
     /// conversation's injected wall clock.
     pub accepted_at_ms: u64,
+    /// The last turn the conversation had accepted when this note was, so a
+    /// transcript places the note after it; `None` before any turn.
+    pub after_execution: Option<ExecutionId>,
+    /// Its retirement, folded from the conversation's
+    /// [`SessionChange::NoteRetired`](super::SessionChange::NoteRetired);
+    /// `None` when none was saved. A note is accepted without one.
+    pub retired: Option<NoteRetirement>,
 }
 impl NoteRecord {
     /// Most notes one conversation keeps. Another is refused rather than an
@@ -153,16 +231,37 @@ impl NoteRecord {
     pub const MAX_PER_AUTHOR_IN_WINDOW: usize = 20;
     /// The window [`Self::MAX_PER_AUTHOR_IN_WINDOW`] counts over.
     pub const RATE_WINDOW_MS: u64 = 60_000;
+    /// Most `next_turn` notes waiting at once in one conversation.
+    pub const MAX_PENDING: usize = 64;
+    /// How long a `next_turn` note waits for a turn before it is retired.
+    pub const PENDING_LIFETIME_MS: u64 = 24 * 60 * 60 * 1000;
+    /// Most notes one turn takes: what a message may carry.
+    pub const MAX_PER_TURN: usize = UserMessage::MAX_NOTES;
     /// Latest accepted time a note may carry: the largest integer a JSON
     /// number holds exactly, so a receipt reads back unchanged on every
     /// client.
     pub const MAX_ACCEPTED_AT_MS: u64 = (1 << 53) - 1;
 
-    /// Where the note stands.
-    pub fn state(&self) -> NoteState {
-        match self.delivery {
-            NoteDelivery::RecordOnly => NoteState::Recorded,
-        }
+    /// The note as the model is given it with the turn that takes it.
+    ///
+    /// # Errors
+    ///
+    /// [`StorageError::Corrupt`] for a note the prompt cannot carry, which a
+    /// saved note never is: its text and surface are within the same bounds.
+    pub fn context(&self) -> Result<NoteContext, StorageError> {
+        let author = match self.author {
+            Initiator::Owner => NoteAuthor::Owner,
+            Initiator::Grant(_) => NoteAuthor::Grant,
+        };
+        NoteContext::new(author, self.actor.surface_id(), self.text.as_str())
+            .map_err(|error| corrupt(&error.to_string()))
+    }
+
+    /// Whether its lifetime is over at `now_ms`.
+    fn overdue(&self, now_ms: u64) -> bool {
+        self.accepted_at_ms
+            .saturating_add(Self::PENDING_LIFETIME_MS)
+            <= now_ms
     }
 
     /// Whether this note answers `principal`'s request `request`: one note
@@ -246,6 +345,18 @@ pub(super) fn admit(
     if snapshot.notes.len() >= NoteRecord::MAX_PER_CONVERSATION {
         return Err(NoteRefusal::Full);
     }
+    // A note past its lifetime is retired by the next turn's admission, and
+    // waits for nothing: it takes no room.
+    if request.delivery == NoteDelivery::NextTurn
+        && snapshot
+            .notes
+            .iter()
+            .filter(|note| snapshot.note_state(note) == NoteState::Pending && !note.overdue(now_ms))
+            .count()
+            >= NoteRecord::MAX_PENDING
+    {
+        return Err(NoteRefusal::Full);
+    }
     // A note accepted later than now, by a clock since set back, counts too:
     // setting the clock back never makes room.
     let recent = snapshot
@@ -271,7 +382,105 @@ pub(super) fn admit(
         actor: request.actor,
         author: request.author,
         accepted_at_ms: now_ms,
+        after_execution: snapshot
+            .invocations
+            .last()
+            .map(|record| record.request.execution_id.clone()),
+        retired: None,
     }))
+}
+
+/// What a turn's admission does to the pending notes, at `now_ms`, given the
+/// host's `candidates`: in saved order, a note past its lifetime is retired
+/// `Expired`; one the host says lost its grant, `PermissionLost`; and, when
+/// `takes_notes`, up to [`NoteRecord::MAX_PER_TURN`] the host authorized are
+/// taken. Nothing else is touched: a note the host could not check waits.
+pub(super) fn select(
+    snapshot: &SessionSnapshot,
+    candidates: &NoteCandidates,
+    takes_notes: bool,
+    now_ms: u64,
+) -> NoteSelection {
+    let mut selection = NoteSelection::default();
+    for note in &snapshot.notes {
+        if snapshot.note_state(note) != NoteState::Pending {
+            continue;
+        }
+        let reason = if note.overdue(now_ms) {
+            Some(NoteRetirementReason::Expired)
+        } else if candidates.revoked.contains(&note.id) {
+            Some(NoteRetirementReason::PermissionLost)
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            selection.retired.push(NoteRetiredRecord {
+                id: note.id.clone(),
+                retirement: NoteRetirement {
+                    reason,
+                    at_ms: now_ms,
+                },
+            });
+        } else if takes_notes
+            && selection.taken.len() < NoteRecord::MAX_PER_TURN
+            && candidates.authorized.contains(&note.id)
+        {
+            selection.taken.push(note.id.clone());
+        }
+    }
+    selection
+}
+
+/// What [`select`] decided for one turn's admission.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct NoteSelection {
+    /// Pending notes to retire, in saved order.
+    pub retired: Vec<NoteRetiredRecord>,
+    /// Pending notes the turn takes, in saved order.
+    pub taken: Vec<NoteId>,
+}
+
+/// Whether `record` may be folded into `snapshot`: it names a `next_turn`
+/// note that is pending there. Answers that note's index.
+pub(super) fn admit_retired(
+    snapshot: &SessionSnapshot,
+    record: &NoteRetiredRecord,
+) -> Result<usize, StorageError> {
+    let index = snapshot
+        .notes
+        .iter()
+        .position(|note| note.id == record.id)
+        .ok_or_else(|| corrupt("a retirement names no saved note"))?;
+    if snapshot.note_state(&snapshot.notes[index]) != NoteState::Pending {
+        return Err(corrupt("a retirement names a note that is not pending"));
+    }
+    Ok(index)
+}
+
+/// Whether the notes a turn names may be folded into `snapshot` with it: at
+/// most [`NoteRecord::MAX_PER_TURN`], each a distinct `next_turn` note
+/// pending there.
+pub(super) fn admit_taken(
+    snapshot: &SessionSnapshot,
+    taken: &[NoteId],
+) -> Result<(), StorageError> {
+    if taken.len() > NoteRecord::MAX_PER_TURN {
+        return Err(corrupt("a turn takes more notes than it may"));
+    }
+    for (index, id) in taken.iter().enumerate() {
+        if taken[..index].contains(id) {
+            return Err(corrupt("a turn names one note twice"));
+        }
+        let pending = snapshot
+            .notes
+            .iter()
+            .find(|note| &note.id == id)
+            .is_some_and(|note| snapshot.note_state(note) == NoteState::Pending);
+        if !pending {
+            return Err(corrupt("a turn takes a note that is not pending"));
+        }
+    }
+    Ok(())
 }
 
 /// Whether `record` may follow what `snapshot` already records, read back
@@ -287,6 +496,14 @@ pub(super) fn admit_saved(
     if record.accepted_at_ms > NoteRecord::MAX_ACCEPTED_AT_MS {
         return Err(corrupt(
             "a note was accepted later than a receipt can state",
+        ));
+    }
+    if record.retired.is_some() {
+        return Err(corrupt("a note is accepted with no retirement"));
+    }
+    if !names_saved_turn(snapshot, record.after_execution.as_ref()) {
+        return Err(corrupt(
+            "a note follows a turn the conversation does not hold",
         ));
     }
     let repeated = snapshot.notes.iter().any(|note| {
@@ -312,13 +529,51 @@ pub(super) fn validate_saved(snapshot: &SessionSnapshot) -> Result<(), StorageEr
                 "a note was accepted later than a receipt can state",
             ));
         }
+        if !names_saved_turn(snapshot, note.after_execution.as_ref()) {
+            return Err(corrupt(
+                "a note follows a turn the conversation does not hold",
+            ));
+        }
+        if note.retired.is_some() && note.delivery != NoteDelivery::NextTurn {
+            return Err(corrupt("a record_only note is retired"));
+        }
         if !ids.insert(note.id.as_str())
             || !requests.insert((note.actor.principal_id(), note.actor.request_id()))
         {
             return Err(corrupt("two notes share an id or a request"));
         }
     }
+    // Every note a turn took is a `next_turn` note no other turn took and
+    // none retired.
+    let mut taken = HashSet::new();
+    for record in &snapshot.invocations {
+        if record.notes.len() > NoteRecord::MAX_PER_TURN {
+            return Err(corrupt("a turn takes more notes than it may"));
+        }
+        for id in &record.notes {
+            let note = snapshot
+                .notes
+                .iter()
+                .find(|note| &note.id == id)
+                .ok_or_else(|| corrupt("a turn takes a note the conversation does not hold"))?;
+            if note.delivery != NoteDelivery::NextTurn
+                || note.retired.is_some()
+                || !taken.insert(id)
+            {
+                return Err(corrupt("a turn takes a note that was not pending"));
+            }
+        }
+    }
     Ok(())
+}
+
+fn names_saved_turn(snapshot: &SessionSnapshot, turn: Option<&ExecutionId>) -> bool {
+    turn.is_none_or(|turn| {
+        snapshot
+            .invocations
+            .iter()
+            .any(|record| &record.request.execution_id == turn)
+    })
 }
 
 fn corrupt(reason: &str) -> StorageError {

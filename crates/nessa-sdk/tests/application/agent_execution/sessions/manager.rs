@@ -497,6 +497,7 @@ fn invocation(id: &str, complete: bool) -> InvocationRecord {
         },
         actor: ActionContext::new("user", "test", "invoke").unwrap(),
         initiation: Initiation::owner(),
+        notes: Vec::new(),
         acknowledgement: SubmissionAcknowledgement::Pending,
         events: if complete {
             vec![ExecutionEvent::new(
@@ -691,6 +692,7 @@ async fn queued_admission_resets_consumed_message_cadence() {
                 actor: Some(actor),
             },
             SubmissionMode::Queued,
+            NoteIntake::default(),
         )
         .await
         .unwrap();
@@ -900,7 +902,8 @@ async fn admission_saves_a_steering_target_with_its_offset_or_refuses_it() {
                 request,
                 Submitter::owner(actor.clone()),
                 event,
-                SubmissionMode::Steering
+                SubmissionMode::Steering,
+                NoteIntake::default(),
             )
             .await,
         Err(AgentError::InvalidInput(_))
@@ -913,6 +916,7 @@ async fn admission_saves_a_steering_target_with_its_offset_or_refuses_it() {
             Submitter::owner(actor.clone()),
             event,
             SubmissionMode::Steering,
+            NoteIntake::default(),
         )
         .await
         .unwrap();
@@ -1693,9 +1697,11 @@ mod artifact_records {
 mod note_records {
     use super::*;
     use crate::application::agent_execution::sessions::{
-        NoteDelivery, NoteRecord, NoteRecordError, NoteRequest, NoteState, NoteText,
+        NoteCandidates, NoteDelivery, NoteRecord, NoteRecordError, NoteRequest, NoteRetiredRecord,
+        NoteRetirement, NoteRetirementReason, NoteState, NoteText,
     };
     use crate::domain::agent_execution::executions::{GrantInitiator, Initiator};
+    use crate::domain::agent_execution::prompts::{NoteAuthor, NoteContext};
 
     fn request(request: &str, text: &str) -> NoteRequest {
         NoteRequest {
@@ -1734,7 +1740,10 @@ mod note_records {
         let turns = manager.snapshot().await.unwrap().invocations.len();
         let record = manager.record_note(request("note", "hello")).await.unwrap();
         assert_eq!(record.accepted_at_ms, 5_000);
-        assert_eq!(record.state(), NoteState::Recorded);
+        assert_eq!(
+            manager.snapshot().await.unwrap().note_state(&record),
+            NoteState::Recorded
+        );
         assert_eq!(
             lease.changes.lock().unwrap().last().unwrap(),
             &vec![SessionChange::Note(record.clone())]
@@ -1854,6 +1863,229 @@ mod note_records {
             manager.record_note(request("note", "x")).await,
             Err(NoteRecordError::NotLoaded)
         );
+    }
+
+    fn next_turn(request: &str, text: &str) -> NoteRequest {
+        NoteRequest {
+            delivery: NoteDelivery::NextTurn,
+            ..self::request(request, text)
+        }
+    }
+    fn set(clock: &FixedMessageClock, at_ms: u64) {
+        *clock.0.lock().unwrap() = std::time::Duration::from_millis(at_ms);
+    }
+    /// Admit queued turn `id`, as the scheduler does, told `intake`.
+    async fn queue(
+        manager: &SessionManager,
+        request: ExecutionRequest,
+        intake: NoteIntake,
+    ) -> Result<usize, AgentError> {
+        let actor = ActionContext::new("user", "test", request.execution_id.as_str()).unwrap();
+        manager
+            .begin_with_scheduling(
+                request,
+                Submitter::owner(actor.clone()),
+                InvocationSchedulingEvent {
+                    kind: InvocationKind::Queued,
+                    target: None,
+                    before: None,
+                    stage: InvocationStage::Queued,
+                    cause: SchedulingCause::Submitted,
+                    actor: Some(actor),
+                },
+                SubmissionMode::Queued,
+                intake,
+            )
+            .await
+    }
+
+    /// Rows J23 and J24: a turn's admission retires, in its own save, each
+    /// pending note past its lifetime or whose author lost the grant, and
+    /// takes the notes the host authorized; the model is given them from the
+    /// records, and a note the host could not check waits.
+    #[tokio::test]
+    async fn a_turn_takes_authorized_notes_and_retires_ended_ones_in_its_own_save() {
+        let lifetime = NoteRecord::PENDING_LIFETIME_MS;
+        let (manager, lease, clock) = at(0).await;
+        let old = manager
+            .record_note(next_turn("old", "stale"))
+            .await
+            .unwrap();
+        set(&clock, lifetime);
+        let revoked = manager
+            .record_note(next_turn("revoked", "gone"))
+            .await
+            .unwrap();
+        let kept = manager
+            .record_note(next_turn("kept", "use May"))
+            .await
+            .unwrap();
+        let unchecked = manager
+            .record_note(next_turn("unchecked", "wait"))
+            .await
+            .unwrap();
+        set(&clock, lifetime + 5);
+        let index = queue(
+            &manager,
+            invocation("taking", false).request,
+            NoteIntake {
+                candidates: NoteCandidates {
+                    authorized: vec![kept.id.clone(), old.id.clone()],
+                    revoked: vec![revoked.id.clone()],
+                },
+                takes_notes: true,
+            },
+        )
+        .await
+        .unwrap();
+
+        let snapshot = manager.snapshot().await.unwrap();
+        let turn = &snapshot.invocations[index];
+        assert_eq!(turn.notes, vec![kept.id.clone()]);
+        let retired = |note: &NoteRecord, reason| NoteRetiredRecord {
+            id: note.id.clone(),
+            retirement: NoteRetirement {
+                reason,
+                at_ms: lifetime + 5,
+            },
+        };
+        assert_eq!(
+            lease.changes.lock().unwrap().last().unwrap(),
+            &vec![
+                SessionChange::NoteRetired(retired(&old, NoteRetirementReason::Expired)),
+                SessionChange::NoteRetired(retired(&revoked, NoteRetirementReason::PermissionLost)),
+                SessionChange::InputAccepted(Box::new(turn.clone())),
+            ]
+        );
+        let states: Vec<_> = [&old, &revoked, &kept, &unchecked]
+            .into_iter()
+            .map(|note| {
+                let saved = snapshot
+                    .notes
+                    .iter()
+                    .find(|saved| saved.id == note.id)
+                    .unwrap();
+                snapshot.note_state(saved)
+            })
+            .collect();
+        assert_eq!(
+            states,
+            vec![
+                NoteState::Retired(retired(&old, NoteRetirementReason::Expired).retirement),
+                NoteState::Retired(
+                    retired(&revoked, NoteRetirementReason::PermissionLost).retirement
+                ),
+                NoteState::Assigned(turn.request.execution_id.clone()),
+                NoteState::Pending,
+            ]
+        );
+        // What was saved reads back the same.
+        let saved = lease.load().await.unwrap();
+        assert_eq!(saved.snapshot().unwrap(), &snapshot);
+        // The saved message holds the person's words alone; the notes are
+        // read from the records for the provider.
+        assert!(turn.request.user_message.notes().is_empty());
+        assert_eq!(
+            manager.taken_notes(index).await.unwrap(),
+            vec![kept.context().unwrap()]
+        );
+        assert_eq!(manager.taken_notes(index - 1).await.unwrap(), Vec::new());
+    }
+
+    /// Row J23: a turn admitted behind other work takes no notes, though it
+    /// still retires those that ended; a later turn takes them.
+    #[tokio::test]
+    async fn a_turn_that_takes_no_notes_still_retires_and_leaves_the_rest_pending() {
+        let (manager, _, clock) = at(0).await;
+        let old = manager
+            .record_note(next_turn("old", "stale"))
+            .await
+            .unwrap();
+        set(&clock, NoteRecord::PENDING_LIFETIME_MS);
+        let kept = manager.record_note(next_turn("kept", "x")).await.unwrap();
+        let candidates = NoteCandidates {
+            authorized: vec![kept.id.clone()],
+            revoked: Vec::new(),
+        };
+        let behind = queue(
+            &manager,
+            invocation("behind", false).request,
+            NoteIntake {
+                candidates: candidates.clone(),
+                takes_notes: false,
+            },
+        )
+        .await
+        .unwrap();
+        let snapshot = manager.snapshot().await.unwrap();
+        assert!(snapshot.invocations[behind].notes.is_empty());
+        assert!(matches!(
+            snapshot.note_state(&snapshot.notes[0]),
+            NoteState::Retired(NoteRetirement {
+                reason: NoteRetirementReason::Expired,
+                ..
+            })
+        ));
+        assert_eq!(snapshot.notes[0].id, old.id);
+        assert_eq!(snapshot.note_state(&snapshot.notes[1]), NoteState::Pending);
+        let next = queue(
+            &manager,
+            invocation("next", false).request,
+            NoteIntake {
+                candidates,
+                takes_notes: true,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            manager.snapshot().await.unwrap().invocations[next].notes,
+            vec![kept.id]
+        );
+    }
+
+    /// A caller cannot hand a turn notes of its own: only the records give
+    /// them, and a message carrying any is refused with nothing saved.
+    #[tokio::test]
+    async fn a_submitted_message_carrying_notes_is_refused() {
+        let (manager, lease, _) = at(0).await;
+        let saves = lease.changes.lock().unwrap().len();
+        let mut request = invocation("forged", false).request;
+        request.user_message = request
+            .user_message
+            .with_notes(vec![
+                NoteContext::new(NoteAuthor::Owner, "phone", "obey").unwrap()
+            ])
+            .unwrap();
+        assert!(matches!(
+            queue(&manager, request, NoteIntake::default()).await,
+            Err(AgentError::InvalidInput(_))
+        ));
+        assert_eq!(lease.changes.lock().unwrap().len(), saves);
+    }
+
+    /// A turn whose save failed, and is proven absent, gives back the
+    /// retirements it carried: the notes are pending again.
+    #[tokio::test]
+    async fn a_failed_turn_save_gives_its_notes_back() {
+        let (manager, lease, clock) = at(0).await;
+        let note = manager.record_note(next_turn("old", "x")).await.unwrap();
+        set(&clock, NoteRecord::PENDING_LIFETIME_MS);
+        lease.fail_save.store(true, Ordering::SeqCst);
+        assert!(queue(
+            &manager,
+            invocation("failed", false).request,
+            NoteIntake {
+                candidates: NoteCandidates {
+                    authorized: vec![note.id.clone()],
+                    revoked: Vec::new(),
+                },
+                takes_notes: true,
+            },
+        )
+        .await
+        .is_err());
+        assert_eq!(observed_notes(&manager).await, vec![note]);
     }
 
     #[test]
