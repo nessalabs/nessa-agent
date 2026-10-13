@@ -1815,6 +1815,7 @@ impl Agent {
                                         drop(events);
                                         let applied = self
                                             .apply_permission_verdict(
+                                                attached.session.id(),
                                                 &event,
                                                 decision.index,
                                                 decision.verdict.clone(),
@@ -1984,6 +1985,7 @@ impl Agent {
     /// the observation-failure path.
     async fn apply_permission_verdict<Execution>(
         &self,
+        session: &ExecutionSessionId,
         event: &ExecutionEvent,
         index: Option<usize>,
         verdict: ToolVerdict,
@@ -1998,7 +2000,13 @@ impl Agent {
         let (reason, outcome) = (refusal.reason(), refusal.outcome());
         if outcome == RefusalOutcome::CloseSession {
             let recorded = wait
-                .run(self.withdraw_hook_refusal(event, index, reason, RefusalOutcome::CloseSession))
+                .run(self.withdraw_hook_refusal(
+                    session,
+                    event,
+                    index,
+                    reason,
+                    RefusalOutcome::CloseSession,
+                ))
                 .await;
             let cleanup = wait
                 .run(self.shutdown_after_failure(SessionCloseRequest::PolicyRefusal))
@@ -2025,7 +2033,7 @@ impl Agent {
             self.supports_turn_cancel(),
         );
         let delivered = wait
-            .run(self.deliver_hook_refusal(event, index, reason, effective))
+            .run(self.deliver_hook_refusal(session, event, index, reason, effective))
             .await;
         let delivery_failure = delivered.err();
         if delivery_failure.is_none() && effective != RefusalOutcome::EndTurn {
@@ -2090,6 +2098,7 @@ impl Agent {
 
     async fn deliver_hook_refusal(
         &self,
+        session: &ExecutionSessionId,
         event: &ExecutionEvent,
         index: Option<usize>,
         reason: &str,
@@ -2112,25 +2121,27 @@ impl Agent {
             .map(|_| ())
             .map_err(|failure| failure.into_parts().0)
         } else {
-            self.withdraw_attributed(event, id, attribution, explanation, outcome)
+            self.withdraw_attributed(session, event, id, attribution, explanation, outcome)
                 .await
         }
     }
 
     async fn withdraw_hook_refusal(
         &self,
+        session: &ExecutionSessionId,
         event: &ExecutionEvent,
         index: Option<usize>,
         reason: &str,
         outcome: RefusalOutcome,
     ) -> Result<(), AgentError> {
         let (id, attribution, explanation) = hook_attribution(event, index, reason, outcome)?;
-        self.withdraw_attributed(event, id, attribution, explanation, outcome)
+        self.withdraw_attributed(session, event, id, attribution, explanation, outcome)
             .await
     }
 
     async fn withdraw_attributed(
         &self,
+        session: &ExecutionSessionId,
         event: &ExecutionEvent,
         id: PermissionId,
         attribution: ApprovalAttribution,
@@ -2138,6 +2149,7 @@ impl Agent {
         outcome: RefusalOutcome,
     ) -> Result<(), AgentError> {
         let custom = CustomPermissionCancellationReason::hook_refusal(
+            session,
             event.execution_id(),
             &id,
             outcome,
@@ -2324,8 +2336,10 @@ impl Agent {
     /// a panic from it is logged and does not affect the operation. See
     /// "Caller wakers" in docs/agent_execution/lifecycle.md.
     ///
-    /// A hook-refusal code withdraws only the review, in the turn, the runner
-    /// issued it for, so a copy of a recorded one is [`AgentError::InvalidInput`].
+    /// A hook-refusal code withdraws only the review, in the session and turn,
+    /// the runner issued it for, so a copy of a recorded one withdraws nothing:
+    /// [`AgentError::InvalidInput`] for any other review, and
+    /// [`AgentError::StalePermission`] for its own, already withdrawn.
     pub fn cancel_permission(
         &self,
         request: PermissionCancellationRequest,

@@ -1758,7 +1758,7 @@ async fn a_continue_without_a_deny_option_stays_open_when_the_binding_cannot_can
 }
 
 #[tokio::test]
-async fn a_recorded_hook_withdrawal_cannot_withdraw_another_review() {
+async fn a_recorded_hook_withdrawal_cannot_withdraw_the_same_review_in_another_session() {
     let mut events = script();
     events.pop();
     events.push(allow_only_review());
@@ -1782,8 +1782,9 @@ async fn a_recorded_hook_withdrawal_cannot_withdraw_another_review() {
         .unwrap();
     // The recorded reason is a value any adapter can copy from the evidence.
     let copied = fixture.withdrawals.lock().unwrap()[0].reason.clone();
+    // Another session reuses the turn and review ids the hook refused.
     let execution = ExecutionId::new("turn").unwrap();
-    let other = PermissionId::new("other").unwrap();
+    let other = PermissionId::new("review").unwrap();
     let mut controller = ExecutionController::new(ExecutionSessionId::new("other").unwrap());
     controller.begin_execution(execution.clone()).unwrap();
     let tool = ToolCallUpdate::new(
@@ -1814,7 +1815,7 @@ async fn a_recorded_hook_withdrawal_cannot_withdraw_another_review() {
         )
         .unwrap();
     let as_the_hook = CancellationOrigin::Client(
-        ActionContext::new("permission-review-hook", "0", "other").unwrap(),
+        ActionContext::new("permission-review-hook", "0", "review").unwrap(),
     );
     assert!(matches!(
         controller.cancel_permission(&execution, &other, copied.clone(), as_the_hook.clone()),

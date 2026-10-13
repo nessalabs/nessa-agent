@@ -46,8 +46,12 @@ fn request(name: &str) -> PermissionRequest {
         .unwrap(),
     )
 }
+fn context() -> ExecutionSessionId {
+    ExecutionSessionId::new("context").unwrap()
+}
+
 fn active() -> ExecutionSession {
-    let mut session = ExecutionSession::new(ExecutionSessionId::new("context").unwrap());
+    let mut session = ExecutionSession::new(context());
     session.begin_execution(execution()).unwrap();
     session
 }
@@ -224,6 +228,7 @@ fn a_hook_refusal_code_withdraws_only_the_review_it_was_issued_for() {
     let other = PermissionId::new("other").unwrap();
     let issued = PermissionCancellationReason::custom(
         CustomPermissionCancellationReason::hook_refusal(
+            &context(),
             &execution(),
             &refused,
             RefusalOutcome::EndTurn,
@@ -283,6 +288,7 @@ fn a_saved_hook_refusal_code_must_be_one_the_runner_writes() {
     // The runner's own reason is held to the same bounds.
     assert_eq!(
         CustomPermissionCancellationReason::hook_refusal(
+            &context(),
             &execution(),
             &PermissionId::new("review").unwrap(),
             RefusalOutcome::Continue,
@@ -313,6 +319,7 @@ fn a_hook_refusal_code_does_not_withdraw_a_review_with_the_same_id_in_a_later_tu
     let review = PermissionId::new("review").unwrap();
     let issued = PermissionCancellationReason::custom(
         CustomPermissionCancellationReason::hook_refusal(
+            &context(),
             &execution(),
             &review,
             RefusalOutcome::Continue,
@@ -350,4 +357,33 @@ fn a_hook_refusal_code_does_not_withdraw_a_review_with_the_same_id_in_a_later_tu
         1,
         "the later review stays pending"
     );
+}
+
+#[test]
+fn a_hook_refusal_code_does_not_withdraw_the_same_review_in_another_session() {
+    let review = PermissionId::new("review").unwrap();
+    let issued = PermissionCancellationReason::custom(
+        CustomPermissionCancellationReason::hook_refusal(
+            &ExecutionSessionId::new("elsewhere").unwrap(),
+            &execution(),
+            &review,
+            RefusalOutcome::EndTurn,
+            "hook refused",
+        )
+        .unwrap(),
+    );
+    // Turn and review ids repeat across sessions, so a copy of a reason
+    // issued in another session must not withdraw this one's review.
+    let mut session = active();
+    session
+        .observe_tool(&execution(), update("original"))
+        .unwrap();
+    session.request_permission(request("review")).unwrap();
+    assert_eq!(
+        session
+            .cancel_permission(&execution(), &review, issued)
+            .unwrap_err(),
+        ExecutionError::ReservedCancellationCode
+    );
+    assert_eq!(session.permission_count(), 1, "the review stays pending");
 }

@@ -106,8 +106,9 @@ so a provider that completes them through its execution cannot deadlock. The
 hook thread receives only the proposed call, not the whole review. A caller
 cannot write a `hook-refusal.` code: `CustomPermissionCancellationReason::new`
 cannot build one, and the session withdraws with one only the review, in the
-turn, the runner issued it for. A copy taken from recorded evidence, or a saved one, withdraws
-nothing, whichever path submits it. A withdrawal with a hook-refusal code, live
+session and turn, the runner issued it for. Turn and review ids can repeat in
+another session, so the binding names the session too. A copy taken from
+recorded evidence, or a saved one, withdraws nothing, whichever path submits it. A withdrawal with a hook-refusal code, live
 or loaded from storage, must name one of the three outcomes and carry the hook's
 own actor for that review, or it is rejected. Only a
 continue is ever an answer, and the execution controller rejects a hook answer
