@@ -21,10 +21,12 @@ import { maskRustNonCode, normalizedPath } from "./rust-boundaries.mjs"
  * Test code is what the compiler says it is: the body of a `#[cfg(test)]`
  * module, and the files an out-of-line `#[cfg(test)] mod name;` loads and the
  * modules they declare in turn. [`testCodeFiles`] follows those declarations
- * the way rustc resolves them, so no file name is taken as a sign of test
- * code. A file pulled in with `include!` is read as product code. Only a
- * crate's `src/` is read; tests, benches and examples outside it are not. Pure text on purpose:
- * `check-architecture.mjs` runs with bare Node.
+ * the way rustc resolves a file's top-level modules, so no file name is taken
+ * as a sign of test code. Two things it does not follow, and reads as product
+ * code: a `mod name;` nested inside an inline `mod … { }` block, and a file
+ * pulled in with `include!`. Only a crate's `src/` is read; tests, benches and
+ * examples outside it are not. Pure text on purpose: `check-architecture.mjs`
+ * runs with bare Node.
  */
 
 /** A path segment named `cedar` is an adapter directory. */
@@ -74,7 +76,8 @@ const DECLARATION = new RegExp(String.raw`((?:#\[[^\]]*\]\s*)*)${MOD};`, "g")
 const IS_TEST = new RegExp(TEST_CFG)
 
 /**
- * The out-of-line modules `path` declares, as the files rustc would load:
+ * The out-of-line modules `path` declares, as the files rustc would load for
+ * a declaration at the top level of the file (not inside an inline module):
  * `name.rs` or `name/mod.rs` in the directory `path` owns, or a `#[path]`
  * relative to `path`'s own directory. A `mod.rs`, `lib.rs` or `main.rs` owns
  * its directory, and so does a file loaded through `#[path]`
