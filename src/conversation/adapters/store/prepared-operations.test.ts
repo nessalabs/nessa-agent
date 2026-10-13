@@ -522,9 +522,9 @@ it("serializes captured question DTOs without caller hooks after create awaits (
   waiting.resolve()
   const result = await pending
   expect(result.meta.requestStatus).toBe("fulfilled")
-  expect(serialized).toBe(
-    JSON.stringify([{ key: "key", values: ["original"], ownWords: "original words" }]),
-  )
+  expect(JSON.parse(serialized ?? "null")).toEqual([
+    { key: "key", values: ["original"], ownWords: "original words" },
+  ])
   expect(valuesHook).not.toHaveBeenCalled()
   expect(recordHook).not.toHaveBeenCalled()
   expect(listHook).not.toHaveBeenCalled()
