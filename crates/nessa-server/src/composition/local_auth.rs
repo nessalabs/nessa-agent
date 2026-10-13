@@ -1104,7 +1104,13 @@ async fn conversations(
         configured.insert(AgentId::Opencode);
     }
     configured.extend(managed_adapters.iter().copied());
-    let agents_catalog = agent_catalog(agents, &configured, opencode.configured(), &ssh_hosts)?;
+    let agents_catalog = agent_catalog(
+        agents,
+        &configured,
+        opencode.configured(),
+        &ssh_hosts,
+        attachments.service.offers_images(),
+    )?;
     let resolver = Arc::new(CurrentAgentResolver::new(CurrentAgentResolverInput {
         fixed: built.providers,
         managed_adapters,
@@ -1321,6 +1327,7 @@ fn agent_catalog(
     configured: &HashSet<AgentId>,
     opencode: Option<&OpenCodeProfile>,
     hosts: &[SshDestination],
+    uploads_offer_images: bool,
 ) -> Result<AgentsListResult, RunError> {
     let models = load_catalog(
         std::fs::File::open(&config.catalog)
@@ -1362,7 +1369,7 @@ fn agent_catalog(
                         display_name: model.display_name.clone(),
                         max_context_window_tokens: u64::from(model.max_context_window_tokens),
                         reasoning: model.reasoning.is_some(),
-                        image_input: model.image_input.is_some(),
+                        image_input: uploads_offer_images && model.image_input.is_some(),
                         approval_modes: modes.iter().copied().map(wire_mode_choice).collect(),
                     }
                 })

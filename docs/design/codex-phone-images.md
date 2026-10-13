@@ -12,6 +12,15 @@ The gateway refuses phone images before upload because the Codex binding offers 
 | Present | Present | Negotiation pending | Existing shared admission may read bytes; worker waits for negotiation and refuses dispatch if absent |
 | Present | Present | Negotiated present | Read verified bytes through the existing bounded source and send image content blocks in attachment order |
 
+The conversation capability also intersects the attachment owner's current upload
+configuration. A present attachment port can keep and release non-image files
+while its shared normalizer offers no images.
+
+| Shared upload normalizer | Model and harness offer images | Conversation behavior |
+| --- | --- | --- |
+| No image limits across configured models | Yes | agents.list model imageInput false and conversation imageInput false; image ticket refused; text usable |
+| Shared image limits available | Yes | agents.list model imageInput true for models with recorded limits, conversation imageInput true; image ticket admitted |
+
 Codex construction derives input modality from `AcpConfig.images`, matching Claude's existing ownership. Runtime negotiation remains the shared worker's responsibility. Only GPT-5.6 Terra gains a conservative admission profile: PNG/JPEG, 5,000,000 encoded bytes and a 2048-pixel edge. These are Nessa's chosen delivery ceilings, not a claim about the provider's maximum; other OpenAI models remain unoffered until a profile is verified. Source: https://developers.openai.com/api/docs/models/gpt-5.6-terra (image input).
 
 ## Verification

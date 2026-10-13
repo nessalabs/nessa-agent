@@ -955,6 +955,9 @@ pub(crate) struct MemoryAttachments {
     pub(crate) record_entered: Notify,
 }
 impl ConversationAttachments for MemoryAttachments {
+    fn offers_images(&self) -> bool {
+        true
+    }
     fn holds<'a>(
         &'a self,
         organization_id: &'a OrganizationId,
