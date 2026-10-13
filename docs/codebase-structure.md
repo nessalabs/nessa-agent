@@ -258,10 +258,13 @@ against a private scripted gateway.
   `ui/overview/` the Agents overview, with its rules in `model/overview/`),
   with `testing.ts` the fake source, the store, and the animation frames its
   tests share. A failed, cancelled, or unresolved turn keeps the gateway's
-  status and diagnostic on the message. Questions the view lists, and the
+  status and diagnostic on the message, including an earlier authentication
+  refusal. The refusal recovery is showing does not also carry that
+  diagnostic. Questions the view lists, and the
   gateway's `interactionViewError`, are on the transcript; answering a
   question checks it is on screen, then that the view still lists it, then
-  sends `answerQuestion`, and the next frame drops it. The window has its own store (`src/desktop/store.ts`) and composition
+  sends `answerQuestion`. A second card of that ask joins the send already
+  on its way. The next frame drops the question. The window has its own store (`src/desktop/store.ts`) and composition
   (`src/desktop/dependencies.ts`). Where its workspace comes from is the
   window's too: the host's gateway, a browser's, a seeded run, or the sample, by
   `src/desktop/model/workspace-backend.ts`, with the desktop app's connection

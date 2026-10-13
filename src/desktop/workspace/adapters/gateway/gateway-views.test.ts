@@ -860,6 +860,51 @@ it("shows auth recovery without duplicating its diagnostic and preserves unrelat
   expect(JSON.stringify(transcript)).not.toContain("OAuth session expired")
 })
 
+it("keeps a Failed mark on an authentication refusal once another turn has followed", () => {
+  const refusal = turn({
+    status: "failed",
+    authenticationRequired: true,
+    error: "Internal error: OAuth session expired",
+  })
+  const followed = transcriptFrom(
+    view("auth", {
+      messages: [
+        refusal,
+        turn({
+          executionId: "later",
+          userText: "Try again",
+          status: "completed",
+          parts: [textPart("Ready", 0)],
+        }),
+      ],
+    }),
+    1,
+    at,
+    GATEWAY_NOW_MS,
+  )
+  expect(recovery(followed)).toBe(false)
+  expect(followed.messages[0]).toMatchObject({
+    role: "user",
+    terminal: { status: "failed", error: "Internal error: OAuth session expired" },
+  })
+  const waiting = view("auth", { messages: [refusal] })
+  waiting.pending = [
+    {
+      executionId: "retry",
+      text: "Try again",
+      attachments: [],
+      files: [],
+      mode: "queued",
+    },
+  ]
+  const superseded = transcriptFrom(waiting, 2, at, GATEWAY_NOW_MS)
+  expect(recovery(superseded)).toBe(false)
+  expect(superseded.messages[0]).toMatchObject({
+    role: "user",
+    terminal: { status: "failed", error: "Internal error: OAuth session expired" },
+  })
+})
+
 it("recovery follows the latest mapped input across pending and dispatched turns", () => {
   const refusal = turn({ status: "failed", authenticationRequired: true })
   const pending = {

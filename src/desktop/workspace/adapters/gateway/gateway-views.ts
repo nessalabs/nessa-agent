@@ -272,8 +272,9 @@ function writtenBy(app: ConversationMessageApp | undefined): { app?: MessageApp 
  * (`gatewayToolWidget`). A turn the gateway says failed, was cancelled, or
  * was left unresolved keeps that status and, when the gateway sent one, its
  * diagnostic — on the reply when there is one, otherwise on the input.
- * Authentication recovery stays the latest turn's typed refusal, and that
- * turn does not also carry the diagnostic. Thoughts are not shown. A question
+ * Authentication recovery stays the latest input's typed refusal, and that
+ * turn does not also carry the diagnostic. An earlier refusal keeps the
+ * mark the gateway reported. Thoughts are not shown. A question
  * the agent is waiting on is kept as the view listed it. A notice that a
  * review or question was left out of the view is kept in the view's words. A file the agent published
  * ends the reply of the turn that was running when it was published; one
@@ -306,6 +307,9 @@ export function transcriptFrom(
   // The inputs still waiting that the view lists apart from its turns: drawn
   // after every turn, as the panel draws them.
   const unlisted = view.pending.filter((waiting) => !listed.has(waiting.executionId))
+  // Recovery owns a typed refusal only while that turn is still the latest
+  // input. A later turn or a later waiting input leaves the older mark.
+  const latestInputId = unlisted.at(-1)?.executionId ?? view.messages.at(-1)?.executionId
   const notes = placeNotes(
     view.notes,
     listed,
@@ -365,7 +369,7 @@ export function transcriptFrom(
       }
     }
     parts.push(...(published.byExecution.get(turn.executionId) ?? []).map(publishedPart))
-    const terminal = turnTerminal(turn)
+    const terminal = turnTerminal(turn, turn.executionId === latestInputId)
     if (parts.length > 0) {
       const reply = replyId(turn.executionId)
       const agent: TurnMessage = { id: reply, role: "agent", at: seen(reply), parts }
@@ -399,7 +403,6 @@ export function transcriptFrom(
     })
     pushNotes(notes.byWaiting.get(waiting.executionId) ?? [])
   }
-  const latestInputId = unlisted.at(-1)?.executionId ?? view.messages.at(-1)?.executionId
   const latestTurn = view.messages.at(-1)
   const history = historyExtent(view)
   // What runs is the tool and its exact input, which the gateway offers a
@@ -451,15 +454,18 @@ export function transcriptFrom(
 }
 
 /**
- * A terminal status the gateway reported, apart from a typed authentication
- * refusal, which the recovery card owns. Any other status is still running
- * or finished and has no mark. A blank diagnostic is left off; the text
- * itself is not rewritten.
+ * A terminal status the gateway reported. A typed authentication refusal
+ * that recovery still owns — it is the latest input — does not also carry
+ * the mark or its diagnostic. An earlier refusal keeps both. Any other
+ * status is still running or finished and has no mark. A blank diagnostic
+ * is left off; the text itself is not rewritten.
  */
 function turnTerminal(
   turn: ConversationView["messages"][number],
+  /** This turn is the conversation's latest input, pending ones included. */
+  latestInput: boolean,
 ): TurnTerminal | undefined {
-  if (turn.authenticationRequired) return undefined
+  if (turn.authenticationRequired && latestInput) return undefined
   switch (turn.status) {
     case "failed":
     case "cancelled":
