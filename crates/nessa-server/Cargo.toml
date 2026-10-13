@@ -60,6 +60,9 @@ async-trait = "0.1"
 # implementation rather than two.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 sha2 = "0.10"
+# The tool policy's evaluator (conversation/infrastructure/tool_policy/cedar), the
+# same pinned build nessa-auth embeds.
+cedar-policy = { version = "=4.12.0", default-features = false }
 # Keying each MCP server's configuration digest with a per-process secret,
 # so a stand-in's arguments say nothing about its variables' values.
 hmac = "0.12"
