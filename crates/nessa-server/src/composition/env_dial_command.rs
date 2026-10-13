@@ -34,8 +34,9 @@ use crate::{
             NotEnrolled,
         },
         domain::Peer,
-        infrastructure::{dial, Approved, FileEnrollmentCode, FilePairingEnvironment, TokioTimer},
+        infrastructure::{dial, Approved, FileEnrollmentCode, FilePairingEnvironment},
     },
+    timer::TokioTimer,
 };
 use nessa_auth::adapters::pairing::{ManualCode, NativeIdentity};
 use nessa_protocol::clock::Clock;

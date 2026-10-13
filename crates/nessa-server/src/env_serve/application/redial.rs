@@ -16,7 +16,7 @@
 //!
 //! Arrows are steps, in order. A refusal is redacted (see `dial.rs`), so a
 //! revoked key is dialed again like a full gateway: the wait caps how often.
-use super::timer::Timer;
+use crate::timer::Timer;
 use std::{future::Future, io, time::Duration};
 use tokio::sync::watch;
 

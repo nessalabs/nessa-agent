@@ -50,6 +50,7 @@ layer may import `nessa_protocol::product_contract::…` but not
 | `src/pairing/limits.rs` | Protected product frame bounds. |
 | `src/pairing/socket/` | The deadline-and-wake socket (`deadline_stream.rs`, `wake.rs`) and the worker-fault mapping (`worker.rs`). |
 | `src/clock.rs` | The monotonic clock port the socket's deadlines read. |
+| `src/relay.rs` | The relay preamble: the bounded frames a gateway and a reader speak to a relay before it joins them, read exactly so the bytes after `Joined` stay on the socket (tests in `tests/relay/`). |
 | `src/agents/` | `AgentId`, the agent names a conversation uses. |
 | `src/conversation/domain/` | Conversation identity, model and approval choice, the summary a list shows, and catalogue identity. |
 | `src/conversation/view.rs`, `src/conversation/projection.rs` | The `conversation.read` shape and the one bounded projection of committed records into it, with its `McpToolUis` port (`tool_uis.rs`), asked by conversation; which SDK session that is stays the gateway's rule. |

@@ -16,6 +16,7 @@
 //! - `conversation`: the conversation read model, and `agents`, the agent names it uses.
 //! - `lease`: the lease frames a gateway and an environment (`nessa env serve`) exchange.
 //! - `clock`: the monotonic clock port the pairing socket's deadlines read.
+//! - `relay`: the preamble a gateway and a reader speak to a relay before it joins them.
 //!
 //! Admission rule: no process state and no runtime of its own. `pairing::socket`
 //! is the one deliberate exception, blocking std socket mechanics both ends
@@ -28,3 +29,4 @@ pub mod pairing;
 pub mod product;
 pub mod product_contract;
 pub mod protocol;
+pub mod relay;

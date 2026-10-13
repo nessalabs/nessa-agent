@@ -1,5 +1,5 @@
-//! The runtime's own clock as the environment role's [`Timer`].
-use crate::env_serve::application::{Moment, Sleep, Timer};
+//! The runtime's own clock as a [`Timer`].
+use super::{Moment, Sleep, Timer};
 
 /// Tokio's clock, measured from when this value was made.
 #[derive(Clone, Copy, Debug)]

@@ -21,7 +21,9 @@ pub use opaque::{
 };
 pub use opaque_ke::rand;
 pub use opaque_ke::rand::{CryptoRng, RngCore};
-pub use tls::{GatewayTrust, NativeIdentity, NativeTransport};
+pub use tls::{
+    verify_relay_proof, GatewayTrust, NativeIdentity, NativeTransport, RELAY_PROOF_CONTEXT,
+};
 /// Maximum raw enrollment cryptographic message consumed by these adapters.
 /// Native framing independently validates the encoded envelope, including JSON
 /// and base64 overhead. Protected product framing has separate directional bounds.

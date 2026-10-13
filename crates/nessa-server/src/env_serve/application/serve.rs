@@ -108,9 +108,9 @@
 use super::artifacts::{ArtifactOutbox, LeaseArtifacts, PublishRequest};
 use super::fetches::{ArtifactInbox, LeaseFetches, NoInbox};
 use super::grants::{grant_for, PeerGrants};
-use super::timer::{timeout, within, Moment, Timer};
 use super::wire::{write_frame, FrameStream};
 use crate::env_serve::domain::{admit_agent, admit_command, Peer, PeerGrant};
+use crate::timer::{timeout, within, Moment, Timer};
 use nessa_protocol::lease::{
     decode, ArtifactReadRefusal, Cleanup, Collection, CommandEnd, Data, EndingCause, FetchOutcome,
     FetchRefusal, FromEnvironment, GrantRefusal, GrantedTerms, Hello, PublishRefusal, Sandbox,
