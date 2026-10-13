@@ -112,4 +112,12 @@ it("aborts every active folder operation when the hook unmounts", async () => {
   await act(async () => root.unmount())
   expect(signals).toHaveLength(2)
   expect(signals.every((signal) => signal.aborted)).toBe(true)
+
+  await act(async () => {
+    reads[0]!.resolve([new File(["late"], "late.txt")])
+    reads[1]!.resolve([new File(["late"], "late.txt")])
+    await Promise.resolve()
+  })
+  expect(addFiles).not.toHaveBeenCalled()
+  expect(refuse).not.toHaveBeenCalled()
 })

@@ -297,6 +297,7 @@ export function useFileAttachments(
     linked: readonly ChosenFile[],
     destination: AttachmentDestination,
   ) {
+    if (!mounted.current) return
     if (!held.length && !linked.length) return
     const target = conversationsOf(destination).find(
       (conversation) => conversation.id === destination.conversationId,
@@ -416,6 +417,7 @@ export function useFileAttachments(
    * came from, so images work there and nothing else can be sent.
    */
   async function chooseFiles(destination = currentDestination()) {
+    if (!mounted.current) return
     // The request identity travels with the host's separate readiness events,
     // so a second picker can overlap without borrowing the first one's owner.
     const requestId: PickerRequestId = `p-${crypto.randomUUID()}`
@@ -437,8 +439,9 @@ export function useFileAttachments(
     let chosen
     try {
       chosen = await chooseAttachmentFiles(requestId)
+      if (!operationIsActive(pickerOperation)) return
     } catch (error) {
-      refuse(pickerRefusal(error), destination)
+      if (operationIsActive(pickerOperation)) refuse(pickerRefusal(error), destination)
       return
     } finally {
       finishOperation(pickerOperation)
@@ -451,6 +454,8 @@ export function useFileAttachments(
           return next
         })
     }
+    // Teardown retires this operation owner. A late answer cannot open the
+    // browser picker or admit another operation after that point.
     if (chosen === null) {
       inputRef.current?.click()
       return
@@ -469,6 +474,7 @@ export function useFileAttachments(
     files: { name: string; mimeType: string; previewUrl?: string }[],
     controller?: AbortController,
   ) {
+    if (!mounted.current) return null
     if (
       [...operationsRef.current].some(
         (operation) =>
@@ -496,6 +502,9 @@ export function useFileAttachments(
     if (mounted.current) setOperations(new Set(operationsRef.current))
   }
 
+  const operationIsActive = (operation: AttachmentOperation) =>
+    mounted.current && operationsRef.current.has(operation)
+
   /**
    * Attach what the picker chose: read the images, point at everything else.
    *
@@ -507,6 +516,7 @@ export function useFileAttachments(
     chosen: readonly ChosenFile[],
     target: AttachmentDestination | string = currentDestination(),
   ) {
+    if (!mounted.current) return
     const destination = typeof target === "string" ? currentDestination(target) : target
     if (!chosen.length) return
     // Checked before the read as well as inside `attach`, which is what makes
@@ -568,15 +578,13 @@ export function useFileAttachments(
           })
         }),
       )
+      if (!operationIsActive(operation)) return
     } catch (error) {
-      if (mounted.current) refuse(pickerRefusal(error), destination)
+      if (operationIsActive(operation)) refuse(pickerRefusal(error), destination)
       return
     } finally {
-      if (mounted.current) {
-        finishOperation(operation)
-      }
+      finishOperation(operation)
     }
-    if (!mounted.current) return
     attach(held, linked, destination)
   }
 
@@ -594,13 +602,14 @@ export function useFileAttachments(
     if (!operation) return
     try {
       const file = await readDroppedImage(url, controller.signal, MAX_ATTACHMENT_BYTES)
-      if (!mounted.current) return
+      if (!operationIsActive(operation)) return
       finishOperation(operation)
       attach([file], [], destination)
     } catch {
-      if (mounted.current) refuse({ reason: "unreadable-image-url" }, destination)
+      if (operationIsActive(operation))
+        refuse({ reason: "unreadable-image-url" }, destination)
     } finally {
-      if (mounted.current) finishOperation(operation)
+      finishOperation(operation)
     }
   }
   return {

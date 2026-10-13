@@ -46,6 +46,7 @@ request is refused without replacing that request's captured destination.
 | AG9 | Folder read held in A; B/c0 starts a folder read; B settles first | A remains pending and attaches to its original live destination; unmount aborts every walk | folder owner regression |
 | AG10 | Two same-owner reads overlap | Existing reading refusal; first admitted operation still owns cleanup | existing races and owner hook |
 | AG11 | Drop begins in A, provider switches to B, result arrives while B is current | Valid result attaches to A's original live destination; B currentness gates only reveal and presentation | App and host-drop regression |
+| AG12 | Picker remains open; attachment hook unmounts; picker returns an image | Teardown retires the operation owner and closes admission; no native read or resource effect starts afterward | owner hook |
 
 The host-drop adapter carries the captured destination as one value; it does
 not resolve it to a local string and hand that to a replacement hook. The App

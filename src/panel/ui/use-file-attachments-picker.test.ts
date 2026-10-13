@@ -27,6 +27,7 @@ const { chooseAttachmentFiles, readAttachmentBytes } = vi.hoisted(() => ({
   chooseAttachmentFiles: vi.fn(),
   readAttachmentBytes: vi.fn(),
 }))
+const { readDroppedImage } = vi.hoisted(() => ({ readDroppedImage: vi.fn() }))
 // This surface is the app's: composition asks the host whether there is a
 // picker that can say where a file is, and here there is.
 vi.mock("../../host", () => ({
@@ -38,6 +39,7 @@ vi.mock("../../host", () => ({
   onAttachmentReadying: () => Promise.resolve(() => {}),
   onAttachmentBatch: () => Promise.resolve(() => {}),
 }))
+vi.mock("../adapters/dropped-image", () => ({ readDroppedImage }))
 
 import { createDependencies } from "../../composition/dependencies"
 import {
@@ -111,6 +113,7 @@ beforeEach(async () => {
   selectedResources = resources
   chooseAttachmentFiles.mockReset()
   readAttachmentBytes.mockReset()
+  readDroppedImage.mockReset()
   readAttachmentBytes.mockResolvedValue(new ArrayBuffer(4))
   clickedInput.mockReset()
   container = document.createElement("div")
@@ -746,4 +749,55 @@ it("refuses an active picker ID collision without replacing its destination", as
     await Promise.resolve()
   })
   randomUUID.mockRestore()
+})
+
+it("does not start another native read when an open picker returns after teardown", async () => {
+  const chosen = deferred<unknown[]>()
+  const cancelled = deferred<null>()
+  const click = vi.fn()
+  const input = document.createElement("input")
+  input.click = click
+  Object.defineProperty(hook.inputRef, "current", { value: input, writable: true })
+  const addChosen = vi.spyOn(resources, "addChosen")
+  chooseAttachmentFiles
+    .mockReturnValueOnce(chosen.promise)
+    .mockReturnValueOnce(cancelled.promise)
+
+  await act(async () => hook.chooseFiles())
+  await act(async () => hook.chooseFiles())
+  expect(chooseAttachmentFiles).toHaveBeenCalledTimes(2)
+  await act(async () => root.unmount())
+
+  await act(async () => {
+    chosen.resolve([
+      {
+        path: "/late.png",
+        name: "late.png",
+        size: 1,
+        mimeType: "image/png",
+        ticket: "late",
+      },
+    ])
+    cancelled.resolve(null)
+    await chosen.promise
+    await cancelled.promise
+    await Promise.resolve()
+  })
+
+  expect(click).not.toHaveBeenCalled()
+  expect(readAttachmentBytes).not.toHaveBeenCalled()
+  expect(addChosen).not.toHaveBeenCalled()
+  await hook.addImageUrl("https://example.com/late.png")
+  await hook.addChosenFiles([
+    {
+      path: "/late.png",
+      name: "late.png",
+      size: 1,
+      mimeType: "image/png",
+      ticket: "late",
+    },
+  ])
+  expect(readDroppedImage).not.toHaveBeenCalled()
+  expect(readAttachmentBytes).not.toHaveBeenCalled()
+  addChosen.mockRestore()
 })
