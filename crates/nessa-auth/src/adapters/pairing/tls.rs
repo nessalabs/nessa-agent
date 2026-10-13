@@ -402,6 +402,13 @@ impl<S: Read + Write> NativeTransport<S> {
     pub fn gateway_spki(&self) -> [u8; 44] {
         self.gateway
     }
+    /// Request TLS traffic-key rotation through rustls and flush its control record.
+    /// Permanent identity, possession proof and enrollment authority do not change.
+    /// The supplied stream retains responsibility for I/O deadlines and cancellation.
+    pub fn request_key_update(&mut self) -> io::Result<()> {
+        self.tls.request_key_update()?;
+        self.tls.flush()
+    }
 }
 // Complete-message framing belongs to the native server codec. These operations
 // preserve the original live TLS/proof owner and expose decrypted stream I/O.
@@ -453,6 +460,15 @@ impl<S: Write> Write for HandshakeBudget<'_, S> {
 enum NativeStream<S: Read + Write> {
     Client(StreamOwned<ClientConnection, S>),
     Server(StreamOwned<ServerConnection, S>),
+}
+impl<S: Read + Write> NativeStream<S> {
+    fn request_key_update(&mut self) -> io::Result<()> {
+        let result = match self {
+            Self::Client(stream) => stream.conn.refresh_traffic_keys(),
+            Self::Server(stream) => stream.conn.refresh_traffic_keys(),
+        };
+        result.map_err(io::Error::other)
+    }
 }
 impl<S: Read + Write> Read for NativeStream<S> {
     fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {

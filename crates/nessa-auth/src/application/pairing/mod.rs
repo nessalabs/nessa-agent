@@ -7,6 +7,8 @@
 #![deny(missing_docs)]
 mod admission;
 mod owner_phone;
+mod owner_phone_purpose;
+pub use owner_phone_purpose::{OwnerPhonePurpose, OwnerPhonePurposeSource};
 mod ports;
 mod private_state;
 mod proof;
