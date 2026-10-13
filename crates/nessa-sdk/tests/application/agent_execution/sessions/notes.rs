@@ -336,7 +336,7 @@ fn a_notes_state_is_read_from_the_turns_and_retirements_saved() {
         NoteRecord {
             retired: Some(NoteRetirement {
                 reason: NoteRetirementReason::Expired,
-                at_ms: 9,
+                at_ms: NoteRecord::PENDING_LIFETIME_MS,
             }),
             ..pending("retired", "four", 0)
         },
@@ -354,7 +354,7 @@ fn a_notes_state_is_read_from_the_turns_and_retirements_saved() {
             NoteState::Pending,
             NoteState::Retired(NoteRetirement {
                 reason: NoteRetirementReason::Expired,
-                at_ms: 9,
+                at_ms: NoteRecord::PENDING_LIFETIME_MS,
             }),
         ]
     );
@@ -390,8 +390,14 @@ fn a_turn_retires_what_ended_and_takes_at_most_eight_authorized_notes_in_order()
         record("recorded", "recorded", now),
         pending("gone", "gone", now),
         pending("old", "old", 100),
-        pending("revoked", "revoked", now),
+        NoteRecord {
+            author: grant(1),
+            ..pending("revoked", "revoked", now)
+        },
         pending("unchecked", "unchecked", now),
+        // The owner never loses the right to leave a note: listed as
+        // revoked, it waits.
+        pending("owners", "owners", now),
     ];
     saved
         .notes
@@ -401,7 +407,7 @@ fn a_turn_retires_what_ended_and_takes_at_most_eight_authorized_notes_in_order()
     // Authorized does not rescue an overdue note, a revoked one, or one
     // already taken or only recorded.
     authorized.extend(["old", "gone", "recorded"]);
-    let candidates = candidates(&authorized, &["revoked", "old", "missing"]);
+    let candidates = candidates(&authorized, &["revoked", "old", "missing", "owners"]);
 
     let selection = select(&saved, &candidates, true, now);
     assert_eq!(
@@ -506,7 +512,7 @@ fn the_fold_retires_and_assigns_only_pending_notes_and_undoes_a_failed_unit() {
             id: NoteId::new(id).unwrap(),
             retirement: NoteRetirement {
                 reason: NoteRetirementReason::Expired,
-                at_ms: 5,
+                at_ms: NoteRecord::PENDING_LIFETIME_MS + 5,
             },
         })
     };
@@ -517,8 +523,21 @@ fn the_fold_retires_and_assigns_only_pending_notes_and_undoes_a_failed_unit() {
         record.local_outcome = None;
         SessionChange::InputAccepted(Box::new(record))
     };
+    // A retirement the note cannot have: expired inside its lifetime, or
+    // permission lost on the owner's note.
+    let impossible = |reason, at_ms| {
+        SessionChange::NoteRetired(NoteRetiredRecord {
+            id: NoteId::new("a").unwrap(),
+            retirement: NoteRetirement { reason, at_ms },
+        })
+    };
     // A unit retiring one note and taking it too fails as a whole.
     for refused in [
+        vec![impossible(NoteRetirementReason::Expired, 5)],
+        vec![impossible(
+            NoteRetirementReason::PermissionLost,
+            NoteRecord::PENDING_LIFETIME_MS,
+        )],
         vec![retire("a"), accepted("t", &["a"])],
         vec![retire("c")],
         vec![retire("missing")],
@@ -551,7 +570,7 @@ fn the_fold_retires_and_assigns_only_pending_notes_and_undoes_a_failed_unit() {
         folded.note_state(&folded.notes[0]),
         NoteState::Retired(NoteRetirement {
             reason: NoteRetirementReason::Expired,
-            at_ms: 5,
+            at_ms: NoteRecord::PENDING_LIFETIME_MS + 5,
         })
     );
     assert_eq!(
@@ -612,6 +631,27 @@ fn a_saved_note_taken_twice_retired_and_taken_or_following_no_turn_is_corrupt() 
             Vec::new(),
             vec![NoteRecord {
                 after_execution: Some(ExecutionId::new("missing").unwrap()),
+                ..pending("a", "one", 0)
+            }],
+        ),
+        // Retired for a reason it cannot have.
+        (
+            Vec::new(),
+            vec![NoteRecord {
+                retired: Some(NoteRetirement {
+                    reason: NoteRetirementReason::Expired,
+                    at_ms: NoteRecord::PENDING_LIFETIME_MS - 1,
+                }),
+                ..pending("a", "one", 0)
+            }],
+        ),
+        (
+            Vec::new(),
+            vec![NoteRecord {
+                retired: Some(NoteRetirement {
+                    reason: NoteRetirementReason::PermissionLost,
+                    at_ms: 1,
+                }),
                 ..pending("a", "one", 0)
             }],
         ),

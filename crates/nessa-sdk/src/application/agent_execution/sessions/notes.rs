@@ -267,6 +267,15 @@ impl NoteRecord {
             .saturating_add(Self::PENDING_LIFETIME_MS)
             <= now_ms
     }
+    /// Whether `retirement` is one this note can have: expired only once
+    /// past its lifetime, and permission lost only for a grant's note, since
+    /// the owner never loses the right to leave one.
+    fn may_be_retired(&self, retirement: &NoteRetirement) -> bool {
+        match retirement.reason {
+            NoteRetirementReason::Expired => self.overdue(retirement.at_ms),
+            NoteRetirementReason::PermissionLost => matches!(self.author, Initiator::Grant(_)),
+        }
+    }
 
     /// Whether this note answers `principal`'s request `request`: one note
     /// per principal and request in a conversation.
@@ -412,7 +421,9 @@ pub(super) fn select(
         }
         let reason = if note.overdue(now_ms) {
             Some(NoteRetirementReason::Expired)
-        } else if candidates.revoked.contains(&note.id) {
+        } else if candidates.revoked.contains(&note.id)
+            && matches!(note.author, Initiator::Grant(_))
+        {
             Some(NoteRetirementReason::PermissionLost)
         } else {
             None
@@ -457,6 +468,9 @@ pub(super) fn admit_retired(
         .ok_or_else(|| corrupt("a retirement names no saved note"))?;
     if snapshot.note_state(&snapshot.notes[index]) != NoteState::Pending {
         return Err(corrupt("a retirement names a note that is not pending"));
+    }
+    if !snapshot.notes[index].may_be_retired(&record.retirement) {
+        return Err(corrupt("a retirement gives a reason the note cannot have"));
     }
     Ok(index)
 }
@@ -540,6 +554,13 @@ pub(super) fn validate_saved(snapshot: &SessionSnapshot) -> Result<(), StorageEr
         }
         if note.retired.is_some() && note.delivery != NoteDelivery::NextTurn {
             return Err(corrupt("a record_only note is retired"));
+        }
+        if note
+            .retired
+            .as_ref()
+            .is_some_and(|retirement| !note.may_be_retired(retirement))
+        {
+            return Err(corrupt("a retirement gives a reason the note cannot have"));
         }
         if !ids.insert(note.id.as_str())
             || !requests.insert((note.actor.principal_id(), note.actor.request_id()))

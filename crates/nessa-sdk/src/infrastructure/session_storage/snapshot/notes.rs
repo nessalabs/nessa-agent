@@ -291,7 +291,8 @@ mod tests {
     fn retirement(reason: NoteRetirementReason) -> NoteRetirement {
         NoteRetirement {
             reason,
-            at_ms: 1_700_000_000_500,
+            // Past every fixture note's lifetime.
+            at_ms: 1_700_000_000_500 + NoteRecord::PENDING_LIFETIME_MS,
         }
     }
 

@@ -2868,11 +2868,12 @@ impl ConversationService {
                 context: actor,
                 initiation: writer.initiation(),
             };
-            // A person's queued message admitted while idle starts the next
-            // turn, so it may take the notes waiting for one: each author is
-            // checked now, and the agent selects among those still allowed
-            // (row J23). Never a steer, an app's message, or a retry.
-            let notes = if idle && !writer.is_app() && matches!(mode, SubmissionMode::Queue) {
+            // A person's queued message may start the next turn, so it may
+            // take the notes waiting for one: each author is checked now, and
+            // the agent decides under its own lock whether the turn takes any
+            // (only when admitted while idle) and which of those still
+            // allowed (row J23). Never a steer, an app's message, or a retry.
+            let notes = if offers_notes(known, writer.is_app(), &mode) {
                 Some(service.note_candidates(&id, &live).await)
             } else {
                 None
@@ -5499,6 +5500,15 @@ fn completed_reply(snapshot: Option<&SessionSnapshot>, execution: &str) -> Optio
 /// are read then, so its conversation's files must outlive a close that did not
 /// reach the agent. Without a snapshot nothing is known, which is not the same
 /// as knowing there is nothing.
+/// Whether a submission offers the agent the notes waiting for a turn: a
+/// person's queued message not already admitted. It is offered whether or
+/// not the conversation looks idle now; the agent decides that under the
+/// lock that admits the turn, so a turn that ends in between cannot leave an
+/// idle admission without the notes it should take.
+fn offers_notes(known: bool, is_app: bool, mode: &SubmissionMode) -> bool {
+    !known && !is_app && matches!(mode, SubmissionMode::Queue)
+}
+
 fn awaits_images(snapshot: Option<&SessionSnapshot>) -> bool {
     let Some(snapshot) = snapshot else {
         return true;
@@ -5538,6 +5548,10 @@ pub use app_calls::{
 #[cfg(test)]
 #[path = "../../../tests/conversation/close_release.rs"]
 mod close_release_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/conversation/offers_notes.rs"]
+mod offers_notes_tests;
 
 #[cfg(test)]
 #[path = "../../../tests/conversation/retirement.rs"]
