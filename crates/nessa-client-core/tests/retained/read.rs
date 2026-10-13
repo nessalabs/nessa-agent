@@ -513,3 +513,41 @@ fn the_connector_notes_a_relay_offline_and_a_connect_clears_it() {
         .unwrap();
     assert!(!offline.load(Ordering::SeqCst));
 }
+
+/// `dial_gateway`: an address that is not `host:port` is said as such
+/// before any route is tried, rather than hidden behind the relay's answer;
+/// a refused direct dial goes on to the relay, whose `Offline` it carries;
+/// and without a relay it is the direct dial alone.
+#[test]
+fn dial_gateway_says_a_bad_address_and_carries_the_relays_answer() {
+    let pin = NativeIdentity::generate(&mut nessa_auth::adapters::pairing::OsEntropy)
+        .unwrap()
+        .public_spki();
+    let unused = RelayAddress::try_from("127.0.0.1:9".to_owned()).unwrap();
+    for address in ["no-port", ":7443", "gw:port"] {
+        let refused = dial_gateway(address, Some((&unused, &pin)), Duration::from_secs(5))
+            .expect_err("not an address");
+        assert_eq!(
+            refused.kind(),
+            std::io::ErrorKind::InvalidInput,
+            "{address}"
+        );
+    }
+
+    let (relay, serving) = answering_relay(RelayFrame::Offline);
+    let offline = dial_gateway("127.0.0.1:0", Some((&relay, &pin)), Duration::from_secs(5))
+        .expect_err("nothing listens at the gateway's address");
+    serving.join().unwrap();
+    assert_eq!(RelayRefusal::carried(&offline), Some(RelayRefusal::Offline));
+
+    let direct = dial_gateway("127.0.0.1:0", None, Duration::from_secs(5))
+        .expect_err("nothing listens at the gateway's address");
+    // Refused on Unix, an unusable address on Windows: either way not this
+    // side's own setup, so a caller dials again.
+    assert_ne!(direct.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(RelayRefusal::carried(&direct), None);
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let connected = dial_gateway(&address.to_string(), None, Duration::from_secs(5)).unwrap();
+    assert_eq!(connected.peer_addr().unwrap(), address);
+}

@@ -871,13 +871,10 @@ async fn relay() -> RelayAddress {
     address
 }
 
-/// An address nothing listens at: a direct dial to it is refused.
+/// Port 0 is never a listener's: a direct dial to it is refused at once,
+/// and no other test can take it in the meantime.
 fn nowhere() -> String {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .to_string()
+    "127.0.0.1:0".to_owned()
 }
 
 /// R4, row RL14 in `docs/design/auth/relay.md`: an environment that

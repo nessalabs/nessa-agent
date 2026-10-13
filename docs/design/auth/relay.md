@@ -289,9 +289,10 @@ connection owner reports the relay's address for every joined connection.
 
 **What a joined pair costs.** The relay adds only its preamble frames and
 copies every other byte unchanged, each way; the test asserts both
-exactly. In the measured read, the reader sent 8,559 bytes and received
+exactly. In one measured run, the reader sent 8,559 bytes and received
 229,326 directly, and through the relay 8,594 and 229,329: its 35-byte
-`Connect` and 3-byte `Joined` more, the TLS bytes the same.
+`Connect` and 3-byte `Joined` more, and the TLS bytes of the two reads
+the same size (observed, not asserted: two reads need not match).
 
 | Who | Over a direct read |
 | --- | --- |
@@ -302,8 +303,9 @@ exactly. In the measured read, the reader sent 8,559 bytes and received
 **What staying registered costs.** Registering is 102 bytes out (`Serve`,
 `Proof`) and 38 in (`Challenge`, `Registered`), again after each lost
 serve connection. Then the relay sends a 3-byte `Ping` every 15 s and the
-gateway answers a 3-byte `Pong`: 6 bytes of frames a ping interval, which
-the test counts. On the wire each is one small TCP segment, so with
+gateway answers a 3-byte `Pong`: 6 bytes of frames a ping interval. The
+test checks that nothing else crosses the serve connection: registration,
+one `Incoming` per join, and whole `Ping`s and `Pong`s. On the wire each is one small TCP segment, so with
 headers and acknowledgements that is a few hundred bytes every 15 s,
 under two megabytes a day, worked out from the frame sizes rather than measured
 on a link. The gateway holds one TCP connection and one task for it, and

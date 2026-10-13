@@ -38,6 +38,7 @@ use nessa_protocol::pairing::{
 use nessa_protocol::relay::RelayAddress;
 use std::{
     io::{Error, ErrorKind, Result as IoResult},
+    net::ToSocketAddrs,
     sync::Arc,
 };
 
@@ -62,8 +63,24 @@ pub(crate) async fn dial(
     pin: [u8; 44],
     clock: Arc<dyn Clock>,
 ) -> IoResult<TlsStream> {
-    let transport = tokio::task::spawn_blocking(move || {
-        open_environment(&address, relay.as_ref(), &identity, pin, clock)
+    let transport = tokio::task::spawn_blocking(move || match relay {
+        // One race: what the direct leg cannot reach in its head start,
+        // the relay is asked for.
+        Some(relay) => open_environment(&address, Some(&relay), &identity, pin, clock),
+        // Each address the name resolves to gets a whole dial of its own,
+        // its handshake included, as a TCP connect by name tries each.
+        None => {
+            let mut failed = Error::new(ErrorKind::NotFound, "no address");
+            for gateway in address.to_socket_addrs()? {
+                let gateway = gateway.to_string();
+                match open_environment(&gateway, None, &identity, pin, clock.clone()) {
+                    Ok(transport) => return Ok(transport),
+                    Err(error) if error.kind() == ErrorKind::InvalidInput => return Err(error),
+                    Err(error) => failed = error,
+                }
+            }
+            Err(failed)
+        }
     })
     .await
     .map_err(|_| Error::other("the dialing worker failed"))??;

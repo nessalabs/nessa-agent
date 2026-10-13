@@ -15,10 +15,11 @@ use nessa_auth::{
 };
 use nessa_client_core::retained::{
     ReadFailure, ReadReport, ReadStop, ReaderAccess, ReaderRole, RetainedCache,
-    RetainedEnrollmentClient,
+    RetainedEnrollmentClient, RetainedTranscript,
 };
 use nessa_protocol::{
     clock::Clock as MonotonicClock,
+    conversation::domain::ConversationId,
     pairing::wire::NativePairingStatus,
     relay::{RelayAddress, RelayFrame},
 };
@@ -35,6 +36,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::runtime::Builder;
+use uuid::Uuid;
 
 struct Time(Instant);
 impl MonotonicClock for Time {
@@ -242,6 +244,11 @@ fn a_relayed_read_is_the_same_session_as_a_direct_one() {
         relayed.conversation_ids(&device.receiver).unwrap(),
         direct.conversation_ids(&device.receiver).unwrap()
     );
+    // The same bytes, not only the same list: each conversation's saved
+    // positions and its projected view agree.
+    let saved = transcripts(&mut relayed, &device.receiver);
+    assert!(saved.len() >= 2 && saved.iter().any(|(_, (downloaded, ..), _)| *downloaded > 0));
+    assert_eq!(saved, transcripts(&mut direct, &device.receiver));
 
     let again = device.read(&mut relayed, device.address, None).unwrap();
     assert!(
@@ -255,19 +262,49 @@ fn a_relayed_read_is_the_same_session_as_a_direct_one() {
     );
 }
 
+/// Each conversation `cache` holds for `receiver`: its id, its saved
+/// positions (downloaded, applied, facts) and its projected view.
+fn transcripts(cache: &mut RetainedCache, receiver: &str) -> Vec<(String, (u64, u64, u64), Value)> {
+    let scope = cache.saved_catalogue_scope(receiver).unwrap().unwrap();
+    cache
+        .conversation_ids(receiver)
+        .unwrap()
+        .into_iter()
+        .map(|id| {
+            let RetainedTranscript::Retained(snapshot) = cache
+                .transcript_view(
+                    receiver,
+                    scope.origin().as_str(),
+                    &ConversationId::new(&id).unwrap(),
+                    Uuid::nil(),
+                )
+                .unwrap()
+            else {
+                panic!("{id} has no retained transcript")
+            };
+            let progress = snapshot.progress();
+            (
+                id,
+                (progress.downloaded(), progress.applied(), progress.facts()),
+                serde_json::to_value(snapshot.view()).unwrap(),
+            )
+        })
+        .collect()
+}
+
 /// What a man-in-the-middle relay does to the session once it has joined
 /// the reader.
 #[derive(Clone, Copy, Debug)]
 enum Tamper {
     /// Pass everything through as it came: the control.
     Nothing,
-    /// Flip one bit of the gateway's first bytes.
+    /// Flip one bit of the gateway's first TLS record.
     Alter,
-    /// Leave out a stretch of the gateway's first bytes.
+    /// Leave out the gateway's first TLS record.
     Drop,
-    /// Send the gateway's first chunk twice.
+    /// Send the gateway's first TLS record twice.
     Replay,
-    /// Swap the order of the gateway's first two chunks.
+    /// Send 16 bytes from after the gateway's first TLS record before it.
     Reorder,
     /// Pass the handshake through, then flip one bit of the first protected
     /// bytes the gateway sends after the reader's second flight.
@@ -341,11 +378,16 @@ fn tampering_relay(upstream: RelayAddress, tamper: Tamper) -> (RelayAddress, Joi
                         }
                     }
                 } else {
-                    let mut chunk = || {
-                        let mut bytes = vec![0; 16];
-                        gateway.read_exact(&mut bytes).map(|()| bytes).ok()
-                    };
-                    let (mut first, second) = (chunk()?, chunk()?);
+                    // The gateway's first TLS record whole (a 5-byte header
+                    // naming its length), so a replay repeats a complete
+                    // record rather than a fragment; then 16 bytes more.
+                    let mut first = vec![0; 5];
+                    gateway.read_exact(&mut first).ok()?;
+                    let length = usize::from(u16::from_be_bytes([first[3], first[4]]));
+                    first.resize(5 + length, 0);
+                    gateway.read_exact(&mut first[5..]).ok()?;
+                    let mut second = vec![0; 16];
+                    gateway.read_exact(&mut second).ok()?;
                     let start = match tamper {
                         Tamper::Nothing => [first, second].concat(),
                         Tamper::Alter => {
@@ -484,6 +526,7 @@ fn a_revoked_reader_is_refused_through_the_relay_as_directly() {
     drop(gateway);
     let _revoked = Gateway::start_relayed(&device.root, "revoke");
     let relay = device.relay();
+    device.wait_registered();
 
     let mut direct = device.cache("direct.sqlite3");
     let refused = device.read(&mut direct, device.address, None);
@@ -664,6 +707,9 @@ struct Tapped {
     up: Arc<AtomicUsize>,
     down: Arc<AtomicUsize>,
     closed: Arc<AtomicUsize>,
+    /// Both sockets, shut when the tap is dropped, and the two copies.
+    sockets: Vec<TcpStream>,
+    copies: Vec<JoinHandle<()>>,
 }
 impl Tapped {
     fn ended(&self) -> bool {
@@ -679,8 +725,8 @@ impl Tapped {
 
 /// Passes every connection it takes on to `upstream` untouched, counting
 /// the bytes each way, as a network observer between the two would see
-/// them. Dropping it stops taking connections; those it took end when
-/// either side closes.
+/// them. Dropping it stops taking connections, shuts those it took, and
+/// waits for their copies to end.
 struct Tap {
     address: SocketAddr,
     connections: Arc<std::sync::Mutex<Vec<Tapped>>>,
@@ -711,11 +757,16 @@ impl Tap {
                         Ok(2) => head[1],
                         _ => 0,
                     };
-                    let tapped = Tapped {
+                    let mut tapped = Tapped {
                         kind,
                         up: Arc::default(),
                         down: Arc::default(),
                         closed: Arc::default(),
+                        sockets: [near.try_clone(), far.try_clone()]
+                            .into_iter()
+                            .flatten()
+                            .collect(),
+                        copies: Vec::new(),
                     };
                     for (from, to, count) in [
                         (near.try_clone(), far.try_clone(), tapped.up.clone()),
@@ -725,10 +776,10 @@ impl Tap {
                             continue;
                         };
                         let closed = tapped.closed.clone();
-                        thread::spawn(move || {
+                        tapped.copies.push(thread::spawn(move || {
                             count_through(from, to, &count);
                             closed.fetch_add(1, Ordering::SeqCst);
-                        });
+                        }));
                     }
                     connections.lock().unwrap().push(tapped);
                 }
@@ -779,6 +830,16 @@ impl Drop for Tap {
         let _ = TcpStream::connect(self.address);
         if let Some(accepting) = self.accepting.take() {
             let _ = accepting.join();
+        }
+        // Every copy it started ends once its sockets are shut.
+        let connections = std::mem::take(&mut *self.connections.lock().unwrap());
+        for mut tapped in connections {
+            for socket in &tapped.sockets {
+                let _ = socket.shutdown(Shutdown::Both);
+            }
+            for copy in tapped.copies.drain(..) {
+                let _ = copy.join();
+            }
         }
     }
 }

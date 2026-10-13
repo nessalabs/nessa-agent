@@ -151,18 +151,22 @@ impl FilePairingEnvironment {
         self.client.shutdown().await;
     }
 
-    /// A blocking stream to the gateway for a status request: direct, then
-    /// through `relay` for the key the pending pairing pinned. With nothing
-    /// pending, there is no key to ask for: direct only.
-    async fn connect_or_relay(&self, relay: RelayAddress) -> io::Result<TcpStream> {
-        let (store, address) = (self.store.clone(), self.address.clone());
+    /// A blocking stream to the gateway for a status request: direct, then,
+    /// with a relay, through it for the key the pending pairing pinned. With
+    /// nothing pending, there is no key to ask for: direct only.
+    async fn connect_or_relay(&self) -> io::Result<TcpStream> {
+        let (store, address, relay) =
+            (self.store.clone(), self.address.clone(), self.relay.clone());
         tokio::task::spawn_blocking(move || {
-            let pin = store
-                .load_pending()
-                .ok()
-                .flatten()
-                .map(|pending| *pending.gateway_pin());
-            dial_gateway(&address, pin.as_ref().map(|pin| (&relay, pin)), CONNECT)
+            let pin = relay.as_ref().and_then(|_| {
+                store
+                    .load_pending()
+                    .ok()
+                    .flatten()
+                    .map(|pending| *pending.gateway_pin())
+            });
+            let route = relay.as_ref().zip(pin.as_ref());
+            dial_gateway(&address, route, CONNECT)
         })
         .await
         .map_err(|_| io::Error::other("the dialing worker failed"))?
@@ -218,10 +222,7 @@ impl EnvironmentPairing for FilePairingEnvironment {
     }
 
     async fn ask(&self) -> Answer {
-        let connected = match &self.relay {
-            None => connect(&self.address).await,
-            Some(relay) => self.connect_or_relay(relay.clone()).await,
-        };
+        let connected = self.connect_or_relay().await;
         let stream = match connected {
             Ok(stream) => stream,
             Err(error) => {
@@ -281,8 +282,12 @@ impl EnrollingPairing for FilePairingEnvironment {
     }
 
     async fn send_code(&self, code: ManualCode) -> Result<(), String> {
-        let stream = connect(&self.address)
+        // Direct only: the relay is asked for a key this learns by enrolling.
+        let address = self.address.clone();
+        let stream = tokio::task::spawn_blocking(move || dial_gateway(&address, None, CONNECT))
             .await
+            .map_err(|_| io::Error::other("the dialing worker failed"))
+            .and_then(|connected| connected)
             .map_err(|error| format!("{}: {error}", self.address))?;
         self.client
             .enroll(stream, code, OsEntropy)
@@ -331,17 +336,6 @@ pub(crate) fn answer_to_failure(error: NativeClientError, directory: &Path) -> A
         )),
         other => Answer::Unanswered(format!("{other:?}")),
     }
-}
-
-/// A blocking stream to the gateway for the pairing client, connected
-/// without blocking the runtime; each address the name resolves to is tried.
-async fn connect(address: &str) -> io::Result<TcpStream> {
-    let stream = tokio::time::timeout(CONNECT, tokio::net::TcpStream::connect(address))
-        .await
-        .map_err(|_| io::Error::from(io::ErrorKind::TimedOut))??
-        .into_std()?;
-    stream.set_nonblocking(false)?;
-    Ok(stream)
 }
 
 #[cfg(test)]

@@ -277,7 +277,8 @@ impl Cancellation for Stopping {
 /// gateway with it.
 ///
 /// # Errors
-/// Neither route connected in time: the relay's answer where it was asked
+/// `address` is not `host:port` (`InvalidInput`, whatever the relay would
+/// say), or neither route connected in time: the relay's answer where it was asked
 /// ([`RelayRefusal::carried`] tells its refusals apart), else the direct
 /// dial's error.
 pub fn dial_gateway(
@@ -288,6 +289,17 @@ pub fn dial_gateway(
     let deadline = Instant::now()
         .checked_add(timeout)
         .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+    // An address that is not `host:port` fails on every dial: said as such,
+    // never hidden behind the relay's answer.
+    if !address
+        .rsplit_once(':')
+        .is_some_and(|(host, port)| !host.is_empty() && port.parse::<u16>().is_ok())
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "the gateway's address is not host:port",
+        ));
+    }
     // A pin that is no Ed25519 key fails TLS whatever the route.
     let route = relay.and_then(|(address, pin)| {
         Some(RelayRoute {
@@ -312,9 +324,9 @@ struct StoppableConnector {
     /// The read's stop and its budget on the injected clock.
     ending: Arc<Stopping>,
     relay: Option<RelayRoute>,
-    /// Set when the relay leg of the last connect answered `Offline`, and
-    /// cleared when a connect succeeds. The leg sets it itself, so a race
-    /// that ends at its budget or its stop still keeps the relay's word.
+    /// Set when the last connect failed and its relay leg had answered
+    /// `Offline` by then, and cleared when a connect succeeds. A race that
+    /// ends at its budget or its stop still keeps the relay's word.
     offline: Arc<AtomicBool>,
 }
 impl GatewayConnector for StoppableConnector {
@@ -322,11 +334,14 @@ impl GatewayConnector for StoppableConnector {
         // A dial itself cannot be stopped; it is bounded by `timeout`, at
         // most [`HANDSHAKE`]. With a relay the race between the two dials
         // asks the stop and the injected clock's budget as it waits.
-        let socket = match &self.relay {
-            None => TcpStream::connect_timeout(&address, timeout)?,
+        // This connect's own flag: a relay leg still running after the race
+        // is decided writes only to it, never to a later connect's answer.
+        let offline = Arc::new(AtomicBool::new(false));
+        let connected = match &self.relay {
+            None => TcpStream::connect_timeout(&address, timeout),
             Some(route) => {
                 let route = route.clone();
-                let offline = self.offline.clone();
+                let offline = offline.clone();
                 race(
                     move |left| TcpStream::connect_timeout(&address, left),
                     move |left| {
@@ -341,10 +356,16 @@ impl GatewayConnector for StoppableConnector {
                     timeout,
                     DIRECT_HEAD_START,
                     &|| self.ending.cancelled(),
-                )?
+                )
             }
         };
-        self.offline.store(false, Ordering::SeqCst);
+        // Read once the race is decided: a failed connect keeps what its
+        // relay said, a successful one clears it.
+        self.offline.store(
+            connected.is_err() && offline.load(Ordering::SeqCst),
+            Ordering::SeqCst,
+        );
+        let socket = connected?;
         self.ending.stop.register(&socket)?;
         Ok(Box::new(Socket::new(socket, self.ending.stop.clone())))
     }
