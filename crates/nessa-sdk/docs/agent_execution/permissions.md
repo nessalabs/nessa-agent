@@ -207,7 +207,10 @@ provider's label, and it does not store a Nessa rule for that choice. OpenCode
 still drops those kinds.
 
 Beside them, an owner turn is offered `nessa.remember.allow` and
-`nessa.remember.deny` when a once option of the same effect survived. Selecting
+`nessa.remember.deny` when a once option of the same effect survived and the
+harness named one tool. A review Codex identifies only by ACP kind is not
+offered those choices: its once and deny choices stay, and Codex's own
+always choices still pass through. Selecting
 one asks the host `PermissionRules` to store a rule for that tool in that
 workspace, then answers the current review with the once option. The audit
 basis is `ApprovalBasis::Rule`, naming the rule id, revision, and grantor. A

@@ -390,6 +390,8 @@ struct PermissionContext {
     once_allow: Option<PermissionOptionId>,
     /// The once deny option, on the same terms.
     once_deny: Option<PermissionOptionId>,
+    /// The harness named one tool. A kind alone is not a project rule.
+    specific: bool,
 }
 
 struct Worker<P> {
@@ -2100,6 +2102,11 @@ impl<P: AcpProfile> Worker<P> {
             .permission_context
             .get(&answer.id)
             .ok_or(AgentError::StalePermission)?;
+        if !context.specific {
+            return Err(AgentError::InvalidInput(
+                "this review does not name one tool".into(),
+            ));
+        }
         let source = self
             .profile
             .native_hooks_launch()
@@ -2716,8 +2723,12 @@ impl<P: AcpProfile> Worker<P> {
             .execution_id
             .clone();
         let source = self.profile.native_hooks_launch().map(|(name, _)| name);
-        let remember =
-            source.is_some() && self.config.permission_rules.offers_remember(&execution_id);
+        // A project rule is one tool. A kind such as Codex `execute` is every
+        // command of that kind, so it is not offered and does not settle one.
+        let specific = self.profile.permission_names_a_tool(&params);
+        let remember = source.is_some()
+            && specific
+            && self.config.permission_rules.offers_remember(&execution_id);
         let admitted = match permission_wire::admit(
             &params,
             &self.config.permissions,
@@ -2793,7 +2804,7 @@ impl<P: AcpProfile> Worker<P> {
         let armed = promised.is_some();
         let tool_name = input.name.clone();
         let workspace = self.config.workspace.to_str().unwrap_or("");
-        let ruled = source.and_then(|source| {
+        let ruled = if specific { source } else { None }.and_then(|source| {
             self.config
                 .permission_rules
                 .settle(workspace, source, &tool_name)
@@ -2824,6 +2835,7 @@ impl<P: AcpProfile> Worker<P> {
                     tool: tool_name,
                     once_allow,
                     once_deny,
+                    specific,
                 },
             );
             let answer = PermissionAnswer {
@@ -2855,6 +2867,7 @@ impl<P: AcpProfile> Worker<P> {
                 tool: tool_name.clone(),
                 once_allow,
                 once_deny,
+                specific,
             },
         );
         if armed {
