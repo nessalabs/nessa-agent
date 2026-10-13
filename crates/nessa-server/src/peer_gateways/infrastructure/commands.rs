@@ -483,7 +483,10 @@ impl PeerCommands {
         let refused = Mutex::new(None);
         let dialed = self
             .within(CONNECT, || {
-                let leg = relay.map(|(relay, key)| self.connector.relay(relay, key));
+                // Asked only once the race starts its relay leg, so a direct
+                // winner never reaches the relay connector at all.
+                let leg =
+                    relay.map(|(relay, key)| async move { self.connector.relay(relay, key).await });
                 raced(self.connector.connect(address), leg, &refused)
             })
             .await;

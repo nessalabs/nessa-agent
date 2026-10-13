@@ -380,15 +380,22 @@ impl GatewayKeyStore for Seed {
     }
 }
 
-/// A connector whose address refuses and whose relay answers a stream of
-/// its own, naming the relay and key it was asked for.
+/// A connector whose address connects when `direct` is set and refuses
+/// otherwise, and whose relay answers a stream of its own; either is a
+/// stream to `listener`. It notes each relay and key it was asked for.
 struct ThroughRelay {
+    direct: bool,
     asked: Mutex<Vec<(String, GatewayKey)>>,
     listener: std::net::TcpListener,
 }
 impl PeerConnector for ThroughRelay {
     fn connect(&self, _: SocketAddr) -> PeerConnectFuture<'_> {
-        Box::pin(async { Err(io::ErrorKind::ConnectionRefused.into()) })
+        let stream = if self.direct {
+            TcpStream::connect(self.listener.local_addr().unwrap())
+        } else {
+            Err(io::ErrorKind::ConnectionRefused.into())
+        };
+        Box::pin(async move { stream })
     }
     fn relay<'a>(&'a self, relay: &'a RelayAddress, key: GatewayKey) -> PeerConnectFuture<'a> {
         self.asked
@@ -401,7 +408,8 @@ impl PeerConnector for ThroughRelay {
 }
 
 /// A peer's status dial takes its relay leg from the injected connector, as
-/// it does its direct one, and asks it for the peer's pinned key.
+/// it does its direct one, and asks it for the peer's pinned key; a direct
+/// connection that comes first never asks it at all.
 #[tokio::test]
 async fn a_status_dial_asks_the_injected_connector_for_the_peers_relay() {
     use nessa_auth::adapters::pairing::{NativeIdentity, OsEntropy};
@@ -448,28 +456,32 @@ async fn a_status_dial_asks_the_injected_connector_for_the_peers_relay() {
     else {
         panic!("one readable record");
     };
-    let connector = Arc::new(ThroughRelay {
-        asked: Mutex::new(Vec::new()),
-        listener: std::net::TcpListener::bind("127.0.0.1:0").unwrap(),
-    });
-    let commands = PeerCommands::new(
-        records,
-        Arc::new(Still),
-        Arc::new(Nothing),
-        connector.clone(),
-        Arc::new(|| {
-            Box::new(nessa_auth::adapters::pairing::OsEntropy) as Box<dyn EnrollmentEntropy>
-        }),
-    );
-    let stream = commands.dial_peer(&record).await.unwrap();
-    assert_eq!(
-        stream.peer_addr().unwrap(),
-        connector.listener.local_addr().unwrap(),
-        "the relay leg's stream is used"
-    );
     let key: GatewayKey = pin[12..].try_into().unwrap();
-    assert_eq!(
-        *connector.asked.lock().unwrap(),
-        vec![("relay.example:443".to_owned(), key)]
-    );
+    for direct in [false, true] {
+        let connector = Arc::new(ThroughRelay {
+            direct,
+            asked: Mutex::new(Vec::new()),
+            listener: std::net::TcpListener::bind("127.0.0.1:0").unwrap(),
+        });
+        let commands = PeerCommands::new(
+            records.clone(),
+            Arc::new(Still),
+            Arc::new(Nothing),
+            connector.clone(),
+            Arc::new(|| {
+                Box::new(nessa_auth::adapters::pairing::OsEntropy) as Box<dyn EnrollmentEntropy>
+            }),
+        );
+        let stream = commands.dial_peer(&record).await.unwrap();
+        assert_eq!(
+            stream.peer_addr().unwrap(),
+            connector.listener.local_addr().unwrap()
+        );
+        let asked = connector.asked.lock().unwrap().clone();
+        if direct {
+            assert!(asked.is_empty(), "a direct winner never asks the relay");
+        } else {
+            assert_eq!(asked, vec![("relay.example:443".to_owned(), key)]);
+        }
+    }
 }
