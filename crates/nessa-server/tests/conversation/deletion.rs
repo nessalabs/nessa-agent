@@ -3247,6 +3247,104 @@ async fn an_unmarked_chat_cannot_be_read_and_can_be_deleted() {
     service.shutdown().await.unwrap();
 }
 
+/// A saved turn that carries a copy of its grant's role is not of the current
+/// shape. Only that chat answers can't-open: the store still opens, after a
+/// restart too, and every other chat reads as before.
+#[tokio::test]
+async fn a_turn_saved_with_its_grants_role_closes_only_its_own_chat() {
+    use crate::conversation::application::error_code::error_code;
+    use nessa_protocol::product_contract::generated::ConversationErrorCode;
+    use nessa_sdk::application::agent_execution::sessions::StorageError;
+    use nessa_sdk::infrastructure::session_storage::ROLE_COPYING_SESSION_BATCH;
+    use std::path::Path;
+
+    async fn open(root: &Path) -> (Arc<RecordStorage>, ConversationService) {
+        let metadata = Arc::new(
+            LocalConversationStore::open(&root.join("conversations").join("metadata.sqlite3"))
+                .unwrap(),
+        );
+        let storage = Arc::new(RecordStorage::new(root.join("sessions")).unwrap());
+        storage.initialize().await.unwrap();
+        let service = ConversationService::new(
+            ConversationDependencies {
+                agents: only(Arc::new(Provider::new(
+                    Arc::new(ProviderFactory::default()),
+                ))),
+                storage: storage.clone(),
+                metadata: metadata.clone(),
+                mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+                creation_audit: Arc::new(AcceptingCreationAudit),
+                file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+                deletion_audit: Arc::new(RecordingDeletionAudit::default()),
+                attachments: None,
+                summaries: metadata.clone(),
+                listing: metadata.clone(),
+                provider_sessions: claude_erasers(),
+                deletion_budgets: DELETION_BUDGETS,
+                message_commit_clock: Arc::new(
+                    nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+                ),
+                clock: Arc::new(TestClock),
+                environment: crate::conversation::infrastructure::in_process_environment().into(),
+            },
+            ConversationLimits::default(),
+            None,
+        )
+        .unwrap();
+        (storage, service)
+    }
+    async fn refused(service: &ConversationService, id: &ConversationId, action: &str) {
+        let read = service.read(id.clone(), caller(action)).await.unwrap_err();
+        assert!(
+            matches!(&read, ConversationError::Storage(StorageError::Corrupt(_))),
+            "{read:?}"
+        );
+        assert_eq!(
+            error_code(&read),
+            ConversationErrorCode::ConversationStateUnreadable
+        );
+    }
+
+    let root = tempfile::tempdir().unwrap();
+    let root = root.path();
+    nessa_local_storage::create_directory(&root.join("conversations")).unwrap();
+    let (storage, service) = open(root).await;
+    let sibling = new_id();
+    let id = new_id();
+    for (id, action) in [(&sibling, "create-sibling"), (&id, "create")] {
+        service
+            .create(
+                id.clone(),
+                caller(action),
+                crate::conversation::application::RequestedConversation::default(),
+            )
+            .await
+            .unwrap();
+    }
+    // Leave only the role-copying batch as this chat's history.
+    service.stop_active_agents().await.unwrap();
+    storage.discard_unreadable(session(&id)).await.unwrap();
+    storage
+        .append_encoded_batch(session(&id), ROLE_COPYING_SESSION_BATCH)
+        .await
+        .unwrap();
+
+    refused(&service, &id, "read").await;
+    let sibling_view = service.read(sibling.clone(), caller("read-sibling")).await;
+    assert!(sibling_view.is_ok(), "{sibling_view:?}");
+    service.shutdown().await.unwrap();
+    drop(storage);
+
+    // A restart opens the store over the same files; the sibling still loads.
+    let (_storage, restarted) = open(root).await;
+    refused(&restarted, &id, "read-after-restart").await;
+    let sibling_view = restarted
+        .read(sibling.clone(), caller("read-sibling-after-restart"))
+        .await;
+    assert!(sibling_view.is_ok(), "{sibling_view:?}");
+    restarted.shutdown().await.unwrap();
+}
+
 /// The deletion record is acknowledged before an unreadable history is
 /// discarded. An audit that refuses leaves the unmarked batch in place, and
 /// a retry that records the deletion then discards it.

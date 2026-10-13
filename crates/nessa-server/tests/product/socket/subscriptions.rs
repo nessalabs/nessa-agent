@@ -2488,7 +2488,7 @@ async fn a_turn_is_saved_with_who_started_it() {
     use crate::conversation::application::{ShareGrantTransition, ShareGrants};
     use crate::conversation::domain::{ShareAccess, ShareRole, ToolPolicy, ToolPreset};
     use nessa_sdk::domain::agent_execution::executions::{
-        GrantInitiator, GrantRole, Initiation, ToolChecking,
+        GrantInitiator, Initiation, ToolChecking,
     };
     let fixture = SubscriptionFixture::new().await;
     fixture.turn("first").await;
@@ -2530,7 +2530,7 @@ async fn a_turn_is_saved_with_who_started_it() {
     );
     fixture.owner_turn("owner").await;
     let driver = |revision| {
-        Initiation::grant(GrantInitiator::new("receiver", GrantRole::Drive, revision).unwrap())
+        Initiation::grant(GrantInitiator::new("receiver", revision).unwrap())
     };
     for (execution, expected) in [
         ("first", Initiation::owner()),
