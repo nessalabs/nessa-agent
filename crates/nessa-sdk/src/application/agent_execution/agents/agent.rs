@@ -1432,47 +1432,49 @@ impl Agent {
         let session_id = attached.session.id().clone();
         // The saved record says who started this turn. Hooks read it from
         // there, so a resumed turn is judged as the turn it was saved as.
-        let (before_gate, initiation) = if hooks.is_empty() {
-            (Ok(()), None)
-        } else {
-            match self
-                .inner
-                .manager
-                .with_invocation(index, |record| {
-                    (
-                        EvaluationSuffix::capture(&record.events),
-                        record.initiation.clone(),
-                    )
+        // It is read for every invocation, so a review always has it.
+        let capture = !hooks.is_empty();
+        let before_gate = match self
+            .inner
+            .manager
+            .with_invocation(index, |record| {
+                (
+                    capture.then(|| EvaluationSuffix::capture(&record.events)),
+                    record.initiation.clone(),
+                )
+            })
+            .await
+        {
+            Ok((evaluation, initiation)) => evaluation
+                .map_or(Ok(()), |evaluation| {
+                    hooks.before(&session_id, &input, &evaluation)
                 })
-                .await
-            {
-                Ok((evaluation, initiation)) => (
-                    hooks.before(&session_id, &input, &evaluation),
-                    Some(initiation),
-                ),
-                Err(error) => (Err(AgentError::Storage(error)), None),
+                .map(|()| initiation),
+            Err(error) => Err(AgentError::Storage(error)),
+        };
+        let initiation = match before_gate {
+            Ok(initiation) => initiation,
+            Err(mut error) => {
+                if let Err(storage) = self
+                    .record_undispatched_stop(index, saved_index, work)
+                    .await
+                {
+                    error = AgentError::StorageAfterExecution {
+                        error: storage,
+                        execution_result: Box::new(Err(error)),
+                    }
+                    .bounded();
+                }
+                return match self.inner.manager.finish(index, Err(error.clone())).await {
+                    Ok(()) => Err(error),
+                    Err(storage) => Err(AgentError::StorageAfterExecution {
+                        error: storage,
+                        execution_result: Box::new(Err(error)),
+                    }),
+                }
+                .map_err(AgentError::bounded);
             }
         };
-        if let Err(mut error) = before_gate {
-            if let Err(storage) = self
-                .record_undispatched_stop(index, saved_index, work)
-                .await
-            {
-                error = AgentError::StorageAfterExecution {
-                    error: storage,
-                    execution_result: Box::new(Err(error)),
-                }
-                .bounded();
-            }
-            return match self.inner.manager.finish(index, Err(error.clone())).await {
-                Ok(()) => Err(error),
-                Err(storage) => Err(AgentError::StorageAfterExecution {
-                    error: storage,
-                    execution_result: Box::new(Err(error)),
-                }),
-            }
-            .map_err(AgentError::bounded);
-        }
         let work_generation = self.inner.lifecycle.work_generation();
         let preparation = match self.accept_preparation() {
             Err(error) => Err(error),
@@ -1773,25 +1775,11 @@ impl Agent {
                                     if event.execution_id() == &input.execution_id
                                         && hooks.reviews_permissions() =>
                                 {
-                                    match &initiation {
-                                        Some(initiation) => Some(ProposedReview {
-                                            tool_id: tool_id.clone(),
-                                            call: call.clone(),
-                                            initiation: initiation.clone(),
-                                        }),
-                                        // A hook reviews this call but the turn's
-                                        // initiation was never read: refuse it
-                                        // rather than let it pass unjudged.
-                                        None => {
-                                            decision = PermissionReviewDecision {
-                                                index: None,
-                                                verdict: ToolVerdict::hook_failed(
-                                                    HookFailureKind::Error,
-                                                ),
-                                            };
-                                            None
-                                        }
-                                    }
+                                    Some(ProposedReview {
+                                        tool_id: tool_id.clone(),
+                                        call: call.clone(),
+                                        initiation: initiation.clone(),
+                                    })
                                 }
                                 _ => None,
                             };
