@@ -111,15 +111,9 @@ impl Harness {
     }
     /// The next frame, or `None` once the stand-in closed.
     async fn next(&mut self) -> Option<Value> {
-        self.next_within(std::time::Duration::from_secs(5)).await
-    }
-
-    /// [`Self::next`], waiting `wait` for a frame. A near-max answer is built
-    /// before it is refused, so that test waits longer than a ping.
-    async fn next_within(&mut self, wait: std::time::Duration) -> Option<Value> {
-        let line = tokio::time::timeout(wait, self.lines.next_line())
+        let line = tokio::time::timeout(std::time::Duration::from_secs(5), self.lines.next_line())
             .await
-            .expect("the stand-in answers or closes in time")
+            .expect("the stand-in answers or closes within 5 s")
             .ok()??;
         Some(serde_json::from_str(&line).unwrap())
     }
