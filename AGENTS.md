@@ -19,7 +19,7 @@ examples.
 
 ## Before you edit
 
-- [Gates](CODING_STANDARDS.md#gates) — the seventeen conditions a change is merged
+- [Gates](CODING_STANDARDS.md#gates) — the eighteen conditions a change is merged
   on. Read them first; most review findings are one of these.
 - [Organization across the repository](CODING_STANDARDS.md#organization-across-the-repository)
   — where a change belongs, and what else moves with it. Applies to source,
@@ -28,6 +28,9 @@ examples.
   verify module maps, moved links, and checks.
 - [Domain-driven design boundaries](CODING_STANDARDS.md#domain-driven-design-boundaries)
   — layers, what each may depend on, and where domain code lives.
+- [Policy goes through Cedar](CODING_STANDARDS.md#policy-goes-through-cedar)
+  — every policy and authorization decision, in every crate. Read it before
+  adding or changing any check of who may do what.
 - [Seams at the process boundary](CODING_STANDARDS.md#seams-at-the-process-boundary)
   — anything read from outside the process, in every crate and package including
   the `src-tauri` host, and how dependencies are injected.
