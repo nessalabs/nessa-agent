@@ -566,3 +566,45 @@ fn a_structured_result_must_be_one_json_value() {
         Err(ExecutionError::InvalidStructuredResult)
     );
 }
+
+#[test]
+fn a_capped_payload_measurement_stops_once_it_passes_the_limit() {
+    let locations: Vec<_> = (0..64)
+        .map(|index| FileLocation::new(FilePath::new(format!("path-{index}")).unwrap(), None))
+        .collect();
+    let content: Vec<_> = (0..64).map(|_| ToolContent::text("x".repeat(64))).collect();
+    let located = ToolCallUpdate::new(
+        ToolCallId::new("tool").unwrap(),
+        None,
+        None,
+        None,
+        Some(locations),
+        None,
+    );
+    let full = located.payload_bytes();
+    let capped = located.payload_bytes_up_to(0);
+    assert!(capped > 0 && capped < full, "{capped} of {full}");
+    assert_eq!(located.payload_bytes_up_to(full), full);
+
+    let contented = ToolCallUpdate::new(
+        ToolCallId::new("tool").unwrap(),
+        None,
+        None,
+        None,
+        None,
+        Some(content),
+    );
+    let full = contented.payload_bytes();
+    let capped = contented.payload_bytes_up_to(0);
+    assert!(capped > 0 && capped < full, "{capped} of {full}");
+
+    let execution = ExecutionId::new("execution").unwrap();
+    let mut session = session(&execution);
+    session.observe_tool(&execution, contented).unwrap();
+    let observation = session
+        .tool(&ToolCallId::new("tool").unwrap())
+        .unwrap()
+        .observation();
+    assert_eq!(observation.payload_bytes_up_to(usize::MAX), full);
+    assert!(observation.payload_bytes_up_to(0) < full);
+}

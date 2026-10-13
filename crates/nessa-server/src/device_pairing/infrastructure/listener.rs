@@ -7,7 +7,8 @@
 //! including an error the listener does not recognise, pauses with a bounded
 //! backoff and then accepts again.
 use super::{
-    connection::NativeConnectionCompletion, NativeConnectionFailure, NativeEnrollmentConnections,
+    connection::{NativeConnectionCompletion, NativeConnectionTask},
+    NativeConnectionError, NativeConnectionFailure, NativeEnrollmentConnections, RelayPermit,
 };
 use nessa_auth::adapters::pairing::{CryptoRng, RngCore};
 use nessa_protocol::pairing::socket::worker_fault;
@@ -33,6 +34,9 @@ const LONGEST_PAUSE: Duration = Duration::from_secs(1);
 pub enum Accepted {
     /// A connection ready for a worker.
     Connection(TcpStream),
+    /// A connection a relay joined, ready for a worker, with the relay
+    /// permit it holds in place of a connection permit.
+    Relayed(TcpStream, RelayPermit),
     /// `accept` itself failed. Whether that ends the run depends on the error.
     AcceptFailed(IoError),
     /// A connection was accepted but could not be prepared for a worker. Only
@@ -167,7 +171,7 @@ impl<A: EnrollmentAccept> NativeEnrollmentListener<A> {
     /// workers are still running, before the drain, and the error is returned
     /// (`native_listener_stops_on_a_listening_socket_failure`). A failed peer
     /// does not end service for others. Result handles hold the connection
-    /// permit, so the task set is bounded by connection capacity.
+    /// or relay permit, so the task set is bounded by those two capacities.
     pub async fn run<R, E, S, F>(mut self, entropy: E, stop: S, failed: F) -> IoResult<()>
     where
         R: RngCore + CryptoRng + Send + 'static,
@@ -195,15 +199,16 @@ impl<A: EnrollmentAccept> NativeEnrollmentListener<A> {
             let error = match accepted {
                 Accepted::Connection(stream) => {
                     pause = None;
-                    match self.connections.start(stream, entropy()) {
-                        Ok(task) => {
-                            tasks.spawn(task.complete());
-                        }
-                        Err(error) if error.failure == NativeConnectionFailure::Capacity => {}
-                        Err(error) => {
-                            tracing::debug!(?error, "Native enrollment dispatch refused")
-                        }
-                    }
+                    dispatch(self.connections.start(stream, entropy()), &mut tasks);
+                    continue;
+                }
+                // A relayed reader says nothing about the listening socket,
+                // so it leaves any pause as it is.
+                Accepted::Relayed(stream, permit) => {
+                    dispatch(
+                        self.connections.start_relayed(stream, permit, entropy()),
+                        &mut tasks,
+                    );
                     continue;
                 }
                 Accepted::ConnectionUnusable(error) => {
@@ -254,6 +259,20 @@ async fn finish(
 impl<A: EnrollmentAccept> Drop for NativeEnrollmentListener<A> {
     fn drop(&mut self) {
         self.connections.close();
+    }
+}
+/// Run an admitted connection's worker to its end in `tasks`. A full or
+/// closed owner refuses quietly; anything else is logged at debug.
+fn dispatch(
+    started: Result<NativeConnectionTask, NativeConnectionError>,
+    tasks: &mut JoinSet<NativeConnectionCompletion>,
+) {
+    match started {
+        Ok(task) => {
+            tasks.spawn(task.complete());
+        }
+        Err(error) if error.failure == NativeConnectionFailure::Capacity => {}
+        Err(error) => tracing::debug!(?error, "Native enrollment dispatch refused"),
     }
 }
 fn observe(result: Result<NativeConnectionCompletion, JoinError>) {

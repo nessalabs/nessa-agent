@@ -82,11 +82,24 @@ fn shipped_catalog_loads_from_a_file_and_contains_only_the_current_lineup() {
         ),
         (1_000_000, 128_000)
     );
-    // Image limits are recorded for every Claude model and differ only in the
-    // resolution the model sees. OpenAI's are not recorded, so those models are
-    // offered no images however their modality flag reads.
+    // Claude records its provider profiles; Terra uses Nessa's conservative
+    // 2048-pixel phone delivery profile. Other models have no image admission limits.
     for model in models {
         let limits = model.image_input.as_ref();
+        if model.model_id == "gpt-5.6-terra" {
+            let limits = limits.expect("Terra must publish image admission limits");
+            assert_eq!(limits.media_types, ["image/png", "image/jpeg"]);
+            assert_eq!(
+                (
+                    limits.max_encoded_bytes,
+                    limits.max_edge_px,
+                    limits.many_images_max_edge_px,
+                    limits.native_long_edge_px
+                ),
+                (5_000_000, 2048, 2048, 2048)
+            );
+            continue;
+        }
         if model.provider != "anthropic" {
             assert_eq!(limits, None, "{}", model.model_id);
             continue;

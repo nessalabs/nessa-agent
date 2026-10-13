@@ -54,6 +54,13 @@
         "image": true,
         "audio": false
       },
+      "imageInput": {
+        "mediaTypes": ["image/png", "image/jpeg"],
+        "maxEncodedBytes": 5000000,
+        "maxEdgePx": 2048,
+        "manyImagesMaxEdgePx": 2048,
+        "nativeLongEdgePx": 2048
+      },
       "output": {
         "text": true,
         "image": false,

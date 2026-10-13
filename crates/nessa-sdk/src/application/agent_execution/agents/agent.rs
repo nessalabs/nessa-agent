@@ -22,12 +22,13 @@ use crate::application::agent_execution::executions::{
     Submitter,
 };
 use crate::application::agent_execution::hooks::{
-    HookRegistration, InvocationContext, InvocationHook, InvocationHooks,
+    EvaluationSuffix, HookFailureKind, HookRegistration, InvocationHook, InvocationHooks,
+    PermissionHookThreadGuard, PermissionReviewDecision, ToolVerdict, PRE_TOOL_HOOK_DEADLINE,
 };
 use crate::application::agent_execution::permissions::{
-    ActionContext, PermissionAnswer, PermissionAnswerFailure, PermissionAnswerFuture,
-    PermissionCancellation, PermissionCancellationRequest, PermissionSelectionState,
-    QuestionAnswer,
+    ActionContext, ApprovalAttribution, HookRefusal, PermissionAnswer, PermissionAnswerFailure,
+    PermissionAnswerFuture, PermissionCancellation, PermissionCancellationRequest,
+    PermissionSelectionState, QuestionAnswer,
 };
 use crate::application::agent_execution::providers::{
     validate_configured_input, AgentProvider, ApprovalMode, CleanupReport, CloseOutcome,
@@ -36,15 +37,20 @@ use crate::application::agent_execution::providers::{
     ProviderOperationResult, ProviderSessionState, SessionCloseRequest,
 };
 use crate::application::agent_execution::sessions::{
-    AttachmentOpenFailureSource, InvocationCancellationEvent, ProviderContext, SessionManager,
-    StorageError,
+    AttachmentOpenFailureSource, InvocationCancellationEvent, MessageCommitSleep, ProviderContext,
+    SessionManager, StorageError,
 };
-use crate::domain::agent_execution::permissions::{PermissionAuthorityError, PermissionId};
+use crate::application::agent_execution::tools::ToolReviewInput;
+use crate::domain::agent_execution::permissions::{
+    CustomPermissionCancellationReason, PermissionAuthorityError, PermissionCancellationReason,
+    PermissionEffect, PermissionId, PermissionOptionId, PermissionScope, RefusalOutcome,
+};
+use crate::domain::agent_execution::tools::ToolCallId;
 use crate::domain::model_metadata::value_objects::{EffortLevel, EffortLevels};
 use crate::domain::{
     agent_execution::{
         executions::{ExecutionId, ExecutionOutcome},
-        sessions::SessionId,
+        sessions::{ExecutionSessionId, SessionId},
     },
     effective_capabilities::value_objects::EffectiveCapabilities,
 };
@@ -52,7 +58,10 @@ use std::{
     future::{poll_fn, Future},
     panic::{catch_unwind, AssertUnwindSafe},
     pin::Pin,
-    sync::{Arc, RwLock},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, RwLock,
+    },
     task::Poll,
 };
 use tokio::sync::{broadcast, watch, Mutex};
@@ -61,7 +70,7 @@ use tokio::sync::{broadcast, watch, Mutex};
 // remains locked by the manager's one save future while ingress is paused.
 async fn await_supervised_save<Save, Execution, Failure>(
     save: Save,
-    mut execution: Pin<&mut Execution>,
+    execution: Pin<&mut Execution>,
     stop_notice: &mut watch::Receiver<Option<InvocationCancellationEvent>>,
     stop_observed: &mut bool,
     pending_provider_outcome: &mut Option<(
@@ -74,17 +83,206 @@ where
     Save: Future<Output = Result<(), Failure>>,
     Execution: Future<Output = (ProviderExecutionReply, Option<InvocationCancellationEvent>)>,
 {
-    tokio::pin!(save);
+    SupervisedWait {
+        execution,
+        stop_notice,
+        stop_observed,
+        pending_provider_outcome,
+        result_known,
+    }
+    .run(save)
+    .await
+}
+
+struct SupervisedWait<'a, Execution> {
+    execution: Pin<&'a mut Execution>,
+    stop_notice: &'a mut watch::Receiver<Option<InvocationCancellationEvent>>,
+    stop_observed: &'a mut bool,
+    pending_provider_outcome:
+        &'a mut Option<(ProviderExecutionReply, Option<InvocationCancellationEvent>)>,
+    result_known: bool,
+}
+
+impl<Execution> SupervisedWait<'_, Execution>
+where
+    Execution: Future<Output = (ProviderExecutionReply, Option<InvocationCancellationEvent>)>,
+{
+    /// Await `operation` while still polling the execution, so a provider
+    /// whose operation completes only through its execution cannot deadlock,
+    /// and a settlement seen meanwhile is kept.
+    async fn run<T>(&mut self, operation: impl Future<Output = T>) -> T {
+        tokio::pin!(operation);
+        loop {
+            tokio::select! {
+                biased;
+                _ = self.stop_notice.changed(), if !*self.stop_observed => *self.stop_observed = true,
+                outcome = &mut self.execution, if !self.result_known && self.pending_provider_outcome.is_none() => {
+                    *self.pending_provider_outcome = Some(outcome);
+                }
+                done = &mut operation => return done,
+            }
+        }
+    }
+
+    /// Whether the supervisor already holds the provider's reply.
+    fn provider_settled(&self) -> bool {
+        self.result_known || self.pending_provider_outcome.is_some()
+    }
+}
+
+struct ClearHookGuard {
+    running: Arc<AtomicBool>,
+    _permit: PermissionHookThreadGuard,
+}
+
+impl Drop for ClearHookGuard {
+    fn drop(&mut self) {
+        self.running.store(false, Ordering::Release);
+    }
+}
+
+/// Run the permission-review hooks without holding the evidence lock.
+///
+/// Stop wins when it is already signaled and returns [`ToolVerdict::Stopped`].
+/// A timeout or a panicked task is a hook failure, which denies the call and
+/// lets the turn continue. A previous hook thread that is still running, or a
+/// process that already holds its hook-thread budget, is refused immediately
+/// as busy, without another blocking thread. Dropping the wait does not stop
+/// the callback: it keeps its thread until it returns, and its verdict is
+/// discarded. A runtime refusal records no hook index. `deadline` is the
+/// session clock's wake for the hook limit.
+async fn run_pre_tool_hook<Execution>(
+    hooks: InvocationHooks,
+    tool_id: ToolCallId,
+    call: ToolReviewInput,
+    suffix: EvaluationSuffix,
+    running: &Arc<AtomicBool>,
+    deadline: MessageCommitSleep,
+    wait: &mut SupervisedWait<'_, Execution>,
+) -> PermissionReviewDecision
+where
+    Execution: Future<Output = (ProviderExecutionReply, Option<InvocationCancellationEvent>)>,
+{
+    // A stop signaled while nothing polled the notice still wins, before any
+    // hook thread can start. A closed notice counts as a stop, as below.
+    if !*wait.stop_observed && !matches!(wait.stop_notice.has_changed(), Ok(false)) {
+        *wait.stop_observed = true;
+    }
+    if *wait.stop_observed {
+        return PermissionReviewDecision {
+            index: None,
+            verdict: ToolVerdict::Stopped,
+        };
+    }
+    if running
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return PermissionReviewDecision {
+            index: None,
+            verdict: ToolVerdict::hook_failed(HookFailureKind::Busy),
+        };
+    }
+    let Some(permit) = PermissionHookThreadGuard::try_acquire() else {
+        running.store(false, Ordering::Release);
+        return PermissionReviewDecision {
+            index: None,
+            verdict: ToolVerdict::hook_failed(HookFailureKind::Busy),
+        };
+    };
+    let guard = ClearHookGuard {
+        running: Arc::clone(running),
+        _permit: permit,
+    };
+    // The hook thread can start well after this point. It reads the notice
+    // again as it starts: a stop sent before then wins and the hook never
+    // runs; one sent after it arrives while the hook runs, as any stop can.
+    let admission = wait.stop_notice.clone();
+    let task = tokio::task::spawn_blocking(move || {
+        if !matches!(admission.has_changed(), Ok(false)) {
+            return None;
+        }
+        let decision = hooks.before_permission_review(&tool_id, &call, &suffix);
+        drop(guard);
+        Some(decision)
+    });
+    tokio::pin!(task);
+    tokio::pin!(deadline);
     loop {
         tokio::select! {
             biased;
-            _ = stop_notice.changed(), if !*stop_observed => *stop_observed = true,
-            outcome = &mut execution, if !result_known && pending_provider_outcome.is_none() => {
-                *pending_provider_outcome = Some(outcome);
+            _ = wait.stop_notice.changed(), if !*wait.stop_observed => {
+                *wait.stop_observed = true;
+                return PermissionReviewDecision { index: None, verdict: ToolVerdict::Stopped };
             }
-            saved = &mut save => return saved,
+            outcome = &mut wait.execution, if !wait.result_known && wait.pending_provider_outcome.is_none() => {
+                *wait.pending_provider_outcome = Some(outcome);
+            }
+            // The deadline is checked before the hook's result, so a verdict
+            // that is only seen after the deadline passed is a timeout.
+            _ = &mut deadline => {
+                return PermissionReviewDecision {
+                    index: None,
+                    verdict: ToolVerdict::hook_failed(HookFailureKind::Timeout),
+                };
+            }
+            finished = &mut task => {
+                return match finished {
+                    Ok(Some(decision)) => decision,
+                    Ok(None) => {
+                        *wait.stop_observed = true;
+                        PermissionReviewDecision { index: None, verdict: ToolVerdict::Stopped }
+                    }
+                    Err(_) => PermissionReviewDecision {
+                        index: None,
+                        verdict: ToolVerdict::hook_failed(HookFailureKind::Panic),
+                    },
+                };
+            }
         }
     }
+}
+
+fn effective_hook_outcome(
+    outcome: RefusalOutcome,
+    has_deny: bool,
+    can_end_turn: bool,
+) -> RefusalOutcome {
+    match outcome {
+        RefusalOutcome::CloseSession => RefusalOutcome::CloseSession,
+        RefusalOutcome::EndTurn if !can_end_turn => RefusalOutcome::Continue,
+        RefusalOutcome::Continue if !has_deny && can_end_turn => RefusalOutcome::EndTurn,
+        other => other,
+    }
+}
+
+fn hook_attribution(
+    event: &ExecutionEvent,
+    index: Option<usize>,
+    reason: &str,
+    outcome: RefusalOutcome,
+) -> Result<(PermissionId, ApprovalAttribution, String), AgentError> {
+    let ExecutionUpdate::PermissionRequested { id, .. } = event.update() else {
+        return Err(AgentError::Protocol(
+            "permission-review hook refusal has no review".into(),
+        ));
+    };
+    let refusal = HookRefusal::applied(index, reason, outcome);
+    let explanation = refusal.reason().to_owned();
+    let attribution = ApprovalAttribution::hook(id, refusal)?;
+    Ok((id.clone(), attribution, explanation))
+}
+
+fn deny_option(event: &ExecutionEvent) -> Option<PermissionOptionId> {
+    let ExecutionUpdate::PermissionRequested { options, .. } = event.update() else {
+        return None;
+    };
+    options.choices().iter().find_map(|option| {
+        let decision = option.decision();
+        (decision.effect() == PermissionEffect::Deny
+            && decision.scope() == &PermissionScope::request())
+            .then(|| option.id().clone())
+    })
 }
 
 /// One agent conversation. Clones share its provider context, hooks, and storage.
@@ -109,6 +307,9 @@ pub(super) struct Inner {
     pub(super) manager: SessionManager,
     pub(super) invocation: Arc<Mutex<()>>,
     hooks: RwLock<Vec<Arc<dyn InvocationHook>>>,
+    /// True while a permission-review hook thread has not returned. A later
+    /// review is refused immediately as busy, so blocking threads stay bounded.
+    permission_hook_running: Arc<AtomicBool>,
     updates: broadcast::Sender<ExecutionEvent>,
     pub(super) reorder: Mutex<()>,
     pub(super) scheduler: Mutex<Scheduler>,
@@ -135,7 +336,7 @@ impl Agent {
         contain_caller_wake(waiter, self.cancel_active_turn(id)).await
     }
     async fn cancel_active_turn(&self, id: ExecutionId) -> ProviderOperationResult<()> {
-        if self.inner.lifecycle.active().as_ref() != Some(&id) || !self.supports_turn_cancel() {
+        if !self.turn_is_active(&id) || !self.supports_turn_cancel() {
             return Err(ProviderOperationFailure::new(
                 AgentError::Unsupported("turn cancel".into()),
                 ProviderSessionState::Usable,
@@ -636,6 +837,7 @@ impl Agent {
                 manager: session_manager,
                 invocation: Arc::new(Mutex::new(())),
                 hooks: RwLock::new(Vec::new()),
+                permission_hook_running: Arc::new(AtomicBool::new(false)),
                 reorder: Mutex::new(()),
                 scheduler: Mutex::new(Scheduler::new()),
                 lifecycle,
@@ -1210,12 +1412,25 @@ impl Agent {
                 .settle_undispatched_invocation(index, saved_index, work, error)
                 .await;
         }
-        let hooks = InvocationHooks::new(self.inner.hooks.read().expect("hook registry").clone());
-        let context = InvocationContext {
-            session_id: attached.session.id(),
-            request: &input,
+        // Drop the registry guard before hook code runs: a hook may register another.
+        let registered = self.inner.hooks.read().expect("hook registry").clone();
+        let hooks = InvocationHooks::new(registered);
+        let session_id = attached.session.id().clone();
+        let before_gate = if hooks.is_empty() {
+            Ok(())
+        } else {
+            match self
+                .inner
+                .manager
+                .with_invocation_events(index, EvaluationSuffix::capture)
+                .await
+                .map(|evaluation| hooks.before(&session_id, &input, &evaluation))
+            {
+                Ok(result) => result,
+                Err(error) => Err(AgentError::Storage(error)),
+            }
         };
-        if let Err(mut error) = hooks.before(&context) {
+        if let Err(mut error) = before_gate {
             if let Err(storage) = self
                 .record_undispatched_stop(index, saved_index, work)
                 .await
@@ -1281,7 +1496,9 @@ impl Agent {
                     execution_result: Box::new(result),
                 }),
             };
-            return hooks.after(&context, settled);
+            return self
+                .settle_after_hooks(&hooks, &session_id, &input, index, settled)
+                .await;
         }
         let mut events = attached.events.lock().await;
         let mut execution = Box::pin(async {
@@ -1319,6 +1536,7 @@ impl Agent {
         let mut stop_after_ready_settlement = false;
         let mut pending_provider_outcome = None;
         let mut pending_save_failure: Option<StorageError> = None;
+        let mut refusal_failure: Option<AgentError> = None;
         loop {
             if let Some(error) = pending_save_failure.take() {
                 storage_failure.get_or_insert(error.clone());
@@ -1523,6 +1741,67 @@ impl Agent {
                                 stop_after_ready_settlement = !confirmed;
                                 continue;
                             }
+                            let mut decision = PermissionReviewDecision {
+                                index: None,
+                                verdict: ToolVerdict::Allow,
+                            };
+                            let proposed = match event.update() {
+                                ExecutionUpdate::PermissionRequested { tool_id, input: call, .. }
+                                    if event.execution_id() == &input.execution_id
+                                        && hooks.reviews_permissions() =>
+                                {
+                                    // The hook thread owns only the proposed
+                                    // call, never the review's options.
+                                    Some((tool_id.clone(), call.clone()))
+                                }
+                                _ => None,
+                            };
+                            if let Some((tool_id, call)) = proposed {
+                                drop(events);
+                                // The hook wait cannot poll the message-commit
+                                // deadline, so earlier output is saved first.
+                                if let Err(error) = await_supervised_save(
+                                    self.inner.manager.flush_pending_messages(),
+                                    execution.as_mut(),
+                                    &mut stop_notice,
+                                    &mut stop_observed,
+                                    &mut pending_provider_outcome,
+                                    result.is_some(),
+                                ).await {
+                                    // Like any failed save, it ends the turn at
+                                    // the top of the loop; no hook runs for it.
+                                    pending_save_failure.get_or_insert(error);
+                                    events = attached.events.lock().await;
+                                    continue;
+                                }
+                                let suffix = self
+                                    .inner
+                                    .manager
+                                    .with_invocation_events(index, EvaluationSuffix::capture)
+                                    .await
+                                    .unwrap_or_else(|_| EvaluationSuffix::incomplete());
+                                let now = self.inner.manager.message_commit_now();
+                                let deadline = self.inner.manager.message_commit_sleep_until(
+                                    now.saturating_add(PRE_TOOL_HOOK_DEADLINE),
+                                );
+                                decision = run_pre_tool_hook(
+                                    hooks.clone(),
+                                    tool_id,
+                                    call,
+                                    suffix,
+                                    &self.inner.permission_hook_running,
+                                    deadline,
+                                    &mut SupervisedWait {
+                                        execution: execution.as_mut(),
+                                        stop_notice: &mut stop_notice,
+                                        stop_observed: &mut stop_observed,
+                                        pending_provider_outcome: &mut pending_provider_outcome,
+                                        result_known: result.is_some(),
+                                    },
+                                )
+                                .await;
+                                events = attached.events.lock().await;
+                            }
                             match await_supervised_save(
                                 self.inner.manager.event(event.clone()),
                                 execution.as_mut(),
@@ -1531,7 +1810,49 @@ impl Agent {
                                 &mut pending_provider_outcome,
                                 result.is_some(),
                             ).await {
-                                Ok(()) => { let _ = self.inner.updates.send(event); }
+                                Ok(()) => {
+                                    if let ToolVerdict::Refuse(_) = &decision.verdict {
+                                        drop(events);
+                                        let applied = self
+                                            .apply_permission_verdict(
+                                                &event,
+                                                decision.index,
+                                                decision.verdict.clone(),
+                                                &mut SupervisedWait {
+                                                    execution: execution.as_mut(),
+                                                    stop_notice: &mut stop_notice,
+                                                    stop_observed: &mut stop_observed,
+                                                    pending_provider_outcome: &mut pending_provider_outcome,
+                                                    result_known: result.is_some(),
+                                                },
+                                            )
+                                            .await;
+                                        if let Some(confirmed) = applied.closed {
+                                            if let Some(failure) = applied.failure {
+                                                observation_failure = Some(failure);
+                                            }
+                                            ended = true;
+                                            stop_after_ready_settlement = !confirmed;
+                                        } else if let Some(failure) = applied.failure {
+                                            // The turn ended and the session stays
+                                            // usable; the failure is still reported.
+                                            refusal_failure = Some(match refusal_failure.take() {
+                                                None => failure,
+                                                Some(first) => AgentError::MultipleOperationFailures {
+                                                    first_error: Box::new(first),
+                                                    subsequent_error: Box::new(failure),
+                                                },
+                                            });
+                                        }
+                                        events = attached.events.lock().await;
+                                    }
+                                    // A refused review is already answered or
+                                    // withdrawn, and a stopping one is not for a
+                                    // person: only an allowed review is published.
+                                    if matches!(decision.verdict, ToolVerdict::Allow) {
+                                        let _ = self.inner.updates.send(event);
+                                    }
+                                }
                                 Err(error) => {
                                     pending_save_failure = Some(error);
                                 }
@@ -1592,6 +1913,13 @@ impl Agent {
                 }
             }
         }
+        let observation_failure = match (refusal_failure, observation_failure) {
+            (Some(first), Some(later)) => Some(AgentError::MultipleOperationFailures {
+                first_error: Box::new(first),
+                subsequent_error: Box::new(later),
+            }),
+            (first, later) => first.or(later),
+        };
         let result = match observation_failure {
             Some(error) => Err(AgentError::ExecutionObservation {
                 error: Box::new(error),
@@ -1613,10 +1941,217 @@ impl Agent {
         // Persist the final local receipt too: a successful provider result can
         // coexist with a later storage/hook failure. Direct invocation
         // has no queue runner to perform this final write on its behalf.
-        self.inner
+        // The after hook sees the same bounded window a permission-review hook saw.
+        // The suffix is copied first so the evidence lock is not held across the callback.
+        let hooked = self
+            .settle_after_hooks(&hooks, &session_id, &input, index, result)
+            .await;
+        self.inner.manager.settle_submission(index, hooked).await
+    }
+
+    async fn settle_after_hooks(
+        &self,
+        hooks: &InvocationHooks,
+        session_id: &ExecutionSessionId,
+        input: &ExecutionRequest,
+        index: usize,
+        result: Result<ExecutionOutcome, AgentError>,
+    ) -> Result<ExecutionOutcome, AgentError> {
+        if hooks.is_empty() {
+            return result;
+        }
+        let evaluation = self
+            .inner
             .manager
-            .settle_submission(index, hooks.after(&context, result))
+            .with_invocation_events(index, EvaluationSuffix::capture)
             .await
+            .unwrap_or_else(|_| EvaluationSuffix::incomplete());
+        hooks.after(session_id, input, &evaluation, result)
+    }
+
+    /// Apply a permission-review refusal after the review has been retained.
+    ///
+    /// The refusal is attributed to the hook and delivered through the same
+    /// control path as an explicit answer, withdrawal, or turn cancel. An
+    /// end-turn the binding cannot perform is recorded as continue. A continue
+    /// with no deny option becomes an end-turn when the binding can cancel the
+    /// turn. A delivery failure ends the turn and is reported, but leaves the
+    /// session usable. A turn whose reply the supervisor already holds needs
+    /// no cancel. Every control runs under `wait`, so the execution is still
+    /// polled and a reply that arrives meanwhile is kept. If ending the turn
+    /// also fails,
+    /// both failures are reported, delivery first, and the session stops on
+    /// the observation-failure path.
+    async fn apply_permission_verdict<Execution>(
+        &self,
+        event: &ExecutionEvent,
+        index: Option<usize>,
+        verdict: ToolVerdict,
+        wait: &mut SupervisedWait<'_, Execution>,
+    ) -> AppliedVerdict
+    where
+        Execution: Future<Output = (ProviderExecutionReply, Option<InvocationCancellationEvent>)>,
+    {
+        let ToolVerdict::Refuse(refusal) = verdict else {
+            return AppliedVerdict::default();
+        };
+        let (reason, outcome) = (refusal.reason(), refusal.outcome());
+        if outcome == RefusalOutcome::CloseSession {
+            let recorded = wait
+                .run(self.withdraw_hook_refusal(event, index, reason, RefusalOutcome::CloseSession))
+                .await;
+            let cleanup = wait
+                .run(self.shutdown_after_failure(SessionCloseRequest::PolicyRefusal))
+                .await;
+            let confirmed = cleanup.is_confirmed();
+            let failure = match (recorded.err(), cleanup.into_result().err()) {
+                (Some(operation_error), Some(cleanup_error)) => {
+                    Some(AgentError::OperationAndCleanupFailure {
+                        operation_error: Box::new(operation_error),
+                        cleanup_error: Box::new(cleanup_error),
+                    })
+                }
+                (Some(operation_error), None) => Some(operation_error),
+                (None, cleanup_error) => cleanup_error,
+            };
+            return AppliedVerdict {
+                closed: Some(confirmed),
+                failure,
+            };
+        }
+        let effective = effective_hook_outcome(
+            outcome,
+            deny_option(event).is_some(),
+            self.supports_turn_cancel(),
+        );
+        let delivered = wait
+            .run(self.deliver_hook_refusal(event, index, reason, effective))
+            .await;
+        let delivery_failure = delivered.err();
+        if delivery_failure.is_none() && effective != RefusalOutcome::EndTurn {
+            return AppliedVerdict::default();
+        }
+        // The provider can settle while the hook runs. Only its captured reply
+        // shows that: a turn no longer active may instead have been retired by
+        // cleanup a failed control reported, and that still needs the stop.
+        if wait.provider_settled() {
+            return AppliedVerdict {
+                closed: None,
+                failure: delivery_failure,
+            };
+        }
+        match wait
+            .run(self.cancel_turn(event.execution_id().clone()))
+            .await
+        {
+            Ok(()) => AppliedVerdict {
+                closed: None,
+                failure: delivery_failure,
+            },
+            // The reply arrived while the cancel ran, so the cancel found no
+            // turn and sent nothing. A cancel that reached the provider keeps
+            // its failure.
+            Err(failure)
+                if wait.provider_settled()
+                    && matches!(failure.error(), AgentError::Unsupported(_))
+                    && matches!(failure.session_state(), ProviderSessionState::Usable) =>
+            {
+                AppliedVerdict {
+                    closed: None,
+                    failure: delivery_failure,
+                }
+            }
+            Err(failure) => {
+                let cancel_failure = failure.into_error();
+                let failure = match delivery_failure {
+                    Some(delivery) => AgentError::MultipleOperationFailures {
+                        first_error: Box::new(delivery),
+                        subsequent_error: Box::new(cancel_failure),
+                    },
+                    None => cancel_failure,
+                };
+                let (error, confirmed) = wait
+                    .run(self.stop_after_observation_failure(
+                        failure,
+                        ObservationFailureCause::ExecutionFailed,
+                    ))
+                    .await;
+                AppliedVerdict {
+                    closed: Some(confirmed),
+                    failure: Some(error),
+                }
+            }
+        }
+    }
+
+    fn turn_is_active(&self, id: &ExecutionId) -> bool {
+        self.inner.lifecycle.active().as_ref() == Some(id)
+    }
+
+    async fn deliver_hook_refusal(
+        &self,
+        event: &ExecutionEvent,
+        index: Option<usize>,
+        reason: &str,
+        outcome: RefusalOutcome,
+    ) -> Result<(), AgentError> {
+        let (id, attribution, explanation) = hook_attribution(event, index, reason, outcome)?;
+        // Only a continue is an answer. A terminal outcome withdraws the review,
+        // so no answer, and nothing an adapter could replay, carries one.
+        let deny = (outcome == RefusalOutcome::Continue)
+            .then(|| deny_option(event))
+            .flatten();
+        if let Some(option_id) = deny {
+            self.answer_permission(PermissionAnswer {
+                attribution,
+                execution_id: event.execution_id().clone(),
+                id,
+                option_id,
+            })
+            .await
+            .map(|_| ())
+            .map_err(|failure| failure.into_parts().0)
+        } else {
+            self.withdraw_attributed(event, id, attribution, explanation, outcome)
+                .await
+        }
+    }
+
+    async fn withdraw_hook_refusal(
+        &self,
+        event: &ExecutionEvent,
+        index: Option<usize>,
+        reason: &str,
+        outcome: RefusalOutcome,
+    ) -> Result<(), AgentError> {
+        let (id, attribution, explanation) = hook_attribution(event, index, reason, outcome)?;
+        self.withdraw_attributed(event, id, attribution, explanation, outcome)
+            .await
+    }
+
+    async fn withdraw_attributed(
+        &self,
+        event: &ExecutionEvent,
+        id: PermissionId,
+        attribution: ApprovalAttribution,
+        explanation: String,
+        outcome: RefusalOutcome,
+    ) -> Result<(), AgentError> {
+        let custom = CustomPermissionCancellationReason::hook_refusal(
+            event.execution_id(),
+            &id,
+            outcome,
+            explanation,
+        )
+        .map_err(|error| AgentError::InvalidInput(error.to_string()))?;
+        self.cancel_permission(PermissionCancellationRequest {
+            execution_id: event.execution_id().clone(),
+            id,
+            reason: PermissionCancellationReason::custom(custom),
+            actor: attribution.actor().clone(),
+        })
+        .await
+        .map(|_| ())
     }
     // Confirmed teardown must settle admitted execution work, including audit-only
     // cleanup errors. Uncertain teardown cannot promise settlement: the caller
@@ -1712,6 +2247,10 @@ impl Agent {
     /// whose selection state distinguishes a still-pending review from a consumed
     /// decision and from an interrupted outcome that must be reloaded.
     ///
+    /// A caller's hook basis always records continue: only the runner, which
+    /// cancels the turn or closes the session itself, can record end-turn or
+    /// close-session (see [`HookRefusal::new`]).
+    ///
     /// The caller's `Waker` is woken when the operation's own task finishes;
     /// a panic from it is logged and does not affect the operation. See
     /// "Caller wakers" in docs/agent_execution/lifecycle.md.
@@ -1784,6 +2323,9 @@ impl Agent {
     /// The caller's `Waker` is woken when the operation's own task finishes;
     /// a panic from it is logged and does not affect the operation. See
     /// "Caller wakers" in docs/agent_execution/lifecycle.md.
+    ///
+    /// A hook-refusal code withdraws only the review, in the turn, the runner
+    /// issued it for, so a copy of a recorded one is [`AgentError::InvalidInput`].
     pub fn cancel_permission(
         &self,
         request: PermissionCancellationRequest,
@@ -1869,6 +2411,15 @@ impl Agent {
     }
 }
 
+/// What applying a permission-review refusal did.
+#[derive(Default)]
+struct AppliedVerdict {
+    /// `Some` when the session was closed; the bool is whether the close was confirmed.
+    closed: Option<bool>,
+    /// A failure to report from this invocation, closed or not.
+    failure: Option<AgentError>,
+}
+
 fn combine_owned_close(
     seal: Result<(), AgentError>,
     cleanup: Result<CloseOutcome, AgentError>,
@@ -1917,5 +2468,122 @@ impl AgentEvents {
             Err(broadcast::error::RecvError::Closed) => Ok(None),
             Err(broadcast::error::RecvError::Lagged(_)) => Err(AgentError::Backpressure),
         }
+    }
+}
+
+#[cfg(test)]
+mod hook_wait_tests {
+    use super::*;
+    use crate::application::agent_execution::hooks::{
+        HookError, InvocationObservationWindow, ProposedToolCall,
+    };
+
+    struct EnteredHook(Arc<AtomicBool>);
+
+    impl InvocationHook for EnteredHook {
+        fn before_permission_review(
+            &self,
+            _call: &ProposedToolCall<'_>,
+            _observations: &InvocationObservationWindow<'_>,
+        ) -> Result<ToolVerdict, HookError> {
+            self.0.store(true, Ordering::SeqCst);
+            Ok(ToolVerdict::Allow)
+        }
+    }
+
+    #[tokio::test]
+    async fn a_stop_nothing_polled_yet_wins_before_the_hook_starts() {
+        let entered = Arc::new(AtomicBool::new(false));
+        let hooks = InvocationHooks::new(vec![Arc::new(EnteredHook(entered.clone()))]);
+        let (stop, mut stop_notice) = watch::channel(None);
+        // Signaled while the supervisor was not polling the notice.
+        stop.send_replace(None);
+        let mut stop_observed = false;
+        let mut pending_provider_outcome = None;
+        let execution =
+            std::future::pending::<(ProviderExecutionReply, Option<InvocationCancellationEvent>)>();
+        tokio::pin!(execution);
+        let decision = run_pre_tool_hook(
+            hooks,
+            ToolCallId::new("bash").unwrap(),
+            ToolReviewInput {
+                name: "bash".into(),
+                arguments_json: "{}".into(),
+            },
+            EvaluationSuffix::incomplete(),
+            &Arc::new(AtomicBool::new(false)),
+            Box::pin(std::future::pending()),
+            &mut SupervisedWait {
+                execution: execution.as_mut(),
+                stop_notice: &mut stop_notice,
+                stop_observed: &mut stop_observed,
+                pending_provider_outcome: &mut pending_provider_outcome,
+                result_known: false,
+            },
+        )
+        .await;
+        assert!(matches!(decision.verdict, ToolVerdict::Stopped));
+        assert!(stop_observed);
+        // A hook thread, had one started, enters well within this.
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        assert!(!entered.load(Ordering::SeqCst), "no hook thread started");
+    }
+    #[test]
+    fn a_stop_sent_before_the_hook_thread_starts_wins() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .max_blocking_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            // Hold the only blocking thread, so the hook thread is queued.
+            let (free, held) = std::sync::mpsc::channel::<()>();
+            let occupier = tokio::task::spawn_blocking(move || held.recv());
+            let entered = Arc::new(AtomicBool::new(false));
+            let hooks = InvocationHooks::new(vec![Arc::new(EnteredHook(entered.clone()))]);
+            let (stop, mut stop_notice) = watch::channel(None);
+            let mut stop_observed = false;
+            let mut pending_provider_outcome = None;
+            let execution = std::future::pending::<(
+                ProviderExecutionReply,
+                Option<InvocationCancellationEvent>,
+            )>();
+            tokio::pin!(execution);
+            let running = Arc::new(AtomicBool::new(false));
+            let mut wait = SupervisedWait {
+                execution: execution.as_mut(),
+                stop_notice: &mut stop_notice,
+                stop_observed: &mut stop_observed,
+                pending_provider_outcome: &mut pending_provider_outcome,
+                result_known: false,
+            };
+            let review = run_pre_tool_hook(
+                hooks,
+                ToolCallId::new("bash").unwrap(),
+                ToolReviewInput {
+                    name: "bash".into(),
+                    arguments_json: "{}".into(),
+                },
+                EvaluationSuffix::incomplete(),
+                &running,
+                Box::pin(std::future::pending()),
+                &mut wait,
+            );
+            tokio::pin!(review);
+            // The supervisor checks stop and queues the hook thread.
+            let first = std::future::poll_fn(|cx| {
+                std::task::Poll::Ready(Future::poll(review.as_mut(), cx))
+            })
+            .await;
+            assert!(first.is_pending());
+            stop.send_replace(None);
+            free.send(()).unwrap();
+            occupier.await.unwrap().unwrap();
+            let decision = review.await;
+            assert!(matches!(decision.verdict, ToolVerdict::Stopped));
+            // Let the queued hook thread run, had it been going to.
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            assert!(!entered.load(Ordering::SeqCst), "the hook did not run");
+        });
     }
 }

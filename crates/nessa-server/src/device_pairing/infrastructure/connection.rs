@@ -40,6 +40,13 @@ const PRODUCT_SESSION_CAPACITY: usize = NATIVE_CONNECTION_CAPACITY;
 /// Bound on paired environments' connections, a pool of their own for the
 /// same reason; also the connection bound, which sizes the wake report.
 const ENVIRONMENT_CAPACITY: usize = NATIVE_CONNECTION_CAPACITY;
+/// Bound on connections a relay joined, and on readers being accepted
+/// through it: a pool of their own, so readers a relay sends, however many,
+/// never take the connection permits direct readers need
+/// (`docs/design/auth/relay.md`). A relayed connection that opens a product
+/// session or an environment moves to that shared pool like a direct one;
+/// only a paired key gets that far.
+pub(crate) const RELAY_CAPACITY: usize = 4;
 
 /// Redacted primary physical/protocol refusal, without peer input diagnostics.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -107,6 +114,8 @@ impl From<DeadlineError> for NativeConnectionError {
 }
 
 /// One fixed eight-connection physical owner; admission queues no requests.
+/// A connection a relay joined comes in on a relay permit instead, from a
+/// pool of four, and holds it in place of a connection permit.
 /// A connection whose first envelope is `openProduct` moves to a pool of its
 /// own, also eight, and returns its connection permit, so product sessions
 /// never take the permits enrollment and pinned status need (design row PR10).
@@ -122,6 +131,7 @@ pub struct NativeEnrollmentConnections {
     sessions: Option<Arc<dyn ProtectedSessions>>,
     environment: Pool,
     peers: Option<Arc<dyn EnvironmentPeers>>,
+    relay: Pool,
 }
 
 /// A pool a connection moves to from the connection pool, selected by its
@@ -173,6 +183,7 @@ impl NativeEnrollmentConnections {
             sessions: None,
             environment: Pool::new(ENVIRONMENT_CAPACITY),
             peers: None,
+            relay: Pool::new(RELAY_CAPACITY),
         }
     }
     /// Serve a connection whose first envelope is `openProduct` with
@@ -198,10 +209,39 @@ impl NativeEnrollmentConnections {
     ) -> Result<(), NativeConnectionError> {
         self.start(stream, entropy)?.wait().await
     }
+    /// A permit for one more connection through the relay, or `None` when
+    /// the relay pool is full or closed. A gateway takes it before it
+    /// accepts a reader the relay announced, and the connection holds it
+    /// once [`Self::start_relayed`] admits it.
+    pub fn relay_permit(&self) -> Option<RelayPermit> {
+        let permit = self.relay.capacity.clone().try_acquire_owned().ok()?;
+        Some(RelayPermit {
+            permit: Some(permit),
+            drained: self.drained.clone(),
+        })
+    }
     pub(super) fn start<R: RngCore + CryptoRng + Send + 'static>(
         &self,
         stream: TcpStream,
         entropy: R,
+    ) -> Result<NativeConnectionTask, NativeConnectionError> {
+        self.start_from(stream, entropy, None)
+    }
+    /// Admit a connection the relay joined, on the relay permit it holds
+    /// rather than a connection permit. A closed owner admits nothing.
+    pub(super) fn start_relayed<R: RngCore + CryptoRng + Send + 'static>(
+        &self,
+        stream: TcpStream,
+        permit: RelayPermit,
+        entropy: R,
+    ) -> Result<NativeConnectionTask, NativeConnectionError> {
+        self.start_from(stream, entropy, Some(permit))
+    }
+    fn start_from<R: RngCore + CryptoRng + Send + 'static>(
+        &self,
+        stream: TcpStream,
+        entropy: R,
+        relayed: Option<RelayPermit>,
     ) -> Result<NativeConnectionTask, NativeConnectionError> {
         let endpoint = WakeEndpoint::new(
             stream
@@ -209,14 +249,29 @@ impl NativeEnrollmentConnections {
                 .map_err(|error| NativeConnectionFailure::Io(error.kind()))?,
         );
         let (stream, deadline) = DeadlineStream::new(stream, self.clock.clone(), endpoint.clone())?;
+        // The sweep a connection starts on: the connection pool's, or the
+        // relay pool's for one the relay joined.
+        let connections = match relayed {
+            Some(_) => self.relay.wake.clone(),
+            None => self.wake.clone(),
+        };
         // `close` closes the semaphore under this lock, so a permit acquired here
         // is registered before any wake sweep, and a closed owner admits nothing.
-        let mut wake = self.wake.lock().unwrap_or_else(PoisonError::into_inner);
-        let permit = self
-            .capacity
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| NativeConnectionError::from(NativeConnectionFailure::Capacity))?;
+        let mut wake = connections.lock().unwrap_or_else(PoisonError::into_inner);
+        let capacity = match &relayed {
+            Some(_) => &self.relay.capacity,
+            None => &self.capacity,
+        };
+        if capacity.is_closed() {
+            return Err(NativeConnectionFailure::Capacity.into());
+        }
+        let permit = match relayed {
+            Some(mut relayed) => relayed.permit.take(),
+            None => self.capacity.clone().try_acquire_owned().ok(),
+        }
+        .ok_or(NativeConnectionError::from(
+            NativeConnectionFailure::Capacity,
+        ))?;
         wake.register(&endpoint);
         let lease = Arc::new(ConnectionPermit {
             permit: Some(permit),
@@ -229,7 +284,7 @@ impl NativeEnrollmentConnections {
         let admission = |pool: &Pool| Admission {
             capacity: pool.capacity.clone(),
             wake: pool.wake.clone(),
-            connections: self.wake.clone(),
+            connections: connections.clone(),
             endpoint: endpoint_of(&lease),
             drained: self.drained.clone(),
         };
@@ -264,6 +319,7 @@ impl NativeEnrollmentConnections {
         drop(wake);
         self.product.close();
         self.environment.close();
+        self.relay.close();
     }
     /// The wake sweep from the first shutdown, if it has happened. A successful
     /// wake does not mean the worker has finished; `shutdown` reports that.
@@ -283,8 +339,15 @@ impl NativeEnrollmentConnections {
     pub fn environment_wake_report(&self) -> Option<NativeWakeReport> {
         self.environment.report()
     }
+    /// The relayed connections' wake sweep from the first shutdown, if it
+    /// has happened; likewise not evidence of a drain.
+    pub fn relay_wake_report(&self) -> Option<NativeWakeReport> {
+        self.relay.report()
+    }
     /// Exclude new sockets and await actual blocked/unwinding closure drain,
-    /// of connections, product sessions and environments alike.
+    /// of connections, relayed connections, product sessions and
+    /// environments alike. A relay permit a gateway took for a reader it is
+    /// still accepting counts until that accept ends.
     pub async fn shutdown(&self) {
         self.close();
         loop {
@@ -294,6 +357,7 @@ impl NativeEnrollmentConnections {
             if self.capacity.available_permits() == NATIVE_CONNECTION_CAPACITY
                 && self.product.drained()
                 && self.environment.drained()
+                && self.relay.drained()
             {
                 return;
             }
@@ -391,6 +455,24 @@ fn endpoint_of(lease: &ConnectionPermit) -> Arc<WakeEndpoint> {
         .endpoint
         .clone()
         .expect("a live connection permit holds its endpoint")
+}
+/// A relay pool permit, taken before a reader the relay announced is
+/// accepted and held by its connection once admitted. Dropping it wakes a
+/// shutdown waiting for the drain.
+pub struct RelayPermit {
+    permit: Option<OwnedSemaphorePermit>,
+    drained: Arc<Notify>,
+}
+impl Drop for RelayPermit {
+    fn drop(&mut self) {
+        drop(self.permit.take());
+        self.drained.notify_waiters();
+    }
+}
+impl std::fmt::Debug for RelayPermit {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("RelayPermit")
+    }
 }
 /// What the blocking worker may move a connection to, by its first envelope.
 struct Admissions {

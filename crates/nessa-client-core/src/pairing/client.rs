@@ -383,13 +383,17 @@ impl NativeEnrollmentClient {
             .unwrap_or_else(PoisonError::into_inner)
             .report()
     }
+    /// Exclude new operations and wake current sockets without waiting for the
+    /// physical worker. Caller composition still awaits `shutdown()` before
+    /// replacing private state; this signal does not prove drain.
+    pub fn request_shutdown(&self) {
+        let mut wake = self.wake.lock().unwrap_or_else(PoisonError::into_inner);
+        self.capacity.close();
+        wake.close();
+    }
     /// Exclude new operations and await actual KSF/IO/private-storage closure drain.
     pub async fn shutdown(&self) {
-        {
-            let mut wake = self.wake.lock().unwrap_or_else(PoisonError::into_inner);
-            self.capacity.close();
-            wake.close();
-        }
+        self.request_shutdown();
         loop {
             let notified = self.drained.notified();
             tokio::pin!(notified);

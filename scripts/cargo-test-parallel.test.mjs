@@ -104,6 +104,27 @@ test("examples, benches, and build scripts are not test binaries", () => {
   assert.deepEqual(testExecutables(stdout), [])
 })
 
+test("a multi-format native library keeps its actual unit-test executable", () => {
+  const output = artifact({
+    manifest: "/repo/crates/nessa-device-client/Cargo.toml",
+    kind: ["rlib", "cdylib", "staticlib"],
+    name: "nessa_device_client",
+    executable: "/repo/target/debug/deps/nessa_device_client-abc",
+  })
+  assert.deepEqual(testExecutables(output), [
+    {
+      label: "nessa-device-client nessa_device_client",
+      executable: "/repo/target/debug/deps/nessa_device_client-abc",
+    },
+  ])
+  assert.deepEqual(
+    testExecutables(
+      artifact({ kind: ["rlib", "cdylib", "staticlib"], testProfile: false }),
+    ),
+    [],
+  )
+})
+
 test("a line prefix keeps a fragment that arrives split", () => {
   let written = ""
   const prefix = linePrefix("infrastructure", (line) => {

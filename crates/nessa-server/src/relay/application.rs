@@ -18,18 +18,18 @@
 //! side is bounded on the injected timer, so a peer that stops reading
 //! cannot hold a task forever; a joined pair is the one exception, as it
 //! may sit idle as long as the two ends like.
+use super::wire::{next_frame, read_frame, write_frame};
 use crate::timer::{within, Moment, Timer};
 use nessa_protocol::relay::{
-    key_id, parse_body, parse_header, GatewayKey, JoinToken, RelayFrame, HEADER, JOIN_DEADLINE,
-    MAX_FRAME, MISSED_PINGS, PING_INTERVAL, PREAMBLE_DEADLINE,
+    key_id, GatewayKey, JoinToken, RelayFrame, JOIN_DEADLINE, MISSED_PINGS, PING_INTERVAL,
+    PREAMBLE_DEADLINE,
 };
 use std::{
     collections::HashMap,
-    io,
     sync::{Arc, Mutex, MutexGuard, PoisonError},
 };
 use tokio::{
-    io::{split, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf},
+    io::{split, AsyncRead, AsyncWrite},
     sync::{mpsc, oneshot, OwnedSemaphorePermit, Semaphore},
 };
 
@@ -347,11 +347,10 @@ where
         frame: RelayFrame,
         deadline: Moment,
     ) -> bool {
-        let write = async {
-            stream.write_all(&frame.encode()).await?;
-            stream.flush().await
-        };
-        matches!(within(&*self.timer, deadline, write).await, Ok(Ok(())))
+        matches!(
+            within(&*self.timer, deadline, write_frame(stream, frame)).await,
+            Ok(Ok(()))
+        )
     }
 }
 
@@ -409,30 +408,6 @@ where
         _ = tokio::io::copy(&mut reader_in, &mut gateway_out) => {}
         _ = tokio::io::copy(&mut gateway_in, &mut reader_out) => {}
     }
-}
-
-/// Read exactly one frame and not a byte more.
-async fn read_frame(stream: &mut (impl AsyncRead + Unpin)) -> io::Result<RelayFrame> {
-    let mut header = [0; HEADER];
-    stream.read_exact(&mut header).await?;
-    let header = parse_header(header).map_err(invalid)?;
-    let mut body = [0; MAX_FRAME - HEADER];
-    let body = &mut body[..header.body()];
-    stream.read_exact(body).await?;
-    parse_body(header, body).map_err(invalid)
-}
-
-/// [`read_frame`] as a future that owns its half, so a serve loop can keep
-/// one read going across its other waits without losing a byte of it.
-async fn next_frame<S: AsyncRead>(
-    mut reader: ReadHalf<S>,
-) -> (ReadHalf<S>, io::Result<RelayFrame>) {
-    let frame = read_frame(&mut reader).await;
-    (reader, frame)
-}
-
-fn invalid(error: nessa_protocol::relay::RelayFrameError) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, error)
 }
 
 #[cfg(test)]

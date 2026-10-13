@@ -190,12 +190,19 @@ impl ToolCallUpdate {
     /// including vector and box storage. ToolCall accounts for retained
     /// identities in addition to these observation bytes.
     pub fn payload_bytes(&self) -> usize {
+        self.payload_bytes_up_to(usize::MAX)
+    }
+    /// [`Self::payload_bytes`], stopping once the count passes `limit`. A
+    /// result above `limit` says only that the payload is larger than `limit`,
+    /// so sizing an oversized update does not walk all of its elements.
+    pub fn payload_bytes_up_to(&self, limit: usize) -> usize {
         ToolObservation::measure_payload(
             &self.title,
             &self.locations,
             &self.content,
             &self.mcp_tool,
             &self.mcp_arguments,
+            limit,
         )
     }
 }
@@ -254,12 +261,18 @@ impl ToolObservation {
     /// Retained payload allocation in bytes, including vector capacity. Saturates at
     /// usize::MAX on overflow; excludes fixed identity/entity storage.
     pub fn payload_bytes(&self) -> usize {
+        self.payload_bytes_up_to(usize::MAX)
+    }
+    /// [`Self::payload_bytes`], stopping once the count passes `limit`. A
+    /// result above `limit` says only that the payload is larger than `limit`.
+    pub fn payload_bytes_up_to(&self, limit: usize) -> usize {
         Self::measure_payload(
             &self.title,
             &self.locations,
             &self.content,
             &self.mcp_tool,
             &self.mcp_arguments,
+            limit,
         )
     }
     /// A complete update for `id` that rebuilds this observation from nothing:
@@ -304,6 +317,7 @@ impl ToolObservation {
             } else {
                 &self.mcp_arguments
             },
+            usize::MAX,
         )
     }
     fn measure_payload(
@@ -312,6 +326,7 @@ impl ToolObservation {
         content: &Option<Vec<ToolContent>>,
         mcp_tool: &Option<Box<McpTool>>,
         mcp_arguments: &Option<McpCallArguments>,
+        limit: usize,
     ) -> usize {
         let mut bytes = title.as_ref().map_or(0, String::capacity);
         bytes = bytes.saturating_add(mcp_tool.as_ref().map_or(0, |tool| {
@@ -327,6 +342,9 @@ impl ToolObservation {
                     .saturating_mul(size_of::<FileLocation>()),
             );
             for location in locations {
+                if bytes > limit {
+                    return bytes;
+                }
                 bytes = bytes.saturating_add(location.path.0.capacity());
             }
         }
@@ -334,6 +352,9 @@ impl ToolObservation {
             bytes =
                 bytes.saturating_add(content.capacity().saturating_mul(size_of::<ToolContent>()));
             for item in content {
+                if bytes > limit {
+                    return bytes;
+                }
                 bytes = bytes.saturating_add(item.payload_bytes());
             }
         }

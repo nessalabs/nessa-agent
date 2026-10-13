@@ -1,3 +1,5 @@
+mod observation_window;
+
 use super::agents::MemoryStorage;
 use super::support::*;
 use nessa_sdk::application::agent_execution::hooks::{

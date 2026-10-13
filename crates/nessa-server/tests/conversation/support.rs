@@ -1010,6 +1010,9 @@ impl MemoryAttachments {
     }
 }
 impl ConversationAttachments for MemoryAttachments {
+    fn offers_images(&self) -> bool {
+        true
+    }
     fn read_held(
         &self,
         range: crate::conversation::application::HeldRange,

@@ -66,6 +66,13 @@ same code the Claude binding runs on. What differs is behind `AcpProfile`:
   not reviewed beforehand. There is no Codex mode that asks for everything, so a
   binding configured with tools disabled is refused rather than accepted as a
   text-only Codex that does not exist.
+- Image input uses the shared ACP byte-source and prompt transport. The factory offers
+  it only with an injected `AcpConfig.images` source and model image limits; the
+  negotiated harness must also advertise `promptCapabilities.image`. The checked
+  Terra catalog profile admits PNG/JPEG up to 5,000,000 encoded bytes and 2048 pixels
+  per edge, Nessa delivery ceilings rather than the provider maximum. Other OpenAI
+  catalog models remain without image admission limits. The capability combinations
+  and exact content blocks are covered by `codex_images_follow_the_model_source_and_negotiated_offer`.
 - Permission scopes are exact-request only. A reusable session or application
   scope is refused at construction: this profile cannot enforce one, and
   accepting it would be a promise about later requests that nothing keeps.

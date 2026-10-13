@@ -2,8 +2,9 @@
 use super::*;
 use crate::domain::agent_execution::{
     permissions::{
-        PermissionDecision, PermissionEffect, PermissionOfferPolicy, PermissionOption,
-        PermissionOptions, PermissionScope,
+        CustomPermissionCancellationReason, PermissionDecision, PermissionEffect,
+        PermissionOfferPolicy, PermissionOption, PermissionOptions, PermissionScope,
+        RefusalOutcome,
     },
     tools::{FileLocation, FilePath, ToolContent, ToolContentView, ToolKind, ToolStatus},
 };
@@ -208,4 +209,145 @@ fn historical_accounting_retains_collection_capacity_and_reports_poisoned_owner(
     }))
     .is_err());
     assert_eq!(session.historical_retained_bytes(), usize::MAX);
+}
+
+#[test]
+fn a_hook_refusal_code_withdraws_only_the_review_it_was_issued_for() {
+    let mut session = active();
+    session
+        .observe_tool(&execution(), update("original"))
+        .unwrap();
+    for name in ["refused", "other"] {
+        session.request_permission(request(name)).unwrap();
+    }
+    let refused = PermissionId::new("refused").unwrap();
+    let other = PermissionId::new("other").unwrap();
+    let issued = PermissionCancellationReason::custom(
+        CustomPermissionCancellationReason::hook_refusal(
+            &execution(),
+            &refused,
+            RefusalOutcome::EndTurn,
+            "hook refused",
+        )
+        .unwrap(),
+    );
+    // A copy of the recorded reason, as evidence exposes it, cannot withdraw
+    // another review, nor every review at once.
+    assert_eq!(
+        session
+            .cancel_permission(&execution(), &other, issued.clone())
+            .unwrap_err(),
+        ExecutionError::ReservedCancellationCode
+    );
+    assert_eq!(
+        session
+            .cancel_permissions(&execution(), issued.clone())
+            .unwrap_err(),
+        ExecutionError::ReservedCancellationCode
+    );
+    // A saved reason is rebuilt with no review, so it withdraws none.
+    let saved = PermissionCancellationReason::custom(
+        CustomPermissionCancellationReason::restore("hook-refusal.end_turn", "hook refused")
+            .unwrap(),
+    );
+    assert_eq!(saved, issued);
+    assert_eq!(
+        session
+            .cancel_permission(&execution(), &refused, saved)
+            .unwrap_err(),
+        ExecutionError::ReservedCancellationCode
+    );
+    assert_eq!(session.permission_count(), 2, "both reviews stay pending");
+    assert!(session
+        .cancel_permission(&execution(), &refused, issued)
+        .unwrap()
+        .is_some());
+    assert!(session
+        .cancel_permission(
+            &execution(),
+            &other,
+            PermissionCancellationReason::custom(
+                CustomPermissionCancellationReason::new("guard", "guard withdrew").unwrap(),
+            ),
+        )
+        .unwrap()
+        .is_some());
+}
+
+#[test]
+fn a_saved_hook_refusal_code_must_be_one_the_runner_writes() {
+    for name in ["continue", "end_turn", "close_session"] {
+        CustomPermissionCancellationReason::restore(format!("hook-refusal.{name}"), "saved")
+            .unwrap();
+    }
+    // The runner's own reason is held to the same bounds.
+    assert_eq!(
+        CustomPermissionCancellationReason::hook_refusal(
+            &execution(),
+            &PermissionId::new("review").unwrap(),
+            RefusalOutcome::Continue,
+            " ",
+        )
+        .unwrap_err(),
+        ExecutionError::EmptyValue("cancellation reason explanation")
+    );
+    for code in [
+        "hook-refusal.",
+        "hook-refusal.retry",
+        "hook-refusal.end_turn.x",
+    ] {
+        assert_eq!(
+            CustomPermissionCancellationReason::restore(code, "saved").unwrap_err(),
+            ExecutionError::ReservedCancellationCode
+        );
+    }
+}
+
+#[test]
+fn a_hook_refusal_code_does_not_withdraw_a_review_with_the_same_id_in_a_later_turn() {
+    let mut session = active();
+    session
+        .observe_tool(&execution(), update("original"))
+        .unwrap();
+    session.request_permission(request("review")).unwrap();
+    let review = PermissionId::new("review").unwrap();
+    let issued = PermissionCancellationReason::custom(
+        CustomPermissionCancellationReason::hook_refusal(
+            &execution(),
+            &review,
+            RefusalOutcome::Continue,
+            "hook refused",
+        )
+        .unwrap(),
+    );
+    assert!(session
+        .cancel_permission(&execution(), &review, issued.clone())
+        .unwrap()
+        .is_some());
+    session
+        .finish_execution(&execution(), Ok(ExecutionOutcome::Completed))
+        .unwrap();
+    // A provider may reuse a review id in the next turn.
+    let later = ExecutionId::new("later").unwrap();
+    session.begin_execution(later.clone()).unwrap();
+    session.observe_tool(&later, update("again")).unwrap();
+    session
+        .request_permission(PermissionRequest::new(
+            review.clone(),
+            later.clone(),
+            tool_id(),
+            request("unused").options().clone(),
+        ))
+        .unwrap();
+    assert_eq!(
+        session
+            .cancel_permission(&later, &review, issued)
+            .unwrap_err(),
+        ExecutionError::ReservedCancellationCode
+    );
+    assert_eq!(
+        session.permission_count(),
+        1,
+        "the later review stays pending"
+    );
 }

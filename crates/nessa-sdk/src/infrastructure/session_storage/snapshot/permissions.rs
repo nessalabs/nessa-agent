@@ -245,7 +245,7 @@ impl Cancellation {
             }
             Reason::PolicyRefusal => PermissionCancellationReason::policy_refusal(),
             Reason::Custom { code, explanation } => PermissionCancellationReason::custom(
-                CustomPermissionCancellationReason::new(code, explanation).map_err(corrupt)?,
+                CustomPermissionCancellationReason::restore(code, explanation).map_err(corrupt)?,
             ),
         };
         request.cancel(reason).map_err(corrupt)?;

@@ -8,6 +8,8 @@
 //! application::Relay ──▶ crate::timer (every deadline and ping)
 //!                    ──▶ RelayEntropy (challenges and join tokens)
 //!                    ──▶ RelayProofs: nessa_auth's verify_relay_proof (who may register a key)
+//! gateway: a gateway serving through a relay (its registration, its accept legs)
+//! wire: reading and writing preamble frames, for both
 //! ```
 //!
 //! Arrows are construction and the calls each makes. The relay reads only
@@ -16,4 +18,6 @@
 //! between the reader and the gateway, which the relay cannot open, so it
 //! holds no authority and stores nothing.
 pub(crate) mod application;
+pub(crate) mod gateway;
 pub(crate) mod infrastructure;
+pub(crate) mod wire;

@@ -8,8 +8,8 @@ use super::{
 };
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::permissions::{
-    ApprovalAttribution, ApprovalBasis, CancellationOrigin, PermissionAnswer,
-    PermissionCancellation, PermissionCancellationRequest, PermissionResolution,
+    validate_hook_withdrawal, ApprovalAttribution, ApprovalBasis, CancellationOrigin,
+    PermissionAnswer, PermissionCancellation, PermissionCancellationRequest, PermissionResolution,
 };
 use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::domain::agent_execution::questions::{AgentQuestion, QuestionId};
@@ -470,7 +470,12 @@ impl ExecutionController {
         Ok(())
     }
     /// Resolves `answer` once against its execution, review, and offered option.
-    /// Returns StalePermission if it cannot match a pending review. The resolution
+    /// Returns StalePermission if it cannot match a pending review. A hook basis
+    /// paired with anything other than the request-scoped deny option, with
+    /// an actor other than [`ApprovalAttribution::hook`] for this review, or
+    /// with an outcome other than continue, returns InvalidInput and leaves
+    /// the review pending. The runner withdraws a review it refuses with
+    /// end-turn or close-session, so no answer carries those outcomes. The resolution
     /// retains this controller’s session, original input and attribution; the adapter must audit selection
     /// before attempting delivery and audit that delivery independently of waiters.
     ///
@@ -485,6 +490,30 @@ impl ExecutionController {
             return Err(AgentError::InvalidInput(
                 "only the review's own deadline can answer it as a deadline".into(),
             ));
+        }
+        if let ApprovalBasis::Hook(refusal) = answer.attribution.basis() {
+            if answer.attribution != ApprovalAttribution::hook(&answer.id, refusal.clone())? {
+                return Err(AgentError::InvalidInput(
+                    "a hook refusal is attributed to the permission-review hook".into(),
+                ));
+            }
+            if refusal.outcome() != &RefusalOutcome::Continue {
+                return Err(AgentError::InvalidInput(
+                    "a hook answer records only continue; a terminal refusal withdraws the review"
+                        .into(),
+                ));
+            }
+            let decision = self
+                .session
+                .pending_option_decision(&answer.execution_id, &answer.id, &answer.option_id)
+                .map_err(|_| AgentError::StalePermission)?;
+            if decision.effect() != PermissionEffect::Deny
+                || decision.scope() != &PermissionScope::request()
+            {
+                return Err(AgentError::InvalidInput(
+                    "a hook refusal selects the request-scoped deny option".into(),
+                ));
+            }
         }
         self.resolve(answer, false)
     }
@@ -503,7 +532,7 @@ impl ExecutionController {
     ) -> Result<PermissionResolution, AgentError> {
         let decision = self
             .session
-            .offered_decision(execution, id, option)
+            .pending_option_decision(execution, id, option)
             .map_err(|_| AgentError::StalePermission)?;
         let published = self
             .published_deadlines
@@ -651,6 +680,7 @@ impl ExecutionController {
         by_deadline: bool,
     ) -> Result<Option<PermissionCancellation>, AgentError> {
         origin.validate_reason(&reason)?;
+        validate_hook_withdrawal(id, &reason, &origin)?;
         let request = self
             .session
             .cancel_permission(execution, id, reason)
@@ -848,6 +878,7 @@ fn domain_error(error: ExecutionError) -> AgentError {
         error @ (ExecutionError::InvalidExecutionFailureReason
         | ExecutionError::InvalidPermissionCancellationReason
         | ExecutionError::InvalidSessionClosureReason
+        | ExecutionError::ReservedCancellationCode
         | ExecutionError::DuplicateExecution) => AgentError::InvalidInput(error.to_string()),
         error => AgentError::Protocol(error.to_string()),
     }
@@ -1323,6 +1354,45 @@ mod tests {
         assert!(finished.deadline_settled.is_empty() && finished.published_deadlines.is_empty());
     }
 
+    #[test]
+    fn a_hook_answer_with_a_terminal_outcome_is_rejected_and_stays_pending() {
+        use crate::application::agent_execution::permissions::HookRefusal;
+        let mut controller = controller();
+        let execution = controller.active_execution_id().unwrap().clone();
+        let deny = PermissionOptions::new(
+            vec![PermissionOption::new(
+                PermissionOptionId::new("deny").unwrap(),
+                String::from("Deny"),
+                PermissionDecision::new(PermissionEffect::Deny, PermissionScope::request()),
+            )
+            .unwrap()],
+            &PermissionOfferPolicy::once_only(),
+        )
+        .unwrap();
+        let id = PermissionId::new("permission").unwrap();
+        controller
+            .request_permission(&execution, id.clone(), tool(None), input(), deny, None)
+            .unwrap();
+        let hook_answer = |outcome| PermissionAnswer {
+            execution_id: execution.clone(),
+            id: id.clone(),
+            option_id: PermissionOptionId::new("deny").unwrap(),
+            attribution: ApprovalAttribution::hook(
+                &id,
+                HookRefusal::applied(Some(0), "no", outcome),
+            )
+            .unwrap(),
+        };
+        for terminal in [RefusalOutcome::EndTurn, RefusalOutcome::CloseSession] {
+            assert!(matches!(
+                controller.answer_permission(hook_answer(terminal)),
+                Err(AgentError::InvalidInput(_))
+            ));
+        }
+        controller
+            .answer_permission(hook_answer(RefusalOutcome::Continue))
+            .expect("a continue is still an answer");
+    }
     #[test]
     fn permission_authority_is_scoped_and_weak() {
         let mut controller = controller();
@@ -1803,5 +1873,66 @@ mod tests {
             .unwrap();
         assert_eq!(records.len(), 2);
         assert_eq!(controller.retained_review_bytes, 0);
+    }
+
+    #[test]
+    fn only_the_hook_records_a_hook_refusal_withdrawal() {
+        use crate::domain::agent_execution::permissions::RefusalOutcome;
+        let execution = ExecutionId::new("execution").unwrap();
+        let review = PermissionId::new("permission").unwrap();
+        let reason = || {
+            PermissionCancellationReason::custom(
+                CustomPermissionCancellationReason::hook_refusal(
+                    &execution,
+                    &review,
+                    RefusalOutcome::EndTurn,
+                    "hook refused",
+                )
+                .unwrap(),
+            )
+        };
+        let person =
+            CancellationOrigin::Client(ActionContext::new("person", "app", "permission").unwrap());
+        let hook = CancellationOrigin::Client(
+            ActionContext::new("permission-review-hook", "0", "permission").unwrap(),
+        );
+        let mut controller = controller();
+        request(&mut controller, "permission", "original").unwrap();
+        for forged in [
+            person.clone(),
+            CancellationOrigin::Client(
+                ActionContext::new("permission-review-hook", "00", "permission").unwrap(),
+            ),
+            CancellationOrigin::Client(
+                ActionContext::new("permission-review-hook", "0", "other").unwrap(),
+            ),
+        ] {
+            assert!(matches!(
+                controller.cancel_permission(&execution, &review, reason(), forged),
+                Err(AgentError::InvalidInput(_))
+            ));
+        }
+        let withdrawn = controller
+            .cancel_permission(&execution, &review, reason(), hook.clone())
+            .unwrap()
+            .expect("the hook withdraws its own review");
+        // Saved evidence is held to the same rule when it is loaded again.
+        let restore = |origin| {
+            let mut saved = PermissionRequest::new(
+                review.clone(),
+                execution.clone(),
+                ToolCallId::new("tool").unwrap(),
+                options("Allow".into()),
+            );
+            saved.cancel(reason()).unwrap();
+            PermissionCancellation::from_record(
+                withdrawn.session_id().clone(),
+                saved,
+                withdrawn.input().clone(),
+                origin,
+            )
+        };
+        assert!(matches!(restore(person), Err(AgentError::InvalidInput(_))));
+        assert_eq!(restore(hook).unwrap(), withdrawn);
     }
 }

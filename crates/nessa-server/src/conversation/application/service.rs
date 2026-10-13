@@ -4428,7 +4428,13 @@ impl ConversationService {
         agent: &Agent,
         operation_capabilities: OperationCapabilities,
     ) -> Option<bool> {
-        if self.inner.attachments.is_none() || !agent.capabilities().features().input().image() {
+        if !self
+            .inner
+            .attachments
+            .as_ref()
+            .is_some_and(|attachments| attachments.offers_images())
+            || !agent.capabilities().features().input().image()
+        {
             return Some(false);
         }
         operation_capabilities

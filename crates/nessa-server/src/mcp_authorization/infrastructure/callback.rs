@@ -472,8 +472,8 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        let mut bind = LoopbackCallback
-            .listen(Duration::from_millis(100))
+        let (mut bind, completion) = LoopbackCallback
+            .listen_with_completion(Duration::from_millis(100))
             .await
             .unwrap();
         let host = address(&bind).await;
@@ -482,7 +482,13 @@ mod tests {
             .await
             .unwrap()
             .is_none());
-        assert!(TcpStream::connect(&host).await.is_err());
+        // Candidate closure can wake this waiter before the owning task finishes
+        // dropping its listener. Its completion receipt proves physical release;
+        // another parallel fixture can reuse the released port afterwards.
+        timeout(Duration::from_millis(300), completion)
+            .await
+            .unwrap()
+            .unwrap();
     }
 
     #[tokio::test]

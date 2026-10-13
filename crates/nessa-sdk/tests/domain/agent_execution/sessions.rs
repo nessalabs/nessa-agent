@@ -132,6 +132,31 @@ fn permissions_require_an_observed_tool_and_invalid_answers_leave_them_pending()
     );
     let id = PermissionId::new("review").unwrap();
     let option = PermissionOptionId::new("allow").unwrap();
+    let allow = PermissionDecision::new(PermissionEffect::Allow, PermissionScope::request());
+    assert_eq!(
+        session.pending_option_decision(&execution("wrong"), &id, &option),
+        Err(ExecutionError::DifferentExecution)
+    );
+    assert_eq!(
+        session.pending_option_decision(
+            &execution("first"),
+            &PermissionId::new("missing").unwrap(),
+            &option
+        ),
+        Err(ExecutionError::UnknownPermission)
+    );
+    assert_eq!(
+        session.pending_option_decision(
+            &execution("first"),
+            &id,
+            &PermissionOptionId::new("other").unwrap()
+        ),
+        Err(ExecutionError::UnknownPermissionOption)
+    );
+    assert_eq!(
+        session.pending_option_decision(&execution("first"), &id, &option),
+        Ok(allow)
+    );
     assert_eq!(
         session.answer_permission(&execution("wrong"), &id, &option),
         Err(ExecutionError::DifferentExecution)
@@ -143,26 +168,6 @@ fn permissions_require_an_observed_tool_and_invalid_answers_leave_them_pending()
             &PermissionOptionId::new("other").unwrap()
         ),
         Err(ExecutionError::UnknownPermissionOption)
-    );
-    assert_eq!(
-        session.offered_decision(&execution("wrong"), &id, &option),
-        Err(ExecutionError::DifferentExecution)
-    );
-    assert_eq!(
-        session.offered_decision(
-            &execution("first"),
-            &id,
-            &PermissionOptionId::new("other").unwrap()
-        ),
-        Err(ExecutionError::UnknownPermissionOption)
-    );
-    assert_eq!(
-        session
-            .offered_decision(&execution("first"), &id, &option)
-            .unwrap()
-            .effect(),
-        PermissionEffect::Allow,
-        "reading the offered decision does not answer the review"
     );
     let resolved = session
         .answer_permission(&execution("first"), &id, &option)
@@ -180,7 +185,7 @@ fn permissions_require_an_observed_tool_and_invalid_answers_leave_them_pending()
         Err(ExecutionError::UnknownPermission)
     );
     assert_eq!(
-        session.offered_decision(&execution("first"), &id, &option),
+        session.pending_option_decision(&execution("first"), &id, &option),
         Err(ExecutionError::UnknownPermission)
     );
 }
@@ -237,7 +242,7 @@ fn finishing_or_closing_cancels_permissions_before_the_next_execution() {
                 Err(ExecutionError::SessionClosed)
             );
             assert_eq!(
-                session.offered_decision(&execution("first"), &id, &option),
+                session.pending_option_decision(&execution("first"), &id, &option),
                 Err(ExecutionError::SessionClosed)
             );
         } else {

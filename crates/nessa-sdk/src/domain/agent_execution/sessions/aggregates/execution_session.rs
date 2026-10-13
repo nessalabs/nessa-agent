@@ -498,6 +498,38 @@ impl ExecutionSession {
             .insert(request.id().clone(), request);
         Ok(())
     }
+    /// Decision of a still-pending offered option, checked as
+    /// [`Self::answer_permission`] checks it.
+    ///
+    /// Rejects a closed session, a mismatched execution, an unknown review, or
+    /// an option that was not offered. Does not answer or cancel the review, so
+    /// a caller that must validate what it records with the answer does so
+    /// here first and a refused answer consumes nothing.
+    pub fn pending_option_decision(
+        &self,
+        execution: &ExecutionId,
+        id: &PermissionId,
+        option: &PermissionOptionId,
+    ) -> Result<PermissionDecision, ExecutionError> {
+        if self.is_closed() {
+            return Err(ExecutionError::SessionClosed);
+        }
+        self.check_execution(execution)?;
+        let active = self
+            .active_execution
+            .as_ref()
+            .expect("checked active execution");
+        let pending = active
+            .pending_permissions
+            .lock()
+            .expect("pending permissions");
+        pending
+            .get(id)
+            .ok_or(ExecutionError::UnknownPermission)?
+            .offered(execution, option)
+            .cloned()
+    }
+
     /// Resolve the exact execution, review ID, and offered option. Rejects closed or mismatched contexts and stale/unknown choices; returns the answered entity as evidence and retains its ID against replay.
     pub fn answer_permission(
         &mut self,
@@ -523,34 +555,6 @@ impl ExecutionSession {
         request.answer(execution, option)?;
         Ok(pending.remove(id).expect("answered permission"))
     }
-    /// The decision `option` would record for pending review `id` in
-    /// `execution`, checked as [`Self::answer_permission`] checks it, and
-    /// without answering. A caller that must validate what it records with
-    /// the answer does so here first, so a refused answer consumes nothing.
-    pub fn offered_decision(
-        &self,
-        execution: &ExecutionId,
-        id: &PermissionId,
-        option: &PermissionOptionId,
-    ) -> Result<PermissionDecision, ExecutionError> {
-        if self.is_closed() {
-            return Err(ExecutionError::SessionClosed);
-        }
-        self.check_execution(execution)?;
-        let active = self
-            .active_execution
-            .as_ref()
-            .expect("checked active execution");
-        let pending = active
-            .pending_permissions
-            .lock()
-            .expect("pending permissions");
-        pending
-            .get(id)
-            .ok_or(ExecutionError::UnknownPermission)?
-            .offered(execution, option)
-            .cloned()
-    }
     /// Cancel one pending review in `execution` without affecting other requests or reopening its identity.
     /// Execution-terminal causes require `finish_execution`, or correlated `close`
     /// for execution failure; standalone cancellation rejects them.
@@ -566,6 +570,9 @@ impl ExecutionSession {
     ) -> Result<Option<PermissionRequest>, ExecutionError> {
         self.check_execution(execution)?;
         self.check_permission_cancellation_reason(&reason)?;
+        if !reason.may_withdraw(Some((execution, id))) {
+            return Err(ExecutionError::ReservedCancellationCode);
+        }
         let Some(mut request) = self
             .active_execution
             .as_mut()
@@ -596,6 +603,9 @@ impl ExecutionSession {
     ) -> Result<Vec<PermissionRequest>, ExecutionError> {
         self.check_execution(execution)?;
         self.check_permission_cancellation_reason(&reason)?;
+        if !reason.may_withdraw(None) {
+            return Err(ExecutionError::ReservedCancellationCode);
+        }
         Ok(self
             .active_execution
             .as_mut()

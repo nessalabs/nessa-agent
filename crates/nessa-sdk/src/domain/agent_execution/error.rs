@@ -159,6 +159,9 @@ pub enum ExecutionError {
     /// A deadline's due time is zero or later than a client can read exactly,
     /// so the card would show a moment other than the one the worker keeps.
     UnrepresentablePermissionDeadlineDue,
+    /// A cancellation code is in the namespace only the runner writes, and was
+    /// not issued for the review it would withdraw.
+    ReservedCancellationCode,
 }
 impl fmt::Display for ExecutionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

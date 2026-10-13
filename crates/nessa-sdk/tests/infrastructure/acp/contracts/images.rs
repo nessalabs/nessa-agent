@@ -879,3 +879,110 @@ async fn a_session_bounds_the_encoded_image_bytes_waiting_to_be_dispatched() {
     assert_eq!(source.reads.load(Ordering::SeqCst), 3);
     close(&opened).await;
 }
+
+/// Exercise Codex's own factory/configuration shape through the shared image worker.
+fn codex_images(
+    mode: &str,
+    source: Option<Arc<FixedImages>>,
+    limits: bool,
+) -> (TempDir, CodexAcpProvider) {
+    let (root, mut config, model) = codex_configuration(mode, 32);
+    config.images = source.map(|value| value as Arc<dyn UserImageSource>);
+    let mut metadata = ModelMetadataDto::from(&model);
+    metadata.input.image = true;
+    metadata.image_input = limits.then(|| ImageInputLimitsDto {
+        media_types: vec!["image/png".into(), "image/jpeg".into()],
+        max_encoded_bytes: 5_000_000,
+        max_edge_px: 2048,
+        many_images_max_edge_px: 2048,
+        native_long_edge_px: 2048,
+    });
+    let model = ModelMetadata::try_from(metadata).unwrap();
+    let provider = CodexAcpProvider::new(
+        config,
+        &model,
+        TokenLimits::new(900, 100).unwrap(),
+        Arc::new(RecordingAudit::default()),
+    )
+    .unwrap();
+    (root, provider)
+}
+
+#[tokio::test]
+async fn codex_images_follow_the_model_source_and_negotiated_offer() {
+    let _slot = process_test_slot().await;
+    let bytes = b"verified photo";
+    let image = reference(bytes, ImageMediaType::Png);
+    for (mode, source_present, limits, expected) in [
+        ("image-input", true, true, None),
+        (
+            "image-input",
+            false,
+            true,
+            Some(ImageInputRefusal::NotOffered),
+        ),
+        (
+            "image-input",
+            true,
+            false,
+            Some(ImageInputRefusal::NotOffered),
+        ),
+        (
+            "image-plain",
+            true,
+            true,
+            Some(ImageInputRefusal::AgentDoesNotAccept),
+        ),
+    ] {
+        let source = Arc::new(FixedImages {
+            answers: HashMap::from([(image.digest(), Ok(bytes.to_vec()))]),
+            ..Default::default()
+        });
+        let (root, provider) = codex_images(mode, source_present.then(|| source.clone()), limits);
+        let opened = provider
+            .open(ProviderOpenRequest::without_startup_control(None))
+            .await
+            .unwrap();
+        let result = opened
+            .session
+            .execute(message("photo", Some("look"), vec![image]))
+            .await
+            .into_result();
+        if let Some(expected) = expected {
+            assert_eq!(result, Err(AgentError::ImageInputRefused(expected)));
+            assert_eq!(source.reads.load(Ordering::SeqCst), 0);
+            assert_eq!(observed(&root, "prompt-observed"), None);
+        } else {
+            assert_eq!(result, Ok(ExecutionOutcome::Completed));
+            assert_eq!(
+                observed(&root, "prompt-observed").unwrap(),
+                json!([
+                {"type":"text","text":"look"},
+                {"type":"image","mimeType":"image/png","data":STANDARD.encode(bytes)}])
+            );
+            assert_eq!(source.reads.load(Ordering::SeqCst), 1);
+            assert_eq!(
+                opened
+                    .session
+                    .execute(message("image-only", None, vec![image]))
+                    .await
+                    .into_result(),
+                Ok(ExecutionOutcome::Completed)
+            );
+            assert_eq!(
+                observed(&root, "prompt-observed").unwrap(),
+                json!([
+                {"type":"image","mimeType":"image/png","data":STANDARD.encode(bytes)}])
+            );
+        }
+        assert_eq!(
+            opened
+                .session
+                .execute(prompt("still usable"))
+                .await
+                .into_result(),
+            Ok(ExecutionOutcome::Completed)
+        );
+        close(&opened).await;
+    }
+}
