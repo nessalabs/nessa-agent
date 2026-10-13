@@ -15,6 +15,7 @@ import { overlayPlacementViolations } from "./architecture/overlay-placement.mjs
 import { setupGatePlacementViolations } from "./architecture/setup-gate-placement.mjs"
 import { standDownPlacementViolations } from "./architecture/stand-down-placement.mjs"
 import { environmentPortViolations } from "./architecture/environment-port.mjs"
+import { policyEngineViolations } from "./architecture/policy-engine.mjs"
 import { composerBudgetViolations } from "./architecture/composer-budget.mjs"
 import { wholeWorkspaceViolations } from "./architecture/whole-workspace.mjs"
 import { importedPaths } from "./architecture/imported-paths.mjs"
@@ -75,6 +76,9 @@ for (const rustRoot of workspaceRustSourceRoots(root, metadata)) {
       fail(file, violation)
     }
     for (const violation of overlayPlacementViolations(rel(file), text)) {
+      fail(file, violation)
+    }
+    for (const violation of policyEngineViolations(rel(file), text)) {
       fail(file, violation)
     }
   }
