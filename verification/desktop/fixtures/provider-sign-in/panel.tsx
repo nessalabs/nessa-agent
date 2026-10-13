@@ -17,27 +17,31 @@ import "../../../../src/styles.css"
 
 const provider =
   new URLSearchParams(location.search).get("provider") === "codex" ? "codex" : "claude"
-const wire = view("panel-auth", {
-  messages: [
-    {
-      executionId: "refused",
-      userText: "Hello",
-      attachments: [],
-      files: [],
-      status: "failed",
-      authenticationRequired: true,
-      parts: [
-        {
-          kind: "local_notice",
-          offset: 0,
-          text: "Nessa declined a tool review.",
-          noticeId: "review-1",
-          toolId: "",
-        },
-      ],
-    },
-  ],
-})
+// The panel keeps its own shape of a note; this transcript has none.
+const wire = {
+  ...view("panel-auth", {
+    messages: [
+      {
+        executionId: "refused",
+        userText: "Hello",
+        attachments: [],
+        files: [],
+        status: "failed",
+        authenticationRequired: true,
+        parts: [
+          {
+            kind: "local_notice",
+            offset: 0,
+            text: "Nessa declined a tool review.",
+            noticeId: "review-1",
+            toolId: "",
+          },
+        ],
+      },
+    ],
+  }),
+  notes: [],
+}
 const value = applyView(conversation("panel-auth"), {
   ...wire,
   runtime: {

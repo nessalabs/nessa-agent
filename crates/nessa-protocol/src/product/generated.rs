@@ -675,6 +675,7 @@ pub struct ConversationView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lease: Option<ConversationLease>,
     pub artifacts: Vec<ConversationArtifact>,
+    pub notes: Vec<ConversationNote>,
     #[serde(deserialize_with = "Option::deserialize")]
     pub title: Option<String>,
     pub questions: Vec<ConversationQuestion>,
@@ -2357,11 +2358,13 @@ impl ConversationSubscriptionErrorCode {
 #[serde(rename_all = "snake_case")]
 pub enum ConversationMessageDelivery {
     RecordOnly,
+    NextTurn,
 }
 impl ConversationMessageDelivery {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::RecordOnly => "record_only",
+            Self::NextTurn => "next_turn",
         }
     }
 }
@@ -2369,13 +2372,69 @@ impl ConversationMessageDelivery {
 #[serde(rename_all = "snake_case")]
 pub enum ConversationMessageState {
     Recorded,
+    Pending,
+    Assigned,
+    Retired,
 }
 impl ConversationMessageState {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Recorded => "recorded",
+            Self::Pending => "pending",
+            Self::Assigned => "assigned",
+            Self::Retired => "retired",
         }
     }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationMessageRetiredReason {
+    Expired,
+    PermissionLost,
+}
+impl ConversationMessageRetiredReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Expired => "expired",
+            Self::PermissionLost => "permission_lost",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationNote {
+    pub message_id: String,
+    pub text: String,
+    pub accepted_at_ms: u64,
+    pub delivery: ConversationMessageDelivery,
+    pub delivery_state: ConversationMessageState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retired_reason: Option<ConversationMessageRetiredReason>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_execution_id: Option<String>,
+    pub author: ConversationNoteAuthor,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationNoteAuthorKind {
+    Owner,
+    Grant,
+}
+impl ConversationNoteAuthorKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Owner => "owner",
+            Self::Grant => "grant",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationNoteAuthor {
+    pub kind: ConversationNoteAuthorKind,
+    pub surface: String,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -2392,6 +2451,10 @@ pub struct ConversationMessageReceipt {
     pub message_id: String,
     pub accepted_at_ms: u64,
     pub delivery_state: ConversationMessageState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retired_reason: Option<ConversationMessageRetiredReason>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -2410,6 +2473,10 @@ pub struct ConversationMessageStatusResult {
     pub accepted_at_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivery_state: Option<ConversationMessageState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retired_reason: Option<ConversationMessageRetiredReason>,
 }
 pub const MAX_CHANGE_WATCH_ID_BYTES: usize = 57;
 pub const CHANGE_WATCH_ID_PATTERN: &str =

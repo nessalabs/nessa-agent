@@ -8,6 +8,9 @@ import { bounds, ProductMethod } from "../generated/product.js"
 import type {
   ConversationCreateResult,
   ConversationListResult,
+  ConversationMessageDelivery,
+  ConversationMessageReceipt,
+  ConversationMessageStatusResult,
   ConversationObserveCursor,
   ConversationObserveResult,
   ConversationView,
@@ -28,6 +31,8 @@ import {
   conversationId,
   conversationIdPattern,
   conversationList,
+  conversationMessageReceipt,
+  conversationMessageStatus,
   conversationObserve,
   conversationView,
   conversationReceipt,
@@ -152,6 +157,33 @@ export type ConversationApi = {
     files?: readonly LinkedFile[],
     options?: ConversationSendOptions,
   ) => Promise<ConversationSubmission>
+  /**
+   * Leave a note in this conversation: saved with who left it, it starts and
+   * steers no turn. A `record_only` note is only kept; a `next_turn` note
+   * waits for the next turn a person starts while the agent is idle, which
+   * hands it to the model labelled with its author. The same `requestId`
+   * with the same text and delivery answers the first note again, so a
+   * failure's `retry()` saves it at most once.
+   * @param text - 1 to 8 KiB UTF-8, not all blank, kept exactly.
+   * @param delivery - `record_only` or `next_turn`.
+   * @throws TypeError before anything is sent when the text breaks these bounds.
+   */
+  message: (
+    conversationId: string,
+    text: string,
+    delivery: ConversationMessageDelivery,
+    options?: ConversationActionOptions,
+  ) => Promise<ConversationMessageReceipt>
+  /**
+   * Where the caller's own note left under `requestId` stands now: pending,
+   * taken by a turn (`executionId`), or retired (`retiredReason`). `found` is
+   * false while no note is saved under it; send the same request again to
+   * save it at most once. This writes nothing.
+   */
+  messageStatus: (
+    conversationId: string,
+    requestId: string,
+  ) => Promise<ConversationMessageStatusResult>
   /** Remove the identified waiting input before provider dispatch. */
   remove: (
     conversationId: string,
@@ -447,6 +479,26 @@ export function createConversationApi(
       submit(ProductMethod.ConversationSend, id, text, attachments, files, options),
     steer: (id, text, attachments, files, options) =>
       submit(ProductMethod.ConversationSteer, id, text, attachments, files, options),
+    message: (id, text, delivery, options = {}) => {
+      validConversationId(id)
+      const requestId = boundedText(options.requestId ?? newId(), "Request ID", 256)
+      boundedText(text, "Note", 8192)
+      if (delivery !== "record_only" && delivery !== "next_turn")
+        throw new TypeError("Note delivery must be record_only or next_turn")
+      return mutate(
+        ProductMethod.ConversationMessage,
+        { conversationId: id, requestId, text, delivery },
+        (value) => conversationMessageReceipt(value, requestId),
+      )
+    },
+    messageStatus: async (id, requestId) =>
+      conversationMessageStatus(
+        await session.request(ProductMethod.ConversationMessageStatus, {
+          conversationId: validConversationId(id),
+          requestId: boundedText(requestId, "Request ID", 256),
+        }),
+        requestId,
+      ),
     remove: (id, executionId, options) =>
       action(ProductMethod.ConversationRemove, id, { executionId }, options),
     reorder: async (id, executionIds, options = {}) => {

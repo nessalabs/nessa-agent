@@ -663,6 +663,8 @@ export interface ConversationView {
   lease?: ConversationLease
   /** Files its agent published under a lease that the conversation held when it recorded them, the newest 64 in the order they were recorded; empty before any was. A record is history and stays when the hold is let go, as closing the conversation does; whether the bytes are still held is asked when they are fetched. An older one is left out of the list, not out of the conversation, and the list may give up its oldest entries to bound the response. */
   artifacts: ConversationArtifact[]
+  /** Notes left in the conversation (conversation.message), the newest 64 in the order they were left; empty before any was. An older one is left out of the list, not out of the conversation, and the list may give up its oldest entries to bound the response. */
+  notes: ConversationNote[]
   /** Name the gateway derived from the conversation's first message, the same one conversation.list shows; null before anything was said. */
   title: string | null
   /** Questions the agent is waiting on, oldest first. */
@@ -2370,15 +2372,62 @@ export const ConversationSubscriptionErrorCode = {
 } as const
 export type ConversationSubscriptionErrorCode =
   (typeof ConversationSubscriptionErrorCode)[keyof typeof ConversationSubscriptionErrorCode]
-/** What becomes of a note once it is saved. record_only saves it with its author and never hands it to the model by itself. Delivering a note to the next turn someone starts is not offered yet. */
-export const ConversationMessageDelivery = { RecordOnly: "record_only" } as const
+/** What becomes of a note once it is saved. record_only saves it with its author and never hands it to the model by itself. next_turn saves it pending and hands it to the model, labelled with its author, with the next turn a person starts with conversation.send while the agent is idle: never with a steer, a turn queued behind another, or an app's message. That turn takes at most 8 notes, the oldest first, and only those whose author still holds the right to leave them, checked as the turn is admitted; a note whose author's grant was revoked or lowered below comment is retired permission_lost instead, and one still pending 24 hours after it was accepted is retired expired. */
+export const ConversationMessageDelivery = {
+  RecordOnly: "record_only",
+  NextTurn: "next_turn",
+} as const
 export type ConversationMessageDelivery =
   (typeof ConversationMessageDelivery)[keyof typeof ConversationMessageDelivery]
-/** Where a saved note stands. recorded is a record_only note: saved, with nothing waiting to deliver it, and it stays recorded. */
-export const ConversationMessageState = { Recorded: "recorded" } as const
+/** Where a saved note stands. recorded is a record_only note: saved, with nothing waiting to deliver it, and it stays recorded. pending is a next_turn note waiting for a turn to take it. assigned is a next_turn note a turn took, named by executionId; it is never pending again, whatever becomes of that turn. retired is a next_turn note no turn will take, for retiredReason. */
+export const ConversationMessageState = {
+  Recorded: "recorded",
+  Pending: "pending",
+  Assigned: "assigned",
+  Retired: "retired",
+} as const
 export type ConversationMessageState =
   (typeof ConversationMessageState)[keyof typeof ConversationMessageState]
-/** Leave a note in one conversation (conversation.message). A note is saved with its author, the caller's principal and surface and the authority it was admitted under, and starts or steers no turn. The conversation's owner leaves one from its own surfaces; a paired device needs a comment or drive grant on that conversation, and is refused forbidden under a read grant and conversation_not_found where it holds none. The same requestId with the same text and delivery, from the same surface under the same authority, answers the first receipt unchanged, however long after; any other note under that requestId is refused idempotency_conflict. A conversation keeps at most 1024 notes, and one author (a principal under one authority) leaves at most 20 in any 60 seconds; past either it is refused message_quota_exceeded and nothing is saved. A deleted conversation refuses it conversation_deleted. */
+/** Why a next_turn note was retired. expired: it was still pending 24 hours after it was accepted. permission_lost: when a turn was admitted, its author's grant had been revoked or lowered below comment. */
+export const ConversationMessageRetiredReason = {
+  Expired: "expired",
+  PermissionLost: "permission_lost",
+} as const
+export type ConversationMessageRetiredReason =
+  (typeof ConversationMessageRetiredReason)[keyof typeof ConversationMessageRetiredReason]
+/** One note left in the conversation, as everyone who reads it sees it. A note is not a turn and not the person's message: show it apart from the turns, with its author. */
+export interface ConversationNote {
+  /** The conversation's own name for the note, as its receipt gave it. */
+  messageId: string
+  /** What the note says, exactly as it was left. */
+  text: string
+  /** When the note was accepted, in milliseconds since the Unix epoch, on the gateway's clock. */
+  acceptedAtMs: number
+  /** What it was left for. */
+  delivery: ConversationMessageDelivery
+  /** Where it stands. */
+  deliveryState: ConversationMessageState
+  /** The turn that took it; present exactly when deliveryState is assigned. */
+  executionId?: string
+  /** Why it was retired; present exactly when deliveryState is retired. */
+  retiredReason?: ConversationMessageRetiredReason
+  /** The last turn the conversation had accepted when the note was, so it is shown after that turn; absent when it was left before any turn. */
+  afterExecutionId?: string
+  /** Who left it. */
+  author: ConversationNoteAuthor
+}
+/** owner: the conversation's owner left it. grant: someone the conversation is shared with left it, under their grant. */
+export const ConversationNoteAuthorKind = { Owner: "owner", Grant: "grant" } as const
+export type ConversationNoteAuthorKind =
+  (typeof ConversationNoteAuthorKind)[keyof typeof ConversationNoteAuthorKind]
+/** Under which authority a note was left, and from which surface: the label it carries in the transcript and to the model. */
+export interface ConversationNoteAuthor {
+  /** Under which authority. */
+  kind: ConversationNoteAuthorKind
+  /** The verified surface it was left from. */
+  surface: string
+}
+/** Leave a note in one conversation (conversation.message). A note is saved with its author, the caller's principal and surface and the authority it was admitted under, and starts or steers no turn: a next_turn note waits for the next turn a person starts (see ConversationMessageDelivery). The conversation's owner leaves one from its own surfaces; a paired device needs a comment or drive grant on that conversation, and is refused forbidden under a read grant and conversation_not_found where it holds none. The same requestId with the same text and delivery, from the same surface under the same authority, answers the first receipt unchanged, however long after; any other note under that requestId is refused idempotency_conflict. A conversation keeps at most 1024 notes, and one author (a principal under one authority) leaves at most 20 in any 60 seconds; past either it is refused message_quota_exceeded and nothing is saved. At most 64 next_turn notes wait for a turn at once, not counting one past its 24 hours, which the next turn retires; past that a next_turn note is refused message_quota_exceeded too. A deleted conversation refuses it conversation_deleted. */
 export interface ConversationMessageParams {
   /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
   conversationId: string
@@ -2389,7 +2438,7 @@ export interface ConversationMessageParams {
   /** What becomes of the note once it is saved. */
   delivery: ConversationMessageDelivery
 }
-/** The receipt of a saved note. It never changes: a retry of the same request answers it again. */
+/** The receipt of a saved note. A retry of the same request answers the same note, where it stands then. */
 export interface ConversationMessageReceipt {
   /** Stable action identifier retained for retries of one logical command. */
   requestId: string
@@ -2399,6 +2448,10 @@ export interface ConversationMessageReceipt {
   acceptedAtMs: number
   /** Where the note stands now. */
   deliveryState: ConversationMessageState
+  /** The turn that took the note; present exactly when deliveryState is assigned. */
+  executionId?: string
+  /** Why the note was retired; present exactly when deliveryState is retired. */
+  retiredReason?: ConversationMessageRetiredReason
 }
 /** Read where the caller's own note stands (conversation.messageStatus), by the requestId it was left under. This writes nothing. It is admitted as conversation.message is, so a paired device needs a comment or drive grant; it finds notes by principal and requestId, so a device signed in as its owner finds the owner's notes and those of the owner's other devices, and never another principal's. */
 export interface ConversationMessageStatusParams {
@@ -2419,6 +2472,10 @@ export interface ConversationMessageStatusResult {
   acceptedAtMs?: number
   /** Present when found is true. */
   deliveryState?: ConversationMessageState
+  /** The turn that took the note; present exactly when deliveryState is assigned. */
+  executionId?: string
+  /** Why the note was retired; present exactly when deliveryState is retired. */
+  retiredReason?: ConversationMessageRetiredReason
 }
 export const maxChangeWatchIdBytes = 57 as const
 export const changeWatchIdPattern =

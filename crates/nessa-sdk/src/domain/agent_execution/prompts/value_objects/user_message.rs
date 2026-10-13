@@ -1,6 +1,6 @@
 #![deny(missing_docs)]
 
-use super::{AppModelContext, MessageSender, PromptText};
+use super::{AppModelContext, MessageSender, NoteContext, PromptText};
 use crate::domain::{
     agent_execution::ExecutionError,
     common::value_objects::{ImageMediaType, Sha256Digest},
@@ -215,6 +215,7 @@ pub struct UserMessage {
     files: Box<[LinkedFile]>,
     sender: MessageSender,
     app_model_context: Box<[AppModelContext]>,
+    notes: Box<[NoteContext]>,
 }
 impl UserMessage {
     /// Most images in one message.
@@ -243,6 +244,10 @@ impl UserMessage {
     /// Most apps' contexts one message carries: with [`AppModelContext::MAX_BYTES`]
     /// each, at most 32 KiB of context goes with one turn.
     pub const MAX_APP_MODEL_CONTEXTS: usize = 4;
+
+    /// Most notes one message carries: with [`NoteContext::MAX_TEXT_BYTES`]
+    /// each, at most 64 KiB of note text goes with one turn.
+    pub const MAX_NOTES: usize = 8;
 
     /// Combine optional `text` with `images` and `files`, each in attachment
     /// order: the person's message, carrying no app's context. All three
@@ -284,6 +289,7 @@ impl UserMessage {
             files: files.into_boxed_slice(),
             sender: MessageSender::Person,
             app_model_context: Box::default(),
+            notes: Box::default(),
         })
     }
     /// A message of text alone, the person's, which cannot fail: the text is
@@ -295,6 +301,7 @@ impl UserMessage {
             files: Box::default(),
             sender: MessageSender::Person,
             app_model_context: Box::default(),
+            notes: Box::default(),
         }
     }
     /// This message, written by `sender`. A message is the person's until
@@ -353,6 +360,28 @@ impl UserMessage {
             ..self
         })
     }
+    /// This message, carrying `notes` — notes left in the conversation that
+    /// this turn takes — in the order given, in place of any it carried.
+    ///
+    /// A session adds them when it dispatches a turn, from the notes its
+    /// saved record of the turn names; a message a caller submits carrying
+    /// any is refused, so a caller cannot speak as someone who left a note.
+    ///
+    /// # Errors
+    ///
+    /// [`ExecutionError::TooManyValues`] past [`Self::MAX_NOTES`].
+    pub fn with_notes(self, notes: Vec<NoteContext>) -> Result<Self, ExecutionError> {
+        if notes.len() > Self::MAX_NOTES {
+            return Err(ExecutionError::TooManyValues {
+                field: "user message notes",
+                max: Self::MAX_NOTES,
+            });
+        }
+        Ok(Self {
+            notes: notes.into_boxed_slice(),
+            ..self
+        })
+    }
     /// The text, when the user wrote any.
     pub fn text(&self) -> Option<&PromptText> {
         self.text.as_ref()
@@ -378,5 +407,10 @@ impl UserMessage {
     /// part of what it says; empty when none did.
     pub fn app_model_context(&self) -> &[AppModelContext] {
         &self.app_model_context
+    }
+    /// Notes left in the conversation that this turn takes, sent ahead of
+    /// the message and not part of what it says; empty when it takes none.
+    pub fn notes(&self) -> &[NoteContext] {
+        &self.notes
     }
 }

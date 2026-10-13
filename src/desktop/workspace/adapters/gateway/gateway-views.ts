@@ -18,7 +18,7 @@ import {
   type ConversationTool,
   type ConversationView,
 } from "@nessa/client"
-import { placePublished } from "../../../../conversation"
+import { placeNotes, placePublished, shownNote } from "../../../../conversation"
 import { composerModels } from "../../../model/composer-options"
 import { decodeId, encodeId } from "../../../model/id-encoding"
 import type {
@@ -205,6 +205,12 @@ export const replyId = (executionId: string) => `${executionId}/reply`
  */
 export const publishedBeforeId = "/published/before"
 export const publishedAfterId = "/published"
+/**
+ * The message a note somebody left is shown as, under the note's own name,
+ * encoded: `/note:` and no other `/`, which no input's id (no `/`), reply's
+ * (ending `/reply`) or published files' (`/published…`) can be.
+ */
+export const noteId = (messageId: string) => `/note:${encodeId(messageId)}`
 
 /** A file the agent published, as the part a message shows it by. */
 function publishedPart(artifact: ConversationView["artifacts"][number]): Part {
@@ -257,7 +263,10 @@ function writtenBy(app: ConversationMessageApp | undefined): { app?: MessageApp 
  * before the first turn, and one published while none ran in one after the
  * last (`placePublished`). Inputs still
  * waiting follow, so a message the window sent is found as soon as the
- * gateway holds it.
+ * gateway holds it. A note somebody left is a message of its own right after
+ * the turn it followed, or the input still waiting it followed; one left
+ * before any turn, or after a turn the bounded view left out, is first
+ * (`placeNotes`).
  */
 export function transcriptFrom(
   view: ConversationView,
@@ -271,7 +280,22 @@ export function transcriptFrom(
   )
   const listed = new Set(view.messages.map((turn) => turn.executionId))
   const published = placePublished(view.artifacts, listed)
+  // The inputs still waiting that the view lists apart from its turns: drawn
+  // after every turn, as the panel draws them.
+  const unlisted = view.pending.filter((waiting) => !listed.has(waiting.executionId))
+  const notes = placeNotes(
+    view.notes,
+    listed,
+    unlisted.map((waiting) => waiting.executionId),
+  )
   const messages: Message[] = []
+  const pushNotes = (left: readonly ConversationView["notes"][number][]) => {
+    for (const note of left) {
+      const id = noteId(note.messageId)
+      messages.push({ id, role: "note", at: seen(id), parts: [], note: shownNote(note) })
+    }
+  }
+  pushNotes(notes.before)
   if (published.before.length > 0)
     messages.push({
       id: publishedBeforeId,
@@ -322,6 +346,7 @@ export function transcriptFrom(
       const reply = replyId(turn.executionId)
       messages.push({ id: reply, role: "agent", at: seen(reply), parts })
     }
+    pushNotes(notes.byExecution.get(turn.executionId) ?? [])
     // A turn at work with nothing streaming yet: what it is doing, and since it was asked.
     if (
       (turn.status === "running" || turn.status === "queued") &&
@@ -336,10 +361,7 @@ export function transcriptFrom(
       at: seen(publishedAfterId),
       parts: published.after.map(publishedPart),
     })
-  let latestInputId = view.messages.at(-1)?.executionId
-  for (const waiting of view.pending) {
-    if (listed.has(waiting.executionId)) continue
-    latestInputId = waiting.executionId
+  for (const waiting of unlisted) {
     const input = inputId(waiting.executionId)
     messages.push({
       id: input,
@@ -349,7 +371,9 @@ export function transcriptFrom(
       // Waiting, it is labelled as it will be once it is a turn (D-H).
       ...writtenBy(waiting.app),
     })
+    pushNotes(notes.byWaiting.get(waiting.executionId) ?? [])
   }
+  const latestInputId = unlisted.at(-1)?.executionId ?? view.messages.at(-1)?.executionId
   const latestTurn = view.messages.at(-1)
   // What runs is the tool and its exact input, which the gateway offers a
   // review only when it can show whole; why is the provider's title for it.

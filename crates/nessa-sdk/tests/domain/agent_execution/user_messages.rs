@@ -463,3 +463,57 @@ fn an_app_and_its_context_count_every_byte_they_hold() {
         .unwrap();
     assert_eq!(text_only.structured_content(), None);
 }
+
+#[test]
+fn a_note_context_holds_a_bounded_surface_and_text_that_are_not_blank() {
+    let longest = "x".repeat(NoteContext::MAX_TEXT_BYTES);
+    let surface = "s".repeat(NoteContext::MAX_SURFACE_BYTES);
+    let note = NoteContext::new(NoteAuthor::Owner, &surface, &longest).unwrap();
+    assert_eq!(note.author(), NoteAuthor::Owner);
+    assert_eq!(note.surface(), surface);
+    assert_eq!(note.text(), longest);
+    for (surface, text, refusal) in [
+        (" ", "a note", ExecutionError::EmptyValue("note surface")),
+        ("phone", "\n", ExecutionError::EmptyValue("note text")),
+        (
+            &*"s".repeat(NoteContext::MAX_SURFACE_BYTES + 1),
+            "a note",
+            ExecutionError::ValueTooLong {
+                field: "note surface",
+                max_bytes: NoteContext::MAX_SURFACE_BYTES,
+            },
+        ),
+        (
+            "phone",
+            &*"x".repeat(NoteContext::MAX_TEXT_BYTES + 1),
+            ExecutionError::ValueTooLong {
+                field: "note text",
+                max_bytes: NoteContext::MAX_TEXT_BYTES,
+            },
+        ),
+    ] {
+        assert_eq!(
+            NoteContext::new(NoteAuthor::Grant, surface, text),
+            Err(refusal)
+        );
+    }
+}
+
+#[test]
+fn a_message_carries_no_notes_until_given_at_most_eight() {
+    let message = UserMessage::text_only(PromptText::new("look").unwrap());
+    assert!(message.notes().is_empty());
+    let note = NoteContext::new(NoteAuthor::Grant, "phone", "a note").unwrap();
+    let eight = vec![note.clone(); UserMessage::MAX_NOTES];
+    let carried = message.clone().with_notes(eight.clone()).unwrap();
+    assert_eq!(carried.notes(), eight.as_slice());
+    assert_ne!(carried, message);
+    assert_eq!(carried.text(), message.text());
+    assert_eq!(
+        message.with_notes(vec![note; UserMessage::MAX_NOTES + 1]),
+        Err(ExecutionError::TooManyValues {
+            field: "user message notes",
+            max: UserMessage::MAX_NOTES,
+        })
+    );
+}

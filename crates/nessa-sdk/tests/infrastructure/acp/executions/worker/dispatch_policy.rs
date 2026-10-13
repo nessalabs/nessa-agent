@@ -57,6 +57,7 @@ async fn worker_projection_after_reload(
             request: request(),
             actor: ActionContext::new("user", "test", "invoke").unwrap(),
             initiation: Initiation::owner(),
+            notes: Vec::new(),
             acknowledgement: SubmissionAcknowledgement::Acknowledged,
             events: Vec::new(),
             scheduling: Vec::new(),

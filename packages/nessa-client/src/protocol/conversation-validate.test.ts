@@ -33,6 +33,7 @@ function view() {
     queueComplete: true,
     transcriptState: "complete",
     artifacts: [],
+    notes: [],
     messages: [
       {
         executionId: "queued",
