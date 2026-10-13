@@ -214,9 +214,14 @@ Environments lane, in order:
   phase B). *Gate:* a shared turn runs under the sharer's policy with its
   denials attributed to them; until the runtime exists, Drive is a typed
   refusal, never a weaker check.
-- [ ] **K. Hosted workers** ([#708](https://github.com/nessalabs/nessa-agent/issues/708)). Environment-only gateways
+- [x] **K. Hosted workers** ([#708](https://github.com/nessalabs/nessa-agent/issues/708); merged in
+  [#786](https://github.com/nessalabs/nessa-agent/pull/786) (drain),
+  [#790](https://github.com/nessalabs/nessa-agent/pull/790) (start) and
+  [#792](https://github.com/nessalabs/nessa-agent/pull/792) (isolation)). Environment-only gateways
   per organization in containers. *Gate:* two-organization isolation
-  across leases, artifacts, tools and audit.
+  across leases, artifacts, tools and audit. Pools of workers per
+  organization and organization budgets are
+  [#791](https://github.com/nessalabs/nessa-agent/issues/791).
 
 Phone lane, beside it, already sliced and unchanged:
 [#263](https://github.com/nessalabs/nessa-agent/issues/263) pairing and
