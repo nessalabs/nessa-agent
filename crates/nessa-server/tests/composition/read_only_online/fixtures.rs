@@ -73,22 +73,34 @@ impl Gateway {
         Self::start_mode(root, "")
     }
     pub(super) fn start_mode(root: &Path, mode: &str) -> Self {
-        Self::spawn(root, mode, Stdio::null())
+        Self::spawn(root, mode, Stdio::null(), false)
+    }
+    /// A gateway in `mode` that also serves a relay in its own process and
+    /// is registered at it; the relay's address is in `relay-address`.
+    pub(super) fn start_relayed(root: &Path, mode: &str) -> Self {
+        Self::spawn(root, mode, Stdio::null(), true)
     }
     /// A gateway that also commits and revokes on request, from inside its own
     /// process, so its process-local watch producer sees the change.
     pub(super) fn start_live(root: &Path) -> Self {
-        Self::spawn(root, "live", Stdio::piped())
+        Self::spawn(root, "live", Stdio::piped(), false)
     }
     /// Actual Agent-produced semantic prefix and controlled terminal suffix.
     pub(super) fn start_semantic(root: &Path) -> Self {
-        Self::spawn(root, "semantic", Stdio::piped())
+        Self::spawn(root, "semantic", Stdio::piped(), false)
     }
-    fn spawn(root: &Path, mode: &str, input: Stdio) -> Self {
-        let mut child = Command::new(std::env::current_exe().unwrap())
+    fn spawn(root: &Path, mode: &str, input: Stdio, relay: bool) -> Self {
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
             .args(["--exact", GATEWAY, "--nocapture"])
             .env("NESSA_ONLINE_GATEWAY", root)
-            .env("NESSA_ONLINE_GATE", mode)
+            .env("NESSA_ONLINE_GATE", mode);
+        if relay {
+            command.env("NESSA_ONLINE_RELAY", "1");
+        } else {
+            command.env_remove("NESSA_ONLINE_RELAY");
+        }
+        let mut child = command
             .stdin(input)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

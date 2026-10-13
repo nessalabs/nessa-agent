@@ -276,11 +276,12 @@ async fn gateway_child() {
         Ok(address) => address.parse().unwrap(),
         Err(_) => "127.0.0.1:0".parse().unwrap(),
     };
-    // "relay": a real relay in this process, and the gateway registered at
-    // it, so a reader whose direct dial fails reads through it.
-    let relay = match std::env::var("NESSA_ONLINE_GATE").as_deref() {
-        Ok("relay") => Some(serve_relay(root).await),
-        _ => None,
+    // `NESSA_ONLINE_RELAY`: a real relay in this process, and the gateway
+    // registered at it, so a reader whose direct dial fails reads through
+    // it, whatever the mode.
+    let relay = match std::env::var_os("NESSA_ONLINE_RELAY") {
+        Some(_) => Some(serve_relay(root).await),
+        None => None,
     };
     let (prepared, commands, _peers) = prepare(
         &NativeConfig {
@@ -627,7 +628,14 @@ async fn serve_relay(root: &Path) -> RelayAddress {
         timer,
         std::future::pending::<()>(),
     ));
-    private_write(&root.join("relay-address"), address.as_bytes());
+    // A restart serves a fresh relay: the address the last process noted
+    // is no longer anyone's.
+    let noted = root.join("relay-address");
+    match std::fs::remove_file(&noted) {
+        Err(error) if error.kind() != io::ErrorKind::NotFound => panic!("{error}"),
+        _ => {}
+    }
+    private_write(&noted, address.as_bytes());
     RelayAddress::try_from(address).unwrap()
 }
 
