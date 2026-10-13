@@ -138,6 +138,14 @@ afterEach(async () => {
   container.remove()
 })
 
+it("keeps the host batch listener through local attachment-state renders", async () => {
+  expect(onAttachmentBatch).toHaveBeenCalledTimes(1)
+
+  await act(async () => hook.refuse({ reason: "too-many-files" }))
+
+  expect(onAttachmentBatch).toHaveBeenCalledTimes(1)
+})
+
 it("shows a tile for the file that needs a moment, named, as soon as it is told", async () => {
   expect(names()).toEqual([])
 
