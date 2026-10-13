@@ -117,6 +117,7 @@ fn compose(
         wall: Arc::new(Wall),
         clock: Arc::new(Monotonic::new()),
         runtime: Builder::new_current_thread().enable_all().build().unwrap(),
+        product: ProductDependencies::default(),
     })
     .unwrap()
 }

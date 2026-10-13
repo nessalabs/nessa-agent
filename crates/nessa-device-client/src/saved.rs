@@ -1,6 +1,9 @@
 //! Generated foreign snapshots consume the shared cache projection. The explicit
 //! target is a saved-data selector, not authority to connect or execute commands.
-use crate::infrastructure::{Monotonic, Wall};
+use crate::{
+    infrastructure::{Monotonic, Wall},
+    serialization::{bounded_json, SerializationFailure},
+};
 use nessa_auth::application::ports::Clock as WallClock;
 use nessa_client_core::retained::{ReadFailure, RetainedCache, RetainedTranscript};
 use nessa_protocol::{
@@ -12,7 +15,6 @@ use serde::Serialize;
 use std::{
     error::Error,
     fmt::{Display, Formatter, Result as FormatResult},
-    io::{Error as IoError, Result as IoResult, Write},
     path::Path,
     sync::{Arc, Mutex, TryLockError},
 };
@@ -221,43 +223,11 @@ impl NativeSavedCache {
     }
 }
 
-struct ViewBytes {
-    bytes: Vec<u8>,
-    maximum: usize,
-    exceeded: bool,
-}
-impl Write for ViewBytes {
-    fn write(&mut self, bytes: &[u8]) -> IoResult<usize> {
-        if self
-            .bytes
-            .len()
-            .checked_add(bytes.len())
-            .is_none_or(|length| length > self.maximum)
-        {
-            self.exceeded = true;
-            return Err(IoError::other("passive view bound"));
-        }
-        self.bytes.extend_from_slice(bytes);
-        Ok(bytes.len())
-    }
-    fn flush(&mut self) -> IoResult<()> {
-        Ok(())
-    }
-}
 fn serialize_view<T: Serialize>(value: &T) -> Result<String, NativeViewError> {
-    let mut output = ViewBytes {
-        bytes: Vec::new(),
-        maximum: MAX_VIEW_BYTES,
-        exceeded: false,
-    };
-    if serde_json::to_writer(&mut output, value).is_err() {
-        return Err(if output.exceeded {
-            NativeViewError::ViewTooLarge
-        } else {
-            NativeViewError::Serialization
-        });
-    }
-    String::from_utf8(output.bytes).map_err(|_| NativeViewError::Serialization)
+    bounded_json(value, MAX_VIEW_BYTES).map_err(|failure| match failure {
+        SerializationFailure::TooLarge => NativeViewError::ViewTooLarge,
+        SerializationFailure::Invalid => NativeViewError::Serialization,
+    })
 }
 #[cfg(test)]
 #[path = "../tests/saved/projection.rs"]

@@ -1,5 +1,5 @@
 //! Immutable foreign failure views preserve compound publication evidence.
-use crate::session::SessionFailure;
+use crate::{native_product::NativeProductFailure, session::SessionFailure};
 use nessa_auth::{
     adapters::pairing::PairingCryptoError,
     application::pairing::{
@@ -346,6 +346,8 @@ pub enum NativeSessionFailureKind {
     NoCredential,
     /// Stop preceded status dispatch.
     Stopped,
+    /// Protected product opening or physical drain failed.
+    Product,
 }
 /// Immutable original session failure, safe to retain after session deallocation.
 #[derive(Debug, uniffi::Object)]
@@ -366,6 +368,7 @@ impl NativeSessionFailure {
             SessionFailure::Enrollment(_) => NativeSessionFailureKind::Enrollment,
             SessionFailure::NoCredential => NativeSessionFailureKind::NoCredential,
             SessionFailure::Stopped => NativeSessionFailureKind::Stopped,
+            SessionFailure::Product(_) => NativeSessionFailureKind::Product,
         }
     }
     /// Original private-state failure.
@@ -388,6 +391,13 @@ impl NativeSessionFailure {
     pub fn enrollment(&self) -> Option<Arc<NativeEnrollmentFailure>> {
         match self.value {
             SessionFailure::Enrollment(value) => Some(Arc::new(NativeEnrollmentFailure { value })),
+            _ => None,
+        }
+    }
+    /// Original product failure, including the original optional typed close reason.
+    pub fn product(&self) -> Option<Arc<NativeProductFailure>> {
+        match self.value {
+            SessionFailure::Product(value) => Some(Arc::new(NativeProductFailure { value })),
             _ => None,
         }
     }

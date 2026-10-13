@@ -1,5 +1,6 @@
 //! Synchronous generated session bindings. UI composition owns worker dispatch
 //! and bounded pre-queue admission; this adapter owns no second authority rule.
+use crate::native_product::NativeProductSession;
 use crate::{
     failures::{NativeCallError, NativeEnrollmentFailure, NativeReadFailure},
     saved::{NativeScope, NativeTranscript},
@@ -785,6 +786,17 @@ impl NativeDeviceSession {
         self.value
             .purge_receipt(&receiver)
             .map(|value| value.map(|value| Arc::new(NativePurge { value })))
+            .map_err(Into::into)
+    }
+    /// Install the original saved-key product child before its worker can dial.
+    /// Returned Ready/settlement/event waits run off-UI on independent waiters.
+    pub fn open_product(
+        &self,
+        instance: String,
+    ) -> Result<Arc<NativeProductSession>, NativeCallError> {
+        self.value
+            .open_product(instance)
+            .map(|value| Arc::new(NativeProductSession { value }))
             .map_err(Into::into)
     }
     /// Signal closure before queueing drain; stop current core sockets.

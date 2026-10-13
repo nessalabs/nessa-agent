@@ -10,14 +10,24 @@ Current development surface:
 - `saved`: one off-UI historical cache selector and immutable transcript/scope
   objects. The existing core owns SQLite reads, physical progress and passive
   projection. No second checkpoint or fold is implemented here.
+- `serialization`: one capped JSON-copy writer for saved/product views, consuming
+  each owning protocol publication; copy refusal retains original native facts.
 - `infrastructure`: wall and monotonic clock adapters supplied by the foreign
   composition entry point. Tests substitute clocks through `with_clocks`.
 - `session`: one private scope, injected clocks/socket/entropy inputs, and one
   physical admission through pinned status, current binding, read and refusal
   recheck. `request_close` closes admission/wakes sockets; `close` drains and
   releases private state. Saved selection uses issued receiver and actual scope.
+- `native_product`: immutable actual Ready, native-ID tickets, full response/stage
+  completions and delivered event batches over core's sole protected product pump.
+  Completion/batch objects retain core count/byte permits until final handle release.
+  Relative event waits capture one deadline on the native clock. Product waits run
+  independently of retained admission and of submission/close dispatch.
 - `native_session`: generated immutable session/receipt/refresh/read/catalogue
   objects. Failure objects retain publication, cleanup and reconciliation payloads.
+- `tests/product`: actual saved issued key/pin/CredentialId and pinned TLS fixtures;
+  parent installation, replacement, poison teardown and private-lock physical drain;
+  escaped foreign facts, retained permits and native event timeout mapping.
 - `tests/saved`: actual cache recreation, typed invalid selection, direct-call
   admission and checked protocol-bounded serialization.
 
@@ -35,6 +45,19 @@ recover durable receipts using the previously captured receiver separately.
 Caller composition must keep the eventual enrolled session's immutable private
 scope and fence historical snapshots on terminal status; a retained snapshot does
 not become fresh or revoke itself after it escapes.
+
+Product opening installs a strong provisional child before dialing. Parent close
+signals and physically joins that child before releasing its private-state owner;
+raw parent Drop applies the same drain, including teardown after a poisoned admitted
+operation. New admission remains refused after damage. An escaped child retains its
+own core resources and native clock, without retaining its parent. Actual Ready and
+completed facts remain historical after closure; requests stay fenced. The protected
+transport uses the saved issued public CredentialId with the private key, not an
+owner bearer proxy. Existing DeviceRead records gain no write permission from this
+adapter; OwnerPhone enrollment, its new private record/adoption and app Send wiring
+remain separate #811 slices. The existing serial NativeSessionWorker does not yet
+compose independent product waits. Do not place a blocking product waiter on its
+submission/retained/close queue.
 
 Build/generate on a host:
 

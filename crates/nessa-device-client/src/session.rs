@@ -17,6 +17,10 @@ use nessa_auth::{
 };
 use nessa_client_core::{
     pairing::{NativeClientError, NativeRetryOutcome},
+    product::{
+        LocalProductConnector, ProductConnector, ProductFailure, ProductLimits, ProductSession,
+        ProductWake, ThreadProductWake,
+    },
     retained::{
         ReadFailure, ReadReport, ReadStop, RetainedCache, RetainedCataloguePage,
         RetainedDeviceReader, RetainedEnrollmentClient, RetainedEnrollmentStatus, RetainedPurge,
@@ -61,6 +65,8 @@ pub enum SessionFailure {
     NoCredential,
     /// A refresh was stopped before asking status.
     Stopped,
+    /// Original protected product opening or physical drain failure.
+    Product(ProductFailure),
 }
 impl Display for SessionFailure {
     fn fmt(&self, output: &mut Formatter<'_>) -> FormatResult {
@@ -208,6 +214,21 @@ struct Gate {
     closed: bool,
     read: Option<Arc<ReadStop>>,
     enrollment: Weak<RetainedEnrollmentClient>,
+    product: Option<ProductSession>,
+}
+struct ProductDependencies {
+    connector: Arc<dyn ProductConnector>,
+    wake: Arc<dyn ProductWake>,
+    limits: ProductLimits,
+}
+impl Default for ProductDependencies {
+    fn default() -> Self {
+        Self {
+            connector: Arc::new(LocalProductConnector),
+            wake: Arc::new(ThreadProductWake::default()),
+            limits: ProductLimits::default(),
+        }
+    }
 }
 struct Driver {
     runtime: Runtime,
@@ -221,6 +242,7 @@ struct Driver {
     clock: Arc<dyn Clock>,
     cache: Option<RetainedCache>,
     received: Option<DisclosedConsent>,
+    product: ProductDependencies,
 }
 struct Dependencies {
     state: Arc<dyn ClientPendingStore>,
@@ -231,6 +253,7 @@ struct Dependencies {
     wall: Arc<dyn WallClock>,
     clock: Arc<dyn Clock>,
     runtime: Runtime,
+    product: ProductDependencies,
 }
 impl Driver {
     fn local_enrollment(&self) -> Result<Option<LocalEnrollment>, SessionFailure> {
@@ -383,6 +406,17 @@ impl Drop for Driver {
     }
 }
 
+/// Physical product child and its injected clock, with no parent ownership.
+pub struct SessionProduct {
+    pub(crate) value: ProductSession,
+    pub(crate) clock: Arc<dyn Clock>,
+}
+impl SessionProduct {
+    /// Borrow the independently owned core child; this does not retain its parent.
+    pub fn session(&self) -> &ProductSession {
+        &self.value
+    }
+}
 /// One private scope and one physical session operation. Methods block and belong
 /// on a dedicated native worker. Swift composition must reserve admission before
 /// enqueueing, signal close before queueing drain, and await close before reuse.
@@ -433,6 +467,7 @@ impl NativeSession {
             connector: Arc::new(SocketConnector),
             entropy: Arc::new(OsEntropyFactory),
             runtime,
+            product: ProductDependencies::default(),
         })
     }
     fn compose(dependencies: Dependencies) -> Result<Self, SessionFailure> {
@@ -445,6 +480,7 @@ impl NativeSession {
             connector,
             entropy,
             runtime,
+            product,
         } = dependencies;
         let enrollment = Arc::new(
             RetainedEnrollmentClient::new(state.clone(), path.clone(), wall.clone(), clock.clone())
@@ -454,6 +490,7 @@ impl NativeSession {
             closed: false,
             read: None,
             enrollment: Arc::downgrade(&enrollment),
+            product: None,
         };
         Ok(Self {
             gate: Mutex::new(gate),
@@ -469,6 +506,7 @@ impl NativeSession {
                 clock,
                 cache: None,
                 received: None,
+                product,
             })),
         })
     }
@@ -558,6 +596,66 @@ impl NativeSession {
         }
         Ok(operation.driver().refresh(&stop))
     }
+    /// Install the original protected product child before its worker can dial.
+    /// The saved issued key/pin/credential supply proof; actual gateway Ready
+    /// supplies capabilities. Waits occur on the child outside driver admission.
+    pub fn open_product(&self, instance: String) -> Result<SessionProduct, SessionFailure> {
+        let mut operation = self.enter(None)?;
+        let previous = self
+            .gate
+            .lock()
+            .map_err(|_| SessionFailure::Damaged)?
+            .product
+            .clone();
+        if let Some(previous) = previous {
+            // Keep the old child registered until its physical join. Its original
+            // failure remains on escaped historical handles, independent of this opening.
+            let _ = previous.close();
+        }
+        let driver = operation.driver();
+        let pending = driver
+            .state
+            .load_pending()
+            .map_err(SessionFailure::PrivateState)?;
+        let issued = driver
+            .state
+            .load_credential()
+            .map_err(SessionFailure::PrivateState)?;
+        let issued = match (pending, issued) {
+            (Some(_), Some(_)) => {
+                return Err(SessionFailure::PrivateState(PrivateStateError::Conflict))
+            }
+            (_, None) => return Err(SessionFailure::NoCredential),
+            (None, Some(issued)) => issued,
+        };
+        let credential = issued.credential().as_str().to_owned();
+        let (key, pin, _) = issued.into_enrollment().into_parts();
+        let identity = NativeIdentity::restore(key)
+            .map_err(|error| SessionFailure::Enrollment(NativeClientError::Crypto(error)))?;
+        let child = ProductSession::prepare(
+            driver.address,
+            Arc::new(identity),
+            pin,
+            credential,
+            instance,
+            driver.product.connector.clone(),
+            driver.clock.clone(),
+            driver.product.wake.clone(),
+            driver.product.limits,
+        );
+        {
+            let mut gate = self.gate.lock().map_err(|_| SessionFailure::Damaged)?;
+            if gate.closed {
+                return Err(SessionFailure::Closed);
+            }
+            gate.product = Some(child.clone());
+        }
+        child.start().map_err(SessionFailure::Product)?;
+        Ok(SessionProduct {
+            value: child,
+            clock: driver.clock.clone(),
+        })
+    }
     /// Saved selection derives receiver from the issued record and origin/stream
     /// from actual retained scope; address metadata is not used as scope.
     pub fn catalogue_page(
@@ -617,26 +715,60 @@ impl NativeSession {
     /// Immediately exclude future admission and wake current enrollment/read
     /// sockets. An OS connect can still wait up to the core HANDSHAKE bound.
     pub fn request_close(&self) -> Result<(), SessionFailure> {
-        let mut gate = self.gate.lock().map_err(|_| SessionFailure::Damaged)?;
-        gate.closed = true;
-        if let Some(read) = &gate.read {
+        let (read, enrollment, product, damaged) = {
+            let (mut gate, damaged) = match self.gate.lock() {
+                Ok(gate) => (gate, false),
+                Err(error) => (error.into_inner(), true),
+            };
+            gate.closed = true;
+            (
+                gate.read.clone(),
+                gate.enrollment.upgrade(),
+                gate.product.clone(),
+                damaged,
+            )
+        };
+        if let Some(read) = read {
             read.stop();
         }
-        if let Some(client) = gate.enrollment.upgrade() {
+        if let Some(client) = enrollment {
             client.request_shutdown();
         }
-        Ok(())
+        if let Some(product) = product {
+            product.request_close();
+        }
+        if damaged {
+            Err(SessionFailure::Damaged)
+        } else {
+            Ok(())
+        }
     }
     /// Wait for admitted physical work and release this private scope. Calls
     /// after close refuse; repeated close remains closed. This blocking drain
     /// belongs on the worker, while request_close can bypass its operation queue.
     pub fn close(&self) -> Result<(), SessionFailure> {
-        self.request_close()?;
-        let mut driver = self.driver.lock().map_err(|_| SessionFailure::Damaged)?;
+        let requested = self.request_close();
+        // Poison still refuses admission; recovery here is only for the physical
+        // drain of already-owned resources (poisoned_parent_drain test).
+        let (mut driver, damaged_driver) = match self.driver.lock() {
+            Ok(driver) => (driver, false),
+            Err(error) => (error.into_inner(), true),
+        };
+        let (product, damaged_gate) = match self.gate.lock() {
+            Ok(gate) => (gate.product.clone(), false),
+            Err(error) => (error.into_inner().product.clone(), true),
+        };
+        let result = product.map_or(Ok(()), |child| {
+            child.close().map_err(SessionFailure::Product)
+        });
         if let Some(driver) = driver.take() {
             drop(driver);
         }
-        Ok(())
+        if damaged_driver || damaged_gate {
+            Err(SessionFailure::Damaged)
+        } else {
+            requested.and(result)
+        }
     }
 }
 impl Drop for NativeSession {
@@ -651,3 +783,7 @@ mod local_enrollment_tests;
 #[cfg(test)]
 #[path = "../tests/session/lifecycle.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../tests/product/parent.rs"]
+mod product_tests;
