@@ -1,5 +1,5 @@
 use super::*;
-use crate::conversation::domain::{ToolPreset, ToolRules};
+use crate::conversation::domain::{ToolPolicy, ToolPreset, ToolRules};
 
 fn evaluator() -> CedarToolPolicyEvaluator {
     CedarToolPolicyEvaluator::new().expect("the checked-in bundle validates")
@@ -31,7 +31,7 @@ fn under(policy: &ToolPolicy, source: ToolSource, name: &str) -> ToolDecision {
 
 fn rules(allow: &[&str], deny: &[&str]) -> ToolPolicy {
     let owned = |list: &[&str]| list.iter().map(ToString::to_string).collect();
-    ToolPolicy::Rules(ToolRules::new(owned(allow), owned(deny)).expect("valid rules"))
+    ToolPolicy::rules(ToolRules::new(owned(allow), owned(deny)).expect("valid rules"))
 }
 
 #[test]
@@ -54,7 +54,7 @@ fn the_owner_calls_any_tool() {
 
 #[test]
 fn read_only_tools_allows_only_named_readers() {
-    let policy = ToolPolicy::Preset(ToolPreset::ReadOnlyTools);
+    let policy = ToolPolicy::preset(ToolPreset::ReadOnlyTools);
     for (source, name) in [
         (ToolSource::Claude, "Read"),
         (ToolSource::Claude, "Grep"),
@@ -88,7 +88,7 @@ fn read_only_tools_allows_only_named_readers() {
 
 #[test]
 fn no_shell_allows_named_readers_and_editors_and_no_command() {
-    let policy = ToolPolicy::Preset(ToolPreset::NoShell);
+    let policy = ToolPolicy::preset(ToolPreset::NoShell);
     assert_eq!(
         under(&policy, ToolSource::Claude, "Read"),
         allowed(&["tool.reads"])
@@ -123,7 +123,7 @@ fn a_deferred_tool_is_loaded_then_judged_on_its_own() {
     // Claude's harness asks for ToolSearch before a deferred tool such as
     // WebFetch. The loader is allowed wherever reads are, so the tool after it
     // is decided by its own name.
-    let no_shell = ToolPolicy::Preset(ToolPreset::NoShell);
+    let no_shell = ToolPolicy::preset(ToolPreset::NoShell);
     assert_eq!(
         under(&no_shell, ToolSource::Claude, "ToolSearch"),
         allowed(&["tool.reads"])
@@ -132,7 +132,7 @@ fn a_deferred_tool_is_loaded_then_judged_on_its_own() {
         under(&no_shell, ToolSource::Claude, "WebFetch"),
         allowed(&["tool.edits"])
     );
-    let read_only = ToolPolicy::Preset(ToolPreset::ReadOnlyTools);
+    let read_only = ToolPolicy::preset(ToolPreset::ReadOnlyTools);
     assert_eq!(
         under(&read_only, ToolSource::Claude, "ToolSearch"),
         allowed(&["tool.reads"])
@@ -149,7 +149,7 @@ fn ask_everything_and_all_allow_every_tool_under_their_own_id() {
         (ToolPreset::AskEverything, "tool.preset.ask_everything"),
         (ToolPreset::All, "tool.preset.all"),
     ] {
-        let policy = ToolPolicy::Preset(preset);
+        let policy = ToolPolicy::preset(preset);
         assert_eq!(under(&policy, ToolSource::Gateway, "run"), allowed(&[id]));
         assert_eq!(
             under(&policy, ToolSource::Claude, "mcp__x__y"),

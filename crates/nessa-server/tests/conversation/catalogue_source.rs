@@ -442,7 +442,7 @@ async fn granted_catalogue(
             .create(owned(&conversation_id, "alice"))
             .await
             .unwrap();
-        let policy = (*role == ShareRole::Drive).then_some(ToolPolicy::Preset(ToolPreset::NoShell));
+        let policy = (*role == ShareRole::Drive).then_some(ToolPolicy::preset(ToolPreset::NoShell));
         crate::conversation_test_support::grant_as(
             store.as_ref(),
             &conversation_id,

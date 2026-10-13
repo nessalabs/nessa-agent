@@ -896,6 +896,12 @@ pub(crate) struct ProviderFactory {
     pub(crate) execution_observation_failure: Mutex<Option<ObservationFailure>>,
     pub(crate) request_permission: AtomicUsize,
     pub(crate) permission_gate: Mutex<Option<Receiver<()>>>,
+    /// Every permission answer the agent was given, in order.
+    pub(crate) permission_answers: Mutex<Vec<PermissionAnswer>>,
+    /// Whether the agent's own hooks may answer a review first.
+    pub(crate) native_hooks: AtomicBool,
+    /// Offer "Reject once" beside "Allow once", so a refusal can be answered.
+    pub(crate) offer_deny: AtomicBool,
     /// Gate after domain consumption rather than before it.
     pub(crate) consume_before_answer_gate: AtomicBool,
     /// Return the controller's actual confirmed selection for successful corpus fixtures.
@@ -1523,6 +1529,7 @@ impl ProviderSessionBackend for Backend {
         ProviderOperationCapabilities {
             image_input: self.factory.image_input.load(Ordering::SeqCst),
             negotiated: !self.factory.answer_unknown.load(Ordering::SeqCst),
+            native_hooks_allowed: self.factory.native_hooks.load(Ordering::SeqCst),
             ..ProviderOperationCapabilities::default()
         }
     }
@@ -1601,19 +1608,27 @@ impl ProviderSessionBackend for Backend {
                 return reply;
             }
             if self.factory.request_permission.load(Ordering::SeqCst) != 0 {
-                let options = PermissionOptions::new(
-                    vec![PermissionOption::new(
-                        PermissionOptionId::new("allow").unwrap(),
-                        "Allow once",
-                        PermissionDecision::new(
-                            PermissionEffect::Allow,
-                            PermissionScope::request(),
-                        ),
-                    )
-                    .unwrap()],
-                    &PermissionOfferPolicy::once_only(),
+                let mut choices = vec![PermissionOption::new(
+                    PermissionOptionId::new("allow").unwrap(),
+                    "Allow once",
+                    PermissionDecision::new(PermissionEffect::Allow, PermissionScope::request()),
                 )
-                .unwrap();
+                .unwrap()];
+                if self.factory.offer_deny.load(Ordering::SeqCst) {
+                    choices.push(
+                        PermissionOption::new(
+                            PermissionOptionId::new("reject").unwrap(),
+                            "Reject once",
+                            PermissionDecision::new(
+                                PermissionEffect::Deny,
+                                PermissionScope::request(),
+                            ),
+                        )
+                        .unwrap(),
+                    );
+                }
+                let options =
+                    PermissionOptions::new(choices, &PermissionOfferPolicy::once_only()).unwrap();
                 let event = self
                     .controller
                     .lock()
@@ -1691,6 +1706,11 @@ impl ProviderSessionBackend for Backend {
         answer: PermissionAnswer,
     ) -> ProviderOperationFuture<'_, PermissionResolution> {
         Box::pin(async move {
+            self.factory
+                .permission_answers
+                .lock()
+                .unwrap()
+                .push(answer.clone());
             if self.factory.answer_succeeds.load(Ordering::SeqCst) {
                 return self
                     .controller
@@ -1871,6 +1891,14 @@ impl crate::conversation::application::ShareGrants for EveryConversationGranted 
     ) -> ConversationFuture<'a, Vec<crate::conversation::application::ShareGrant>> {
         Box::pin(async { Err(ConversationError::Unavailable) })
     }
+    fn policy_at<'a>(
+        &'a self,
+        _: &'a ConversationId,
+        _: &'a str,
+        _: u64,
+    ) -> ConversationFuture<'a, Option<crate::conversation::domain::ToolPolicy>> {
+        Box::pin(async { Ok(None) })
+    }
 }
 
 /// Grant `receiver` Read on `id` in a real grant table, as the owner's
@@ -1931,7 +1959,7 @@ pub(crate) fn roles_beyond_read() -> [crate::conversation::domain::ShareAccess; 
         ShareAccess::new(ShareRole::Comment, None).unwrap(),
         ShareAccess::new(
             ShareRole::Drive,
-            Some(ToolPolicy::Preset(ToolPreset::NoShell)),
+            Some(ToolPolicy::preset(ToolPreset::NoShell)),
         )
         .unwrap(),
     ]

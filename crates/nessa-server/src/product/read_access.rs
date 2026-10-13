@@ -31,7 +31,9 @@ use crate::conversation::application::{
     ConversationError, PairedAccess, PairedParty, PairedRefusal, ReceiverBinding, RequestShape,
     ShareConversation, ShareGrant,
 };
-use crate::conversation::domain::{ShareRole, ToolPolicy, ToolPreset, ToolRules};
+use crate::conversation::domain::{
+    CommandHosts, ShareRole, ToolChoice, ToolPolicy, ToolPreset, ToolRules,
+};
 use nessa_auth::{application::session::AuthenticatedSession, domain::CredentialId};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::conversation::read_scope::ReadRefusal;
@@ -489,29 +491,40 @@ fn wire_preset(preset: ToolPreset) -> ConversationToolPreset {
 }
 
 /// A wire policy as the domain's: `preset` alone, or `allow` and `deny`
-/// together, each checked by `ToolRules::new`. Any other shape is
-/// `InvalidInput` (row J3).
+/// together, each checked by `ToolRules::new`, with `commandHosts` beside
+/// either, checked by `CommandHosts::new` and against the policy's entries
+/// (`ToolPolicy::with_command_hosts`); absent or empty, it names none.
+/// Any other shape is `InvalidInput` (row J3).
 fn tool_policy(policy: ConversationToolPolicy) -> Result<ToolPolicy, ConversationError> {
-    match (policy.preset, policy.allow, policy.deny) {
-        (Some(named), None, None) => Ok(ToolPolicy::Preset(preset(named))),
+    let hosts = CommandHosts::new(policy.command_hosts.unwrap_or_default())
+        .map_err(|_| ConversationError::InvalidInput)?;
+    let tools = match (policy.preset, policy.allow, policy.deny) {
+        (Some(named), None, None) => ToolPolicy::preset(preset(named)),
         (None, Some(allow), Some(deny)) => ToolRules::new(allow, deny)
-            .map(ToolPolicy::Rules)
-            .map_err(|_| ConversationError::InvalidInput),
-        _ => Err(ConversationError::InvalidInput),
-    }
+            .map(ToolPolicy::rules)
+            .map_err(|_| ConversationError::InvalidInput)?,
+        _ => return Err(ConversationError::InvalidInput),
+    };
+    tools
+        .with_command_hosts(hosts)
+        .map_err(|_| ConversationError::InvalidInput)
 }
 
 fn wire_policy(policy: &ToolPolicy) -> ConversationToolPolicy {
-    match policy {
-        ToolPolicy::Preset(named) => ConversationToolPolicy {
+    let hosts = policy.command_hosts();
+    let command_hosts = (!hosts.is_empty()).then(|| hosts.names().iter().cloned().collect());
+    match policy.tools() {
+        ToolChoice::Preset(named) => ConversationToolPolicy {
             preset: Some(wire_preset(*named)),
             allow: None,
             deny: None,
+            command_hosts,
         },
-        ToolPolicy::Rules(rules) => ConversationToolPolicy {
+        ToolChoice::Rules(rules) => ConversationToolPolicy {
             preset: None,
             allow: Some(rules.allow().to_vec()),
             deny: Some(rules.deny().to_vec()),
+            command_hosts,
         },
     }
 }

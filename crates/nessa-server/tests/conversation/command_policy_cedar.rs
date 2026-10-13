@@ -1,18 +1,20 @@
 //! The command policy, answered by Cedar: one test per policy id, the grant's
-//! own hosts, an error refusing, and — until `run` asks this port — the
-//! same answers as `CommandPolicy::admit` and `grants` for the owner.
+//! own hosts, an error refusing, and the questions `run` asks as truth tables
+//! for the owner and for a grant.
 use super::*;
 use crate::conversation::application::admit_command;
-use crate::conversation::domain::{ToolPolicy, ToolPreset};
+use crate::conversation::domain::{CommandHosts, ToolPolicy, ToolPreset};
 use nessa_sdk::domain::agent_execution::leases::CommandRefusal;
-use std::collections::BTreeSet;
 
 fn names(names: &[&str]) -> Vec<String> {
     names.iter().map(|name| (*name).to_owned()).collect()
 }
 
-fn set(names: &[&str]) -> BTreeSet<String> {
-    names.iter().map(|name| (*name).to_owned()).collect()
+/// A Drive policy whose turns may use `hosts`.
+fn on(hosts: &[&str]) -> ToolPolicy {
+    ToolPolicy::preset(ToolPreset::All)
+        .with_command_hosts(CommandHosts::new(names(hosts)).expect("valid hosts"))
+        .expect("within the policy's entries")
 }
 
 fn evaluator(policy: &CommandPolicy) -> CedarCommandPolicyEvaluator {
@@ -30,8 +32,6 @@ fn refused(rules: &[&str]) -> ToolDecision {
         rules: rules.iter().map(ToString::to_string).collect(),
     }
 }
-
-const PRESET: ToolPolicy = ToolPolicy::Preset(ToolPreset::All);
 
 fn host(host: &str) -> CommandQuestion<'_> {
     CommandQuestion::Host { host }
@@ -77,11 +77,10 @@ fn command_owner_host_the_owner_uses_every_configured_host_and_no_other() {
 fn command_grant_host_a_grant_uses_only_configured_hosts_it_names_itself() {
     let policy = CommandPolicy::new(names(&["devbox", "build"]), None, Vec::new());
     let cedar = evaluator(&policy);
-    let own = set(&["devbox", "elsewhere"]);
+    let own = on(&["devbox", "elsewhere"]);
     let grant = CommandInitiator::Grant {
         grant: "grant-1",
-        policy: &PRESET,
-        hosts: Some(&own),
+        policy: &own,
     };
     assert_eq!(
         cedar.evaluate(grant, host("devbox")).unwrap(),
@@ -105,22 +104,27 @@ fn command_grant_host_a_grant_uses_only_configured_hosts_it_names_itself() {
 fn a_grant_that_names_no_hosts_uses_none() {
     let policy = CommandPolicy::new(names(&["devbox"]), None, Vec::new());
     let cedar = evaluator(&policy);
-    let empty = BTreeSet::new();
-    for hosts in [None, Some(&empty)] {
+    let presets = [
+        ToolPreset::ReadOnlyTools,
+        ToolPreset::NoShell,
+        ToolPreset::AskEverything,
+        ToolPreset::All,
+    ];
+    for preset in presets {
+        let policy = ToolPolicy::preset(preset);
         let grant = CommandInitiator::Grant {
             grant: "grant-1",
-            policy: &PRESET,
-            hosts,
+            policy: &policy,
         };
         assert_eq!(
             cedar.evaluate(grant, host("devbox")).unwrap(),
             refused(&[]),
-            "{hosts:?}"
+            "{preset:?}"
         );
         assert_eq!(
             admit_command(&cedar, grant, "devbox", "ls"),
             Err(CommandRefusal::EnvironmentNotGranted),
-            "{hosts:?}"
+            "{preset:?}"
         );
     }
 }
@@ -169,11 +173,10 @@ fn command_denied_program_a_denied_file_name_never_runs_and_wins() {
             .unwrap(),
         refused(&["command.denied_program", "command.unlisted_program"])
     );
-    let own = set(&["devbox"]);
+    let own = on(&["devbox"]);
     let grant = CommandInitiator::Grant {
         grant: "grant-1",
-        policy: &PRESET,
-        hosts: Some(&own),
+        policy: &own,
     };
     assert_eq!(
         cedar.evaluate(grant, run("devbox", "rm")).unwrap(),
@@ -229,54 +232,80 @@ fn a_policy_that_errors_makes_the_command_decision_unavailable() {
     );
 }
 
-/// Scaffolding for the switch (slice J4 part 3): until `run` asks this port,
-/// Cedar must answer the owner exactly as `CommandPolicy` does. Deleted with
-/// `CommandPolicy::admit` and `grants`.
+/// What `run` asks, as a truth table: the owner and three grants (one
+/// naming the host, one naming another, one naming none) against a host
+/// configured or not and a program allowed, unlisted or denied. A grant
+/// meets exactly the owner's answer on the hosts it names, and a refused
+/// host everywhere else.
 #[test]
-fn for_the_owner_cedar_answers_as_command_policy_does() {
-    let policies = [
-        CommandPolicy::new(names(&["devbox"]), None, Vec::new()),
-        CommandPolicy::new(names(&["devbox"]), None, names(&["rm"])),
-        CommandPolicy::new(
-            names(&["devbox", "peer:lab"]),
-            Some(names(&["cargo", "rm"])),
-            names(&["rm"]),
+fn run_admits_the_owner_on_every_configured_host_and_a_grant_only_on_its_own() {
+    let policy = CommandPolicy::new(
+        names(&["devbox", "build"]),
+        Some(names(&["cargo", "rm"])),
+        names(&["rm"]),
+    );
+    let cedar = evaluator(&policy);
+    let (devbox, build, none) = (
+        on(&["devbox"]),
+        on(&["build"]),
+        ToolPolicy::preset(ToolPreset::All),
+    );
+    let grant = |policy| CommandInitiator::Grant {
+        grant: "grant-1",
+        policy,
+    };
+    use CommandRefusal::{CommandDenied as Denied, EnvironmentNotGranted as NotGranted};
+    type Row = (&'static str, &'static str, [Result<(), CommandRefusal>; 4]);
+    let rows: [Row; 6] = [
+        // host, program: owner, grant on devbox, grant on build, grant on none
+        (
+            "devbox",
+            "cargo",
+            [Ok(()), Ok(()), Err(NotGranted), Err(NotGranted)],
         ),
-        CommandPolicy::new(names(&["devbox"]), Some(Vec::new()), Vec::new()),
-        CommandPolicy::new(Vec::new(), None, Vec::new()),
-        CommandPolicy::new(Vec::new(), Some(Vec::new()), Vec::new()),
+        (
+            "devbox",
+            "sh",
+            [Err(Denied), Err(Denied), Err(NotGranted), Err(NotGranted)],
+        ),
+        (
+            "devbox",
+            "rm",
+            [Err(Denied), Err(Denied), Err(NotGranted), Err(NotGranted)],
+        ),
+        (
+            "devbox",
+            "/usr/bin/cargo",
+            [Err(Denied), Err(Denied), Err(NotGranted), Err(NotGranted)],
+        ),
+        (
+            "build",
+            "cargo",
+            [Ok(()), Err(NotGranted), Ok(()), Err(NotGranted)],
+        ),
+        ("elsewhere", "cargo", [Err(NotGranted); 4]),
     ];
-    let hosts = ["devbox", "peer:lab", "build", ""];
-    let programs = [
-        "cargo",
-        "rm",
-        "/bin/rm",
-        "/usr/bin/rm",
-        "./rm",
-        "./cargo",
-        "/tmp/x/cargo",
-        "cargo-ext",
-        "sh",
-        "ls",
-        "",
-        "/",
-        "rm/",
-    ];
-    for policy in &policies {
-        let cedar = evaluator(policy);
-        for host_name in hosts {
-            let granted = matches!(
-                cedar.evaluate(CommandInitiator::Owner, host(host_name)),
-                Ok(ToolDecision::Allow { .. })
+    for (host_name, program, expected) in rows {
+        let initiators = [
+            CommandInitiator::Owner,
+            grant(&devbox),
+            grant(&build),
+            grant(&none),
+        ];
+        for (initiator, expected) in initiators.into_iter().zip(expected) {
+            assert_eq!(
+                admit_command(&cedar, initiator, host_name, program).map(|_| ()),
+                expected,
+                "{initiator:?} {host_name} {program}"
             );
-            assert_eq!(granted, policy.grants(host_name), "{policy:?} {host_name}");
-            for program in programs {
-                assert_eq!(
-                    admit_command(&cedar, CommandInitiator::Owner, host_name, program).map(|_| ()),
-                    policy.admit(host_name, program),
-                    "{policy:?} {host_name} {program}"
-                );
-            }
+            assert_eq!(
+                matches!(
+                    cedar.evaluate(initiator, host(host_name)),
+                    Ok(ToolDecision::Allow { .. })
+                ),
+                expected != Err(NotGranted),
+                "{initiator:?} {host_name}"
+            );
         }
     }
 }

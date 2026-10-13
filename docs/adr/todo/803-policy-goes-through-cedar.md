@@ -117,7 +117,7 @@ table survives edits.
 | | `conversation/application/share_grants.rs` `ShareConversation::share`; `infrastructure/store/share_grants.rs` `change` | A share target must be the caller's receiver and hold `conversation.read` (grant list scanned by hand); grant and revoke need ownership, inside the transaction. Step 3 moved the target predicate to `conversation.share` with the target's binding and grants as facts, and `owner_of` to `conversation.shares`; binding lifecycle and credential identity agreement stay in Rust, and the store still asks ownership inside the transaction |
 | | `conversation/application/passive_read.rs` `binding`; `product/change_watch/registration.rs` `admit_current` | Owner and grant checks after Cedar; a catalogue watch is refused to a peer gateway. Step 3 moved the read and the watch to the access policy; `binding` stays as identity and binding lifecycle |
 | | `attachments/application/held_reads.rs` `HeldReads::read` | Artifact bytes only for the conversation's owner. Step 3 moved it to the access policy (`artifact.read`) |
-| **C. Agent tools** | `conversation/domain/command_policy.rs` `CommandPolicy::admit` | `run` only on configured hosts; programs by allow and deny sets; ignores who started the turn. Step 4 writes these as `commands.cedar` behind `CommandPolicyEvaluator`, keyed on who started the turn |
+| **C. Agent tools** | `conversation/domain/command_policy.rs` `CommandPolicy::admit`, `grants` | `run` only on configured hosts; programs by allow and deny sets; ignores who started the turn. Step 4 moved both into `commands.cedar` behind `CommandPolicyEvaluator`, keyed on who started the turn: `run` asks `admit_command` and `environments_list` the host question, and a Drive grant's turn uses only the hosts its policy names (`commandHosts`), none when it names none. `admit` and `grants` are deleted; `CommandPolicy` stays as the gateway's configuration, read as facts |
 | | `mcp_servers/domain/app_call.rs` `admit_app`, `admit_tool_call` | An MCP App calls only its own server, and only tools visible to it. Step 4 moved both into `apps.cedar` behind `AppCallPolicyEvaluator`; whether it is an app at all, whether the tool was listed, argument size and a destructive tool's review stay in Rust (lookups, capacity, a prompt) |
 | | `nessa-sdk` `infrastructure/mcp/stand_in.rs`, `infrastructure/mcp/wire.rs` `hidden_for_model` | The model may not call a tool hidden from it |
 | | `conversation/domain/value_objects/share_access.rs` `ToolRules`, `ToolPreset` | The Drive tool policy: stored, never evaluated. Slice J4 part 2 built its Cedar evaluator |
@@ -179,12 +179,18 @@ request, `Part of #803`, because each pull request costs a full CI run (Saurav,
    needs the conversation to be asked about; and a share's target binding is
    compared with the caller only by `conversation.share`, after the registry
    read, so a registry outage shows for another owner's credential too.
-4. **C: agent tools,** after slice J4 lands its tool-policy adapter.
-   `CommandPolicy` and MCP App call admission become policies beside that
-   bundle, keyed on who started the turn. The turn's initiation and its share
-   grant are facts, so a grant can be limited to its own command hosts: a
+4. **C: agent tools. Done.** `CommandPolicy` and MCP App call admission are
+   policies beside slice J4's tool-policy bundle (`commands.cedar`,
+   `apps.cedar`), keyed on who started the turn. The turn's initiation and its
+   share grant's policy at the turn's revision are facts, so a grant is
+   limited to its own command hosts: a Drive grant's policy names them
+   (`commandHosts`, stored with its tools under one policy revision), a
    Drive-started turn no longer inherits the gateway-wide host list, and a
-   grant with no host list gets no hosts unless its policy says otherwise.
+   grant with no host list, including every grant stored before the field
+   existed, gets no hosts. Composition builds the command evaluator once over
+   the configured `CommandPolicy`; `CommandPolicy::admit` and `grants` are
+   deleted. Whether a grant's turn may call `run` at all stays its tool
+   policy's, asked first.
    Three items in row C are not policy and stay as they are:
    - **`hidden_for_model`** is the audience an MCP server declares for its
      tool under the MCP Apps protocol. It is the same for every turn and names

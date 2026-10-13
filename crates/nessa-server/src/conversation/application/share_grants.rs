@@ -321,6 +321,17 @@ pub trait ShareGrants: Send + Sync {
     fn change(&self, change: ShareGrantChange) -> ConversationFuture<'_, bool>;
     /// The grants on one conversation, oldest first.
     fn grants<'a>(&'a self, id: &'a ConversationId) -> ConversationFuture<'a, Vec<ShareGrant>>;
+    /// The tool policy `receiver_id`'s grant on `id` held at
+    /// `policy_revision`, as the journal entry of that revision says; `None`
+    /// when that entry is no Drive grant of that party on that conversation.
+    /// An entry is never changed, so the answer for one revision is always
+    /// the same, whatever the grant holds now.
+    fn policy_at<'a>(
+        &'a self,
+        id: &'a ConversationId,
+        receiver_id: &'a str,
+        policy_revision: u64,
+    ) -> ConversationFuture<'a, Option<ToolPolicy>>;
 }
 
 /// The owner's share commands: `conversation.share`, `.unshare`, `.shares`.

@@ -105,6 +105,7 @@ const outcomes: Readonly<Record<ConversationErrorCode, Outcome>> = {
   [ConversationErrorCode.ShareTargetNotPaired]: "failed",
   [ConversationErrorCode.IdempotencyConflict]: "failed",
   [ConversationErrorCode.MessageQuotaExceeded]: "failed",
+  [ConversationErrorCode.DrivePolicyUnenforceable]: "failed",
   [ConversationErrorCode.ConversationCapacity]: "failed",
   [ConversationErrorCode.ConversationConfigurationChanged]: "failed",
   [ConversationErrorCode.ConversationStateUnreadable]: "failed",

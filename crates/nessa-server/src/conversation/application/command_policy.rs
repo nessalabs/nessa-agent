@@ -4,8 +4,8 @@
 //! The owner's turns and a Drive grant's turns ask the same port. It is
 //! answered by Cedar (`infrastructure::tool_policy::cedar`), from what is
 //! true: the hosts and program lists this gateway is configured with, the
-//! hosts a grant names for itself, and the program as asked. Nothing here
-//! compares hosts or program names.
+//! hosts a grant's policy names for itself (`ToolPolicy::command_hosts`), and
+//! the program as asked. Nothing here compares hosts or program names.
 //!
 //! ```text
 //! caller ──(initiator, Host{host})──────────▶ CommandPolicyEvaluator ──▶ Allow { rules }
@@ -16,12 +16,11 @@
 //! A grant that names no hosts uses none, whatever the gateway is configured
 //! with: a Drive turn does not inherit the owner's hosts.
 //!
-//! Not wired yet: `run` still asks `CommandPolicy::admit` and
-//! `environments_list` still asks `CommandPolicy::grants`. Both move to
-//! [`admit_command`] and [`CommandQuestion::Host`] in the same change, once
-//! slice J4 part 3 gives `run` the turn's initiation (ADR 803 step 4).
-
-use std::collections::BTreeSet;
+//! `run` asks [`admit_command`] and `environments_list` asks
+//! [`CommandQuestion::Host`] for the running turn's initiator: the owner, or
+//! the Drive grant that started it with its policy at the revision the turn
+//! was admitted under (`AdmittedPolicies`). Whether a grant's turn may call
+//! `run` at all is its tool policy's (`drive_tools`), asked first.
 
 use nessa_sdk::domain::agent_execution::leases::CommandRefusal;
 
@@ -55,12 +54,10 @@ pub enum CommandInitiator<'a> {
     Grant {
         /// The grant's identity text.
         grant: &'a str,
-        /// The grant's tool policy at the revision its turn was admitted
-        /// under: one fact of the same grant the tool policy reads.
+        /// The grant's policy at the revision its turn was admitted under,
+        /// whose command hosts are the ones it may use: none when it names
+        /// none.
         policy: &'a ToolPolicy,
-        /// The hosts the grant names for itself; `None` when it names none,
-        /// and so may use none.
-        hosts: Option<&'a BTreeSet<String>>,
     },
 }
 

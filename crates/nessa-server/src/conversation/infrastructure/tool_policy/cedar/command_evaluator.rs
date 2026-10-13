@@ -66,11 +66,9 @@ impl CommandPolicyEvaluator for CedarCommandPolicyEvaluator {
     ) -> Result<ToolDecision, ToolPolicyUnavailable> {
         let principal = match initiator {
             CommandInitiator::Owner => owner()?,
-            CommandInitiator::Grant {
-                grant: id,
-                policy,
-                hosts,
-            } => grant(id, policy, hosts)?,
+            CommandInitiator::Grant { grant: id, policy } => {
+                grant(id, policy, Some(policy.command_hosts().names()))?
+            }
         };
         let (host, action, context) = match question {
             CommandQuestion::Host { host } => (host, COMMAND_HOST, Context::empty()),

@@ -268,6 +268,18 @@ struct SubscriptionFixture {
     _directory: TempDir,
 }
 
+/// Takes every Drive tool decision.
+struct AcceptingDriveToolAudit;
+
+impl crate::conversation::application::DriveToolAudit for AcceptingDriveToolAudit {
+    fn record(
+        &self,
+        _: crate::conversation::application::DriveToolAuditRecord,
+    ) -> crate::conversation::application::ConversationFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
 fn conversation_service(
     storage: &Arc<RecordStorage>,
     metadata: &Arc<LocalConversationStore>,
@@ -314,6 +326,13 @@ fn conversation_service_with_repository(
     service.bind_commands(storage.clone());
     // The store is the grant table, as `composition::local_auth` binds it.
     service.bind_note_authors(metadata.clone());
+    service.bind_drive_tools(crate::conversation::application::DriveTools {
+        grants: metadata.clone(),
+        evaluator: Arc::new(
+            crate::conversation::infrastructure::CedarToolPolicyEvaluator::new().unwrap(),
+        ),
+        audit: Arc::new(AcceptingDriveToolAudit),
+    });
     Arc::new(service)
 }
 
@@ -2502,10 +2521,11 @@ const DRIVE_COMMANDS: [&str; 7] = [
 /// The methods a Comment grant admits, and so a Drive grant too (row J17).
 const COMMENT_COMMANDS: [&str; 2] = ["conversation.message", "conversation.messageStatus"];
 
-/// A Drive grant with the widest policy, which nothing enforces yet.
+/// A Drive grant with the widest policy: every tool, asked as the
+/// conversation's approval mode asks.
 fn drive_access() -> crate::conversation::domain::ShareAccess {
     use crate::conversation::domain::{ShareAccess, ShareRole, ToolPolicy, ToolPreset};
-    ShareAccess::new(ShareRole::Drive, Some(ToolPolicy::Preset(ToolPreset::All))).unwrap()
+    ShareAccess::new(ShareRole::Drive, Some(ToolPolicy::preset(ToolPreset::All))).unwrap()
 }
 
 /// Params any Drive command's handler reads, naming conversation `id`: each
@@ -3034,11 +3054,11 @@ async fn a_driver_sends_text_and_names_nothing_of_the_owners() {
 
 /// Row J15: a turn is saved with who started it. The owner's turn says the
 /// owner, from its own surface and while devices are paired. A driver's,
-/// sent or steered, says the Drive grant that admitted it, with the role and
-/// the policy revision read for that command, and each says its tools ran
-/// unchecked. The stamp is per turn: a policy changed later stamps the next
-/// turn, and a retry of the same request keeps the revision it was admitted
-/// with.
+/// sent or steered, says the Drive grant that admitted it, with the policy
+/// revision read for that command, and that its tools were checked (row
+/// J27); the owner's say they were not. The stamp is per turn: a policy
+/// changed later stamps the next turn, and a retry of the same request
+/// keeps the revision it was admitted with.
 #[tokio::test]
 async fn a_turn_is_saved_with_who_started_it() {
     use crate::conversation::application::{ShareGrantTransition, ShareGrants};
@@ -3070,7 +3090,7 @@ async fn a_turn_is_saved_with_who_started_it() {
         .grant_to(ShareGrantTransition::Grant(
             ShareAccess::new(
                 ShareRole::Drive,
-                Some(ToolPolicy::Preset(ToolPreset::ReadOnlyTools)),
+                Some(ToolPolicy::preset(ToolPreset::ReadOnlyTools)),
             )
             .unwrap(),
         ))
@@ -3085,17 +3105,19 @@ async fn a_turn_is_saved_with_who_started_it() {
         &["conversation.write", "conversation.read", "server.read"],
     );
     fixture.owner_turn("owner").await;
-    let driver = |revision| Initiation::grant(GrantInitiator::new("receiver", revision).unwrap());
-    for (execution, expected) in [
-        ("first", Initiation::owner()),
-        ("driven", driver(granted)),
-        ("steered", driver(granted)),
-        ("again", driver(changed)),
-        ("owner", Initiation::owner()),
+    let driver = |revision| {
+        Initiation::checked_grant(GrantInitiator::new("receiver", revision).unwrap())
+    };
+    for (execution, expected, tools) in [
+        ("first", Initiation::owner(), ToolChecking::NotChecked),
+        ("driven", driver(granted), ToolChecking::Checked),
+        ("steered", driver(granted), ToolChecking::Checked),
+        ("again", driver(changed), ToolChecking::Checked),
+        ("owner", Initiation::owner(), ToolChecking::NotChecked),
     ] {
         let saved = fixture.initiation_of(execution).await;
         assert_eq!(saved, expected, "{execution}");
-        assert_eq!(saved.tools(), ToolChecking::NotChecked, "{execution}");
+        assert_eq!(saved.tools(), tools, "{execution}");
     }
     // The owner's own surface, unbound, on a gateway that pairs a device.
     let owner = SubscriptionFixture::new()
@@ -4531,4 +4553,284 @@ async fn a_steer_takes_no_note() {
         .call("conversation.messageStatus", status_params(&fixture.id, "note"))
         .await;
     assert_eq!(status["payload"]["deliveryState"], "pending", "{status}");
+}
+
+/// A Drive grant to the fixture's device with `preset`.
+fn drive_preset(
+    preset: crate::conversation::domain::ToolPreset,
+) -> crate::conversation::domain::ShareAccess {
+    use crate::conversation::domain::{ShareAccess, ShareRole, ToolPolicy};
+    ShareAccess::new(ShareRole::Drive, Some(ToolPolicy::preset(preset))).unwrap()
+}
+
+/// Row J26: a Drive grant's message, sent or steered, is refused
+/// `drive_policy_unenforceable` where its tools cannot all be checked: the
+/// conversation in an approval mode other than Ask, or its agent's own hooks
+/// allowed to answer first. Nothing is saved. Back in Ask, it is admitted,
+/// and a retry of it is answered from what was saved; the owner's messages
+/// are never refused for it.
+#[tokio::test]
+async fn a_drive_turn_is_refused_where_its_tools_cannot_be_checked() {
+    use crate::conversation::application::ShareGrantTransition;
+    let fixture = SubscriptionFixture::new().await;
+    fixture.turn("first").await;
+    fixture.settled_read(1).await;
+    let fixture = fixture.with_devices(this_device(true));
+    fixture
+        .grant_to(ShareGrantTransition::Grant(drive_access()))
+        .await;
+    grants(
+        &fixture.authority,
+        &["conversation.write", "conversation.read", "server.read"],
+    );
+    // A turn's view settles a moment before its agent is idle, and a mode
+    // changes only while nothing runs: ask again, under a new request, while
+    // the answer is `turn_running`, until it is applied.
+    let set_mode = |mode: &'static str, label: &'static str| {
+        let fixture = &fixture;
+        async move {
+            timeout(EXPECTED, async {
+                for attempt in 0.. {
+                    let params = json!({
+                        "conversationId": fixture.id.to_string(),
+                        "requestId": format!("mode-{label}-{attempt}"),
+                        "mode": mode,
+                    });
+                    let changed =
+                        owner_call(fixture, "conversation.setApprovalMode", params).await;
+                    if changed["error"]["code"] != "turn_running" {
+                        assert_eq!(changed["ok"], true, "{changed}");
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+        }
+    };
+    set_mode("auto", "auto").await;
+    let turns = fixture.turns().await;
+    for method in ["conversation.send", "conversation.steer"] {
+        let answer = fixture
+            .call(method, drive_params(method, &fixture.id, &format!("{method}-auto")))
+            .await;
+        assert_eq!(
+            answer["error"]["code"], "drive_policy_unenforceable",
+            "{method}: {answer}"
+        );
+    }
+    assert_eq!(fixture.turns().await, turns);
+    fixture.owner_turn("owner-auto").await;
+    fixture.settled_read(2).await;
+    set_mode("ask", "ask").await;
+    fixture.turn("driven").await;
+    fixture.settled_read(3).await;
+    // A retry of the admitted turn is answered from what was saved, not
+    // admitted again, whatever the mode is now.
+    set_mode("auto", "auto-again").await;
+    let turns = fixture.turns().await;
+    fixture.turn("driven").await;
+    assert_eq!(fixture.turns().await, turns);
+
+    // The agent's own hooks allowed, from its first start.
+    let fixture = SubscriptionFixture::new().await;
+    fixture.provider.native_hooks.store(true, Ordering::SeqCst);
+    fixture.turn("first").await;
+    let fixture = fixture.with_devices(this_device(true));
+    fixture
+        .grant_to(ShareGrantTransition::Grant(drive_access()))
+        .await;
+    grants(
+        &fixture.authority,
+        &["conversation.write", "conversation.read", "server.read"],
+    );
+    let turns = fixture.turns().await;
+    let answer = fixture
+        .call(
+            "conversation.send",
+            drive_params("conversation.send", &fixture.id, "hooked"),
+        )
+        .await;
+    assert_eq!(answer["error"]["code"], "drive_policy_unenforceable", "{answer}");
+    assert_eq!(fixture.turns().await, turns);
+    fixture.owner_turn("owner-hooked").await;
+}
+
+/// Row J27: every call a driver's turn asks permission for is checked
+/// against the grant's policy at the turn's revision before anyone is asked.
+/// Under `read_only_tools` the agent's `write_file` is refused as the hook,
+/// the reason naming the grant, its revision, the tool and that no policy
+/// allows it, and the turn goes on. The owner's turn, and a driver's under
+/// `all`, leave the same call to the person.
+#[tokio::test]
+async fn a_drivers_tool_call_is_checked_against_the_grants_policy() {
+    use crate::conversation::application::{ShareGrantTransition, ShareGrants};
+    use crate::conversation::domain::ToolPreset;
+    use nessa_sdk::application::agent_execution::permissions::ApprovalBasis;
+    let fixture = SubscriptionFixture::new().await;
+    fixture.turn("first").await;
+    fixture.settled_read(1).await;
+    let fixture = fixture.with_devices(this_device(true));
+    fixture
+        .grant_to(ShareGrantTransition::Grant(drive_preset(
+            ToolPreset::ReadOnlyTools,
+        )))
+        .await;
+    let revision = fixture.metadata.grants(&fixture.id).await.unwrap()[0].policy_revision;
+    grants(
+        &fixture.authority,
+        &["conversation.write", "conversation.read", "server.read"],
+    );
+    fixture
+        .provider
+        .answer_succeeds
+        .store(true, Ordering::SeqCst);
+    fixture.provider.offer_deny.store(true, Ordering::SeqCst);
+    fixture
+        .provider
+        .request_permission
+        .store(1, Ordering::SeqCst);
+    // The agent waits after asking, until the test lets it go.
+    let gated = || {
+        let (go, gate) = tokio::sync::oneshot::channel();
+        *fixture.provider.permission_gate.lock().unwrap() = Some(gate);
+        go
+    };
+    // Refused by the grant's policy, as the hook.
+    let go = gated();
+    fixture.turn("refused").await;
+    let answer = timeout(EXPECTED, async {
+        loop {
+            if let Some(answer) = fixture.provider.permission_answers.lock().unwrap().first() {
+                return answer.clone();
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let ApprovalBasis::Hook(refusal) = answer.attribution.basis() else {
+        panic!("answered as the hook: {answer:?}");
+    };
+    assert_eq!(
+        refusal.reason(),
+        format!(
+            r#"Drive grant "receiver" at revision {revision} does not allow "write_file" (rules: none allows it)"#
+        )
+    );
+    go.send(()).unwrap();
+    fixture.settled_read(2).await;
+    // The owner's turn, and a driver's under `all`, are left to the person.
+    let fixture = &fixture;
+    let pending = |execution: &'static str| async move {
+        timeout(EXPECTED, async {
+            loop {
+                let view = fixture
+                    .service
+                    .read(fixture.id.clone(), caller(&fixture.session, "read".into()))
+                    .await
+                    .unwrap();
+                if view
+                    .permissions
+                    .iter()
+                    .any(|permission| permission.execution_id == execution)
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+    };
+    let go = gated();
+    fixture.owner_turn("owner").await;
+    pending("owner").await;
+    go.send(()).unwrap();
+    fixture.settled_read(3).await;
+    fixture
+        .grant_to(ShareGrantTransition::Grant(drive_preset(ToolPreset::All)))
+        .await;
+    let go = gated();
+    fixture.turn("everything").await;
+    pending("everything").await;
+    go.send(()).unwrap();
+    fixture.settled_read(4).await;
+    assert_eq!(fixture.provider.permission_answers.lock().unwrap().len(), 1);
+}
+
+/// Row J26: a Drive turn admitted while its tools could be checked, and
+/// still queued when they no longer can (the agent's own hooks allowed by
+/// the time it is sent), is settled unsent: the agent never sees it.
+#[tokio::test]
+async fn a_queued_drive_turn_is_not_sent_where_its_tools_can_no_longer_be_checked() {
+    use crate::conversation::application::ShareGrantTransition;
+    use nessa_sdk::application::agent_execution::agents::AgentError;
+    let fixture = SubscriptionFixture::new().await;
+    fixture.turn("first").await;
+    fixture.settled_read(1).await;
+    let fixture = fixture.with_devices(this_device(true));
+    fixture
+        .grant_to(ShareGrantTransition::Grant(drive_access()))
+        .await;
+    grants(
+        &fixture.authority,
+        &["conversation.write", "conversation.read", "server.read"],
+    );
+    fixture
+        .provider
+        .request_permission
+        .store(1, Ordering::SeqCst);
+    let (go, gate) = tokio::sync::oneshot::channel();
+    *fixture.provider.permission_gate.lock().unwrap() = Some(gate);
+    fixture.owner_turn("owner").await;
+    timeout(EXPECTED, async {
+        while !fixture
+            .provider
+            .executions
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|execution| execution == "owner")
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    // Admitted behind the owner's turn, then the agent's hooks are allowed.
+    fixture.turn("queued").await;
+    fixture.provider.native_hooks.store(true, Ordering::SeqCst);
+    go.send(()).unwrap();
+    let session = crate::conversation::application::conversation_session(&fixture.id);
+    let result = timeout(EXPECTED, async {
+        loop {
+            let committed = fixture.storage.read_committed(session.clone()).await.unwrap().unwrap();
+            let settled = committed
+                .snapshot()
+                .unwrap()
+                .invocations
+                .iter()
+                .find(|record| record.request.execution_id.as_str() == "queued")
+                .and_then(|record| record.result.clone());
+            if let Some(result) = settled {
+                return result;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(
+        matches!(&result, Err(AgentError::Unsupported(reason)) if reason.contains("checked turn")),
+        "{result:?}"
+    );
+    assert!(!fixture
+        .provider
+        .executions
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|execution| execution == "queued"));
 }

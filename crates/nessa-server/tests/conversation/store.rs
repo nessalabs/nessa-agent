@@ -3289,10 +3289,10 @@ fn drive_with(policy: ToolPolicy) -> ShareAccess {
     ShareAccess::new(ShareRole::Drive, Some(policy)).unwrap()
 }
 fn no_shell() -> ShareAccess {
-    drive_with(ToolPolicy::Preset(ToolPreset::NoShell))
+    drive_with(ToolPolicy::preset(ToolPreset::NoShell))
 }
 fn rules() -> ShareAccess {
-    drive_with(ToolPolicy::Rules(
+    drive_with(ToolPolicy::rules(
         ToolRules::new(vec!["Read".into()], vec!["Bash(rm -rf:*)".into()]).unwrap(),
     ))
 }
@@ -3716,4 +3716,60 @@ async fn a_share_change_is_admitted_by_the_access_policy_in_its_transaction() {
         Err(ConversationError::Deleted)
     ));
     assert!(revoke(&opened.store, &id, "phone").await);
+}
+
+/// Row J26: the policy a Drive grant held at a revision is read from that
+/// revision's journal entry, so a later change does not change it. A
+/// revision that is no Drive grant of that party on that conversation, or
+/// none at all, names no policy.
+#[tokio::test]
+async fn a_revisions_policy_is_read_from_its_journal_entry() {
+    use crate::conversation::application::{ShareGrantTransition, ShareGrants};
+    let opened = opened();
+    let store = &opened.store;
+    let (id, other) = (new_id(), new_id());
+    store.create(owned(&id)).await.unwrap();
+    store.create(owned(&other)).await.unwrap();
+    assert!(share_as(store, &id, "phone", ShareAccess::read(), "read")
+        .await
+        .unwrap());
+    let read = only_grant(store, &id).await.policy_revision;
+    assert!(share_as(store, &id, "phone", no_shell(), "no-shell")
+        .await
+        .unwrap());
+    let shell_less = only_grant(store, &id).await.policy_revision;
+    assert!(share_as(store, &id, "phone", rules(), "rules")
+        .await
+        .unwrap());
+    let ruled = only_grant(store, &id).await.policy_revision;
+    let at = |id: ConversationId, receiver: &'static str, revision: u64| async move {
+        store.policy_at(&id, receiver, revision).await.unwrap()
+    };
+    assert_eq!(
+        at(id.clone(), "phone", shell_less).await,
+        no_shell().policy().cloned()
+    );
+    assert_eq!(
+        at(id.clone(), "phone", ruled).await,
+        rules().policy().cloned()
+    );
+    assert_eq!(at(id.clone(), "phone", read).await, None);
+    assert_eq!(at(id.clone(), "laptop", ruled).await, None);
+    assert_eq!(at(other.clone(), "phone", ruled).await, None);
+    assert_eq!(at(id.clone(), "phone", ruled + 100).await, None);
+    assert_eq!(at(id.clone(), "phone", u64::MAX).await, None);
+    store
+        .change(grant_change(
+            ShareGrantTransition::Revoke,
+            &id,
+            Some("phone"),
+            "phone-credential",
+            "revoke",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        at(id.clone(), "phone", shell_less).await,
+        no_shell().policy().cloned()
+    );
 }

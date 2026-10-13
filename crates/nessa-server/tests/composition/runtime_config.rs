@@ -59,11 +59,13 @@ fn environment_tools_grant_commands_on_named_hosts_under_their_programs() {
     )
     .unwrap()
     .unwrap();
-    assert!(policy.grants("devbox"));
-    assert!(!policy.grants("build"));
-    assert_eq!(policy.admit("devbox", "cargo"), Ok(()));
-    assert!(policy.admit("devbox", "ls").is_err());
-    assert!(policy.admit("devbox", "sh").is_err());
+    // Read as the facts the command policy decides with.
+    let set = |names: &[&str]| -> std::collections::BTreeSet<String> {
+        names.iter().map(|name| (*name).to_owned()).collect()
+    };
+    assert_eq!(policy.hosts(), &set(&["devbox"]));
+    assert_eq!(policy.allow(), Some(&set(&["cargo", "ls"])));
+    assert_eq!(policy.deny(), &set(&["ls"]));
     // A paired environment is named as it dials in, never in sshHosts.
     let peer = format!("peer:{}", "ab".repeat(32));
     let paired = self::policy(
@@ -71,7 +73,7 @@ fn environment_tools_grant_commands_on_named_hosts_under_their_programs() {
     )
     .unwrap()
     .unwrap();
-    assert!(paired.grants(&peer));
+    assert!(paired.hosts().contains(&peer));
 }
 
 #[test]

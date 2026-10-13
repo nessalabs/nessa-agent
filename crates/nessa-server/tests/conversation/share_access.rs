@@ -1,7 +1,8 @@
 //! A share's role and tool policy, tested without storage or a socket
 //! (`docs/design/read-grants.md`, rows J1 and J3).
 use super::{
-    ShareAccess, ShareAccessError, ShareRole, ToolPolicy, ToolPolicyError, ToolPreset, ToolRules,
+    CommandHosts, ShareAccess, ShareAccessError, ShareRole, ToolPolicy, ToolPolicyError,
+    ToolPreset, ToolRules,
 };
 
 fn rules(allow: &[&str], deny: &[&str]) -> Result<ToolRules, ToolPolicyError> {
@@ -14,7 +15,7 @@ fn rules(allow: &[&str], deny: &[&str]) -> Result<ToolRules, ToolPolicyError> {
 /// Row J3: Drive needs a policy, and Read and Comment take none.
 #[test]
 fn drive_needs_a_policy_and_read_and_comment_take_none() {
-    let policy = || Some(ToolPolicy::Preset(ToolPreset::NoShell));
+    let policy = || Some(ToolPolicy::preset(ToolPreset::NoShell));
     assert_eq!(
         ShareAccess::new(ShareRole::Drive, None),
         Err(ShareAccessError::PolicyRequired)
@@ -70,4 +71,65 @@ fn tool_rules_are_bounded_and_plain() {
             "{malformed:?}"
         );
     }
+}
+
+/// A Drive policy's command hosts are names `run` could take, each once, at
+/// most `MAX_HOSTS`; none is the default, and a policy keeps them beside its
+/// tools.
+#[test]
+fn command_hosts_are_bounded_and_named_as_run_names_them() {
+    let names = |hosts: &[&str]| hosts.iter().map(|host| (*host).to_owned()).collect();
+    let peer = format!("peer:{}", "0f".repeat(32));
+    let kept = CommandHosts::new(names(&["devbox", "user@build.example", &peer])).unwrap();
+    assert_eq!(
+        kept.names().iter().map(String::as_str).collect::<Vec<_>>(),
+        ["devbox", &peer, "user@build.example"]
+    );
+    assert!(CommandHosts::new(Vec::new()).unwrap().is_empty());
+    assert_eq!(CommandHosts::new(Vec::new()).unwrap(), CommandHosts::none());
+    let full: Vec<String> = (0..CommandHosts::MAX_HOSTS)
+        .map(|n| format!("h{n}"))
+        .collect();
+    assert!(CommandHosts::new(full.clone()).is_ok());
+    let mut over = full;
+    over.push("one-more".into());
+    assert_eq!(CommandHosts::new(over), Err(ToolPolicyError::TooManyHosts));
+    for malformed in [
+        "",
+        "here",
+        " devbox",
+        "-devbox",
+        "dev box",
+        "peer:",
+        "peer:ZZ",
+        &format!("peer:{}", "0F".repeat(32)),
+        &"h".repeat(CommandHosts::MAX_HOST_BYTES + 1),
+    ] {
+        assert_eq!(
+            CommandHosts::new(names(&[malformed])),
+            Err(ToolPolicyError::MalformedHost),
+            "{malformed:?}"
+        );
+    }
+    assert_eq!(
+        CommandHosts::new(names(&["devbox", "devbox"])),
+        Err(ToolPolicyError::MalformedHost)
+    );
+    assert!(CommandHosts::new(vec!["h".repeat(CommandHosts::MAX_HOST_BYTES)]).is_ok());
+    // Hosts take the room of patterns: with both lists full, none fits.
+    let full: Vec<String> = (0..ToolRules::MAX_RULES).map(|n| format!("t{n}")).collect();
+    let rules = ToolPolicy::rules(ToolRules::new(full.clone(), full).unwrap());
+    assert_eq!(
+        rules
+            .clone()
+            .with_command_hosts(CommandHosts::new(names(&["devbox"])).unwrap()),
+        Err(ToolPolicyError::TooManyHosts)
+    );
+    assert!(rules.with_command_hosts(CommandHosts::none()).is_ok());
+    let policy = ToolPolicy::preset(ToolPreset::NoShell);
+    assert!(policy.command_hosts().is_empty());
+    let on = policy.clone().with_command_hosts(kept.clone()).unwrap();
+    assert_eq!(on.command_hosts(), &kept);
+    assert_eq!(on.tools(), policy.tools());
+    assert_ne!(on, policy);
 }

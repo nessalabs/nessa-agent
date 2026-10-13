@@ -5,7 +5,7 @@ use cedar_policy::{Authorizer, Context, Entity, PolicySet, RestrictedExpression}
 use crate::conversation::application::{
     ToolDecision, ToolInitiator, ToolPolicyEvaluator, ToolPolicyUnavailable,
 };
-use crate::conversation::domain::{ToolCall, ToolPolicy, ToolSource};
+use crate::conversation::domain::{ToolCall, ToolChoice, ToolSource};
 
 use super::bundle::Bundle;
 use super::grant_rules::grant_policies;
@@ -73,9 +73,9 @@ impl ToolPolicyEvaluator for CedarToolPolicyEvaluator {
         match initiator {
             ToolInitiator::Owner => self.decide(owner()?, self.bundle.policies(), call),
             ToolInitiator::Grant { grant: id, policy } => {
-                let policies = match policy {
-                    ToolPolicy::Preset(_) => None,
-                    ToolPolicy::Rules(rules) => Some(self.bundle.with(grant_policies(id, rules)?)?),
+                let policies = match policy.tools() {
+                    ToolChoice::Preset(_) => None,
+                    ToolChoice::Rules(rules) => Some(self.bundle.with(grant_policies(id, rules)?)?),
                 };
                 let principal = grant(id, policy, None)?;
                 let policies = policies.as_ref().unwrap_or(self.bundle.policies());

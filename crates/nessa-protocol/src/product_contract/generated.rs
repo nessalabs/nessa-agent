@@ -123,6 +123,7 @@ pub enum ConversationErrorCode {
     ShareTargetNotPaired,
     IdempotencyConflict,
     MessageQuotaExceeded,
+    DrivePolicyUnenforceable,
 }
 impl ConversationErrorCode {
     pub fn as_str(self) -> &'static str {
@@ -183,6 +184,7 @@ impl ConversationErrorCode {
             Self::ShareTargetNotPaired => "share_target_not_paired",
             Self::IdempotencyConflict => "idempotency_conflict",
             Self::MessageQuotaExceeded => "message_quota_exceeded",
+            Self::DrivePolicyUnenforceable => "drive_policy_unenforceable",
         }
     }
 }

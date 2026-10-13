@@ -10,7 +10,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::str::FromStr;
 
 use crate::conversation::application::{ToolDecision, ToolPolicyUnavailable};
-use crate::conversation::domain::{ToolPolicy, ToolPreset};
+use crate::conversation::domain::{ToolChoice, ToolPolicy, ToolPreset};
 
 use super::bundle::Bundle;
 
@@ -110,18 +110,19 @@ pub(super) fn owner() -> Result<Entity, ToolPolicyUnavailable> {
     entity(OWNER, "owner", [])
 }
 
-/// A Drive grant, with every fact of it the caller holds: its tool policy's
-/// preset (`rules` for its own rules), and the hosts it names for its
-/// commands, left out when it names none. One builder for every evaluator,
-/// so the entity is the same wherever it is read.
+/// A Drive grant, with every fact of it the caller asks about: its tool
+/// policy's preset (`rules` for its own rules), and, for the command policy
+/// alone, the hosts its policy names for its commands (an empty set when it
+/// names none). One builder for every evaluator, so the entity is the same
+/// wherever it is read.
 pub(super) fn grant(
     grant: &str,
     policy: &ToolPolicy,
     command_hosts: Option<&BTreeSet<String>>,
 ) -> Result<Entity, ToolPolicyUnavailable> {
-    let preset = match policy {
-        ToolPolicy::Preset(preset) => preset_name(*preset),
-        ToolPolicy::Rules(_) => RULES,
+    let preset = match policy.tools() {
+        ToolChoice::Preset(preset) => preset_name(*preset),
+        ToolChoice::Rules(_) => RULES,
     };
     let mut attributes = vec![(
         "toolPreset",

@@ -136,6 +136,10 @@ pub enum FetchCallRefusal {
     EnvironmentNotLeased,
     /// A fetch for the same tool call is under way.
     DuplicateRequest,
+    /// The running turn's Drive grant does not allow `artifacts_fetch`
+    /// (row J28), or its decision could not be recorded in the Drive tool
+    /// audit. Nothing was placed.
+    NotAllowed,
     /// Where the agent runs takes no files: this gateway's own machine.
     FetchUnavailable,
     /// The digest, media type or size do not name a file one could hold.
@@ -296,13 +300,26 @@ impl ConversationService {
         let Some(snapshot) = live.agent.session_manager().snapshot().await else {
             return refused(FetchCallRefusal::NoTurn);
         };
-        let Some((lease, _turn, actor)) =
+        let Some((lease, turn, actor, initiation)) =
             super::environment_tools::running_turn(&snapshot, &call.call)
         else {
             return refused(FetchCallRefusal::NoTurn);
         };
         if &lease != live.lease.id() || !live.lease.is_live() {
             return refused(FetchCallRefusal::NoTurn);
+        }
+        let checked = super::environment_tools::GatewayToolCall {
+            conversation: id,
+            turn: &turn,
+            actor: &actor,
+            initiation: &initiation,
+            tool: "artifacts_fetch",
+        };
+        if let Some(reason) =
+            super::environment_tools::drive_refusal(&self.inner.drive, &live, checked).await
+        {
+            tracing::warn!(conversation_id = %id, %reason, "a Drive grant's tool call was refused");
+            return refused(FetchCallRefusal::NotAllowed);
         }
         // Where the agent runs now is the only lease it holds, compared as
         // `artifacts_publish` compares it.

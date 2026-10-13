@@ -43,6 +43,14 @@ impl ShareGrants for Scripted {
     fn grants<'a>(&'a self, _: &'a ConversationId) -> ConversationFuture<'a, Vec<ShareGrant>> {
         unreachable!("a verdict lists no grants")
     }
+    fn policy_at<'a>(
+        &'a self,
+        _: &'a ConversationId,
+        _: &'a str,
+        _: u64,
+    ) -> ConversationFuture<'a, Option<crate::conversation::domain::ToolPolicy>> {
+        unreachable!("a verdict reads no policy")
+    }
 }
 
 fn note(id: &str, author: Initiator) -> NoteRecord {

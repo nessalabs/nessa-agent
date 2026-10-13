@@ -44,6 +44,11 @@ pub enum ConversationError {
     /// The conversation keeps its most notes, or the note's author left its
     /// most for now. Nothing was saved.
     MessageQuotaExceeded,
+    /// A Drive grant's turn sent where its tools cannot all be checked
+    /// against the grant's policy: an agent that runs tools without asking
+    /// (OpenCode), an approval mode other than Ask, native hooks allowed, or
+    /// the policy unreadable. Nothing was saved or sent.
+    DrivePolicyUnenforceable,
     /// A delete that happened — the conversation is tombstoned, left out of
     /// every list, and refused — and did not finish. Repeating the delete
     /// finishes it.

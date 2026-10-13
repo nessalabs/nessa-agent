@@ -4,7 +4,9 @@
 //!
 //! ```text
 //! run(conversation, call) ──▶ the running turn? ── no ──▶ NoTurn, nothing recorded
-//!   ──▶ the command's policy, sandbox and budget ── refused ──▶ CommandRefused
+//!   ──▶ a Drive grant's turn: its tool policy allows `run`? ── no ──▶ NotAllowed
+//!   ──▶ admit_command(turn's initiator, host, program), sandbox and budget
+//!       ── refused ──▶ CommandRefused
 //!   ──▶ CommandEnvironment::grant ── refused ──▶ CommandRefused
 //!   ──▶ the terms granted within those asked? ── no ──▶ the hold dropped,
 //!       CommandRefused(environment not granted)
@@ -20,23 +22,39 @@
 //! the caller going away, or the agent's lease ending, stops it (row L15),
 //! and what it printed is kept as evidence under its record's bound.
 //!
+//! Where a command may go, and which program it may run, is the command
+//! policy's (`CommandPolicyEvaluator`, ADR 803 step 4), asked for the turn's
+//! initiator: the owner uses every host the gateway grants commands on, a
+//! Drive grant's turn only those its policy at the turn's revision names, and
+//! none when it names none. `environments_list` asks the same policy, so a
+//! grant's turn is shown only the hosts it may use.
+//!
 //! What is recorded issued is what the environment granted, never what was
 //! asked (row L1): its timeout may be shorter than asked, under the
 //! environment owner's own policy. An answer granting more — a longer
 //! timeout, another sandbox — is never run.
 use super::{ConversationError, ConversationService, LiveConversation};
-use crate::conversation::application::{environment::GrantedTerms, CommandResult, Environment};
+use crate::conversation::application::drive_tools::{
+    decision, AdmittedPolicies, DriveToolAuditRecord, DriveTools,
+};
+use crate::conversation::application::{
+    admit_command, environment::GrantedTerms, CommandInitiator, CommandQuestion, CommandResult,
+    Environment, ToolDecision,
+};
+use crate::conversation::domain::{ToolCall, ToolPolicy, ToolSource};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::application::agent_execution::{
     permissions::ActionContext,
-    sessions::{CurrentLease, LeaseRecord, SessionSnapshot},
+    sessions::{CurrentLease, InvocationRecord, LeaseRecord, SessionSnapshot},
 };
-use nessa_sdk::domain::agent_execution::executions::{ExecutionId, InvocationStage};
+use nessa_sdk::domain::agent_execution::executions::{
+    ExecutionId, Initiation, Initiator, InvocationStage,
+};
 use nessa_sdk::domain::agent_execution::leases::{
     CommandExit, CommandOutput, CommandRefusal, CommandTerms, CommandWork, EnvironmentRef, Lease,
     LeaseEndCause, LeaseId, LeasePhase, LeaseRefusal, SandboxProfile, SandboxProfiles,
 };
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tokio::sync::watch;
 
 /// The environment named `here`: this gateway's own machine.
@@ -53,7 +71,8 @@ pub struct EnvironmentListing {
     /// `Some(true)` with a connection to it open now; `None` when not known
     /// without reaching it. Nothing is reached to answer.
     pub reachable: Option<bool>,
-    /// Whether the agent may run commands there with `run`.
+    /// Whether the running turn's initiator may run commands there with
+    /// `run`, as the command policy answers.
     pub commands: bool,
     /// Whether this conversation's agent runs there.
     pub current: bool,
@@ -102,6 +121,10 @@ pub enum CommandCallError {
     NotConfigured,
     /// Its caller went away before anything was asked of an environment.
     Cancelled,
+    /// The running turn's Drive grant does not allow `run`, or its decision
+    /// could not be recorded in the Drive tool audit, with why. No lease
+    /// record was written.
+    NotAllowed(String),
 }
 
 impl ConversationService {
@@ -110,16 +133,31 @@ impl ConversationService {
         self.inner.environment.command_policy().is_some()
     }
 
-    /// Where conversation `id`'s agent could work: here, every configured
-    /// host and every connected paired environment, what is known of
-    /// reaching each without reaching it, and whether commands are granted
-    /// there.
+    /// Where conversation `id`'s agent could work, for its running turn's
+    /// initiator: here, and each configured host and connected paired
+    /// environment the command policy lets that initiator use, with what is
+    /// known of reaching each without reaching it and whether it takes
+    /// commands. The owner is shown every one, commands or not; a Drive
+    /// grant's turn only the hosts it may use, and the one the conversation
+    /// runs on. With no turn running, or a grant whose policy is no longer
+    /// kept, nobody may use any host, and only here and where it runs are
+    /// shown.
     pub async fn list_environments(
         &self,
         id: &ConversationId,
     ) -> Result<Vec<EnvironmentListing>, ConversationError> {
         let environments = &self.inner.environment;
         let current = environments.placement(id).await?;
+        let initiator = match self.live(id).await {
+            Some(live) => {
+                let snapshot = live.agent.session_manager().snapshot().await;
+                snapshot
+                    .as_ref()
+                    .and_then(running_invocation)
+                    .and_then(|turn| TurnInitiator::of(&live.admitted_policies, &turn.initiation))
+            }
+            None => None,
+        };
         let policy = environments.command_policy();
         let mut listed = vec![EnvironmentListing {
             name: HERE.into(),
@@ -133,12 +171,24 @@ impl ConversationService {
             .iter()
             .map(|(name, environment)| (name.clone(), environment.clone()));
         for (name, environment) in hosts.chain(environments.connected_peers()) {
+            let usable = match (policy, &initiator) {
+                (Some(policy), Some(initiator)) => matches!(
+                    policy.evaluate(initiator.ask(), CommandQuestion::Host { host: &name }),
+                    Ok(ToolDecision::Allow { .. })
+                ),
+                _ => false,
+            };
+            let is_current = current.as_deref() == Some(name.as_str());
+            let shown = usable || is_current || matches!(initiator, Some(TurnInitiator::Owner));
+            if !shown {
+                continue;
+            }
             let commands = environment.commands();
             listed.push(EnvironmentListing {
                 here: false,
                 reachable: commands.and_then(|commands| commands.reachable()),
-                commands: commands.is_some() && policy.is_some_and(|policy| policy.grants(&name)),
-                current: current.as_deref() == Some(name.as_str()),
+                commands: commands.is_some() && usable,
+                current: is_current,
                 name,
             });
         }
@@ -168,8 +218,22 @@ impl ConversationService {
         let live = self.live(id).await.ok_or(CommandCallError::NoTurn)?;
         let manager = live.agent.session_manager();
         let snapshot = manager.snapshot().await.ok_or(CommandCallError::NoTurn)?;
-        let (parent, _, actor) =
+        let (parent, turn, actor, initiation) =
             running_turn(&snapshot, &call.call).ok_or(CommandCallError::NoTurn)?;
+        // A Drive grant's turn runs a command only where its policy allows
+        // `run` (row J28); where it then goes, and what it runs, the command
+        // policy decides below for the same grant at the same revision.
+        let checked = GatewayToolCall {
+            conversation: id,
+            turn: &turn,
+            actor: &actor,
+            initiation: &initiation,
+            tool: "run",
+        };
+        if let Some(reason) = drive_refusal(&self.inner.drive, &live, checked).await {
+            tracing::warn!(conversation_id = %id, %reason, "a Drive grant's tool call was refused");
+            return Err(CommandCallError::NotAllowed(reason));
+        }
         let lease = LeaseId::new(uuid::Uuid::new_v4().to_string())
             .expect("a UUID is a portable lease identity");
         // A name that is no environment is not recorded as one: nothing
@@ -207,7 +271,18 @@ impl ConversationService {
             };
             return self.refuse(&live, &refused, refusal).await;
         };
-        if let Err(refusal) = policy.admit(&call.environment, work.program()) {
+        // A grant's policy no longer kept refuses the host, as the Drive
+        // check above refuses its call: nothing stands in for it.
+        let admitted = match TurnInitiator::of(&live.admitted_policies, &initiation) {
+            Some(initiator) => admit_command(
+                policy.as_ref(),
+                initiator.ask(),
+                &call.environment,
+                work.program(),
+            ),
+            None => Err(CommandRefusal::EnvironmentNotGranted),
+        };
+        if let Err(refusal) = admitted {
             return self.refuse(&live, &refused, refusal).await;
         }
         if let Err(refusal) = SandboxProfiles::UNENCLOSED.admit(call.sandbox) {
@@ -500,13 +575,13 @@ struct Refused<'a> {
     actor: &'a ActionContext,
 }
 
-/// The conversation's Live agent lease, the running turn, and the person
-/// it is for with `call` as their request; `None` with no turn running or
-/// no Live lease to run under.
+/// The conversation's Live agent lease, the running turn, the person it is
+/// for with `call` as their request, and who started it; `None` with no
+/// turn running or no Live lease to run under.
 pub(super) fn running_turn(
     snapshot: &SessionSnapshot,
     call: &str,
-) -> Option<(LeaseId, ExecutionId, ActionContext)> {
+) -> Option<(LeaseId, ExecutionId, ActionContext, Initiation)> {
     let parent = snapshot
         .lease
         .as_ref()
@@ -514,16 +589,119 @@ pub(super) fn running_turn(
         .filter(|lease| lease.phase() == LeasePhase::Live)?
         .id()
         .clone();
-    let turn = snapshot.invocations.iter().rev().find(|record| {
+    let turn = running_invocation(snapshot)?;
+    let actor = &turn.actor;
+    let actor = ActionContext::new(actor.principal_id(), actor.surface_id(), call).ok()?;
+    Some((
+        parent,
+        turn.request.execution_id.clone(),
+        actor,
+        turn.initiation.clone(),
+    ))
+}
+
+/// The conversation's running turn, if one is.
+fn running_invocation(snapshot: &SessionSnapshot) -> Option<&InvocationRecord> {
+    snapshot.invocations.iter().rev().find(|record| {
         record.result.is_none()
             && record
                 .scheduling
                 .last()
                 .is_some_and(|event| event.stage == InvocationStage::Running)
-    })?;
-    let actor = &turn.actor;
-    let actor = ActionContext::new(actor.principal_id(), actor.surface_id(), call).ok()?;
-    Some((parent, turn.request.execution_id.clone(), actor))
+    })
+}
+
+/// Who a turn's commands run for, as the command policy is asked about
+/// them: the owner, or the Drive grant that started it with its policy at
+/// the revision the turn was admitted under.
+enum TurnInitiator {
+    Owner,
+    Grant { grant: String, policy: ToolPolicy },
+}
+
+impl TurnInitiator {
+    /// The initiator of a turn started as `initiation`, or `None` for a
+    /// grant whose policy at that revision the conversation no longer keeps.
+    fn of(admitted: &AdmittedPolicies, initiation: &Initiation) -> Option<Self> {
+        match initiation.initiator() {
+            Initiator::Owner => Some(Self::Owner),
+            Initiator::Grant(grant) => {
+                admitted
+                    .policy(grant.grant(), grant.policy_revision())
+                    .map(|policy| Self::Grant {
+                        grant: grant.grant().to_owned(),
+                        policy,
+                    })
+            }
+        }
+    }
+
+    fn ask(&self) -> CommandInitiator<'_> {
+        match self {
+            Self::Owner => CommandInitiator::Owner,
+            Self::Grant { grant, policy } => CommandInitiator::Grant { grant, policy },
+        }
+    }
+}
+
+/// One gateway tool call of a running turn, as [`drive_refusal`] checks it.
+pub(super) struct GatewayToolCall<'a> {
+    pub(super) conversation: &'a ConversationId,
+    pub(super) turn: &'a ExecutionId,
+    pub(super) actor: &'a ActionContext,
+    pub(super) initiation: &'a Initiation,
+    pub(super) tool: &'a str,
+}
+
+/// Why the gateway's tool `call.tool` may not run for a turn of `live`, or
+/// `None` when it may: a Drive grant's turn is checked against its policy,
+/// the owner's never is (row J28). A grant's decision, allowed or refused, is
+/// committed to the Drive tool audit first; one that could not be is refused.
+pub(super) async fn drive_refusal(
+    drive: &OnceLock<DriveTools>,
+    live: &LiveConversation,
+    call: GatewayToolCall<'_>,
+) -> Option<String> {
+    let decided = decision(
+        drive,
+        &live.admitted_policies,
+        call.initiation,
+        ToolCall::new(ToolSource::Gateway, call.tool),
+    )?;
+    let Some(audit) = drive.get().map(|drive| drive.audit.clone()) else {
+        return Some(decided.refusal.unwrap_or_else(|| unrecorded(call.tool)));
+    };
+    let record = DriveToolAuditRecord {
+        conversation_id: call.conversation.clone(),
+        turn: call.turn.as_str().to_owned(),
+        call: call.actor.request_id().to_owned(),
+        initiator_principal_id: call.actor.principal_id().to_owned(),
+        initiator_surface_id: call.actor.surface_id().to_owned(),
+        grant: decided.grant,
+        revision: decided.revision,
+        tool: call.tool.to_owned(),
+        allowed: decided.refusal.is_none(),
+        rules: decided.rules,
+        reason: decided.refusal.clone(),
+    };
+    if let Err(error) = audit.record(record).await {
+        tracing::error!(
+            conversation_id = %call.conversation,
+            call = call.actor.request_id(),
+            tool = call.tool,
+            ?error,
+            "a Drive grant's tool decision could not be recorded, so the call is refused"
+        );
+        return Some(match decided.refusal {
+            Some(reason) => format!("{reason}; its decision could not be recorded"),
+            None => unrecorded(call.tool),
+        });
+    }
+    decided.refusal
+}
+
+fn unrecorded(tool: &str) -> String {
+    format!("the Drive grant's decision on {tool:?} could not be recorded, so it is refused")
 }
 
 /// What issuing a granted command came to, under the lock.

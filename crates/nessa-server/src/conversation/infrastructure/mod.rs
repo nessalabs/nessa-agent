@@ -64,6 +64,9 @@
 //! (`access_policy/cedar/`): who may locate, act on, read, comment in, drive
 //! or share a conversation, and watch a catalogue. The store asks it inside
 //! the transaction that writes a share grant.
+//! `DurableDriveToolAudit` keeps each of the tool policy's decisions on the
+//! gateway's own tools for a Drive turn, one immutable file per conversation,
+//! call, tool and outcome.
 mod change_watch;
 pub use change_watch::{NessaRecordWatches, UuidWatchNamespaces};
 // Composed only by the Unix gateway (`composition/local_auth.rs`), as
@@ -110,6 +113,8 @@ pub use creation_audit::DurableConversationCreationAudit;
 
 mod mode_audit;
 pub use mode_audit::DurableConversationModeAudit;
+mod drive_tool_audit;
+pub use drive_tool_audit::DurableDriveToolAudit;
 
 mod mcp_app_audit;
 pub use mcp_app_audit::DurableMcpAppAudit;
