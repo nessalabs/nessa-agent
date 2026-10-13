@@ -6,6 +6,7 @@
 mod failures;
 mod infrastructure;
 mod native_owner_phone;
+mod native_owner_recovery;
 mod native_product;
 mod native_session;
 mod saved;
@@ -17,6 +18,7 @@ mod test_support;
 uniffi::setup_scaffolding!();
 pub use failures::*;
 pub use native_owner_phone::*;
+pub use native_owner_recovery::*;
 pub use native_product::*;
 pub use native_session::*;
 pub use saved::{
@@ -26,5 +28,5 @@ pub use session::{
     EnrollmentConnector, EnrollmentEntropy, EnrollmentEntropyFactory, FollowedConversation,
     LocalEnrollment, LocalIssuedEnrollment, NativeSession, SessionCloseObservation,
     SessionFailure, SessionFollow, SessionPreparationFailure, SessionProduct, SessionRead,
-    SessionRefresh,
+    SessionRefresh, SessionStatus,
 };

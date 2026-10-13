@@ -1803,8 +1803,14 @@ selection; cold getters acknowledge the named original, while adoption validates
 all offered selectors before its first acknowledgement. Generic enrollment writers
 remain excluded from original scopes. Actual storage regressions live in
 `tests/adapters/private_state/owner_phone_adoption.rs`. These Auth owners implement
-local historical adoption; remote recovery, current reader/product admission,
-generated Apple bindings and app Send remain consuming integration work.
+local historical adoption. Core `pairing/owner_recovery.rs` consumes the same
+combined private owner for actual pinned compact recovery, complete original/echo/
+disclosure correspondence, explicit settlement and actual saved-record correlation.
+`retained/owner.rs` structurally separates failed recovery from completed remote
+facts and later independent settlement/purge failures; `retained/device.rs` runs
+both inside the existing physical worker/permit. Current reader/product selection
+uses the same freshly reloaded, correlated issued record. Generated Apple bindings
+and app Send remain consuming integration work.
 
 ### Shared product contract values
 
@@ -2044,7 +2050,14 @@ unknown poisoned empty slot stays unconfirmed. No new mutable cleanup flag exist
 changing captured native facts.
 `tests/product/parent.rs` and `tests/product/fixtures.rs` exercise actual pinned TLS,
 private-scope retention and escaped foreign facts/permits. These additions do not
-compose Swift product waiting or implement OwnerPhone enrollment/adoption.
+compose Swift product waiting. `src/native_owner_recovery.rs` exposes immutable
+pinned recovery and independent exact local adoption failures, without a seed,
+bearer or parent lease. `SessionStatus` distinguishes current ReadOnly and original
+OwnerPhone outcomes; missing original state cannot fall through to ReadOnly.
+`tests/session/owner_recovery.rs` crosses actual private FS, pinned compact TLS,
+contradictory valid saved records, held publication/close, reader refusal recheck,
+terminal purge/removal and actual product Ready. Authorization/app Send and the
+changed generated Apple ABI remain separate integration gates.
 The admitted `local_enrollment` publication transfers an owned private-record seed to
 the Auth native identity adapter and returns only public key/pin/intent and optional
 issued selectors. `tests/session/local_enrollment.rs` covers records, failures,
@@ -2062,6 +2075,14 @@ admission reserved before enqueue, a per-call stop latch and a cancellation-inde
 close task. Per-operation capture overloads translate bounded immutable snapshots
 inside that same admission, including serialization/decoding. Verification holds
 actual private scope locks through physical calls and captures until drain.
+Its original prepare/restore/recovery calls use that same parent admission;
+close capture preserves native-confirmed physical release independently of a
+historical failure. `swift/NativeProductWorker.swift` dispatches the actual product
+child with separately admitted Ready, event and submission lanes. Native tickets
+settle on an independent wait lane; their captures retain native count/byte
+permits, original UInt64 identity and typed settlement. Synchronous close wakes
+native I/O before physical drain joins those captures. Neither wrapper allocates
+transport IDs, implements request deadlines or copies private device keys.
 `scripts/build-native-device.sh` generates a local Apple Swift package/XCFramework
 from a frozen checkout; generated declarations remain build output, not hand-edited
 source. Nessa iOS embeds a reviewed dynamic package; its production native

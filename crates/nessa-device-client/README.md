@@ -31,6 +31,13 @@ Current development surface:
   core's canonical durable producer. Immutable public original/key/signature/digest
   getters expose no seed or bearer, and never establish enrollment or Ready.
   Complete discovery conversion uses the protocol mapper and bounded unique JSON.
+- `native_owner_recovery`: immutable actual pinned original observations and
+  independent local adoption/purge failures. Recovery alone performs no adoption;
+  fresh status explicitly settles through Auth's combined original/enrollment owner.
+  Reader/product selection reloads and correlates the actual issued record's key,
+  pin, complete public lineage, credential and receiver before using that same record.
+  Missing original history refuses OwnerPhone records rather than substituting the
+  current DeviceRead capability. Tests live in `tests/session/owner_recovery.rs`.
 - `tests/product`: actual saved issued key/pin/CredentialId and pinned TLS fixtures;
   parent installation, replacement, poison teardown and private-lock physical drain;
   escaped foreign facts, retained permits and native event timeout mapping.
@@ -63,10 +70,13 @@ owner bearer proxy. Existing DeviceRead records gain no write permission from th
 adapter. OwnerPhone original preparation now has separate initial/restore calls;
 restoration never creates a replacement key for missing or Reserved history. The
 same private owner retains admitted work through its physical publication, including
-late facts after closure. OwnerPhone network enrollment/recovery/adoption and app
-Send wiring remain separate #811 slices. The new preparation/release-observation
-ABI still needs generated Apple declaration/package verification before adoption. The existing serial NativeSessionWorker does not yet
-compose independent product waits. Do not place a blocking product waiter on its
+late facts after closure. The native consumer now performs read-only original
+recovery and explicit local adoption over pinned compact TLS, with ordinary
+completed observations retained beside later typed failures. An outer worker fault
+leaves completion/effects unconfirmed; it does not prove that publication was absent.
+Application authorization and Send wiring remain separate #811 slices. The changed
+ABI still needs generated Apple declaration/package verification before adoption.
+Swift product-wait integration also remains separately reviewed consuming work. Do not place a blocking product waiter on its
 submission/retained/close queue.
 
 A physical close observation can retain Product or Damaged failure while confirming

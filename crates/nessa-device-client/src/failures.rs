@@ -356,6 +356,8 @@ pub enum NativeSessionFailureKind {
     Stopped,
     /// Protected product opening or physical drain failed.
     Product,
+    /// Original recovery or later actual owner selection refused.
+    Owner,
 }
 /// Immutable original session failure, safe to retain after session deallocation.
 #[derive(Debug, uniffi::Object)]
@@ -377,6 +379,9 @@ impl NativeSessionFailure {
             SessionFailure::NoCredential => NativeSessionFailureKind::NoCredential,
             SessionFailure::Stopped => NativeSessionFailureKind::Stopped,
             SessionFailure::Product(_) => NativeSessionFailureKind::Product,
+            SessionFailure::Owner(_) | SessionFailure::OwnerSelection { .. } => {
+                NativeSessionFailureKind::Owner
+            }
         }
     }
     /// Original private-state failure.
@@ -406,6 +411,26 @@ impl NativeSessionFailure {
     pub fn product(&self) -> Option<Arc<NativeProductFailure>> {
         match self.value {
             SessionFailure::Product(value) => Some(Arc::new(NativeProductFailure { value })),
+            _ => None,
+        }
+    }
+    /// Entire owner recovery/settlement facts preserved when product selection refused.
+    pub fn owner_status(&self) -> Option<Arc<crate::native_session::NativeStatus>> {
+        match &self.value {
+            SessionFailure::Owner(value) | SessionFailure::OwnerSelection { status: value, .. } => {
+                Some(Arc::new(crate::native_session::NativeStatus {
+                    value: (**value).clone(),
+                }))
+            }
+            _ => None,
+        }
+    }
+    /// Actual later selected-record refusal, separate from successful earlier status.
+    pub fn owner_selection(&self) -> Option<Arc<NativeEnrollmentFailure>> {
+        match self.value {
+            SessionFailure::OwnerSelection { error, .. } => {
+                Some(Arc::new(NativeEnrollmentFailure { value: error }))
+            }
             _ => None,
         }
     }

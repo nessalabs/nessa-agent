@@ -16,7 +16,7 @@ use std::{
 };
 
 /// Expected preparation refusal, preserving source failures without string parsing.
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OwnerPhonePreparationError {
     /// Immutable source/pin/key cannot construct the canonical signed original.
     Crypto(PairingCryptoError),
@@ -35,6 +35,7 @@ impl Display for OwnerPhonePreparationError {
 impl Error for OwnerPhonePreparationError {}
 
 /// Public immutable proof. It is neither remote approval nor current private-key possession.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OwnerPhonePreparation {
     original: OwnerPhoneRequest,
     signature: [u8; 64],
@@ -54,13 +55,15 @@ impl OwnerPhonePreparation {
         &self.digest
     }
 }
-fn validate(reservation: &OwnerPhoneReservation) -> Result<(), OwnerPhonePreparationError> {
+pub(super) fn validate(
+    reservation: &OwnerPhoneReservation,
+) -> Result<(), OwnerPhonePreparationError> {
     relay_key(reservation.context().gateway_pin()).ok_or(OwnerPhonePreparationError::Crypto(
         PairingCryptoError::InvalidContext,
     ))?;
     Ok(())
 }
-fn proof(
+pub(super) fn proof(
     reservation: &OwnerPhoneReservation,
     identity: &NativeIdentity,
 ) -> Result<OwnerPhonePreparation, OwnerPhonePreparationError> {

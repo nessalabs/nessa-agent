@@ -383,7 +383,7 @@ impl OwnerPhoneOriginalStore for Store {
         Option<nessa_auth::application::pairing::OwnerPhonePrivateOriginal>,
         PrivateStateError,
     > {
-        panic!("unexpected original read")
+        Ok(None)
     }
 }
 
@@ -404,5 +404,37 @@ impl OwnerPhoneOriginalStore for HeldStore {
         PrivateStateError,
     > {
         self.owned.load_original()
+    }
+}
+
+impl nessa_auth::application::pairing::OwnerPhoneEnrollmentStore for Store {
+    fn adopt_owner_phone(
+        &self,
+        original: &nessa_auth::domain::pairing::OwnerPhoneRequest,
+        digest: &[u8; 32],
+        consent: &DisclosedConsent,
+        issued: Option<(&CredentialId, &ResourceId)>,
+    ) -> Result<
+        nessa_auth::application::pairing::OwnerPhoneAdoption,
+        nessa_auth::application::pairing::OwnerPhoneAdoptionFailure,
+    > {
+        let _ = (original, digest, consent, issued);
+        panic!("read-only fixture unexpectedly adopted owner-phone enrollment")
+    }
+}
+
+impl nessa_auth::application::pairing::OwnerPhoneEnrollmentStore for HeldStore {
+    fn adopt_owner_phone(
+        &self,
+        original: &nessa_auth::domain::pairing::OwnerPhoneRequest,
+        digest: &[u8; 32],
+        consent: &DisclosedConsent,
+        issued: Option<(&CredentialId, &ResourceId)>,
+    ) -> Result<
+        nessa_auth::application::pairing::OwnerPhoneAdoption,
+        nessa_auth::application::pairing::OwnerPhoneAdoptionFailure,
+    > {
+        self.owned
+            .adopt_owner_phone(original, digest, consent, issued)
     }
 }

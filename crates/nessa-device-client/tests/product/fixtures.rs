@@ -163,45 +163,7 @@ pub(crate) fn peer(script: impl FnOnce(&mut Wire) + Send + 'static) -> (SocketAd
             decode_request(&selector.receive_envelope().unwrap()).unwrap(),
             NativePairingRequest::OpenProduct
         ));
-        let mut wire = Wire {
-            transport: selector.into_transport(),
-            frames: FrameReader::new(MAX_PROTECTED_REQUEST_BYTES),
-        };
-        wire.send(OutgoingMessage::Event(
-            EventFrame::push(
-                product_event::SESSION_CHALLENGE,
-                &SessionChallenge {
-                    min_version: PRODUCT_VERSION,
-                    max_version: PRODUCT_VERSION,
-                    nonce: "original-nonce".into(),
-                    expires_at: 10_000,
-                },
-                0,
-                0,
-            )
-            .unwrap(),
-        ));
-        let auth = wire.request().unwrap();
-        assert_eq!(auth.id, "0");
-        assert_eq!(auth.params["credential"], "issued");
-        assert_eq!(auth.params["nonce"], "original-nonce");
-        assert_eq!(auth.params["client"]["id"], "app.nessa.mobile");
-        assert_eq!(auth.params["surface"]["instance"], "phone-instance");
-        let ready = ProductSessionReady {
-            version: PRODUCT_VERSION,
-            gateway_id: "gateway".into(),
-            principal_id: "owner".into(),
-            organization_id: "org".into(),
-            membership_id: "member".into(),
-            credential_id: "issued".into(),
-            audience_id: "gateway".into(),
-            expires_at: None,
-            grants: vec![],
-            methods: vec!["conversation.list".into()],
-        };
-        wire.send(OutgoingMessage::Response(
-            ResponseFrame::success("0", &ready).unwrap(),
-        ));
+        let mut wire = protected_wire(selector.into_transport());
         script(&mut wire);
     });
     (address, Peer(Some(thread)))
@@ -258,4 +220,48 @@ impl ProductConnector for CleanupConnector {
             interrupt: connected.interrupt,
         })
     }
+}
+
+/// Shared actual protected handshake fixture after the canonical OpenProduct selector.
+pub(crate) fn protected_wire(transport: NativeTransport<TcpStream>) -> Wire {
+    let mut wire = Wire {
+        transport,
+        frames: FrameReader::new(MAX_PROTECTED_REQUEST_BYTES),
+    };
+    wire.send(OutgoingMessage::Event(
+        EventFrame::push(
+            product_event::SESSION_CHALLENGE,
+            &SessionChallenge {
+                min_version: PRODUCT_VERSION,
+                max_version: PRODUCT_VERSION,
+                nonce: "original-nonce".into(),
+                expires_at: 10_000,
+            },
+            0,
+            0,
+        )
+        .unwrap(),
+    ));
+    let auth = wire.request().unwrap();
+    assert_eq!(auth.id, "0");
+    assert_eq!(auth.params["credential"], "issued");
+    assert_eq!(auth.params["nonce"], "original-nonce");
+    assert_eq!(auth.params["client"]["id"], "app.nessa.mobile");
+    assert_eq!(auth.params["surface"]["instance"], "phone-instance");
+    let ready = ProductSessionReady {
+        version: PRODUCT_VERSION,
+        gateway_id: "gateway".into(),
+        principal_id: "owner".into(),
+        organization_id: "org".into(),
+        membership_id: "member".into(),
+        credential_id: "issued".into(),
+        audience_id: "gateway".into(),
+        expires_at: None,
+        grants: vec![],
+        methods: vec!["conversation.list".into()],
+    };
+    wire.send(OutgoingMessage::Response(
+        ResponseFrame::success("0", &ready).unwrap(),
+    ));
+    wire
 }

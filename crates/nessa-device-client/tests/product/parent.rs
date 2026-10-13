@@ -1250,7 +1250,7 @@ fn retained_refresh_admits_while_foreign_event_waiter_owns_its_original_child() 
     let refresh = parent.refresh(ReadStop::new()).unwrap();
     assert!(matches!(
         refresh.initial(),
-        Err(NativeClientError::Io(ErrorKind::ConnectionRefused))
+        SessionStatus::ReadOnly(Err(NativeClientError::Io(ErrorKind::ConnectionRefused)))
     ));
     assert!(refresh.read().is_none());
     assert!(refresh.recheck().is_none());
@@ -1726,5 +1726,53 @@ impl OwnerPhoneOriginalStore for FailedStore {
         PrivateStateError,
     > {
         self.owned.load_original()
+    }
+}
+
+impl nessa_auth::application::pairing::OwnerPhoneEnrollmentStore for HeldStore {
+    fn adopt_owner_phone(
+        &self,
+        original: &nessa_auth::domain::pairing::OwnerPhoneRequest,
+        digest: &[u8; 32],
+        consent: &DisclosedConsent,
+        issued: Option<(&CredentialId, &ResourceId)>,
+    ) -> Result<
+        nessa_auth::application::pairing::OwnerPhoneAdoption,
+        nessa_auth::application::pairing::OwnerPhoneAdoptionFailure,
+    > {
+        self.owned
+            .adopt_owner_phone(original, digest, consent, issued)
+    }
+}
+
+impl nessa_auth::application::pairing::OwnerPhoneEnrollmentStore for PoisonableStore {
+    fn adopt_owner_phone(
+        &self,
+        original: &nessa_auth::domain::pairing::OwnerPhoneRequest,
+        digest: &[u8; 32],
+        consent: &DisclosedConsent,
+        issued: Option<(&CredentialId, &ResourceId)>,
+    ) -> Result<
+        nessa_auth::application::pairing::OwnerPhoneAdoption,
+        nessa_auth::application::pairing::OwnerPhoneAdoptionFailure,
+    > {
+        self.owned
+            .adopt_owner_phone(original, digest, consent, issued)
+    }
+}
+
+impl nessa_auth::application::pairing::OwnerPhoneEnrollmentStore for FailedStore {
+    fn adopt_owner_phone(
+        &self,
+        original: &nessa_auth::domain::pairing::OwnerPhoneRequest,
+        digest: &[u8; 32],
+        consent: &DisclosedConsent,
+        issued: Option<(&CredentialId, &ResourceId)>,
+    ) -> Result<
+        nessa_auth::application::pairing::OwnerPhoneAdoption,
+        nessa_auth::application::pairing::OwnerPhoneAdoptionFailure,
+    > {
+        self.owned
+            .adopt_owner_phone(original, digest, consent, issued)
     }
 }

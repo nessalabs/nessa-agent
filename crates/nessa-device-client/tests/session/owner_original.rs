@@ -408,3 +408,19 @@ fn unknown_unwind_after_driver_handoff_does_not_confirm_release_from_empty_slot(
     drop(FilePairingState::open(root.path(), Path::new("private")).unwrap());
     assert!(!parent.close_observed().released());
 }
+
+impl nessa_auth::application::pairing::OwnerPhoneEnrollmentStore for Store {
+    fn adopt_owner_phone(
+        &self,
+        original: &nessa_auth::domain::pairing::OwnerPhoneRequest,
+        digest: &[u8; 32],
+        consent: &DisclosedConsent,
+        issued: Option<(&CredentialId, &ResourceId)>,
+    ) -> Result<
+        nessa_auth::application::pairing::OwnerPhoneAdoption,
+        nessa_auth::application::pairing::OwnerPhoneAdoptionFailure,
+    > {
+        self.owned
+            .adopt_owner_phone(original, digest, consent, issued)
+    }
+}
