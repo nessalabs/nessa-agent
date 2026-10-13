@@ -6,6 +6,7 @@ use crate::application::agent_execution::providers::{
     ProviderOperationCapabilities, ProviderPermissionDeferralCapability,
 };
 use crate::application::agent_execution::tools::ToolReviewInput;
+use crate::domain::agent_execution::permissions::DeadlineDenyPreference;
 use crate::domain::agent_execution::tools::ToolCallUpdate;
 use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
 use crate::domain::model_metadata::value_objects::EffortLevel;
@@ -165,6 +166,14 @@ pub(crate) trait AcpProfile: Send + Sync + 'static {
     /// see only part of the request would have to review an action it cannot
     /// fully describe. The shared runtime does not interpret the request.
     fn permission_input(&self, request: &Value) -> Result<ToolReviewInput, AgentError>;
+    /// Which denial a deadline selects, and which of those stop the turn.
+    ///
+    /// The default is that a one-request refusal continues the turn, which is
+    /// what Claude and OpenCode do with `reject_once`. A profile whose harness
+    /// offers a refusal that stops the turn says so here.
+    fn deadline_deny_preference(&self) -> DeadlineDenyPreference {
+        DeadlineDenyPreference::continuing()
+    }
     /// Apply this frame's input rule when the review will be declined.
     ///
     /// The shared runtime declines without treating the frame as a tool

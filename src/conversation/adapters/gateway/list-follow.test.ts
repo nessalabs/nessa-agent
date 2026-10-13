@@ -53,11 +53,13 @@ function gateway(
 function follower() {
   return { list: vi.fn(), failed: vi.fn() }
 }
+/** The panel's clock: a list carries no deadline, so any reading does. */
+const panelNow = () => 0
 
 it("PL8: independent active and archived targets use the existing client gate and lagging resumes immediately", async () => {
   const g = gateway()
   const wait = vi.fn(async () => {})
-  const effects = gatewayEffects(() => g.client, wait)
+  const effects = gatewayEffects(() => g.client, wait, panelNow)
   const a = follower(),
     b = follower()
   const stopA = effects.followList(false, a),
@@ -86,6 +88,7 @@ it("PL4: an aborted pending list open closes before its replacement can subscrib
   const effects = gatewayEffects(
     () => g.client,
     async () => {},
+    panelNow,
   )
   const old = follower(),
     next = follower()
@@ -113,7 +116,7 @@ it("PL3, PL8: typed refusal retains its failure through backoff; no terminal cal
   const waited = deferred<void>()
   const wait = vi.fn(() => waited.promise)
   const g = gateway()
-  const effects = gatewayEffects(() => g.client, wait)
+  const effects = gatewayEffects(() => g.client, wait, panelNow)
   const f = follower()
   const stop = effects.followList(true, f)
   await flush()
@@ -137,7 +140,7 @@ it("PL8: a refused open reports the port's typed reason and a stopped retry send
   const wait = vi.fn(() => waited.promise)
   const g = gateway([new NessaRpcError("conversation_configuration_changed", "changed")])
   const f = follower()
-  const stop = gatewayEffects(() => g.client, wait).followList(false, f)
+  const stop = gatewayEffects(() => g.client, wait, panelNow).followList(false, f)
   await flush()
   expect(f.failed).toHaveBeenCalledWith("configuration-changed", expect.anything())
   stop()

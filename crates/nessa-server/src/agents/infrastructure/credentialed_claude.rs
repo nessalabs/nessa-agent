@@ -300,6 +300,7 @@ mod tests {
             stand_ins: nessa_sdk::infrastructure::acp::sessions::StandInSessions::none(),
             permissions: PermissionOfferPolicy::once_only(),
             refusal: nessa_sdk::application::agent_execution::permissions::ConfiguredRefusal::continue_turn(),
+            permission_deadlines: nessa_sdk::domain::agent_execution::permissions::PermissionDeadlinePolicy::standard(),
             launch_timeout: Duration::from_secs(10),
             startup_timeout: Duration::from_secs(10),
             execution_timeout: None,
@@ -310,6 +311,7 @@ mod tests {
             max_incoming_frame_bytes: 8192,
             images: None,
             clock: Arc::new(RuntimeClock::new()),
+            workspace_paths: Arc::new(nessa_sdk::infrastructure::workspace_paths::FilesystemPaths),
         };
         let prompt = SystemPrompt::new(vec![PromptContribution::new(
             PromptSource::new(PromptSourceKind::Core, "test").unwrap(),

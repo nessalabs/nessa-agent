@@ -1,6 +1,6 @@
 use super::super::{
     fields,
-    permissions::wire as permission_wire,
+    permissions::{wire as permission_wire, workspace::bounded_review_class},
     profile::AcpProfile,
     questions::wire as question_wire,
     sessions::{
@@ -48,10 +48,10 @@ use crate::domain::agent_execution::executions::{
     ExecutionId, ExecutionOutcome, MessageChunk, MessageId,
 };
 use crate::domain::agent_execution::permissions::{
-    PermissionCancellationReason, PermissionCancellationReasonView, PermissionDecision,
-    PermissionEffect, PermissionId, PermissionOfferPolicy, PermissionOptionId, PermissionScope,
-    RefusalOutcome, ReviewDecline, ReviewDeclineId, ReviewDeclineObservation, ReviewDeclineReason,
-    ReviewDeclineStage,
+    PermissionCancellationReason, PermissionCancellationReasonView, PermissionDeadlineSettlement,
+    PermissionDecision, PermissionEffect, PermissionId, PermissionOfferPolicy, PermissionOptionId,
+    PermissionScope, PermissionStateView, RefusalOutcome, ReviewDecline, ReviewDeclineId,
+    ReviewDeclineObservation, ReviewDeclineReason, ReviewDeclineStage,
 };
 use crate::domain::agent_execution::prompts::UserMessage;
 use crate::domain::agent_execution::questions::{
@@ -75,7 +75,7 @@ use std::{
     },
     task::Poll,
 };
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{mpsc, oneshot, watch, Semaphore};
 
 /// What this client says about itself in `initialize`, on every connection
 /// it opens to an agent, whatever the connection is for.
@@ -374,6 +374,12 @@ fn event_publication_result(
         Err(QueueError::Full) => Err(AgentError::Backpressure),
     }
 }
+/// One review the deadline will answer if nobody else does first.
+struct ArmedPermission {
+    at: ClockInstant,
+    settlement: PermissionDeadlineSettlement,
+}
+
 struct Worker<P> {
     profile: P,
     audit: Arc<dyn ExecutionAudit>,
@@ -398,6 +404,12 @@ struct Worker<P> {
     operation_capabilities: watch::Sender<ProviderOperationCapabilities>,
     permission_authority: PermissionAuthoritySource,
     permissions: HashMap<PermissionId, RpcId>,
+    /// Reviews waiting on a person, and the moment the deadline answers them.
+    armed_permissions: HashMap<PermissionId, ArmedPermission>,
+    /// One path classification at a time. A read that outlasts its wait keeps
+    /// the permit until the read returns, so the next review does not start
+    /// another (`a_classification_still_running_is_not_started_again`).
+    path_classification: Arc<Semaphore>,
     /// One session identity claimed by advisory updates racing session startup.
     /// Advisory payloads are not retained and conflicting identities fail startup.
     startup_advisory_session: Option<ExecutionSessionId>,
@@ -452,11 +464,16 @@ struct Worker<P> {
     /// for reporting the state this runtime had not asked for yet.
     configured: bool,
     closing: bool,
-    /// Set only after `session/cancel` for the active turn is written.
+    /// Set when this turn's end was written: `session/cancel`, or a refusal
+    /// that stops the turn (the deadline's, or a person's Codex `cancel`).
     /// A later `Cancelled` prompt result is that turn ending. Any other
-    /// cancelled result is still session teardown.
+    /// cancelled result is session teardown, which disarms deadlines.
     turn_cancel_requested: Option<ExecutionId>,
     deferred_outcome: Option<ExecutionOutcome>,
+    /// Commands a deadline took from the queue and has not run yet. They were
+    /// admitted, so a batch that stops early leaves them here for teardown to
+    /// answer, as it would have found them in the queue.
+    carried: VecDeque<Command>,
     provider_result: Option<Result<ExecutionOutcome, AgentError>>,
     settlement_facts: SettlementFacts,
     correlation_sequence: u64,
@@ -517,6 +534,8 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
         operation_capabilities,
         permission_authority,
         permissions: HashMap::new(),
+        armed_permissions: HashMap::new(),
+        path_classification: Arc::new(Semaphore::new(1)),
         startup_advisory_session: None,
         questions: HashMap::new(),
         declined: None,
@@ -530,6 +549,7 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
         closing: false,
         turn_cancel_requested: None,
         deferred_outcome: None,
+        carried: VecDeque::new(),
         provider_result: None,
         settlement_facts: SettlementFacts::new(),
         correlation_sequence: 0,
@@ -1297,23 +1317,36 @@ impl<P: AcpProfile> Worker<P> {
             Command(Option<Command>),
             Message(Result<Envelope, AgentError>),
             Deadline,
+            PermissionDeadline,
             ConsumerGone,
         }
         loop {
             let deadline = self.current_deadline();
+            let permission_deadline = self.next_permission_deadline();
             let input = if self.close_requested.borrow().is_some() && !self.closing {
                 Input::Close
             } else {
+                // A due permission deadline is ahead of unrelated commands. An
+                // answer or cancellation of that review already in the queue is
+                // taken before it settles. A provider frame stays behind it, so
+                // a turn end that is also ready is read after the deadline.
+                // `an_answer_already_waiting_at_the_deadline_beats_the_deadline`
+                // and `an_unrelated_command_already_queued_does_not_hold_a_due_deadline`.
                 tokio::select! { biased;
                     _ = self.close_requested.changed(), if !self.closing => Input::Close,
                     _ = self.events.closed() => Input::ConsumerGone,
                     _ = wait_for_deadline(&*self.config.clock, deadline), if deadline.is_some() => Input::Deadline,
+                    _ = wait_for_deadline(&*self.config.clock, permission_deadline), if permission_deadline.is_some() => Input::PermissionDeadline,
                     command = self.commands.recv(), if !self.closing => Input::Command(command),
                     message = self.reader.next() => Input::Message(message),
                 }
             };
             match input {
                 Input::Close | Input::Command(None) => {
+                    // `cancel_wire_requests`, called from the cancellation
+                    // below, clears armed deadlines before this branch returns
+                    // to the wait. The shutdown grace can outlast a review, and
+                    // the deadline must not answer during it.
                     self.closing = true;
                     self.begin_shutdown_grace();
                     let request = self
@@ -1382,6 +1415,49 @@ impl<P: AcpProfile> Worker<P> {
                         return Ok(());
                     }
                 }
+                Input::PermissionDeadline => {
+                    // Answers and cancellations of a due review were admitted
+                    // before this wait returned. They decide it. The snapshot
+                    // is what the queue held as the deadline won, taken before
+                    // anything here is awaited: each command taken frees a
+                    // slot, and a command admitted into it came after the
+                    // deadline, so it is not taken here
+                    // (`a_command_admitted_after_the_deadline_is_not_in_its_snapshot`).
+                    // Anything else in that snapshot waits until those reviews
+                    // are settled
+                    // (`an_unrelated_command_already_queued_does_not_hold_a_due_deadline`).
+                    // Taken commands wait in `carried`, not a local, so an
+                    // early return still leaves them for teardown
+                    // (`an_admitted_command_outlives_a_deadline_batch_that_stops`).
+                    // `now` is fixed with the snapshot. A review that falls
+                    // due while this batch awaits may have an answer admitted
+                    // after the snapshot, so it waits for its own wake and
+                    // its own snapshot
+                    // (`a_review_due_during_another_settlement_keeps_its_queued_answer`).
+                    let now = self.config.clock.now();
+                    let admitted = self.commands.len();
+                    let (due, later): (Vec<_>, Vec<_>) =
+                        admitted_before_deadline(&mut self.commands, admitted)
+                            .into_iter()
+                            .partition(|command| self.command_answers_due_review(command, now));
+                    let answers = due.len();
+                    self.carried.extend(due);
+                    self.carried.extend(later);
+                    for _ in 0..answers {
+                        let command = self.carried.pop_front().expect("carried answer");
+                        self.command(execution, command).await?;
+                        if self.deferred_outcome.is_some() {
+                            return Ok(());
+                        }
+                    }
+                    self.settle_due_permissions(execution, now).await?;
+                    while let Some(command) = self.carried.pop_front() {
+                        self.command(execution, command).await?;
+                        if self.deferred_outcome.is_some() {
+                            return Ok(());
+                        }
+                    }
+                }
                 Input::Message(message) => {
                     let message = message.map_err(|error| {
                         self.record_failure(OperationEffectPhase::Worker, error)
@@ -1407,7 +1483,16 @@ impl<P: AcpProfile> Worker<P> {
         // notification arrived over an independently ordered watch channel.
         self.commands.close();
         let mut failure: Option<WorkerFailure> = None;
-        while let Some(command) = self.commands.recv().await {
+        // A deadline batch that stopped early holds commands admitted before
+        // those still queued, so they are answered first.
+        loop {
+            let command = match self.carried.pop_front() {
+                Some(command) => command,
+                None => match self.commands.recv().await {
+                    Some(command) => command,
+                    None => break,
+                },
+            };
             match command {
                 command @ (Command::Answer(..)
                 | Command::CancelPermission(..)
@@ -1954,6 +2039,7 @@ impl<P: AcpProfile> Worker<P> {
             .permissions
             .remove(record.request().id())
             .expect("pending wire permission");
+        self.armed_permissions.remove(record.request().id());
         if let Err(error) = self.record_cancellations(vec![record.clone()]).await {
             let _ = reply.send(Err(ProviderOperationFailure::permission_answer(
                 error.error().clone(),
@@ -1997,6 +2083,7 @@ impl<P: AcpProfile> Worker<P> {
     ) -> Result<(), WorkerFailure> {
         let permission_id = answer.id.clone();
         let option_id = answer.option_id.clone();
+        let answered_execution = answer.execution_id.clone();
         let resolution = match execution.answer_permission(answer) {
             Ok(resolution) => resolution,
             Err(error) => {
@@ -2008,6 +2095,7 @@ impl<P: AcpProfile> Worker<P> {
                 return Ok(());
             }
         };
+        self.armed_permissions.remove(&permission_id);
         let correlation = self.next_correlation();
         if let Err(error) = self
             .record_answer(
@@ -2030,6 +2118,31 @@ impl<P: AcpProfile> Worker<P> {
             .expect("pending wire permission");
         let response = permission_wire::selected(&wire_id, option_id.as_str());
         let result = self.send(response).await;
+        // Codex ends the turn when the person picks `cancel`. The cancelled
+        // result that follows is that turn ending. `decline` does not stop
+        // the turn, so the same cancelled result after it is unrequested and
+        // the session is torn down. Without the stop check, every answer
+        // would be treated as that turn ending. Only a refusal stops a turn:
+        // an allow that carries the stopping id is still an allow
+        // (`an_allow_named_cancel_then_an_unasked_cancel_ends_the_session`).
+        let refused = matches!(
+            resolution.request().state(),
+            PermissionStateView::Answered { decision, .. }
+                if decision.effect() == PermissionEffect::Deny
+        );
+        if result.is_ok()
+            && refused
+            && self
+                .profile
+                .deadline_deny_preference()
+                .stops_turn(option_id.as_str())
+            && self
+                .active
+                .as_ref()
+                .is_some_and(|active| active.execution_id == answered_execution)
+        {
+            self.turn_cancel_requested = Some(answered_execution);
+        }
         let delivery_failure = result.as_ref().err().map(|error| {
             WorkerFailure::new(
                 error.clone(),
@@ -2140,6 +2253,7 @@ impl<P: AcpProfile> Worker<P> {
                     .find_map(|(id, pending)| (pending == &wire_id).then(|| id.clone()))
                 {
                     self.permissions.remove(&id);
+                    self.armed_permissions.remove(&id);
                     let target = &self
                         .active
                         .as_ref()
@@ -2250,8 +2364,11 @@ impl<P: AcpProfile> Worker<P> {
                 let turn_cancel_requested =
                     self.turn_cancel_requested.take().as_ref() == Some(&active_turn);
                 if result == ExecutionOutcome::Cancelled && !turn_cancel_requested {
-                    // Keep pending reviews until correlated session teardown. Never publish
-                    // tool/process cancellation from protocol evidence alone.
+                    // The provider ended the prompt without a cancel we sent.
+                    // The cancelled result is session teardown. `cancel_wire_requests`,
+                    // called from that teardown, clears armed deadlines before the
+                    // shutdown grace, so none answers a request the provider
+                    // stopped waiting on.
                     self.deferred_outcome = Some(result);
                 } else {
                     let target = &self
@@ -2530,9 +2647,51 @@ impl<P: AcpProfile> Worker<P> {
             .as_ref()
             .expect("validated active prompt")
             .execution_id;
-        let event =
-            execution.request_permission(target, permission_id.clone(), tool, input, options)?;
-        self.permissions.insert(permission_id, wire_id);
+        let observed = execution.observation_after(&tool);
+        let class = bounded_review_class(
+            &*self.config.clock,
+            &self.path_classification,
+            *observed.kind(),
+            observed.locations().clone(),
+            self.config.workspace.clone(),
+            Arc::clone(&self.config.workspace_paths),
+        )
+        .await;
+        let settlement = self.config.permission_deadlines.settlement(
+            class,
+            &options,
+            &self.profile.deadline_deny_preference(),
+        );
+        // One reading of the clock arms the deadline and dates the card, so
+        // the two cannot differ by whatever happens between two readings.
+        let armed_at = self.config.clock.now();
+        // A wall clock past what a client can read gives no moment a card
+        // could show, so the review waits for a person as it would with no
+        // deadline, rather than be decided at a time nobody was told.
+        let promised = settlement
+            .deadline()
+            .clone()
+            .promise(unix_deadline_ms(
+                &*self.config.clock,
+                armed_at,
+                settlement.deadline().wait(),
+            ))
+            .ok();
+        let armed = promised.is_some();
+        let event = execution.request_permission(
+            target,
+            permission_id.clone(),
+            tool,
+            input,
+            options,
+            promised,
+        )?;
+        self.permissions.insert(permission_id.clone(), wire_id);
+        if armed {
+            let at = armed_at + settlement.deadline().wait();
+            self.armed_permissions
+                .insert(permission_id, ArmedPermission { at, settlement });
+        }
         self.emit(event).map_err(Into::into)
     }
     /// Answer one review "no" without offering it, and leave the turn running.
@@ -2619,7 +2778,11 @@ impl<P: AcpProfile> Worker<P> {
                 AuditEffectPhase::PermissionSelection,
             )
             .await;
-        let response = match rejection_option(params, &self.config.permissions) {
+        let response = match rejection_option(
+            params,
+            &self.config.permissions,
+            &self.profile.deadline_deny_preference(),
+        ) {
             Some(option) => permission_wire::selected(&wire_id, &option),
             None => permission_wire::permission_cancel(&wire_id),
         };
@@ -2759,7 +2922,11 @@ impl<P: AcpProfile> Worker<P> {
                 self.stop_reply_deadline = Some(deadline);
             }
         }
-        let response = match rejection_option(params, &self.config.permissions) {
+        let response = match rejection_option(
+            params,
+            &self.config.permissions,
+            &self.profile.deadline_deny_preference(),
+        ) {
             Some(option) => permission_wire::selected(&wire_id, &option),
             None => permission_wire::permission_cancel(&wire_id),
         };
@@ -3624,6 +3791,9 @@ impl<P: AcpProfile> Worker<P> {
     /// review cancellation returns early, and must not decide whether an ask
     /// is told. The first failure to tell the provider anything is returned.
     async fn cancel_wire_requests(&mut self) -> Result<(), AgentError> {
+        // The turn these reviews belonged to is over. A deadline that fired
+        // afterwards would answer a request the provider is no longer waiting on.
+        self.armed_permissions.clear();
         let asked: Vec<QuestionId> = self.questions.keys().cloned().collect();
         let mut failure = None;
         for id in asked {
@@ -3764,20 +3934,208 @@ fn declared_tool_name(params: &Value) -> Option<&str> {
 /// this binding to answer one on its behalf, and such a review is cancelled
 /// instead. The identity is validated as a domain option identity, not by a
 /// second rule invented here.
-fn rejection_option(params: &Value, policy: &PermissionOfferPolicy) -> Option<String> {
+fn rejection_option(
+    params: &Value,
+    policy: &PermissionOfferPolicy,
+    deny_preference: &crate::domain::agent_execution::permissions::DeadlineDenyPreference,
+) -> Option<String> {
     let deny = PermissionDecision::new(PermissionEffect::Deny, PermissionScope::request());
     if !policy.decisions().contains(&deny) {
         return None;
     }
-    params
+    let ids: Vec<PermissionOptionId> = params
         .get("options")
         .and_then(Value::as_array)?
         .iter()
-        .find(|option| option.get("kind").and_then(Value::as_str) == Some("reject_once"))
-        .and_then(|option| option.get("optionId"))
-        .and_then(Value::as_str)
-        .and_then(|id| PermissionOptionId::new(id).ok())
-        .map(|id| id.as_str().to_owned())
+        .filter(|option| option.get("kind").and_then(Value::as_str) == Some("reject_once"))
+        .filter_map(|option| option.get("optionId").and_then(Value::as_str))
+        .filter_map(|id| PermissionOptionId::new(id).ok())
+        .collect();
+    deny_preference
+        .select(ids.iter())
+        .map(|(id, _)| id.as_str().to_owned())
+}
+
+/// Unix milliseconds when a review armed now, waiting `wait`, comes due.
+///
+/// `clock` is the binding's clock. The countdown a card shows and the moment
+/// this worker decides are the same timeline.
+fn unix_deadline_ms(clock: &dyn Clock, armed_at: ClockInstant, wait: std::time::Duration) -> u64 {
+    let wait_ms = crate::domain::agent_execution::permissions::wait_ms(wait);
+    clock.unix_ms_at(armed_at).saturating_add(wait_ms)
+}
+
+impl<P: AcpProfile> Worker<P> {
+    /// An answer or a cancellation of a review whose deadline has already
+    /// passed. That command was admitted before this wait, so it decides the
+    /// review. Any other command does not.
+    fn command_answers_due_review(&self, command: &Command, now: ClockInstant) -> bool {
+        let id = match command {
+            Command::Answer(answer, _) => &answer.id,
+            Command::CancelPermission(request, _) => &request.id,
+            _ => return false,
+        };
+        self.armed_permissions
+            .get(id)
+            .is_some_and(|armed| now >= armed.at)
+    }
+
+    fn next_permission_deadline(&self) -> Option<ClockInstant> {
+        self.armed_permissions.values().map(|armed| armed.at).min()
+    }
+
+    /// Answer every review whose deadline had passed at `now` and which nobody
+    /// else has answered. An audit failure is retained and does not stop the
+    /// turn. A failure to tell the provider, or to publish the notice, does.
+    async fn settle_due_permissions(
+        &mut self,
+        execution: &mut ExecutionController,
+        now: ClockInstant,
+    ) -> Result<(), WorkerFailure> {
+        let mut due: Vec<(ClockInstant, PermissionId)> = self
+            .armed_permissions
+            .iter()
+            .filter(|(_, armed)| now >= armed.at)
+            .map(|(id, armed)| (armed.at, id.clone()))
+            .collect();
+        due.sort_by(|(left_at, left_id), (right_at, right_id)| {
+            left_at
+                .cmp(right_at)
+                .then_with(|| left_id.as_str().cmp(right_id.as_str()))
+        });
+        for (_, id) in due {
+            let Some(armed) = self.armed_permissions.remove(&id) else {
+                continue;
+            };
+            self.settle_permission(execution, id, armed).await?;
+        }
+        Ok(())
+    }
+
+    async fn settle_permission(
+        &mut self,
+        execution: &mut ExecutionController,
+        id: PermissionId,
+        armed: ArmedPermission,
+    ) -> Result<(), WorkerFailure> {
+        let Some(execution_id) = self
+            .active
+            .as_ref()
+            .map(|active| active.execution_id.clone())
+        else {
+            if let Some(wire_id) = self.permissions.remove(&id) {
+                let _ = self
+                    .send(permission_wire::permission_cancel(&wire_id))
+                    .await;
+            }
+            return Ok(());
+        };
+        let deadline = armed.settlement.deadline().clone();
+        let stops_turn = deadline.stops_turn();
+        let reason = deadline.recorded_reason();
+        let mut delivery_correlation = None;
+        let sent = if let Some(option_id) = armed.settlement.option().cloned() {
+            let resolution = match execution.settle_deadline(
+                &execution_id,
+                &id,
+                &option_id,
+                deadline,
+            ) {
+                Ok(resolution) => resolution,
+                Err(error) => {
+                    tracing::warn!(%error, permission_id = %id.as_str(), "permission deadline found the review already resolved");
+                    // A review resolved without its deadline being disarmed is
+                    // a bug elsewhere; nothing was decided, so nothing is published.
+                    return Ok(());
+                }
+            };
+            let correlation = self.next_correlation();
+            delivery_correlation = Some(correlation);
+            if let Err(failure) = self
+                .record_answer(
+                    resolution.clone(),
+                    PermissionAnswerDelivery::Selected,
+                    correlation,
+                )
+                .await
+            {
+                // Retained on the settlement facts. An audit failure must not
+                // stop the turn: the provider is still answered below.
+                let _ = failure;
+            }
+            let wire_id = self
+                .permissions
+                .remove(&id)
+                .expect("pending wire permission");
+            let sent = self
+                .send(permission_wire::selected_because(
+                    &wire_id,
+                    option_id.as_str(),
+                    reason.as_str(),
+                ))
+                .await;
+            let delivery = match &sent {
+                Ok(()) => PermissionAnswerDelivery::Written,
+                Err(error) => PermissionAnswerDelivery::Failed(error.clone()),
+            };
+            if let Err(failure) = self.record_answer(resolution, delivery, correlation).await {
+                // Same as the selection audit: kept, and not a reason to skip
+                // the notice or to fail the turn when the write itself succeeded.
+                let _ = failure;
+            }
+            sent
+        } else {
+            if let Some(record) = execution
+                .cancel_deadline(&execution_id, &id, deadline)
+                .map_err(|error| self.record_failure(OperationEffectPhase::Worker, error))?
+            {
+                if let Err(failure) = self
+                    .record_audit(
+                        ExecutionAuditRecord::Cancelled(record.clone()),
+                        AuditEffectPhase::Cancellation,
+                    )
+                    .await
+                {
+                    // The cancellation is already the local fact. Losing the
+                    // audit record does not change that the review was cancelled.
+                    let _ = failure;
+                }
+                // The history must carry the cancellation before the provider
+                // acts on it: a later notice without it would say the deadline
+                // answered a review nothing settled.
+                self.emit(ExecutionEvent::new(
+                    record.request().execution_id().clone(),
+                    ExecutionUpdate::PermissionCancelled(record),
+                ))
+                .map_err(|error| self.record_failure(OperationEffectPhase::EventDelivery, error))?;
+            }
+            let wire_id = self
+                .permissions
+                .remove(&id)
+                .expect("pending wire permission");
+            self.send(permission_wire::permission_cancel(&wire_id))
+                .await
+        };
+        if let Err(error) = sent {
+            let correlation = delivery_correlation.unwrap_or_else(|| self.next_correlation());
+            return Err(
+                self.record_failure(OperationEffectPhase::PermissionDelivery(correlation), error)
+            );
+        }
+        // The notice says the deadline decided, so it follows the write: an
+        // answer the provider never received decided nothing.
+        if let Ok(event) = execution.deadline_answered(&execution_id, &id) {
+            self.emit(event)
+                .map_err(|error| self.record_failure(OperationEffectPhase::EventDelivery, error))?;
+        }
+        // Codex ends the turn when the refusal it was given stops the turn.
+        // The cancelled result that follows is that turn ending. Without this,
+        // it is an unrequested cancel and the session is torn down.
+        if stops_turn {
+            self.turn_cancel_requested = Some(execution_id);
+        }
+        Ok(())
+    }
 }
 
 /// No artificial far-future timestamp: no configured limit means no timer.
@@ -3785,6 +4143,45 @@ fn wait_for_deadline(clock: &dyn Clock, deadline: Option<ClockInstant>) -> Clock
     match deadline {
         Some(deadline) => clock.sleep_until(deadline),
         None => Box::pin(std::future::pending()),
+    }
+}
+
+/// The first `admitted` commands in `queue`: what it held when the deadline
+/// won, counted then, and nothing admitted after.
+///
+/// Taking a command frees its slot, and a sender waiting on a full queue
+/// fills it at once, so draining until the queue is empty could take a
+/// command that arrived after the deadline.
+fn admitted_before_deadline<T>(queue: &mut mpsc::Receiver<T>, admitted: usize) -> Vec<T> {
+    let mut ready = Vec::with_capacity(admitted);
+    while ready.len() < admitted {
+        match queue.try_recv() {
+            Ok(command) => ready.push(command),
+            Err(_) => break,
+        }
+    }
+    ready
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::admitted_before_deadline;
+    use tokio::sync::mpsc;
+
+    #[test]
+    fn a_command_admitted_after_the_deadline_is_not_in_its_snapshot() {
+        let (sender, mut queue) = mpsc::channel(4);
+        sender.try_send("before").unwrap();
+        sender.try_send("also before").unwrap();
+        let admitted = queue.len();
+        // Admitted after the count: a sender that was waiting for the slot
+        // the first taken command frees arrives the same way.
+        sender.try_send("after").unwrap();
+        assert_eq!(
+            admitted_before_deadline(&mut queue, admitted),
+            vec!["before", "also before"]
+        );
+        assert_eq!(queue.try_recv().unwrap(), "after");
     }
 }
 

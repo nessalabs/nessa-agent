@@ -5,3 +5,4 @@
 //! ```
 //! Arrows show translation. Identity and lifecycle decisions stay in the domain.
 pub(crate) mod wire;
+pub(crate) mod workspace;

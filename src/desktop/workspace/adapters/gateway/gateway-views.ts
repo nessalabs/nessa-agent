@@ -10,12 +10,13 @@
  * summary is unpinned and read. Its summaries name no model: the one passed
  * in is the adapter's best word for it (`modelFor`).
  */
-import type {
-  ConversationMessageApp,
-  ConversationPermission,
-  ConversationSummary,
-  ConversationTool,
-  ConversationView,
+import {
+  clientDueAtMs,
+  type ConversationMessageApp,
+  type ConversationPermission,
+  type ConversationSummary,
+  type ConversationTool,
+  type ConversationView,
 } from "@nessa/client"
 import { placePublished } from "../../../../conversation"
 import { composerModels } from "../../../model/composer-options"
@@ -244,7 +245,7 @@ function writtenBy(app: ConversationMessageApp | undefined): { app?: MessageApp 
 /**
  * A conversation view as the session's transcript, at the revision the
  * adapter minted for it. `seen` answers when the adapter first saw a message
- * — the gateway's view carries no times — and keeps answering the same.
+ * — the gateway's view carries no message times — and keeps answering the same.
  *
  * Each turn is the input under its execution id and, once it has output,
  * the agent's reply: its text fragments joined where the provider says they
@@ -262,6 +263,8 @@ export function transcriptFrom(
   view: ConversationView,
   revision: number,
   seen: (messageId: string) => number,
+  /** When the view arrived, on the window's clock: its deadline is put on that clock. */
+  receivedAtMs: number,
 ): Transcript {
   const tools = new Map(
     view.tools.map((tool) => [JSON.stringify([tool.executionId, tool.toolId]), tool]),
@@ -361,6 +364,15 @@ export function transcriptFrom(
         // The gateway's own word for what is asked, a closed set the client
         // holds the view to (`conversation-validate.ts`, D19 on #390).
         ask: asked.ask,
+        deadline: asked.deadline && {
+          waitMs: asked.deadline.waitMs,
+          // The gateway's clock's moment as the window's, so the card's
+          // countdown does not move with the difference between the two.
+          dueAtMs: clientDueAtMs(asked.deadline.dueAtMs, view.serverNowMs, receivedAtMs),
+          effect: asked.deadline.effect,
+          reason: asked.deadline.reason,
+          stopsTurn: asked.deadline.stopsTurn,
+        },
       }
     : null
   return {

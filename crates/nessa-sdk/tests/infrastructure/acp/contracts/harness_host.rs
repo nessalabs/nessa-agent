@@ -10,6 +10,19 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
+#[test]
+fn a_workspace_on_a_host_is_not_resolved_on_this_machine() {
+    let (root, config, _) = test_acp_configuration("success", 16);
+    let local = root.path().to_path_buf();
+    assert!(config.workspace_paths.resolve(&local).is_some());
+    let hosted = config.on_host(local.clone());
+    assert_eq!(
+        hosted.workspace_paths.resolve(&local),
+        None,
+        "a path that exists here is not the host's path"
+    );
+}
+
 /// A host that is this machine: it starts the fixture harness in its own
 /// workspace, keeps what each launch asked for, and counts its cleanups.
 struct LocalHost {

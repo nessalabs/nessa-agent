@@ -7,11 +7,12 @@ use super::view::{
     ConversationLeaseState, ConversationLeaseView, ConversationLifecycle,
     ConversationLifecyclePhase, ConversationMcpTool, ConversationMessage, ConversationMessageApp,
     ConversationMessageStatus, ConversationPart, ConversationPending, ConversationPendingMode,
-    ConversationPermission, ConversationPermissionAsk, ConversationPermissionOption,
-    ConversationPermissionOptionEffect, ConversationPermissionOrigin, ConversationQuestion,
-    ConversationRuntime, ConversationSelectionView, ConversationTool, ConversationTranscriptState,
-    ConversationView, NativeHooksChoice, MAX_STRUCTURED_CONTENT_BYTES,
+    ConversationPermission, ConversationPermissionAsk, ConversationPermissionDeadline,
+    ConversationPermissionOption, ConversationPermissionOptionEffect, ConversationPermissionOrigin,
+    ConversationQuestion, ConversationRuntime, ConversationSelectionView, ConversationTool,
+    ConversationTranscriptState, ConversationView, NativeHooksChoice, MAX_STRUCTURED_CONTENT_BYTES,
 };
+use nessa_sdk::application::agent_execution::permissions::CancellationOrigin;
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
     executions::{ExecutionEvent, ExecutionUpdate, SubmissionMode},
@@ -28,7 +29,8 @@ use nessa_sdk::domain::agent_execution::tools::McpTool;
 use nessa_sdk::domain::agent_execution::{
     executions::{ExecutionId, ExecutionOutcome, InvocationStage, MessageKind},
     permissions::{
-        PermissionScope, RefusalOutcome, ReviewDecline, ReviewDeclineReason, ReviewDeclineStage,
+        PermissionEffect, PermissionReviewDeadline, PermissionScope, RefusalOutcome, ReviewDecline,
+        ReviewDeclineId, ReviewDeclineReason, ReviewDeclineStage,
     },
     questions::{AnswerShape, MAX_OPEN_QUESTIONS},
     tools::{ToolContentView, ToolKind, ToolStatus},
@@ -229,6 +231,15 @@ pub struct Projection {
     revision: u64,
     committed_position: Option<(String, u64, u64, u64)>,
     resolved_permissions: HashSet<(String, String)>,
+    /// Permission ids a request named in this execution, with the deadline
+    /// that request published. A deadline notice is shown only when it repeats
+    /// that deadline: one whose id is absent, whose request published no
+    /// deadline, or whose outcome differs is ignored. A deadline cancellation
+    /// must decide as it in full, not only share its outcome.
+    requested_permissions: HashMap<(String, String), Option<PermissionReviewDeadline>>,
+    /// Reviews cancelled for a reason other than their own deadline. Their
+    /// deadline did not settle them, so a later notice is ignored.
+    cancelled_otherwise: HashSet<(String, String)>,
     /// Asks that have stopped waiting, so a replayed ask does not reopen one.
     answered_questions: HashSet<(String, String)>,
     terminal_executions: HashSet<String>,
@@ -246,6 +257,11 @@ pub struct Projection {
     /// offered an interaction. It does not, by itself, decide that every
     /// other unfinished record was interrupted.
     live_here: HashSet<String>,
+    /// Reviews this process's worker is still waiting on, as execution id and
+    /// permission id. Storage restores a deadline unarmed. One of these is
+    /// still the promise that worker made, so its card counts down.
+    /// `a_saved_deadline_counts_down_while_this_process_holds_the_review`.
+    holding_reviews: HashSet<(String, String)>,
     /// Unfinished executions present when this projection first accepted a
     /// snapshot, except any this process has since run. A record admitted
     /// later is absent, so a read while it is saved but not active — or no
@@ -274,6 +290,33 @@ fn outcome(value: ExecutionOutcome) -> ConversationMessageStatus {
         | ExecutionOutcome::RequestLimit
         | ExecutionOutcome::Refused => ConversationMessageStatus::Failed,
     }
+}
+fn permission_deadline(
+    deadline: &PermissionReviewDeadline,
+    holding: bool,
+) -> Option<ConversationPermissionDeadline> {
+    // A restored deadline is a record of what was promised, not a promise this
+    // process will keep. `holding` is a review this process's worker is still
+    // waiting on: storage cannot record that, so the live read says so and
+    // the card counts down. Any other unarmed deadline stays off the card.
+    // `a_saved_deadline_counts_down_while_this_process_holds_the_review`.
+    if !deadline.armed() && !holding {
+        return None;
+    }
+    Some(ConversationPermissionDeadline {
+        wait_ms: nessa_sdk::domain::agent_execution::permissions::wait_ms(deadline.wait()),
+        due_at_ms: deadline.due_at_ms()?,
+        effect: ConversationPermissionOptionEffect::from(deadline.effect()),
+        reason: deadline.reason().to_owned(),
+        stops_turn: deadline.stops_turn(),
+    })
+}
+fn deadline_notice(effect: PermissionEffect, reason: &str) -> String {
+    let verb = match effect {
+        PermissionEffect::Allow => "Allowed automatically",
+        PermissionEffect::Deny => "Denied automatically",
+    };
+    format!("{verb}: {reason}")
 }
 fn decline_notice(decline: &ReviewDecline, delivery: ReviewDeclineStage) -> String {
     let target = decline
@@ -393,6 +436,7 @@ pub fn retained_view(
         HashSet::new(),
         revision,
         None,
+        &HashSet::new(),
     );
     projection.transcript_state(status.view_state().into());
     bound_view(projection.read())
@@ -404,7 +448,14 @@ impl Projection {
         capabilities: ConversationCapabilities,
         snapshot: Option<&SessionSnapshot>,
     ) -> Self {
-        Self::from_snapshot(id, capabilities, snapshot, HashSet::new(), None)
+        Self::from_snapshot(
+            id,
+            capabilities,
+            snapshot,
+            HashSet::new(),
+            None,
+            &HashSet::new(),
+        )
     }
 
     fn from_snapshot(
@@ -413,6 +464,7 @@ impl Projection {
         snapshot: Option<&SessionSnapshot>,
         live_here: HashSet<String>,
         carried_unfinished: Option<HashSet<String>>,
+        holding_reviews: &HashSet<(String, String)>,
     ) -> Self {
         Self::from_snapshot_with_epoch(
             id,
@@ -421,6 +473,7 @@ impl Projection {
             live_here,
             Uuid::new_v4(),
             carried_unfinished,
+            holding_reviews,
         )
     }
 
@@ -431,6 +484,7 @@ impl Projection {
         live_here: HashSet<String>,
         epoch: Uuid,
         carried_unfinished: Option<HashSet<String>>,
+        holding_reviews: &HashSet<(String, String)>,
     ) -> Self {
         let history_accepted = carried_unfinished.is_some() || snapshot.is_some();
         let unfinished_at_fold = match carried_unfinished {
@@ -444,11 +498,14 @@ impl Projection {
             revision: 0,
             committed_position: None,
             resolved_permissions: HashSet::new(),
+            requested_permissions: HashMap::new(),
+            cancelled_otherwise: HashSet::new(),
             answered_questions: HashSet::new(),
             terminal_executions: HashSet::new(),
             tool_parts: HashMap::new(),
             execution_hooks: HashMap::new(),
             live_here: live_here.clone(),
+            holding_reviews: holding_reviews.clone(),
             unfinished_at_fold,
             history_accepted,
             tool_uis: Arc::new(NoMcpToolUis),
@@ -530,6 +587,22 @@ impl Projection {
         order: &[ExecutionId],
         active: Option<&ExecutionId>,
     ) -> bool {
+        self.replace_committed_while_holding(committed, order, active, &HashSet::new())
+    }
+
+    /// As [`Self::replace_committed`], and `holding` names each review this
+    /// process's worker is still waiting on, as execution id and permission
+    /// id. A saved deadline is restored unarmed. One of these is still that
+    /// worker's promise, so its card counts down. A restored deadline for any
+    /// other review stays off the card.
+    /// `a_saved_deadline_counts_down_while_this_process_holds_the_review`.
+    pub fn replace_committed_while_holding(
+        &mut self,
+        committed: &CommittedSession,
+        order: &[ExecutionId],
+        active: Option<&ExecutionId>,
+        holding: &HashSet<(String, String)>,
+    ) -> bool {
         let incarnation = committed.incarnation();
         let position = committed.position();
         let downloaded = committed.downloaded();
@@ -557,6 +630,7 @@ impl Projection {
             snapshot,
             active_set,
             carried,
+            holding,
         )
         .with_tool_uis(self.tool_uis.clone());
         next.epoch = self.epoch;
@@ -870,11 +944,18 @@ impl Projection {
             observation,
             input,
             options,
+            deadline,
         } = event.update()
         else {
             return;
         };
         let execution = event.execution_id().as_str();
+        // Recorded before a card is skipped. A later notice still names a
+        // request this execution saw, even when the card could not be shown.
+        self.requested_permissions.insert(
+            (execution.to_owned(), permission.as_str().to_owned()),
+            deadline.clone(),
+        );
         if self
             .resolved_permissions
             .contains(&(execution.to_owned(), permission.as_str().to_owned()))
@@ -918,6 +999,9 @@ impl Projection {
         {
             tool.input = input.arguments_json.clone();
         }
+        let holding = self
+            .holding_reviews
+            .contains(&(execution.to_owned(), permission.as_str().to_owned()));
         let value = ConversationPermission {
             execution_id: execution.into(),
             permission_id: permission.as_str().into(),
@@ -930,6 +1014,9 @@ impl Projection {
             arguments_json: input.arguments_json.clone(),
             origin: ConversationPermissionOrigin::Harness,
             ask: ConversationPermissionAsk::Tool,
+            deadline: deadline
+                .as_ref()
+                .and_then(|deadline| permission_deadline(deadline, holding)),
             options: options
                 .choices()
                 .iter()
@@ -976,7 +1063,32 @@ impl Projection {
             ExecutionUpdate::PermissionRequested { .. } => self.observe_permission(event),
             ExecutionUpdate::QuestionAsked { .. } => self.observe_question(event),
             ExecutionUpdate::PermissionCancelled(cancellation) => {
+                // Only the review's own published deadline settles it by
+                // cancelling. An execution timeout shares the reason but has
+                // a runtime origin, so its review was settled otherwise.
+                let by_deadline = matches!(
+                    cancellation.origin(),
+                    CancellationOrigin::Deadline(deadline)
+                        if self.deadline_settled(
+                            execution,
+                            cancellation.request().id().as_str(),
+                            |published| published.decides_as(deadline),
+                        )
+                );
+                if !by_deadline {
+                    self.cancelled_otherwise.insert((
+                        execution.to_owned(),
+                        cancellation.request().id().as_str().to_owned(),
+                    ));
+                }
                 self.resolved_permission(execution, cancellation.request().id().as_str());
+            }
+            ExecutionUpdate::DeadlineAnswered { id, effect, reason } => {
+                if self.deadline_settled(execution, id.as_str(), |published| {
+                    published.effect() == *effect && published.reason() == reason.as_str()
+                }) {
+                    self.resolved_permission(execution, id.as_str());
+                }
             }
             ExecutionUpdate::QuestionClosed { id } => {
                 self.answered_questions
@@ -993,10 +1105,49 @@ impl Projection {
         }
     }
 
+    /// Whether `permission` published a deadline that `settled_by` accepts,
+    /// and nothing but that deadline ended it. A stale, duplicate, or
+    /// contradictory notice in restored history is not one.
+    fn deadline_settled(
+        &self,
+        execution: &str,
+        permission: &str,
+        settled_by: impl FnOnce(&PermissionReviewDeadline) -> bool,
+    ) -> bool {
+        let key = (execution.to_owned(), permission.to_owned());
+        matches!(
+            self.requested_permissions.get(&key),
+            Some(Some(published)) if settled_by(published)
+        ) && !self.cancelled_otherwise.contains(&key)
+    }
+
     /// Render one observation from a validated committed SDK record.
     fn observe(&mut self, event: &ExecutionEvent) {
         let id = event.execution_id().as_str();
         let index = self.ensure_message(id);
+        // Decided once, before this event changes anything: a notice is shown
+        // for the deadline that settled its review, and only the first time.
+        // The notice part is that record, so a replayed record shows it again.
+        // The review's id becomes the notice's, and a notice id is the decimal
+        // a review decline has; a saved history may hold any permission id, so
+        // one that is not a notice id shows no notice rather than a view the
+        // client refuses whole.
+        let deadline_notice_shown = match event.update() {
+            ExecutionUpdate::DeadlineAnswered {
+                id: permission,
+                effect,
+                reason,
+            } => {
+                ReviewDeclineId::new(permission.as_str()).is_ok()
+                    && self.deadline_settled(id, permission.as_str(), |published| {
+                        published.effect() == *effect && published.reason() == reason.as_str()
+                    })
+                    && !self.view.messages[index].parts.iter().any(|part| {
+                        part.kind == "local_notice" && part.notice_id == permission.as_str()
+                    })
+            }
+            _ => false,
+        };
         self.view
             .pending
             .retain(|pending| pending.execution_id != id);
@@ -1038,6 +1189,29 @@ impl Projection {
                     tool_id,
                     notice_id: String::new(),
                 })
+            }
+            ExecutionUpdate::DeadlineAnswered {
+                id: permission,
+                effect,
+                reason,
+            } => {
+                if !deadline_notice_shown {
+                    None
+                } else {
+                    let text = deadline_notice(*effect, reason.as_str());
+                    let bounded = clipped(&text, available);
+                    if bounded.len() != text.len() {
+                        self.view.truncated = true;
+                    }
+                    Some(ConversationPart {
+                        message_id: None,
+                        offset,
+                        kind: "local_notice".into(),
+                        text: bounded,
+                        tool_id: String::new(),
+                        notice_id: permission.as_str().into(),
+                    })
+                }
             }
             ExecutionUpdate::ReviewDeclined(observation) => {
                 let notice_id = observation.id().as_str();
@@ -1103,6 +1277,11 @@ impl Projection {
                 self.view.messages[index].status = ConversationMessageStatus::Running;
             }
             ExecutionUpdate::PermissionCancelled(_) | ExecutionUpdate::QuestionClosed { .. } => {}
+            ExecutionUpdate::DeadlineAnswered { .. } => {
+                if deadline_notice_shown {
+                    self.view.messages[index].status = ConversationMessageStatus::Running;
+                }
+            }
             ExecutionUpdate::ReviewDeclined(observation) => {
                 if observation.decline().outcome() == RefusalOutcome::Continue {
                     self.view.messages[index].status = ConversationMessageStatus::Running;

@@ -62,6 +62,7 @@ the Interactive macOS policy, local timing logs, and deferred follow-up work.
 | [344 — MCP UI](done/344-mcp-ui.md) | Nessa hosts MCP Apps: a gateway MCP client, tool identity and `_meta`, app calls with policy and audit, and a sandboxed iframe host. Slices #346–#349 are closed. Amends 326 (plugin kinds) and 333 (where an experiment view is built) |
 | [483 — Gateway protocol and device client crates](done/483-protocol-and-client-core-crates.md) | Shared wire/read model in `nessa-protocol`, device enrollment and retained sync in `nessa-client-core`, gateway links the client without its `cli` feature (amended, #705) and portable dependency boundaries |
 | [596 — Observe every owned conversation](done/596-observe-every-owned-conversation.md) | The desktop index walks `conversation.observe` when `conversation.list` is incomplete. The list bound stays 500. The page size is the catalogue's. Listing and observing open no provider |
+| [141 — Unanswered permissions settle at a deadline](done/141-permission-deadlines.md) | A pending review's class deadline answers it, the deadline is its own audit decider, and a third-party harness that cannot defer is reported unavailable. Remembered approvals, notifications, BYOK deferral, and elicitation stay on #141 |
 | [768 — Native harness hooks are a per-harness choice](done/768-native-harness-hooks.md) | Claude and Codex read the stored choice at each process start. Off is the default. OpenCode stays suppressed |
 
 ## Todo — implementation priority

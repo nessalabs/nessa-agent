@@ -5,6 +5,7 @@ use crate::application::agent_execution::providers::{
     ApprovalMode, ApprovalModeChoice, NativeHookSuppressionCapability, NativeHooksSwitch,
 };
 use crate::application::agent_execution::tools::ToolReviewInput;
+use crate::domain::agent_execution::permissions::DeadlineDenyPreference;
 use crate::domain::agent_execution::tools::ToolCallUpdate;
 use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
 use crate::domain::model_metadata::value_objects::EffortLevel;
@@ -337,5 +338,13 @@ impl AcpProfile for CodexProfile {
 
     fn permission_input(&self, request: &Value) -> Result<ToolReviewInput, AgentError> {
         wire::permission_input(request, &self.tools)
+    }
+
+    /// Codex ACP 1.12.0 offers `decline` and `cancel` as the same ACP kind
+    /// (`reject_once`). `decline` continues the turn. `cancel` stops it. File
+    /// edits, MCP tool approvals, and extra-permission commands offer only
+    /// `cancel`, so a deadline that selects it has to say the turn stopped.
+    fn deadline_deny_preference(&self) -> DeadlineDenyPreference {
+        DeadlineDenyPreference::new(["decline"], ["cancel"])
     }
 }
