@@ -555,11 +555,15 @@ item or summon shortcut to toggle it closed.
 The chat kit lives in [`nessalabs/nessa_ui`](https://github.com/nessalabs/nessa_ui)
 (`packages/react`). It is not on npm yet, so `pnpm install` links it from
 `.vendor/nessa_ui`. That directory is filled by `scripts/ensure-nessa-ui.mjs`
-before install: a sibling `nessa_ui` (or the original imessage worktree) is
-symlinked when it contains the commit in `nessa-ui-revision`; otherwise the repo
-is cloned at that reviewed commit. When the pin moves, the script advances a managed
-clone on its own, as long as it carries no local edits. A symlinked sibling checkout
-is never switched: the script stops and says so. Update the revision file
+before install: it clones the reviewed commit in `nessa-ui-revision` into this
+checkout's own directory, where scoped dependency installation and package builds
+run. An existing `.vendor/nessa_ui` symlink is replaced with a private clone;
+the borrowed target's source, edits, and build artifacts stay untouched (covered
+by `scripts/ensure-nessa-ui.test.mjs`). When the pin moves, the script advances
+its clone as long as it carries no local edits. A linked `.vendor` parent is
+refused before preparation; replace that link with a checkout-local directory.
+If private cloning fails after removing a vendor link, its target stays intact
+and the next preparation retries cloning. Update the revision file
 deliberately when adopting UI changes.
 
 pnpm skips `preinstall` when the lockfile is already satisfied, so a pull that only
