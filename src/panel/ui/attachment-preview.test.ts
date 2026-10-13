@@ -7,7 +7,8 @@ import type { FileAttachment } from "../../conversation"
 function preview(name: string, size: number) {
   const file: FileAttachment = {
     type: "file",
-    id: "preview",
+    resourceId: "preview",
+    placementId: "preview",
     name,
     mimeType: "application/octet-stream",
     size,

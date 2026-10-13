@@ -1,4 +1,4 @@
-import type { MessageContent } from "./content"
+import type { MessageContent, MessagePart } from "./content"
 
 /**
  * Why an upload did not finish, as something to branch on.
@@ -59,20 +59,19 @@ export type UploadState =
   | { status: "failed"; reason: UploadFailure }
 
 /**
- * A file attached in this window. `name`, `mimeType`, `size`, and `previewUrl`
- * describe the original file, which is what is previewed and what is uploaded.
- * What a message will refer to is `upload.image` and may be none of those.
- * Plain data: the bytes themselves stay with the panel's resource store.
+ * A retained resource descriptor supplied for admission into a draft. Metadata
+ * describes the original bytes or chosen path; bytes remain in the panel's
+ * resource store. It carries neither placement identity nor upload state.
  */
-export type FileAttachment = {
+export type AttachmentInput = {
   type: "file"
-  id: string
+  /** Identity of the retained bytes or path descriptor, shared across admissions. */
+  resourceId: string
   name: string
   mimeType: string
   size: number
   /** Empty when this window holds no bytes to paint, which a path-only file does not. */
   previewUrl: string
-  upload: UploadState
   /**
    * Where the file is on this machine, when the host said so, and `null` when
    * nobody could: a browser `File` deliberately does not carry one, so a file
@@ -84,6 +83,13 @@ export type FileAttachment = {
    * {@link messageFiles}.
    */
   path: string | null
+}
+
+/** One application-owned admission into a draft, retained through its local turn. */
+export type FileAttachment = AttachmentInput & {
+  /** Fresh identity minted by attachFiles for this admission in one store. */
+  placementId: string
+  upload: UploadState
 }
 
 /**
@@ -153,12 +159,14 @@ const digestPattern = /^sha256:[0-9a-f]{64}$/
  * may hold, which is about the draft rather than about memory, and that every
  * file's size is a number that could be one.
  */
-export function validDraftAttachments(content: MessageContent): boolean {
+export function validDraftAttachments(
+  content: readonly (MessagePart | AttachmentInput)[],
+): boolean {
   const files = content.filter((part) => part.type === "file")
   const held = files.filter((file) => !linkedFile(file))
   return (
     files.length <= MAX_DRAFT_ATTACHMENTS &&
-    new Set(files.map((file) => file.id)).size === files.length &&
+    new Set(files.map((file) => file.resourceId)).size === files.length &&
     files.every((file) => Number.isSafeInteger(file.size) && file.size >= 0) &&
     held.every((file) => file.size <= MAX_ATTACHMENT_BYTES) &&
     held.reduce((bytes, file) => bytes + file.size, 0) <= MAX_DRAFT_ATTACHMENT_BYTES
@@ -313,7 +321,7 @@ export function storedImages(content: MessageContent): ImageReference[] {
  * these, even when its path is known — an image is carried, so that the model
  * sees it without having to decide to look.
  */
-export function linkedFile(file: FileAttachment): boolean {
+export function linkedFile(file: AttachmentInput): boolean {
   return !isImageFile(file.mimeType) && file.path !== null
 }
 

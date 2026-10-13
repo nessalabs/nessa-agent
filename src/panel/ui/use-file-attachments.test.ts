@@ -66,7 +66,8 @@ const resources: AttachmentResources = {
   add: (files) =>
     files.map((file) => ({
       type: "file" as const,
-      id: `r${taken++}`,
+      resourceId: `r${taken++}`,
+      placementId: `r${taken++}`,
       name: file.name,
       mimeType: file.type || "application/octet-stream",
       size: file.size,
@@ -79,7 +80,8 @@ const resources: AttachmentResources = {
   addChosen: (chosen) =>
     chosen.map((file) => ({
       type: "file" as const,
-      id: `r${taken++}`,
+      resourceId: `r${taken++}`,
+      placementId: `r${taken++}`,
       name: file.name,
       mimeType: "application/octet-stream",
       size: file.size,
@@ -123,7 +125,7 @@ function Surface() {
           "data-remove": true,
           onClick: () => {
             const [first] = attachments.files
-            if (first) attachments.remove(first.id)
+            if (first) attachments.remove(first.placementId)
           },
         },
         "Remove",
@@ -235,14 +237,14 @@ it("says a refusal at the moment it happens, without taking a failed upload's Re
     store.dispatch(
       uploadChanged({
         conversationId: "c0",
-        fileId: (file as { id: string }).id,
+        placementId: (file as { placementId: string }).placementId,
         to: "uploading",
       }),
     )
     store.dispatch(
       uploadChanged({
         conversationId: "c0",
-        fileId: (file as { id: string }).id,
+        placementId: (file as { placementId: string }).placementId,
         to: "failed",
         reason: "unavailable",
       }),
@@ -394,12 +396,11 @@ it("keeps a refusal that the conversation, not the panel, turned the send away f
         files: [
           {
             type: "file",
-            id: "n",
+            resourceId: "n",
             name: "notes.pdf",
             mimeType: "application/pdf",
             size: 2,
             previewUrl: "blob:test",
-            upload: { status: "not-started" },
             path: null,
           },
         ],

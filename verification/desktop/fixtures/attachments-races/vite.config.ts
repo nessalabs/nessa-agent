@@ -48,5 +48,5 @@ export const onAttachmentDropped = (handler) => { window.__attachmentProbe.drop 
       },
     },
   ],
-  server: { ...base.server, host: "127.0.0.1", port: 1448, strictPort: true },
+  server: { ...base.server, host: "127.0.0.1", port: 1486, strictPort: true },
 })

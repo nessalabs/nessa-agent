@@ -22,8 +22,10 @@ and checks before considering the change complete. A new folder alone does not
 establish an architectural boundary.
 
 Upload progress is owned by the conversation application and carries its local
-conversation and file together; see [upload targets](design/upload-targets.md).
+conversation and admitted placement together; see [attachment lifetimes](design/attachment-lifetimes.md).
 The panel carries that target through hashing and the store through staging.
+The conversation application mints placements and publishes one resource-usage
+snapshot for retention and preview eviction; resource IDs identify shared bytes.
 
 ## Today
 

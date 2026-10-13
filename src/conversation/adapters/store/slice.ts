@@ -10,7 +10,7 @@ import {
   storedImages,
   type CommandFailure,
   type ConversationSelection,
-  type FileAttachment,
+  type AttachmentInput,
   type MessageContent,
   type ReadFailure,
   type Turn,
@@ -239,16 +239,20 @@ export const takeUploadStep =
 
 export const stageAttachment = createAsyncThunk<
   void,
-  { id: string; fileId: string; file: UploadedFile; bytes: Blob },
+  { id: string; placementId: string; file: UploadedFile; bytes: Blob },
   ThunkConfig
 >(
   "conversation/stageAttachment",
   async (input, { dispatch, getState, extra, signal }) => {
-    const target = { conversationId: input.id, fileId: input.fileId }
+    const target = { conversationId: input.id, placementId: input.placementId }
     const current = getState().conversation.conversations.find(
       (item) => item.id === target.conversationId,
     )
-    if (!current?.draft.some((part) => part.type === "file" && part.id === target.fileId))
+    if (
+      !current?.draft.some(
+        (part) => part.type === "file" && part.placementId === target.placementId,
+      )
+    )
       return
     const serverId = current.serverConversationId ?? crypto.randomUUID()
     dispatch(bindConversation({ id: target.conversationId, serverId }))
@@ -668,8 +672,8 @@ const conversationSlice = createSlice({
   name: "conversation",
   initialState: emptyLocalTabs(),
   reducers: {
-    restoreConversations(_state, action: PayloadAction<SavedConversationTabs>) {
-      return restoreConversationTabs(action.payload)
+    restoreConversations(state, action: PayloadAction<SavedConversationTabs>) {
+      return restoreConversationTabs(state, action.payload)
     },
     cancellationChanged(
       state,
@@ -688,7 +692,7 @@ const conversationSlice = createSlice({
     },
     attachFiles(
       state,
-      action: PayloadAction<{ files: FileAttachment[]; conversationId: string }>,
+      action: PayloadAction<{ files: AttachmentInput[]; conversationId: string }>,
     ) {
       return gateway.attachFiles(
         state,
@@ -898,3 +902,6 @@ export const {
 export const conversationReducer = conversationSlice.reducer
 // Mounted beside the tabs by the store, which reaches this vertical through this module alone.
 export { conversationHistoryReducer } from "./history"
+
+// Narrow composition entry: the store mounts reducers without loading UI barrels.
+export { attachmentResourceUsage } from "../../application/queries/attachment-resources"

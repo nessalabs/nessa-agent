@@ -21,6 +21,8 @@ vi.mock("../../conversation", () => import("../../conversation/testing"))
 import { createDependencies } from "../../composition/dependencies"
 import {
   attachFiles,
+  openConversation,
+  closeConversation,
   AttachmentStagingError,
   removeFile,
   scenarioEffects,
@@ -48,13 +50,17 @@ const stored = {
   size: 2,
 }
 
-let retry: (fileId: string) => void = () => {}
+const digest = async () => DIGEST
+let retry: (placementId: string) => void = () => {}
 function Surface({
   resources,
+  projection,
 }: {
   resources: Parameters<typeof useAttachmentUploads>[1]
+  projection?: ReturnType<typeof useConversation>
 }) {
-  const uploads = useAttachmentUploads(useConversation(), resources, async () => DIGEST)
+  const current = useConversation()
+  const uploads = useAttachmentUploads(projection ?? current, resources, digest)
   retry = uploads.retry
   return null
 }
@@ -94,13 +100,19 @@ async function mounted(
     await React.act(async () => {
       store.dispatch(attachFiles({ files: [attachment!], conversationId: "c0" }))
     })
-    return attachment!.id
+    const placed = store
+      .getState()
+      .conversation.conversations[0]!.draft.find(
+        (part) => part.type === "file" && part.resourceId === attachment!.resourceId,
+      )
+    if (!placed || placed.type !== "file") throw new Error("Attachment was not admitted")
+    return placed.placementId
   }
   const uploadOf = (id: string) => {
     const part = store
       .getState()
       .conversation.conversations[0]!.draft.find(
-        (part) => part.type === "file" && part.id === id,
+        (part) => part.type === "file" && part.placementId === id,
       )
     return part?.type === "file" ? part.upload : undefined
   }
@@ -270,15 +282,210 @@ it("does not spin on an image whose upload ends before React has rendered at all
   const [attachment] = panel.dependencies.attachments.add([
     new File(["raw"], "gone.heic", { type: "image/heic" }),
   ])
-  panel.dependencies.attachments.retain(new Set())
+  panel.dependencies.attachments.retain({ needed: new Set(), previews: new Map() })
   await React.act(async () => {
     panel.store.dispatch(attachFiles({ files: [attachment!], conversationId: "c0" }))
   })
-  expect(panel.uploadOf(attachment!.id)).toEqual({
+  const placed = panel.store.getState().conversation.conversations[0]!.draft[0]
+  if (!placed || placed.type !== "file") throw new Error("Attachment was not admitted")
+  expect(panel.uploadOf(placed.placementId)).toEqual({
     status: "failed",
     reason: "unreadable",
   })
   expect(panel.stage).not.toHaveBeenCalled()
   // Attach, uploading, failed — and then it stops.
   expect(change.mock.calls.length).toBeLessThan(10)
+})
+
+it("AL4: shared bytes get independent upload slots and removing one placement leaves the other live", async () => {
+  const calls: Array<{ signal: AbortSignal; resolve: (image: typeof stored) => void }> =
+    []
+  const panel = await mounted(async (_id, _file, _bytes, rawSignal) => {
+    const signal = rawSignal as AbortSignal
+    return new Promise<typeof stored>((resolve, reject) => {
+      calls.push({ signal, resolve })
+      signal.addEventListener("abort", () => reject(new Error("placement removed")), {
+        once: true,
+      })
+    })
+  })
+  const [resource] = panel.dependencies.attachments.add([
+    new File(["raw"], "shared.png", { type: "image/png" }),
+  ])
+  await React.act(async () => {
+    panel.store.dispatch(attachFiles({ conversationId: "c0", files: [resource!] }))
+  })
+  await vi.waitFor(() => expect(calls).toHaveLength(1))
+  await React.act(async () => {
+    panel.store.dispatch(openConversation())
+    panel.store.dispatch(attachFiles({ conversationId: "c1", files: [resource!] }))
+  })
+  await vi.waitFor(() => expect(calls).toHaveLength(2))
+  const first = panel.store.getState().conversation.conversations[0]!.draft[0]
+  const second = panel.store.getState().conversation.conversations[1]!.draft[0]
+  if (first?.type !== "file" || second?.type !== "file")
+    throw new Error("Attachments were not admitted")
+  expect(first.resourceId).toBe(second.resourceId)
+  expect(first.placementId).not.toBe(second.placementId)
+  await React.act(async () => {
+    panel.store.dispatch(closeConversation("c0"))
+  })
+  expect(calls[0]!.signal.aborted).toBe(true)
+  expect(calls[1]!.signal.aborted).toBe(false)
+  expect(panel.dependencies.attachments.bytes(resource!.resourceId)).toBeDefined()
+  await React.act(async () => {
+    calls[1]!.resolve(stored)
+  })
+  expect(panel.store.getState().conversation.conversations[0]!.draft[0]).toMatchObject({
+    placementId: second.placementId,
+    upload: { status: "stored", image: stored },
+  })
+})
+
+function owner(files: number, stage: Parameters<typeof mounted>[0]) {
+  const dependencies = createDependencies({
+    conversation: { ...scenarioEffects("echo"), stageAttachment: stage },
+  })
+  const store = makeStore(dependencies)
+  const inputs = dependencies.attachments.add(
+    Array.from(
+      { length: files },
+      (_, index) => new File(["raw"], `${index}.png`, { type: "image/png" }),
+    ),
+  )
+  store.dispatch(attachFiles({ conversationId: "c0", files: inputs }))
+  return { dependencies, store }
+}
+async function showOwner(scope: ReturnType<typeof owner>) {
+  await React.act(async () => {
+    root.render(
+      React.createElement(Provider, {
+        store: scope.store,
+        children: React.createElement(Surface, {
+          resources: scope.dependencies.attachments,
+        }),
+      }),
+    )
+  })
+}
+
+it.each(["swap", "unmount"] as const)(
+  "AL11/AL12: completion after %s cannot settle a replacement owner's matching placement",
+  async (change) => {
+    const oldReply = deferred<typeof stored>()
+    const nextReply = deferred<typeof stored>()
+    const oldStage = vi.fn(() => oldReply.promise)
+    const nextStage = vi.fn(() => nextReply.promise)
+    const original = owner(1, oldStage)
+    const replacement = owner(1, nextStage)
+    await showOwner(original)
+    await vi.waitFor(() => expect(oldStage).toHaveBeenCalledTimes(1))
+    if (change === "unmount")
+      await React.act(async () => {
+        root.render(null)
+      })
+    await showOwner(replacement)
+    await vi.waitFor(() => expect(nextStage).toHaveBeenCalledTimes(1))
+    const before = replacement.store.getState().conversation.conversations[0]!.draft
+    await React.act(async () => {
+      oldReply.resolve(stored)
+    })
+    expect(replacement.store.getState().conversation.conversations[0]!.draft).toBe(before)
+    expect(nextStage).toHaveBeenCalledTimes(1)
+    await React.act(async () => {
+      nextReply.resolve(stored)
+    })
+    expect(
+      replacement.store.getState().conversation.conversations[0]!.draft[0],
+    ).toMatchObject({ placementId: "a1", upload: { status: "stored" } })
+  },
+)
+
+it("AL12: revisiting an owner preserves its occupied slots and cancellation handles", async () => {
+  const calls: Array<{
+    signal: AbortSignal
+    reply: ReturnType<typeof deferred<typeof stored>>
+  }> = []
+  const stage = vi.fn(async (_id, _file, _bytes, signal) => {
+    const reply = deferred<typeof stored>()
+    calls.push({ signal: signal as AbortSignal, reply })
+    return reply.promise
+  })
+  const original = owner(4, stage)
+  const other = owner(1, async () => stored)
+  await showOwner(original)
+  await vi.waitFor(() => expect(stage).toHaveBeenCalledTimes(3))
+  await showOwner(other)
+  await showOwner(original)
+  expect(stage).toHaveBeenCalledTimes(3)
+  await React.act(async () => {
+    calls[0]!.reply.resolve(stored)
+  })
+  await vi.waitFor(() => expect(stage).toHaveBeenCalledTimes(4))
+  await React.act(async () => {
+    original.store.dispatch(removeFile("a2"))
+  })
+  expect(calls[1]!.signal.aborted).toBe(true)
+  expect(calls[2]!.signal.aborted).toBe(false)
+  expect(calls[3]!.signal.aborted).toBe(false)
+  await React.act(async () => {
+    for (const call of calls.slice(1)) call.reply.resolve(stored)
+  })
+})
+
+it("AL11: an old owner's completion cannot wake a replacement's custom live projection", async () => {
+  const oldReply = deferred<typeof stored>()
+  const oldStage = vi.fn(() => oldReply.promise)
+  const nextStage = vi.fn(async () => stored)
+  const original = owner(1, oldStage)
+  const replacement = owner(1, nextStage)
+  let commands: ReturnType<typeof useConversation> | undefined
+  function Capture() {
+    commands = useConversation()
+    return null
+  }
+  // Capture the real public commands, then provide a headless live projection
+  // of the same authoritative store. No fabricated IDs or transition rules.
+  await React.act(async () => {
+    root.render(
+      React.createElement(Provider, {
+        store: replacement.store,
+        children: React.createElement(Capture),
+      }),
+    )
+  })
+  if (!commands) throw new Error("Commands were not captured")
+  const projection = {
+    ...commands,
+    get conversations() {
+      return replacement.store.getState().conversation.conversations
+    },
+  }
+  await showOwner(original)
+  await vi.waitFor(() => expect(oldStage).toHaveBeenCalledTimes(1))
+  await React.act(async () => {
+    root.render(
+      React.createElement(Provider, {
+        store: replacement.store,
+        children: React.createElement(Surface, {
+          resources: replacement.dependencies.attachments,
+          projection,
+        }),
+      }),
+    )
+  })
+  await vi.waitFor(() => expect(nextStage).toHaveBeenCalledTimes(1))
+  const [resource] = replacement.dependencies.attachments.add([
+    new File(["raw"], "later.png", { type: "image/png" }),
+  ])
+  await React.act(async () => {
+    replacement.store.dispatch(attachFiles({ conversationId: "c0", files: [resource!] }))
+  })
+  await React.act(async () => {
+    oldReply.resolve(stored)
+  })
+  expect(nextStage).toHaveBeenCalledTimes(1)
+  expect(
+    replacement.store.getState().conversation.conversations[0]!.draft[1],
+  ).toMatchObject({ placementId: "a2", upload: { status: "not-started" } })
 })

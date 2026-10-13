@@ -39,7 +39,8 @@ function image(
 ): FileAttachment {
   return {
     type: "file",
-    id,
+    resourceId: id,
+    placementId: id,
     name: `${id}.png`,
     mimeType: "image/png",
     previewUrl: `blob:${id}`,
@@ -53,7 +54,8 @@ function image(
 it("accepts empty files and exact file limit, rejects invalid byte sizes", () => {
   const file: FileAttachment = {
     type: "file",
-    id: "a",
+    resourceId: "a",
+    placementId: "a",
     name: "a.txt",
     mimeType: "text/plain",
     previewUrl: "blob:test-empty",

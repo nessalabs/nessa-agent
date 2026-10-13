@@ -41,7 +41,8 @@ const file = (
   mimeType = "image/png",
 ): FileAttachment => ({
   type: "file",
-  id,
+  resourceId: id,
+  placementId: id,
   name: `${id}.png`,
   mimeType,
   size: 3,

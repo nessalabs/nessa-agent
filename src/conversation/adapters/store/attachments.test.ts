@@ -59,7 +59,8 @@ function deferred<T>() {
 
 const image = (id: string, change: Partial<FileAttachment> = {}): FileAttachment => ({
   type: "file",
-  id,
+  resourceId: id,
+  placementId: "a1",
   name: `${id}.heic`,
   mimeType: "image/heic",
   size: 3,
@@ -128,11 +129,26 @@ async function attachStored(
   file: FileAttachment,
 ) {
   store.dispatch(attachFiles({ files: [file], conversationId: "c0" }))
+  const placed = store
+    .getState()
+    .conversation.conversations[0]!.draft.find(
+      (part) => part.type === "file" && part.resourceId === file.resourceId,
+    )
+  if (!placed || placed.type !== "file") throw new Error("Attachment was not admitted")
   store.dispatch(
-    uploadChanged({ conversationId: "c0", fileId: file.id, to: "uploading" }),
+    uploadChanged({
+      conversationId: "c0",
+      placementId: placed.placementId,
+      to: "uploading",
+    }),
   )
   await store.dispatch(
-    stageAttachment({ id: "c0", fileId: file.id, file: described(file), bytes }),
+    stageAttachment({
+      id: "c0",
+      placementId: placed.placementId,
+      file: described(file),
+      bytes,
+    }),
   )
 }
 
@@ -557,7 +573,7 @@ it.each<ConversationTranscriptState>([
       shape: (view) => ({ ...saying(true)(view), transcriptState: state }),
     })
     const serverId = context.current().serverConversationId
-    context.store.dispatch(removeFile("finder"))
+    context.store.dispatch(removeFile("a1"))
     expect(context.current()).toMatchObject({
       turns: [],
       draft: [],
@@ -607,7 +623,7 @@ it("retains a truncated confirmed-empty view and closes only its tab", async () 
     close,
     shape: (view) => ({ ...saying(true)(view), truncated: true }),
   })
-  context.store.dispatch(removeFile("finder"))
+  context.store.dispatch(removeFile("a1"))
   expect(
     conversationTabSnapshot(context.store.getState().conversation).tabs,
   ).toHaveLength(1)
@@ -635,7 +651,7 @@ it("does not save a tab for a conversation known to be empty, and does once it i
     conversationTabSnapshot(context.store.getState().conversation).tabs.length
   // Bound to a gateway conversation by the upload, with an image in the draft.
   expect(saved()).toBe(1)
-  context.store.dispatch(removeFile(file.id))
+  context.store.dispatch(removeFile(file.placementId))
   // Attach-then-remove: read, empty, nothing drafted. Not worth coming back to.
   expect(saved()).toBe(0)
   await attachStored(context.store, image("again"))
@@ -647,7 +663,7 @@ it("keeps a tab whose conversation has not been read yet: it may have a history"
   const gate = deferred<ConversationView>()
   const context = storeWith({ read: () => gate.promise })
   await attachStored(context.store, image("a"))
-  context.store.dispatch(removeFile("a"))
+  context.store.dispatch(removeFile("a1"))
   expect(
     conversationTabSnapshot(context.store.getState().conversation).tabs,
   ).toHaveLength(1)
@@ -715,14 +731,14 @@ it("does not bring back a tile removed while its upload was in flight", async ()
   const file = image("a")
   context.store.dispatch(attachFiles({ files: [file], conversationId: "c0" }))
   context.store.dispatch(
-    uploadChanged({ conversationId: "c0", fileId: "a", to: "uploading" }),
+    uploadChanged({ conversationId: "c0", placementId: "a1", to: "uploading" }),
   )
   const staging = context.store.dispatch(
-    stageAttachment({ id: "c0", fileId: "a", file: described(file), bytes }),
+    stageAttachment({ id: "c0", placementId: "a1", file: described(file), bytes }),
   )
   // Create has settled and the upload is genuinely in flight before the removal.
   await started.promise
-  context.store.dispatch(removeFile("a"))
+  context.store.dispatch(removeFile("a1"))
   expect(context.draft()).toEqual([])
   gate.resolve(stored)
   await staging
@@ -736,7 +752,7 @@ it("uploads nothing for a file that is already gone", async () => {
   await context.store.dispatch(
     stageAttachment({
       id: "c0",
-      fileId: "never-attached",
+      placementId: "never-attached",
       file: described(image("x")),
       bytes,
     }),

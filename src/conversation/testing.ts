@@ -50,6 +50,7 @@ export { useConversation } from "./ui/use-conversation"
 export { fromEditor, toEditor, pastedTextLabel } from "./ui/composer-content"
 export {
   type FileAttachment,
+  type AttachmentInput,
   type UploadFailure,
   MAX_ATTACHMENT_BYTES,
   MAX_DRAFT_ATTACHMENT_BYTES,

@@ -470,7 +470,8 @@ it("shows a turn it never held the bytes for as text plus image references", () 
 it("keeps a sent turn's local previews when the gateway echoes it by reference", () => {
   const file = {
     type: "file" as const,
-    id: "f",
+    resourceId: "f",
+    placementId: "f",
     name: "finder.png",
     mimeType: "image/png",
     size: 2048,

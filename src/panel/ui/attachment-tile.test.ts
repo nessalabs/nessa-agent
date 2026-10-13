@@ -29,7 +29,8 @@ import { AttachmentTile } from "./attachment-tile"
 
 const file = (upload: FileAttachment["upload"]): FileAttachment => ({
   type: "file",
-  id: "f",
+  resourceId: "f",
+  placementId: "f",
   name: "photo.png",
   mimeType: "image/png",
   size: 3,

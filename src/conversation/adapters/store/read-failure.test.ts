@@ -152,7 +152,8 @@ it.each([false, true])(
       ...textContent("Keep this draft"),
       {
         type: "file",
-        id: "notes",
+        resourceId: "notes",
+        placementId: "notes",
         name: "notes.txt",
         mimeType: "text/plain",
         size: 1,
@@ -176,7 +177,7 @@ it.each([false, true])(
     expect(before.readError).toBe("unavailable")
     try {
       const declined = await store.dispatch(
-        sendDraft({ id: "c0", content: draft, connected: true, steering }),
+        sendDraft({ id: "c0", content: before.draft, connected: true, steering }),
       )
       expect({
         create: create.mock.calls.length,
@@ -198,7 +199,7 @@ it.each([false, true])(
       await store.dispatch(followConversation("c0"))
       expect(store.getState().conversation.conversations[0]!.readError).toBeUndefined()
       const accepted = await store.dispatch(
-        sendDraft({ id: "c0", content: draft, connected: true, steering }),
+        sendDraft({ id: "c0", content: before.draft, connected: true, steering }),
       )
       expect(accepted.meta.requestStatus).toBe("fulfilled")
       expect(create).toHaveBeenCalledTimes(1)

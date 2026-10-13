@@ -39,7 +39,8 @@ import { ComposerNotices } from "./composer-notices"
 
 const failedUpload: FileAttachment = {
   type: "file",
-  id: "b",
+  resourceId: "b",
+  placementId: "b",
   name: "b.png",
   path: null,
   mimeType: "image/png",

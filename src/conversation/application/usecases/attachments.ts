@@ -4,10 +4,16 @@ import {
   validDraftAttachments,
   validImageReference,
   type FileAttachment,
+  type AttachmentInput,
 } from "../../model"
 import type { LocalTabs } from "../local-tabs"
 import type { UploadChange } from "../ports"
-import { findConversation, replaceConversation, withDraft } from "../internal"
+import {
+  findConversation,
+  replaceConversation,
+  withDraft,
+  takePlacementId,
+} from "../internal"
 
 /**
  * Append files to the requested conversation, atomically within limits.
@@ -25,37 +31,48 @@ import { findConversation, replaceConversation, withDraft } from "../internal"
  */
 export function attachFiles(
   tabs: LocalTabs,
-  files: FileAttachment[],
+  files: AttachmentInput[],
   conversationId: string,
 ): LocalTabs {
   const current = findConversation(tabs, conversationId)
   if (!current || files.length === 0) return tabs
-  const draft = [
-    ...current.draft,
-    ...files.map((file) => ({
-      ...file,
-      // For every file, however it arrived. The type decides the route and the
-      // gesture never does, so a `.heic` chosen through the picker is the same
-      // image here as the one dropped on the panel — whoever attached it is
-      // responsible for having the bytes an image needs.
-      mimeType: declaredMediaType(file.name, file.mimeType),
-      upload: { status: "not-started" as const },
-    })),
-  ]
-  if (!validDraftAttachments(draft)) return tabs
-  return replaceConversation(tabs, withDraft(current, draft))
+  // Validate the whole resource batch before consuming placement identities.
+  const inputs = files.map((file) => ({
+    type: "file" as const,
+    resourceId: file.resourceId,
+    name: file.name,
+    mimeType: declaredMediaType(file.name, file.mimeType),
+    size: file.size,
+    previewUrl: file.previewUrl,
+    path: file.path,
+  }))
+  const proposed = [...current.draft, ...inputs]
+  if (!validDraftAttachments(proposed)) return tabs
+  let allocated = tabs
+  const admitted = inputs.map((file): FileAttachment => {
+    const next = takePlacementId(allocated)
+    allocated = next.tabs
+    return { ...file, placementId: next.id, upload: { status: "not-started" } }
+  })
+  return replaceConversation(
+    allocated,
+    withDraft(current, [...current.draft, ...admitted]),
+  )
 }
 
 /** Remove a file preview from the active conversation without changing prose. */
 export function removeFile(tabs: LocalTabs, id: string): LocalTabs {
   const current = findConversation(tabs, tabs.activeId)
-  if (!current || !current.draft.some((part) => part.type === "file" && part.id === id))
+  if (
+    !current ||
+    !current.draft.some((part) => part.type === "file" && part.placementId === id)
+  )
     return tabs
   return replaceConversation(
     tabs,
     withDraft(
       current,
-      current.draft.filter((part) => part.type !== "file" || part.id !== id),
+      current.draft.filter((part) => part.type !== "file" || part.placementId !== id),
     ),
   )
 }
@@ -68,13 +85,15 @@ export function removeFile(tabs: LocalTabs, id: string): LocalTabs {
  *
  * Each step has one predecessor. A result for an upload that is not in flight
  * is ignored rather than applied: `stored` arriving on a failed part is not
- * a transition from the state on screen. The same file ID reused within
- * the same parent does not distinguish attempts; issue 814 documents this limit.
+ * a transition from the state on screen. Remove/re-add mints a new placement
+ * (AL1/AL3 in attachment-resources/upload-targets tests). Retry within the same
+ * live placement continues using these predecessor rules.
  */
 export function changeUpload(tabs: LocalTabs, change: UploadChange): LocalTabs {
   const current = findConversation(tabs, change.conversationId)
   const file = current?.draft.find(
-    (part): part is FileAttachment => part.type === "file" && part.id === change.fileId,
+    (part): part is FileAttachment =>
+      part.type === "file" && part.placementId === change.placementId,
   )
   if (!current || !file) return tabs
   const next = changedFile(file, change)

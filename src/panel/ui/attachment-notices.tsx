@@ -94,7 +94,7 @@ export function AttachmentNotices({
   const notices = attachmentNotices({
     refusal,
     files: files.map((file) => ({
-      id: file.id,
+      placementId: file.placementId,
       name: file.name,
       image: isImageFile(file.mimeType),
       linked: linkedFile(file),

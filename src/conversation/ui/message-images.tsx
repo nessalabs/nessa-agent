@@ -57,7 +57,7 @@ export function MessageImages({
     if (part.type === "file" && isImageFile(part.mimeType))
       return [
         {
-          key: part.id,
+          key: part.placementId,
           label: part.name,
           title: part.name,
           // An original the webview cannot paint (HEIC, RAW) gets the labelled
@@ -68,7 +68,7 @@ export function MessageImages({
     if (part.type === "file" && linkedFile(part))
       return [
         {
-          key: part.id,
+          key: part.placementId,
           label: part.name,
           title: part.path ?? part.name,
           src: undefined,

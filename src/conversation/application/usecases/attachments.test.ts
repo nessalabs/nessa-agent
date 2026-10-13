@@ -36,7 +36,8 @@ import { boundSentPreviews } from "./release-uploads"
 
 const file = (id: string, size = 1): FileAttachment => ({
   type: "file",
-  id,
+  resourceId: id,
+  placementId: "a1",
   size,
   name: `${id}.txt`,
   mimeType: "text/plain",
@@ -55,10 +56,10 @@ const reference = (size = 3) => ({ digest: DIGEST, mimeType: "image/png" as cons
 /** A draft holding one image the gateway has taken. */
 function stored(id = "a") {
   let tabs = attachFiles(emptyLocalTabs(), [image(id)], "c0")
-  tabs = changeUpload(tabs, { conversationId: "c0", fileId: id, to: "uploading" })
+  tabs = changeUpload(tabs, { conversationId: "c0", placementId: "a1", to: "uploading" })
   return changeUpload(tabs, {
     conversationId: "c0",
-    fileId: id,
+    placementId: "a1",
     to: "stored",
     image: reference(),
   })
@@ -117,10 +118,10 @@ describe("draft file previews", () => {
     const tabs = openConversation(
       attachFiles(emptyLocalTabs(), [file("a"), file("b")], "c0"),
     )
-    expect(removeFile(tabs, "a")).toBe(tabs)
+    expect(removeFile(tabs, "a1")).toBe(tabs)
     const active = setActive(tabs, "c0")
-    const next = removeFile(active, "a")
-    expect(next.conversations[0]!.draft).toEqual([file("b")])
+    const next = removeFile(active, "a1")
+    expect(next.conversations[0]!.draft).toEqual([{ ...file("b"), placementId: "a2" }])
     expect(next.conversations[1]!.draft).toEqual([])
     expect(attachFiles(tabs, [file("c")], "missing")).toBe(tabs)
   })
@@ -180,7 +181,7 @@ describe("a draft file's upload state", () => {
     expect(
       changeUpload(attached, {
         conversationId: "c0",
-        fileId: "a",
+        placementId: "a1",
         to: "stored",
         image: reference(),
       }),
@@ -188,25 +189,33 @@ describe("a draft file's upload state", () => {
     expect(
       changeUpload(attached, {
         conversationId: "c0",
-        fileId: "a",
+        placementId: "a1",
         to: "failed",
         reason: "rejected",
       }),
     ).toBe(attached)
     expect(
-      changeUpload(attached, { conversationId: "c0", fileId: "a", to: "not-started" }),
+      changeUpload(attached, {
+        conversationId: "c0",
+        placementId: "a1",
+        to: "not-started",
+      }),
     ).toBe(attached)
     const uploading = changeUpload(attached, {
       conversationId: "c0",
-      fileId: "a",
+      placementId: "a1",
       to: "uploading",
     })
     expect(
-      changeUpload(uploading, { conversationId: "c0", fileId: "a", to: "uploading" }),
+      changeUpload(uploading, {
+        conversationId: "c0",
+        placementId: "a1",
+        to: "uploading",
+      }),
     ).toBe(uploading)
     const done = changeUpload(uploading, {
       conversationId: "c0",
-      fileId: "a",
+      placementId: "a1",
       to: "stored",
       image: reference(),
     })
@@ -217,25 +226,25 @@ describe("a draft file's upload state", () => {
     expect(
       changeUpload(done, {
         conversationId: "c0",
-        fileId: "a",
+        placementId: "a1",
         to: "failed",
         reason: "unavailable",
       }),
     ).toBe(done)
     expect(
-      changeUpload(done, { conversationId: "c0", fileId: "a", to: "not-started" }),
+      changeUpload(done, { conversationId: "c0", placementId: "a1", to: "not-started" }),
     ).toBe(done)
   })
 
   it("retries only a failure, and keeps why it failed until then", () => {
     const uploading = changeUpload(attachFiles(emptyLocalTabs(), [image("a")], "c0"), {
       conversationId: "c0",
-      fileId: "a",
+      placementId: "a1",
       to: "uploading",
     })
     const failed = changeUpload(uploading, {
       conversationId: "c0",
-      fileId: "a",
+      placementId: "a1",
       to: "failed",
       reason: "unavailable",
     })
@@ -244,7 +253,7 @@ describe("a draft file's upload state", () => {
     ])
     const again = changeUpload(failed, {
       conversationId: "c0",
-      fileId: "a",
+      placementId: "a1",
       to: "not-started",
     })
     expect(again.conversations[0]!.draft).toEqual([image("a")])
@@ -264,12 +273,12 @@ describe("a draft file's upload state", () => {
     }
     const uploading = changeUpload(attachFiles(emptyLocalTabs(), [heic], "c0"), {
       conversationId: "c0",
-      fileId: "a",
+      placementId: "a1",
       to: "uploading",
     })
     const done = changeUpload(uploading, {
       conversationId: "c0",
-      fileId: "a",
+      placementId: "a1",
       to: "stored",
       image: stored,
     })
@@ -289,12 +298,12 @@ describe("a draft file's upload state", () => {
   ])("fails, rather than stores, a reference to %s", (_name, claimed) => {
     const uploading = changeUpload(attachFiles(emptyLocalTabs(), [image("a")], "c0"), {
       conversationId: "c0",
-      fileId: "a",
+      placementId: "a1",
       to: "uploading",
     })
     const result = changeUpload(uploading, {
       conversationId: "c0",
-      fileId: "a",
+      placementId: "a1",
       to: "stored",
       image: claimed,
     })
@@ -306,12 +315,12 @@ describe("a draft file's upload state", () => {
   it("never stores a reference on a file that is not an image", () => {
     const uploading = changeUpload(attachFiles(emptyLocalTabs(), [file("a", 3)], "c0"), {
       conversationId: "c0",
-      fileId: "a",
+      placementId: "a1",
       to: "uploading",
     })
     const result = changeUpload(uploading, {
       conversationId: "c0",
-      fileId: "a",
+      placementId: "a1",
       to: "stored",
       image: reference(),
     })
@@ -335,7 +344,7 @@ describe("a draft file's upload state", () => {
   it("never lets the composer's last render put back a file that was removed", () => {
     const held = stored()
     const rendered = held.conversations[0]!.draft
-    const removed = removeFile(held, "a")
+    const removed = removeFile(held, "a1")
     const typed = setDraft(removed, {
       draft: [{ type: "text", text: "hi" }, ...rendered],
     })
@@ -389,12 +398,12 @@ describe("a draft file's upload state", () => {
     // Which makes the RAW file sendable once the gateway has stored it.
     const uploading = changeUpload(tabs, {
       conversationId: "c0",
-      fileId: "raw",
+      placementId: "a1",
       to: "uploading",
     })
     const done = changeUpload(uploading, {
       conversationId: "c0",
-      fileId: "raw",
+      placementId: "a1",
       to: "stored",
       image: reference(),
     })
@@ -406,11 +415,19 @@ describe("a draft file's upload state", () => {
 
   it("forgets what the gateway held once the conversation has been closed there", () => {
     let tabs = attachFiles(stored("kept"), [image("flying"), image("broken")], "c0")
-    tabs = changeUpload(tabs, { conversationId: "c0", fileId: "flying", to: "uploading" })
-    tabs = changeUpload(tabs, { conversationId: "c0", fileId: "broken", to: "uploading" })
     tabs = changeUpload(tabs, {
       conversationId: "c0",
-      fileId: "broken",
+      placementId: "a2",
+      to: "uploading",
+    })
+    tabs = changeUpload(tabs, {
+      conversationId: "c0",
+      placementId: "a3",
+      to: "uploading",
+    })
+    tabs = changeUpload(tabs, {
+      conversationId: "c0",
+      placementId: "a3",
       to: "failed",
       reason: "rejected",
     })
@@ -432,20 +449,25 @@ describe("a draft file's upload state", () => {
   it("does not bring back a file removed while its upload was in flight", () => {
     const uploading = changeUpload(attachFiles(emptyLocalTabs(), [image("a")], "c0"), {
       conversationId: "c0",
-      fileId: "a",
+      placementId: "a1",
       to: "uploading",
     })
-    const removed = removeFile(uploading, "a")
+    const removed = removeFile(uploading, "a1")
     expect(removed.conversations[0]!.draft).toEqual([])
     for (const late of [
-      { conversationId: "c0", fileId: "a", to: "stored" as const, image: reference() },
       {
         conversationId: "c0",
-        fileId: "a",
+        placementId: "a1",
+        to: "stored" as const,
+        image: reference(),
+      },
+      {
+        conversationId: "c0",
+        placementId: "a1",
         to: "failed" as const,
         reason: "unavailable" as const,
       },
-      { conversationId: "c0", fileId: "a", to: "not-started" as const },
+      { conversationId: "c0", placementId: "a1", to: "not-started" as const },
     ])
       expect(changeUpload(removed, late)).toBe(removed)
   })
@@ -455,7 +477,7 @@ describe("a draft file's upload state", () => {
     expect(tabs.activeId).not.toBe("c0")
     const uploading = changeUpload(tabs, {
       conversationId: "c0",
-      fileId: "a",
+      placementId: "a1",
       to: "uploading",
     })
     expect(uploading.conversations[0]!.draft[0]).toMatchObject({
@@ -520,7 +542,9 @@ describe("why a draft is declined before anything is sent", () => {
     const local = emptyLocalTabs().conversations[0]!
     const failed = { ...local, readError: "unavailable" as const }
     const bound = { ...failed, serverConversationId: "server" }
-    const stranger = { content: [...hello, image("stranger")] }
+    const stranger = {
+      content: [...hello, { ...image("stranger"), placementId: "unknown" }],
+    }
     expect(declineReason(bound, { ...stranger, connected: false }, true)?.kind).toBe(
       "not-connected",
     )
@@ -560,7 +584,10 @@ describe("why a draft is declined before anything is sent", () => {
     ],
     [
       "the caller named a file this draft does not hold",
-      [withImages(true), { content: [...hello, image("stranger")] }],
+      [
+        withImages(true),
+        { content: [...hello, { ...image("stranger"), placementId: "unknown" }] },
+      ],
       "unknown-attachment",
     ],
     [
@@ -661,12 +688,12 @@ describe("sending a draft that holds images", () => {
     const attached = attachFiles(emptyLocalTabs(), [image("a")], "c0")
     const uploading = changeUpload(attached, {
       conversationId: "c0",
-      fileId: "a",
+      placementId: "a1",
       to: "uploading",
     })
     const failed = changeUpload(uploading, {
       conversationId: "c0",
-      fileId: "a",
+      placementId: "a1",
       to: "failed",
       reason: "rejected",
     })
@@ -896,10 +923,14 @@ describe("originals kept to paint sent turns", () => {
     receipts.forEach((receipt, index) => {
       const id = `f${index}`
       tabs = attachFiles(tabs, [image(id, size)], "c0")
-      tabs = changeUpload(tabs, { conversationId: "c0", fileId: id, to: "uploading" })
       tabs = changeUpload(tabs, {
         conversationId: "c0",
-        fileId: id,
+        placementId: `a${index + 1}`,
+        to: "uploading",
+      })
+      tabs = changeUpload(tabs, {
+        conversationId: "c0",
+        placementId: `a${index + 1}`,
         to: "stored",
         image: reference(),
       })
@@ -1038,7 +1069,7 @@ it("UP1: progress finds the enclosing draft before its file identity", () => {
   const first = tabs.conversations[0]
   const changed = changeUpload(tabs, {
     conversationId: "c1",
-    fileId: "same",
+    placementId: "a2",
     to: "uploading",
   })
   expect(changed.conversations[0]).toBe(first)
@@ -1048,7 +1079,7 @@ it("UP1: progress finds the enclosing draft before its file identity", () => {
   expect(
     changeUpload(changed, {
       conversationId: "gone",
-      fileId: "same",
+      placementId: "same",
       to: "failed",
       reason: "unavailable",
     }),
@@ -1059,7 +1090,7 @@ it("UP1: progress finds the enclosing draft before its file identity", () => {
 function uploadTargetTypeChecks() {
   // @ts-expect-error A file identity alone cannot name its enclosing conversation.
   const missingParent: import("../ports").UploadChange = {
-    fileId: "same",
+    placementId: "a2",
     to: "uploading",
   }
   // @ts-expect-error A conversation identity alone cannot name its file.

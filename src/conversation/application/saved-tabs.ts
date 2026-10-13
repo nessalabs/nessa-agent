@@ -78,7 +78,10 @@ export function conversationTabSnapshot(tabs: LocalTabs): SavedConversationTabs 
   }
 }
 
-export function restoreConversationTabs(input: SavedConversationTabs): LocalTabs {
+export function restoreConversationTabs(
+  current: LocalTabs,
+  input: SavedConversationTabs,
+): LocalTabs {
   const conversations = input.tabs.map((item, index) => ({
     ...conversation(`c${index}`),
     ...(item.title ? { title: item.title, titleEdited: true as const } : {}),
@@ -91,6 +94,7 @@ export function restoreConversationTabs(input: SavedConversationTabs): LocalTabs
       activeId: "c0",
       nextConversationId: 1,
       nextTurnId: 1,
+      nextPlacementId: current.nextPlacementId,
     }
   }
   const activeIndex = input.tabs.findIndex(
@@ -101,5 +105,6 @@ export function restoreConversationTabs(input: SavedConversationTabs): LocalTabs
     activeId: conversations[Math.max(activeIndex, 0)].id,
     nextConversationId: conversations.length,
     nextTurnId: 1,
+    nextPlacementId: current.nextPlacementId,
   }
 }

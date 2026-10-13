@@ -213,7 +213,8 @@ export function useFileAttachments(
         (conversation) =>
           conversation.id === viewed.conversationId &&
           conversation.draft.some(
-            (part) => part.type === "file" && part.id === viewed.file.id,
+            (part) =>
+              part.type === "file" && part.placementId === viewed.file.placementId,
           ),
       )
     )
@@ -588,7 +589,7 @@ export function useFileAttachments(
       // Taking a tile off is an answer to "attach fewer" and to "this draft is
       // too heavy" alike, whichever of them was being said.
       answerRefusal(chat.active.id)
-      if (viewed?.file.id === id) setViewed(null)
+      if (viewed?.file.placementId === id) setViewed(null)
     },
   }
 }

@@ -70,3 +70,20 @@ export function replaceConversation(tabs: LocalTabs, next: Conversation): LocalT
 export function findConversation(tabs: LocalTabs, id: string): Conversation | undefined {
   return tabs.conversations.find((item) => item.id === id)
 }
+
+/** Mint a placement for one admission; its counter survives removed files and restoration. */
+export function takePlacementId(tabs: LocalTabs): { tabs: LocalTabs; id: string } {
+  const taken = new Set(
+    tabs.conversations.flatMap((conversation) =>
+      [
+        ...conversation.draft,
+        ...conversation.turns.flatMap((turn) =>
+          turn.from === "user" ? turn.content : [],
+        ),
+      ].flatMap((part) => (part.type === "file" ? [part.placementId] : [])),
+    ),
+  )
+  let next = tabs.nextPlacementId
+  while (taken.has(`a${next}`)) next += 1
+  return { tabs: { ...tabs, nextPlacementId: next + 1 }, id: `a${next}` }
+}

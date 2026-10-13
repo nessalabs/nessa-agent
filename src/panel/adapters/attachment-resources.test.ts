@@ -31,10 +31,10 @@ it("bounds all retained conversations and reclaims the budget exactly once", () 
   expect(resources.canAdd(1)).toBe(false)
   expect(() => resources.add([new File(["x"], "extra.txt")])).toThrow()
   expect(create).toHaveBeenCalledTimes(1)
-  resources.retain(new Set([attachment!.id]))
+  resources.retain({ needed: new Set([attachment!.resourceId]), previews: new Map() })
   expect(revoke).not.toHaveBeenCalled()
-  resources.retain(new Set())
-  resources.retain(new Set())
+  resources.retain({ needed: new Set(), previews: new Map() })
+  resources.retain({ needed: new Set(), previews: new Map() })
   expect(revoke).toHaveBeenCalledExactlyOnceWith("blob:full")
   expect(resources.canAdd(MAX_SESSION_ATTACHMENT_BYTES)).toBe(true)
 })
@@ -63,10 +63,11 @@ it("hands back the bytes it retains, and nothing once they are released", () => 
   const resources = createAttachmentResources()
   const file = new File(["contents"], "note.txt", { type: "text/plain" })
   const [attachment] = resources.add([file])
-  expect(attachment!.upload).toEqual({ status: "not-started" })
-  expect(resources.bytes(attachment!.id)).toBe(file)
-  resources.retain(new Set())
-  expect(resources.bytes(attachment!.id)).toBeUndefined()
+  expect(attachment).not.toHaveProperty("placementId")
+  expect(attachment).not.toHaveProperty("upload")
+  expect(resources.bytes(attachment!.resourceId)).toBe(file)
+  resources.retain({ needed: new Set(), previews: new Map() })
+  expect(resources.bytes(attachment!.resourceId)).toBeUndefined()
 })
 
 it("stops counting a file against attaching once its message has been taken, and still keeps it", () => {
@@ -79,10 +80,13 @@ it("stops counting a file against attaching once its message has been taken, and
   const originals = [1, 2, 3, 4].map(
     (name) => ({ name: `${name}.cr3`, type: "", size: quarter }) as File,
   )
-  const ids = resources.add(originals).map((file) => file.id)
+  const ids = resources.add(originals).map((file) => file.resourceId)
   expect(resources.canAdd(1)).toBe(false)
   // All four were sent and the gateway has them: drafts are empty.
-  resources.retain(new Set(ids), new Set(ids))
+  resources.retain({
+    needed: new Set(),
+    previews: new Map(ids.map((id) => [id, quarter])),
+  })
   expect(revoke).not.toHaveBeenCalled()
   expect(resources.bytes(ids[0]!)).toBe(originals[0])
   // The whole budget is there for attaching again.
@@ -101,12 +105,15 @@ it("keeps counting a file whose message may yet come back to the draft", () => {
     { name: "a.png", type: "image/png", size: MAX_SESSION_ATTACHMENT_BYTES } as File,
   ])
   // Retained because a turn holds it, but that turn is not taken yet.
-  resources.retain(new Set([sending!.id]))
+  resources.retain({ needed: new Set([sending!.resourceId]), previews: new Map() })
   expect(resources.canAdd(1)).toBe(false)
-  // Once sent, always sent: a later pass that does not repeat it changes nothing.
-  resources.retain(new Set([sending!.id]), new Set([sending!.id]))
-  resources.retain(new Set([sending!.id]))
-  expect(resources.canAdd(MAX_SESSION_ATTACHMENT_BYTES)).toBe(true)
+  // A preview may become needed by another admission; classification is a snapshot.
+  resources.retain({
+    needed: new Set(),
+    previews: new Map([[sending!.resourceId, MAX_SESSION_ATTACHMENT_BYTES]]),
+  })
+  resources.retain({ needed: new Set([sending!.resourceId]), previews: new Map() })
+  expect(resources.canAdd(1)).toBe(false)
 })
 
 it("holds a window's worth of camera RAW files: 256 MiB", () => {
@@ -133,11 +140,10 @@ it("takes a chosen file by its path, holding none of it and spending no budget",
     size: huge,
     path: "/Users/ada/holiday.mp4",
     previewUrl: "",
-    upload: { status: "not-started" },
   })
   // Nothing was read, so nothing was allocated and nothing can be read back.
   expect(create).not.toHaveBeenCalled()
-  expect(resources.bytes(attachment!.id)).toBeUndefined()
+  expect(resources.bytes(attachment!.resourceId)).toBeUndefined()
   expect(resources.canAdd(MAX_SESSION_ATTACHMENT_BYTES)).toBe(true)
 })
 

@@ -59,7 +59,8 @@ const resources: AttachmentResources = {
   add: (files) =>
     files.map((file) => ({
       type: "file" as const,
-      id: `a${taken++}`,
+      resourceId: `a${taken++}`,
+      placementId: `a${taken++}`,
       name: file.name,
       mimeType: file.type || "application/octet-stream",
       size: file.size,
@@ -70,7 +71,8 @@ const resources: AttachmentResources = {
   addChosen: (chosen) =>
     chosen.map((file) => ({
       type: "file" as const,
-      id: `c${taken++}`,
+      resourceId: `c${taken++}`,
+      placementId: `c${taken++}`,
       name: file.name,
       mimeType: "application/octet-stream",
       size: file.size,

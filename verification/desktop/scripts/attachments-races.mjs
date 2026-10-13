@@ -7,7 +7,7 @@ import { launch } from "./lib/browser.mjs"
 import { attachmentVerification as selectors } from "./lib/selectors.mjs"
 
 const root = resolve(fileURLToPath(import.meta.url), "../../../..")
-const url = "http://127.0.0.1:1448/attachment-verification"
+const url = "http://127.0.0.1:1486/attachment-verification"
 const server = spawn(
   resolve(root, "node_modules/.bin/vite"),
   ["--config", "verification/desktop/fixtures/attachments-races/vite.config.ts"],
@@ -57,6 +57,10 @@ try {
         "second-url",
         "upload-parent-success",
         "upload-parent-failure",
+        "upload-placement-success",
+        "upload-placement-failure",
+        "shared-resource",
+        "owner-swap",
       ]) {
         const context = await browser.newContext({
           viewport: { width: 800, height: 900 },
@@ -74,18 +78,93 @@ try {
             () => typeof window.__attachmentProbe?.drop === "function",
           )
           const snapshot = () => page.evaluate(() => window.__attachmentProbe.snapshot())
-          if (scenario.startsWith("upload-parent-")) {
-            await page.evaluate(() => window.__attachmentProbe.startParentUpload())
+          if (scenario === "owner-swap") {
+            await page.evaluate(() => window.__attachmentProbe.startOwnerUpload())
+            await page.waitForFunction(
+              () => window.__attachmentProbe.snapshot().sharedUploads.length === 1,
+            )
+            await page.evaluate(() => window.__attachmentProbe.swapOwner())
+            await page.waitForFunction(
+              () => window.__attachmentProbe.snapshot().sharedUploads.length === 2,
+            )
+            await page.evaluate(() => window.__attachmentProbe.finishOriginalOwner())
+            assert.equal(
+              (await snapshot()).draft.find((part) => part.type === "file").upload.status,
+              "uploading",
+            )
+            assert.equal(
+              await page.locator(selectors.uploadTile).getAttribute("data-upload"),
+              "uploading",
+            )
+            await page.evaluate(() => window.__attachmentProbe.finishSharedUpload())
+            await page.waitForFunction(
+              () =>
+                window.__attachmentProbe
+                  .snapshot()
+                  .draft.find((part) => part.type === "file")?.upload.status === "stored",
+            )
+            assert.equal(
+              await page.locator(selectors.uploadTile).getAttribute("data-upload"),
+              "stored",
+            )
+          } else if (scenario === "shared-resource") {
+            await page.evaluate(() => window.__attachmentProbe.startSharedUploads())
+            await page.waitForFunction(
+              () => window.__attachmentProbe.snapshot().sharedUploads.length === 2,
+            )
+            const shared = await snapshot()
+            assert.equal(
+              new Set(
+                shared.tabs.flatMap((tab) => tab.files.map((file) => file.placementId)),
+              ).size,
+              2,
+            )
+            assert.equal(
+              new Set(
+                shared.tabs.flatMap((tab) => tab.files.map((file) => file.resourceId)),
+              ).size,
+              1,
+            )
+            await page.evaluate(() => window.__attachmentProbe.removeSharedParent())
+            await page.waitForFunction(
+              () =>
+                window.__attachmentProbe
+                  .snapshot()
+                  .sharedUploads.filter((upload) => upload.aborted).length === 1,
+            )
+            assert.equal((await snapshot()).sharedBytesRetained, true)
+            await page.evaluate(() => window.__attachmentProbe.finishSharedUpload())
+            await page.waitForFunction(
+              () =>
+                window.__attachmentProbe.snapshot().draft[0]?.upload.status === "stored",
+            )
+            assert.equal(
+              await page.locator(selectors.uploadTile).getAttribute("data-upload"),
+              "stored",
+            )
+            await page.evaluate(() => window.__attachmentProbe.closeSharedParent())
+            assert.equal((await snapshot()).sharedBytesRetained, false)
+          } else if (
+            scenario.startsWith("upload-parent-") ||
+            scenario.startsWith("upload-placement-")
+          ) {
+            await page.evaluate(
+              (sameParent) => window.__attachmentProbe.startParentUpload(sameParent),
+              scenario.startsWith("upload-placement-"),
+            )
             const tile = page.locator(selectors.uploadTile)
             await tile.waitFor()
             assert.equal(await tile.count(), 1)
             assert.equal(await tile.getAttribute("data-upload"), "uploading")
             await page.evaluate(
               (failed) => window.__attachmentProbe.finishParentUpload(failed),
-              scenario === "upload-parent-failure",
+              scenario.endsWith("-failure"),
             )
             assert.equal(await tile.getAttribute("data-upload"), "uploading")
-            assert.equal((await snapshot()).draft[0].upload.status, "uploading")
+            assert.equal(
+              (await snapshot()).draft.find((part) => part.type === "file").upload.status,
+              "uploading",
+            )
           } else if (scenario === "control") {
             await page.locator(selectors.editor).press("Enter")
             await page.waitForFunction(

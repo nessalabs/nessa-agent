@@ -83,7 +83,8 @@ describe("a sent turn's images", () => {
   const digest = `sha256:${"ab".repeat(32)}`
   const local = {
     type: "file" as const,
-    id: "f",
+    resourceId: "f",
+    placementId: "f",
     name: "finder.png",
     mimeType: "image/png",
     size: 2048,
@@ -162,7 +163,7 @@ describe("a sent turn's images", () => {
           { type: "text", text: "read this" },
           {
             ...local,
-            id: "d",
+            placementId: "d",
             name: "report.pdf",
             mimeType: "application/pdf",
             previewUrl: "",
