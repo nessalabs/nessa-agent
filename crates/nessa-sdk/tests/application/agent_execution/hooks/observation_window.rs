@@ -1040,7 +1040,10 @@ async fn hook_code_runs_after_the_hook_registry_is_released() {
     )
     .await;
     *agent.lock().unwrap() = Some(fixture.agent.clone());
-    let invoked = fixture.agent.invoke(request(), Submitter::owner(close_action())).await;
+    let invoked = fixture
+        .agent
+        .invoke(request(), Submitter::owner(close_action()))
+        .await;
     // Break the agent -> hook -> agent cycle so the agent is dropped.
     agent.lock().unwrap().take();
     invoked.expect("the turn runs");
@@ -1096,7 +1099,10 @@ async fn close_session_is_a_policy_refusal() {
         })],
     )
     .await;
-    let _ = fixture.agent.invoke(request(), Submitter::owner(close_action())).await;
+    let _ = fixture
+        .agent
+        .invoke(request(), Submitter::owner(close_action()))
+        .await;
     assert_eq!(fixture.answered.load(Ordering::SeqCst), 0);
     assert_eq!(fixture.cancelled.load(Ordering::SeqCst), 1);
     {
@@ -1118,7 +1124,10 @@ async fn close_session_is_a_policy_refusal() {
         fixture.closes.lock().unwrap().as_slice(),
         [SessionCloseRequest::PolicyRefusal]
     );
-    let second = fixture.agent.invoke(second_request(), Submitter::owner(close_action())).await;
+    let second = fixture
+        .agent
+        .invoke(second_request(), Submitter::owner(close_action()))
+        .await;
     assert!(
         matches!(second, Err(AgentError::AttachmentUnavailable(_))),
         "closing the session left it usable: {second:?}"
@@ -1155,7 +1164,11 @@ async fn review_slow_pre_tool_hook_delays_close() {
     .await;
     let mut published = fixture.agent.subscribe();
     let runner = fixture.agent.clone();
-    let turn = tokio::spawn(async move { runner.invoke(request(), Submitter::owner(close_action())).await });
+    let turn = tokio::spawn(async move {
+        runner
+            .invoke(request(), Submitter::owner(close_action()))
+            .await
+    });
     while !entered.load(Ordering::SeqCst) {
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     }
@@ -1336,7 +1349,11 @@ async fn a_substituted_message_clock_times_out_a_slow_hook() {
     )
     .await;
     let runner = fixture.agent.clone();
-    let turn = tokio::spawn(async move { runner.invoke(request(), Submitter::owner(close_action())).await });
+    let turn = tokio::spawn(async move {
+        runner
+            .invoke(request(), Submitter::owner(close_action()))
+            .await
+    });
     let wait_started = std::time::Instant::now();
     while !entered.load(Ordering::SeqCst) {
         assert!(
@@ -1409,7 +1426,11 @@ async fn a_verdict_first_seen_after_the_deadline_is_a_timeout() {
     )
     .await;
     let runner = fixture.agent.clone();
-    let turn = tokio::spawn(async move { runner.invoke(request(), Submitter::owner(close_action())).await });
+    let turn = tokio::spawn(async move {
+        runner
+            .invoke(request(), Submitter::owner(close_action()))
+            .await
+    });
     let wait_started = std::time::Instant::now();
     while !entered.load(Ordering::SeqCst) {
         assert!(
@@ -1578,7 +1599,11 @@ async fn output_before_a_review_is_saved_while_its_hook_runs() {
     )
     .await;
     let runner = fixture.agent.clone();
-    let turn = tokio::spawn(async move { runner.invoke(request(), Submitter::owner(close_action())).await });
+    let turn = tokio::spawn(async move {
+        runner
+            .invoke(request(), Submitter::owner(close_action()))
+            .await
+    });
     let wait_started = std::time::Instant::now();
     while !entered.load(Ordering::SeqCst) {
         assert!(
@@ -1730,44 +1755,6 @@ async fn a_continue_without_a_deny_option_stays_open_when_the_binding_cannot_can
     }
     assert!(!review_still_pending(&fixture, "review"));
     assert!(fixture.closes.lock().unwrap().is_empty());
-}
-
-#[tokio::test]
-async fn a_caller_cannot_resubmit_a_recorded_hook_withdrawal() {
-    let mut events = script();
-    events.pop();
-    events.push(allow_only_review());
-    let fixture = open_fixture(
-        events,
-        vec![Arc::new(ReviewHook {
-            seen: Arc::new(Mutex::new(Vec::new())),
-            verdict: ToolVerdict::refuse("no", RefusalOutcome::Continue),
-        })],
-        FixtureKnobs {
-            turn_cancel: false,
-            fail_delivery: false,
-            fail_turn_cancel: false,
-        },
-    )
-    .await;
-    fixture
-        .agent
-        .invoke(request(), Submitter::owner(close_action()))
-        .await
-        .unwrap();
-    // The recorded reason is a value a caller can copy from the evidence.
-    let mut copied = fixture.withdrawals.lock().unwrap()[0].clone();
-    copied.actor = close_action();
-    let refused = fixture.agent.cancel_permission(copied).await;
-    assert!(
-        matches!(refused, Err(AgentError::InvalidInput(_))),
-        "{refused:?}"
-    );
-    assert_eq!(
-        fixture.cancelled.load(Ordering::SeqCst),
-        1,
-        "nothing was sent"
-    );
 }
 
 #[tokio::test]
@@ -1926,7 +1913,9 @@ async fn a_reply_that_arrives_during_a_failed_delivery_needs_no_cancel() {
         }));
     let failure = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        fixture.agent.invoke(request(), Submitter::owner(close_action())),
+        fixture
+            .agent
+            .invoke(request(), Submitter::owner(close_action())),
     )
     .await
     .expect("the invocation settles")
@@ -1955,7 +1944,9 @@ async fn a_withdrawal_that_needs_the_execution_polled_completes() {
     fixture.handshake.required.store(true, Ordering::SeqCst);
     tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        fixture.agent.invoke(request(), Submitter::owner(close_action())),
+        fixture
+            .agent
+            .invoke(request(), Submitter::owner(close_action())),
     )
     .await
     .expect("the execution is polled while the hook's withdrawal runs")

@@ -66,7 +66,21 @@ impl ActionContext {
     pub fn request_id(&self) -> &str {
         &self.request_id
     }
+    /// Whether this is the actor [`ApprovalAttribution::hook`] names for
+    /// `permission`: the hook principal, a registration index or `runtime`,
+    /// and that review's identity.
+    pub(crate) fn is_hook_for(&self, permission: &PermissionId) -> bool {
+        let surface = &*self.surface_id;
+        &*self.principal_id == HOOK_PRINCIPAL
+            && &*self.request_id == permission.as_str()
+            && (surface == "runtime"
+                || surface
+                    .parse::<usize>()
+                    .is_ok_and(|index| index.to_string() == surface))
+    }
 }
+
+const HOOK_PRINCIPAL: &str = "permission-review-hook";
 
 /// The host's effective mode and immutable configuration revision at decision time.
 /// This is attribution, not a mode evaluator or permission to bypass host policy.
@@ -283,7 +297,7 @@ impl ApprovalAttribution {
             None => "runtime".to_owned(),
         };
         Ok(Self::new(
-            ActionContext::new("permission-review-hook", surface, permission.as_str())?,
+            ActionContext::new(HOOK_PRINCIPAL, surface, permission.as_str())?,
             ApprovalBasis::Hook(refusal),
         ))
     }

@@ -568,6 +568,9 @@ impl ExecutionSession {
     ) -> Result<Option<PermissionRequest>, ExecutionError> {
         self.check_execution(execution)?;
         self.check_permission_cancellation_reason(&reason)?;
+        if !reason.may_withdraw(Some(id)) {
+            return Err(ExecutionError::ReservedCancellationCode);
+        }
         let Some(mut request) = self
             .active_execution
             .as_mut()
@@ -598,6 +601,9 @@ impl ExecutionSession {
     ) -> Result<Vec<PermissionRequest>, ExecutionError> {
         self.check_execution(execution)?;
         self.check_permission_cancellation_reason(&reason)?;
+        if !reason.may_withdraw(None) {
+            return Err(ExecutionError::ReservedCancellationCode);
+        }
         Ok(self
             .active_execution
             .as_mut()

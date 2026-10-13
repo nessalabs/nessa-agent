@@ -1,6 +1,8 @@
 #![deny(missing_docs)]
 
-use super::{PermissionApplicationId, PermissionOptionId, PermissionSessionId, RefusalOutcome};
+use super::{
+    PermissionApplicationId, PermissionId, PermissionOptionId, PermissionSessionId, RefusalOutcome,
+};
 use crate::domain::agent_execution::ExecutionError;
 use std::collections::HashSet;
 
@@ -368,6 +370,21 @@ impl PermissionCancellationReason {
     pub fn custom(reason: CustomPermissionCancellationReason) -> Self {
         Self(PermissionCancellationReasonValue::Custom(reason))
     }
+    /// Whether this reason may withdraw `review`: a hook-refusal code withdraws
+    /// only the review the runner issued it for, and `None` allows none, so a
+    /// copy of a recorded one, or a saved one, withdraws nothing.
+    pub(crate) fn may_withdraw(&self, review: Option<&PermissionId>) -> bool {
+        match &self.0 {
+            PermissionCancellationReasonValue::Custom(reason) if reason.is_hook_refusal() => {
+                review.is_some() && reason.withdraws.as_ref() == review
+            }
+            _ => true,
+        }
+    }
+    /// Whether this is a custom reason with a hook-refusal code.
+    pub(crate) fn is_hook_refusal(&self) -> bool {
+        matches!(&self.0, PermissionCancellationReasonValue::Custom(reason) if reason.is_hook_refusal())
+    }
     /// Borrow the cause and any validated custom payload without mutation authority.
     ///
     /// ```compile_fail
@@ -417,11 +434,20 @@ impl PermissionCancellationReason {
 /// A caller-defined cause, such as an automatic guard's decision.
 /// Code identifies the cause consistently; explanation describes this cancellation.
 /// Both preserve supplied text and must be nonblank. Bounds are UTF-8 bytes.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Two reasons are equal when their code and explanation are.
+#[derive(Clone, Debug)]
 pub struct CustomPermissionCancellationReason {
     code: Box<str>,
     explanation: Box<str>,
+    // The one review a hook-refusal code may withdraw; never saved.
+    withdraws: Option<PermissionId>,
 }
+impl PartialEq for CustomPermissionCancellationReason {
+    fn eq(&self, other: &Self) -> bool {
+        self.code == other.code && self.explanation == other.explanation
+    }
+}
+impl Eq for CustomPermissionCancellationReason {}
 impl CustomPermissionCancellationReason {
     /// Maximum UTF-8 byte length of the stable cause code.
     pub const MAX_CODE_BYTES: usize = 128;
@@ -447,23 +473,25 @@ impl CustomPermissionCancellationReason {
         }
         Ok(reason)
     }
-    /// Whether the code is in the namespace only the runner writes.
-    pub(crate) fn is_hook_refusal(&self) -> bool {
+    fn is_hook_refusal(&self) -> bool {
         self.code.starts_with(Self::HOOK_REFUSAL_PREFIX)
     }
-    /// The withdrawal the runner records for a hook refusal with `outcome`.
+    /// The withdrawal the runner records for a hook refusal of `review` with
+    /// `outcome`. It can withdraw only `review`.
     pub(crate) fn hook_refusal(
+        review: &PermissionId,
         outcome: RefusalOutcome,
         explanation: impl Into<String>,
     ) -> Result<Self, ExecutionError> {
-        let name = match outcome {
-            RefusalOutcome::Continue => "continue",
-            RefusalOutcome::EndTurn => "end_turn",
-            RefusalOutcome::CloseSession => "close_session",
-        };
-        Self::restore(format!("{}{name}", Self::HOOK_REFUSAL_PREFIX), explanation)
+        let name = Self::outcome_name(&outcome);
+        let mut reason =
+            Self::restore(format!("{}{name}", Self::HOOK_REFUSAL_PREFIX), explanation)?;
+        reason.withdraws = Some(review.clone());
+        Ok(reason)
     }
-    /// Rebuild a saved reason, reserved codes included, checking only its bounds.
+    /// Rebuild a saved reason, checking its bounds. A code in the reserved
+    /// namespace must be one the runner writes, or it is
+    /// [`ExecutionError::ReservedCancellationCode`].
     pub(crate) fn restore(
         code: impl Into<String>,
         explanation: impl Into<String>,
@@ -471,9 +499,30 @@ impl CustomPermissionCancellationReason {
         let reason = Self {
             code: code.into().into_boxed_str(),
             explanation: explanation.into().into_boxed_str(),
+            withdraws: None,
         };
         reason.validate()?;
+        if reason.is_hook_refusal()
+            && ![
+                RefusalOutcome::Continue,
+                RefusalOutcome::EndTurn,
+                RefusalOutcome::CloseSession,
+            ]
+            .iter()
+            .any(|outcome| {
+                reason.code[Self::HOOK_REFUSAL_PREFIX.len()..] == *Self::outcome_name(outcome)
+            })
+        {
+            return Err(ExecutionError::ReservedCancellationCode);
+        }
         Ok(reason)
+    }
+    fn outcome_name(outcome: &RefusalOutcome) -> &'static str {
+        match outcome {
+            RefusalOutcome::Continue => "continue",
+            RefusalOutcome::EndTurn => "end_turn",
+            RefusalOutcome::CloseSession => "close_session",
+        }
     }
     fn validate(&self) -> Result<(), ExecutionError> {
         for (value, field, max_bytes) in [

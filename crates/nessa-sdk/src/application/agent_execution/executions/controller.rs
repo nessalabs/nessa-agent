@@ -8,8 +8,8 @@ use super::{
 };
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::permissions::{
-    ApprovalAttribution, ApprovalBasis, CancellationOrigin, PermissionAnswer,
-    PermissionCancellation, PermissionCancellationRequest, PermissionResolution,
+    validate_hook_withdrawal, ApprovalAttribution, ApprovalBasis, CancellationOrigin,
+    PermissionAnswer, PermissionCancellation, PermissionCancellationRequest, PermissionResolution,
 };
 use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::domain::agent_execution::questions::{AgentQuestion, QuestionId};
@@ -494,6 +494,7 @@ impl ExecutionController {
         origin: CancellationOrigin,
     ) -> Result<Option<PermissionCancellation>, AgentError> {
         origin.validate_reason(&reason)?;
+        validate_hook_withdrawal(id, &reason, &origin)?;
         let request = self
             .session
             .cancel_permission(execution, id, reason)
@@ -682,6 +683,7 @@ fn domain_error(error: ExecutionError) -> AgentError {
         error @ (ExecutionError::InvalidExecutionFailureReason
         | ExecutionError::InvalidPermissionCancellationReason
         | ExecutionError::InvalidSessionClosureReason
+        | ExecutionError::ReservedCancellationCode
         | ExecutionError::DuplicateExecution) => AgentError::InvalidInput(error.to_string()),
         error => AgentError::Protocol(error.to_string()),
     }
@@ -1443,5 +1445,65 @@ mod tests {
             .unwrap();
         assert_eq!(records.len(), 2);
         assert_eq!(controller.retained_review_bytes, 0);
+    }
+
+    #[test]
+    fn only_the_hook_records_a_hook_refusal_withdrawal() {
+        use crate::domain::agent_execution::permissions::RefusalOutcome;
+        let execution = ExecutionId::new("execution").unwrap();
+        let review = PermissionId::new("permission").unwrap();
+        let reason = || {
+            PermissionCancellationReason::custom(
+                CustomPermissionCancellationReason::hook_refusal(
+                    &review,
+                    RefusalOutcome::EndTurn,
+                    "hook refused",
+                )
+                .unwrap(),
+            )
+        };
+        let person =
+            CancellationOrigin::Client(ActionContext::new("person", "app", "permission").unwrap());
+        let hook = CancellationOrigin::Client(
+            ActionContext::new("permission-review-hook", "0", "permission").unwrap(),
+        );
+        let mut controller = controller();
+        request(&mut controller, "permission", "original").unwrap();
+        for forged in [
+            person.clone(),
+            CancellationOrigin::Client(
+                ActionContext::new("permission-review-hook", "00", "permission").unwrap(),
+            ),
+            CancellationOrigin::Client(
+                ActionContext::new("permission-review-hook", "0", "other").unwrap(),
+            ),
+        ] {
+            assert!(matches!(
+                controller.cancel_permission(&execution, &review, reason(), forged),
+                Err(AgentError::InvalidInput(_))
+            ));
+        }
+        let withdrawn = controller
+            .cancel_permission(&execution, &review, reason(), hook.clone())
+            .unwrap()
+            .expect("the hook withdraws its own review");
+        // Saved evidence is held to the same rule when it is loaded again.
+        let restore = |origin| {
+            let mut saved = PermissionRequest::new(
+                review.clone(),
+                execution.clone(),
+                ToolCallId::new("tool").unwrap(),
+                options("Allow".into()),
+            );
+            saved.cancel(reason()).unwrap();
+            PermissionCancellation::from_record(
+                withdrawn.session_id().clone(),
+                saved,
+                withdrawn.input().clone(),
+                origin,
+            )
+        };
+        assert!(matches!(restore(person), Err(AgentError::InvalidInput(_))));
+        assert_eq!(restore(hook).unwrap(), withdrawn);
     }
 }

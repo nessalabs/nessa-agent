@@ -43,8 +43,7 @@ use crate::application::agent_execution::sessions::{
 use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::domain::agent_execution::permissions::{
     CustomPermissionCancellationReason, PermissionAuthorityError, PermissionCancellationReason,
-    PermissionCancellationReasonView, PermissionEffect, PermissionId, PermissionOptionId,
-    PermissionScope, RefusalOutcome,
+    PermissionEffect, PermissionId, PermissionOptionId, PermissionScope, RefusalOutcome,
 };
 use crate::domain::agent_execution::tools::ToolCallId;
 use crate::domain::model_metadata::value_objects::{EffortLevel, EffortLevels};
@@ -2138,9 +2137,9 @@ impl Agent {
         explanation: String,
         outcome: RefusalOutcome,
     ) -> Result<(), AgentError> {
-        let custom = CustomPermissionCancellationReason::hook_refusal(outcome, explanation)
+        let custom = CustomPermissionCancellationReason::hook_refusal(&id, outcome, explanation)
             .map_err(|error| AgentError::InvalidInput(error.to_string()))?;
-        self.submit_permission_cancellation(PermissionCancellationRequest {
+        self.cancel_permission(PermissionCancellationRequest {
             execution_id: event.execution_id().clone(),
             id,
             reason: PermissionCancellationReason::custom(custom),
@@ -2320,30 +2319,9 @@ impl Agent {
     /// a panic from it is logged and does not affect the operation. See
     /// "Caller wakers" in docs/agent_execution/lifecycle.md.
     ///
-    /// A hook-refusal code is [`AgentError::InvalidInput`] and sends nothing.
-    /// [`CustomPermissionCancellationReason::new`] cannot build one, and this
-    /// rejects one copied from an earlier withdrawal's evidence, so only the
-    /// runner records a hook's withdrawal.
+    /// A hook-refusal code withdraws only the review the runner issued it
+    /// for, so a copy of a recorded one is [`AgentError::InvalidInput`].
     pub fn cancel_permission(
-        &self,
-        request: PermissionCancellationRequest,
-    ) -> AgentFuture<'_, PermissionCancellation> {
-        if matches!(
-            request.reason.view(),
-            PermissionCancellationReasonView::Custom(reason) if reason.is_hook_refusal()
-        ) {
-            return Box::pin(async {
-                Err(AgentError::InvalidInput(
-                    crate::domain::agent_execution::ExecutionError::ReservedCancellationCode
-                        .to_string(),
-                ))
-            });
-        }
-        self.submit_permission_cancellation(request)
-    }
-
-    // The runner's withdrawal path, which may carry a hook-refusal code.
-    fn submit_permission_cancellation(
         &self,
         request: PermissionCancellationRequest,
     ) -> AgentFuture<'_, PermissionCancellation> {
