@@ -14,4 +14,4 @@ pub use generated_types::{
     RuntimeStatus, Scope, ShortcutAction, ShortcutArgs, ShortcutBinding, ShortcutScope,
     ShortcutSurface, ShortcutsDocument, SurfaceInfo, SurfaceKind,
 };
-pub use json::unique_envelope;
+pub use json::{unique_envelope, unique_value};

@@ -1,4 +1,4 @@
-use super::super::deadline_stream::DeadlineStream;
+use crate::protected::DeadlineStream;
 use crate::read_only_sync::application::{Cancellation, GatewayError, GatewayStream};
 use nessa_protocol::clock::Clock;
 use std::io::{ErrorKind, Read, Result as IoResult, Write};

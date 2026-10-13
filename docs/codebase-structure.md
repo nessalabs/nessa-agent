@@ -1815,6 +1815,16 @@ tests enable it as a dev-dependency (ADR 483, amended). The portable package
 gate refuses any client dependency path to `nessa-server`, including renamed
 and transitive edges. Both ends depend on `nessa-protocol` for shared rules.
 
+The public `product` library owns an independent bounded protected pump over the
+same canonical pinned TLS/OpenProduct handshake. `src/protected.rs` and its
+deadline stream own shared incremental framing; `src/product/ports.rs` supplies
+injected socket, independent interrupt and versioned wake ports. The original
+request/ticket and settlement handles in `src/product/session.rs` retain capacity
+through physical completion and final observer release; `src/product/worker.rs`
+is the sole serialized writer/reader. Matching real TLS evidence is under
+`tests/product/`. Actual Ready methods gate admission; this transport grants no
+new credential purpose and changes no method payload schemas or cached authority.
+
 The public `retained` library selects owner-device or granted-peer catalogue reads
 through the existing source authorizer. `retained/subscribe.rs` is the live
 `conversation.subscribe` feed on a new pinned session to the same gateway; it does not write

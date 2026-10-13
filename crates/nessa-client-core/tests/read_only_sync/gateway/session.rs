@@ -1284,3 +1284,62 @@ mod held_files;
 mod subscribe;
 #[path = "session/watch.rs"]
 mod watch;
+
+#[test]
+fn canonical_tls_observer_keeps_original_socket_failure_for_retained_caller() {
+    struct FailedSocket(ErrorKind);
+    impl Read for FailedSocket {
+        fn read(&mut self, _: &mut [u8]) -> IoResult<usize> {
+            Err(self.0.into())
+        }
+    }
+    impl Write for FailedSocket {
+        fn write(&mut self, bytes: &[u8]) -> IoResult<usize> {
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> IoResult<()> {
+            Ok(())
+        }
+    }
+    impl GatewayStream for FailedSocket {
+        fn read_timeout(&self, _: Duration) -> IoResult<()> {
+            Ok(())
+        }
+        fn write_timeout(&self, _: Duration) -> IoResult<()> {
+            Ok(())
+        }
+        fn shutdown(&self) -> IoResult<()> {
+            Ok(())
+        }
+    }
+    struct Connector(ErrorKind);
+    impl GatewayConnector for Connector {
+        fn connect(&self, _: SocketAddr, _: Duration) -> IoResult<Box<dyn GatewayStream>> {
+            Ok(Box::new(FailedSocket(self.0)))
+        }
+    }
+    let identity = NativeIdentity::generate(&mut OsEntropy).unwrap();
+    for (error, cause) in [
+        (ErrorKind::TimedOut, GatewayError::TimedOut),
+        (ErrorKind::ConnectionReset, GatewayError::Closed(None)),
+        (ErrorKind::PermissionDenied, GatewayError::Transport),
+    ] {
+        let opened = Session::connect(
+            "127.0.0.1:1".parse().unwrap(),
+            DeviceEvidence {
+                identity: &identity,
+                pin: identity.public_spki(),
+                credential: "credential",
+            },
+            "example",
+            &Connector(error),
+            Arc::new(Time(Instant::now())),
+            Arc::new(Never),
+            policy(),
+        );
+        assert!(
+            matches!(opened,Err(failure) if failure==cause),
+            "canonical observer must not consume {cause:?}"
+        );
+    }
+}
