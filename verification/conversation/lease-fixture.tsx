@@ -1,4 +1,3 @@
-import { conversationView as panelView } from "../../src/conversation/adapters/gateway/effects"
 /** The production details sheet over published gateway views, one per lease state. */
 import type { ConversationLease, ConversationView } from "@nessa/client"
 import { createRoot } from "react-dom/client"
