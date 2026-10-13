@@ -90,3 +90,23 @@ fn debug_names_a_key_short_and_shows_no_secret() {
     );
     assert_eq!(shown, "Serve(abababab) Proof Incoming");
 }
+
+#[test]
+fn host_port_is_the_one_shape_of_a_dialed_address() {
+    for (address, port) in [
+        ("gw.example:7443", Some(7443)),
+        ("10.0.0.2:0", Some(0)),
+        ("[::1]:7443", Some(7443)),
+        ("::1:7443", None),
+        ("[::1:7443", None),
+        (":7443", None),
+        ("gw.example", None),
+        ("gw.example:port", None),
+    ] {
+        assert_eq!(host_port(address), port, "{address}");
+    }
+    // A relay address is that shape with a port that is not 0.
+    assert!(RelayAddress::try_from("relay.example:7444".to_owned()).is_ok());
+    assert!(RelayAddress::try_from("relay.example:0".to_owned()).is_err());
+    assert!(RelayAddress::try_from("::1:7444".to_owned()).is_err());
+}

@@ -492,13 +492,15 @@ impl AcpConfig {
     /// of a frame when it is as large as `UserMessage` allows: the request
     /// around it (about 2 KiB) and every block's keys, quotes and braces —
     /// the text's, the app-context block's preamble and each of the at most
-    /// `UserMessage::MAX_APP_MODEL_CONTEXTS` app entries in it, the at most
+    /// `UserMessage::MAX_APP_MODEL_CONTEXTS` app entries in it, the notes
+    /// block's preamble and each of the at most `UserMessage::MAX_NOTES`
+    /// notes in it, the at most
     /// `UserMessage::MAX_IMAGES` images', and the at most
     /// `UserMessage::MAX_FILES` file links' with their `file://`. In bytes.
     ///
     /// What the sender wrote — the text, each image's base64, each app's
-    /// names and context, each file's path and name, each with whatever JSON
-    /// escaping it takes — is not in it: a host that bounds those adds its
+    /// names and context, each file's path and name, and each note's surface
+    /// and text, each with whatever JSON escaping it takes — is not in it: a host that bounds those adds its
     /// bounds to this to size `max_frame_bytes`, so that no message it admits
     /// is refused with `AgentError::MessageTooLarge`. Derived from the figure
     /// a message is measured by when it is submitted, so it grows when that

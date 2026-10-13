@@ -1,5 +1,7 @@
 import type {
   ConversationListResult,
+  ConversationMessageReceipt,
+  ConversationMessageStatusResult,
   ConversationObserveResult,
   ConversationSummary,
   ConversationView,
@@ -224,6 +226,7 @@ export function conversationView(value: unknown, expected: string): Conversation
     "runtime",
     "lease",
     "artifacts",
+    "notes",
     "title",
     "approvalMode",
     "approvalModes",
@@ -634,6 +637,7 @@ export function conversationView(value: unknown, expected: string): Conversation
   }
   if (item.lease !== undefined) lease(item.lease)
   for (const artifact of items(item, "artifacts", 64)) conversationArtifact(artifact)
+  for (const note of items(item, "notes", 64)) conversationNote(note)
   const capabilities = record(item.capabilities)
   const capabilityKeys = [
     "queue",
@@ -891,6 +895,107 @@ function conversationArtifact(item: Record<string, unknown>) {
     throw new Error("Invalid conversation artifact mimeType")
   if (!validSize(item.size, MAX_UPLOAD_BYTES))
     throw new Error("Invalid conversation artifact size")
+}
+
+/** Where a note stands, with the turn that took it and why it was retired
+ * present exactly when its state says so. */
+function noteState(item: Record<string, unknown>) {
+  const state = text(item, "deliveryState")
+  oneOf(state, ["recorded", "pending", "assigned", "retired"])
+  if ((state === "assigned") !== (item.executionId !== undefined))
+    throw new Error("Invalid conversation note executionId")
+  if (item.executionId !== undefined) identity(item, "executionId")
+  if ((state === "retired") !== (item.retiredReason !== undefined))
+    throw new Error("Invalid conversation note retiredReason")
+  if (item.retiredReason !== undefined)
+    oneOf(text(item, "retiredReason"), ["expired", "permission_lost"])
+}
+/** A note's text and its acceptance time, as its receipt and the view state them. */
+function noteAccepted(item: Record<string, unknown>) {
+  text(item, "messageId", 64, false)
+  const acceptedAtMs = item.acceptedAtMs
+  if (
+    typeof acceptedAtMs !== "number" ||
+    !Number.isSafeInteger(acceptedAtMs) ||
+    acceptedAtMs < 0
+  )
+    throw new Error("Invalid conversation acceptedAtMs")
+}
+
+/** One note the view lists: the published shape, closed. */
+function conversationNote(item: Record<string, unknown>) {
+  exact(item, [
+    "messageId",
+    "text",
+    "acceptedAtMs",
+    "delivery",
+    "deliveryState",
+    "executionId",
+    "retiredReason",
+    "afterExecutionId",
+    "author",
+  ])
+  noteAccepted(item)
+  text(item, "text", 8192, false)
+  oneOf(text(item, "delivery"), ["record_only", "next_turn"])
+  noteState(item)
+  if (item.afterExecutionId !== undefined) identity(item, "afterExecutionId")
+  const author = record(item.author)
+  exact(author, ["kind", "surface"])
+  oneOf(text(author, "kind"), ["owner", "grant"])
+  text(author, "surface", 256, false)
+}
+
+/** Confirm a note's receipt answers the request that left it. */
+export function conversationMessageReceipt(
+  value: unknown,
+  requestId: string,
+): ConversationMessageReceipt {
+  const item = record(value)
+  exact(item, [
+    "requestId",
+    "messageId",
+    "acceptedAtMs",
+    "deliveryState",
+    "executionId",
+    "retiredReason",
+  ])
+  if (identity(item, "requestId") !== requestId)
+    throw new Error("Conversation receipt belongs to another action")
+  noteAccepted(item)
+  noteState(item)
+  return item as unknown as ConversationMessageReceipt
+}
+
+/** Confirm a note's status answers the request looked up: a found note
+ * carries its name, time and state; one not found carries none of them. */
+export function conversationMessageStatus(
+  value: unknown,
+  requestId: string,
+): ConversationMessageStatusResult {
+  const item = record(value)
+  exact(item, [
+    "found",
+    "requestId",
+    "messageId",
+    "acceptedAtMs",
+    "deliveryState",
+    "executionId",
+    "retiredReason",
+  ])
+  if (identity(item, "requestId") !== requestId)
+    throw new Error("Conversation status belongs to another action")
+  flag(item, "found")
+  if (item.found) {
+    noteAccepted(item)
+    noteState(item)
+  } else if (
+    ["messageId", "acceptedAtMs", "deliveryState", "executionId", "retiredReason"].some(
+      (key) => item[key] !== undefined,
+    )
+  )
+    throw new Error("Conversation status describes a note it did not find")
+  return item as unknown as ConversationMessageStatusResult
 }
 
 export function conversationReorder(

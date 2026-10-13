@@ -663,6 +663,8 @@ export interface ConversationView {
   lease?: ConversationLease
   /** Files its agent published under a lease that the conversation held when it recorded them, the newest 64 in the order they were recorded; empty before any was. A record is history and stays when the hold is let go, as closing the conversation does; whether the bytes are still held is asked when they are fetched. An older one is left out of the list, not out of the conversation, and the list may give up its oldest entries to bound the response. */
   artifacts: ConversationArtifact[]
+  /** Notes left in the conversation (conversation.message), the newest 64 in the order they were left; empty before any was. An older one is left out of the list, not out of the conversation, and the list may give up its oldest entries to bound the response. */
+  notes: ConversationNote[]
   /** Name the gateway derived from the conversation's first message, the same one conversation.list shows; null before anything was said. */
   title: string | null
   /** Questions the agent is waiting on, oldest first. */
@@ -952,7 +954,7 @@ export const ConversationToolPreset = {
 } as const
 export type ConversationToolPreset =
   (typeof ConversationToolPreset)[keyof typeof ConversationToolPreset]
-/** The tool policy a drive grant's turns run under: either preset alone, or allow and deny together. Allow and deny each hold at most 16 patterns, and at least one of the two holds one (both empty is refused); each pattern is 1 to 48 UTF-8 bytes with no surrounding whitespace and no control character; anything else is refused invalid_request. A pattern is kept as written; nothing evaluates it yet. */
+/** The tool policy a drive grant's turns run under: either preset alone, or allow and deny together. Allow and deny each hold at most 16 patterns, and at least one of the two holds one (both empty is refused); each pattern is 1 to 48 UTF-8 bytes with no surrounding whitespace and no control character; anything else is refused invalid_request. A pattern's * matches any run of characters and every other character is itself; a pattern matches a tool's name as the agent or the gateway names it (Read, read, run), and a deny wins over an allow. Every tool call a drive turn's agent asks permission for, and the gateway's own run, artifacts_publish and artifacts_fetch, is checked against the policy at the revision the turn was admitted under; a refused call is answered as refused and the turn goes on. Two things a policy does not limit: what the agent does in the ask approval mode without asking (Claude reads files; Codex runs commands in its read-only, offline sandbox), so a deny pattern naming a read tool does not stop those reads; and where an allowed run goes, which is any environment the gateway grants commands on. */
 export interface ConversationToolPolicy {
   /** A named policy. Present alone, without allow or deny. */
   preset?: ConversationToolPreset
@@ -1547,7 +1549,7 @@ export const McpServersErrorCode = {
 } as const
 export type McpServersErrorCode =
   (typeof McpServersErrorCode)[keyof typeof McpServersErrorCode]
-/** Typed rejection code carried by a conversation command the gateway dispatched and refused. Branch on these instead of message text. These are not every code a conversation request can receive: access and routing failures are answered by the session before a conversation command is dispatched, and carry their own codes. agent_startup_deadline means the agent was still starting when its budget expired, so nothing reached the provider and the same command is safe to repeat; it normally succeeds once the runtime is warm, but a launch whose process could not be confirmed stopped keeps that conversation blocked. invalid_request and agent_not_configured reject the command until their cause is addressed. agent_not_configured, agent_unsupported and conversations_not_configured are three different situations and only one of them is fixed by configuring an agent: the gateway runs no conversations at all, it names no runtime under the agent this conversation asked for, or no build here can open that conversation's agent. sandbox_unavailable means no lease could be granted to run the agent because the sandbox it asks for is not one both its agent binding and the place it would run can enforce; nothing ran, the refusal is in the conversation's records, and repeating the command fails the same way until that configuration changes. environment_not_configured is a create naming an SSH destination config.json does not name, or a conversation created on one it no longer names; nothing ran. environment_unavailable is an SSH environment that could not be reached, is serving another connection, or cannot run this conversation's agent: no lease was granted, the refusal is in the conversation's records, and the same command may succeed once the environment is reachable. environment_version_mismatch is an SSH environment whose copy of this build, where the gateway installs it, says it speaks another lease protocol: nothing was sent to it. environment_platform_unsupported is an SSH environment with no copy of this build that runs on a system or processor this build cannot run on: the gateway installs only its own executable, so nothing was installed or sent; run the conversation on a host like the gateway's. environment_install_failed is an SSH environment with no copy of this build where installing one failed: what arrived did not match what was sent, did not run there, or could not be stored, and nothing was sent; the gateway's environment audit says which, and the same command tries the install again. linked_file_unreachable is a message linking a file by its path on this machine, sent to a conversation that runs on an SSH host: the host cannot read this machine's files and would read whatever it has at that path, so nothing was recorded or sent; send the message without it, or attach an image, whose bytes travel with it. The image codes answer `attachment.begin`, a message naming uploads, and `artifact.read`: image_input_unsupported is a model that takes no images, so no ticket and no message with one will ever be taken; attachment_not_found is an image or artifact this conversation does not hold — never uploaded or published into it, expired, or released when it closed — which also ends an artifact.read; attachment_unavailable is one it holds but could not read; attachment_capacity is no room for another upload right now; attachment_storage_unavailable is the gateway unable to keep the bytes. attachment_cleanup_unavailable is a close that did happen, whose release of this conversation's uploads did not, and is the one image code that is not a refusal of the command. conversation_deleted refuses every command its owner sends on a conversation somebody deleted, except deleting it again; anyone else is told conversation_not_found. Its identity is never reused, so a surface still holding it should let it go. conversation_erasure_incomplete is a delete that did happen — the conversation is gone and every command on it is refused — whose erasure of stored data did not finish; repeating the delete, and each gateway start, tries again, but an agent that keeps refusing to delete its own session, or a damaged history, needs the operator. The mcp_ codes refuse an MCP App's request (mcp.callTool, mcp.readResource, mcp.sendMessage, mcp.updateModelContext): mcp_app_unknown, the app is not an MCP tool call with a UI in this conversation, or the resource is not an app's; mcp_server_mismatch, it names another server than the app's; mcp_tool_not_for_app, the tool is not listed with visibility including app; mcp_session_unavailable, the conversation has no open session of that server, or it ended; mcp_approval_denied and mcp_approval_expired, the person refused, or did not answer within x-mcpAppCallTiming.reviewDeadlineMs; mcp_cancelled, the review was withdrawn because the request was cancelled, the app was torn down, or the conversation ended, or, with no review withdrawn, the app's mount was released or the opening it was drawn in ended (closed, deleted, stopped, another begun, or the gateway stopping) before the request took effect, which for mcp.sendMessage sends nothing and opens nothing; mcp_request_too_large and mcp_result_too_large, past a request's bound (the arguments' 32 KiB, a message's input bound or its review's room, a context's 8 KiB) and a result's 56 KiB; turn_running also refuses an app's message while a turn runs or input waits; mcp_timed_out, the server did not answer in time; mcp_remote_error, the server answered with a JSON-RPC error (McpRemoteErrorDetails), or with something that is no MCP answer (no details). mcp_unauthorized, the remote endpoint refused the caller and the tool was not run; the answer carries no token. mcp_unreachable, the remote endpoint could not be reached and nothing was retained. mcp_insufficient_scope, the caller's scope was not enough and the call was not retried. These three are not mcp_session_unavailable: the session was not reported as ended. share_target_not_paired: conversation.share named a credential that is not an active paired device or peer gateway of the conversation's owner holding conversation.read. idempotency_conflict: conversation.message reused a requestId that already left another note (another text, delivery, surface or authority; the same grant at a later policy revision is the same authority); nothing was saved, and the first note stands. message_quota_exceeded: conversation.message found the conversation holding its most notes, or its author past its rate; nothing was saved. */
+/** Typed rejection code carried by a conversation command the gateway dispatched and refused. Branch on these instead of message text. These are not every code a conversation request can receive: access and routing failures are answered by the session before a conversation command is dispatched, and carry their own codes. agent_startup_deadline means the agent was still starting when its budget expired, so nothing reached the provider and the same command is safe to repeat; it normally succeeds once the runtime is warm, but a launch whose process could not be confirmed stopped keeps that conversation blocked. invalid_request and agent_not_configured reject the command until their cause is addressed. agent_not_configured, agent_unsupported and conversations_not_configured are three different situations and only one of them is fixed by configuring an agent: the gateway runs no conversations at all, it names no runtime under the agent this conversation asked for, or no build here can open that conversation's agent. sandbox_unavailable means no lease could be granted to run the agent because the sandbox it asks for is not one both its agent binding and the place it would run can enforce; nothing ran, the refusal is in the conversation's records, and repeating the command fails the same way until that configuration changes. environment_not_configured is a create naming an SSH destination config.json does not name, or a conversation created on one it no longer names; nothing ran. environment_unavailable is an SSH environment that could not be reached, is serving another connection, or cannot run this conversation's agent: no lease was granted, the refusal is in the conversation's records, and the same command may succeed once the environment is reachable. environment_version_mismatch is an SSH environment whose copy of this build, where the gateway installs it, says it speaks another lease protocol: nothing was sent to it. environment_platform_unsupported is an SSH environment with no copy of this build that runs on a system or processor this build cannot run on: the gateway installs only its own executable, so nothing was installed or sent; run the conversation on a host like the gateway's. environment_install_failed is an SSH environment with no copy of this build where installing one failed: what arrived did not match what was sent, did not run there, or could not be stored, and nothing was sent; the gateway's environment audit says which, and the same command tries the install again. linked_file_unreachable is a message linking a file by its path on this machine, sent to a conversation that runs on an SSH host: the host cannot read this machine's files and would read whatever it has at that path, so nothing was recorded or sent; send the message without it, or attach an image, whose bytes travel with it. The image codes answer `attachment.begin`, a message naming uploads, and `artifact.read`: image_input_unsupported is a model that takes no images, so no ticket and no message with one will ever be taken; attachment_not_found is an image or artifact this conversation does not hold — never uploaded or published into it, expired, or released when it closed — which also ends an artifact.read; attachment_unavailable is one it holds but could not read; attachment_capacity is no room for another upload right now; attachment_storage_unavailable is the gateway unable to keep the bytes. attachment_cleanup_unavailable is a close that did happen, whose release of this conversation's uploads did not, and is the one image code that is not a refusal of the command. conversation_deleted refuses every command its owner sends on a conversation somebody deleted, except deleting it again; anyone else is told conversation_not_found. Its identity is never reused, so a surface still holding it should let it go. conversation_erasure_incomplete is a delete that did happen — the conversation is gone and every command on it is refused — whose erasure of stored data did not finish; repeating the delete, and each gateway start, tries again, but an agent that keeps refusing to delete its own session, or a damaged history, needs the operator. The mcp_ codes refuse an MCP App's request (mcp.callTool, mcp.readResource, mcp.sendMessage, mcp.updateModelContext): mcp_app_unknown, the app is not an MCP tool call with a UI in this conversation, or the resource is not an app's; mcp_server_mismatch, it names another server than the app's; mcp_tool_not_for_app, the tool is not listed with visibility including app; mcp_session_unavailable, the conversation has no open session of that server, or it ended; mcp_approval_denied and mcp_approval_expired, the person refused, or did not answer within x-mcpAppCallTiming.reviewDeadlineMs; mcp_cancelled, the review was withdrawn because the request was cancelled, the app was torn down, or the conversation ended, or, with no review withdrawn, the app's mount was released or the opening it was drawn in ended (closed, deleted, stopped, another begun, or the gateway stopping) before the request took effect, which for mcp.sendMessage sends nothing and opens nothing; mcp_request_too_large and mcp_result_too_large, past a request's bound (the arguments' 32 KiB, a message's input bound or its review's room, a context's 8 KiB) and a result's 56 KiB; turn_running also refuses an app's message while a turn runs or input waits; mcp_timed_out, the server did not answer in time; mcp_remote_error, the server answered with a JSON-RPC error (McpRemoteErrorDetails), or with something that is no MCP answer (no details). mcp_unauthorized, the remote endpoint refused the caller and the tool was not run; the answer carries no token. mcp_unreachable, the remote endpoint could not be reached and nothing was retained. mcp_insufficient_scope, the caller's scope was not enough and the call was not retried. These three are not mcp_session_unavailable: the session was not reported as ended. share_target_not_paired: conversation.share named a credential that is not an active paired device or peer gateway of the conversation's owner holding conversation.read. idempotency_conflict: conversation.message reused a requestId that already left another note (another text, delivery, surface or authority; the same grant at a later policy revision is the same authority); nothing was saved, and the first note stands. message_quota_exceeded: conversation.message found the conversation holding its most notes, or its author past its rate; nothing was saved. drive_policy_unenforceable: a Drive grant's conversation.send or conversation.steer where its tools cannot all be checked against the grant's tool policy (an OpenCode conversation, an approval mode other than ask, native hooks allowed, or the policy unreadable); nothing was saved or sent, and the same command fails the same way until the owner changes that. */
 export const ConversationErrorCode = {
   AgentNotConfigured: "agent_not_configured",
   AgentUnsupported: "agent_unsupported",
@@ -1605,6 +1607,7 @@ export const ConversationErrorCode = {
   ShareTargetNotPaired: "share_target_not_paired",
   IdempotencyConflict: "idempotency_conflict",
   MessageQuotaExceeded: "message_quota_exceeded",
+  DrivePolicyUnenforceable: "drive_policy_unenforceable",
 } as const
 export type ConversationErrorCode =
   (typeof ConversationErrorCode)[keyof typeof ConversationErrorCode]
@@ -2280,12 +2283,13 @@ export interface PeerGateway {
   /** What this gateway's poller last saw reading the peer. Only in peer.list, and only for a pending or active peer; absent for a revoked or unreadable one, and in the results of peer.enroll and peer.forget. */
   sync?: PeerSync
 }
-/** How reading a peer last went, since this gateway started. waiting: not read yet, or still pending on the peer. synced: the last read brought the retained cache up to what the peer grants. syncing: the last read saved some of what the peer grants and stopped at a bound (a page bound or its time budget); the next continues it. A read an owner command stops leaves the state as it was. unreachable: the peer could not be reached, or the last read ran out of its time budget before it saved anything; reads back off. failed: the peer answered but the read failed; reads back off. quota: this gateway's retained cache of the peer is full; each read still withdraws what the peer no longer grants, and reads back off until the peer grants less. */
+/** How reading a peer last went, since this gateway started. waiting: not read yet, or still pending on the peer. synced: the last read brought the retained cache up to what the peer grants. syncing: the last read saved some of what the peer grants and stopped at a bound (a page bound or its time budget); the next continues it. A read an owner command stops leaves the state as it was. unreachable: the peer could not be reached, or the last read ran out of its time budget before it saved anything; reads back off. away: the peer's address did not answer and its relay said the peer is not registered with it (asleep, quit or offline, as far as the relay can tell; nothing authenticates that word); the retained cache is kept and readable, and reads back off as for unreachable. failed: the peer answered but the read failed; reads back off. quota: this gateway's retained cache of the peer is full; each read still withdraws what the peer no longer grants, and reads back off until the peer grants less. */
 export const PeerSyncState = {
   Waiting: "waiting",
   Synced: "synced",
   Syncing: "syncing",
   Unreachable: "unreachable",
+  Away: "away",
   Failed: "failed",
   Quota: "quota",
 } as const
@@ -2456,15 +2460,62 @@ export const ConversationSubscriptionErrorCode = {
 } as const
 export type ConversationSubscriptionErrorCode =
   (typeof ConversationSubscriptionErrorCode)[keyof typeof ConversationSubscriptionErrorCode]
-/** What becomes of a note once it is saved. record_only saves it with its author and never hands it to the model by itself. Delivering a note to the next turn someone starts is not offered yet. */
-export const ConversationMessageDelivery = { RecordOnly: "record_only" } as const
+/** What becomes of a note once it is saved. record_only saves it with its author and never hands it to the model by itself. next_turn saves it pending and hands it to the model, labelled with its author, with the next turn a person starts with conversation.send while the agent is idle: never with a steer, a turn queued behind another, or an app's message. That turn takes at most 8 notes, the oldest first, and only those whose author still holds the right to leave them, checked as the turn is admitted; a note whose author's grant was revoked or lowered below comment is retired permission_lost instead, and one still pending 24 hours after it was accepted is retired expired. */
+export const ConversationMessageDelivery = {
+  RecordOnly: "record_only",
+  NextTurn: "next_turn",
+} as const
 export type ConversationMessageDelivery =
   (typeof ConversationMessageDelivery)[keyof typeof ConversationMessageDelivery]
-/** Where a saved note stands. recorded is a record_only note: saved, with nothing waiting to deliver it, and it stays recorded. */
-export const ConversationMessageState = { Recorded: "recorded" } as const
+/** Where a saved note stands. recorded is a record_only note: saved, with nothing waiting to deliver it, and it stays recorded. pending is a next_turn note waiting for a turn to take it. assigned is a next_turn note a turn took, named by executionId; it is never pending again, whatever becomes of that turn. retired is a next_turn note no turn will take, for retiredReason. */
+export const ConversationMessageState = {
+  Recorded: "recorded",
+  Pending: "pending",
+  Assigned: "assigned",
+  Retired: "retired",
+} as const
 export type ConversationMessageState =
   (typeof ConversationMessageState)[keyof typeof ConversationMessageState]
-/** Leave a note in one conversation (conversation.message). A note is saved with its author, the caller's principal and surface and the authority it was admitted under, and starts or steers no turn. The conversation's owner leaves one from its own surfaces; a paired device needs a comment or drive grant on that conversation, and is refused forbidden under a read grant and conversation_not_found where it holds none. The same requestId with the same text and delivery, from the same surface under the same authority, answers the first receipt unchanged, however long after; any other note under that requestId is refused idempotency_conflict. A conversation keeps at most 1024 notes, and one author (a principal under one authority) leaves at most 20 in any 60 seconds; past either it is refused message_quota_exceeded and nothing is saved. A deleted conversation refuses it conversation_deleted. */
+/** Why a next_turn note was retired. expired: it was still pending 24 hours after it was accepted. permission_lost: when a turn was admitted, its author's grant had been revoked or lowered below comment. */
+export const ConversationMessageRetiredReason = {
+  Expired: "expired",
+  PermissionLost: "permission_lost",
+} as const
+export type ConversationMessageRetiredReason =
+  (typeof ConversationMessageRetiredReason)[keyof typeof ConversationMessageRetiredReason]
+/** One note left in the conversation, as everyone who reads it sees it. A note is not a turn and not the person's message: show it apart from the turns, with its author. */
+export interface ConversationNote {
+  /** The conversation's own name for the note, as its receipt gave it. */
+  messageId: string
+  /** What the note says, exactly as it was left. */
+  text: string
+  /** When the note was accepted, in milliseconds since the Unix epoch, on the gateway's clock. */
+  acceptedAtMs: number
+  /** What it was left for. */
+  delivery: ConversationMessageDelivery
+  /** Where it stands. */
+  deliveryState: ConversationMessageState
+  /** The turn that took it; present exactly when deliveryState is assigned. */
+  executionId?: string
+  /** Why it was retired; present exactly when deliveryState is retired. */
+  retiredReason?: ConversationMessageRetiredReason
+  /** The last turn the conversation had accepted when the note was, so it is shown after that turn; absent when it was left before any turn. */
+  afterExecutionId?: string
+  /** Who left it. */
+  author: ConversationNoteAuthor
+}
+/** owner: the conversation's owner left it. grant: someone the conversation is shared with left it, under their grant. */
+export const ConversationNoteAuthorKind = { Owner: "owner", Grant: "grant" } as const
+export type ConversationNoteAuthorKind =
+  (typeof ConversationNoteAuthorKind)[keyof typeof ConversationNoteAuthorKind]
+/** Under which authority a note was left, and from which surface: the label it carries in the transcript and to the model. */
+export interface ConversationNoteAuthor {
+  /** Under which authority. */
+  kind: ConversationNoteAuthorKind
+  /** The verified surface it was left from. */
+  surface: string
+}
+/** Leave a note in one conversation (conversation.message). A note is saved with its author, the caller's principal and surface and the authority it was admitted under, and starts or steers no turn: a next_turn note waits for the next turn a person starts (see ConversationMessageDelivery). The conversation's owner leaves one from its own surfaces; a paired device needs a comment or drive grant on that conversation, and is refused forbidden under a read grant and conversation_not_found where it holds none. The same requestId with the same text and delivery, from the same surface under the same authority, answers the first receipt unchanged, however long after; any other note under that requestId is refused idempotency_conflict. A conversation keeps at most 1024 notes, and one author (a principal under one authority) leaves at most 20 in any 60 seconds; past either it is refused message_quota_exceeded and nothing is saved. At most 64 next_turn notes wait for a turn at once, not counting one past its 24 hours, which the next turn retires; past that a next_turn note is refused message_quota_exceeded too. A deleted conversation refuses it conversation_deleted. */
 export interface ConversationMessageParams {
   /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
   conversationId: string
@@ -2475,7 +2526,7 @@ export interface ConversationMessageParams {
   /** What becomes of the note once it is saved. */
   delivery: ConversationMessageDelivery
 }
-/** The receipt of a saved note. It never changes: a retry of the same request answers it again. */
+/** The receipt of a saved note. A retry of the same request answers the same note, where it stands then. */
 export interface ConversationMessageReceipt {
   /** Stable action identifier retained for retries of one logical command. */
   requestId: string
@@ -2485,6 +2536,10 @@ export interface ConversationMessageReceipt {
   acceptedAtMs: number
   /** Where the note stands now. */
   deliveryState: ConversationMessageState
+  /** The turn that took the note; present exactly when deliveryState is assigned. */
+  executionId?: string
+  /** Why the note was retired; present exactly when deliveryState is retired. */
+  retiredReason?: ConversationMessageRetiredReason
 }
 /** Read where the caller's own note stands (conversation.messageStatus), by the requestId it was left under. This writes nothing. It is admitted as conversation.message is, so a paired device needs a comment or drive grant; it finds notes by principal and requestId, so a device signed in as its owner finds the owner's notes and those of the owner's other devices, and never another principal's. */
 export interface ConversationMessageStatusParams {
@@ -2505,6 +2560,10 @@ export interface ConversationMessageStatusResult {
   acceptedAtMs?: number
   /** Present when found is true. */
   deliveryState?: ConversationMessageState
+  /** The turn that took the note; present exactly when deliveryState is assigned. */
+  executionId?: string
+  /** Why the note was retired; present exactly when deliveryState is retired. */
+  retiredReason?: ConversationMessageRetiredReason
 }
 export const maxChangeWatchIdBytes = 57 as const
 export const changeWatchIdPattern =

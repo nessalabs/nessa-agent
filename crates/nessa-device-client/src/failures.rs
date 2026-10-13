@@ -62,6 +62,7 @@ copied_enum!(
     [
         Refused,
         Unreachable,
+        Away,
         ResetRequired,
         Protocol,
         Cache,

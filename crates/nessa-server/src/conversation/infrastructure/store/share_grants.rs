@@ -454,6 +454,41 @@ impl ShareGrants for LocalConversationStore {
             Ok(grants)
         })
     }
+
+    fn policy_at<'a>(
+        &'a self,
+        id: &'a ConversationId,
+        receiver_id: &'a str,
+        policy_revision: u64,
+    ) -> ConversationFuture<'a, Option<ToolPolicy>> {
+        let (id, receiver_id) = (id.to_string(), receiver_id.to_owned());
+        self.run(move |connection| {
+            // A revision past what SQLite numbers names no entry.
+            let Ok(sequence) = i64::try_from(policy_revision) else {
+                return Ok(None);
+            };
+            let entry: Option<(String, Option<String>)> = connection
+                .query_row(
+                    &format!(
+                        "SELECT after, {} FROM share_grant_changes
+                         WHERE sequence = ?1 AND conversation_id = ?2 AND receiver_id = ?3",
+                        super::acquisition::text("policy_after", MAX_POLICY_TEXT_BYTES, true),
+                    ),
+                    params![sequence, id, receiver_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()
+                .map_err(failed)?;
+            match entry {
+                Some((after, Some(text))) if after == role_name(ShareRole::Drive) => {
+                    policy_from(&text)
+                        .map(Some)
+                        .ok_or_else(|| unreadable("share_grant_changes", &id))
+                }
+                _ => Ok(None),
+            }
+        })
+    }
 }
 
 #[cfg(test)]

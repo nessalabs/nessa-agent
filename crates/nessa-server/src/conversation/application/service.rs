@@ -4,6 +4,7 @@ use super::metadata_target::{load_conversation, validate_target};
 use super::session_key::conversation_session;
 use super::{
     app_reviews::{AppReviews, ReviewAnswer, ReviewAnswerer},
+    drive_tools::{checked_source, AdmittedPolicies, DriveToolHook, DriveTools},
     environment::{confirmed_despite, issue, open_lease, LeaseIssueError, LeaseRequest, LiveLease},
     live_changes::LiveChanges,
     locks::ConversationLocks,
@@ -23,7 +24,7 @@ use super::{
     UnfinishedDeletions,
 };
 use crate::conversation::domain::{
-    Conversation, ConversationDeletion, ProviderSessionErasure, ProviderSessionLink,
+    Conversation, ConversationDeletion, ProviderSessionErasure, ProviderSessionLink, ToolSource,
 };
 use futures_util::{future::join_all, FutureExt};
 use nessa_auth::application::ports::Clock;
@@ -67,7 +68,10 @@ use nessa_sdk::application::agent_execution::{
     },
 };
 use nessa_sdk::domain::agent_execution::{
-    executions::{ExecutionId, ExecutionOutcome, Initiation, InvocationStage, MessageKind},
+    executions::{
+        ExecutionId, ExecutionOutcome, GrantInitiator, Initiation, Initiator, InvocationStage,
+        MessageKind,
+    },
     leases::{AgentWork, LeaseEndCause, SandboxProfile, SandboxProfiles},
     permissions::{
         CustomPermissionCancellationReason, PermissionCancellationReason, PermissionId,
@@ -603,6 +607,12 @@ struct LiveConversation {
     fetches: Arc<FetchRequests>,
     /// Whose organization the conversation is, as its record says.
     organization_id: OrganizationId,
+    /// Who names its agent's tools, when every call that agent makes outside
+    /// its Ask-mode floor is asked about; `None` for OpenCode, which admits
+    /// no Drive turn.
+    tool_source: Option<ToolSource>,
+    /// The tool policies of the Drive turns admitted here.
+    admitted_policies: Arc<AdmittedPolicies>,
 }
 enum AttachmentOwner {
     Running(JoinHandle<()>),
@@ -735,6 +745,13 @@ struct Inner {
     /// Principal command receipts. Composition binds the shared record runtime.
     /// Absent storage refuses command admission rather than skipping the receipt.
     commands: Arc<OnceLock<Arc<dyn CreationStorage>>>,
+    /// The share grants a waiting note's author is checked against before a
+    /// turn takes it. Composition binds the gateway's table; without one, a
+    /// grant's note is never checked and waits, and an owner's is taken.
+    note_authors: Arc<OnceLock<Arc<dyn super::ShareGrants>>>,
+    /// What checks a Drive grant's tools. Composition binds it; until then
+    /// no Drive turn is admitted (`drive_policy_unenforceable`).
+    drive: Arc<OnceLock<DriveTools>>,
 }
 /// Owns Agents independently of authenticated socket lifetimes. Clones share all owners.
 #[derive(Clone)]
@@ -1048,6 +1065,8 @@ impl ConversationService {
                 app_calls: Arc::new(Semaphore::new(app_calls::MAX_APP_CALLS)),
                 fetch_reads: Arc::new(Semaphore::new(artifact_fetch::FETCH_READS)),
                 commands: Arc::new(OnceLock::new()),
+                note_authors: Arc::new(OnceLock::new()),
+                drive: Arc::new(OnceLock::new()),
             }),
         })
     }
@@ -1502,6 +1521,7 @@ impl ConversationService {
                                 service.inner.clock.as_ref(),
                             )
                             .await;
+                            let tool_source = checked_source(agent);
                             let agent = Agent::prepare(
                                 opening.fence.clone(),
                                 manager,
@@ -1514,6 +1534,18 @@ impl ConversationService {
                                     holds: error.needs_cleanup(),
                                 }
                             })?;
+                            // Before anything can run: every call a Drive
+                            // grant's turn asks about is checked against its
+                            // policy. An agent that does not ask about every
+                            // call admits no Drive turn, so it needs no hook.
+                            let admitted_policies = Arc::new(AdmittedPolicies::default());
+                            if let Some(source) = tool_source {
+                                agent.add_invocation_hook(Arc::new(DriveToolHook {
+                                    drive: service.inner.drive.clone(),
+                                    admitted: admitted_policies.clone(),
+                                    source,
+                                }));
+                            }
                             let issued = issue(
                                 agent.session_manager(),
                                 environment.as_ref(),
@@ -1715,6 +1747,8 @@ impl ConversationService {
                                 publishes: Arc::default(),
                                 fetches: Arc::default(),
                                 organization_id: record.organization().clone(),
+                                tool_source,
+                                admitted_policies,
                             });
                             // What the host publishes under the lease is
                             // kept for as long as the lease is held.
@@ -2608,6 +2642,55 @@ impl ConversationService {
     /// (`m10_a_stop_that_ended_the_messages_opening_before_the_enqueue_is_m10_by_the_system`).
     /// One that came after the refusal leaves it as it was
     /// (`m10_a_release_after_a_turn_running_refusal_keeps_turn_running`).
+    /// Admit a turn `grant` sends to `live`, or refuse it
+    /// `DrivePolicyUnenforceable` (row J26): its agent must ask about every
+    /// call outside its Ask-mode floor (Claude or Codex, not OpenCode), run
+    /// in the Ask approval mode, attached, with native hooks off, and the
+    /// grant's policy at the admitted revision must be read from its journal.
+    /// The policy is kept for the conversation, where its calls are checked.
+    async fn admit_drive_turn(
+        &self,
+        live: &LiveConversation,
+        id: &ConversationId,
+        grant: &GrantInitiator,
+        non_default_mode: bool,
+    ) -> Result<(), ConversationError> {
+        let refused = Err(ConversationError::DrivePolicyUnenforceable);
+        let Some(drive) = self.inner.drive.get() else {
+            return refused;
+        };
+        if live.tool_source.is_none() || non_default_mode {
+            return refused;
+        }
+        // What the agent asks about is decided as it attaches: its approval
+        // mode and whether its own hooks may answer first.
+        let _ = live.join_attachment_owner().await;
+        if live.agent.attachment_status().phase() != AttachmentPhase::Attached
+            || live.agent.approval_mode() != Some(ProviderApprovalMode::Ask)
+            || live.agent.operation_capabilities().native_hooks_allowed()
+        {
+            return refused;
+        }
+        match drive
+            .grants
+            .policy_at(id, grant.grant(), grant.policy_revision())
+            .await
+        {
+            Ok(Some(policy)) => {
+                live.admitted_policies
+                    .admit(grant.grant(), grant.policy_revision(), policy);
+                Ok(())
+            }
+            Ok(None) | Err(_) => refused,
+        }
+    }
+
+    /// Bind what checks a Drive grant's tools. A second bind is ignored;
+    /// unbound, no Drive turn is admitted.
+    pub fn bind_drive_tools(&self, drive: DriveTools) {
+        let _ = self.inner.drive.set(drive);
+    }
+
     pub(super) async fn submit_as(
         &self,
         id: ConversationId,
@@ -2691,8 +2774,14 @@ impl ConversationService {
                         .invocations
                         .iter()
                         .find(|record| record.request.execution_id == execution)
-                        .map(|record| record.request.user_message.app_model_context().to_vec())
+                        .map(|record| {
+                            (
+                                record.request.user_message.app_model_context().to_vec(),
+                                record.initiation.clone(),
+                            )
+                        })
                 });
+            let (original, saved_initiation) = original.unzip();
             let known = original.is_some();
             // Asked under the submission lock, which a desktop stop takes to
             // mark the owner: an owner being stopped is handed no new message
@@ -2736,6 +2825,24 @@ impl ConversationService {
                     return Err(ConversationError::ApprovalModeNotApplied.into());
                 }
             }
+            // A Drive grant's turn is admitted only where every call it asks
+            // about is checked against the grant's policy, and is saved as
+            // checked (rows J26 and J27).
+            // A retry by the same initiator is answered from what was saved,
+            // checked or not, and is not admitted again; one by another is
+            // the agent's conflict to refuse.
+            let retried = saved_initiation
+                .filter(|saved| saved.initiator() == writer.initiation().initiator());
+            let initiation = match (retried, writer.initiation().initiator()) {
+                (Some(saved), _) => saved,
+                (None, Initiator::Owner) => Initiation::owner(),
+                (None, Initiator::Grant(grant)) => {
+                    service
+                        .admit_drive_turn(&live, &id, grant, non_default_mode)
+                        .await?;
+                    Initiation::checked_grant(grant.clone())
+                }
+            };
             if !message.images().is_empty() && !known {
                 // Refuse before acceptance what the agent would refuse at dispatch,
                 // and any digest this conversation did not upload itself.
@@ -2857,25 +2964,42 @@ impl ConversationService {
             }
             asking.store(true, Ordering::SeqCst);
             // Saved as started by whom it was admitted for: the owner, or
-            // the Drive grant as it stood at admission, its tools unchecked
-            // (row J15).
+            // the Drive grant as it stood at admission, its tools checked
+            // (rows J15 and J27).
             let submitter = Submitter {
                 context: actor,
-                initiation: writer.initiation(),
+                initiation,
             };
-            let delivery = match mode {
-                SubmissionMode::Queue => live
+            // A person's queued message may start the next turn, so it may
+            // take the notes waiting for one: each author is checked now, and
+            // the agent decides under its own lock whether the turn takes any
+            // (only when admitted while idle) and which of those still
+            // allowed (row J23). Never a steer, an app's message, or a retry.
+            let notes = if offers_notes(known, writer.is_app(), &mode) {
+                Some(service.note_candidates(&id, &live).await)
+            } else {
+                None
+            };
+            let delivery = match (mode, notes) {
+                (SubmissionMode::Queue, Some(candidates)) => live
+                    .agent
+                    .enqueue_with_notes(request, submitter, candidates)
+                    .await
+                    .map(SubmissionDelivery::Queued),
+                (SubmissionMode::Queue, None) => live
                     .agent
                     .enqueue(request, submitter)
                     .await
                     .map(SubmissionDelivery::Queued),
-                SubmissionMode::Steer if !live.agent.operation_capabilities().native_steering() => {
+                (SubmissionMode::Steer, _)
+                    if !live.agent.operation_capabilities().native_steering() =>
+                {
                     live.agent
                         .enqueue_steering(request, submitter)
                         .await
                         .map(SubmissionDelivery::Queued)
                 }
-                SubmissionMode::Steer => {
+                (SubmissionMode::Steer, _) => {
                     live.agent
                         .steer(request, submitter)
                         .await
@@ -5478,6 +5602,15 @@ fn completed_reply(snapshot: Option<&SessionSnapshot>, execution: &str) -> Optio
 /// are read then, so its conversation's files must outlive a close that did not
 /// reach the agent. Without a snapshot nothing is known, which is not the same
 /// as knowing there is nothing.
+/// Whether a submission offers the agent the notes waiting for a turn: a
+/// person's queued message not already admitted. It is offered whether or
+/// not the conversation looks idle now; the agent decides that under the
+/// lock that admits the turn, so a turn that ends in between cannot leave an
+/// idle admission without the notes it should take.
+fn offers_notes(known: bool, is_app: bool, mode: &SubmissionMode) -> bool {
+    !known && !is_app && matches!(mode, SubmissionMode::Queue)
+}
+
 fn awaits_images(snapshot: Option<&SessionSnapshot>) -> bool {
     let Some(snapshot) = snapshot else {
         return true;
@@ -5517,6 +5650,10 @@ pub use app_calls::{
 #[cfg(test)]
 #[path = "../../../tests/conversation/close_release.rs"]
 mod close_release_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/conversation/offers_notes.rs"]
+mod offers_notes_tests;
 
 #[cfg(test)]
 #[path = "../../../tests/conversation/retirement.rs"]

@@ -299,6 +299,7 @@ fn publish_refusal_code(refusal: PublishCallRefusal) -> &'static str {
         PublishCallRefusal::NoTurn => "no_turn",
         PublishCallRefusal::EnvironmentNotLeased => "environment_not_leased",
         PublishCallRefusal::DuplicateRequest => "duplicate_request",
+        PublishCallRefusal::NotAllowed => "not_allowed",
         PublishCallRefusal::PublishUnavailable => "publish_unavailable",
         PublishCallRefusal::Unanswered => "unanswered",
         PublishCallRefusal::TimedOut => "timed_out",
@@ -331,6 +332,9 @@ fn publish_refusal_message(refusal: PublishCallRefusal) -> &'static str {
             "the agent does not run there; publish from the environment environments_list marks current"
         }
         PublishCallRefusal::DuplicateRequest => "this call is already publishing a file",
+        PublishCallRefusal::NotAllowed => {
+            "this turn's Drive grant does not allow artifacts_publish; nothing was published"
+        }
         PublishCallRefusal::PublishUnavailable => {
             "where the agent runs publishes no files yet"
         }
@@ -437,6 +441,7 @@ fn fetch_refusal_code(refusal: FetchCallRefusal) -> &'static str {
         FetchCallRefusal::NoTurn => "no_turn",
         FetchCallRefusal::EnvironmentNotLeased => "environment_not_leased",
         FetchCallRefusal::DuplicateRequest => "duplicate_request",
+        FetchCallRefusal::NotAllowed => "not_allowed",
         FetchCallRefusal::FetchUnavailable => "fetch_unavailable",
         FetchCallRefusal::Invalid => "invalid",
         FetchCallRefusal::NotHeld => "not_held",
@@ -471,6 +476,9 @@ fn fetch_refusal_message(refusal: FetchCallRefusal) -> &'static str {
             "the agent does not run there; fetch into the environment environments_list marks current"
         }
         FetchCallRefusal::DuplicateRequest => "this call is already fetching a file",
+        FetchCallRefusal::NotAllowed => {
+            "this turn's Drive grant does not allow artifacts_fetch; nothing was placed"
+        }
         FetchCallRefusal::FetchUnavailable => "where the agent runs takes no files",
         FetchCallRefusal::Invalid => {
             "the digest, media type, size or destination cannot name a file"
@@ -678,6 +686,7 @@ fn call_error(error: &CommandCallError) -> &str {
         CommandCallError::Unrecorded => "the command could not be recorded, so it did not run",
         CommandCallError::NotConfigured => "this gateway grants no commands",
         CommandCallError::Cancelled => "the call was cancelled before the command was asked for",
+        CommandCallError::NotAllowed(reason) => reason,
     }
 }
 

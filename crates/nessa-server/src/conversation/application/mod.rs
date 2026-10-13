@@ -138,6 +138,7 @@ pub use catalogue_watch::{
 mod artifacts;
 mod catalogue_read;
 mod command_environment;
+mod drive_tools;
 mod environment;
 mod error;
 mod error_code;
@@ -206,6 +207,8 @@ pub(crate) use placement::Environments;
 #[cfg(any(unix, test))]
 pub(crate) use placement::{ConversationPlacements, PlacementError};
 // For the paired environment adapter, which lives with the Unix-only SSH one.
+pub(crate) use drive_tools::MAX_ADMITTED_POLICIES;
+pub use drive_tools::{DriveToolAudit, DriveToolAuditRecord, DriveTools};
 #[cfg(unix)]
 pub(crate) use placement::PairedEnvironments;
 pub use placement::{FETCH_CALL_WAIT, PUBLISH_CALL_WAIT};
@@ -243,7 +246,7 @@ pub use service::{
 };
 pub(crate) use session_key::conversation_session;
 pub use share_grants::{
-    admit_read, admit_role, binding_of, reader_of, HeldGrant, Reader, RoleRefusal,
+    admit_read, admit_role, binding_of, note_candidates, reader_of, HeldGrant, Reader, RoleRefusal,
     ShareConversation, ShareGrant, ShareGrantChange, ShareGrantTransition, ShareGrants,
     MAX_DRIVE_GRANTS_PER_CONVERSATION, MAX_SHARE_GRANTS_PER_CONVERSATION,
 };

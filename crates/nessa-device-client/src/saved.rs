@@ -60,6 +60,7 @@ fn cache_error(error: ReadFailure) -> NativeViewError {
         ReadFailure::Cache
         | ReadFailure::Refused
         | ReadFailure::Unreachable
+        | ReadFailure::Away
         | ReadFailure::Stopped => NativeViewError::Cache,
     }
 }

@@ -191,6 +191,74 @@ for (const invalid of [
   if (validateView(JSON.parse(JSON.stringify(invalid))))
     throw new Error("Product conversation view accepts an invalid artifact")
 }
+// The notes a view lists: required, at most 64, each closed and bounded,
+// its turn and its retirement named only by the fields that carry them.
+const note = view.notes[0]
+for (const valid of [
+  { ...view, notes: [] },
+  { ...view, notes: Array(64).fill(note) },
+  {
+    ...view,
+    notes: [
+      {
+        ...note,
+        executionId: undefined,
+        afterExecutionId: undefined,
+        deliveryState: "pending",
+      },
+    ],
+  },
+  {
+    ...view,
+    notes: [
+      {
+        ...note,
+        executionId: undefined,
+        deliveryState: "retired",
+        retiredReason: "permission_lost",
+      },
+    ],
+  },
+  {
+    ...view,
+    notes: [
+      {
+        ...note,
+        delivery: "record_only",
+        deliveryState: "recorded",
+        executionId: undefined,
+      },
+    ],
+  },
+  {
+    ...view,
+    notes: [
+      {
+        ...note,
+        text: "x".repeat(8192),
+        author: { kind: "owner", surface: "x".repeat(256) },
+      },
+    ],
+  },
+]) {
+  if (!validateView(JSON.parse(JSON.stringify(valid))))
+    throw new Error("Product conversation view rejects a bounded note list")
+}
+for (const invalid of [
+  { ...view, notes: undefined },
+  { ...view, notes: Array(65).fill(note) },
+  { ...view, notes: [{ ...note, text: "" }] },
+  { ...view, notes: [{ ...note, text: "x".repeat(8193) }] },
+  { ...view, notes: [{ ...note, deliveryState: "delivered" }] },
+  { ...view, notes: [{ ...note, retiredReason: "stale" }] },
+  { ...view, notes: [{ ...note, author: { kind: "app", surface: "phone" } }] },
+  { ...view, notes: [{ ...note, author: { kind: "owner" } }] },
+  { ...view, notes: [{ ...note, author: undefined }] },
+  { ...view, notes: [{ ...note, policyRevision: 3 }] },
+]) {
+  if (validateView(JSON.parse(JSON.stringify(invalid))))
+    throw new Error("Product conversation view accepts an invalid note")
+}
 // A deadline's dueAtMs and the view's serverNowMs are compared in a client's
 // numbers, so both stop at the largest integer a client reads exactly.
 const validateDeadline = ajv.getSchema(

@@ -329,6 +329,12 @@ as "Paired machine" plus the first eight characters of its key, and is named
 connection ends, waiting up to a minute between tries, and stops on Ctrl-C
 or SIGTERM. Revoking its credential stops the next lease it is given.
 
+If the gateway serves through a relay (`native.relay` in its `config.json`), add
+`--relay relay.example:7444` to `env dial`: whenever the gateway's own
+address does not answer within a moment, the machine asks the relay for it
+instead, both while it waits for your approval and for every connection
+after. Enrolling still needs the gateway's own address.
+
 A machine that dials in runs nothing for the gateway until you grant it, on
 that machine. Grants are kept in `environment/grants.json` beside its
 pairing and read again for every lease, so a change applies from the next

@@ -8,7 +8,8 @@
 use crate::attachments::application::{AttachmentLimits, HeldReads};
 use crate::conversation::application::{
     ArtifactBudget, ARTIFACT_READ_RESUMES, FETCH_BUSY_BACKOFF, FETCH_CALL_WAIT, FETCH_READS,
-    MAX_DRIVE_GRANTS_PER_CONVERSATION, MAX_SHARE_GRANTS_PER_CONVERSATION, PUBLISH_CALL_WAIT,
+    MAX_ADMITTED_POLICIES, MAX_DRIVE_GRANTS_PER_CONVERSATION, MAX_SHARE_GRANTS_PER_CONVERSATION,
+    PUBLISH_CALL_WAIT,
 };
 use crate::conversation::domain::ToolRules;
 use crate::conversation::infrastructure::{DISCOVERY_STEPS_PER_READ, MAX_CATALOGUE_CHANGE_WATCHES};
@@ -216,6 +217,12 @@ fn catalogue() -> &'static [Limit] {
             meaning: "the drive grants one conversation holds; one more conversation.share naming drive is refused invalid_request, so a conversation.shares answer with every policy at its largest still fits one frame",
         },
         Limit {
+            id: "conversation.drive_policies",
+            tier: "fixed",
+            owner: "MAX_ADMITTED_POLICIES in crates/nessa-server/src/conversation/application/drive_tools.rs",
+            meaning: "the Drive grant policies one open conversation keeps for the turns it admitted, by grant and revision; past this the least recently admitted is let go, and a turn still needing it has its tool calls refused, never allowed",
+        },
+        Limit {
             id: "conversation.notes",
             tier: "fixed",
             owner: "NoteRecord::MAX_PER_CONVERSATION in crates/nessa-sdk/src/application/agent_execution/sessions/notes.rs",
@@ -226,6 +233,24 @@ fn catalogue() -> &'static [Limit] {
             tier: "fixed",
             owner: "NoteRecord::MAX_PER_AUTHOR_IN_WINDOW and RATE_WINDOW_MS in crates/nessa-sdk/src/application/agent_execution/sessions/notes.rs",
             meaning: "the notes one author, a principal under one authority, leaves in one conversation in any 60 seconds on the gateway's wall clock; one more is refused message_quota_exceeded, and a clock set back makes no room",
+        },
+        Limit {
+            id: "conversation.pending_notes",
+            tier: "fixed",
+            owner: "NoteRecord::MAX_PENDING in crates/nessa-sdk/src/application/agent_execution/sessions/notes.rs",
+            meaning: "the next_turn notes one conversation keeps waiting for a turn, not counting one past its lifetime; one more next_turn note is refused message_quota_exceeded and nothing is saved",
+        },
+        Limit {
+            id: "conversation.note_lifetime",
+            tier: "fixed",
+            owner: "NoteRecord::PENDING_LIFETIME_MS in crates/nessa-sdk/src/application/agent_execution/sessions/notes.rs",
+            meaning: "how long a next_turn note waits for a turn, from when it was accepted, on the gateway's wall clock; the first turn admitted after that retires it expired",
+        },
+        Limit {
+            id: "conversation.notes_per_turn",
+            tier: "fixed",
+            owner: "UserMessage::MAX_NOTES in crates/nessa-sdk/src/domain/agent_execution/prompts/value_objects/user_message.rs, which NoteRecord::MAX_PER_TURN follows",
+            meaning: "the next_turn notes one turn takes, the oldest first; the rest wait for the next turn",
         },
         Limit {
             id: "conversation.note_bytes",
@@ -549,6 +574,7 @@ pub(crate) fn effective_json(
         "conversation.drive_grants",
         MAX_DRIVE_GRANTS_PER_CONVERSATION.unsigned_abs(),
     );
+    put("conversation.drive_policies", count(MAX_ADMITTED_POLICIES));
     put(
         "conversation.notes",
         count(NoteRecord::MAX_PER_CONVERSATION),
@@ -556,6 +582,15 @@ pub(crate) fn effective_json(
     put(
         "conversation.note_rate",
         count(NoteRecord::MAX_PER_AUTHOR_IN_WINDOW),
+    );
+    put("conversation.pending_notes", count(NoteRecord::MAX_PENDING));
+    put(
+        "conversation.note_lifetime",
+        millis(Duration::from_millis(NoteRecord::PENDING_LIFETIME_MS)),
+    );
+    put(
+        "conversation.notes_per_turn",
+        count(NoteRecord::MAX_PER_TURN),
     );
     put("conversation.note_bytes", count(NoteText::MAX_BYTES));
     put(
