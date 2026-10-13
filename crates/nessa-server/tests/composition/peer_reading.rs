@@ -1683,3 +1683,55 @@ async fn a_read_past_the_cap_waits_for_a_slot() {
     stop(peers.a).await;
     stop(peers.c).await;
 }
+
+/// A held read wakes every tick. It scans the peer records when they change,
+/// not on each of those ticks, and an enrollment during the hold is still read.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_held_read_lists_when_the_records_change_not_on_every_tick() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut peers = TwoPeers::start(directory.path()).await;
+    let (key_c, _) = enroll(&peers.c, &peers.b, &peers.relay_c, true).await;
+    peers.key_c = key_c;
+    peers.relay_c.hold_after(1);
+    let poller = peers.b.poller(PollPolicy {
+        interval: Duration::from_secs(60),
+        backoff_cap: Duration::from_secs(60),
+        ..POLICY
+    });
+    peers.relay_c.until_held(0).await;
+    let listed = poller.lists();
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let during = poller.lists();
+    assert!(
+        during <= listed + 1,
+        "a held read scanned the records {during} times after {listed}"
+    );
+
+    let since = SystemClock.unix_milliseconds();
+    let (key_a, _) = enroll(&peers.a, &peers.b, &peers.relay_a, true).await;
+    peers.key_a = key_a;
+    let synced = tokio::time::timeout(WAIT, async {
+        loop {
+            if sync_of(&peers.b, &peers.key_a).await.is_some_and(|sync| {
+                sync.state == SyncState::Synced && sync.last_synced_ms.is_some_and(|at| at >= since)
+            }) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    assert!(
+        synced.is_ok(),
+        "A was not read after its record changed; scans went from {during} to {}",
+        poller.lists()
+    );
+    assert!(
+        poller.lists() > during,
+        "enrolling A did not scan the records again"
+    );
+    peers.relay_c.pass_all();
+    tokio::time::timeout(WAIT, poller.join()).await.unwrap();
+    stop(peers.a).await;
+    stop(peers.c).await;
+}

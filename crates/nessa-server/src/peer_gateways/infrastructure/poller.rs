@@ -7,7 +7,8 @@
 //! the other reads.
 //!
 //! ```text
-//! tick --> PeerRecords::list (schedules) --> each due peer, up to READS_AT_ONCE:
+//! records changed, or the interval --> PeerRecords::list (schedules)
+//!   --> each due peer, up to READS_AT_ONCE:
 //!   take that peer's turn --> re-read its record; gone or revoked --> drop it
 //!   pinned status (NativeEnrollmentClient over its PeerSlot)
 //!     Active   --> the client saves the credential --> RetainedCache::read
@@ -70,6 +71,8 @@ use nessa_client_core::retained::{
 use nessa_protocol::pairing::socket::WAKE_TICK;
 use nessa_protocol::pairing::wire::NativePairingStatus;
 use nessa_protocol::relay::RelayRefusal;
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{
     collections::HashMap,
     future::Future,
@@ -158,6 +161,9 @@ pub struct PeerPoller {
     stop: watch::Sender<bool>,
     commands: Arc<PeerCommands>,
     task: JoinHandle<()>,
+    /// How many times this poller has scanned the peer records.
+    #[cfg(test)]
+    lists: Arc<AtomicUsize>,
 }
 impl PeerPoller {
     /// Start reading `commands`' peers with `inputs`.
@@ -166,6 +172,8 @@ impl PeerPoller {
         // `READS_AT_ONCE` is at least one. A schedule of zero places would
         // leave every due peer waiting for a slot that cannot exist.
         let reads = Arc::new(Semaphore::new(inputs.policy.reads_at_once));
+        #[cfg(test)]
+        let lists = Arc::new(AtomicUsize::new(0));
         let shared = Arc::new(Shared {
             commands: commands.clone(),
             inputs,
@@ -177,12 +185,24 @@ impl PeerPoller {
             due: HashMap::new(),
             running: JoinSet::new(),
             running_keys: HashMap::new(),
+            known: Vec::new(),
+            listed_generation: 0,
+            listed_at: None,
+            #[cfg(test)]
+            lists: Arc::clone(&lists),
         };
         Self {
             stop,
             commands,
             task: tokio::spawn(poller.run()),
+            #[cfg(test)]
+            lists,
         }
+    }
+    /// How many times the peer records have been scanned.
+    #[cfg(test)]
+    pub(crate) fn lists(&self) -> usize {
+        self.lists.load(Ordering::Relaxed)
     }
     /// Ask the poller to stop: its waits end, and every cycle in progress is
     /// stopped, its read's sockets shut at once.
@@ -214,6 +234,15 @@ struct Poller {
     due: HashMap<DeviceKey, Due>,
     running: JoinSet<Option<Pace>>,
     running_keys: HashMap<Id, DeviceKey>,
+    /// The peers the last successful list found.
+    known: Vec<DeviceKey>,
+    /// The record generation that list was taken against.
+    listed_generation: u64,
+    /// When that list finished, on the injected clock. `None` until one does.
+    listed_at: Option<u64>,
+    /// How many directory scans this poller has done.
+    #[cfg(test)]
+    lists: Arc<AtomicUsize>,
 }
 impl Poller {
     fn stopping(&self) -> bool {
@@ -228,9 +257,32 @@ impl Poller {
                 break;
             }
             let now = self.now();
-            let listed = self.peers().await;
-            self.start_due(now, listed.as_deref());
-            if !self.wait(listed.is_some()).await {
+            // Captured before the scan, so a write during it is seen next.
+            let generation = self.shared.commands.records().listed_generation();
+            let list_now = match self.listed_at {
+                None => true,
+                Some(at) => list_peers(
+                    generation != self.listed_generation,
+                    now.saturating_sub(at),
+                    millis(self.shared.inputs.policy.interval),
+                ),
+            };
+            let have = if list_now {
+                match self.peers().await {
+                    Some(live) => {
+                        self.known = live;
+                        self.listed_generation = generation;
+                        self.listed_at = Some(self.now());
+                        true
+                    }
+                    None => false,
+                }
+            } else {
+                true
+            };
+            let known = have.then(|| self.known.clone());
+            self.start_due(now, known.as_deref());
+            if !self.wait(have).await {
                 break;
             }
         }
@@ -271,12 +323,12 @@ impl Poller {
     }
 
     /// Wait until the schedule says to look again. `false` once the poller
-    /// is stopped. A read in flight, or a due peer that did not start, is
-    /// looked at again within one [`WAKE_TICK`], so a peer enrolled beside a
-    /// read is listed without waiting out that read, and a full cap does not
-    /// spin ([`look_again_soon`]). Idle, and a list that failed, this waits
-    /// out `next` on the injected clock, one tick at a time, and does not
-    /// list between ticks.
+    /// is stopped. A read in flight, or a due peer that did not start, wakes
+    /// within one [`WAKE_TICK`] ([`look_again_soon`]), so a record change is
+    /// noticed without waiting out that read, and a full cap does not spin.
+    /// The directory is scanned only when [`list_peers`] says so. Idle, and
+    /// a list that failed, this waits out `next` on the injected clock, one
+    /// tick at a time, and does not list between ticks.
     async fn wait(&mut self, listed: bool) -> bool {
         let next = next_wake(
             listed,
@@ -345,6 +397,8 @@ impl Poller {
     /// listed, which waits out the interval and does not stop a read already
     /// running. Who is read is decided again under that peer's turn.
     async fn peers(&mut self) -> Option<Vec<DeviceKey>> {
+        #[cfg(test)]
+        self.lists.fetch_add(1, Ordering::Relaxed);
         let records = self.shared.commands.records().clone();
         let listed = tokio::task::spawn_blocking(move || records.list()).await;
         let Ok(Ok(entries)) = listed else {
@@ -1044,12 +1098,21 @@ fn draw(entropy: &EnrollmentEntropySource) -> u32 {
     }
 }
 
-/// Whether the scheduler lists again within a tick. A read in flight, or a
-/// due peer that did not start (`left` is 0), is looked at again so an
+/// Whether the scheduler wakes within a tick. A read in flight, or a due
+/// peer that did not start (`left` is 0), is looked at again so an
 /// enrollment beside a read is not held until that read ends, and so a full
-/// cap does not spin. Idle, and a list that failed, wait out the schedule.
+/// cap does not spin. Waking does not scan the directory; [`list_peers`]
+/// does. Idle, and a list that failed, wait out the schedule.
 fn look_again_soon(listed: bool, running: bool, left: u64) -> bool {
     listed && (running || left == 0)
+}
+
+/// Whether to scan the peer records. A wake while a read runs is every
+/// tick; the directory is scanned when the records have changed since the
+/// last list, or one interval has passed
+/// (`a_held_read_lists_when_the_records_change_not_on_every_tick`).
+fn list_peers(changed: bool, since_list_ms: u64, interval_ms: u64) -> bool {
+    changed || since_list_ms >= interval_ms
 }
 
 /// When the poller next wakes, on the injected clock: the soonest peer due,

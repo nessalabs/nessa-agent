@@ -122,7 +122,7 @@ fn records_that_cannot_be_listed_wait_the_interval_not_a_due_already_past() {
 }
 
 #[test]
-fn a_read_in_flight_is_listed_again_soon_and_an_idle_poller_waits_its_schedule() {
+fn a_read_in_flight_wakes_within_a_tick_and_an_idle_poller_waits_its_schedule() {
     assert!(look_again_soon(true, true, 0));
     assert!(look_again_soon(true, true, 30_000));
     // Due, and not started: look again, rather than spin on the same listing.
@@ -132,6 +132,17 @@ fn a_read_in_flight_is_listed_again_soon_and_an_idle_poller_waits_its_schedule()
     // A list that failed waits the interval, whether or not a read is in flight.
     assert!(!look_again_soon(false, true, 0));
     assert!(!look_again_soon(false, false, 30_000));
+}
+
+/// A wake while a read runs is every tick. The directory is scanned when the
+/// records change, or once an interval has passed.
+#[test]
+fn a_running_read_lists_when_the_records_change_or_the_interval_passes() {
+    let interval = POLICY.interval.as_millis() as u64;
+    assert!(!list_peers(false, 0, interval));
+    assert!(!list_peers(false, interval - 1, interval));
+    assert!(list_peers(false, interval, interval));
+    assert!(list_peers(true, 0, interval));
 }
 
 #[test]

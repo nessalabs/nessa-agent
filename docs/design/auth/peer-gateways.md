@@ -1395,7 +1395,12 @@ sequenceDiagram
   process that stops between a change and its record, a withdrawal included,
   loses that record; the peer's record and cache on disk say what the change
   came to, as an owner command's outcome does.
-- **Cadence.** Each peer is read every `POLL_INTERVAL` (30 s), spread 80 to
+- **Cadence.** The poller scans the peer records when they change, and
+  again each interval; a read in flight wakes every tick to notice that
+  change and to start a peer waiting on a free slot, and does not scan the
+  directory on each tick
+  (`a_held_read_lists_when_the_records_change_not_on_every_tick`).
+  Each peer is read every `POLL_INTERVAL` (30 s), spread 80 to
   120 percent, and after a failure after a backoff that doubles; every wait,
   jitter included, is held to `POLL_BACKOFF_CAP` (15 min). That is the wait
   a peer is scheduled for. A peer that is due while every read slot is taken
@@ -1454,6 +1459,7 @@ sequenceDiagram
 | R30 | `peer.forget` of the peer that just synced, while the other peer's read is held; then `peer.enroll` to a peer that accepts and never answers, and `peer.forget` of the peer being read | The first forget removes that peer and does not open a new connection for the held read. The enroll holds the record set, so the second forget is `peer_busy` and does not stop the held read. Dropping the silent socket ends the enroll | same |
 | R31 | Two peers enrolled, then one grantor's listener stopped | The stopped peer is listed `unreachable`. The other is `synced`. The poller joins | `a_failing_peer_is_reported_and_the_other_is_read` |
 | R32 | `reads_at_once` is 1, and both peers' reads would hold | One peer's read is held. The other has accepted nothing, for longer than a poll tick. Once the held read is released, the waiting peer is read | `a_read_past_the_cap_waits_for_a_slot` |
+| R33 | A read is held, and the interval has not passed; then another peer is enrolled | The directory is not scanned on each tick of the held read. Enrolling the other peer scans it, and that peer is `synced` without waiting out the interval | `a_held_read_lists_when_the_records_change_not_on_every_tick` |
 
 ## What this part does not do
 
