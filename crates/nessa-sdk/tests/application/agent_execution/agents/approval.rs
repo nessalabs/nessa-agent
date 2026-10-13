@@ -170,7 +170,7 @@ async fn prepared() -> Prepared {
 async fn finish(agent: &Agent, id: &str) {
     assert_eq!(
         agent
-            .enqueue(request(id), close_action())
+            .enqueue(request(id), Submitter::owner(close_action()))
             .await
             .unwrap()
             .wait()
@@ -180,7 +180,10 @@ async fn finish(agent: &Agent, id: &str) {
 }
 
 async fn finish_steering(agent: &Agent, id: &str) {
-    let SteeringDelivery::Queued(receipt) = agent.steer(request(id), close_action()).await.unwrap()
+    let SteeringDelivery::Queued(receipt) = agent
+        .steer(request(id), Submitter::owner(close_action()))
+        .await
+        .unwrap()
     else {
         panic!("steering while idle is admitted to the queue");
     };
@@ -211,7 +214,7 @@ async fn a_live_approval_change_is_what_its_attachment_admits_and_a_new_attachme
     // provider generation is still the one close left behind.
     assert_eq!(agent.approval_mode(), Some(ApprovalMode::Ask));
     let detached = agent
-        .enqueue(request("queued-detached"), close_action())
+        .enqueue(request("queued-detached"), Submitter::owner(close_action()))
         .await
         .unwrap();
     let authorization = agent
@@ -270,12 +273,12 @@ async fn admit_across_close(steer: bool) -> (Result<(), AgentError>, Vec<Option<
     let admitted = tokio::spawn(async move {
         if steer {
             runner
-                .steer(request("across-close"), close_action())
+                .steer(request("across-close"), Submitter::owner(close_action()))
                 .await
                 .map(|_| ())
         } else {
             runner
-                .enqueue(request("across-close"), close_action())
+                .enqueue(request("across-close"), Submitter::owner(close_action()))
                 .await
                 .map(|_| ())
         }
@@ -440,7 +443,7 @@ async fn an_uncertain_approval_response_fences_its_generation_without_publishing
     assert_eq!(agent.approval_mode(), Some(ApprovalMode::Ask));
     assert!(backend.applied.lock().unwrap().is_empty());
     assert!(agent
-        .invoke(request("uncertain-mode"), close_action())
+        .invoke(request("uncertain-mode"), Submitter::owner(close_action()))
         .await
         .is_err());
     assert_eq!(backend.inner.prompts.load(Ordering::SeqCst), 0);
@@ -461,7 +464,10 @@ async fn a_backend_panic_before_returning_the_approval_future_fences_its_generat
         &ProviderSessionState::CleanupRequired
     );
     assert!(agent
-        .invoke(request("after-provider-panic"), close_action())
+        .invoke(
+            request("after-provider-panic"),
+            Submitter::owner(close_action())
+        )
         .await
         .is_err());
     assert_eq!(backend.inner.prompts.load(Ordering::SeqCst), 0);

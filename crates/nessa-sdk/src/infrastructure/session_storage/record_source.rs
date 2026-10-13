@@ -1136,7 +1136,7 @@ mod tests {
         },
     };
     use crate::domain::agent_execution::{
-        executions::ExecutionId,
+        executions::{ExecutionId, Initiation},
         prompts::{PromptText, UserMessage},
         sessions::ExecutionSessionId,
     };
@@ -1289,6 +1289,7 @@ mod tests {
                     reserved_output_tokens: 1,
                 },
                 actor: ActionContext::new("user", "surface", "request").unwrap(),
+                initiation: Initiation::owner(),
                 acknowledgement: SubmissionAcknowledgement::Pending,
                 events: Vec::new(),
                 scheduling: Vec::new(),
@@ -3611,6 +3612,7 @@ mod tests {
                     reserved_output_tokens: 1,
                 },
                 actor: ActionContext::new("user", "surface", "request").unwrap(),
+                initiation: Initiation::owner(),
                 acknowledgement: SubmissionAcknowledgement::Pending,
                 events: Vec::new(),
                 scheduling: Vec::new(),

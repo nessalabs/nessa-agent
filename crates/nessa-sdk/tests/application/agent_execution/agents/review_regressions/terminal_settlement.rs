@@ -23,7 +23,7 @@ async fn terminal_observation_with_failed_settlement_cleans_up_and_preserves_bot
                 *backend.execution_gate.lock().unwrap() = Some(wait);
                 let mut updates = agent.subscribe();
                 let receipt = agent
-                    .enqueue(input("terminal-error"), actor())
+                    .enqueue(input("terminal-error"), Submitter::owner(actor()))
                     .await
                     .unwrap();
                 backend.executing.notified().await;
@@ -72,7 +72,9 @@ async fn terminal_observation_with_failed_settlement_cleans_up_and_preserves_bot
                 assert_eq!(backend.closes.load(Ordering::SeqCst), 1);
                 if uncertain {
                     assert!(matches!(
-                        agent.enqueue(input("blocked"), actor()).await,
+                        agent
+                            .enqueue(input("blocked"), Submitter::owner(actor()))
+                            .await,
                         Err(AgentError::Closed)
                     ));
                     backend.fail_close.store(false, Ordering::SeqCst);
@@ -85,7 +87,7 @@ async fn terminal_observation_with_failed_settlement_cleans_up_and_preserves_bot
                 backend.suppress_terminal.store(false, Ordering::SeqCst);
                 assert_eq!(
                     agent
-                        .enqueue(input("next"), actor())
+                        .enqueue(input("next"), Submitter::owner(actor()))
                         .await
                         .unwrap()
                         .wait()

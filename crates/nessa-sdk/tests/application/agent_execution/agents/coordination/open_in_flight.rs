@@ -97,7 +97,10 @@ async fn recovery_at_the_gate(keeps_failed: bool) -> (Agent, QueueAdmission, one
         "the provider reported its release"
     );
 
-    let receipt = agent.enqueue(input(), actor()).await.unwrap();
+    let receipt = agent
+        .enqueue(input(), Submitter::owner(actor()))
+        .await
+        .unwrap();
     timeout(Duration::from_secs(1), opening)
         .await
         .expect("the scheduler starts a recovery open")

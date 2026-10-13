@@ -109,3 +109,55 @@ fn message_identity_preserves_exact_utf8_at_its_validated_byte_boundaries() {
     assert_eq!(chunk.message_id(), Some(exact.as_str()));
     assert_eq!(chunk.payload_bytes(), exact.len() + "payload".len());
 }
+
+#[test]
+fn an_owner_initiation_names_the_owner_and_unchecked_tools() {
+    let owner = Initiation::owner();
+    assert_eq!(owner.initiator(), &Initiator::Owner);
+    assert_eq!(owner.tools(), ToolChecking::NotChecked);
+    assert_eq!(owner.clone(), owner);
+    assert!(format!("{owner:?}").contains("Owner"));
+}
+
+#[test]
+fn a_grant_initiation_keeps_exact_grant_text_role_and_policy_revision() {
+    for role in [GrantRole::Read, GrantRole::Comment, GrantRole::Drive] {
+        let grant = GrantInitiator::new(" grant-1 ", role, 7).unwrap();
+        assert_eq!(grant.grant(), " grant-1 ");
+        assert_eq!(grant.role(), role);
+        assert_eq!(grant.policy_revision(), 7);
+        let initiation = Initiation::grant(grant.clone());
+        assert_eq!(initiation.initiator(), &Initiator::Grant(grant));
+        assert_eq!(initiation.tools(), ToolChecking::NotChecked);
+        assert_ne!(initiation, Initiation::owner());
+        assert!(format!("{:?}", initiation.clone()).contains("grant-1"));
+    }
+    let longest = "é".repeat(GrantInitiator::MAX_GRANT_BYTES / 2);
+    assert_eq!(
+        GrantInitiator::new(longest.clone(), GrantRole::Drive, 0)
+            .unwrap()
+            .grant(),
+        longest
+    );
+}
+
+#[test]
+fn a_grant_initiator_refuses_blank_or_oversized_grant_text() {
+    for blank in ["", " \n\t"] {
+        assert_eq!(
+            GrantInitiator::new(blank, GrantRole::Read, 1),
+            Err(ExecutionError::EmptyValue("share grant"))
+        );
+    }
+    assert_eq!(
+        GrantInitiator::new(
+            "x".repeat(GrantInitiator::MAX_GRANT_BYTES + 1),
+            GrantRole::Read,
+            1
+        ),
+        Err(ExecutionError::ValueTooLong {
+            field: "share grant",
+            max_bytes: GrantInitiator::MAX_GRANT_BYTES,
+        })
+    );
+}

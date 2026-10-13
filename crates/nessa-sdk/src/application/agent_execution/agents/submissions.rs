@@ -7,8 +7,7 @@ use super::{
     SteeringEvidence,
 };
 use crate::application::agent_execution::{
-    executions::{ExecutionRequest, SubmissionMode},
-    permissions::ActionContext,
+    executions::{ExecutionRequest, SubmissionMode, Submitter},
     sessions::{SessionManager, SubmissionAcknowledgement},
 };
 use crate::domain::agent_execution::executions::{ExecutionId, ExecutionOutcome, InvocationStage};
@@ -52,11 +51,17 @@ pub(super) async fn recover(
     manager: &SessionManager,
     receipts: &HashMap<ExecutionId, SubmissionReceipt>,
     input: &ExecutionRequest,
-    actor: &ActionContext,
+    submitter: &Submitter,
     mode: SubmissionMode,
 ) -> Option<Result<SteeringDelivery, AgentError>> {
     let record = manager.submission(&input.execution_id).await?;
-    if record.request != *input || record.actor != *actor || record.submission != mode {
+    // A retry under a different initiation is a different submission, the
+    // same as one from a different actor.
+    if record.request != *input
+        || record.actor != submitter.context
+        || record.initiation != submitter.initiation
+        || record.submission != mode
+    {
         return Some(Err(AgentError::SubmissionConflict));
     }
     let queued = |result, evidence| {

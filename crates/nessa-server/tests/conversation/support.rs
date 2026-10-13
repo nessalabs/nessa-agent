@@ -1840,12 +1840,17 @@ pub(crate) fn capabilities(image_input: bool) -> EffectiveCapabilities {
 /// no change; a test of share grants uses the store's own table.
 pub(crate) struct EveryConversationGranted;
 impl crate::conversation::application::ShareGrants for EveryConversationGranted {
-    fn held_role<'a>(
+    fn held_grant<'a>(
         &'a self,
         _: &'a ConversationId,
         _: &'a str,
-    ) -> ConversationFuture<'a, Option<crate::conversation::domain::ShareRole>> {
-        Box::pin(async { Ok(Some(crate::conversation::domain::ShareRole::Read)) })
+    ) -> ConversationFuture<'a, Option<crate::conversation::application::HeldGrant>> {
+        Box::pin(async {
+            Ok(Some(crate::conversation::application::HeldGrant {
+                role: crate::conversation::domain::ShareRole::Read,
+                policy_revision: 1,
+            }))
+        })
     }
     fn change(
         &self,

@@ -41,6 +41,10 @@ invocations: [
             surface_id: "desktop",
             request_id: "send-1",
         },
+        initiation: Initiation {
+            initiator: Owner,
+            tools: NotChecked,
+        },
         acknowledgement: Acknowledged,
         events: [
             ExecutionEvent {

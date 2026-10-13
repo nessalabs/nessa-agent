@@ -164,7 +164,11 @@ async fn rejected_observation_fences_permission_controls_before_its_save_resumes
                 };
                 let invocation = tokio::spawn({
                     let agent = agent.clone();
-                    async move { agent.invoke(input("execution"), actor()).await }
+                    async move {
+                        agent
+                            .invoke(input("execution"), Submitter::owner(actor()))
+                            .await
+                    }
                 });
                 paused.await.unwrap();
                 let result = if let Some(admitted) = admitted {

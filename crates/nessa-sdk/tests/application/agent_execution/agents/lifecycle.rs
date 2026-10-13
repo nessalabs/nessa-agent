@@ -4,6 +4,7 @@ use super::{actor, invoke, request, MemoryStorage, TestProvider};
 use crate::application::agent_execution::support::{attached_agent, close_action};
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
+    executions::Submitter,
     sessions::{
         SessionLoad, SessionManager, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit,
         SessionSnapshot, SessionStorage, SessionStorageLease, StorageError, StorageFuture,
@@ -29,7 +30,11 @@ async fn close_waits_for_direct_settlement_save() {
         .unwrap();
     let mut events = agent.subscribe();
     let runner = agent.clone();
-    let running = tokio::spawn(async move { runner.invoke(request("direct"), actor()).await });
+    let running = tokio::spawn(async move {
+        runner
+            .invoke(request("direct"), Submitter::owner(actor()))
+            .await
+    });
     events.next().await.unwrap();
     let (saving, release) = storage.pause_next_save();
     let closer = agent.clone();
@@ -137,14 +142,21 @@ async fn cancelled_caller_during_admission_still_executes_committed_input() {
         release: waiting,
     });
     let runner = agent.clone();
-    let running = tokio::spawn(async move { runner.invoke(request("committed"), actor()).await });
+    let running = tokio::spawn(async move {
+        runner
+            .invoke(request("committed"), Submitter::owner(actor()))
+            .await
+    });
     observing.await.unwrap();
     assert_eq!(storage.backing.snapshot().invocations.len(), 1);
     running.abort();
     assert!(running.await.unwrap_err().is_cancelled());
     assert_eq!(invoke(&agent, "overlap").await, Err(AgentError::Busy));
     release.send(()).unwrap();
-    let next = agent.enqueue(request("next"), actor()).await.unwrap();
+    let next = agent
+        .enqueue(request("next"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     next.wait().await.unwrap();
     let snapshot = storage.backing.snapshot();
     assert_eq!(snapshot.invocations.len(), 2);
@@ -198,8 +210,11 @@ async fn verify_uncertain_admission(fail_load: bool) {
         release: waiting,
     });
     let submitter = agent.clone();
-    let submission =
-        tokio::spawn(async move { submitter.enqueue(request("uncertain"), actor()).await });
+    let submission = tokio::spawn(async move {
+        submitter
+            .enqueue(request("uncertain"), Submitter::owner(actor()))
+            .await
+    });
     observing.await.unwrap();
     storage.fail_load.store(fail_load, Ordering::SeqCst);
     drop(release);
@@ -216,7 +231,9 @@ async fn verify_uncertain_admission(fail_load: bool) {
         .invocations
         .is_empty());
     assert!(matches!(
-        agent.enqueue(request("uncertain"), actor()).await,
+        agent
+            .enqueue(request("uncertain"), Submitter::owner(actor()))
+            .await,
         Err(AgentError::SubmissionUnresolved)
     ));
     invoke(&agent, "next").await.unwrap();
@@ -256,7 +273,11 @@ async fn close_joins_admission_save_after_the_invoke_caller_disappears() {
         release: waiting,
     });
     let runner = agent.clone();
-    let running = tokio::spawn(async move { runner.invoke(request("saving"), actor()).await });
+    let running = tokio::spawn(async move {
+        runner
+            .invoke(request("saving"), Submitter::owner(actor()))
+            .await
+    });
     observing.await.unwrap();
     running.abort();
     assert!(running.await.unwrap_err().is_cancelled());
@@ -308,7 +329,11 @@ async fn abandoned_admission_retains_exclusive_lease_until_save_settles() {
         release: waiting,
     });
     let runner = agent.clone();
-    let running = tokio::spawn(async move { runner.invoke(request("saving"), actor()).await });
+    let running = tokio::spawn(async move {
+        runner
+            .invoke(request("saving"), Submitter::owner(actor()))
+            .await
+    });
     observing.await.unwrap();
     running.abort();
     assert!(running.await.unwrap_err().is_cancelled());
@@ -380,8 +405,11 @@ async fn corrupt_reconciliation_cannot_prove_absence_and_deep_errors_are_safely_
             release: waiting,
         });
         let submitter = agent.clone();
-        let submission =
-            tokio::spawn(async move { submitter.enqueue(request("uncertain"), actor()).await });
+        let submission = tokio::spawn(async move {
+            submitter
+                .enqueue(request("uncertain"), Submitter::owner(actor()))
+                .await
+        });
         observing.await.unwrap();
         // Move the untrusted tree: even the fixture must not recursively clone it.
         *storage.loaded_snapshot.lock().unwrap() = Some(corrupt);
@@ -391,7 +419,9 @@ async fn corrupt_reconciliation_cannot_prove_absence_and_deep_errors_are_safely_
             Err(AgentError::Storage(StorageError::Io(_)))
         ));
         assert!(matches!(
-            agent.enqueue(request("uncertain"), actor()).await,
+            agent
+                .enqueue(request("uncertain"), Submitter::owner(actor()))
+                .await,
             Err(AgentError::SubmissionUnresolved)
         ));
         assert_eq!(provider.calls.executions.load(Ordering::SeqCst), 1);

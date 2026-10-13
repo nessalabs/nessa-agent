@@ -657,9 +657,12 @@ fn actor() -> ActionContext {
     ActionContext::new("user", "test", "invoke").unwrap()
 }
 async fn invoke(agent: &Agent, id: &str) -> Result<ExecutionOutcome, AgentError> {
-    tokio::time::timeout(Duration::from_secs(2), agent.invoke(request(id), actor()))
-        .await
-        .expect("agent invocation settled")
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        agent.invoke(request(id), Submitter::owner(actor())),
+    )
+    .await
+    .expect("agent invocation settled")
 }
 
 #[tokio::test]
@@ -821,7 +824,11 @@ async fn close_can_interrupt_an_active_invocation_from_a_clone() {
         .unwrap();
     let mut events = agent.subscribe();
     let running = agent.clone();
-    let active = tokio::spawn(async move { running.invoke(request("waiting"), actor()).await });
+    let active = tokio::spawn(async move {
+        running
+            .invoke(request("waiting"), Submitter::owner(actor()))
+            .await
+    });
     let observed = tokio::time::timeout(Duration::from_secs(2), events.next())
         .await
         .unwrap()
@@ -961,6 +968,7 @@ async fn unfinished_saved_invocations_are_retained_without_automatic_replay() {
             scheduling: Vec::new(),
             request: request("interrupted"),
             actor: actor(),
+            initiation: Initiation::owner(),
             acknowledgement: SubmissionAcknowledgement::Pending,
             events: Vec::new(),
             result: None,
@@ -1085,6 +1093,7 @@ async fn restored_unresolved_admission_is_never_redispatched_by_retry() {
                 submission: SubmissionMode::Queued,
                 request: request("interrupted"),
                 actor: actor(),
+                initiation: Initiation::owner(),
                 acknowledgement: SubmissionAcknowledgement::Pending,
                 events: Vec::new(),
                 scheduling,
@@ -1097,7 +1106,9 @@ async fn restored_unresolved_admission_is_never_redispatched_by_retry() {
             .await
             .unwrap();
         assert!(matches!(
-            agent.enqueue(request("interrupted"), actor()).await,
+            agent
+                .enqueue(request("interrupted"), Submitter::owner(actor()))
+                .await,
             Err(AgentError::SubmissionUnresolved)
         ));
         assert_eq!(provider.calls.executions.load(Ordering::SeqCst), 0);

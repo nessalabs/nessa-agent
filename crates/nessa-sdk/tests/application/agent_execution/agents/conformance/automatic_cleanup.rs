@@ -178,7 +178,11 @@ async fn automatic_stop_keeps_native_steering_cause_across_retry_and_restoration
         *backend.steering_gate.lock().unwrap() = Some(gate);
         let steering = tokio::spawn({
             let agent = agent.clone();
-            async move { agent.steer(request("correction"), actor()).await }
+            async move {
+                agent
+                    .steer(request("correction"), Submitter::owner(actor()))
+                    .await
+            }
         });
         bounded(backend.steering_admitted.notified()).await;
         // Native delivery is pending before the independent execution reports
@@ -187,7 +191,7 @@ async fn automatic_stop_keeps_native_steering_cause_across_retry_and_restoration
         let error = bounded(steering).await.unwrap().err().unwrap();
         assert!(bounded(running).await.unwrap().is_err());
         assert_eq!(
-            bounded(agent.steer(request("correction"), actor()))
+            bounded(agent.steer(request("correction"), Submitter::owner(actor())))
                 .await
                 .err(),
             Some(error.clone())
@@ -211,7 +215,7 @@ async fn automatic_stop_keeps_native_steering_cause_across_retry_and_restoration
         let (restored, restored_backend, restored_storage) =
             workflow_from_storage(restored_storage).await;
         assert_eq!(
-            bounded(restored.steer(request("correction"), actor()))
+            bounded(restored.steer(request("correction"), Submitter::owner(actor())))
                 .await
                 .err(),
             Some(error)

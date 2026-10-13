@@ -599,7 +599,7 @@ async fn pre_tool_and_turn_boundary_share_kinds_and_thinking() {
     .await;
     fixture
         .agent
-        .invoke(request(), close_action())
+        .invoke(request(), Submitter::owner(close_action()))
         .await
         .expect("hook admitted the review");
     let seen = seen.lock().unwrap();
@@ -638,7 +638,7 @@ async fn add_hook_reports_each_event_kind() {
     );
     fixture
         .agent
-        .invoke(request(), close_action())
+        .invoke(request(), Submitter::owner(close_action()))
         .await
         .expect("registered hook admitted the review");
     assert_eq!(
@@ -725,7 +725,7 @@ async fn a_continue_refusal_keeps_the_review_and_the_session() {
     .await;
     fixture
         .agent
-        .invoke(request(), close_action())
+        .invoke(request(), Submitter::owner(close_action()))
         .await
         .expect("deny-and-continue finishes the turn");
     assert_eq!(fixture.answered.load(Ordering::SeqCst), 1);
@@ -755,7 +755,7 @@ async fn a_continue_refusal_keeps_the_review_and_the_session() {
         .any(|event| matches!(event.update(), ExecutionUpdate::PermissionRequested { .. })));
     fixture
         .agent
-        .invoke(second_request(), close_action())
+        .invoke(second_request(), Submitter::owner(close_action()))
         .await
         .expect("the session stays usable");
 }
@@ -773,7 +773,7 @@ async fn a_refused_review_is_not_published_for_a_person_to_answer() {
     let mut published = fixture.agent.subscribe();
     fixture
         .agent
-        .invoke(request(), close_action())
+        .invoke(request(), Submitter::owner(close_action()))
         .await
         .expect("deny-and-continue finishes the turn");
     assert_eq!(fixture.answered.load(Ordering::SeqCst), 1);
@@ -805,7 +805,7 @@ async fn a_continue_without_a_deny_option_does_not_invent_one() {
     .await;
     fixture
         .agent
-        .invoke(request(), close_action())
+        .invoke(request(), Submitter::owner(close_action()))
         .await
         .expect("a continue with no deny option ends the turn without closing");
     assert_eq!(fixture.answered.load(Ordering::SeqCst), 0);
@@ -831,7 +831,7 @@ async fn a_continue_without_a_deny_option_does_not_invent_one() {
     assert!(fixture.closes.lock().unwrap().is_empty());
     fixture
         .agent
-        .invoke(second_request(), close_action())
+        .invoke(second_request(), Submitter::owner(close_action()))
         .await
         .expect("the session stays usable");
 }
@@ -848,7 +848,7 @@ async fn an_end_turn_refusal_does_not_close_the_session() {
     .await;
     fixture
         .agent
-        .invoke(request(), close_action())
+        .invoke(request(), Submitter::owner(close_action()))
         .await
         .expect("ending the turn leaves the session open");
     // An end-turn withdraws the review rather than answering it, so no answer
@@ -874,7 +874,7 @@ async fn an_end_turn_refusal_does_not_close_the_session() {
     assert!(fixture.closes.lock().unwrap().is_empty());
     fixture
         .agent
-        .invoke(second_request(), close_action())
+        .invoke(second_request(), Submitter::owner(close_action()))
         .await
         .expect("the session stays usable");
 }
@@ -884,7 +884,7 @@ async fn a_hook_error_denies_and_continues() {
     let fixture = agent_with(script(), vec![Arc::new(FailingHook)]).await;
     fixture
         .agent
-        .invoke(request(), close_action())
+        .invoke(request(), Submitter::owner(close_action()))
         .await
         .expect("a hook error does not close the session");
     assert_eq!(fixture.answered.load(Ordering::SeqCst), 1);
@@ -900,7 +900,7 @@ async fn a_hook_error_denies_and_continues() {
         .any(|event| matches!(event.update(), ExecutionUpdate::PermissionRequested { .. })));
     fixture
         .agent
-        .invoke(second_request(), close_action())
+        .invoke(second_request(), Submitter::owner(close_action()))
         .await
         .expect("the session stays usable");
 }
@@ -948,7 +948,7 @@ async fn a_panicked_review_hook_denies_and_continues() {
     let fixture = agent_with(script(), vec![Arc::new(PanicHook)]).await;
     fixture
         .agent
-        .invoke(request(), close_action())
+        .invoke(request(), Submitter::owner(close_action()))
         .await
         .expect("a panicked hook does not close the session");
     assert_eq!(fixture.answered.load(Ordering::SeqCst), 1);
@@ -958,7 +958,7 @@ async fn a_panicked_review_hook_denies_and_continues() {
     );
     fixture
         .agent
-        .invoke(second_request(), close_action())
+        .invoke(second_request(), Submitter::owner(close_action()))
         .await
         .expect("the session stays usable after a panicked hook");
 }
@@ -989,7 +989,7 @@ async fn a_hook_that_panics_on_participation_refuses_the_review() {
     let fixture = agent_with(script(), vec![Arc::new(PanickingParticipant)]).await;
     fixture
         .agent
-        .invoke(request(), close_action())
+        .invoke(request(), Submitter::owner(close_action()))
         .await
         .expect("a panicked hook does not close the session");
     assert_eq!(fixture.answered.load(Ordering::SeqCst), 1);
@@ -1040,7 +1040,7 @@ async fn hook_code_runs_after_the_hook_registry_is_released() {
     )
     .await;
     *agent.lock().unwrap() = Some(fixture.agent.clone());
-    let invoked = fixture.agent.invoke(request(), close_action()).await;
+    let invoked = fixture.agent.invoke(request(), Submitter::owner(close_action())).await;
     // Break the agent -> hook -> agent cycle so the agent is dropped.
     agent.lock().unwrap().take();
     invoked.expect("the turn runs");
@@ -1066,7 +1066,7 @@ async fn a_hook_that_returns_stopped_is_deny_and_continue() {
     .await;
     fixture
         .agent
-        .invoke(request(), close_action())
+        .invoke(request(), Submitter::owner(close_action()))
         .await
         .expect("a hook-supplied stop is a deny");
     assert_eq!(fixture.answered.load(Ordering::SeqCst), 1);
@@ -1081,7 +1081,7 @@ async fn a_hook_that_returns_stopped_is_deny_and_continue() {
     assert!(fixture.closes.lock().unwrap().is_empty());
     fixture
         .agent
-        .invoke(second_request(), close_action())
+        .invoke(second_request(), Submitter::owner(close_action()))
         .await
         .expect("the session stays usable");
 }
@@ -1096,7 +1096,7 @@ async fn close_session_is_a_policy_refusal() {
         })],
     )
     .await;
-    let _ = fixture.agent.invoke(request(), close_action()).await;
+    let _ = fixture.agent.invoke(request(), Submitter::owner(close_action())).await;
     assert_eq!(fixture.answered.load(Ordering::SeqCst), 0);
     assert_eq!(fixture.cancelled.load(Ordering::SeqCst), 1);
     {
@@ -1118,7 +1118,7 @@ async fn close_session_is_a_policy_refusal() {
         fixture.closes.lock().unwrap().as_slice(),
         [SessionCloseRequest::PolicyRefusal]
     );
-    let second = fixture.agent.invoke(second_request(), close_action()).await;
+    let second = fixture.agent.invoke(second_request(), Submitter::owner(close_action())).await;
     assert!(
         matches!(second, Err(AgentError::AttachmentUnavailable(_))),
         "closing the session left it usable: {second:?}"
@@ -1155,7 +1155,7 @@ async fn review_slow_pre_tool_hook_delays_close() {
     .await;
     let mut published = fixture.agent.subscribe();
     let runner = fixture.agent.clone();
-    let turn = tokio::spawn(async move { runner.invoke(request(), close_action()).await });
+    let turn = tokio::spawn(async move { runner.invoke(request(), Submitter::owner(close_action())).await });
     while !entered.load(Ordering::SeqCst) {
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     }
@@ -1206,12 +1206,12 @@ async fn review_pre_tool_rejection_leaves_the_session_usable() {
     .await;
     fixture
         .agent
-        .invoke(request(), close_action())
+        .invoke(request(), Submitter::owner(close_action()))
         .await
         .expect("the refused call does not fail the turn");
     fixture
         .agent
-        .invoke(second_request(), close_action())
+        .invoke(second_request(), Submitter::owner(close_action()))
         .await
         .expect("a hook refusal of one tool left the session unusable");
 }
@@ -1230,7 +1230,7 @@ async fn a_hook_past_the_deadline_is_deny_and_continue() {
     let started = std::time::Instant::now();
     fixture
         .agent
-        .invoke(request(), close_action())
+        .invoke(request(), Submitter::owner(close_action()))
         .await
         .expect("timeout is deny-and-continue");
     let elapsed = started.elapsed();
@@ -1252,7 +1252,7 @@ async fn a_hook_past_the_deadline_is_deny_and_continue() {
     }
     fixture
         .agent
-        .invoke(second_request(), close_action())
+        .invoke(second_request(), Submitter::owner(close_action()))
         .await
         .expect("the session stays usable");
 }
@@ -1336,7 +1336,7 @@ async fn a_substituted_message_clock_times_out_a_slow_hook() {
     )
     .await;
     let runner = fixture.agent.clone();
-    let turn = tokio::spawn(async move { runner.invoke(request(), close_action()).await });
+    let turn = tokio::spawn(async move { runner.invoke(request(), Submitter::owner(close_action())).await });
     let wait_started = std::time::Instant::now();
     while !entered.load(Ordering::SeqCst) {
         assert!(
@@ -1409,7 +1409,7 @@ async fn a_verdict_first_seen_after_the_deadline_is_a_timeout() {
     )
     .await;
     let runner = fixture.agent.clone();
-    let turn = tokio::spawn(async move { runner.invoke(request(), close_action()).await });
+    let turn = tokio::spawn(async move { runner.invoke(request(), Submitter::owner(close_action())).await });
     let wait_started = std::time::Instant::now();
     while !entered.load(Ordering::SeqCst) {
         assert!(
@@ -1462,14 +1462,14 @@ async fn an_end_turn_after_the_provider_settled_keeps_the_session() {
         .add_invocation_hook(Arc::new(SettlingRefuser(fixture.release.clone())));
     fixture
         .agent
-        .invoke(request(), close_action())
+        .invoke(request(), Submitter::owner(close_action()))
         .await
         .expect("a turn that already ended needs no cancel");
     assert_eq!(fixture.turn_cancels.load(Ordering::SeqCst), 0);
     assert!(fixture.closes.lock().unwrap().is_empty());
     fixture
         .agent
-        .invoke(second_request(), close_action())
+        .invoke(second_request(), Submitter::owner(close_action()))
         .await
         .expect("the session stays usable");
 }
@@ -1513,7 +1513,7 @@ async fn hooks_that_do_not_review_leave_the_review_to_the_person() {
     .await;
     fixture
         .agent
-        .invoke(request(), close_action())
+        .invoke(request(), Submitter::owner(close_action()))
         .await
         .expect("the turn runs as it would with no hooks");
     assert_eq!(
@@ -1545,7 +1545,7 @@ async fn a_hook_that_does_not_review_is_skipped_beside_one_that_does() {
     .await;
     fixture
         .agent
-        .invoke(request(), close_action())
+        .invoke(request(), Submitter::owner(close_action()))
         .await
         .expect("the reviewing hook admits the call");
     assert_eq!(
@@ -1578,7 +1578,7 @@ async fn output_before_a_review_is_saved_while_its_hook_runs() {
     )
     .await;
     let runner = fixture.agent.clone();
-    let turn = tokio::spawn(async move { runner.invoke(request(), close_action()).await });
+    let turn = tokio::spawn(async move { runner.invoke(request(), Submitter::owner(close_action())).await });
     let wait_started = std::time::Instant::now();
     while !entered.load(Ordering::SeqCst) {
         assert!(
@@ -1610,7 +1610,7 @@ async fn a_hook_refusal_leaves_evidence_of_who_refused_and_why() {
     .await;
     fixture
         .agent
-        .invoke(request(), close_action())
+        .invoke(request(), Submitter::owner(close_action()))
         .await
         .unwrap();
     // The session snapshot does not store an approval basis. The answer the
@@ -1673,7 +1673,7 @@ async fn an_end_turn_the_binding_cannot_cancel_is_recorded_as_continue() {
     .await;
     fixture
         .agent
-        .invoke(request(), close_action())
+        .invoke(request(), Submitter::owner(close_action()))
         .await
         .expect("an end-turn the binding cannot perform continues");
     assert_eq!(fixture.turn_cancels.load(Ordering::SeqCst), 0);
@@ -1684,7 +1684,7 @@ async fn an_end_turn_the_binding_cannot_cancel_is_recorded_as_continue() {
     );
     fixture
         .agent
-        .invoke(second_request(), close_action())
+        .invoke(second_request(), Submitter::owner(close_action()))
         .await
         .expect("the session stays usable");
 }
@@ -1709,7 +1709,7 @@ async fn a_continue_without_a_deny_option_stays_open_when_the_binding_cannot_can
     .await;
     fixture
         .agent
-        .invoke(request(), close_action())
+        .invoke(request(), Submitter::owner(close_action()))
         .await
         .expect("withdrawing the review leaves the session open");
     assert_eq!(fixture.answered.load(Ordering::SeqCst), 0);
@@ -1752,7 +1752,7 @@ async fn a_caller_cannot_resubmit_a_recorded_hook_withdrawal() {
     .await;
     fixture
         .agent
-        .invoke(request(), close_action())
+        .invoke(request(), Submitter::owner(close_action()))
         .await
         .unwrap();
     // The recorded reason is a value a caller can copy from the evidence.
@@ -1787,7 +1787,7 @@ async fn a_failed_hook_denial_ends_the_turn_and_leaves_no_review_pending() {
     .await;
     let failure = fixture
         .agent
-        .invoke(request(), close_action())
+        .invoke(request(), Submitter::owner(close_action()))
         .await
         .expect_err("a failed denial is reported");
     let AgentError::ExecutionObservation {
@@ -1823,7 +1823,7 @@ async fn a_failed_hook_denial_ends_the_turn_and_leaves_no_review_pending() {
     );
     fixture
         .agent
-        .invoke(second_request(), close_action())
+        .invoke(second_request(), Submitter::owner(close_action()))
         .await
         .expect("the session stays usable");
 }
@@ -1845,7 +1845,7 @@ async fn a_failed_denial_and_a_failed_turn_cancel_are_both_reported() {
     .await;
     let failure = fixture
         .agent
-        .invoke(request(), close_action())
+        .invoke(request(), Submitter::owner(close_action()))
         .await
         .expect_err("both failures are reported");
     let AgentError::ExecutionObservation { error, .. } = &failure else {
@@ -1893,7 +1893,7 @@ async fn a_failed_turn_cancel_that_reports_cleanup_is_still_reported() {
         }));
     let failure = fixture
         .agent
-        .invoke(request(), close_action())
+        .invoke(request(), Submitter::owner(close_action()))
         .await
         .expect_err("a failed cancel is not mistaken for a settled turn");
     let AgentError::ExecutionObservation { error, .. } = &failure else {
@@ -1926,7 +1926,7 @@ async fn a_reply_that_arrives_during_a_failed_delivery_needs_no_cancel() {
         }));
     let failure = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        fixture.agent.invoke(request(), close_action()),
+        fixture.agent.invoke(request(), Submitter::owner(close_action())),
     )
     .await
     .expect("the invocation settles")
@@ -1955,7 +1955,7 @@ async fn a_withdrawal_that_needs_the_execution_polled_completes() {
     fixture.handshake.required.store(true, Ordering::SeqCst);
     tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        fixture.agent.invoke(request(), close_action()),
+        fixture.agent.invoke(request(), Submitter::owner(close_action())),
     )
     .await
     .expect("the execution is polled while the hook's withdrawal runs")
@@ -1982,7 +1982,7 @@ async fn a_reply_seen_while_cancelling_keeps_the_session() {
         .store(true, Ordering::SeqCst);
     fixture
         .agent
-        .invoke(request(), close_action())
+        .invoke(request(), Submitter::owner(close_action()))
         .await
         .expect("a turn that settled on its own is not a cancel failure");
     assert_eq!(
@@ -2014,7 +2014,7 @@ async fn a_second_review_does_not_start_another_hook_thread() {
     let started = std::time::Instant::now();
     fixture
         .agent
-        .invoke(request(), close_action())
+        .invoke(request(), Submitter::owner(close_action()))
         .await
         .expect("a busy hook refuses the next review immediately");
     assert!(

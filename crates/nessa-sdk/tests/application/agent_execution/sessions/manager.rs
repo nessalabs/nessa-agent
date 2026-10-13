@@ -8,7 +8,7 @@ use crate::application::agent_execution::{
     },
 };
 use crate::domain::agent_execution::{
-    executions::{InvocationKind, InvocationStage, MessageChunk},
+    executions::{Initiation, InvocationKind, InvocationStage, MessageChunk},
     prompts::{PromptText, UserMessage},
     sessions::ExecutionSessionId,
 };
@@ -490,6 +490,7 @@ fn invocation(id: &str, complete: bool) -> InvocationRecord {
             reserved_output_tokens: 1,
         },
         actor: ActionContext::new("user", "test", "invoke").unwrap(),
+        initiation: Initiation::owner(),
         acknowledgement: SubmissionAcknowledgement::Pending,
         events: if complete {
             vec![ExecutionEvent::new(
@@ -673,7 +674,7 @@ async fn queued_admission_resets_consumed_message_cadence() {
     manager
         .begin_with_scheduling(
             request,
-            actor.clone(),
+            Submitter::owner(actor.clone()),
             InvocationSchedulingEvent {
                 kind: InvocationKind::Queued,
                 target: None,
@@ -719,7 +720,7 @@ async fn failed_admission_retains_pending_message_cadence() {
     lease.fail_save.store(true, Ordering::SeqCst);
     let new_input = invocation("queued", false);
     assert!(manager
-        .begin(new_input.request, new_input.actor)
+        .begin(new_input.request, Submitter::owner(new_input.actor))
         .await
         .is_err());
     assert_eq!(manager.pending_message_deadline().await, Some(before));
@@ -740,10 +741,19 @@ async fn definitely_rejected_admission_does_not_leak_into_the_next_record_batch(
     let actor = ActionContext::new("user", "test", "invoke").unwrap();
 
     lease.fail_save.store(true, Ordering::SeqCst);
-    assert!(manager.begin(request.clone(), actor.clone()).await.is_err());
+    assert!(manager
+        .begin(request.clone(), Submitter::owner(actor.clone()))
+        .await
+        .is_err());
     assert_eq!(manager.snapshot().await.unwrap().invocations.len(), 1);
     lease.fail_save.store(false, Ordering::SeqCst);
-    assert_eq!(manager.begin(request, actor).await.unwrap(), 1);
+    assert_eq!(
+        manager
+            .begin(request, Submitter::owner(actor))
+            .await
+            .unwrap(),
+        1
+    );
 
     let saves = lease.changes.lock().unwrap();
     assert_eq!(saves.len(), 2);
@@ -784,7 +794,9 @@ async fn admission_takes_only_an_app_an_observed_mcp_tool_call_drew() {
     let actor = || ActionContext::new("user", "test", "invoke").unwrap();
 
     assert_eq!(
-        manager.begin(request("early", show()), actor()).await,
+        manager
+            .begin(request("early", show()), Submitter::owner(actor()))
+            .await,
         Err(AgentError::UnknownApp(UnknownApp::NoMcpToolCall))
     );
     manager
@@ -808,7 +820,7 @@ async fn admission_takes_only_an_app_an_observed_mcp_tool_call_drew() {
         manager
             .begin(
                 request("forged", McpTool::new("charts", "hide").unwrap()),
-                actor()
+                Submitter::owner(actor())
             )
             .await,
         Err(AgentError::UnknownApp(UnknownApp::DifferentMcpTool))
@@ -825,13 +837,15 @@ async fn admission_takes_only_an_app_an_observed_mcp_tool_call_drew() {
         .unwrap(),
     ));
     assert_eq!(
-        manager.begin(own, actor()).await,
+        manager.begin(own, Submitter::owner(actor())).await,
         Err(AgentError::UnknownApp(UnknownApp::NoMcpToolCall))
     );
     assert_eq!(manager.snapshot().await.unwrap().invocations.len(), 1);
 
     assert_eq!(
-        manager.begin(request("drawn", show()), actor()).await,
+        manager
+            .begin(request("drawn", show()), Submitter::owner(actor()))
+            .await,
         Ok(1)
     );
     let accepted: Vec<_> = lease
@@ -875,14 +889,24 @@ async fn admission_saves_a_steering_target_with_its_offset_or_refuses_it() {
     let (request, event) = steer("stray", &ExecutionId::new("unsaved").unwrap());
     assert!(matches!(
         manager
-            .begin_with_scheduling(request, actor.clone(), event, SubmissionMode::Steering)
+            .begin_with_scheduling(
+                request,
+                Submitter::owner(actor.clone()),
+                event,
+                SubmissionMode::Steering
+            )
             .await,
         Err(AgentError::InvalidInput(_))
     ));
     assert_eq!(lease.changes.lock().unwrap().len(), saves);
     let (request, event) = steer("steered", &active);
     manager
-        .begin_with_scheduling(request, actor.clone(), event, SubmissionMode::Steering)
+        .begin_with_scheduling(
+            request,
+            Submitter::owner(actor.clone()),
+            event,
+            SubmissionMode::Steering,
+        )
         .await
         .unwrap();
     let snapshot = manager.snapshot().await.unwrap();
@@ -942,11 +966,15 @@ async fn admission_keeps_a_calls_first_mcp_identity() {
         Err(StorageError::Corrupt(message)) if message.contains("DifferentMcpTool")
     ));
     assert_eq!(
-        manager.begin(request("hidden", hide()), actor()).await,
+        manager
+            .begin(request("hidden", hide()), Submitter::owner(actor()))
+            .await,
         Err(AgentError::UnknownApp(UnknownApp::DifferentMcpTool))
     );
     assert_eq!(
-        manager.begin(request("shown", show()), actor()).await,
+        manager
+            .begin(request("shown", show()), Submitter::owner(actor()))
+            .await,
         Ok(1)
     );
 }

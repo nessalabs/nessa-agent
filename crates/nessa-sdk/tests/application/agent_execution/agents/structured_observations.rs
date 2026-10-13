@@ -170,7 +170,9 @@ async fn admission(update: ExecutionUpdate, accepted: bool) {
     )
     .await
     .unwrap();
-    let result = agent.invoke(request("payload"), actor()).await;
+    let result = agent
+        .invoke(request("payload"), Submitter::owner(actor()))
+        .await;
     let snapshot = storage.snapshot();
     if accepted {
         assert_eq!(result, Ok(ExecutionOutcome::Completed));

@@ -11,7 +11,7 @@ use crate::application::agent_execution::{
     caller_wake::{contain_caller_wake, CallerWaiter},
     executions::{
         limits::{reserve_observation_slot, ObservationUsage},
-        ExecutionEvent, ExecutionRequest, ExecutionUpdate, SubmissionMode,
+        ExecutionEvent, ExecutionRequest, ExecutionUpdate, SubmissionMode, Submitter,
     },
     permissions::ActionContext,
     providers::{
@@ -690,9 +690,9 @@ impl SessionManager {
     pub(crate) async fn begin(
         &self,
         request: ExecutionRequest,
-        actor: ActionContext,
+        submitter: Submitter,
     ) -> Result<usize, AgentError> {
-        self.begin_record(request, actor, SubmissionMode::Immediate, Vec::new())
+        self.begin_record(request, submitter, SubmissionMode::Immediate, Vec::new())
             .await
     }
     /// Saves input and its first scheduling event atomically before admission.
@@ -701,20 +701,24 @@ impl SessionManager {
     pub(crate) async fn begin_with_scheduling(
         &self,
         request: ExecutionRequest,
-        actor: ActionContext,
+        submitter: Submitter,
         event: InvocationSchedulingEvent,
         submission: SubmissionMode,
     ) -> Result<usize, AgentError> {
-        self.begin_record(request, actor, submission, vec![event])
+        self.begin_record(request, submitter, submission, vec![event])
             .await
     }
     async fn begin_record(
         &self,
         request: ExecutionRequest,
-        actor: ActionContext,
+        submitter: Submitter,
         submission: SubmissionMode,
         scheduling: Vec<InvocationSchedulingEvent>,
     ) -> Result<usize, AgentError> {
+        let Submitter {
+            context: actor,
+            initiation,
+        } = submitter;
         request.validate_message_size()?;
         InvocationSchedulingEvent::validate_history(&scheduling)
             .map_err(|error| AgentError::Storage(StorageError::Corrupt(error.to_string())))?;
@@ -777,6 +781,7 @@ impl SessionManager {
                 submission,
                 request,
                 actor,
+                initiation,
                 acknowledgement: SubmissionAcknowledgement::Pending,
                 events: Vec::new(),
                 scheduling,

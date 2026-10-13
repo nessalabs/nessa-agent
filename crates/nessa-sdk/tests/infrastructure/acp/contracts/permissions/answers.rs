@@ -953,7 +953,7 @@ async fn agent_acp_permission_query_does_not_wait_behind_consumed_answer_audit()
     let agent = attached_agent(Arc::new(provider), manager).await.unwrap();
     let mut events = agent.subscribe();
     let receipt = agent
-        .enqueue(prompt("write"), close_action())
+        .enqueue(prompt("write"), Submitter::owner(close_action()))
         .await
         .unwrap();
     let permission = loop {

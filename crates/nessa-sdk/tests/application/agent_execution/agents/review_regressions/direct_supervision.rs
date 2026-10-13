@@ -7,7 +7,7 @@ use nessa_sdk::application::agent_execution::sessions::{
 #[tokio::test]
 async fn never_polled_direct_invocation_has_no_effects() {
     let (agent, backend, storage) = probe(false).await;
-    drop(agent.invoke(input("never-polled"), actor()));
+    drop(agent.invoke(input("never-polled"), Submitter::owner(actor())));
     assert!(storage.snapshot().invocations.is_empty());
     assert_eq!(backend.executions.load(Ordering::SeqCst), 0);
     agent.close(actor()).await.unwrap();
@@ -20,16 +20,25 @@ async fn caller_loss_during_preparation_keeps_slot_and_boundary_steering() {
     *backend.prepare_gate.lock().unwrap() = Some(gate);
     let caller = tokio::spawn({
         let agent = agent.clone();
-        async move { agent.invoke(input("preparing"), actor()).await }
+        async move {
+            agent
+                .invoke(input("preparing"), Submitter::owner(actor()))
+                .await
+        }
     });
     backend.preparing.notified().await;
     caller.abort();
     assert!(caller.await.unwrap_err().is_cancelled());
     assert_eq!(
-        agent.invoke(input("overlap"), actor()).await,
+        agent
+            .invoke(input("overlap"), Submitter::owner(actor()))
+            .await,
         Err(AgentError::Busy)
     );
-    let SteeringDelivery::Queued(next) = agent.steer(input("correction"), actor()).await.unwrap()
+    let SteeringDelivery::Queued(next) = agent
+        .steer(input("correction"), Submitter::owner(actor()))
+        .await
+        .unwrap()
     else {
         panic!("preparation must retain boundary steering")
     };
@@ -53,20 +62,29 @@ async fn caller_loss_after_dispatch_keeps_native_target_and_settlement() {
     *backend.execution_gate.lock().unwrap() = Some(gate);
     let caller = tokio::spawn({
         let agent = agent.clone();
-        async move { agent.invoke(input("active"), actor()).await }
+        async move {
+            agent
+                .invoke(input("active"), Submitter::owner(actor()))
+                .await
+        }
     });
     backend.executing.notified().await;
     caller.abort();
     assert!(caller.await.unwrap_err().is_cancelled());
     assert_eq!(
-        agent.invoke(input("overlap"), actor()).await,
+        agent
+            .invoke(input("overlap"), Submitter::owner(actor()))
+            .await,
         Err(AgentError::Busy)
     );
     assert!(
-        matches!(agent.steer(input("correction"), actor()).await.unwrap(),
+        matches!(agent.steer(input("correction"), Submitter::owner(actor())).await.unwrap(),
         SteeringDelivery::Injected { target, .. } if target.as_str() == "active")
     );
-    let next = agent.enqueue(input("next"), actor()).await.unwrap();
+    let next = agent
+        .enqueue(input("next"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     assert_eq!(backend.executions.load(Ordering::SeqCst), 1);
     release.send(()).unwrap();
     assert_eq!(next.wait().await, Ok(ExecutionOutcome::Completed));
@@ -89,7 +107,7 @@ async fn close_settles_direct_invocation_without_polling_its_waiter() {
         .await
         .unwrap();
     let mut events = agent.subscribe();
-    let mut waiting = agent.invoke(input("suspended"), actor());
+    let mut waiting = agent.invoke(input("suspended"), Submitter::owner(actor()));
     poll_fn(|context| {
         assert!(waiting.as_mut().poll(context).is_pending());
         Poll::Ready(())
@@ -116,7 +134,11 @@ async fn panicked_provider_retains_slot_until_cleanup_and_saves_failure() {
     *backend.close_gate.lock().unwrap() = Some(cleanup_gate);
     let caller = tokio::spawn({
         let agent = agent.clone();
-        async move { agent.invoke(input("panicking"), actor()).await }
+        async move {
+            agent
+                .invoke(input("panicking"), Submitter::owner(actor()))
+                .await
+        }
     });
     backend.executing.notified().await;
     // Probe deliberately unwraps its execution gate; losing this sender panics
@@ -124,7 +146,9 @@ async fn panicked_provider_retains_slot_until_cleanup_and_saves_failure() {
     drop(panic);
     backend.closing.notified().await;
     assert_eq!(
-        agent.invoke(input("overlap"), actor()).await,
+        agent
+            .invoke(input("overlap"), Submitter::owner(actor()))
+            .await,
         Err(AgentError::Busy)
     );
     assert!(!caller.is_finished());
@@ -147,7 +171,11 @@ async fn panicked_provider_with_uncertain_cleanup_keeps_admission_closed() {
     *backend.execution_gate.lock().unwrap() = Some(gate);
     let caller = tokio::spawn({
         let agent = agent.clone();
-        async move { agent.invoke(input("panicking"), actor()).await }
+        async move {
+            agent
+                .invoke(input("panicking"), Submitter::owner(actor()))
+                .await
+        }
     });
     backend.executing.notified().await;
     drop(panic);
@@ -158,7 +186,9 @@ async fn panicked_provider_with_uncertain_cleanup_keeps_admission_closed() {
     );
     assert_eq!(storage.snapshot().invocations[0].result, Some(result));
     assert_eq!(
-        agent.invoke(input("blocked"), actor()).await,
+        agent
+            .invoke(input("blocked"), Submitter::owner(actor()))
+            .await,
         Err(AgentError::Closed)
     );
     assert_eq!(backend.executions.load(Ordering::SeqCst), 1);
@@ -221,7 +251,9 @@ async fn settlement_storage_panic_preserves_already_observed_provider_success() 
     .await
     .unwrap();
     let agent = attached_agent(TestProvider::new(), manager).await.unwrap();
-    let result = agent.invoke(input("settlement-panic"), actor()).await;
+    let result = agent
+        .invoke(input("settlement-panic"), Submitter::owner(actor()))
+        .await;
     assert!(
         matches!(&result, Err(AgentError::ExecutionObservation { error, execution_result: Some(outcome) })
         if matches!(error.as_ref(), AgentError::Protocol(_)) && **outcome == Ok(ExecutionOutcome::Completed))
@@ -235,7 +267,10 @@ async fn rejected_direct_input_does_not_create_invocation_evidence() {
     let (agent, backend, storage) = probe(false).await;
     let mut request = input("invalid");
     request.reserved_output_tokens = u32::MAX;
-    assert!(agent.invoke(request, actor()).await.is_err());
+    assert!(agent
+        .invoke(request, Submitter::owner(actor()))
+        .await
+        .is_err());
     assert!(storage.snapshot().invocations.is_empty());
     assert_eq!(backend.executions.load(Ordering::SeqCst), 0);
     agent.close(actor()).await.unwrap();

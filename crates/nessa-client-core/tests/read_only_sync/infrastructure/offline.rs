@@ -1,18 +1,257 @@
 //! Offline selection consumes saved identities and the existing entry admission.
 use super::{
     catalogue_tests::{catalogue_scope, page, start, value},
-    fixtures::{cache, cache_path, id, scope as transcript_scope},
+    fixtures::{
+        cache, cache_path, id, plan, scope as transcript_scope, source_records, FixedClock,
+    },
 };
 use crate::read_only_sync::application::{
     offline::{SavedReads, SavedTranscript},
     CacheError,
 };
+use crate::retained::{RetainedCache, RetainedTranscript};
 use nessa_local_database::rusqlite::params;
+use nessa_protocol::clock::Clock;
 use nessa_protocol::conversation::domain::ConversationId;
+use nessa_sync::replication::application::ReplicaStore;
 use nessa_sync::replication::catalogue::{
     CatalogueStore, MAX_CATALOGUE_ENTRIES, MAX_CATALOGUE_PAYLOAD_BYTES,
 };
+use std::{path::Path, sync::Arc};
 use uuid::Uuid;
+
+struct Monotonic;
+impl Clock for Monotonic {
+    fn elapsed_ms(&self) -> u64 {
+        0
+    }
+}
+fn public_reader(path: &Path) -> RetainedCache {
+    RetainedCache::open(path, Arc::new(FixedClock), Arc::new(Monotonic)).unwrap()
+}
+
+#[test]
+fn public_catalogue_pages_keep_actual_snapshot_progress_through_between_page_deletion() {
+    let root = tempfile::tempdir().unwrap();
+    let path = cache_path(root.path(), "public-pages.sqlite3");
+    let mut writer = cache(&path);
+    let first = value(1, false);
+    let mut second = value(2, false);
+    second.manifest.key.creation = 2;
+    second.manifest.key.id = id("00000000-0000-0000-0000-000000000002");
+    second.payload = serde_json::to_vec(&serde_json::json!({"id":second.manifest.key.id.as_str(),
+        "createdAtMs":20,"agent":null,"model":"model","approvalMode":"ask","summary":null}))
+    .unwrap();
+    let pass = start(&mut writer, 2);
+    CatalogueStore::apply_page(&mut writer, page(pass, vec![first, second.clone()])).unwrap();
+    drop(writer);
+    let mut reader = public_reader(&path);
+    let old = reader
+        .catalogue_page("receiver", "origin", "catalogue", None, 1)
+        .unwrap()
+        .unwrap();
+    assert!(old.next().is_some());
+    assert!(!old.entries()[0].manifest().deleted);
+    let mut writer = cache(&path);
+    let pass = start(&mut writer, 3);
+    CatalogueStore::apply_page(&mut writer, page(pass, vec![value(3, true)])).unwrap();
+    drop(writer);
+    let later = reader
+        .catalogue_page("receiver", "origin", "catalogue", old.next(), 1)
+        .unwrap()
+        .unwrap();
+    assert_ne!(old.progress().generation, later.progress().generation);
+    assert_ne!(old.progress().completed, later.progress().completed);
+    assert!(
+        !old.entries()[0].manifest().deleted,
+        "owned old snapshot is unchanged"
+    );
+    let current = reader
+        .catalogue_page("receiver", "origin", "catalogue", None, 1)
+        .unwrap()
+        .unwrap();
+    assert!(current.entries()[0].manifest().deleted);
+    assert!(current.entries()[0].metadata().is_none());
+    assert!(reader
+        .catalogue_page("other-receiver", "origin", "catalogue", None, 1)
+        .unwrap()
+        .is_none());
+    assert!(reader
+        .catalogue_page("receiver", "origin", "catalogue", None, 0)
+        .is_err());
+    assert_eq!(
+        reader.saved_catalogue_scope("receiver").unwrap(),
+        Some(catalogue_scope())
+    );
+    drop(reader);
+    let mut reopened = public_reader(&path);
+    assert!(
+        reopened
+            .catalogue_page("receiver", "origin", "catalogue", None, 1)
+            .unwrap()
+            .unwrap()
+            .entries()[0]
+            .manifest()
+            .deleted
+    );
+}
+
+#[tokio::test]
+async fn public_transcript_retains_real_progress_and_distinguishes_deletion_and_not_loaded() {
+    let root = tempfile::tempdir().unwrap();
+    let path = cache_path(root.path(), "public-transcript.sqlite3");
+    let (scope, records) = source_records(root.path()).await;
+    let conversation = ConversationId::new(scope.stream().as_str()).unwrap();
+    let mut writer = cache(&path);
+    writer.apply(plan(&scope, 0, records.clone())).unwrap();
+    let expected = writer.cached_progress(&scope).unwrap().unwrap();
+    drop(writer);
+    let mut reader = public_reader(&path);
+    let retained = reader
+        .transcript_view("receiver", "origin", &conversation, Uuid::nil())
+        .unwrap();
+    let RetainedTranscript::Retained(snapshot) = &retained else {
+        panic!("missing retained transcript")
+    };
+    let (progress, view) = (snapshot.progress(), snapshot.view());
+    assert_eq!(progress.scope(), &expected.scope);
+    assert_eq!(progress.downloaded(), expected.downloaded);
+    assert_eq!(progress.applied(), expected.applied);
+    assert_eq!(progress.facts(), expected.facts);
+    assert_eq!(progress.generation(), expected.generation);
+    let original_view = serde_json::to_value(view).unwrap();
+    assert!(matches!(
+        reader
+            .transcript_view("other", "origin", &conversation, Uuid::nil())
+            .unwrap(),
+        RetainedTranscript::NotLoaded
+    ));
+    let mut writer = cache(&path);
+    let pass = start(&mut writer, 1);
+    CatalogueStore::apply_page(&mut writer, page(pass, vec![value(1, true)])).unwrap();
+    assert!(
+        writer.apply(plan(&scope, 0, records)).is_err(),
+        "retained tombstone fences a late physical apply"
+    );
+    drop(writer);
+    assert!(matches!(
+        reader
+            .transcript_view("receiver", "origin", &conversation, Uuid::new_v4())
+            .unwrap(),
+        RetainedTranscript::Deleted
+    ));
+    assert_eq!(
+        serde_json::to_value(view).unwrap(),
+        original_view,
+        "owned snapshot cannot claim to update after deletion"
+    );
+    drop(reader);
+    assert!(matches!(
+        public_reader(&path)
+            .transcript_view("receiver", "origin", &conversation, Uuid::nil())
+            .unwrap(),
+        RetainedTranscript::Deleted
+    ));
+}
+
+#[test]
+fn public_empty_retained_transcript_is_distinct_from_not_loaded() {
+    let root = tempfile::tempdir().unwrap();
+    let path = cache_path(root.path(), "public-empty.sqlite3");
+    let scope = transcript_scope();
+    let conversation = ConversationId::new(scope.stream().as_str()).unwrap();
+    let mut writer = cache(&path);
+    writer.observe_head(&scope, 0).unwrap();
+    drop(writer);
+    let mut reader = public_reader(&path);
+    let RetainedTranscript::Retained(snapshot) = reader
+        .transcript_view("receiver", "origin", &conversation, Uuid::nil())
+        .unwrap()
+    else {
+        panic!("empty checkpoint must remain retained")
+    };
+    let (progress, view) = (snapshot.progress(), snapshot.view());
+    assert_eq!(progress.downloaded(), 0);
+    assert_eq!(progress.applied(), 0);
+    assert_eq!(progress.facts(), 0);
+    let document = serde_json::to_value(view).unwrap();
+    assert_eq!(document["messages"], serde_json::json!([]));
+    assert!(matches!(
+        reader
+            .transcript_view("receiver", "other-origin", &conversation, Uuid::nil())
+            .unwrap(),
+        RetainedTranscript::NotLoaded
+    ));
+}
+
+#[tokio::test]
+async fn public_partial_physical_prefix_does_not_claim_semantic_apply() {
+    let root = tempfile::tempdir().unwrap();
+    let path = cache_path(root.path(), "public-partial.sqlite3");
+    let (scope, records) = source_records(root.path()).await;
+    assert!(records.len() > 1);
+    let mut writer = cache(&path);
+    writer
+        .apply(plan(&scope, 0, records[..1].to_vec()))
+        .unwrap();
+    drop(writer);
+    let mut reader = public_reader(&path);
+    let conversation = ConversationId::new(scope.stream().as_str()).unwrap();
+    let RetainedTranscript::Retained(snapshot) = reader
+        .transcript_view("receiver", "origin", &conversation, Uuid::nil())
+        .unwrap()
+    else {
+        panic!("pending physical prefix must stay retained")
+    };
+    let progress = snapshot.progress();
+    assert_eq!(progress.downloaded(), 1);
+    assert_eq!(progress.applied(), 0);
+    assert_eq!(progress.facts(), 0);
+    drop(reader);
+    let mut writer = cache(&path);
+    writer
+        .apply(plan(&scope, 1, records[1..].to_vec()))
+        .unwrap();
+    drop(writer);
+    let RetainedTranscript::Retained(snapshot) = public_reader(&path)
+        .transcript_view("receiver", "origin", &conversation, Uuid::nil())
+        .unwrap()
+    else {
+        panic!("resumed physical suffix lost checkpoint")
+    };
+    let progress = snapshot.progress();
+    assert_eq!(progress.downloaded(), records.last().unwrap().position);
+    assert_eq!(progress.applied(), progress.downloaded());
+    assert!(progress.facts() > 0);
+}
+
+#[test]
+fn public_catalogue_refuses_corrupt_metadata_without_advancing_saved_progress() {
+    let root = tempfile::tempdir().unwrap();
+    let path = cache_path(root.path(), "public-corrupt.sqlite3");
+    let mut writer = cache(&path);
+    let pass = start(&mut writer, 1);
+    CatalogueStore::apply_page(&mut writer, page(pass, vec![value(1, false)])).unwrap();
+    let expected = CatalogueStore::progress(&mut writer, &catalogue_scope()).unwrap();
+    writer
+        .connection
+        .execute(
+            "UPDATE catalogue_entries SET payload=?1",
+            [b"invalid json".as_slice()],
+        )
+        .unwrap();
+    drop(writer);
+    let mut reader = public_reader(&path);
+    assert!(matches!(
+        reader.catalogue_page("receiver", "origin", "catalogue", None, 1),
+        Err(crate::retained::ReadFailure::CacheDamaged)
+    ));
+    drop(reader);
+    assert_eq!(
+        CatalogueStore::progress(&mut cache(&path), &catalogue_scope()).unwrap(),
+        expected
+    );
+}
 
 #[test]
 fn offline_catalogue_reads_saved_scope_and_bounded_pages() {
@@ -249,8 +488,6 @@ fn an_unmarked_checkpoint_is_not_loaded_on_the_first_offline_show() {
 
 #[tokio::test]
 async fn offline_transcript_selection_preserves_saved_scope_and_deletion() {
-    use super::fixtures::{plan, source_records};
-    use nessa_sync::replication::application::ReplicaStore;
     let root = tempfile::tempdir().unwrap();
     let path = cache_path(root.path(), "cache.sqlite3");
     let (scope, records) = source_records(root.path()).await;

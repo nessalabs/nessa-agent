@@ -1,4 +1,4 @@
-//! One bounded read of everything a paired reader was granted, into its
+//! One bounded read of an owner's or granted peer's conversations, into its
 //! retained cache: the catalogue, then each granted conversation's records.
 //! A gateway reading what a peer granted it calls this; the device example
 //! composes the same core through its own command line.
@@ -71,6 +71,30 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
+mod saved;
+pub use saved::{
+    RetainedCatalogueEntry, RetainedCataloguePage, RetainedProgress, RetainedTranscript,
+    RetainedTranscriptSnapshot,
+};
+
+/// The catalogue selector, not a grant of read authority. The authenticated
+/// session and the existing source authorizer enforce the selected scope.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReaderRole {
+    /// The paired device reads exactly its session principal's catalogue.
+    DeviceOwner,
+    /// A peer gateway reads the owner catalogue assigned to its receiver.
+    GrantedPeer,
+}
+impl ReaderRole {
+    fn catalogue_reader(self) -> CatalogueReader {
+        match self {
+            Self::DeviceOwner => CatalogueReader::Owner,
+            Self::GrantedPeer => CatalogueReader::Granted,
+        }
+    }
+}
+
 /// Largest private cache one reader keeps.
 const CACHE_BYTES: u64 = 256 * 1024 * 1024;
 /// Largest saved transcript checkpoint.
@@ -92,6 +116,8 @@ const UNEXPECTED_EVENTS: usize = 16;
 /// and the credential, receiver and access epoch its latest Active status
 /// named.
 pub struct ReaderAccess<'a> {
+    /// Which existing catalogue selector this authenticated reader uses.
+    pub role: ReaderRole,
     /// The gateway's native address.
     pub address: SocketAddr,
     /// The reader's own key.
@@ -156,7 +182,7 @@ pub enum ReadFailure {
 /// and the sockets it has open, shut so a blocked read returns at once where
 /// the operating system wakes it for that. Not every one does: on Windows a
 /// receive blocked in another thread is not woken by shutting its socket. So
-/// no physical wait is longer than [`STOP_SLICE`]; each slice asks the flag,
+/// no physical wait is longer than the module's `STOP_SLICE`; each slice asks the flag,
 /// and a stop reaches a blocked read within one slice on every system.
 #[derive(Default)]
 pub struct ReadStop {
@@ -367,8 +393,8 @@ impl RetainedCache {
     /// Read what the gateway grants `access` into this cache, within
     /// `budget` on the injected clock. An unchanged catalogue head ends the
     /// read after one call only when the cache notes a finished walk at that
-    /// head ([`settled`]); otherwise every cached conversation is walked, and
-    /// only a walk that finished notes it ([`walked`]). At most
+    /// head (the module's `settled` rule); otherwise every cached conversation is walked, and
+    /// only a walk that finished notes it (the module's `walked` rule). At most
     /// `max_withdrawn` conversations are withdrawn in one read; one that
     /// reaches that many ends incomplete and the next read carries on, so a
     /// caller that keeps evidence of each withdrawal can bound it. Each
@@ -446,9 +472,8 @@ impl RetainedCache {
         let connection = GatewayConnection::new(session);
         let epoch = access.access_epoch;
 
-        // The reader is a peer gateway: it reads what the peer's owner
-        // granted it, not a catalogue of its own.
-        let mut catalogue = connection.catalogue(receiver.clone(), epoch, CatalogueReader::Granted);
+        let mut catalogue =
+            connection.catalogue(receiver.clone(), epoch, access.role.catalogue_reader());
         let discovery = connection.run(|| catalogue.discover()).map_err(failure)?;
         let (scope, head) = match (discovery.result, discovery.outcome.failure) {
             (_, Some(error)) => return Err(failure(error)),
@@ -882,7 +907,9 @@ fn unread(error: GatewayError) -> Result<Conversation, ReadFailure> {
 /// one is emptied, a full one is reported as such, and anything else may pass.
 fn cache_failure(error: &CacheError) -> ReadFailure {
     match error {
-        CacheError::Corrupt | CacheError::OutdatedSchema => ReadFailure::CacheDamaged,
+        CacheError::Corrupt | CacheError::OutdatedSchema | CacheError::CatalogueMetadata => {
+            ReadFailure::CacheDamaged
+        }
         CacheError::Quota => ReadFailure::Quota,
         CacheError::Scope { .. } => ReadFailure::ResetRequired,
         _ => ReadFailure::Cache,

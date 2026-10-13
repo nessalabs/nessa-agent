@@ -143,7 +143,10 @@ async fn ordered_hooks_correlate_sequential_calls_and_share_registration_across_
     .await;
     for id in ["first", "second"] {
         assert_eq!(
-            session.clone().invoke(request(id), close_action()).await,
+            session
+                .clone()
+                .invoke(request(id), Submitter::owner(close_action()))
+                .await,
             Ok(ExecutionOutcome::Completed)
         );
     }
@@ -161,7 +164,7 @@ async fn ordered_hooks_correlate_sequential_calls_and_share_registration_across_
     assert_eq!(*calls.lock().unwrap(), expected);
     client(recording(), vec![])
         .await
-        .invoke(request("isolated"), close_action())
+        .invoke(request("isolated"), Submitter::owner(close_action()))
         .await
         .unwrap();
     assert_eq!(calls.lock().unwrap().len(), 8);
@@ -183,7 +186,9 @@ async fn before_failure_stops_dispatch_and_later_hooks_without_changing_backend_
     )
     .await;
     assert_eq!(
-        session.invoke(request("rejected"), close_action()).await,
+        session
+            .invoke(request("rejected"), Submitter::owner(close_action()))
+            .await,
         Err(AgentError::BeforeInvocationHook(HookFailure {
             index: 1,
             error: HookError::Failed("gate unavailable".into())
@@ -203,7 +208,9 @@ async fn invalid_capabilities_never_reach_hooks_or_backend() {
     let mut input = request("invalid");
     input.reserved_output_tokens = 0;
     assert!(matches!(
-        session.invoke(input, close_action()).await,
+        session
+            .invoke(input, Submitter::owner(close_action()))
+            .await,
         Err(AgentError::InvalidInput(_))
     ));
     assert!(calls.lock().unwrap().is_empty());
@@ -229,7 +236,9 @@ async fn after_failures_and_panics_preserve_success_and_notify_remaining_hooks()
     let Err(AgentError::AfterInvocationHooks {
         failures,
         execution_result,
-    }) = session.invoke(request("done"), close_action()).await
+    }) = session
+        .invoke(request("done"), Submitter::owner(close_action()))
+        .await
     else {
         panic!("expected hook failures")
     };
@@ -326,7 +335,9 @@ async fn after_hooks_receive_original_admission_lifecycle_and_audit_failures() {
         .await;
         let Err(AgentError::AfterInvocationHooks {
             execution_result, ..
-        }) = session.invoke(request("failed"), close_action()).await
+        }) = session
+            .invoke(request("failed"), Submitter::owner(close_action()))
+            .await
         else {
             panic!("expected retained failure")
         };
@@ -341,7 +352,9 @@ async fn successful_hooks_preserve_backend_failure() {
     let calls = Calls::default();
     let session = client(Arc::new(OfflineSession), vec![Arc::new(hook(0, &calls))]).await;
     assert_eq!(
-        session.invoke(request("closed"), close_action()).await,
+        session
+            .invoke(request("closed"), Submitter::owner(close_action()))
+            .await,
         Err(AgentError::Closed)
     );
     assert_eq!(calls.lock().unwrap()[1].3, Some(Err(AgentError::Closed)));
@@ -432,7 +445,7 @@ async fn dropping_the_wait_preserves_hooks_until_confirmed_close_settlement() {
         closed: watch::channel(false).0,
     });
     let session = client(backend.clone(), vec![Arc::new(hook(0, &calls))]).await;
-    let mut execution = session.invoke(request("pending"), close_action());
+    let mut execution = session.invoke(request("pending"), Submitter::owner(close_action()));
     poll_fn(|cx| {
         assert!(execution.as_mut().poll(cx).is_pending());
         Poll::Ready(())
@@ -486,7 +499,9 @@ async fn before_panic_is_a_typed_failure_without_dispatch() {
     let backend = recording();
     let session = client(backend.clone(), vec![Arc::new(PanickingBefore)]).await;
     assert_eq!(
-        session.invoke(request("panic"), close_action()).await,
+        session
+            .invoke(request("panic"), Submitter::owner(close_action()))
+            .await,
         Err(AgentError::BeforeInvocationHook(HookFailure {
             index: 0,
             error: HookError::Panicked
@@ -517,7 +532,7 @@ async fn typed_callback_registration_observes_the_invocation_and_saved_result() 
         Ok(())
     });
     agent
-        .invoke(request("callbacks"), close_action())
+        .invoke(request("callbacks"), Submitter::owner(close_action()))
         .await
         .unwrap();
     assert_eq!(
@@ -594,7 +609,9 @@ async fn observation_failure_retains_confirmed_execution_in_storage_and_after_ho
     .unwrap();
     let calls = Calls::default();
     agent.add_invocation_hook(Arc::new(hook(0, &calls)));
-    let result = agent.invoke(request("confirmed"), close_action()).await;
+    let result = agent
+        .invoke(request("confirmed"), Submitter::owner(close_action()))
+        .await;
     assert!(
         matches!(&result, Err(AgentError::ExecutionObservation { execution_result: Some(confirmed), .. }) if **confirmed == Ok(ExecutionOutcome::Completed))
     );
