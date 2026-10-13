@@ -73,7 +73,7 @@ sequenceDiagram
     Port->>Cedar: entities + request
     Cedar-->>Port: Allow / Deny, policy ids
     Port-->>Caller: typed Decision
-    Caller->>Caller: acts on it; never re-decides
+    Caller->>Caller: acts on it and never re-decides
 ```
 
 ### What is policy, and what is not
@@ -147,9 +147,12 @@ replaces in the same change.
    slice J3 thread is editing, so it starts only when that is clear.
 4. **C: agent tools,** after slice J4 lands its tool-policy adapter.
    `CommandPolicy`, MCP App call admission and model-hidden tools become
-   policies in that bundle, keyed on who started the turn. The fixed harness
-   deny lists are then generated from the same policies rather than written
-   twice.
+   policies in that bundle, keyed on who started the turn. The turn's
+   initiation and its share grant are facts, so a grant can be limited to its
+   own command hosts: a Drive-started turn no longer inherits the gateway-wide
+   host list, and a grant with no host list gets no hosts unless its policy
+   says otherwise. The fixed harness deny lists are then generated from the
+   same policies rather than written twice.
 5. **D: environment host.** Agent and command grants become a Cedar bundle on
    the host; the terms (timeout clamp, lease deadlines) stay in Rust.
 6. **E: SDK artifacts.** The SDK gains a port for "may this actor record an
