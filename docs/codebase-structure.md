@@ -1925,6 +1925,16 @@ core. `src/session.rs` registers the original product child before start and joi
 it before private-state disposal, including teardown-only poisoned-lock recovery.
 The pure `SessionProduct` holder keeps the injected native clock independently of
 the parent; the foreign relative wait captures one absolute deadline for core.
+`src/native_owner_phone.rs` maps bounded unique discovery through the canonical
+protocol owner and exposes immutable original preparation proof. Initial/restore
+calls share the same combined private store and delegate durable key/signature
+production to core; no network enrollment, issued credential or Ready is invented.
+`tests/session/owner_original.rs` holds actual FS publication/admission/close with
+injected entropy/socket counters; `tests/session/owner_proof.rs` crosses actual cold
+private state and the public foreign proof/error/close-observation boundary.
+`SessionCloseObservation` derives release under the existing driver lock after
+actual join/destruction, independently of retained Product/Damaged errors; an
+unknown poisoned empty slot stays unconfirmed. No new mutable cleanup flag exists.
 `src/serialization.rs` owns the shared capped saved/product JSON-copy writer;
 `tests/product/serialization.rs` covers exact limits and canonical growth without
 changing captured native facts.

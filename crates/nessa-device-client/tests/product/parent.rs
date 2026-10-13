@@ -2,7 +2,7 @@
 use super::*;
 use nessa_local_storage::create_directory_beneath;
 
-mod fixtures;
+pub(crate) mod fixtures;
 use crate::{
     test_support::PrivateFixture, NativeDeviceSession, NativeProductCallError,
     NativeProductCloseReason, NativeProductCompletionKind, NativeProductFailure,
@@ -457,14 +457,14 @@ fn parent_close_and_repeated_close_keep_original_child_cause_after_physical_rele
         let parent = parent.clone();
         let sent = sent.clone();
         thread::spawn(move || {
-            let value = parent.close();
+            let value = parent.close_observed();
             sent.send(value).unwrap();
         })
     };
     let second = {
         let parent = parent.clone();
         thread::spawn(move || {
-            sent.send(parent.close()).unwrap();
+            sent.send(parent.close_observed()).unwrap();
         })
     };
     assert!(received.recv_timeout(Duration::from_millis(40)).is_err());
@@ -474,9 +474,11 @@ fn parent_close_and_repeated_close_keep_original_child_cause_after_physical_rele
     ));
     gate.release();
     for _ in 0..2 {
+        let observation = recv(&received);
+        assert!(observation.released());
         assert_eq!(
-            recv(&received),
-            Err(SessionFailure::Product(ProductFailure::Correlation))
+            observation.outcome(),
+            &Err(SessionFailure::Product(ProductFailure::Correlation))
         );
     }
     first.join().unwrap();
@@ -1068,7 +1070,7 @@ fn poisoned_parent_drain_preserves_distinct_faults_and_joins_before_private_rele
                 drop(parent);
                 sent.send(None).unwrap();
             } else {
-                let result = parent.close();
+                let result = parent.close_observed();
                 sent.send(Some((parent, result))).unwrap();
             }
         });
@@ -1082,7 +1084,8 @@ fn poisoned_parent_drain_preserves_distinct_faults_and_joins_before_private_rele
         ));
         gate.release();
         if let Some((parent, result)) = recv(&received) {
-            assert_eq!(result, Err(SessionFailure::Damaged));
+            assert!(result.released());
+            assert_eq!(result.outcome(), &Err(SessionFailure::Damaged));
             assert_eq!(parent.close(), Err(SessionFailure::Damaged));
             assert!(matches!(
                 parent.open_product("phone-instance".into()),
@@ -1664,4 +1667,64 @@ fn replacement_cannot_publish_or_connect_before_old_physical_join() {
         Err(SessionFailure::Product(ProductFailure::Transport))
     );
     peer.join();
+}
+
+impl OwnerPhoneOriginalStore for HeldStore {
+    fn reserve_original(
+        &self,
+        reservation: OwnerPhoneReservation,
+    ) -> Result<
+        Box<dyn nessa_auth::application::pairing::OwnerPhoneOriginalCreation + '_>,
+        PrivateStateError,
+    > {
+        self.owned.reserve_original(reservation)
+    }
+    fn load_original(
+        &self,
+    ) -> Result<
+        Option<nessa_auth::application::pairing::OwnerPhonePrivateOriginal>,
+        PrivateStateError,
+    > {
+        self.owned.load_original()
+    }
+}
+
+impl OwnerPhoneOriginalStore for PoisonableStore {
+    fn reserve_original(
+        &self,
+        reservation: OwnerPhoneReservation,
+    ) -> Result<
+        Box<dyn nessa_auth::application::pairing::OwnerPhoneOriginalCreation + '_>,
+        PrivateStateError,
+    > {
+        self.owned.reserve_original(reservation)
+    }
+    fn load_original(
+        &self,
+    ) -> Result<
+        Option<nessa_auth::application::pairing::OwnerPhonePrivateOriginal>,
+        PrivateStateError,
+    > {
+        self.owned.load_original()
+    }
+}
+
+impl OwnerPhoneOriginalStore for FailedStore {
+    fn reserve_original(
+        &self,
+        reservation: OwnerPhoneReservation,
+    ) -> Result<
+        Box<dyn nessa_auth::application::pairing::OwnerPhoneOriginalCreation + '_>,
+        PrivateStateError,
+    > {
+        self.owned.reserve_original(reservation)
+    }
+    fn load_original(
+        &self,
+    ) -> Result<
+        Option<nessa_auth::application::pairing::OwnerPhonePrivateOriginal>,
+        PrivateStateError,
+    > {
+        self.owned.load_original()
+    }
 }
