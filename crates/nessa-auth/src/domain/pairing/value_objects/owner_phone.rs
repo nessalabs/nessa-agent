@@ -93,9 +93,7 @@ impl OwnerPhoneRequest {
         endpoint: SocketAddr,
         device_key: DeviceKey,
     ) -> Result<Self, PairingError> {
-        if endpoint.port() == 0 || endpoint.ip().is_unspecified() {
-            return Err(PairingError::Invalid);
-        }
+        Self::validate_endpoint(endpoint)?;
         let capabilities = ConsentClass::OwnerPhoneReadWrite.grants(source.resource.clone())?;
         Ok(Self {
             id,
@@ -105,6 +103,14 @@ impl OwnerPhoneRequest {
             device_key,
             capabilities,
         })
+    }
+    /// Validate the authenticated advertised numeric destination before a
+    /// permanent device key exists. `new` uses this same endpoint owner.
+    pub fn validate_endpoint(endpoint: SocketAddr) -> Result<(), PairingError> {
+        if endpoint.port() == 0 || endpoint.ip().is_unspecified() {
+            return Err(PairingError::Invalid);
+        }
+        Ok(())
     }
     /// Immutable original request identity.
     pub fn id(&self) -> OwnerPhoneRequestId {

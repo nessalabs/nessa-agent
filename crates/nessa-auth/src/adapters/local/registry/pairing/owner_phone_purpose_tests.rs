@@ -1,6 +1,6 @@
 //! Current Auth purpose with real signed publication and real pinned TLS proof.
 use super::*;
-use crate::application::pairing::OwnerPhonePurposeSource;
+use crate::application::{pairing::OwnerPhonePurposeSource, ports::IssuePath};
 fn active_signed(f: &SignedFixture) -> PairingRecord {
     let approved = ready(f.store.authorize_owner_phone(
         &f.initial,
@@ -184,7 +184,9 @@ fn delegated_membership_loss_is_an_error_never_missing_purpose() {
     administrator.membership.id = "other-admin-membership".into();
     administrator.membership.principal_id = "other-admin".into();
     administrator.membership.role = MembershipRoleDto::Admin;
-    f.store.issue_internal(administrator, true).unwrap();
+    f.store
+        .issue_internal(administrator, IssuePath::SurfaceProvision)
+        .unwrap();
     // Trusted registry fixture changes current membership in one actual published revision.
     let mut slot = f.store.slot().unwrap();
     let mut next = slot.as_ref().unwrap().clone();
