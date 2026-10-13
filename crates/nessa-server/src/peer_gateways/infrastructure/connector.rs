@@ -14,7 +14,7 @@
 //! ```
 use crate::peer_gateways::application::{PeerConnectFuture, PeerConnector};
 use crate::relay::wire::{read_frame, write_frame};
-use nessa_protocol::relay::{GatewayKey, RelayAddress, RelayFrame, DIRECT_HEAD_START};
+use nessa_protocol::relay::{GatewayKey, RelayAddress, RelayFrame};
 use std::future::Future;
 use std::io;
 use std::net::{SocketAddr, TcpStream};
@@ -42,13 +42,16 @@ fn blocking(stream: tokio::net::TcpStream) -> io::Result<TcpStream> {
 }
 
 /// `direct`, raced with the relay leg `relay` once `direct` has not
-/// connected within [`DIRECT_HEAD_START`] or has failed. No relay: `direct`
-/// alone. A relay that refuses while `direct` still waits leaves its error
-/// in `refused`, so a caller that drops this at its deadline still reports
-/// the relay's answer rather than its own timeout.
+/// connected by the time `head_start` ends or has failed. No relay: `direct`
+/// alone. The caller times `head_start`: a status dial's ends
+/// [`DIRECT_HEAD_START`](nessa_protocol::relay::DIRECT_HEAD_START) after it
+/// begins, by its injected clock. A relay that refuses while `direct` still
+/// waits leaves its error in `refused`, so a caller that drops this at its
+/// deadline still reports the relay's answer rather than its own timeout.
 pub(super) async fn raced(
     direct: impl Future<Output = io::Result<TcpStream>>,
     relay: Option<impl Future<Output = io::Result<TcpStream>>>,
+    head_start: impl Future<Output = ()>,
     refused: &Mutex<Option<io::Error>>,
 ) -> io::Result<TcpStream> {
     let Some(leg) = relay else {
@@ -61,7 +64,7 @@ pub(super) async fn raced(
             Ok(stream) => return Ok(stream),
             Err(_) => true,
         },
-        () = tokio::time::sleep(DIRECT_HEAD_START) => false,
+        () = head_start => false,
     };
     tokio::pin!(leg);
     if direct_failed {

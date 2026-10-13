@@ -46,7 +46,7 @@ use nessa_client_core::retained::{ReadStop, HANDSHAKE};
 use nessa_protocol::clock::Clock as MonotonicClock;
 use nessa_protocol::pairing::socket::WAKE_TICK;
 use nessa_protocol::product::generated::PeerErrorCode;
-use nessa_protocol::relay::RelayAddress;
+use nessa_protocol::relay::{RelayAddress, DIRECT_HEAD_START};
 use std::collections::HashMap;
 use std::sync::{Mutex, PoisonError};
 use std::{
@@ -487,7 +487,12 @@ impl PeerCommands {
                 // winner never reaches the relay connector at all.
                 let leg =
                     relay.map(|(relay, key)| async move { self.connector.relay(relay, key).await });
-                raced(self.connector.connect(address), leg, &refused)
+                raced(
+                    self.connector.connect(address),
+                    leg,
+                    self.after(DIRECT_HEAD_START),
+                    &refused,
+                )
             })
             .await;
         dialed.unwrap_or_else(|| {
@@ -496,6 +501,19 @@ impl PeerCommands {
             let refused = refused.into_inner().unwrap_or_else(PoisonError::into_inner);
             Err(refused.unwrap_or_else(|| io::ErrorKind::TimedOut.into()))
         })
+    }
+    /// Ends once the injected clock has moved `limit` past now, read every
+    /// [`WAKE_TICK`] as [`Self::within`] reads it.
+    fn after(&self, limit: Duration) -> impl Future<Output = ()> + '_ {
+        let end = self
+            .clock
+            .elapsed_ms()
+            .saturating_add(u64::try_from(limit.as_millis()).unwrap_or(u64::MAX));
+        async move {
+            while self.clock.elapsed_ms() < end {
+                tokio::time::sleep(WAKE_TICK).await;
+            }
+        }
     }
     /// What the work `start` begins answers, or `None` once the injected
     /// clock has moved `limit` past the moment before it began: the one way

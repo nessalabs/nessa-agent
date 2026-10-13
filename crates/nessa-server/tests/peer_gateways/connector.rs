@@ -1,4 +1,5 @@
 use super::*;
+use nessa_protocol::relay::DIRECT_HEAD_START;
 use std::io::Read;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -43,6 +44,7 @@ async fn no_relay_is_the_direct_connect_alone() {
     let used = raced(
         async { Ok(stream) },
         None::<PeerConnectFuture>,
+        tokio::time::sleep(DIRECT_HEAD_START),
         &Mutex::new(None),
     )
     .await
@@ -60,6 +62,7 @@ async fn a_direct_connect_first_never_dials_the_relay() {
     let used = raced(
         async { Ok(stream) },
         Some(TcpPeerConnector.relay(&address, KEY)),
+        tokio::time::sleep(DIRECT_HEAD_START),
         &Mutex::new(None),
     )
     .await
@@ -79,6 +82,7 @@ async fn a_refused_direct_connect_reads_through_the_relay_at_once() {
     let mut joined = raced(
         async { Err(io::ErrorKind::ConnectionRefused.into()) },
         Some(TcpPeerConnector.relay(&address, KEY)),
+        tokio::time::sleep(DIRECT_HEAD_START),
         &Mutex::new(None),
     )
     .await
@@ -100,6 +104,7 @@ async fn a_direct_connect_still_waiting_after_the_head_start_is_raced_by_the_rel
     let mut joined = raced(
         std::future::pending(),
         Some(TcpPeerConnector.relay(&address, KEY)),
+        tokio::time::sleep(DIRECT_HEAD_START),
         &Mutex::new(None),
     )
     .await
@@ -124,6 +129,7 @@ async fn a_relay_that_refuses_first_leaves_a_slow_direct_connect_to_connect() {
     let used = raced(
         slow,
         Some(TcpPeerConnector.relay(&address, KEY)),
+        tokio::time::sleep(DIRECT_HEAD_START),
         &Mutex::new(None),
     )
     .await
@@ -139,6 +145,7 @@ async fn both_failing_is_the_relays_refusal() {
         let refused = raced(
             async { Err(io::ErrorKind::TimedOut.into()) },
             Some(TcpPeerConnector.relay(&address, KEY)),
+            tokio::time::sleep(DIRECT_HEAD_START),
             &Mutex::new(None),
         )
         .await
@@ -154,6 +161,7 @@ async fn a_relay_answering_a_gateways_frame_is_invalid() {
     let refused = raced(
         async { Err(io::ErrorKind::ConnectionRefused.into()) },
         Some(TcpPeerConnector.relay(&address, KEY)),
+        tokio::time::sleep(DIRECT_HEAD_START),
         &Mutex::new(None),
     )
     .await
@@ -171,6 +179,7 @@ async fn a_relay_refusal_outlives_a_direct_connect_dropped_at_the_callers_deadli
         raced(
             std::future::pending(),
             Some(TcpPeerConnector.relay(&address, KEY)),
+            tokio::time::sleep(DIRECT_HEAD_START),
             &refused,
         ),
     )
