@@ -374,6 +374,9 @@ impl Host {
             Serving {
                 peer: self.peer,
                 grants: self.grants.clone(),
+                policy: Arc::new(
+                    crate::env_serve::infrastructure::CedarLeasePolicy::new().unwrap(),
+                ),
             },
             Runners {
                 harnesses: self.launcher.clone(),

@@ -49,7 +49,16 @@ impl Namespace {
         Arc::new(LocalReceiverAuthority::open(&path, "policy", Arc::new(SystemClock)).unwrap())
     }
     fn registry(&self) -> Arc<LocalCredentialStore> {
-        Arc::new(LocalCredentialStore::open(self.root().join("auth"), "credentials.json").unwrap())
+        Arc::new(
+            LocalCredentialStore::open(
+                self.root().join("auth"),
+                "credentials.json",
+                std::sync::Arc::new(
+                    nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
+                ),
+            )
+            .unwrap(),
+        )
     }
     /// The bootstrapped owner's session, on a registry this test then drops.
     async fn bootstrap(&self) -> AuthenticatedSession {

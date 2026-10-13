@@ -326,7 +326,12 @@ async fn device_at_gateway(gateway: &Gateway, device: DeviceCredential) -> Devic
     let data = gateway.root.path().join("data/ci");
     #[cfg(unix)]
     let data = data.canonicalize().unwrap();
-    let registry = LocalCredentialStore::open(data.join("auth"), "credentials.v1.json").unwrap();
+    let registry = LocalCredentialStore::open(
+        data.join("auth"),
+        "credentials.v1.json",
+        std::sync::Arc::new(nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap()),
+    )
+    .unwrap();
     let audience = AudienceId::new(registry.gateway_id().unwrap()).unwrap();
     let keys = FilePairingState::open(&data, Path::new("native-pairing")).unwrap();
     let identity = NativeIdentity::restore(
@@ -677,7 +682,12 @@ async fn a_missing_journal_stops_a_gateway_that_still_owes_cleanup() {
     // Killed, so shutdown's reconciliation never runs and the fence stays owed.
     drop(server);
     let data = gateway.root.path().join("data/ci");
-    let registry = LocalCredentialStore::open(data.join("auth"), "credentials.v1.json").unwrap();
+    let registry = LocalCredentialStore::open(
+        data.join("auth"),
+        "credentials.v1.json",
+        std::sync::Arc::new(nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap()),
+    )
+    .unwrap();
     assert!(
         registry
             .pending_pairings()
@@ -741,7 +751,12 @@ async fn native_restart_ends_available_and_keeps_the_key() {
 
 /// The actions a credential `token` carries, read from the registry at `data`.
 async fn grants(data: &Path, token: &str) -> Vec<String> {
-    let store = LocalCredentialStore::open(data.join("ci/auth"), "credentials.v1.json").unwrap();
+    let store = LocalCredentialStore::open(
+        data.join("ci/auth"),
+        "credentials.v1.json",
+        std::sync::Arc::new(nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap()),
+    )
+    .unwrap();
     let gateway = AudienceId::new(store.gateway_id().unwrap()).unwrap();
     let evidence = CredentialEvidence::new(token.trim().as_bytes().to_vec()).unwrap();
     let verified = store.verify(&evidence, &gateway).await.unwrap();
@@ -811,8 +826,12 @@ async fn recovered_old_owner_can_pair_devices() {
     // A registry as `auth init` wrote it before row S17, built through the
     // registry API rather than by editing files.
     let old = {
-        let store =
-            LocalCredentialStore::open(data.join("ci/auth"), "credentials.v1.json").unwrap();
+        let store = LocalCredentialStore::open(
+            data.join("ci/auth"),
+            "credentials.v1.json",
+            std::sync::Arc::new(nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap()),
+        )
+        .unwrap();
         let grant = |action: &str| CredentialGrantDto {
             action: action.into(),
             resource: ResourceDto {

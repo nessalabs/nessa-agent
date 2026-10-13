@@ -294,6 +294,9 @@ impl LeaseConnector for Connector {
                     Serving {
                         peer: Peer::Ssh,
                         grants: self.grants.clone(),
+                        policy: Arc::new(
+                            crate::env_serve::infrastructure::CedarLeasePolicy::new().unwrap(),
+                        ),
                     },
                     Runners {
                         harnesses: self.launcher.clone(),

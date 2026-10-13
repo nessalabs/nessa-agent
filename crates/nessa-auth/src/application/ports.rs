@@ -1,6 +1,7 @@
 //! Implement these ports in local or hosted adapters. Choose adapters in composition.
 use crate::domain::{
-    Action, AudienceId, AuthContext, Credential, CredentialId, Membership, Resource,
+    Action, AudienceId, AuthContext, Credential, CredentialId, Grant, Membership, MembershipRole,
+    PrincipalKind, Resource,
 };
 use std::{fmt, future::Future, pin::Pin};
 
@@ -179,6 +180,52 @@ pub trait PolicyEvaluator: Send + Sync {
         action: &Action,
         resource: &Resource,
         snapshot: &AccessSnapshot,
+    ) -> Result<Decision, AccessError>;
+}
+
+/// Which way a credential is coming into, or already sits in, the registry.
+/// It is a fact the policy reads, not a verdict: whether a path may hand out
+/// administration is the policy's answer, never this value's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IssuePath {
+    /// The local operator creates the owner credential of a new registry.
+    Bootstrap,
+    /// A signed-in administrator issues a credential over the product protocol.
+    ProductIssue,
+    /// The local operator provisions a surface's credential offline.
+    SurfaceProvision,
+    /// The local operator replaces the owner credential offline.
+    OwnerRecovery,
+    /// A credential already in the registry, checked again when it is read.
+    StoredOnLoad,
+}
+
+/// Which credentials may exist at all: who one may be issued to, and which
+/// grants it may carry. Asked when one is issued and whenever the registry
+/// holding it is read or written. A credential exists only when this allows
+/// it; the request-time [`PolicyEvaluator`] then decides each use of it.
+///
+/// Missing or invalid policy data must not produce Allow, and a caller treats
+/// any answer but `Ok(Allow)` as a refusal.
+pub trait GrantPolicyEvaluator: Send + Sync {
+    /// Whether a principal of `kind` may hold `grant` when the credential
+    /// comes in by `path`.
+    fn may_hold(
+        &self,
+        kind: PrincipalKind,
+        grant: &Grant,
+        path: IssuePath,
+    ) -> Result<Decision, AccessError>;
+
+    /// Whether a new credential may be issued by `path` to a principal of
+    /// `kind` whose membership has `role`, for `gateway` (the resource the
+    /// credential will be good on, in the membership's organization).
+    fn may_issue(
+        &self,
+        kind: PrincipalKind,
+        role: MembershipRole,
+        gateway: &Resource,
+        path: IssuePath,
     ) -> Result<Decision, AccessError>;
 }
 

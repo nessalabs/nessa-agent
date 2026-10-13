@@ -2,7 +2,8 @@
 //! (issue #699).
 //!
 //! ```text
-//! gateway ──frames──▶ serve ──Grant──▶ the peer's grant covers it? (PeerGrants, read now)
+//! gateway ──frames──▶ serve ──Grant──▶ the lease policy allows it? (PeerGrants, read now,
+//!                                     then LeasePolicyEvaluator)
 //!                                     the host runs the agent, in the sandbox asked?
 //!                                     ──▶ ledger: granted{sandbox, leaseMs} ──▶ Granted{terms}
 //!                                     ──▶ otherwise ledger: refused ──▶ Refused
@@ -14,7 +15,7 @@
 //!                                     ──▶ ledger: input_overflow ──▶ stop ──▶ Stopped (unasked)
 //!                          ──End────▶ stop every harness ──▶ ledger: ended ──▶ Ended
 //!                          ──Account▶ ledger ──▶ Accounted
-//!                          ──GrantCommand──▶ the peer's grant covers commands? the host
+//!                          ──GrantCommand──▶ the lease policy allows commands? the host
 //!                                            runs them? timeout narrowed to its most
 //!                                            ──▶ ledger: command_granted ──▶ Granted{terms}
 //!                          ──Run──▶ ledger: command_started ──▶ CommandRunner::run
@@ -69,7 +70,8 @@
 //!
 //! Each lease is admitted under the grant this host's owner gave the peer
 //! serving is for ([`Peer`], given by composition, never by the gateway),
-//! read through [`PeerGrants`] at every grant: what the host can run is its
+//! read through [`PeerGrants`] at every grant and decided by the
+//! [`LeasePolicyEvaluator`] over it: what the host can run is its
 //! configuration's, and the grant only narrows it, refusing `not_granted`.
 //! The grant is checked first, so a peer not granted a lease learns nothing
 //! of which agents the host runs, or whether it runs commands.
@@ -107,9 +109,10 @@
 //! reading a ledger that does not hold it yet.
 use super::artifacts::{ArtifactOutbox, LeaseArtifacts, PublishRequest};
 use super::fetches::{ArtifactInbox, LeaseFetches, NoInbox};
-use super::grants::{grant_for, PeerGrants};
+use super::grants::{admit_agent, admit_command, PeerGrants};
+use super::lease_policy::LeasePolicyEvaluator;
 use super::wire::{write_frame, FrameStream};
-use crate::env_serve::domain::{admit_agent, admit_command, Peer, PeerGrant};
+use crate::env_serve::domain::{NotGranted, Peer};
 use crate::timer::{timeout, within, Moment, Timer};
 use nessa_protocol::lease::{
     decode, ArtifactReadRefusal, Cleanup, Collection, CommandEnd, Data, EndingCause, FetchOutcome,
@@ -473,11 +476,13 @@ pub(crate) struct Runners {
 }
 
 /// Who serving is for, and what they are granted: the peer as composition
-/// knows it, never as the gateway says, and where its grant is read.
+/// knows it, never as the gateway says, where its grant is read, and the
+/// policy that decides each lease under it.
 #[derive(Clone)]
 pub(crate) struct Serving {
     pub(crate) peer: Peer,
     pub(crate) grants: Arc<dyn PeerGrants>,
+    pub(crate) policy: Arc<dyn LeasePolicyEvaluator>,
 }
 
 /// Serve one gateway, `serving`'s peer, until its stream ends, then end
@@ -1186,7 +1191,8 @@ impl Served {
         } else if self.draining {
             // The host is stopping: the ask crossed that.
             Some(GrantRefusal::Draining)
-        } else if admit_agent(&self.grant_now(), &agent)
+        } else if self
+            .admit_agent(&agent)
             .map(|admitted| lease_ms = admitted)
             .is_err()
         {
@@ -1266,10 +1272,26 @@ impl Served {
         }
     }
 
-    /// What the peer is granted now: read again for every lease, so a
-    /// change applies from the next one.
-    fn grant_now(&self) -> PeerGrant {
-        grant_for(self.serving.grants.as_ref(), &self.serving.peer)
+    /// Whether the peer may lease `agent` now, and for how long: its grant
+    /// read again for every lease, so a change applies from the next one.
+    fn admit_agent(&self, agent: &str) -> Result<Option<u64>, NotGranted> {
+        admit_agent(
+            self.serving.grants.as_ref(),
+            self.serving.policy.as_ref(),
+            &self.serving.peer,
+            agent,
+        )
+    }
+
+    /// Whether the peer may run a command now, and the timeout it is
+    /// granted, as [`Self::admit_agent`] reads its grant.
+    fn admit_command(&self, timeout_ms: u64) -> Result<u64, NotGranted> {
+        admit_command(
+            self.serving.grants.as_ref(),
+            self.serving.policy.as_ref(),
+            &self.serving.peer,
+            timeout_ms,
+        )
     }
 
     /// Why a lease id this host's audit already records, from this
@@ -1656,7 +1678,7 @@ impl Served {
         } else {
             // The peer's grant first: a peer granted no commands learns
             // nothing of whether the host runs any.
-            match admit_command(&self.grant_now(), timeout_ms) {
+            match self.admit_command(timeout_ms) {
                 Err(_) => Err(GrantRefusal::NotGranted),
                 Ok(_) if self.runner.is_none() => Err(GrantRefusal::CommandsUnavailable),
                 // Checked here as the command it will run, with the timeout

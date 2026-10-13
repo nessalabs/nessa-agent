@@ -1,5 +1,5 @@
-//! What a peer is granted, and the one decision made from it: whether a
-//! lease is admitted, and a command's timeout narrowed, never widened.
+//! What a peer is granted, and the terms of a lease admitted under it: a
+//! command's timeout narrowed, never widened, and a lease's longest.
 use super::*;
 
 fn named(agents: &[&str]) -> Agents {
@@ -15,51 +15,40 @@ fn pin(byte: u8) -> [u8; 44] {
     [byte; 44]
 }
 
-/// Without an entry, SSH keeps what a host served over SSH always had and
-/// a dialed gateway is granted nothing; an entry is what it says.
+/// A peer with no entry is shown as, and changed from, everything for SSH
+/// and nothing for a dialed gateway. Whether it may lease is the lease
+/// policy's (`lease_policy.rs`), held to the same answer there.
 #[test]
-fn a_peer_without_an_entry_has_its_defaults() {
-    assert_eq!(granted_to(&Peer::Ssh, None), PeerGrant::everything());
+fn a_peer_without_an_entry_is_shown_as_its_defaults() {
+    assert_eq!(unwritten(&Peer::Ssh), PeerGrant::everything());
     assert_eq!(
-        granted_to(&Peer::Gateway { pin: pin(1) }, None),
+        unwritten(&Peer::Gateway { pin: pin(1) }),
         PeerGrant::nothing()
     );
-    let entry = PeerGrant::new(named(&["claude"]), None);
-    assert_eq!(granted_to(&Peer::Ssh, Some(entry.clone())), entry);
-    assert_eq!(
-        granted_to(&Peer::Gateway { pin: pin(1) }, Some(entry.clone())),
-        entry
-    );
 }
 
-/// An agent is admitted only when its grant names it or grants every agent.
+/// A harness lease lasts at most the grant's `maxLeaseMs`, or until ended.
 #[test]
-fn an_agent_is_admitted_only_when_granted() {
-    let some = PeerGrant::new(named(&["claude"]), None);
-    assert_eq!(admit_agent(&some, "claude"), Ok(None));
-    assert_eq!(admit_agent(&some, "codex"), Err(NotGranted));
-    assert_eq!(
-        admit_agent(&PeerGrant::nothing(), "claude"),
-        Err(NotGranted)
-    );
-    assert_eq!(admit_agent(&PeerGrant::everything(), "codex"), Ok(None));
+fn a_lease_lasts_at_most_its_grants_max_lease() {
+    assert_eq!(lease_ms(&PeerGrant::everything()), None);
+    let limited =
+        PeerGrant::new(named(&["claude"]), None).with_max_lease(MaxLease::new(3_600_000).unwrap());
+    assert_eq!(lease_ms(&limited), Some(3_600_000));
 }
 
-/// A command is admitted only with commands granted, for the timeout asked
-/// or the grant's longest when that is shorter: narrowed, never widened.
+/// A command runs for the timeout asked or the grant's longest when that is
+/// shorter: narrowed, never widened; a grant without commands has no terms.
 #[test]
 fn a_command_timeout_is_narrowed_and_never_widened() {
     let grant = PeerGrant::new(named(&[]), Some(CommandGrant::new(60_000).unwrap()));
-    assert_eq!(admit_command(&grant, 120_000), Ok(60_000));
-    assert_eq!(admit_command(&grant, 60_000), Ok(60_000));
-    assert_eq!(admit_command(&grant, 5_000), Ok(5_000));
-    assert_eq!(admit_command(&PeerGrant::nothing(), 5_000), Err(NotGranted));
+    assert_eq!(command_timeout(&grant, 120_000), Some(60_000));
+    assert_eq!(command_timeout(&grant, 60_000), Some(60_000));
+    assert_eq!(command_timeout(&grant, 5_000), Some(5_000));
+    assert_eq!(command_timeout(&PeerGrant::nothing(), 5_000), None);
     assert_eq!(
-        admit_command(&PeerGrant::everything(), CommandWork::MAX_TIMEOUT_MS),
-        Ok(CommandWork::MAX_TIMEOUT_MS)
+        command_timeout(&PeerGrant::everything(), CommandWork::MAX_TIMEOUT_MS),
+        Some(CommandWork::MAX_TIMEOUT_MS)
     );
-    // Commands do not grant agents.
-    assert_eq!(admit_agent(&grant, "claude"), Err(NotGranted));
 }
 
 /// A grant holds only what it can: a command timeout from one millisecond
