@@ -37,6 +37,7 @@
  * turns, and an app's review is not one.
  */
 import {
+  permissionTargets,
   NessaMcpAppError,
   NessaRpcError,
   type AgentsApi,
@@ -211,13 +212,11 @@ function onAnswer(
   done: (allowed: boolean) => void,
   landing: (allowed: boolean) => void = () => {},
 ) {
-  gateway.once("answer", async (normal) => {
-    const args = gateway.calls.at(-1)?.args ?? []
-    const [to, execution, permission, option] = args
+  gateway.onceAnswer(async (normal, [target, option]) => {
     const ours =
-      to === conversation &&
-      execution === review.executionId &&
-      permission === review.permissionId
+      target.conversationId === conversation &&
+      target.executionId === review.executionId &&
+      target.permissionId === review.permissionId
     const chosen = review.options.find((each) => each.id === option)
     if (!ours || !chosen) {
       // Not this review's answer: it stays open, and the call waits.
@@ -233,6 +232,15 @@ function onAnswer(
   })
 }
 
+function denied(review: ConversationPermission) {
+  return new NessaMcpAppError(
+    conversation,
+    review.permissionId,
+    app,
+    new NessaRpcError("mcp_approval_denied", "The person denied it"),
+  )
+}
+
 const mcpApps = {
   callTool: (_conversation: string, _app: unknown, _server: string, tool: string) => {
     if (waiting)
@@ -246,7 +254,7 @@ const mcpApps = {
         onAnswer(review, (allowed) => {
           waiting = false
           if (allowed) resolve({ resultJson: '{"content":[]}' })
-          else reject(new Error("The person denied this app's call"))
+          else reject(denied(review))
         })
       }, openingMs)
     })
@@ -266,15 +274,7 @@ const mcpApps = {
           (allowed) => {
             waiting = false
             if (allowed) resolve({ executionId: turn })
-            else
-              reject(
-                new NessaMcpAppError(
-                  conversation,
-                  review.permissionId,
-                  app,
-                  new NessaRpcError("mcp_approval_denied", "The person denied it"),
-                ),
-              )
+            else reject(denied(review))
           },
           // Allowed, the message is the person's turn, written by the app.
           (allowed) => {
@@ -333,6 +333,25 @@ void store.dispatch(loadWorkspace())
 
 Object.assign(window, {
   __appReview: {
+    /** Probe correlation with an SDK-issued target that names another review. */
+    answerOther(field: "conversationId" | "executionId" | "permissionId") {
+      const open = gateway.views.get(conversation)?.permissions[0]
+      if (!open) throw new Error("no review is open")
+      const other = {
+        conversationId:
+          field === "conversationId"
+            ? "00000000-0000-4000-8000-000000000002"
+            : conversation,
+        permissions: [
+          {
+            ...open,
+            executionId: field === "executionId" ? "other-turn" : open.executionId,
+            permissionId: field === "permissionId" ? "other-review" : open.permissionId,
+          },
+        ],
+      }
+      return gateway.client.conversation.answer(permissionTargets(other)[0]!, "allow")
+    },
     /** The app calls `tool`, as its bridge would: through the window's own plugin. */
     call(tool: string) {
       const plugin = dependencies.widgets.plugin(appPluginId(server))
@@ -377,7 +396,12 @@ Object.assign(window, {
         // Every answer the gateway was sent, whichever review it named.
         answers: gateway.calls
           .filter((call) => call.method === "answer")
-          .map((call) => [...call.args]),
+          .map(({ args: [target, optionId] }) => ({
+            conversationId: target.conversationId,
+            executionId: target.executionId,
+            permissionId: target.permissionId,
+            optionId,
+          })),
         openReview: open?.permissionId ?? null,
         // The open review's own options, which the card's buttons must be.
         openOptions:
