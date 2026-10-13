@@ -1,3 +1,4 @@
+import type { ConversationView as PublishedConversationView } from "@nessa/client"
 /** Browser inputs are published gateway views; authority is tested in the server projection. */
 import { configureStore } from "@reduxjs/toolkit"
 import { useState } from "react"
@@ -45,6 +46,7 @@ function view(
     {
       conversationId: "committed-conversation",
       revision: `${state}:${liveAuthority}`,
+      serverNowMs: 1_700_000_000_000,
       title: "Committed transcript",
       approvalMode: "ask",
       approvalModes: [
@@ -67,6 +69,7 @@ function view(
             ]
           : [],
       pending: [],
+      artifacts: [],
       questions: [],
       tools: [],
       permissions: actionable
@@ -99,13 +102,13 @@ function view(
           permissionDeferral: "unsupported_not_implemented",
           elicitationForwarding: "unknown",
           preToolPolicy: "unsupported_not_implemented",
-          policyEndTurn: "unsupported_not_implemented",
-          policyCloseSession: "unsupported_not_implemented",
-          incomingElicitation: "unknown",
+          policyEndTurn: "unsupported",
+          policyCloseSession: "unsupported",
+          incomingElicitation: "unsupported",
         },
       },
       lifecycle: { phase: liveAuthority ? "attached" : "absent" },
-    },
+    } satisfies PublishedConversationView,
     "committed-conversation",
   )
 }
@@ -173,7 +176,9 @@ function HistoryTabConsumer() {
     }
     const tabs = makeStore(createDependencies({ conversation: effects }))
     tabs.dispatch(restoreConversations({ tabs: [{ conversationId: serverId }] }))
-    await tabs.dispatch(followConversation("c0")).unwrap()
+    await tabs
+      .dispatch(followConversation(tabs.getState().conversation.activeId))
+      .unwrap()
     setActive({ store: tabs, closeCalls: () => closes })
     setResult({
       name: `${state}:${truncated}`,
@@ -184,7 +189,9 @@ function HistoryTabConsumer() {
   }
   const close = async () => {
     if (!active) return
-    await active.store.dispatch(closeTab("c0")).unwrap()
+    await active.store
+      .dispatch(closeTab(active.store.getState().conversation.activeId))
+      .unwrap()
     setResult(
       (previous) =>
         previous && {

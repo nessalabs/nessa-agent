@@ -767,7 +767,10 @@ the one authority, a registry keyed by agent and filled at one site in
 `acp/sessions/deletion.rs`. The ownership record and every audit store
 are kept; see [ADR 182](adr/done/182-conversation-deletion.md).
 The floating panel uses injected conversation effects and NessaClient; neither
-owns SDK scheduling. See [gateway chat](guides/gateway-chat.md).
+owns SDK scheduling. Its `application/saved-tabs.ts` restores durable references
+with fresh local identities from the existing allocator; old callbacks retain the
+retired tab name ([local tab lifetimes](design/local-tab-identities.md)).
+See [gateway chat](guides/gateway-chat.md).
 
 Image input follows the same split. `@nessa/client` owns the wire: the
 `AttachmentUploadTransport` port in `application/attachment-upload.ts`, its
