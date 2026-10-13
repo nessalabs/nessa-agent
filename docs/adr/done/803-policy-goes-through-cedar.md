@@ -10,7 +10,8 @@ order the hand-written decisions move in. The rule itself is
 
 - **Date:** 2026-10-13
 - **Status:** accepted (Saurav, 2026-10-13: "everything should be cedar for
-  policies")
+  policies") and implemented: steps 1, 2 and 5 in #808 and #817, steps 3 and 4
+  in the pull request that moved this record to `done/`; step 6 dropped
 
 ## Context
 
