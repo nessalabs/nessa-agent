@@ -221,5 +221,12 @@ request, `Part of #803`, because each pull request costs a full CI run (Saurav,
 - Cost: each migration step rebuilds entity mapping and tests for its area, and
   per-request evaluation costs more than an inline comparison. Not measured
   yet; step 3 measures the catalogue page, where each item is re-admitted.
+- Known limit: moving a check into Cedar does not change when it runs. A
+  grant revoked after a note or a Drive turn was admitted, but before the turn
+  is saved, does not stop that turn: a revoke stops the next turn, not one
+  already being admitted (read-grants rows J15 and J23). Closing that window
+  means saving the turn only if the grant's revision is still the one Cedar
+  was asked about, inside the save's transaction. That is a change to how
+  turns are saved, not to the policy, so it is its own issue.
 - Watch for: a context value that is really a verdict, and a `cedar` directory
   used to hide hand-written matching. Both are review findings under gate 18.
