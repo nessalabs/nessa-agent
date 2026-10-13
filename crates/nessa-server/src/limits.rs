@@ -274,13 +274,13 @@ fn catalogue() -> &'static [Limit] {
             id: "conversation.tool_policy_command_hosts",
             tier: "fixed",
             owner: "CommandHosts::MAX_HOSTS in crates/nessa-server/src/conversation/domain/value_objects/share_access.rs, the schema's ConversationToolPolicy",
-            meaning: "the hosts a drive grant's policy names for its turns' commands, which with its patterns are at most 32; a conversation.share with more is refused invalid_request, and a grant naming none runs commands nowhere",
+            meaning: "the hosts a drive grant's policy names for its turns' commands, which with its patterns are at most 32, so a policy whose allow and deny already hold 32 patterns names none; a conversation.share with more is refused invalid_request, and a grant naming none runs commands nowhere",
         },
         Limit {
             id: "conversation.tool_policy_command_host_bytes",
             tier: "fixed",
             owner: "CommandHosts::MAX_HOST_BYTES in crates/nessa-server/src/conversation/domain/value_objects/share_access.rs, the schema's ConversationToolPolicy",
-            meaning: "the longest command host a drive grant's policy names, in bytes, so a host is never longer on the wire than a pattern; a conversation.share with a longer one is refused invalid_request",
+            meaning: "the longest command host a drive grant's policy names, in bytes, so a host is never longer on the wire than a pattern; a conversation.share with a longer one is refused invalid_request, so an SSH destination longer than this cannot be granted until conversation.shares pages (issue #832)",
         },
         Limit {
             id: "record.read_work_budget",

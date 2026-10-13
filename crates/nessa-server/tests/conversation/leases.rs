@@ -5586,6 +5586,84 @@ async fn a_drive_grants_run_goes_only_to_the_hosts_its_policy_names() {
     go.send(()).unwrap();
 }
 
+/// ADR 803 step 4: a Drive grant's turn whose admitted policy is no longer
+/// kept, let go after `MAX_ADMITTED_POLICIES` other revisions were admitted
+/// since, may use no host. `environments_list` shows it `here`, where the
+/// conversation runs, and no host, none taking commands, though the host
+/// its policy named was listed taking commands while the policy was kept;
+/// its `run` is refused as unavailable, nothing is recorded as a command,
+/// and the host is asked nothing.
+#[tokio::test]
+async fn a_drive_turn_whose_policy_was_let_go_is_shown_no_host_and_runs_nothing() {
+    use crate::conversation::domain::{ToolPolicy, ToolPreset};
+    let root = tempfile::tempdir().unwrap();
+    let host = CommandHost::new();
+    let harness = with_command_host(root.path(), host.clone(), Some(devbox_policy()));
+    let audit =
+        harness.checking_drive_tools(on_hosts(ToolPolicy::preset(ToolPreset::All), &["devbox"]));
+    harness.create().await;
+    let go = harness.running_drive_turn("driven", "phone", 3).await;
+    let listed = |listings: Vec<super::EnvironmentListing>| {
+        listings
+            .into_iter()
+            .map(|listing| (listing.name, listing.commands, listing.current))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        listed(
+            harness
+                .service
+                .list_environments(&harness.id)
+                .await
+                .unwrap()
+        ),
+        [
+            (HERE.to_owned(), false, true),
+            ("devbox".to_owned(), true, false)
+        ]
+    );
+    // Every later revision admitted, queued behind the running turn, lets
+    // the least recently admitted go: revision 3 is the first to go.
+    for revision in 0..super::MAX_ADMITTED_POLICIES as u64 {
+        assert!(
+            harness
+                .send_as_driver(&format!("queued-{revision}"), "phone", 100 + revision)
+                .await
+        );
+    }
+    assert_eq!(
+        listed(
+            harness
+                .service
+                .list_environments(&harness.id)
+                .await
+                .unwrap()
+        ),
+        [(HERE.to_owned(), false, true)]
+    );
+    let refused = harness
+        .run(command("devbox", &["echo", "hi"], "call-1"))
+        .await;
+    assert!(
+        matches!(
+            &refused,
+            Err(CommandCallError::NotAllowed(reason))
+                if reason == r#"the tool policy of Drive grant "phone" at revision 3 is unavailable, so "run" is refused"#
+        ),
+        "{refused:?}"
+    );
+    assert!(harness.saved_commands().is_empty());
+    assert_eq!(host.granted.load(std::sync::atomic::Ordering::SeqCst), 0);
+    let records = audit.records.lock().unwrap().clone();
+    assert_eq!(records.len(), 1);
+    assert!(!records[0].allowed);
+    assert_eq!(
+        (records[0].grant.as_str(), records[0].revision),
+        ("phone", 3)
+    );
+    go.send(()).unwrap();
+}
+
 /// ADR 803 step 4: a Drive grant's turn on a host its policy names is shown
 /// that host as taking commands, and its program is still the gateway's to
 /// allow: a denied one is refused `CommandDenied` there as the owner's is.

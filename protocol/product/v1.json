@@ -2406,7 +2406,7 @@
             "maxLength": 96,
             "x-utf8MaxBytes": 96
           },
-          "description": "The hosts the holder's turns may run commands on with run, by the name environments_list gives them: an SSH destination or a paired environment's peer: name, never here, each named once and at most 96 bytes. Beside either preset or allow and deny; a policy's hosts and patterns together are at most 32. A host is used only where the gateway also grants commands on it. Absent or empty, the holder's turns run commands nowhere: a drive grant never inherits the owner's hosts. A host that is no such name, one named twice, more than 16, or more than the patterns leave room for is refused invalid_request. Listed only when it names a host."
+          "description": "The hosts the holder's turns may run commands on with run, by the name environments_list gives them: an SSH destination or a paired environment's peer: name, never here, each named once and at most 96 bytes. Beside either preset or allow and deny; a policy's hosts and patterns together are at most 32. A host is used only where the gateway also grants commands on it. Absent or empty, the holder's turns run commands nowhere: a drive grant never inherits the owner's hosts. A host that is no such name, one named twice, more than 16, or more than the patterns leave room for is refused invalid_request: a policy whose allow and deny already hold 32 patterns can name no hosts, and an SSH destination longer than 96 bytes cannot be granted (paging conversation.shares to lift both is issue #832). Listed only when it names a host."
         }
       },
       "required": []

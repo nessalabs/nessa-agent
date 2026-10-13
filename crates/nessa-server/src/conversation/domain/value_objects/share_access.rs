@@ -103,12 +103,13 @@ pub enum ToolChoice {
 /// gateway's. Whether a host is used is the command policy's, which Cedar
 /// answers; this value only checks the names' shape, length and number.
 ///
-/// A host is bounded like a pattern, so a policy at its largest is no
-/// larger on the wire with hosts than without: each is at most
+/// A host is bounded like a pattern: each is at most
 /// [`Self::MAX_HOST_BYTES`], which JSON writes in no more bytes than the
 /// longest pattern, and a policy's hosts and patterns together are at most
-/// [`ToolPolicy::MAX_ENTRIES`]. That keeps every grant of a conversation in
-/// one `conversation.shares` frame.
+/// [`ToolPolicy::MAX_ENTRIES`], so a host takes a pattern's room. Whether
+/// every grant of a conversation still fits one `conversation.shares` frame
+/// is measured, not argued: row J10's test builds the largest answer, hosts
+/// and all, and checks it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CommandHosts(BTreeSet<String>);
 

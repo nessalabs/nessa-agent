@@ -3718,6 +3718,53 @@ async fn a_share_change_is_admitted_by_the_access_policy_in_its_transaction() {
     assert!(revoke(&opened.store, &id, "phone").await);
 }
 
+/// ADR 803 step 4: the command hosts a Drive grant's policy names are kept
+/// with it and read back at its revision; changing only the hosts is a new
+/// revision, and the earlier one still names the hosts it held.
+#[tokio::test]
+async fn a_revisions_command_hosts_are_read_from_its_journal_entry() {
+    use crate::conversation::application::ShareGrants;
+    use crate::conversation::domain::CommandHosts;
+    let on = |hosts: &[&str]| {
+        drive_with(
+            ToolPolicy::preset(ToolPreset::All)
+                .with_command_hosts(
+                    CommandHosts::new(hosts.iter().map(|host| (*host).to_owned()).collect())
+                        .unwrap(),
+                )
+                .unwrap(),
+        )
+    };
+    let peer = format!("peer:{}", "ab".repeat(32));
+    let opened = opened();
+    let store = &opened.store;
+    let id = new_id();
+    store.create(owned(&id)).await.unwrap();
+    let both = on(&["devbox", &peer]);
+    assert!(share_as(store, &id, "phone", both.clone(), "both")
+        .await
+        .unwrap());
+    let first = only_grant(store, &id).await;
+    assert_eq!(first.access, both);
+    let one = on(&["devbox"]);
+    assert!(share_as(store, &id, "phone", one.clone(), "one")
+        .await
+        .unwrap());
+    let second = only_grant(store, &id).await.policy_revision;
+    assert_ne!(second, first.policy_revision);
+    let at = |revision: u64| {
+        let id = &id;
+        async move { store.policy_at(id, "phone", revision).await.unwrap() }
+    };
+    let held = at(first.policy_revision).await.unwrap();
+    assert_eq!(
+        held.command_hosts().names().iter().collect::<Vec<_>>(),
+        ["devbox", &peer]
+    );
+    assert_eq!(Some(&held), both.policy());
+    assert_eq!(at(second).await.as_ref(), one.policy());
+}
+
 /// Row J26: the policy a Drive grant held at a revision is read from that
 /// revision's journal entry, so a later change does not change it. A
 /// revision that is no Drive grant of that party on that conversation, or

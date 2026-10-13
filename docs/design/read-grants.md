@@ -178,9 +178,10 @@ tools](#checking-a-drive-turns-tools)).
   bytes, plain text; at most 16 hosts, each a name `run` could take, once,
   and at most 96 bytes. Hosts take the room of patterns: a policy's patterns
   and hosts together are at most 32, and a host is never longer as JSON than
-  the longest pattern, so a policy at its largest is no larger on the wire
-  with hosts than without, and `conversation.shares` still fits one frame
-  (row J10). What it allows is decided by Cedar ([below](#what-a-tool-policy-allows)).
+  the longest pattern. Whether `conversation.shares` still fits one frame
+  with hosts is measured, not argued: row J10's test builds the largest
+  answer, hosts and all, and checks it. What it allows is decided by Cedar
+  ([below](#what-a-tool-policy-allows)).
   `ShareAccess` holds the role and policy together, so a Drive grant always
   has a policy and a Read or Comment grant never has one (row J3). The store
   keeps the policy as JSON and reads it back through the same constructors;

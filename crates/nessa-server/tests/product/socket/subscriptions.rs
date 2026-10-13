@@ -3727,6 +3727,116 @@ async fn a_share_whose_role_and_policy_do_not_fit_is_refused_and_writes_nothing(
     assert_eq!(answer["payload"]["applied"], true, "{answer}");
 }
 
+/// ADR 803 step 4: a Drive grant's `commandHosts` goes through
+/// `conversation.share` into the store and back out of `conversation.shares`
+/// as named; an empty list is a policy naming none, accepted and listed
+/// without the key. `here`, a host named twice, more than
+/// `CommandHosts::MAX_HOSTS`, and hosts past the room a policy's patterns
+/// leave are refused `invalid_request` and change nothing.
+#[tokio::test]
+async fn a_drive_grants_command_hosts_round_trip_and_their_bounds_are_refused() {
+    use crate::conversation::application::ShareGrants;
+    use crate::conversation::domain::{CommandHosts, ToolRules};
+    let fixture = sharing_fixture().await;
+    let share = |request: &str, credential: &str, policy: Value| {
+        json!({
+            "conversationId": fixture.id.to_string(),
+            "requestId": request,
+            "credentialId": credential,
+            "role": "drive",
+            "policy": policy,
+        })
+    };
+    let policy_of = |credential: &'static str| {
+        let fixture = &fixture;
+        async move {
+            let shares = fixture
+                .call(
+                    "conversation.shares",
+                    json!({"conversationId": fixture.id.to_string()}),
+                )
+                .await;
+            shares["payload"]["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|item| item["credentialId"] == credential)
+                .unwrap()["policy"]
+                .clone()
+        }
+    };
+    let peer = format!("peer:{}", "ab".repeat(32));
+    let named = json!({"preset": "all", "commandHosts": ["devbox", peer]});
+    let answer = fixture
+        .call("conversation.share", share("named", "phone", named.clone()))
+        .await;
+    assert_eq!(answer["payload"]["applied"], true, "{answer}");
+    assert_eq!(policy_of("phone").await, named);
+    let held = fixture.metadata.grants(&fixture.id).await.unwrap();
+    assert_eq!(
+        held[0]
+            .access
+            .policy()
+            .unwrap()
+            .command_hosts()
+            .names()
+            .iter()
+            .collect::<Vec<_>>(),
+        ["devbox", &peer]
+    );
+
+    let answer = fixture
+        .call(
+            "conversation.share",
+            share(
+                "empty",
+                "tablet",
+                json!({"preset": "no_shell", "commandHosts": []}),
+            ),
+        )
+        .await;
+    assert_eq!(answer["payload"]["applied"], true, "{answer}");
+    assert_eq!(policy_of("tablet").await, json!({"preset": "no_shell"}));
+
+    let pattern = |n: usize| format!("t{n}");
+    let full = ToolRules::MAX_RULES;
+    let refused = [
+        json!({"preset": "all", "commandHosts": ["here"]}),
+        json!({"preset": "all", "commandHosts": ["devbox", "devbox"]}),
+        json!({
+            "preset": "all",
+            "commandHosts": (0..=CommandHosts::MAX_HOSTS)
+                .map(|n| format!("host{n}"))
+                .collect::<Vec<_>>(),
+        }),
+        json!({
+            "allow": (0..full).map(pattern).collect::<Vec<_>>(),
+            "deny": (0..full).map(pattern).collect::<Vec<_>>(),
+            "commandHosts": ["devbox"],
+        }),
+        json!({
+            "allow": (0..full).map(pattern).collect::<Vec<_>>(),
+            "deny": [pattern(0)],
+            "commandHosts": (0..full)
+                .map(|n| format!("host{n}"))
+                .collect::<Vec<_>>(),
+        }),
+    ];
+    for (n, policy) in refused.into_iter().enumerate() {
+        let answer = fixture
+            .call(
+                "conversation.share",
+                share(&format!("refused-{n}"), "phone", policy.clone()),
+            )
+            .await;
+        assert_eq!(
+            answer["error"]["code"], "invalid_request",
+            "{policy}: {answer}"
+        );
+    }
+    assert_eq!(policy_of("phone").await, named);
+}
+
 /// Row J7: `conversation.shares` reports each grant's role, its policy when
 /// it drives, and its policy revision, which moves when the owner changes
 /// the role or the policy and not otherwise.
