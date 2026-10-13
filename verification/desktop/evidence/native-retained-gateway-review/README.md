@@ -21,9 +21,12 @@ Verdict: **pass**
 Relevant line: `requestfailed: /browser/check net::ERR_ABORTED` followed a 204
 response and is the existing harmless #485 case. All recorded checks passed.
 
-The exact seven-package Rust selection also passed against the then-current
-main integration candidate: server 2,662 tests, SDK 1,212 tests, and the separate
-application, enrollment, core, native and documentation selections.
+The exact seven-package Rust selection also passed at the earlier verification
+merge `24956e195a588c6d050e5ec836e8233ffaee762c`, combining `e63cd76a` with the
+same main before the passive consent-class getter. That run passed server 2,662
+tests, SDK 1,212 tests, and the separate application, enrollment, core, native
+and documentation selections. The getter-specific checks below cover its later
+implementation independently.
 
 The consent-class getter was independently reviewed at `13acd020`; all three
 Auth classes across seven receipt phases and retry preserve the Auth-owned wire
