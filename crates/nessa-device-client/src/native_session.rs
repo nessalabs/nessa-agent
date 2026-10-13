@@ -4,8 +4,8 @@ use crate::{
     failures::{NativeCallError, NativeEnrollmentFailure, NativeReadFailure},
     saved::{NativeScope, NativeTranscript},
     session::{
-        LocalEnrollment, LocalIssuedEnrollment, NativeSession, SessionFailure, SessionRead,
-        SessionRefresh,
+        LocalEnrollment, LocalIssuedEnrollment, NativeSession, SessionFailure, SessionFollow,
+        SessionRead, SessionRefresh,
     },
 };
 use nessa_auth::{
@@ -19,7 +19,10 @@ use nessa_client_core::{
         RetainedPurge,
     },
 };
-use nessa_protocol::{conversation::domain::ConversationId, pairing::wire::NativePairingStatus};
+use nessa_protocol::{
+    conversation::domain::ConversationId, pairing::wire::NativePairingStatus,
+    product::generated::ConversationViewCursor,
+};
 use nessa_sync::replication::{catalogue::EntryKey, domain::Id};
 use std::{net::SocketAddr, path::Path, sync::Arc};
 use uuid::Uuid;
@@ -480,6 +483,63 @@ impl NativeRefresh {
         })
     }
 }
+/// One admitted `conversation.subscribe` read. The view replaces what the
+/// device shows; it does not advance a physical checkpoint.
+#[derive(uniffi::Object)]
+pub struct NativeFollow {
+    value: SessionFollow,
+}
+#[uniffi::export]
+impl NativeFollow {
+    /// Original initial status and purge.
+    pub fn initial(&self) -> Arc<NativeStatus> {
+        Arc::new(NativeStatus {
+            value: self.value.initial().clone(),
+        })
+    }
+    /// Exact current binding refusal before product selection.
+    pub fn selection_failure(&self) -> Option<Arc<NativeEnrollmentFailure>> {
+        self.value
+            .selection_failure()
+            .map(|value| Arc::new(NativeEnrollmentFailure { value }))
+    }
+    /// Product view JSON when the first frame was a view.
+    pub fn view_json(&self) -> Option<String> {
+        self.value
+            .followed()
+            .and_then(|result| result.as_ref().ok())
+            .map(|value| value.view_json().to_owned())
+    }
+    /// Cursor incarnation on that view.
+    pub fn incarnation(&self) -> Option<String> {
+        self.value
+            .followed()
+            .and_then(|result| result.as_ref().ok())
+            .map(|value| value.incarnation().to_owned())
+    }
+    /// Cursor position on that view. A later follow passes it back as `after`.
+    pub fn position(&self) -> Option<String> {
+        self.value
+            .followed()
+            .and_then(|result| result.as_ref().ok())
+            .map(|value| value.position().to_owned())
+    }
+    /// Why no view was delivered, when a reader was selected.
+    pub fn failure(&self) -> Option<NativeReadFailure> {
+        self.value
+            .followed()
+            .and_then(|result| result.as_ref().err().copied())
+            .map(Into::into)
+    }
+    /// Authority-refusal recheck. A conversation this device was not granted does not ask.
+    pub fn recheck(&self) -> Option<Arc<NativeStatus>> {
+        self.value.recheck().map(|value| {
+            Arc::new(NativeStatus {
+                value: value.clone(),
+            })
+        })
+    }
+}
 /// Immutable saved entry cursor. Restoration selects order, not read authority.
 #[derive(uniffi::Object)]
 pub struct NativeEntryKey {
@@ -737,7 +797,37 @@ impl NativeDeviceSession {
             .map(|value| value.map(|value| Arc::new(NativeLocalEnrollment { value })))
             .map_err(Into::into)
     }
-    /// Run status, binding, bounded read and refusal recheck under one admission.
+    /// Run status, binding, one `conversation.subscribe`, and an authority recheck.
+    /// `after_incarnation` and `after_position` are both absent, or both the
+    /// last cursor this caller applied. The first view is returned and the
+    /// subscription is closed. Checkpoints stay on [`Self::refresh`].
+    pub fn follow(
+        &self,
+        conversation: String,
+        after_incarnation: Option<String>,
+        after_position: Option<String>,
+        stop: Arc<NativeReadStop>,
+    ) -> Result<Arc<NativeFollow>, NativeCallError> {
+        let conversation =
+            ConversationId::new(&conversation).map_err(|_| NativeCallError::InvalidArgument)?;
+        let after = match (after_incarnation, after_position) {
+            (None, None) => None,
+            (Some(incarnation), Some(position))
+                if !incarnation.is_empty() && !position.is_empty() =>
+            {
+                Some(ConversationViewCursor {
+                    incarnation,
+                    position,
+                })
+            }
+            _ => return Err(NativeCallError::InvalidArgument),
+        };
+        self.value
+            .follow(&conversation, after, stop.value.clone())
+            .map(|value| Arc::new(NativeFollow { value }))
+            .map_err(Into::into)
+    }
+    /// Run status, binding, bounded checkpoint read and refusal recheck under one admission.
     pub fn refresh(
         &self,
         stop: Arc<NativeReadStop>,

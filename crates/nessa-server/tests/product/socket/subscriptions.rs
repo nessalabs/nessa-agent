@@ -2147,6 +2147,43 @@ async fn a_paired_device_on_the_socket_sees_only_what_it_was_granted() {
     fixture.assert_lists_refused().await;
 }
 
+/// A linked device holds `conversation.read`, the grant pairing mints, and
+/// not `conversation.write`. It follows a conversation that grant shares
+/// with it. An ungranted id is `conversation_not_found`. Its list
+/// subscription stays refused.
+#[tokio::test]
+async fn a_paired_reader_follows_a_granted_conversation_with_the_read_grant() {
+    let fixture = SubscriptionFixture::new().await;
+    fixture.turn("first").await;
+    let fixture = fixture.with_devices(this_device(true));
+    grants(&fixture.authority, &["conversation.read", "server.read"]);
+    let mut client = fixture.connect();
+    client.send(
+        "missing",
+        "conversation.subscribe",
+        json!({"conversationId": fixture.id.to_string()}),
+    );
+    let (reply, _) = client.reply("missing").await;
+    assert_eq!(reply["error"]["code"], "conversation_not_found", "{reply}");
+    fixture
+        .grant_to(
+            crate::conversation::application::ShareGrantTransition::Grant(
+                crate::conversation::domain::ShareAccess::read(),
+            ),
+        )
+        .await;
+    let id = client.subscribe("view", &fixture.id).await;
+    client.send(
+        "stop",
+        "conversation.unsubscribe",
+        json!({"subscriptionId": id}),
+    );
+    let (stopped, _) = client.reply("stop").await;
+    assert_eq!(stopped["ok"], true, "{stopped}");
+    client.close().await;
+    fixture.assert_lists_refused().await;
+}
+
 /// Row H8 (`docs/design/auth/peer-gateways.md`): a session whose receiver
 /// binding's owner is not the session's principal is a paired reader on the
 /// socket like a device: `binding_of` matches its binding by credential and
@@ -2155,9 +2192,8 @@ async fn a_paired_device_on_the_socket_sees_only_what_it_was_granted() {
 /// grantor's conversations. Ungranted, both answer `conversation_not_found`.
 /// Granted, a conversation that is not the binding owner's still answers
 /// `conversation_not_found`: a grant reads only its grantor's conversations
-/// (`grant.read`). Its lists are refused, as a device's are. (A real peer
-/// never gets this far: these methods need `conversation.write`, which a
-/// gateway principal can never hold, so the policy refuses them first.)
+/// (`grant.read`). Its lists are refused, as a device's are. A paired
+/// reader is admitted on `conversation.read` before that share check.
 #[tokio::test]
 async fn a_binding_owned_by_another_principal_reads_only_its_grantors_grants() {
     let fixture = SubscriptionFixture::new().await;

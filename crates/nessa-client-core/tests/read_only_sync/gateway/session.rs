@@ -1203,5 +1203,7 @@ fn public_retained_read_enforces_owner_scope_and_preserves_granted_peer_mode() {
 
 #[path = "session/held_files.rs"]
 mod held_files;
+#[path = "session/subscribe.rs"]
+mod subscribe;
 #[path = "session/watch.rs"]
 mod watch;

@@ -16,6 +16,7 @@ use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::conversation::projection::retained_view;
 use nessa_protocol::conversation::view::ConversationView;
+use nessa_protocol::product::generated::AgentsListResult;
 use nessa_sdk::application::agent_execution::executions::ExecutionUpdate;
 use nessa_sdk::application::agent_execution::sessions::{
     SessionSnapshot, SessionStorage, SubmissionAcknowledgement,
@@ -48,14 +49,20 @@ use tokio::io::{stdin, AsyncBufReadExt, BufReader};
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
-pub(super) async fn serve(
-    root: &Path,
-    setup: &Setup,
+/// The semantic producer, built before the gateway binds so a paired device
+/// can follow the same conversation the retained watch folds.
+pub(super) struct Corpus {
+    pub(super) service: Arc<ConversationService>,
+    producer: Arc<RecordingStorage>,
+    provider: Arc<ProviderFactory>,
+    release: oneshot::Sender<()>,
+}
+
+pub(super) fn prepare(
     storage: Arc<RecordStorage>,
     metadata: Arc<LocalConversationStore>,
-    heads: Arc<HeadHold>,
-) {
-    let producer = Arc::new(RecordingStorage::new(storage.clone()));
+) -> Corpus {
+    let producer = Arc::new(RecordingStorage::new(storage));
     let provider = Arc::new(ProviderFactory::default());
     provider.request_permission.store(1, Ordering::SeqCst);
     provider.answer_succeeds.store(true, Ordering::SeqCst);
@@ -73,7 +80,7 @@ pub(super) async fn serve(
             access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage: producer.clone(),
-            metadata: metadata.clone(),
+            metadata,
             mode_audit: Arc::new(AcceptingModeAudit),
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
@@ -91,6 +98,57 @@ pub(super) async fn serve(
         None,
     )
     .unwrap();
+    Corpus {
+        service: Arc::new(service),
+        producer,
+        provider,
+        release,
+    }
+}
+
+/// The catalog `wire_view` resolves for this corpus: Claude, model `test`,
+/// approval `ask`, matching the provider the corpus opens.
+pub(super) fn catalog() -> AgentsListResult {
+    serde_json::from_value(json!({
+        "environments": [],
+        "agents": [{
+            "agent": "claude",
+            "defaultModel": "test",
+            "models": [{
+                "modelId": "test",
+                "displayName": "Test model",
+                "maxContextWindowTokens": 100000,
+                "reasoning": false,
+                "imageInput": false,
+                "approvalModes": [{
+                    "id": "ask",
+                    "name": "Provider asks",
+                    "description": "The provider requests approval where required."
+                }, {
+                    "id": "auto",
+                    "name": "Automatic",
+                    "description": "The provider decides."
+                }]
+            }]
+        }],
+        "nativeHooks": {"claude": "off", "codex": "off"}
+    }))
+    .unwrap()
+}
+
+pub(super) async fn serve(
+    root: &Path,
+    setup: &Setup,
+    metadata: Arc<LocalConversationStore>,
+    corpus: Corpus,
+    heads: Arc<HeadHold>,
+) {
+    let Corpus {
+        service,
+        producer,
+        provider,
+        release,
+    } = corpus;
     let id = ConversationId::new(&setup.conversation).unwrap();
     let caller = |action: &str| ConversationCaller {
         organization_id: OrganizationId::new(&setup.organization).unwrap(),
@@ -148,7 +206,8 @@ pub(super) async fn serve(
         None,
     )
     .await;
-    let prefix = storage
+    let prefix = producer
+        .records()
         .read_committed(SessionId::new(&setup.conversation).unwrap())
         .await
         .unwrap()

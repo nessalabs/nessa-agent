@@ -1727,7 +1727,9 @@ gate refuses any client dependency path to `nessa-server`, including renamed
 and transitive edges. Both ends depend on `nessa-protocol` for shared rules.
 
 The public `retained` library selects owner-device or granted-peer catalogue reads
-through the existing source authorizer. `retained/saved.rs` maps saved scope,
+through the existing source authorizer. `retained/subscribe.rs` is the live
+`conversation.subscribe` feed on that same pinned session; it does not write
+the checkpoint `RetainedCache::read` still copies. `retained/saved.rs` maps saved scope,
 catalogue pages and transcript/progress/deletion values through the existing
 private cache and passive projection, with no CLI, second fold or receiver.
 Scope discovery and each page have separate snapshots; pages carry their actual

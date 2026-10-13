@@ -11,10 +11,14 @@
 //! `WatchInbox` whenever they arrive, so an operation waiting for its own
 //! response never counts them as unexpected events (committed change watches,
 //! rows W6, W10, W15).
+//!
+//! It may also hold one `conversation.subscribe` feed. View and end frames are
+//! kept the same way, including a view that arrives in the same turn as the
+//! subscribe reply, before that reply has named the subscription.
 use super::deadline_stream::{io_cause, DeadlineStream};
 use crate::read_only_sync::application::{
     held_file::busy, watch::Wait, Cancellation, GatewayConnector, GatewayError, GatewayOutcome,
-    GatewayPolicy, GatewayStream, HeldFileRefusal,
+    GatewayPolicy, GatewayStream, HeldFileRefusal, SubscriptionCode, SubscriptionRefusal,
 };
 use nessa_auth::adapters::pairing::{GatewayTrust, NativeIdentity, NativeTransport};
 use nessa_protocol::clock::Clock;
@@ -28,9 +32,11 @@ use nessa_protocol::pairing::{
 use nessa_protocol::product::generated::{
     product_event, product_method, wire_shape_product_session_ready,
     wire_shape_session_authenticate_params, wire_shape_session_challenge, ChangeWatchId,
-    ConversationChanged, ConversationWatchEnded, ConversationWatchRecordsParams,
-    ConversationWatchResult, ProductClientMetadata, ProductSessionReady, ProductSurface,
-    ProductSurfaceKind, SessionAuthenticateParams, SessionChallenge, CHANGE_WATCH_ID_PATTERN,
+    ConversationChanged, ConversationSubscribeParams, ConversationSubscribeResult,
+    ConversationSubscriptionEnded, ConversationUnsubscribeParams, ConversationViewed,
+    ConversationWatchEnded, ConversationWatchRecordsParams, ConversationWatchResult,
+    ProductClientMetadata, ProductSessionReady, ProductSurface, ProductSurfaceKind,
+    SessionAuthenticateParams, SessionChallenge, CHANGE_WATCH_ID_PATTERN,
     MAX_AUTH_CREDENTIAL_CHARACTERS, MAX_CHANGE_WATCH_ID_BYTES, MAX_PRODUCT_CLIENT_ID_CHARACTERS,
     MAX_PRODUCT_SURFACE_INSTANCE_CHARACTERS, PRODUCT_HANDSHAKE_METHOD, PRODUCT_VERSION,
 };
@@ -145,6 +151,7 @@ pub(super) enum RpcKind {
     Catalogue,
     Watch,
     HeldFile,
+    Subscribe,
 }
 
 /// What the session holds for its one registered watch: whether any hint
@@ -156,12 +163,57 @@ struct WatchInbox {
     ended: Option<ChangeWatchEndReason>,
 }
 
+/// Views kept until the caller takes them. Each one replaces what the caller
+/// shows, so a burst past [`QUEUED_VIEWS`] drops the oldest and keeps the
+/// newest in arrival order.
+const QUEUED_VIEWS: usize = 4;
+
+struct Parked {
+    views: Vec<ConversationViewed>,
+    ended: Option<ConversationSubscriptionEnded>,
+}
+impl Parked {
+    fn push_view(&mut self, viewed: ConversationViewed) {
+        if self.ended.is_some() {
+            return;
+        }
+        if self.views.len() == QUEUED_VIEWS {
+            self.views.remove(0);
+            tracing::warn!(
+                limit = "client.subscription_views",
+                "product session hit an operational limit"
+            );
+        }
+        self.views.push(viewed);
+    }
+}
+
+/// The one subscription this connection opened. `closed` is set once its end
+/// has been delivered, so a view that arrives after that end is ignored.
+struct SubscriptionInbox {
+    id: String,
+    parked: Parked,
+    closed: bool,
+}
+
+/// One delivery from the subscription feed, in arrival order.
+pub(crate) enum SubscriptionDelivery {
+    View(Box<ConversationViewed>),
+    Ended(ConversationSubscriptionEnded),
+}
+
 /// How events are read for one session: the watch's own events go to its
-/// inbox; every other event counts toward the operation's capacity.
+/// inbox, and a subscription's views and end go to its inbox. A view that
+/// arrives before the subscribe reply is parked on `opening` and taken when
+/// that reply names the subscription. Every other event counts toward the
+/// operation's capacity.
 struct Events {
     policy: GatewayPolicy,
     unexpected: usize,
     inbox: Option<WatchInbox>,
+    subscription: Option<SubscriptionInbox>,
+    /// Set while `conversation.subscribe` is unanswered.
+    opening: Option<Parked>,
 }
 impl Events {
     fn new(policy: GatewayPolicy) -> Self {
@@ -169,6 +221,8 @@ impl Events {
             policy,
             unexpected: 0,
             inbox: None,
+            subscription: None,
+            opening: None,
         }
     }
     /// A watch event names a watch this connection minted, or the connection
@@ -184,6 +238,10 @@ impl Events {
                 let inbox = self.own_inbox(&ended.watch_id)?;
                 inbox.ended.get_or_insert(ended.reason);
                 return Ok(());
+            }
+            product_event::CONVERSATION_VIEW => return self.observe_view(event.payload),
+            product_event::CONVERSATION_SUBSCRIPTION_ENDED => {
+                return self.observe_subscription_end(event.payload)
             }
             _ => {
                 if self.unexpected >= self.policy.unexpected_events() {
@@ -201,6 +259,69 @@ impl Events {
             .as_mut()
             .filter(|inbox| inbox.watch == watch)
             .ok_or(GatewayError::Protocol)
+    }
+    /// A view outside the generated shape is skipped. One for another
+    /// subscription than the one this connection opened is a protocol failure.
+    fn observe_view(&mut self, payload: serde_json::Value) -> Result<(), GatewayError> {
+        let viewed = match strict_decode::<ConversationViewed>(payload) {
+            Ok(viewed) if !viewed.subscription_id.is_empty() => viewed,
+            _ => {
+                tracing::warn!(
+                    limit = "client.subscription_view",
+                    "skipped a conversation view outside the generated shape"
+                );
+                return Ok(());
+            }
+        };
+        if let Some(live) = &mut self.subscription {
+            if viewed.subscription_id != live.id {
+                return Err(GatewayError::Protocol);
+            }
+            if live.closed {
+                return Ok(());
+            }
+            live.parked.push_view(viewed);
+            return Ok(());
+        }
+        if let Some(opening) = &mut self.opening {
+            opening.push_view(viewed);
+            return Ok(());
+        }
+        self.count_unexpected()
+    }
+    fn observe_subscription_end(&mut self, payload: serde_json::Value) -> Result<(), GatewayError> {
+        let ended = match strict_decode::<ConversationSubscriptionEnded>(payload) {
+            Ok(ended) if !ended.subscription_id.is_empty() => ended,
+            _ => {
+                tracing::warn!(
+                    limit = "client.subscription_end",
+                    "skipped a subscription end outside the generated shape"
+                );
+                return Ok(());
+            }
+        };
+        let parked = if let Some(live) = &mut self.subscription {
+            if ended.subscription_id != live.id {
+                return Err(GatewayError::Protocol);
+            }
+            if live.closed {
+                return Ok(());
+            }
+            &mut live.parked
+        } else if let Some(opening) = &mut self.opening {
+            opening
+        } else {
+            return self.count_unexpected();
+        };
+        parked.ended.get_or_insert(ended);
+        Ok(())
+    }
+    fn count_unexpected(&mut self) -> Result<(), GatewayError> {
+        if self.unexpected >= self.policy.unexpected_events() {
+            return Err(GatewayError::EventCapacity);
+        }
+        self.unexpected += 1;
+        Ok(())
     }
 }
 
@@ -450,6 +571,121 @@ impl Session {
             }
         }
     }
+    /// Open this connection's conversation subscription. A view that arrived
+    /// with the reply is kept and comes out of [`Self::next_delivery`] first.
+    pub(crate) fn subscribe(
+        &mut self,
+        params: &ConversationSubscribeParams,
+    ) -> Result<String, GatewayError> {
+        // One inbox per connection. A second subscribe would drop the first
+        // id, and this client could no longer unsubscribe it.
+        if self.events.subscription.is_some() {
+            return Err(self.fail(GatewayError::Busy));
+        }
+        self.events.opening = Some(Parked {
+            views: Vec::new(),
+            ended: None,
+        });
+        let value = match self.rpc(
+            product_method::CONVERSATION_SUBSCRIBE,
+            params,
+            RpcKind::Subscribe,
+        ) {
+            Ok(value) => value,
+            Err(error) => {
+                self.events.opening = None;
+                return Err(error);
+            }
+        };
+        let result = match strict_decode::<ConversationSubscribeResult>(value) {
+            Ok(result) if !result.subscription_id.is_empty() => result,
+            _ => {
+                self.events.opening = None;
+                return Err(self.fail(GatewayError::Protocol));
+            }
+        };
+        let parked = self.events.opening.take().unwrap_or(Parked {
+            views: Vec::new(),
+            ended: None,
+        });
+        let foreign = parked
+            .views
+            .iter()
+            .any(|view| view.subscription_id != result.subscription_id)
+            || parked
+                .ended
+                .as_ref()
+                .is_some_and(|ended| ended.subscription_id != result.subscription_id);
+        if foreign {
+            return Err(self.fail(GatewayError::Protocol));
+        }
+        self.events.subscription = Some(SubscriptionInbox {
+            id: result.subscription_id.clone(),
+            parked,
+            closed: false,
+        });
+        Ok(result.subscription_id)
+    }
+    /// The next kept view, or the subscription's end once every kept view
+    /// has been taken. Waits under the current operation's deadline.
+    pub(crate) fn next_delivery(&mut self) -> Result<SubscriptionDelivery, GatewayError> {
+        let active = self.active.as_ref().ok_or(GatewayError::Busy)?;
+        if let Some(error) = active.failure {
+            return Err(error);
+        }
+        let result = self.delivery_inner();
+        result.map_err(|error| self.fail(error))
+    }
+    fn delivery_inner(&mut self) -> Result<SubscriptionDelivery, GatewayError> {
+        loop {
+            let inbox = self
+                .events
+                .subscription
+                .as_mut()
+                .ok_or(GatewayError::Busy)?;
+            if inbox.closed {
+                return Err(GatewayError::Closed(None));
+            }
+            if !inbox.parked.views.is_empty() {
+                return Ok(SubscriptionDelivery::View(Box::new(
+                    inbox.parked.views.remove(0),
+                )));
+            }
+            if let Some(ended) = inbox.parked.ended.take() {
+                inbox.closed = true;
+                return Ok(SubscriptionDelivery::Ended(ended));
+            }
+            let socket = self.socket.as_mut().ok_or(GatewayError::Transport)?;
+            match read_frame(socket)? {
+                OutgoingMessage::Response(_) => return Err(GatewayError::Correlation),
+                OutgoingMessage::Event(event) => self.events.observe(event)?,
+            }
+        }
+    }
+    /// Stop the subscription this connection opened. A frame already queued
+    /// is dropped with it: the caller asked to stop.
+    pub(crate) fn unsubscribe(&mut self) -> Result<(), GatewayError> {
+        let id = self
+            .events
+            .subscription
+            .as_ref()
+            .map(|inbox| inbox.id.clone())
+            .ok_or(GatewayError::Busy)?;
+        let value = self.rpc(
+            product_method::CONVERSATION_UNSUBSCRIBE,
+            &ConversationUnsubscribeParams {
+                subscription_id: id.clone(),
+            },
+            RpcKind::Subscribe,
+        )?;
+        let result = strict_decode::<ConversationSubscribeResult>(value)
+            .map_err(|error| self.fail(error))?;
+        if result.subscription_id != id {
+            return Err(self.fail(GatewayError::Protocol));
+        }
+        self.events.subscription = None;
+        Ok(())
+    }
     fn rpc_inner<T: Serialize>(
         &mut self,
         method: &str,
@@ -476,7 +712,7 @@ fn keeps_connection(error: GatewayError) -> bool {
         error,
         GatewayError::Record(
             RecordReadErrorCode::SourcePreparing | RecordReadErrorCode::WrongOwner
-        )
+        ) | GatewayError::Subscription(_)
     ) || busy(error)
 }
 fn shape_decode<T: DeserializeOwned>(
@@ -559,10 +795,27 @@ fn response_payload(response: ResponseFrame, kind: RpcKind) -> Result<Value, Gat
             .map(GatewayError::Watch)
             .map_or_else(|_| Err(GatewayError::Protocol), Err),
         RpcKind::HeldFile => Err(held_file_refusal(error.code)),
+        RpcKind::Subscribe => Err(subscription_refusal(error.code)),
         RpcKind::Authentication => Err(GatewayError::Authentication(authentication_close_reason(
             &error.code,
         ))),
     }
+}
+pub(crate) fn subscription_refusal(code: String) -> GatewayError {
+    let refusal = match code.as_str() {
+        "forbidden" => SubscriptionRefusal::Forbidden,
+        "unauthorized" => SubscriptionRefusal::Unauthorized,
+        "subscription_capacity" => SubscriptionRefusal::Subscription(SubscriptionCode::Capacity),
+        "subscription_duplicate" => SubscriptionRefusal::Subscription(SubscriptionCode::Duplicate),
+        "unknown_subscription" => SubscriptionRefusal::Subscription(SubscriptionCode::Unknown),
+        "cursor_ahead" => SubscriptionRefusal::Subscription(SubscriptionCode::CursorAhead),
+        _ => match serde_json::from_value::<ConversationErrorCode>(serde_json::Value::String(code))
+        {
+            Ok(code) => SubscriptionRefusal::Conversation(code),
+            Err(_) => return GatewayError::Protocol,
+        },
+    };
+    GatewayError::Subscription(refusal)
 }
 /// An `artifact.read` refusal: a conversation code, or the socket's access
 /// refusals. A code this client was not taught is a protocol failure, never

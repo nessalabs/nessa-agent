@@ -85,7 +85,15 @@ fn stopped_before_dispatch_opens_no_connection_or_cache() {
     let stop = ReadStop::new();
     stop.stop();
     assert!(matches!(
-        session.refresh(stop),
+        session.refresh(stop.clone()),
+        Err(SessionFailure::Stopped)
+    ));
+    assert!(matches!(
+        session.follow(
+            &ConversationId::new("00000000-0000-4000-8000-000000000001").unwrap(),
+            None,
+            stop,
+        ),
         Err(SessionFailure::Stopped)
     ));
     assert_eq!(connector.calls.load(Ordering::SeqCst), 0);
@@ -130,6 +138,16 @@ fn unreachable_status_retains_outer_failure_and_does_not_read() {
     assert!(refresh.recheck().is_none());
     assert_eq!(connector.calls.load(Ordering::SeqCst), 1);
     assert!(!root.path().join("private/cache.sqlite").exists());
+    let followed = session
+        .follow(
+            &ConversationId::new("00000000-0000-4000-8000-000000000001").unwrap(),
+            None,
+            ReadStop::new(),
+        )
+        .unwrap();
+    assert!(followed.followed().is_none());
+    assert!(followed.recheck().is_none());
+    assert_eq!(connector.calls.load(Ordering::SeqCst), 2);
     session.close().unwrap();
 }
 #[test]

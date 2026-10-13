@@ -22,7 +22,7 @@ outcome values through `product_contract`, not transport DTOs through `product`.
 
 The public API is `pairing::{NativeEnrollmentClient, NativeClientError,
 NativeRetryOutcome}`, `retained::{RetainedCache, ReaderAccess, ReaderRole, ReadStop,
-ReadReport, ReadFailure}` and its typed saved catalogue/transcript/progress values,
+ReadReport, ReadFailure, ConversationFeed, FeedEvent, SubscribeError}` and its typed saved catalogue/transcript/progress values,
 and, with `cli`, `composition::{execute, run_read_only_example}`.
 Gateway enrollment tests use the former; gateway online tests/child fixtures use
 `execute`; the example uses `run_read_only_example`. The crate root publishes an
@@ -53,7 +53,7 @@ borrowed accessors; its compile-fail example checks that the view cannot be muta
 | --- | --- |
 | `src/pairing/client.rs` | Native enrollment, strict pinned status and retry, pending-state publication and one retained physical worker. Shared framing and enrollment socket policy come from `nessa-protocol::pairing`. |
 | `src/retained/device.rs` | Library composition of that physical worker and the existing purge policy; immutable admission-scoped status/purge results and durable purge receipt lookup. No CLI or second worker. |
-| `src/retained.rs`, `src/retained/saved.rs` | Public bounded owner/granted read over the existing driver, plus typed saved scope/page/transcript/progress projections delegating to the same SQLite and passive-view owners. No CLI or additional receiver. |
+| `src/retained.rs`, `src/retained/saved.rs`, `src/retained/subscribe.rs` | Public bounded owner/granted checkpoint read over the existing driver, plus typed saved scope/page/transcript/progress projections delegating to the same SQLite and passive-view owners. `subscribe` follows one conversation with `conversation.subscribe` on that same pinned session and does not write a checkpoint. No CLI or additional receiver. |
 | `src/read_only_sync/domain/` | Immutable attributed cache reset requests; a held file named as the view names it, and its ranges. |
 | `src/read_only_sync/application/` | Cache policy and typed evidence, finite records/catalogue drivers, saved-read/reset/purge ports, protected connection policy, bounded watch loop, and the held-file fetch (ranges, at least one asked every time, busy retries, size and digest before keeping). |
 | `src/read_only_sync/infrastructure/cache/` | One private SQLite owner for catalogue values, physical records, SDK checkpoints, progress and purge/reset receipts. |

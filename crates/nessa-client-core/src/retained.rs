@@ -78,12 +78,14 @@ mod active;
 mod device;
 mod relay;
 mod saved;
+mod subscribe;
 pub use active::RetainedDeviceReader;
 pub use device::{RetainedEnrollmentClient, RetainedEnrollmentStatus, RetainedPurge};
 pub use saved::{
     RetainedCatalogueEntry, RetainedCataloguePage, RetainedProgress, RetainedTranscript,
     RetainedTranscriptSnapshot,
 };
+pub use subscribe::{ConversationFeed, FeedEvent, SubscribeError};
 
 /// The catalogue selector, not a grant of read authority. The authenticated
 /// session and the existing source authorizer enforce the selected scope.
@@ -563,36 +565,7 @@ impl RetainedCache {
         withdrawn: &mut Vec<String>,
     ) -> Result<ReadReport, ReadFailure> {
         let receiver = Id::new(access.receiver).map_err(|_| ReadFailure::Protocol)?;
-        let policy = GatewayPolicy::new(
-            HANDSHAKE_MS,
-            PASSIVE_MIN_REQUEST_TIMEOUT_MS,
-            UNEXPECTED_EVENTS,
-        )
-        .map_err(|_| ReadFailure::Protocol)?;
-        let session = Session::connect(
-            access.address,
-            DeviceEvidence {
-                identity: access.identity,
-                pin: access.pin,
-                credential: access.credential,
-            },
-            access.client_id,
-            &StoppableConnector {
-                ending: ending.clone(),
-                // A pin that is no Ed25519 key fails TLS whatever the route.
-                relay: access.relay.and_then(|address| {
-                    Some(RelayRoute {
-                        address: address.clone(),
-                        key: relay_key(&access.pin)?,
-                    })
-                }),
-                offline: offline.clone(),
-            },
-            self.clock.clone(),
-            ending.clone(),
-            policy,
-        )
-        .map_err(failure)?;
+        let session = self.open_session(&access, ending, offline)?;
         let connection = GatewayConnection::new(session);
         let epoch = access.access_epoch;
 
@@ -702,6 +675,46 @@ impl RetainedCache {
             complete,
             conversations: self.live(&scope)?.len(),
         })
+    }
+
+    /// The pinned session a read and a subscription share: the same key, pin,
+    /// credential, relay and stop. A subscription does not write the cache.
+    fn open_session(
+        &self,
+        access: &ReaderAccess<'_>,
+        ending: &Arc<Stopping>,
+        offline: &Arc<AtomicBool>,
+    ) -> Result<Session, ReadFailure> {
+        let policy = GatewayPolicy::new(
+            HANDSHAKE_MS,
+            PASSIVE_MIN_REQUEST_TIMEOUT_MS,
+            UNEXPECTED_EVENTS,
+        )
+        .map_err(|_| ReadFailure::Protocol)?;
+        Session::connect(
+            access.address,
+            DeviceEvidence {
+                identity: access.identity,
+                pin: access.pin,
+                credential: access.credential,
+            },
+            access.client_id,
+            &StoppableConnector {
+                ending: ending.clone(),
+                // A pin that is no Ed25519 key fails TLS whatever the route.
+                relay: access.relay.and_then(|address| {
+                    Some(RelayRoute {
+                        address: address.clone(),
+                        key: relay_key(&access.pin)?,
+                    })
+                }),
+                offline: offline.clone(),
+            },
+            self.clock.clone(),
+            ending.clone(),
+            policy,
+        )
+        .map_err(failure)
     }
 
     /// One conversation's records, from what the cache holds to the head;
