@@ -605,7 +605,7 @@ sequenceDiagram
     S->>S: admit nothing more: a Grant or GrantCommand is refused draining
     loop each lease held
         S->>J: draining (with the gateway it is for)
-        S->>S: stop every harness under it; a running command is stopped and answers Ran
+        S->>S: stop every harness under it, a running command is stopped and answers Ran
         S->>J: ended (drained, cleanup)
         S->>L: Ending{drained}
         L->>C: the hold ends as a system stop
@@ -618,7 +618,7 @@ sequenceDiagram
     S->>S: nothing held, no command running, every drained lease's End asked
     S-->>L: the connection closes
     D->>D: dial no more, sweep, release the lock, exit
-    Note over D,K: past the deadline the connection is closed and what is left is lost; a second signal exits at once
+    Note over D,K: past the deadline the connection is closed and what is left is lost, a second signal exits at once
 ```
 
 - **Inert until asked.** Only `--drain-deadline` makes a signal drain;
@@ -748,12 +748,12 @@ sequenceDiagram
     W->>A: dial with A's pin and W's key
     X->>B: dial with B's pin and X's key
     X-xA: dial with A's pin: X's key is not paired there, refused
-    A->>W: command and agent lease; publish report.txt
+    A->>W: command and agent lease, publish report.txt
     W-->>A: W's report.txt
     A-xX: lease on X's name: unreachable, A holds no connection for it
     A->>W: publish ../x/report.txt
     W-->>A: refused outsideWorkspace
-    B->>X: command and agent lease; publish report.txt
+    B->>X: command and agent lease, publish report.txt
     X-->>B: X's report.txt
 ```
 

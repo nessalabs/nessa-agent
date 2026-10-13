@@ -386,10 +386,10 @@ sequenceDiagram
     R->>G: Page(D,H)
     G--xR: Answer lost
     Note over R,G: Either or both processes restart
-    R->>DB: Reload D and A; drain saved terminal outcomes
+    R->>DB: Reload D and A, drain saved terminal outcomes
     R->>G: Fresh auth, head and page from D
     G-->>R: Validated fixed-target page
-    R->>DB: Atomic records+D; drain sealed facts or aborts with atomic A
+    R->>DB: Atomic records+D, drain sealed facts or aborts with atomic A
     R->>G: Next page until captured H
     Note over G: New commits beyond H
     R->>G: Reauthorize and recheck head
