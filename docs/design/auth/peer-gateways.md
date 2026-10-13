@@ -100,8 +100,9 @@ device does. The owner shares a conversation with the peer's credential
 peer's receiver, and every read the peer makes asks that receiver's grants:
 
 - **Record head and pages, and a records watch** go through
-  `AdmitPassiveRead::execute`, which asks `admit_read` for the receiver's
-  grant on that conversation; an ungranted one is `wrong_owner`.
+  `AdmitPassiveRead::execute`, which asks the conversation access policy
+  (`conversation.read`, ADR 803) with the receiver's grant on that
+  conversation; an ungranted one is `wrong_owner`.
 - **Catalogue manifest and resolve** are narrowed in SQL to the receiver's
   granted rows (`store::share_grants::granted`). A manifest pass may not reach
   past the receiver's own head, so probing boundaries finds that head and not

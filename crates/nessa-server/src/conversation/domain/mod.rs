@@ -2,8 +2,8 @@
 //! A conversation's summary — its title, last thing said, and when — is a
 //! separate value derived from what was said, never part of ownership.
 //! A deleted conversation keeps its ownership record and a tombstone, its
-//! `ConversationDeletion`, which `Conversation::check_access` refuses callers
-//! by from then on. The tombstone also carries how far the deletion got, and
+//! `ConversationDeletion`, by which the access policy refuses everyone but
+//! the owner from then on. The tombstone also carries how far the deletion got, and
 //! the domain decides which progress is possible and which request decided it.
 //! The conversation's identity, its summary and the catalogue stream identity
 //! are `nessa_protocol::conversation::domain`, read by gateway and device alike.

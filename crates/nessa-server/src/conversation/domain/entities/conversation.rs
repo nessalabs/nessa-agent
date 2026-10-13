@@ -213,7 +213,8 @@ impl Conversation {
     /// Ownership alone, deleted or not, as a record-integrity check: a stored
     /// record against the row columns it was selected by. Whether a caller may
     /// locate or act on the conversation is the access policy's
-    /// (`ConversationAccessPolicyEvaluator`).
+    /// (`ConversationAccessPolicyEvaluator`). The share commands' `owner_of`
+    /// still uses it as an access check until ADR 803 step 3 moves them.
     pub fn allows(&self, organization: &OrganizationId, principal: &PrincipalId) -> bool {
         self.organization == *organization && self.owner == *principal
     }
@@ -221,7 +222,7 @@ impl Conversation {
     /// not deleted.
     ///
     /// Policy written in Rust, kept only for the callers ADR 803 step 3
-    /// has not moved yet (notes and the share commands); the access policy
+    /// has not moved yet (`note_status`); the access policy
     /// (`ConversationAccessPolicyEvaluator`, `conversation.act`) is the
     /// authority, and S5 removes this.
     ///
