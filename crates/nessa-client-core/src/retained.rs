@@ -173,6 +173,9 @@ pub enum ReadFailure {
     /// The private cache could not be opened or written; trying again may
     /// help. Conversations the gateway no longer grants were still withdrawn.
     Cache,
+    /// A cache commit may have taken effect. Reload durable progress or purge
+    /// evidence before treating the write as absent or retrying it.
+    CacheUncertain,
     /// The private cache is damaged, or has a shape this build does not
     /// read. It is derived from the gateway, so only emptying it helps.
     CacheDamaged,
@@ -916,7 +919,10 @@ fn retained_policy() -> Result<CachePolicy, CacheError> {
 /// one is emptied, a full one is reported as such, and anything else may pass.
 fn cache_failure(error: &CacheError) -> ReadFailure {
     match error {
-        CacheError::Corrupt | CacheError::OutdatedSchema => ReadFailure::CacheDamaged,
+        CacheError::Corrupt | CacheError::OutdatedSchema | CacheError::CatalogueMetadata => {
+            ReadFailure::CacheDamaged
+        }
+        CacheError::Uncertain => ReadFailure::CacheUncertain,
         CacheError::Quota => ReadFailure::Quota,
         CacheError::Scope { .. } => ReadFailure::ResetRequired,
         _ => ReadFailure::Cache,

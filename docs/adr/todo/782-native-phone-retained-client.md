@@ -41,8 +41,10 @@ storage-owned pre-effect reservation. Scope replacement drains the old owner.
 | --- | --- | --- |
 | Unpaired owner enrolls, later ends credential A, then enrolls B | Purge policy derives each receiver from its exact current issued credential | One wrapper, changing issued bindings, receiver assertions |
 | Terminal operation expects A, saved credential is B | Existing purge policy checks intent before opening cache; typed Conflict | Zero cache opens, no credential removal, no B row deletion |
+| Terminal credential has a valid pairing receiver beyond the sync identity byte bound | Purge and durable receipt retain the pairing ResourceId; sync read identity validation remains owned by sync | Full 256-byte ASCII and UTF-8 credential cleanup, durable receipt reopen and repeated purge |
 | Pending-only Unclaimed | Existing pending removal, no receiver purge | Cache opener never called |
-| Purge fails | Preserve issued credential and typed purge failure | Storage/open failure and retry |
+| Purge fails before commit | Preserve issued credential and ordinary Cache failure | Storage/open failure and retry |
+| Purge commit acknowledgement is uncertain | Preserve issued credential and distinct CacheUncertain; recover original durable receipt before retry | Uncertain vs unavailable mapping, foreign translation and withdrawal-stop regression |
 | Purge succeeds, removal fails or is uncertain | Keep original purge receipt separate from removal acknowledgement | Reopen each store; later NoPending does not erase durable purge evidence |
 | Purge commits, then private-state worker panics before completion capture | Typed worker fault, no captured completion claim; durable receipt recoverable independently | Subsequent NoPending cannot inherit the abandoned transient purge effect |
 | Refused/offline/Active after an earlier purge failure | Collect this operation's evidence inside its physical permit | Prior effect cannot leak into the next result |
@@ -159,3 +161,10 @@ exposed an existing callback fixture race: channel closure preceded the owning
 task's listener teardown. That test now consumes its existing task-completion
 receipt instead of treating an OS port observation as listener identity. This
 changes verification only, not callback production behavior.
+
+### Saved metadata recovery classification
+
+| Evidence | Caller outcome | Regression |
+| --- | --- | --- |
+| Persisted non-deleted catalogue entry has malformed metadata | CacheDamaged; saved progress is unchanged and recovery requires purge/resync | public_catalogue_refuses_corrupt_metadata_without_advancing_saved_progress |
+| Cache unavailable before a write | Cache; no claim that a commit occurred | uncertain_cache_commit_is_distinct_from_a_pre_effect_failure |

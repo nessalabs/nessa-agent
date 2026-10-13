@@ -1,7 +1,10 @@
 //! The purge-before-forgetting store and the recheck rule, against doubles
 //! that record the order of effects.
 use super::*;
-use nessa_auth::domain::pairing::{AttemptId, ConsentClass, ConsentIntentId, InvitationId};
+use nessa_auth::domain::{
+    pairing::{AttemptId, ConsentClass, ConsentIntentId, InvitationId},
+    MAX_IDENTIFIER_BYTES,
+};
 use nessa_protocol::product_contract::generated::{ConversationErrorCode, SessionCloseReason};
 
 #[derive(Default)]
@@ -91,7 +94,7 @@ impl ClientPendingStore for Store {
 }
 struct Purges(Arc<Effects>, Option<CacheError>);
 impl CachePurges for Purges {
-    fn purge_receiver(&mut self, receiver: &Id) -> Result<PurgeReceipt, CacheError> {
+    fn purge_receiver(&mut self, receiver: &ResourceId) -> Result<PurgeReceipt, CacheError> {
         self.0.push("purge");
         if let Some(error) = self.1.clone() {
             return Err(error);
@@ -369,4 +372,36 @@ fn published_pinned_classifier_preserves_phase_receiver_and_epoch() {
         PinnedStatus::from_native(&terminal),
         Some(PinnedStatus::Terminal)
     );
+}
+
+/// Pairing receiver identities keep their full byte bound when an authenticated
+/// Terminal status purges and removes their credential.
+#[test]
+fn terminal_cleanup_accepts_pairing_receivers_beyond_the_sync_id_bound() {
+    for receiver in [
+        "r".repeat(MAX_IDENTIFIER_BYTES),
+        "é".repeat(MAX_IDENTIFIER_BYTES / 2),
+    ] {
+        let effects = Arc::new(Effects::default());
+        let state = Arc::new(Store::new(effects.clone(), true));
+        *state.issued.lock().unwrap() = Some((intent(), receiver.clone()));
+        let opening = effects.clone();
+        let purging = PurgeBeforeEnd::new(
+            state.clone(),
+            Box::new(move || {
+                opening.push("open");
+                Ok(Box::new(Purges(opening.clone(), None)))
+            }),
+        );
+        purging.end_enrollment(intent()).unwrap();
+        assert_eq!(
+            effects.taken(),
+            ["load_credential", "open", "purge", "end_enrollment"]
+        );
+        assert_eq!(
+            purging.purge().unwrap().unwrap().receiver.as_str(),
+            receiver
+        );
+        assert!(state.issued.lock().unwrap().is_none());
+    }
 }

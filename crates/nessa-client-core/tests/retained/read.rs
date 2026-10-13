@@ -128,6 +128,7 @@ fn a_withdrawal_that_cannot_be_written_does_not_stop_the_others() {
 fn a_damaged_cache_or_a_lost_connection_ends_the_walk_at_once() {
     for failure in [
         ReadFailure::CacheDamaged,
+        ReadFailure::CacheUncertain,
         ReadFailure::ResetRequired,
         ReadFailure::Unreachable,
         ReadFailure::Refused,
@@ -373,4 +374,14 @@ fn a_sliced_wait_lasts_as_long_as_the_caller_set() {
         "{:?}",
         started.elapsed()
     );
+}
+
+#[test]
+fn uncertain_cache_commit_is_distinct_from_a_pre_effect_failure() {
+    assert_eq!(
+        cache_failure(&CacheError::Uncertain),
+        ReadFailure::CacheUncertain
+    );
+    assert_eq!(cache_failure(&CacheError::Unavailable), ReadFailure::Cache);
+    assert!(!holds_back(ReadFailure::CacheUncertain));
 }
