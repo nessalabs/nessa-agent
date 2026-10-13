@@ -442,10 +442,14 @@ impl CustomPermissionCancellationReason {
         explanation: impl Into<String>,
     ) -> Result<Self, ExecutionError> {
         let reason = Self::restore(code, explanation)?;
-        if reason.code.starts_with(Self::HOOK_REFUSAL_PREFIX) {
+        if reason.is_hook_refusal() {
             return Err(ExecutionError::ReservedCancellationCode);
         }
         Ok(reason)
+    }
+    /// Whether the code is in the namespace only the runner writes.
+    pub(crate) fn is_hook_refusal(&self) -> bool {
+        self.code.starts_with(Self::HOOK_REFUSAL_PREFIX)
     }
     /// The withdrawal the runner records for a hook refusal with `outcome`.
     pub(crate) fn hook_refusal(

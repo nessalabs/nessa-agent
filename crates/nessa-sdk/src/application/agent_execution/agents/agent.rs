@@ -42,7 +42,8 @@ use crate::application::agent_execution::sessions::{
 use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::domain::agent_execution::permissions::{
     CustomPermissionCancellationReason, PermissionAuthorityError, PermissionCancellationReason,
-    PermissionEffect, PermissionId, PermissionOptionId, PermissionScope, RefusalOutcome,
+    PermissionCancellationReasonView, PermissionEffect, PermissionId, PermissionOptionId,
+    PermissionScope, RefusalOutcome,
 };
 use crate::domain::agent_execution::tools::ToolCallId;
 use crate::domain::model_metadata::value_objects::{EffortLevel, EffortLevels};
@@ -193,10 +194,17 @@ where
         running: Arc::clone(running),
         _permit: permit,
     };
+    // The hook thread can start well after this point. It reads the notice
+    // again as it starts: a stop sent before then wins and the hook never
+    // runs; one sent after it arrives while the hook runs, as any stop can.
+    let admission = wait.stop_notice.clone();
     let task = tokio::task::spawn_blocking(move || {
+        if !matches!(admission.has_changed(), Ok(false)) {
+            return None;
+        }
         let decision = hooks.before_permission_review(&tool_id, &call, &suffix);
         drop(guard);
-        decision
+        Some(decision)
     });
     tokio::pin!(task);
     tokio::pin!(deadline);
@@ -220,7 +228,11 @@ where
             }
             finished = &mut task => {
                 return match finished {
-                    Ok(decision) => decision,
+                    Ok(Some(decision)) => decision,
+                    Ok(None) => {
+                        *wait.stop_observed = true;
+                        PermissionReviewDecision { index: None, verdict: ToolVerdict::Stopped }
+                    }
                     Err(_) => PermissionReviewDecision {
                         index: None,
                         verdict: ToolVerdict::hook_failed(HookFailureKind::Panic),
@@ -2129,7 +2141,7 @@ impl Agent {
     ) -> Result<(), AgentError> {
         let custom = CustomPermissionCancellationReason::hook_refusal(outcome, explanation)
             .map_err(|error| AgentError::InvalidInput(error.to_string()))?;
-        self.cancel_permission(PermissionCancellationRequest {
+        self.submit_permission_cancellation(PermissionCancellationRequest {
             execution_id: event.execution_id().clone(),
             id,
             reason: PermissionCancellationReason::custom(custom),
@@ -2309,10 +2321,30 @@ impl Agent {
     /// a panic from it is logged and does not affect the operation. See
     /// "Caller wakers" in docs/agent_execution/lifecycle.md.
     ///
-    /// A caller cannot write a hook-refusal code:
-    /// [`CustomPermissionCancellationReason::new`] rejects that namespace, so
-    /// only the runner records a hook's withdrawal.
+    /// A hook-refusal code is [`AgentError::InvalidInput`] and sends nothing.
+    /// [`CustomPermissionCancellationReason::new`] cannot build one, and this
+    /// rejects one copied from an earlier withdrawal's evidence, so only the
+    /// runner records a hook's withdrawal.
     pub fn cancel_permission(
+        &self,
+        request: PermissionCancellationRequest,
+    ) -> AgentFuture<'_, PermissionCancellation> {
+        if matches!(
+            request.reason.view(),
+            PermissionCancellationReasonView::Custom(reason) if reason.is_hook_refusal()
+        ) {
+            return Box::pin(async {
+                Err(AgentError::InvalidInput(
+                    crate::domain::agent_execution::ExecutionError::ReservedCancellationCode
+                        .to_string(),
+                ))
+            });
+        }
+        self.submit_permission_cancellation(request)
+    }
+
+    // The runner's withdrawal path, which may carry a hook-refusal code.
+    fn submit_permission_cancellation(
         &self,
         request: PermissionCancellationRequest,
     ) -> AgentFuture<'_, PermissionCancellation> {
@@ -2513,5 +2545,63 @@ mod hook_wait_tests {
         // A hook thread, had one started, enters well within this.
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         assert!(!entered.load(Ordering::SeqCst), "no hook thread started");
+    }
+    #[test]
+    fn a_stop_sent_before_the_hook_thread_starts_wins() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .max_blocking_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            // Hold the only blocking thread, so the hook thread is queued.
+            let (free, held) = std::sync::mpsc::channel::<()>();
+            let occupier = tokio::task::spawn_blocking(move || held.recv());
+            let entered = Arc::new(AtomicBool::new(false));
+            let hooks = InvocationHooks::new(vec![Arc::new(EnteredHook(entered.clone()))]);
+            let (stop, mut stop_notice) = watch::channel(None);
+            let mut stop_observed = false;
+            let mut pending_provider_outcome = None;
+            let execution = std::future::pending::<(
+                ProviderExecutionReply,
+                Option<InvocationCancellationEvent>,
+            )>();
+            tokio::pin!(execution);
+            let running = Arc::new(AtomicBool::new(false));
+            let mut wait = SupervisedWait {
+                execution: execution.as_mut(),
+                stop_notice: &mut stop_notice,
+                stop_observed: &mut stop_observed,
+                pending_provider_outcome: &mut pending_provider_outcome,
+                result_known: false,
+            };
+            let review = run_pre_tool_hook(
+                hooks,
+                ToolCallId::new("bash").unwrap(),
+                ToolReviewInput {
+                    name: "bash".into(),
+                    arguments_json: "{}".into(),
+                },
+                EvaluationSuffix::incomplete(),
+                &running,
+                Box::pin(std::future::pending()),
+                &mut wait,
+            );
+            tokio::pin!(review);
+            // The supervisor checks stop and queues the hook thread.
+            let first = std::future::poll_fn(|cx| {
+                std::task::Poll::Ready(Future::poll(review.as_mut(), cx))
+            })
+            .await;
+            assert!(first.is_pending());
+            stop.send_replace(None);
+            free.send(()).unwrap();
+            occupier.await.unwrap().unwrap();
+            let decision = review.await;
+            assert!(matches!(decision.verdict, ToolVerdict::Stopped));
+            // Let the queued hook thread run, had it been going to.
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            assert!(!entered.load(Ordering::SeqCst), "the hook did not run");
+        });
     }
 }

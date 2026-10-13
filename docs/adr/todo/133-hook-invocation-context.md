@@ -124,7 +124,8 @@ runs, because the hook's wait cannot poll that deadline.
 The review is human-paced. The suffix is copied, the evidence lock is released,
 and the hook runs on a blocking thread until the session's injected
 message-commit clock advances two seconds, selected against stop. A stop that
-arrives first wins. Dropping the wait does not cancel the callback. The
+arrives first wins, including one sent before the hook thread starts, which
+reads stop again before the callback. Dropping the wait does not cancel the callback. The
 blocking task cannot be cancelled, so a hook that overruns keeps its thread
 until it returns; its late verdict is discarded, and it must not re-enter the
 session. Before and after hooks see the

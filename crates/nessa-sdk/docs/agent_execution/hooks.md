@@ -64,6 +64,8 @@ that needs the whole turn treats `Inconclusive`, and `!is_complete()`, as a no.
 The suffix is copied and the evidence lock is released before the callback. A
 permission-review hook runs on a blocking thread until the session's
 message-commit clock advances two seconds, and it yields when stop arrives.
+The hook thread reads stop again as it starts, so a stop sent before the
+callback begins means it never runs, however long the thread took to start.
 Dropping that wait does not cancel the callback: the blocking task cannot be
 cancelled, so a hook that overruns keeps its thread until it returns, its late
 verdict is discarded, and it must not re-enter the session. A verdict first
@@ -103,8 +105,8 @@ withdrawal and cancel run while the execution is still polled, as saves do,
 so a provider that completes them through its execution cannot deadlock. The
 hook thread receives only the proposed call, not the whole review. A caller
 cannot write a `hook-refusal.` code: `CustomPermissionCancellationReason::new`
-rejects that namespace, so a withdrawal carrying one, by any path, was
-recorded by the runner that carried the refusal out. Only a
+cannot build one, and `Agent::cancel_permission` rejects one copied from an
+earlier withdrawal, so only the runner submits a hook's withdrawal. Only a
 continue is ever an answer, and the execution controller rejects a hook answer
 with any other outcome, so no answer carries a terminal outcome to replay.
 An end-turn the binding cannot perform is recorded as continue and does not

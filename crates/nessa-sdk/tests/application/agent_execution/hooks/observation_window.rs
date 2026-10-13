@@ -1733,6 +1733,44 @@ async fn a_continue_without_a_deny_option_stays_open_when_the_binding_cannot_can
 }
 
 #[tokio::test]
+async fn a_caller_cannot_resubmit_a_recorded_hook_withdrawal() {
+    let mut events = script();
+    events.pop();
+    events.push(allow_only_review());
+    let fixture = open_fixture(
+        events,
+        vec![Arc::new(ReviewHook {
+            seen: Arc::new(Mutex::new(Vec::new())),
+            verdict: ToolVerdict::refuse("no", RefusalOutcome::Continue),
+        })],
+        FixtureKnobs {
+            turn_cancel: false,
+            fail_delivery: false,
+            fail_turn_cancel: false,
+        },
+    )
+    .await;
+    fixture
+        .agent
+        .invoke(request(), close_action())
+        .await
+        .unwrap();
+    // The recorded reason is a value a caller can copy from the evidence.
+    let mut copied = fixture.withdrawals.lock().unwrap()[0].clone();
+    copied.actor = close_action();
+    let refused = fixture.agent.cancel_permission(copied).await;
+    assert!(
+        matches!(refused, Err(AgentError::InvalidInput(_))),
+        "{refused:?}"
+    );
+    assert_eq!(
+        fixture.cancelled.load(Ordering::SeqCst),
+        1,
+        "nothing was sent"
+    );
+}
+
+#[tokio::test]
 async fn a_failed_hook_denial_ends_the_turn_and_leaves_no_review_pending() {
     let fixture = open_fixture(
         script(),
