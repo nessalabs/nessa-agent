@@ -31,10 +31,10 @@ use std::{
 };
 use zeroize::Zeroizing;
 
-pub(super) fn identity(seed: u8) -> NativeIdentity {
+pub(crate) fn identity(seed: u8) -> NativeIdentity {
     NativeIdentity::restore(PrivateKeyMaterial::new(Zeroizing::new([seed; 32]))).unwrap()
 }
-pub(super) fn intent() -> PublicIntent {
+pub(crate) fn intent() -> PublicIntent {
     PublicIntent::new(
         InvitationId::new([1; 16]),
         AttemptId::new([2; 16]),
@@ -45,7 +45,7 @@ pub(super) fn intent() -> PublicIntent {
     )
     .unwrap()
 }
-pub(super) fn root(issued: bool) -> PrivateFixture {
+pub(crate) fn root(issued: bool) -> PrivateFixture {
     let root = PrivateFixture::new();
     create_directory_beneath(root.path(), Path::new("private")).unwrap();
     let state = FilePairingState::open(root.path(), Path::new("private")).unwrap();
@@ -68,18 +68,18 @@ pub(super) fn root(issued: bool) -> PrivateFixture {
     }
     root
 }
-pub(super) struct Held {
+pub(crate) struct Held {
     state: Mutex<(bool, bool)>,
     changed: Condvar,
 }
 impl Held {
-    pub(super) fn new() -> Arc<Self> {
+    pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self {
             state: Mutex::new((false, false)),
             changed: Condvar::new(),
         })
     }
-    pub(super) fn hold(&self) {
+    pub(crate) fn hold(&self) {
         let mut state = self.state.lock().unwrap();
         state.0 = true;
         self.changed.notify_all();
@@ -87,21 +87,21 @@ impl Held {
             state = self.changed.wait(state).unwrap();
         }
     }
-    pub(super) fn entered(&self) {
+    pub(crate) fn entered(&self) {
         let (state, timeout) = self
             .changed
             .wait_timeout_while(self.state.lock().unwrap(), Duration::from_secs(3), |s| !s.0)
             .unwrap();
         assert!(!timeout.timed_out() && state.0, "physical gate entered");
     }
-    pub(super) fn release(&self) {
+    pub(crate) fn release(&self) {
         self.state.lock().unwrap().1 = true;
         self.changed.notify_all();
     }
 }
-pub(super) struct Peer(Option<JoinHandle<()>>);
+pub(crate) struct Peer(Option<JoinHandle<()>>);
 impl Peer {
-    pub(super) fn join(mut self) {
+    pub(crate) fn join(mut self) {
         self.0.take().unwrap().join().unwrap();
     }
 }
@@ -115,21 +115,21 @@ impl Drop for Peer {
         }
     }
 }
-pub(super) struct Wire {
+pub(crate) struct Wire {
     transport: NativeTransport<TcpStream>,
     frames: FrameReader,
 }
 impl Wire {
-    pub(super) fn send(&mut self, message: OutgoingMessage) {
+    pub(crate) fn send(&mut self, message: OutgoingMessage) {
         self.raw(&message.to_wire_text().unwrap());
     }
-    pub(super) fn raw(&mut self, text: &str) {
+    pub(crate) fn raw(&mut self, text: &str) {
         self.transport
             .write_all(&encode_frame(MAX_PROTECTED_RESPONSE_BYTES, text.as_bytes()).unwrap())
             .unwrap();
         self.transport.flush().unwrap();
     }
-    pub(super) fn request(&mut self) -> Option<RequestFrame> {
+    pub(crate) fn request(&mut self) -> Option<RequestFrame> {
         loop {
             let count = self.transport.read(self.frames.unfilled().unwrap()).ok()?;
             if count == 0 {
@@ -141,7 +141,7 @@ impl Wire {
         }
     }
 }
-pub(super) fn peer(script: impl FnOnce(&mut Wire) + Send + 'static) -> (SocketAddr, Peer) {
+pub(crate) fn peer(script: impl FnOnce(&mut Wire) + Send + 'static) -> (SocketAddr, Peer) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let thread = thread::spawn(move || {
@@ -206,8 +206,8 @@ pub(super) fn peer(script: impl FnOnce(&mut Wire) + Send + 'static) -> (SocketAd
     });
     (address, Peer(Some(thread)))
 }
-pub(super) struct HeldConnector {
-    pub(super) gate: Arc<Held>,
+pub(crate) struct HeldConnector {
+    pub(crate) gate: Arc<Held>,
 }
 impl ProductConnector for HeldConnector {
     fn connect(&self, address: SocketAddr, timeout: Duration) -> IoResult<ConnectedProduct> {
@@ -215,8 +215,8 @@ impl ProductConnector for HeldConnector {
         LocalProductConnector.connect(address, timeout)
     }
 }
-pub(super) struct CleanupConnector {
-    pub(super) gate: Arc<Held>,
+pub(crate) struct CleanupConnector {
+    pub(crate) gate: Arc<Held>,
 }
 struct Cleanup {
     inner: Box<dyn ProductStream>,

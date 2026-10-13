@@ -7,7 +7,9 @@ use nessa_auth::{
         OsEntropy, RngCore,
     },
     application::{
-        pairing::{ClientPendingStore, PrivateStateError},
+        pairing::{
+            ClientPendingStore, OwnerPhoneOriginalStore, OwnerPhoneReservation, PrivateStateError,
+        },
         ports::Clock as WallClock,
     },
     domain::{
@@ -16,7 +18,10 @@ use nessa_auth::{
     },
 };
 use nessa_client_core::{
-    pairing::{NativeClientError, NativeRetryOutcome},
+    pairing::{
+        prepare_owner_phone, restore_owner_phone, NativeClientError, NativeRetryOutcome,
+        OwnerPhonePreparation, OwnerPhonePreparationError,
+    },
     product::{
         LocalProductConnector, ProductConnector, ProductFailure, ProductLimits, ProductSession,
         ProductWake, ThreadProductWake,
@@ -121,6 +126,65 @@ impl RngCore for Entropy {
     }
 }
 impl CryptoRng for Entropy {}
+
+/// Parent admission or original preparation failure; neither erases the other owner.
+#[derive(Debug)]
+pub enum SessionPreparationFailure {
+    /// Original parent admission failure.
+    Session(SessionFailure),
+    /// Original canonical preparation or private publication refusal.
+    Preparation(OwnerPhonePreparationError),
+}
+impl Display for SessionPreparationFailure {
+    fn fmt(&self, output: &mut Formatter<'_>) -> FormatResult {
+        write!(output, "{self:?}")
+    }
+}
+impl Error for SessionPreparationFailure {}
+
+/// Immutable physical cleanup fact, independent of its retained typed outcome.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SessionCloseObservation {
+    outcome: Result<(), SessionFailure>,
+    released: bool,
+}
+impl SessionCloseObservation {
+    /// Original result from the same actual cleanup invocation.
+    pub fn outcome(&self) -> &Result<(), SessionFailure> {
+        &self.outcome
+    }
+    /// Whether this cleanup owner confirmed release of its private scope.
+    pub fn released(&self) -> bool {
+        self.released
+    }
+}
+
+// Acquisition is lazy: invalid or restored preparation consumes no entropy source.
+struct PreparationEntropy {
+    factory: Arc<dyn EnrollmentEntropyFactory>,
+    value: Option<Entropy>,
+}
+impl PreparationEntropy {
+    fn value(&mut self) -> &mut Entropy {
+        self.value
+            .get_or_insert_with(|| Entropy(self.factory.create()))
+    }
+}
+impl RngCore for PreparationEntropy {
+    fn next_u32(&mut self) -> u32 {
+        self.value().next_u32()
+    }
+    fn next_u64(&mut self) -> u64 {
+        self.value().next_u64()
+    }
+    fn fill_bytes(&mut self, bytes: &mut [u8]) {
+        self.value().fill_bytes(bytes);
+    }
+    fn try_fill_bytes(&mut self, bytes: &mut [u8]) -> Result<(), EntropyError> {
+        self.value().try_fill_bytes(bytes)
+    }
+}
+impl CryptoRng for PreparationEntropy {}
 
 /// Read completion retains withdrawals even when the read ends with a failure.
 #[derive(Clone, Debug)]
@@ -285,10 +349,13 @@ impl Default for ProductDependencies {
         }
     }
 }
+trait NativePrivateState: ClientPendingStore + OwnerPhoneOriginalStore {}
+impl<T: ClientPendingStore + OwnerPhoneOriginalStore> NativePrivateState for T {}
+
 struct Driver {
     runtime: Runtime,
     enrollment: Arc<RetainedEnrollmentClient>,
-    state: Arc<dyn ClientPendingStore>,
+    state: Arc<dyn NativePrivateState>,
     connector: Arc<dyn EnrollmentConnector>,
     entropy: Arc<dyn EnrollmentEntropyFactory>,
     address: SocketAddr,
@@ -300,7 +367,7 @@ struct Driver {
     product: ProductDependencies,
 }
 struct Dependencies {
-    state: Arc<dyn ClientPendingStore>,
+    state: Arc<dyn NativePrivateState>,
     connector: Arc<dyn EnrollmentConnector>,
     entropy: Arc<dyn EnrollmentEntropyFactory>,
     path: PathBuf,
@@ -704,6 +771,35 @@ impl NativeSession {
             gate: &self.gate,
         })
     }
+    /// Prepare only a newly allocated original under the admitted private owner.
+    /// A matching Prepared replay restores its key; it never consumes new entropy.
+    pub fn prepare_owner_original(
+        &self,
+        reservation: OwnerPhoneReservation,
+    ) -> Result<OwnerPhonePreparation, SessionPreparationFailure> {
+        let mut operation = self
+            .enter(None)
+            .map_err(SessionPreparationFailure::Session)?;
+        let driver = operation.driver();
+        let mut entropy = PreparationEntropy {
+            factory: driver.entropy.clone(),
+            value: None,
+        };
+        prepare_owner_phone(driver.state.as_ref(), reservation, &mut entropy)
+            .map_err(SessionPreparationFailure::Preparation)
+    }
+    /// Restore an existing original; missing or incomplete private history refuses.
+    /// This never falls back to initial preparation or creates another key.
+    pub fn restore_owner_original(
+        &self,
+        reservation: &OwnerPhoneReservation,
+    ) -> Result<OwnerPhonePreparation, SessionPreparationFailure> {
+        let mut operation = self
+            .enter(None)
+            .map_err(SessionPreparationFailure::Session)?;
+        restore_owner_phone(operation.driver().state.as_ref(), reservation)
+            .map_err(SessionPreparationFailure::Preparation)
+    }
     /// Use the existing physical enrollment worker; no replacement key on failure.
     pub fn enroll(&self, code: ManualCode) -> Result<NativePairingStatus, SessionFailure> {
         let mut operation = self.enter(None)?;
@@ -942,28 +1038,39 @@ impl NativeSession {
     /// after close refuse; repeated close remains closed. This blocking drain
     /// belongs on the worker, while request_close can bypass its operation queue.
     pub fn close(&self) -> Result<(), SessionFailure> {
+        self.close_observed().outcome
+    }
+    /// Join actual owned work and capture release separately from historical failure.
+    /// An unknown earlier unwind with a poisoned empty slot proves no release.
+    pub fn close_observed(&self) -> SessionCloseObservation {
         let requested = self.request_close();
-        // Poison still refuses admission; recovery here is only for the physical
-        // drain of already-owned resources (poisoned_parent_drain test).
         let (mut driver, damaged_driver) = match self.driver.lock() {
             Ok(driver) => (driver, false),
             Err(error) => (error.into_inner(), true),
         };
+        // A damaged already-empty slot cannot distinguish prior successful
+        // destruction from a prior unwind after take(). Current nonempty
+        // destruction can establish the fact in this invocation, without a flag.
+        let original_driver_present = driver.is_some();
         let (product, damaged_gate) = match self.gate.lock() {
             Ok(gate) => (gate.product.clone(), false),
             Err(error) => (error.into_inner().product.clone(), true),
         };
-        let result = product.map_or(Ok(()), |child| {
+        let child_result = product.map_or(Ok(()), |child| {
             child.close().map_err(SessionFailure::Product)
         });
-        if let Some(driver) = driver.take() {
-            drop(driver);
+        if let Some(value) = driver.take() {
+            drop(value);
         }
-        if damaged_driver || damaged_gate {
+        // This line is unreachable if physical join or destruction unwinds.
+        // Hold the same driver guard through the immutable receipt capture.
+        let released = driver.is_none() && (!damaged_driver || original_driver_present);
+        let outcome = if damaged_driver || damaged_gate {
             Err(SessionFailure::Damaged)
         } else {
-            requested.and(result)
-        }
+            requested.and(child_result)
+        };
+        SessionCloseObservation { outcome, released }
     }
 }
 impl Drop for NativeSession {
@@ -984,4 +1091,8 @@ mod tests;
 
 #[cfg(test)]
 #[path = "../tests/product/parent.rs"]
-mod product_tests;
+pub(crate) mod product_tests;
+
+#[cfg(test)]
+#[path = "../tests/session/owner_original.rs"]
+mod owner_original_tests;

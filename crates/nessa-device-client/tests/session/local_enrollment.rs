@@ -105,7 +105,7 @@ fn root() -> PrivateFixture {
 }
 fn compose(
     root: &Path,
-    state: Arc<dyn ClientPendingStore>,
+    state: Arc<dyn NativePrivateState>,
     connector: Arc<NoNetwork>,
 ) -> NativeSession {
     NativeSession::compose(Dependencies {
@@ -365,4 +365,44 @@ fn local_enrollment_held_read_reserves_admission_and_private_scope_until_close()
         Err(SessionFailure::Closed)
     ));
     drop(FilePairingState::open(root.path(), Path::new("private")).unwrap());
+}
+
+impl OwnerPhoneOriginalStore for Store {
+    fn reserve_original(
+        &self,
+        _: OwnerPhoneReservation,
+    ) -> Result<
+        Box<dyn nessa_auth::application::pairing::OwnerPhoneOriginalCreation + '_>,
+        PrivateStateError,
+    > {
+        panic!("unexpected original reservation")
+    }
+    fn load_original(
+        &self,
+    ) -> Result<
+        Option<nessa_auth::application::pairing::OwnerPhonePrivateOriginal>,
+        PrivateStateError,
+    > {
+        panic!("unexpected original read")
+    }
+}
+
+impl OwnerPhoneOriginalStore for HeldStore {
+    fn reserve_original(
+        &self,
+        reservation: OwnerPhoneReservation,
+    ) -> Result<
+        Box<dyn nessa_auth::application::pairing::OwnerPhoneOriginalCreation + '_>,
+        PrivateStateError,
+    > {
+        self.owned.reserve_original(reservation)
+    }
+    fn load_original(
+        &self,
+    ) -> Result<
+        Option<nessa_auth::application::pairing::OwnerPhonePrivateOriginal>,
+        PrivateStateError,
+    > {
+        self.owned.load_original()
+    }
 }

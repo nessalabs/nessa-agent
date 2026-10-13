@@ -25,6 +25,12 @@ Current development surface:
   independently of retained admission and of submission/close dispatch.
 - `native_session`: generated immutable session/receipt/refresh/read/catalogue
   objects. Failure objects retain publication, cleanup and reconciliation payloads.
+  `close_observed` returns physical release separately from its original typed
+  failure, derived after actual cleanup under the existing driver lock.
+- `native_owner_phone`: separate initial-original preparation and restoration over
+  core's canonical durable producer. Immutable public original/key/signature/digest
+  getters expose no seed or bearer, and never establish enrollment or Ready.
+  Complete discovery conversion uses the protocol mapper and bounded unique JSON.
 - `tests/product`: actual saved issued key/pin/CredentialId and pinned TLS fixtures;
   parent installation, replacement, poison teardown and private-lock physical drain;
   escaped foreign facts, retained permits and native event timeout mapping.
@@ -54,10 +60,21 @@ own core resources and native clock, without retaining its parent. Actual Ready 
 completed facts remain historical after closure; requests stay fenced. The protected
 transport uses the saved issued public CredentialId with the private key, not an
 owner bearer proxy. Existing DeviceRead records gain no write permission from this
-adapter; OwnerPhone enrollment, its new private record/adoption and app Send wiring
-remain separate #811 slices. The existing serial NativeSessionWorker does not yet
+adapter. OwnerPhone original preparation now has separate initial/restore calls;
+restoration never creates a replacement key for missing or Reserved history. The
+same private owner retains admitted work through its physical publication, including
+late facts after closure. OwnerPhone network enrollment/recovery/adoption and app
+Send wiring remain separate #811 slices. The new preparation/release-observation
+ABI still needs generated Apple declaration/package verification before adoption. The existing serial NativeSessionWorker does not yet
 compose independent product waits. Do not place a blocking product waiter on its
 submission/retained/close queue.
+
+A physical close observation can retain Product or Damaged failure while confirming
+actual release. An unknown prior unwind with a poisoned empty driver slot remains
+unconfirmed; slot absence alone cannot establish destruction. Escaped observations
+retain value facts without retaining the parent. Signal close before waiting for
+this blocking receipt off UI, and require its confirmed release before replacing
+scope when the normal throwing close reported a historical fault.
 
 Build/generate on a host:
 

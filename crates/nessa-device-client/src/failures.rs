@@ -158,6 +158,11 @@ pub enum NativePrivateStateKind {
 pub struct NativePrivateStateFailure {
     value: PrivateStateError,
 }
+impl NativePrivateStateFailure {
+    pub(crate) fn from_state(value: PrivateStateError) -> Self {
+        Self { value }
+    }
+}
 #[uniffi::export]
 impl NativePrivateStateFailure {
     /// Original variant.

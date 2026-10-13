@@ -1,12 +1,15 @@
 //! Synchronous generated session bindings. UI composition owns worker dispatch
 //! and bounded pre-queue admission; this adapter owns no second authority rule.
+use crate::native_owner_phone::{
+    reservation, NativeOwnerPhonePreparation, NativeOwnerPreparationCallError,
+};
 use crate::native_product::NativeProductSession;
 use crate::{
-    failures::{NativeCallError, NativeEnrollmentFailure, NativeReadFailure},
+    failures::{NativeCallError, NativeEnrollmentFailure, NativeReadFailure, NativeSessionFailure},
     saved::{NativeScope, NativeTranscript},
     session::{
-        LocalEnrollment, LocalIssuedEnrollment, NativeSession, SessionFailure, SessionFollow,
-        SessionRead, SessionRefresh,
+        LocalEnrollment, LocalIssuedEnrollment, NativeSession, SessionCloseObservation,
+        SessionFailure, SessionFollow, SessionRead, SessionRefresh,
     },
 };
 use nessa_auth::{
@@ -751,6 +754,27 @@ impl NativeLocalEnrollment {
     }
 }
 
+/// Immutable confirmation from the actual native cleanup owner.
+#[derive(uniffi::Object)]
+pub struct NativeCloseObservation {
+    value: SessionCloseObservation,
+}
+#[uniffi::export]
+impl NativeCloseObservation {
+    /// Physical private-scope release, independent of a retained typed failure.
+    pub fn released(&self) -> bool {
+        self.value.released()
+    }
+    /// Original cleanup outcome; historical Product failure can coexist with release.
+    pub fn failure(&self) -> Option<Arc<NativeSessionFailure>> {
+        self.value
+            .outcome()
+            .as_ref()
+            .err()
+            .copied()
+            .map(|value| Arc::new(NativeSessionFailure { value }))
+    }
+}
 /// The generated native session handle. Blocking calls run on the caller's
 /// dedicated worker; close must drain there before releasing/replacing scope.
 #[derive(uniffi::Object)]
@@ -886,6 +910,38 @@ impl NativeDeviceSession {
             .open_product(instance)
             .map(|value| Arc::new(NativeProductSession { value }))
             .map_err(Into::into)
+    }
+    /// Initial preparation only for a newly allocated application reservation.
+    /// Captures the exact original and durable key without network or issuance.
+    pub fn prepare_owner_original(
+        &self,
+        request_id: Vec<u8>,
+        discovery_json: String,
+    ) -> Result<Arc<NativeOwnerPhonePreparation>, NativeOwnerPreparationCallError> {
+        let reservation = reservation(request_id, discovery_json)?;
+        self.value
+            .prepare_owner_original(reservation)
+            .map(|value| Arc::new(NativeOwnerPhonePreparation { value }))
+            .map_err(Into::into)
+    }
+    /// Existing reservations restore only; missing history never creates another key.
+    pub fn restore_owner_original(
+        &self,
+        request_id: Vec<u8>,
+        discovery_json: String,
+    ) -> Result<Arc<NativeOwnerPhonePreparation>, NativeOwnerPreparationCallError> {
+        let reservation = reservation(request_id, discovery_json)?;
+        self.value
+            .restore_owner_original(&reservation)
+            .map(|value| Arc::new(NativeOwnerPhonePreparation { value }))
+            .map_err(Into::into)
+    }
+    /// Await actual cleanup and retain its separate physical release observation.
+    /// This synchronous method belongs on the same cancellation-independent worker.
+    pub fn close_observed(&self) -> Arc<NativeCloseObservation> {
+        Arc::new(NativeCloseObservation {
+            value: self.value.close_observed(),
+        })
     }
     /// Signal closure before queueing drain; stop current core sockets.
     pub fn request_close(&self) -> Result<(), NativeCallError> {
