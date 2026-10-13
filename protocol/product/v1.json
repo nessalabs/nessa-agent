@@ -5004,6 +5004,268 @@
       ],
       "description": "Typed catalogue admission, source, capacity, and transport refusals."
     },
+    "PhoneEndpointParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {},
+      "required": [],
+      "description": "Discover the native phone endpoint and canonical consent under the current authenticated bootstrap session."
+    },
+    "PhoneOwnerSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Original conversation owner."
+        },
+        "organizationId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Original organization."
+        },
+        "membershipId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Original membership."
+        },
+        "audience": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Original gateway audience."
+        },
+        "credentialId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Original public bootstrap credential identifier; not a token."
+        },
+        "resourceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Composition-resolved original gateway resource."
+        }
+      },
+      "required": [
+        "ownerId",
+        "organizationId",
+        "membershipId",
+        "audience",
+        "credentialId",
+        "resourceId"
+      ],
+      "description": "Exact original authenticated bootstrap linkage. These public identifiers describe correlation; the server reconstructs current authority independently."
+    },
+    "PhoneConsent": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "class": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "Canonical access class returned by discovery."
+        },
+        "grants": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ProductGrant" },
+          "minItems": 1,
+          "maxItems": 16,
+          "description": "Complete canonical ordered action/resource set. No singular grant alias."
+        }
+      },
+      "required": ["class", "grants"],
+      "description": "Complete ordered consent published by Auth. The envelope admits bounded grants; Auth owns the exact class, actions, order and resource correspondence."
+    },
+    "PhoneDiscovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/PhoneOwnerSource",
+          "description": "Original bootstrap identity and gateway resource."
+        },
+        "nativeEndpoint": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Explicit usable numeric SocketAddr destination, as composed by the gateway. Auth validates the numeric address; the wire envelope bounds its text."
+        },
+        "gatewayKey": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+          "minItems": 44,
+          "maxItems": 44,
+          "description": "Exact gateway TLS SPKI bytes; Auth validates its key grammar."
+        },
+        "consent": {
+          "$ref": "#/$defs/PhoneConsent",
+          "description": "Canonical complete consent returned by Auth."
+        }
+      },
+      "required": ["source", "nativeEndpoint", "gatewayKey", "consent"],
+      "description": "Authenticated discovery facts for signing one original phone authorization. No endpoint is inferred from a product address."
+    },
+    "PhoneOriginal": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requestId": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+          "minItems": 16,
+          "maxItems": 16,
+          "description": "Original allocated nonzero request UUID bytes, retained through lost replies."
+        },
+        "discovery": {
+          "$ref": "#/$defs/PhoneDiscovery",
+          "description": "Exact discovery included in the signed original."
+        },
+        "deviceKey": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+          "minItems": 32,
+          "maxItems": 32,
+          "description": "Exact permanent device public key. No private key is published.",
+          "x-pairing-byte-array": "DeviceKey"
+        }
+      },
+      "required": ["requestId", "discovery", "deviceKey"],
+      "description": "One immutable signed original. Auth validates nonzero request identity, endpoint, pin and canonical consent before effects."
+    },
+    "PhoneAuthorizeParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "original": {
+          "$ref": "#/$defs/PhoneOriginal",
+          "description": "Original to verify and persist before activation."
+        },
+        "signature": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+          "minItems": 64,
+          "maxItems": 64,
+          "description": "Ed25519 signature of the Auth-owned original transcript."
+        }
+      },
+      "required": ["original", "signature"],
+      "description": "Authorize this exact signed original under fresh bootstrap management and complete consent admission. Exact replay rejoins the same original."
+    },
+    "PhoneStatusParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requestId": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+          "minItems": 16,
+          "maxItems": 16,
+          "description": "Original request UUID bytes."
+        },
+        "originalDigest": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+          "minItems": 32,
+          "maxItems": 32,
+          "description": "SHA-256 digest computed by the cryptographic owner from the original transcript."
+        }
+      },
+      "required": ["requestId", "originalDigest"],
+      "description": "Find or rejoin only this exact original in the current bootstrap namespace. Digest mismatch or another source cannot disclose or activate it."
+    },
+    "PhoneAuthorizationStatus": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "original": {
+          "$ref": "#/$defs/PhoneOriginal",
+          "description": "Exact stored signed original, including complete consent."
+        },
+        "originalDigest": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+          "minItems": 32,
+          "maxItems": 32,
+          "description": "Auth-computed digest of this original transcript."
+        },
+        "invitationId": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+          "minItems": 16,
+          "maxItems": 16,
+          "description": "Original invitation identity.",
+          "x-pairing-byte-array": "InvitationId"
+        },
+        "consentId": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+          "minItems": 16,
+          "maxItems": 16,
+          "description": "Original immutable consent identity.",
+          "x-pairing-byte-array": "ConsentIntentId"
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Original consent generation."
+        },
+        "createdAtMs": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Original creation time, Unix milliseconds."
+        },
+        "expiresAtMs": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Original exclusive expiry, Unix milliseconds."
+        },
+        "phase": {
+          "$ref": "#/$defs/PairingOwnerPhase",
+          "description": "Auth-owned current enrollment phase."
+        },
+        "credentialId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Public issued or reserved device credential identifier, once known."
+        },
+        "receiver": {
+          "$ref": "#/$defs/PairingReceiver",
+          "description": "Original receiver and access epoch, once known."
+        },
+        "terminal": {
+          "$ref": "#/$defs/PairingTerminal",
+          "description": "First terminal cause and initiator, once ended."
+        },
+        "cleanupPending": {
+          "type": "boolean",
+          "description": "Whether original physical cleanup remains owed."
+        },
+        "activationStopped": {
+          "$ref": "#/$defs/PairingActivationStop",
+          "description": "Typed activation interruption, when present."
+        }
+      },
+      "required": [
+        "original",
+        "originalDigest",
+        "invitationId",
+        "consentId",
+        "generation",
+        "createdAtMs",
+        "expiresAtMs",
+        "phase",
+        "cleanupPending"
+      ],
+      "description": "Complete historical status of one original phone authorization. Auth constructs phase, receiver, credential and cleanup together; historical activation is not current read/write authority."
+    },
     "PairingEnrollee": {
       "type": "string",
       "enum": ["device", "gateway", "environment"],

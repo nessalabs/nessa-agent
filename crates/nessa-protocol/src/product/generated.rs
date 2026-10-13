@@ -1944,6 +1944,73 @@ pub struct ConversationCatalogueResolveResult {
     pub entry: CatalogueDescriptor,
     pub payload: String,
 }
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PhoneEndpointParams {}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PhoneOwnerSource {
+    pub owner_id: String,
+    pub organization_id: String,
+    pub membership_id: String,
+    pub audience: String,
+    pub credential_id: String,
+    pub resource_id: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PhoneConsent {
+    pub class: String,
+    pub grants: Vec<CredentialGrantDto>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PhoneDiscovery {
+    pub source: PhoneOwnerSource,
+    pub native_endpoint: String,
+    pub gateway_key: Vec<u64>,
+    pub consent: PhoneConsent,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PhoneOriginal {
+    pub request_id: Vec<u64>,
+    pub discovery: PhoneDiscovery,
+    pub device_key: [u8; DeviceKey::LENGTH],
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PhoneAuthorizeParams {
+    pub original: PhoneOriginal,
+    pub signature: Vec<u64>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PhoneStatusParams {
+    pub request_id: Vec<u64>,
+    pub original_digest: Vec<u64>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PhoneAuthorizationStatus {
+    pub original: PhoneOriginal,
+    pub original_digest: Vec<u64>,
+    pub invitation_id: [u8; InvitationId::LENGTH],
+    pub consent_id: [u8; ConsentIntentId::LENGTH],
+    pub generation: u64,
+    pub created_at_ms: u64,
+    pub expires_at_ms: u64,
+    pub phase: PairingOwnerPhase,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiver: Option<PairingReceiver>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal: Option<PairingTerminal>,
+    pub cleanup_pending: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activation_stopped: Option<PairingActivationStop>,
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PairingEnrollee {
@@ -2700,6 +2767,9 @@ pub mod product_method {
     pub const MCP_SERVERS_INSPECT: &str = "mcpServers.inspect";
     pub const MCP_SERVERS_AUTHORIZE: &str = "mcpServers.authorize";
     pub const MCP_SERVERS_REVOKE: &str = "mcpServers.revoke";
+    pub const PHONE_ENDPOINT: &str = "phone.endpoint";
+    pub const PHONE_AUTHORIZE: &str = "phone.authorize";
+    pub const PHONE_STATUS: &str = "phone.status";
     pub const PAIRING_CREATE: &str = "pairing.create";
     pub const PAIRING_PENDING: &str = "pairing.pending";
     pub const PAIRING_STATUS: &str = "pairing.status";
@@ -2985,6 +3055,9 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "mcpServers.inspect",
     "mcpServers.authorize",
     "mcpServers.revoke",
+    "phone.endpoint",
+    "phone.authorize",
+    "phone.status",
     "pairing.create",
     "pairing.pending",
     "pairing.status",
@@ -3023,7 +3096,8 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "agents.list"
         | "agents.subscribe"
         | "agents.unsubscribe"
-        | "agents.installOptions" => Some("server.read"),
+        | "agents.installOptions"
+        | "phone.endpoint" => Some("server.read"),
         "credential.issue"
         | "credential.list"
         | "credential.revoke"
@@ -3034,6 +3108,8 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "mcpServers.inspect"
         | "mcpServers.authorize"
         | "mcpServers.revoke"
+        | "phone.authorize"
+        | "phone.status"
         | "pairing.create"
         | "pairing.pending"
         | "pairing.status"

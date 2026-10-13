@@ -578,6 +578,7 @@ const contractTests = spawnSync(
   [
     "--test",
     "scripts/product-protocol/core-contract.test.mjs",
+    "scripts/product-protocol/phone-wire.test.mjs",
     "scripts/product-protocol/rust-wire-shapes.test.mjs",
     "scripts/product-protocol/protocol-generation.test.mjs",
   ],
