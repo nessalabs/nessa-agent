@@ -211,7 +211,24 @@ const view = await client.conversation.read(conversationId)
 Read serially while the surface is visible to display current streamed output. Each
 view replaces the previous one; `revision` is opaque, and `truncated` indicates
 omitted history, text or whole interactions. `interactionViewError` means a complete interaction cannot be
-shown safely. Permission controls must use its exact offered IDs and original input.
+shown safely. Capture permission controls from that enclosing view:
+
+```ts
+import { permissionTargets } from "@nessa/client"
+
+const [target] = permissionTargets(view)
+if (target) {
+  await client.conversation.answer(target, view.permissions[0].options[0].id)
+  // To dismiss a still-pending review instead:
+  // await client.conversation.cancel(target, "No longer needed")
+}
+```
+
+Targets capture the conversation, execution, review and offered choices together.
+They are frozen, process-local values; edited, spread or JSON copies are refused
+before a control RPC (`application/permission-target.test.ts`). Recreate them
+from a newly read view after restart or an uncertain acknowledgement. A target
+confers no authority: the gateway checks current access and pending review state.
 
 The client generates separate execution and action IDs once per message. A
 conversation ID is a canonical lowercase hyphenated UUID. Message text is limited

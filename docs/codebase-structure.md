@@ -629,6 +629,15 @@ numbers are the caller's: the gateway takes them from the selected model's
 
 ## Gateway conversation ownership
 
+Client permission controls capture related IDs through
+`packages/nessa-client/src/application/permission-target.ts` and consume those
+opaque targets in `presentation/conversation-api.ts`. Panel effects and control
+arguments carry the same target; the desktop gateway source captures it from its
+enclosing read. The factory's tests sit beside it, and panel routing/interleaving
+tests live in `src/conversation/adapters/store/permission-targets.test.ts`.
+See [permission targets](design/permission-targets.md) for the ordering table and
+the distinction between captured intent and server-owned authorization.
+
 `crates/nessa-server/src/conversation/` groups durable conversation ownership and
 access (domain), shared Agent orchestration (application), and private
 metadata/audit adapters (infrastructure). The conversation's identity and summary,

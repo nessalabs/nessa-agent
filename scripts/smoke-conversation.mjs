@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url"
 import { WebSocket } from "ws"
 import {
   asImageAttachment,
+  permissionTargets,
   NessaClient,
   NessaClientConfig,
   NessaConversationMutationError,
@@ -347,9 +348,11 @@ try {
 
   const answered = await proxy.guard(
     client.conversation.answer(
-      conversationId,
-      answerExecutionId,
-      permission.permissionId,
+      permissionTargets(permissionView).find(
+        (target) =>
+          target.executionId === answerExecutionId &&
+          target.permissionId === permission.permissionId,
+      ),
       "allow-once",
       { requestId: "request-answer" },
     ),

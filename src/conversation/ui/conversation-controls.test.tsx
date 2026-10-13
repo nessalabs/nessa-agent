@@ -7,6 +7,7 @@ import * as React from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { act } from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { permissionTargetConversation } from "@nessa/client"
 
 import type { AgentFeatures, Conversation } from "../model"
 import { ClockProvider } from "./clock"
@@ -89,6 +90,7 @@ let root: Root
 let time = 1_700_000_000_000
 
 beforeEach(() => {
+  dispatch.mockClear()
   vi.useFakeTimers()
   window.matchMedia = vi.fn().mockReturnValue({
     matches: false,
@@ -129,4 +131,34 @@ describe("the floating card countdown", () => {
       "If nobody answers within 25 seconds, this is denied automatically.",
     )
   })
+})
+
+it("captures the displayed review's conversation for both answer and dismiss", async () => {
+  const conversation = { ...waiting(time + 30_000), serverConversationId: "captured" }
+  await act(async () => {
+    root.render(
+      <ClockProvider now={() => time}>
+        <ConversationControls conversation={conversation} gatewayAvailable />
+      </ClockProvider>,
+    )
+  })
+  const buttons = [...host.querySelectorAll("button")]
+  expect(buttons.map((button) => button.textContent)).toEqual([
+    "Cancel",
+    "Dismiss request",
+  ])
+  await act(async () => {
+    buttons.forEach((button) => button.click())
+  })
+  const controls = dispatch.mock.calls.map(([action]) => action.request.control)
+  expect(controls.map((control) => control.kind)).toEqual(["answer", "cancel"])
+  for (const control of controls) {
+    expect(permissionTargetConversation(control.target)).toBe("captured")
+    expect(control.target).toMatchObject({
+      executionId: "run",
+      permissionId: "permission",
+    })
+    expect(control).not.toHaveProperty("executionId")
+    expect(control).not.toHaveProperty("permissionId")
+  }
 })

@@ -1,3 +1,4 @@
+import type { PermissionTarget } from "@nessa/client"
 import type {
   ConversationListing,
   ConversationView,
@@ -130,12 +131,7 @@ export interface ConversationEffects {
     executionIds: readonly string[],
   ): Promise<"applied" | "unchanged" | "queue_changed" | "priority_conflict">
   remove(conversationId: string, executionId: string): Promise<void>
-  answer(
-    conversationId: string,
-    executionId: string,
-    permissionId: string,
-    optionId: string,
-  ): Promise<void>
+  answer(target: PermissionTarget, optionId: string): Promise<void>
   /** Answer one question the agent asked; null choices decline it. */
   answerQuestion(
     conversationId: string,
@@ -143,7 +139,7 @@ export interface ConversationEffects {
     questionId: string,
     choices: readonly { key: string; values: string[]; ownWords?: string }[] | null,
   ): Promise<void>
-  cancel(conversationId: string, executionId: string, permissionId: string): Promise<void>
+  cancel(target: PermissionTarget): Promise<void>
   close(conversationId: string): Promise<void>
   /** Stop one captured turn. The attachment stays open and its uploads stay held. */
   stop(conversationId: string, executionId: string): Promise<void>
