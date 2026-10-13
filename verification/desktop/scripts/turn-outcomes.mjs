@@ -54,8 +54,7 @@ async function open(browser, url, layout) {
 }
 
 /** Visible text of one surface. */
-const textOf = (page, surface) =>
-  page.locator(surface).innerText()
+const textOf = (page, surface) => page.locator(surface).innerText()
 
 const checks = {
   async terminals({ browser, url, layout, engine, options }) {

@@ -1048,13 +1048,22 @@ describe("questions and a withheld interaction", () => {
       view("c", {
         messages: [turn({ status: "running" })],
         questions: [
-          { executionId: "", questionId: "q0", message: "Missing an execution", questions: [field] },
+          {
+            executionId: "",
+            questionId: "q0",
+            message: "Missing an execution",
+            questions: [field],
+          },
           { executionId: "e1", questionId: "q1", message: "   ", questions: [field] },
           {
             executionId: "e1",
             questionId: "q2",
             message: "No usable field",
-            questions: [{ ...field, key: "" }, { ...field, prompt: "  " }, { ...field, options: [] }],
+            questions: [
+              { ...field, key: "" },
+              { ...field, prompt: "  " },
+              { ...field, options: [] },
+            ],
           },
           {
             executionId: "e1",

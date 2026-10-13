@@ -222,7 +222,8 @@ export function fakeSource(index: WorkspaceIndex = testIndex()): FakeSource {
             ...transcript,
             questions: (transcript.questions ?? []).filter(
               (question) =>
-                question.executionId !== executionId || question.questionId !== questionId,
+                question.executionId !== executionId ||
+                question.questionId !== questionId,
             ),
             revision: transcript.revision + 1,
           }

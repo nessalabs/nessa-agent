@@ -193,7 +193,11 @@ export const SessionPeek = memo(function SessionPeek({
         ) : null}
 
         {transcript?.interactionNotice ? (
-          <p className="workspace-transcript-notice" role="status" data-interaction-notice>
+          <p
+            className="workspace-transcript-notice"
+            role="status"
+            data-interaction-notice
+          >
             {transcript.interactionNotice}
           </p>
         ) : null}

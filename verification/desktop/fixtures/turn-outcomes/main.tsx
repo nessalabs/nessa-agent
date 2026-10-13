@@ -46,7 +46,11 @@ import {
   followWorkspace,
   loadWorkspace,
 } from "../../../../src/desktop/workspace"
-import { fakeGateway, row, view } from "../../../../src/desktop/workspace/adapters/gateway/fake-gateway"
+import {
+  fakeGateway,
+  row,
+  view,
+} from "../../../../src/desktop/workspace/adapters/gateway/fake-gateway"
 import { saveFile } from "../../../../src/host"
 
 import "@fontsource-variable/geist"
@@ -55,12 +59,7 @@ import "../../../../src/desktop/styles.css"
 
 const conversation = "7d1e2f3a-4b5c-4d6e-8f0a-1b2c3d4e5f61"
 
-const field = (
-  key: string,
-  prompt: string,
-  value: string,
-  label: string,
-) => ({
+const field = (key: string, prompt: string, value: string, label: string) => ({
   key,
   prompt,
   multiSelect: false,
@@ -155,7 +154,9 @@ gateway.rows.set(
 const wireView = conversationView(wire, conversation)
 gateway.views.set(conversation, wireView)
 
-const original = gateway.client.conversation.answerQuestion.bind(gateway.client.conversation)
+const original = gateway.client.conversation.answerQuestion.bind(
+  gateway.client.conversation,
+)
 gateway.client.conversation.answerQuestion = (async (
   ...args: Parameters<typeof original>
 ) => {
@@ -257,7 +258,9 @@ Object.assign(window, {
       if (!current) return
       gateway.views.set(conversation, {
         ...current,
-        questions: current.questions.filter((question) => question.questionId !== questionId),
+        questions: current.questions.filter(
+          (question) => question.questionId !== questionId,
+        ),
       } satisfies ConversationView)
       gateway.publish(conversation)
       showPanel()

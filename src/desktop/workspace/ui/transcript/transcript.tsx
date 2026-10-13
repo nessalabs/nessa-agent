@@ -172,7 +172,11 @@ export const Transcript = memo(function Transcript({
           <ProviderSignIn key={provider} provider={provider} />
         ) : null}
         {transcript?.interactionNotice ? (
-          <p className="workspace-transcript-notice" role="status" data-interaction-notice>
+          <p
+            className="workspace-transcript-notice"
+            role="status"
+            data-interaction-notice
+          >
             {transcript.interactionNotice}
           </p>
         ) : null}

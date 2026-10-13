@@ -456,14 +456,18 @@ export function transcriptFrom(
  * or finished and has no mark. A blank diagnostic is left off; the text
  * itself is not rewritten.
  */
-function turnTerminal(turn: ConversationView["messages"][number]): TurnTerminal | undefined {
+function turnTerminal(
+  turn: ConversationView["messages"][number],
+): TurnTerminal | undefined {
   if (turn.authenticationRequired) return undefined
   switch (turn.status) {
     case "failed":
     case "cancelled":
     case "unresolved": {
       const error = reportedText(turn.error)
-      return error === undefined ? { status: turn.status } : { status: turn.status, error }
+      return error === undefined
+        ? { status: turn.status }
+        : { status: turn.status, error }
     }
     case "queued":
     case "running":

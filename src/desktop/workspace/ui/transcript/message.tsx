@@ -90,7 +90,9 @@ export const Message = memo(function Message({
   // A reply that has only just begun streaming has nothing to show yet.
   // A turn that ended still shows how it ended, even when it said nothing.
   if (
-    groups.every((group) => !Array.isArray(group) && group.kind === "text" && !group.text) &&
+    groups.every(
+      (group) => !Array.isArray(group) && group.kind === "text" && !group.text,
+    ) &&
     !message.terminal
   )
     return null
@@ -162,7 +164,9 @@ function TurnTerminalMark({ terminal }: { terminal: TurnTerminal }) {
       data-turn-terminal={terminal.status}
       {...(terminal.error === undefined ? {} : { "data-turn-error": terminal.error })}
     >
-      <span className="workspace-turn-terminal-status">{terminalLabel(terminal.status)}</span>
+      <span className="workspace-turn-terminal-status">
+        {terminalLabel(terminal.status)}
+      </span>
       {terminal.error === undefined ? null : (
         <span className="workspace-turn-terminal-error">{terminal.error}</span>
       )}

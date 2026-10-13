@@ -44,7 +44,9 @@ export function QuestionCard({
   const [failure, setFailure] = useState<WorkspaceFailureReason | null>(null)
   const ready = questionAnswerReady(question.questions, chosen, ownWords)
 
-  const send = (choices: { key: string; values: string[]; ownWords?: string }[] | null) => {
+  const send = (
+    choices: { key: string; values: string[]; ownWords?: string }[] | null,
+  ) => {
     setBusy(true)
     setFailure(null)
     void dispatch(
@@ -93,10 +95,16 @@ export function QuestionCard({
             }
           >
             {field.options.map((option) => (
-              <QuestionnaireChoice key={option.value} value={option.value} disabled={busy}>
+              <QuestionnaireChoice
+                key={option.value}
+                value={option.value}
+                disabled={busy}
+              >
                 {option.label}
                 {option.description ? (
-                  <QuestionnaireDescription>{option.description}</QuestionnaireDescription>
+                  <QuestionnaireDescription>
+                    {option.description}
+                  </QuestionnaireDescription>
                 ) : null}
               </QuestionnaireChoice>
             ))}
@@ -109,7 +117,9 @@ export function QuestionCard({
               disabled={busy}
               value={ownWords.get(field.key) ?? ""}
               onChange={(event) =>
-                setOwnWords((current) => new Map(current).set(field.key, event.target.value))
+                setOwnWords((current) =>
+                  new Map(current).set(field.key, event.target.value),
+                )
               }
             />
           ) : null}

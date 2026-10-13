@@ -420,7 +420,11 @@ export function inMemorySource(
     return transcript
   }
 
-  const waitingQuestion = (sessionId: string, executionId: string, questionId: string) => {
+  const waitingQuestion = (
+    sessionId: string,
+    executionId: string,
+    questionId: string,
+  ) => {
     known(sessionId)
     const transcript = transcriptOf(sessionId)
     const asked = transcript.questions?.some(
@@ -532,7 +536,8 @@ export function inMemorySource(
             ...transcript,
             questions: (transcript.questions ?? []).filter(
               (question) =>
-                question.executionId !== executionId || question.questionId !== questionId,
+                question.executionId !== executionId ||
+                question.questionId !== questionId,
             ),
           })
           return known(sessionId).revision

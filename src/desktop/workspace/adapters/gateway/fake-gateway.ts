@@ -406,7 +406,8 @@ export function fakeGateway(
               ...current,
               questions: current.questions.filter(
                 (question) =>
-                  question.executionId !== executionId || question.questionId !== questionId,
+                  question.executionId !== executionId ||
+                  question.questionId !== questionId,
               ),
             })
           return { requestId: "answer-question", applied: true }
