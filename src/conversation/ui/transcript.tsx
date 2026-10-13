@@ -23,6 +23,7 @@ import {
 import { MessageContentView } from "./message-content"
 import { PublishedFiles } from "./published-files"
 import { TranscriptNotes } from "./transcript-note"
+import { UnreadableParts } from "./unreadable-part"
 import { MessageMarkdown } from "@nessa-ui/react/message-markdown"
 import { ProviderSignInCard } from "../../provider-authentication/ui/provider-sign-in"
 import { TranscriptDivider } from "@nessa-ui/react/transcript-divider"
@@ -112,6 +113,7 @@ export function Transcript({
   const sentTurns = conversation.turns.filter((turn) => turn.from === "user").length
   const published = publishedByRow(conversation, rows)
   const notes = notesByRow(conversation, rows, waitingUsers)
+  const unreadable = unreadableByRow(conversation, rows, waitingUsers)
 
   return (
     <>
@@ -127,6 +129,7 @@ export function Transcript({
             // listed, not an empty welcome.
             (conversation.remote?.artifacts ?? []).length === 0 &&
             (conversation.remote?.notes ?? []).length === 0 &&
+            (conversation.remote?.unreadable ?? []).length === 0 &&
             conversation.phase === "idle" &&
             emptyState ? (
               <EmptyState
@@ -136,6 +139,7 @@ export function Transcript({
                 statusLabel={statusLabel}
               />
             ) : null}
+            <UnreadableParts parts={unreadable.before} />
             <TranscriptNotes notes={notes.before} />
             <PublishedFiles
               conversationId={conversation.serverConversationId}
@@ -226,6 +230,7 @@ export function Transcript({
                   ) : (
                     <TurnStatus key={`${row.key}:status`} status={row.status} />
                   )}
+                  <UnreadableParts parts={unreadable.byRow.get(row.key) ?? []} />
                   <TranscriptNotes notes={notes.byRow.get(row.key) ?? []} />
                 </React.Fragment>
               )
@@ -242,6 +247,9 @@ export function Transcript({
                   streaming={false}
                   animateMount={animateMount}
                   onOpenPaste={onOpenPaste}
+                />
+                <UnreadableParts
+                  parts={unreadable.byWaiting.get(turn.executionId ?? "") ?? []}
                 />
                 <TranscriptNotes
                   notes={notes.byWaiting.get(turn.executionId ?? "") ?? []}
@@ -369,6 +377,34 @@ function notesByRow(
     turn.executionId ? [turn.executionId] : [],
   )
   const placed = placeNotes(notes, rowOf.keys(), waiting)
+  for (const [execution, left] of placed.byExecution) {
+    const row = rowOf.get(execution)
+    if (row !== undefined) byRow.set(row, left)
+  }
+  return { byRow, before: placed.before, byWaiting: placed.byWaiting }
+}
+
+/**
+ * Records this read could not apply, placed the same way as notes: after the
+ * turn that was the last accepted when each was skipped.
+ */
+function unreadableByRow(
+  conversation: Conversation,
+  rows: readonly { key: string; promptId?: string; sourceTurnId?: string }[],
+  waitingUsers: readonly Turn[],
+): {
+  byRow: Map<string, { id: string; afterExecutionId?: string }[]>
+  before: { id: string; afterExecutionId?: string }[]
+  byWaiting: Map<string, { id: string; afterExecutionId?: string }[]>
+} {
+  const parts = conversation.remote?.unreadable ?? []
+  const byRow = new Map<string, { id: string; afterExecutionId?: string }[]>()
+  if (parts.length === 0) return { byRow, before: [], byWaiting: new Map() }
+  const rowOf = rowsByExecution(conversation, rows, "last")
+  const waiting = waitingUsers.flatMap((turn) =>
+    turn.executionId ? [turn.executionId] : [],
+  )
+  const placed = placeNotes(parts, rowOf.keys(), waiting)
   for (const [execution, left] of placed.byExecution) {
     const row = rowOf.get(execution)
     if (row !== undefined) byRow.set(row, left)

@@ -651,3 +651,11 @@ it("carries the notes left in the conversation as the view lists them, and repla
   expect(applyView(first, { ...view, notes: [taken] }).remote?.notes).toEqual([taken])
   expect(applyView(first, { ...view, notes: [] }).remote?.notes).toEqual([])
 })
+
+it("carries each record the view could not read, and replaces them with the next view", () => {
+  const gap = { id: "12", afterExecutionId: "run" }
+  const first = applyView(conversation("tab"), { ...view, unreadable: [gap] })
+  expect(first.remote?.unreadable).toEqual([gap])
+  expect(first.turns).toEqual(applyView(conversation("tab"), view).turns)
+  expect(applyView(first, { ...view, unreadable: [] }).remote?.unreadable).toEqual([])
+})

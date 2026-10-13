@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Nessa: unreadable record</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      #root {
+        height: 900px;
+      }
+      #panels {
+        display: flex;
+        gap: 24px;
+        padding: 16px;
+      }
+      #panel {
+        width: 420px;
+        display: flex;
+        flex-direction: column;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <div id="panels">
+      <div id="panel"></div>
+    </div>
+    <script type="module" src="./main.tsx"></script>
+  </body>
+</html>

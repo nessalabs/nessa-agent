@@ -2,7 +2,9 @@
 #![deny(missing_docs)]
 #[cfg(test)]
 use super::validation::InvocationContinuation;
-use super::{records, SessionChange, SessionSnapshot, StorageError};
+use super::{
+    records, CurrentLeaseState, LeaseRecord, SessionChange, SessionSnapshot, StorageError,
+};
 #[cfg(test)]
 use crate::domain::agent_execution::executions::InvocationHistory;
 #[cfg(test)]
@@ -33,6 +35,11 @@ pub(crate) struct CommittedTransactionState {
     facts: u64,
     evidence: records::ProviderEvidence,
     context_witness: Option<(usize, usize)>,
+}
+impl CommittedTransactionState {
+    pub(crate) fn undo_len(&self) -> usize {
+        self.undo.len()
+    }
 }
 impl CommittedTranscript {
     /// Validate the numeric relationship between a physical applied position and
@@ -142,14 +149,62 @@ impl CommittedTranscript {
                 "semantic position does not advance".into(),
             ));
         }
-        let facts = self
+        self.continuation.stage(changes, &mut state.undo)?;
+        self.applied = position;
+        Ok(())
+    }
+    /// Count one accepted save unit, including a unit whose changes were skipped.
+    ///
+    /// # Errors
+    /// Returns [`StorageError::Corrupt`] when the fact count is exhausted.
+    pub(crate) fn count_unit(&mut self) -> Result<(), StorageError> {
+        self.facts = self
             .facts
             .checked_add(1)
             .ok_or_else(|| StorageError::Corrupt("semantic fact count exhausted".into()))?;
-        self.continuation.stage(changes, &mut state.undo)?;
-        self.applied = position;
-        self.facts = facts;
         Ok(())
+    }
+    /// Drop the changes staged after `mark` without moving the fact count.
+    pub(crate) fn abandon_staged(&mut self, state: &mut CommittedTransactionState, mark: usize) {
+        let extra = state.undo.split_off(mark);
+        self.continuation.rollback(extra);
+    }
+    pub(crate) fn accepts_execution(
+        &self,
+        id: &crate::domain::agent_execution::executions::ExecutionId,
+    ) -> bool {
+        self.snapshot().is_some_and(|snapshot| {
+            snapshot
+                .invocations
+                .iter()
+                .any(|record| &record.request.execution_id == id)
+        })
+    }
+    /// A held lease becomes unreadable. Its revision stays, so the next issuance
+    /// can follow it. A chat with no held lease is unchanged.
+    pub(crate) fn lose_held_lease(&mut self, state: &mut CommittedTransactionState) {
+        let held = self
+            .snapshot()
+            .and_then(|snapshot| snapshot.lease.as_ref())
+            .is_some_and(|lease| matches!(lease.state(), CurrentLeaseState::Held(_)));
+        if !held {
+            return;
+        }
+        let record = LeaseRecord::Unreadable {
+            kind: "record".into(),
+            body: String::new(),
+        };
+        let mark = state.undo.len();
+        if self
+            .continuation
+            .stage(
+                std::slice::from_ref(&SessionChange::Lease(record)),
+                &mut state.undo,
+            )
+            .is_err()
+        {
+            self.abandon_staged(state, mark);
+        }
     }
     pub(crate) fn abort(&mut self, position: u64) {
         self.applied = position;
@@ -160,7 +215,10 @@ impl CommittedTranscript {
         facts: u64,
     ) -> Result<Self, StorageError> {
         Self::validate_fact_count(applied, facts)?;
-        if (facts == 0) != snapshot.is_none() || (applied == 0 && snapshot.is_some()) {
+        // A snapshot was opened, so at least one unit was counted. Units that
+        // could not be read are counted too, and then the snapshot may still
+        // be absent.
+        if (snapshot.is_some() && facts == 0) || (applied == 0 && snapshot.is_some()) {
             return Err(StorageError::Corrupt(
                 "semantic checkpoint positions disagree".into(),
             ));

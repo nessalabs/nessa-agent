@@ -329,6 +329,63 @@ pub(crate) fn decode_batch(
     Ok(changes)
 }
 
+/// One change inside a batch the preflight accepted.
+pub(crate) enum ReadChange {
+    /// The change decoded.
+    Decoded(SessionChange),
+    /// The change did not decode. `lease` is set when the object is a lease.
+    Failed { lease: bool },
+}
+
+/// A save unit read one change at a time. [`BatchRead::Whole`] means the unit
+/// itself cannot be read, so none of its changes apply.
+pub(crate) enum BatchRead {
+    /// Preflight failed, or the body is not a batch of changes.
+    Whole,
+    /// Preflight passed. A failed change hides the rest of the unit.
+    Changes(Vec<ReadChange>),
+}
+
+/// Read a save unit without refusing the chat. A version or shape this build
+/// does not read is [`BatchRead::Whole`]. A single change that does not decode
+/// is [`ReadChange::Failed`] and the changes after it are not returned.
+pub(crate) fn read_batch(bytes: &[u8], context: &ProviderContext) -> BatchRead {
+    if super::decode::preflight_semantic_batch(bytes).is_err() {
+        return BatchRead::Whole;
+    }
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes) else {
+        return BatchRead::Whole;
+    };
+    let Some(changes) = value.get("changes").and_then(|changes| changes.as_array()) else {
+        return BatchRead::Whole;
+    };
+    if changes.is_empty() {
+        return BatchRead::Whole;
+    }
+    let mut context = context.clone();
+    let mut read = Vec::with_capacity(changes.len());
+    for change in changes {
+        let lease_object = change
+            .as_object()
+            .is_some_and(|object| object.contains_key("Lease"));
+        let Ok(wire) = serde_json::from_value::<WireChange>(change.clone()) else {
+            read.push(ReadChange::Failed {
+                lease: lease_object,
+            });
+            break;
+        };
+        let lease = lease_object || matches!(wire, WireChange::Lease(_));
+        match decode_wire_change(wire, &mut context) {
+            Ok(decoded) => read.push(ReadChange::Decoded(decoded)),
+            Err(_) => {
+                read.push(ReadChange::Failed { lease });
+                break;
+            }
+        }
+    }
+    BatchRead::Changes(read)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

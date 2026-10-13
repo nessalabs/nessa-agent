@@ -12,8 +12,8 @@
  * session shows in full. A widget is not one of them: a plugin's view is the
  * session's to draw, so it is dropped before the parts are counted. Nor is a
  * file the agent published, whose card — and the bytes it reads back — is
- * the session's too. Nor is a note somebody left in the conversation, which is
- * no part of the turn.
+ * the session's too. Nor is a note somebody left in the conversation, or a
+ * record this read could not apply, which are no part of the turn.
  */
 import type { Activity, Message, Transcript } from "../transcript"
 
@@ -43,8 +43,8 @@ export function peekOf(transcript: Transcript, limit = peekParts): Peek {
   let room = limit
   let total = 0
   for (let index = messages.length - 1; index > last; index--) {
-    // A note somebody left is not the turn's: the session shows it.
-    if (messages[index].role === "note") continue
+    // A note, or a record this read could not apply, is not the turn's.
+    if (messages[index].role === "note" || messages[index].role === "unreadable") continue
     const message = withoutCards(messages[index])
     // A message of widgets and files alone tells the peek nothing: it is not drawn at all.
     if (message.parts.length === 0 && messages[index].parts.length > 0) continue

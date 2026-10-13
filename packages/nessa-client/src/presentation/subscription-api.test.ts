@@ -16,6 +16,7 @@ const view: ConversationView = {
   conversationId,
   artifacts: [],
   notes: [],
+  unreadable: [],
   approvalMode: "ask",
   approvalModes: [{ id: "ask", name: "Provider asks", description: "Asks." }],
   title: null,

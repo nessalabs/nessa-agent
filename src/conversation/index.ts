@@ -44,6 +44,7 @@ export {
 // Notes left in a conversation, placed and shown: the panel's transcripts and
 // the desktop window's alike.
 export { TranscriptNote } from "./ui/transcript-note"
+export { UnreadablePartLine, UNREADABLE_SENTENCE } from "./ui/unreadable-part"
 export {
   historyExtent,
   historyNotices,

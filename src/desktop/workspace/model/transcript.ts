@@ -119,10 +119,11 @@ export interface QuestionChoice {
 }
 
 /**
- * One row of a conversation: a message from the person or the agent, or a
- * note somebody left in it (`NoteMessage`).
+ * One row of a conversation: a message from the person or the agent, a
+ * note somebody left in it (`NoteMessage`), or a saved record this read
+ * could not apply (`UnreadableMessage`).
  */
-export type Message = TurnMessage | NoteMessage
+export type Message = TurnMessage | NoteMessage | UnreadableMessage
 
 /** A message the person or the agent said in a turn. */
 export interface TurnMessage {
@@ -169,6 +170,25 @@ export interface NoteMessage {
   /** None: what it says is the note's. */
   readonly parts: readonly Part[]
   readonly note: Note
+  readonly observedInput?: never
+  readonly delivery?: never
+  readonly app?: never
+  readonly unreadable?: never
+}
+
+/**
+ * A saved record this read could not apply, drawn as one line
+ * (`UnreadablePartLine`). `unreadable.id` is the record's position, and the
+ * line is where a future report action attaches. Nothing the window sends
+ * is one of these.
+ */
+export interface UnreadableMessage {
+  readonly id: string
+  readonly role: "unreadable"
+  readonly at: number
+  readonly parts: readonly Part[]
+  readonly unreadable: { readonly id: string; readonly afterExecutionId?: string }
+  readonly note?: never
   readonly observedInput?: never
   readonly delivery?: never
   readonly app?: never

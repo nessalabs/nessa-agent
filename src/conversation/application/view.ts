@@ -26,6 +26,11 @@ export type ConversationView = {
    * left: who left each, where it stands, and the turn it follows.
    */
   notes: Note[]
+  /**
+   * Records this read could not apply, oldest first. Each is one line in the
+   * transcript. Absent on a view built before the gateway sent the list.
+   */
+  unreadable?: { id: string; afterExecutionId?: string }[]
   approvalMode: ApprovalMode
   approvalModes: ApprovalModeChoice[]
   approvalModeChange?: {

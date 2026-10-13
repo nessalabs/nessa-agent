@@ -70,6 +70,12 @@ export function conversationView(
         : { executionId: artifact.executionId }),
     })),
     notes: value.notes.map(shownNote),
+    unreadable: value.unreadable.map((part) => ({
+      id: part.id,
+      ...(part.afterExecutionId === undefined
+        ? {}
+        : { afterExecutionId: part.afterExecutionId }),
+    })),
     capabilities: {
       queue: value.capabilities.queue,
       steer: value.capabilities.steer,

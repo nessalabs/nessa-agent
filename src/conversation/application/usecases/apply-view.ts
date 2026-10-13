@@ -155,6 +155,7 @@ export function applyView(current: Conversation, view: ConversationView): Conver
       lease: view.lease,
       artifacts: view.artifacts,
       notes: view.notes,
+      unreadable: view.unreadable ?? [],
       approvalMode: view.approvalMode,
       approvalModes: view.approvalModes,
       approvalModeChange: view.approvalModeChange,

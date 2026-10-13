@@ -93,7 +93,8 @@ A different execution or incarnation grants no interaction authority.
 | Partial | Matching seal | Decode complete body and publish candidate+A. Separate receiver restart fixture. |
 | Partial | Matching abort | Clear pending attempt, advance A, keep semantic snapshot. Partial/abort test. |
 | Any | Duplicate downloaded page | Receiver store compares saved bytes; fold refuses stale suffix without mutation. Duplicate/gap test and separate receiver lost-apply fixture. |
-| Any | Foreign scope, gap, unknown schema, malformed seal, invalid intermediate decision | Reject batch without publishing candidate or progress. Duplicate/gap/invalid decision test. |
+| Any | Record scope from another stream, or a position that is missing, repeated, or ahead | Reject the page without publishing. Duplicate/gap test. |
+| Any | Unknown schema, malformed seal, undecodable save, or a decision the session fold refuses | Skip that record, remember one gap line, and publish every record in the page that can be read. [716](../adr/todo/716-open-a-chat-when-a-record-cannot-be-read.md). |
 | Partial | Newer head not yet reached or unavailable source | Preserve partial completeness with stale/unknown freshness. Partial/abort test. |
 | Checkpoint | Restart with D>A | Validate full semantic state and independently saved A; drain stored suffix A..D. `durable_receiver_restarts_mid_fact_and_after_lost_apply_reply` |
 | Checkpoint | Altered scope, cursor, state or allocation overflow | Refuse before publication; checkpoint validation tests. |

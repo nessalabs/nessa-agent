@@ -21,6 +21,7 @@ use crate::domain::agent_execution::{
     sessions::SessionId,
 };
 use nessa_sync::replication::domain::Id;
+use serde::{Deserialize, Serialize};
 use std::{error::Error, fmt, future::Future, mem, pin::Pin, sync::Arc};
 
 /// Asynchronous storage result borrowing its adapter for `'a` and returning `T`.
@@ -161,6 +162,60 @@ pub(crate) struct StorageErrorUsage {
     text: usize,
 }
 
+/// One saved record the fold could not read. The transcript shows it as a line
+/// and keeps every record it could read.
+///
+/// `id` is the decimal physical position of that record. `after_execution_id`
+/// is the last turn the chat had accepted when the gap was recorded, absent
+/// when it had accepted none. At most [`Self::MAX_PER_CONVERSATION`] are kept.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UnreadablePart {
+    id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    after_execution_id: Option<String>,
+}
+impl UnreadablePart {
+    /// Most gap lines one chat keeps. A later record that cannot be read is
+    /// still skipped.
+    pub const MAX_PER_CONVERSATION: usize = 32;
+
+    pub(crate) fn at(position: u64, after_execution_id: Option<String>) -> Self {
+        Self {
+            id: position.to_string(),
+            after_execution_id,
+        }
+    }
+
+    /// The record's physical position, as decimal text.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// The last accepted turn when this gap was recorded.
+    pub fn after_execution_id(&self) -> Option<&str> {
+        self.after_execution_id.as_deref()
+    }
+
+    pub(crate) fn valid_list(parts: &[Self]) -> bool {
+        if parts.len() > Self::MAX_PER_CONVERSATION {
+            return false;
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        parts.iter().all(|part| {
+            seen.insert(part.id.as_str())
+                && !part.id.is_empty()
+                && part.id.len() <= 20
+                && part.id.bytes().all(|byte| byte.is_ascii_digit())
+                && !part.id.starts_with('0')
+                && part
+                    .after_execution_id
+                    .as_ref()
+                    .is_none_or(|id| !id.is_empty() && id.len() <= 256)
+        })
+    }
+}
+
 /// A read of committed storage, independent of an agent's live observations.
 /// `position` is monotone only within `incarnation`; it may count physical
 /// records or snapshot revisions according to the storage adapter.
@@ -173,6 +228,7 @@ pub struct CommittedSession {
     observed_head: u64,
     snapshot: Option<Arc<SessionSnapshot>>,
     status: CommittedStatus,
+    unreadable: Vec<UnreadablePart>,
 }
 impl CommittedSession {
     /// Validate a replacement read from a storage adapter. Full snapshot validation
@@ -210,6 +266,7 @@ impl CommittedSession {
             observed_head,
             snapshot: snapshot.map(Arc::new),
             status,
+            unreadable: Vec::new(),
         })
     }
     pub(crate) fn from_transcript(
@@ -220,6 +277,7 @@ impl CommittedSession {
         applied: u64,
         snapshot: Option<Arc<SessionSnapshot>>,
         status: CommittedStatus,
+        unreadable: Vec<UnreadablePart>,
     ) -> Result<Self, StorageError> {
         if snapshot.as_ref().is_some_and(|snapshot| snapshot.id != id) {
             return Err(StorageError::IdentityMismatch);
@@ -237,6 +295,7 @@ impl CommittedSession {
             observed_head,
             snapshot,
             status,
+            unreadable,
         })
     }
     /// Exact session identity requested from storage.
@@ -272,6 +331,10 @@ impl CommittedSession {
     /// Coarse display completeness and freshness.
     pub fn state(&self) -> CommittedViewState {
         self.status.view_state()
+    }
+    /// Records in this read that could not be applied, oldest first.
+    pub fn unreadable(&self) -> &[UnreadablePart] {
+        &self.unreadable
     }
 }
 impl fmt::Display for StorageError {

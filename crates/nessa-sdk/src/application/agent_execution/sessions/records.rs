@@ -219,7 +219,7 @@ pub(crate) fn fold_changes(
         .ok_or_else(|| corrupt("semantic batch has no session"))
 }
 
-pub(super) fn affected_execution(change: &SessionChange) -> Option<&ExecutionId> {
+pub(crate) fn affected_execution(change: &SessionChange) -> Option<&ExecutionId> {
     match change {
         SessionChange::InputAccepted(record) => Some(&record.request.execution_id),
         SessionChange::ProviderObservation(event) => Some(event.execution_id()),

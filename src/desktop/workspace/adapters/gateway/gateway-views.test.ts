@@ -16,6 +16,7 @@ import {
   modelFor,
   noteId,
   publishedAfterId,
+  unreadableId,
   publishedBeforeId,
   replyId,
   reviewOf,
@@ -427,6 +428,28 @@ describe("a conversation view as a transcript", () => {
     // A note is no turn's text: nothing reads it as what was said.
     expect(messageText(shown!)).toBe("")
     expect(new Set(transcript.messages.map((message) => message.id)).size).toBe(9)
+  })
+
+  it("shows a record it could not read as its own line after the turn it followed, and one with no turn first", () => {
+    const transcript = transcriptFrom(
+      view("c", {
+        messages: [turn({ executionId: "e1", parts: [textPart("Charted", 0)] })],
+        unreadable: [{ id: "3" }, { id: "9", afterExecutionId: "e1" }],
+      }),
+      1,
+      at,
+      GATEWAY_NOW_MS,
+    )
+    expect(transcript.messages.map((message) => [message.id, message.role])).toEqual([
+      [unreadableId("3"), "unreadable"],
+      [inputId("e1"), "user"],
+      [replyId("e1"), "agent"],
+      [unreadableId("9"), "unreadable"],
+    ])
+    const line = transcript.messages.find((message) => message.role === "unreadable")
+    expect(line && "unreadable" in line ? line.unreadable : null).toEqual({ id: "3" })
+    expect(messageText(transcript.messages[0]!)).toBe("")
+    expect(new Set(transcript.messages.map((message) => message.id)).size).toBe(4)
   })
 
   it("puts a note left between two inputs waiting right after the first, as the gateway lists them", () => {

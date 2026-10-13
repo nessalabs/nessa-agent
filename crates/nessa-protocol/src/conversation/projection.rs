@@ -11,7 +11,7 @@ use super::view::{
     ConversationPermissionDeadline, ConversationPermissionOption,
     ConversationPermissionOptionEffect, ConversationPermissionOrigin, ConversationQuestion,
     ConversationRuntime, ConversationSelectionView, ConversationTool, ConversationTranscriptState,
-    ConversationView, NativeHooksChoice, MAX_STRUCTURED_CONTENT_BYTES,
+    ConversationUnreadable, ConversationView, NativeHooksChoice, MAX_STRUCTURED_CONTENT_BYTES,
 };
 use nessa_sdk::application::agent_execution::permissions::CancellationOrigin;
 use nessa_sdk::application::agent_execution::{
@@ -568,6 +568,7 @@ impl Projection {
                         .map(|note| ConversationNote::of(snapshot, note))
                         .collect()
                 }),
+                unreadable: Vec::new(),
             },
         };
         if let Some(snapshot) = snapshot {
@@ -669,6 +670,14 @@ impl Projection {
         next.view.lifecycle = self.view.lifecycle.clone();
         next.view.approval_mode_change = self.view.approval_mode_change.clone();
         next.view.title = self.view.title.clone();
+        next.view.unreadable = committed
+            .unreadable()
+            .iter()
+            .map(|part| ConversationUnreadable {
+                id: part.id().to_owned(),
+                after_execution_id: part.after_execution_id().map(str::to_owned),
+            })
+            .collect();
         if let Some(snapshot) = snapshot {
             for id in order {
                 let Some(record) = snapshot

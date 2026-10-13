@@ -376,6 +376,11 @@ type ConversationState = {
     artifacts: PublishedFile[]
     /** Notes left in the conversation, as the last view listed them. */
     notes: Note[]
+    /**
+     * Records the last view could not read, each one line in the transcript.
+     * Absent when that view listed none.
+     */
+    unreadable?: { id: string; afterExecutionId?: string }[]
     /** The committed approval mode in this gateway view. */
     approvalMode: ApprovalMode
     /** The modes this conversation's agent can honour. */
