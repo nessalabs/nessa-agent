@@ -974,6 +974,53 @@ async fn a_relay_without_the_gateway_answers_offline_to_an_environments_dial() {
     assert_ne!(offline.kind(), ErrorKind::InvalidInput);
 }
 
+/// R4: a pending pairing whose saved pin is not a key cannot be asked for
+/// at the relay, and asking again does not change that: waiting for
+/// approval ends as unusable rather than asking forever.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_pending_pin_that_is_not_a_key_ends_waiting_through_a_relay() {
+    use crate::env_serve::application::{approval, NotApproved};
+    use crate::env_serve::infrastructure::FilePairingEnvironment;
+    use nessa_auth::domain::pairing::{AttemptId, ConsentIntentId, InvitationId, PublicIntent};
+
+    let directory = tempfile::tempdir().unwrap();
+    let environment = directory.path().join("e-environment");
+    nessa_local_storage::create_directory(&environment).unwrap();
+    let root = environment.canonicalize().unwrap();
+    nessa_local_storage::create_directory_beneath(&root, Path::new("pairing")).unwrap();
+    let intent = PublicIntent::new(
+        InvitationId::new([1; 16]),
+        AttemptId::new([2; 16]),
+        ConsentIntentId::new([3; 16]),
+        1,
+        1,
+        ConsentClass::PeerEnvironment,
+    )
+    .unwrap();
+    let identity = NativeIdentity::generate(&mut OsEntropy).unwrap();
+    // Saved and let go, so the environment's pairing can take the lock.
+    FilePairingState::open(&root, Path::new("pairing"))
+        .unwrap()
+        .save_pending(identity.key_material(), &[0; 44], intent, None)
+        .unwrap();
+
+    let pairing = FilePairingEnvironment::open(&environment, &nowhere(), clock())
+        .unwrap()
+        .through(Some(relay().await));
+    let (_running, running) = watch::channel(false);
+    let ended = tokio::time::timeout(
+        WAIT,
+        approval(&pairing, Duration::from_millis(20), &TokioTimer::new(), running),
+    )
+    .await
+    .expect("told at once, not asked again");
+    assert!(
+        matches!(ended, Err(NotApproved::Unusable(_))),
+        "{ended:?}"
+    );
+    pairing.shutdown().await;
+}
+
 /// A binding that runs its harness on whichever host it is given, and
 /// remembers that host.
 struct OnHost {

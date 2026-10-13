@@ -63,24 +63,30 @@ pub(crate) async fn dial(
     pin: [u8; 44],
     clock: Arc<dyn Clock>,
 ) -> IoResult<TlsStream> {
-    let transport = tokio::task::spawn_blocking(move || match relay {
-        // One race: what the direct leg cannot reach in its head start,
-        // the relay is asked for.
-        Some(relay) => open_environment(&address, Some(&relay), &identity, pin, clock),
+    let transport = tokio::task::spawn_blocking(move || {
         // Each address the name resolves to gets a whole dial of its own,
-        // its handshake included, as a TCP connect by name tries each.
-        None => {
-            let mut failed = Error::new(ErrorKind::NotFound, "no address");
-            for gateway in address.to_socket_addrs()? {
-                let gateway = gateway.to_string();
-                match open_environment(&gateway, None, &identity, pin, clock.clone()) {
-                    Ok(transport) => return Ok(transport),
-                    Err(error) if error.kind() == ErrorKind::InvalidInput => return Err(error),
-                    Err(error) => failed = error,
-                }
-            }
-            Err(failed)
+        // its handshake included, as a TCP connect by name tries each: a
+        // first address that connects but is not the pinned gateway does
+        // not stop the next. The relay finds the gateway by its key, not by
+        // this name, so with one a name that does not resolve here is still
+        // asked for there.
+        let gateways: Vec<String> = match (address.to_socket_addrs(), &relay) {
+            (Ok(found), _) => found.map(|gateway| gateway.to_string()).collect(),
+            (Err(error), None) => return Err(error),
+            (Err(_), Some(_)) => Vec::new(),
+        };
+        if gateways.is_empty() && relay.is_some() {
+            return open_environment(&address, relay.as_ref(), &identity, pin, clock);
         }
+        let mut failed = Error::new(ErrorKind::NotFound, "no address");
+        for gateway in gateways {
+            match open_environment(&gateway, relay.as_ref(), &identity, pin, clock.clone()) {
+                Ok(transport) => return Ok(transport),
+                Err(error) if error.kind() == ErrorKind::InvalidInput => return Err(error),
+                Err(error) => failed = error,
+            }
+        }
+        Err(failed)
     })
     .await
     .map_err(|_| Error::other("the dialing worker failed"))??;

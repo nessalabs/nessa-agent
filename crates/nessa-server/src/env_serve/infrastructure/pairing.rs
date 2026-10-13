@@ -224,6 +224,12 @@ impl EnvironmentPairing for FilePairingEnvironment {
         let connected = self.connect_or_relay().await;
         let stream = match connected {
             Ok(stream) => stream,
+            // A saved pin that is not a key is not changed by asking again.
+            Err(error) if error.kind() == io::ErrorKind::InvalidInput => {
+                return Answer::Unusable(format!(
+                    "the pairing waiting for approval cannot be used: {error}"
+                ))
+            }
             Err(error) => {
                 return Answer::Unanswered(format!(
                     "{} could not be reached: {error}",
