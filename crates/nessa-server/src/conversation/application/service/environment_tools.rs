@@ -31,12 +31,14 @@ use nessa_sdk::application::agent_execution::{
     permissions::ActionContext,
     sessions::{CurrentLease, LeaseRecord, SessionSnapshot},
 };
-use nessa_sdk::domain::agent_execution::executions::{ExecutionId, InvocationStage};
+use nessa_sdk::domain::agent_execution::executions::{ExecutionId, Initiation, InvocationStage};
 use nessa_sdk::domain::agent_execution::leases::{
     CommandExit, CommandOutput, CommandRefusal, CommandTerms, CommandWork, EnvironmentRef, Lease,
     LeaseEndCause, LeaseId, LeasePhase, LeaseRefusal, SandboxProfile, SandboxProfiles,
 };
-use std::sync::Arc;
+use crate::conversation::application::drive_tools::{refusal, DriveTools};
+use crate::conversation::domain::{ToolCall, ToolSource};
+use std::sync::{Arc, OnceLock};
 use tokio::sync::watch;
 
 /// The environment named `here`: this gateway's own machine.
@@ -102,6 +104,9 @@ pub enum CommandCallError {
     NotConfigured,
     /// Its caller went away before anything was asked of an environment.
     Cancelled,
+    /// The running turn's Drive grant does not allow `run`, with why.
+    /// Nothing was recorded.
+    NotAllowed(String),
 }
 
 impl ConversationService {
@@ -168,8 +173,15 @@ impl ConversationService {
         let live = self.live(id).await.ok_or(CommandCallError::NoTurn)?;
         let manager = live.agent.session_manager();
         let snapshot = manager.snapshot().await.ok_or(CommandCallError::NoTurn)?;
-        let (parent, _, actor) =
+        let (parent, _, actor, initiation) =
             running_turn(&snapshot, &call.call).ok_or(CommandCallError::NoTurn)?;
+        // A Drive grant's turn runs a command only where its policy allows
+        // `run` (row J28); where it then goes is any environment granted
+        // below, whatever the grant.
+        if let Some(reason) = drive_refusal(&self.inner.drive, &live, &initiation, "run") {
+            tracing::warn!(conversation_id = %id, %reason, "a Drive grant's tool call was refused");
+            return Err(CommandCallError::NotAllowed(reason));
+        }
         let lease = LeaseId::new(uuid::Uuid::new_v4().to_string())
             .expect("a UUID is a portable lease identity");
         // A name that is no environment is not recorded as one: nothing
@@ -500,13 +512,13 @@ struct Refused<'a> {
     actor: &'a ActionContext,
 }
 
-/// The conversation's Live agent lease, the running turn, and the person
-/// it is for with `call` as their request; `None` with no turn running or
-/// no Live lease to run under.
+/// The conversation's Live agent lease, the running turn, the person it is
+/// for with `call` as their request, and who started it; `None` with no
+/// turn running or no Live lease to run under.
 pub(super) fn running_turn(
     snapshot: &SessionSnapshot,
     call: &str,
-) -> Option<(LeaseId, ExecutionId, ActionContext)> {
+) -> Option<(LeaseId, ExecutionId, ActionContext, Initiation)> {
     let parent = snapshot
         .lease
         .as_ref()
@@ -523,7 +535,29 @@ pub(super) fn running_turn(
     })?;
     let actor = &turn.actor;
     let actor = ActionContext::new(actor.principal_id(), actor.surface_id(), call).ok()?;
-    Some((parent, turn.request.execution_id.clone(), actor))
+    Some((
+        parent,
+        turn.request.execution_id.clone(),
+        actor,
+        turn.initiation.clone(),
+    ))
+}
+
+/// Why the gateway's tool `tool` may not run for a turn of `live` started as
+/// `initiation`, or `None` when it may: a Drive grant's turn is checked
+/// against its policy, the owner's never is (row J28).
+pub(super) fn drive_refusal(
+    drive: &OnceLock<DriveTools>,
+    live: &LiveConversation,
+    initiation: &Initiation,
+    tool: &str,
+) -> Option<String> {
+    refusal(
+        drive,
+        &live.admitted_policies,
+        initiation,
+        ToolCall::new(ToolSource::Gateway, tool),
+    )
 }
 
 /// What issuing a granted command came to, under the lock.

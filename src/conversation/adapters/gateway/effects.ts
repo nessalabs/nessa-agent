@@ -237,6 +237,9 @@ const failures: Partial<Record<ConversationErrorCode, CommandFailure>> = {
   // either meeting another command is a request it had no business making.
   idempotency_conflict: "invalid-request",
   message_quota_exceeded: "invalid-request",
+  // Answers only a Drive grant's send or steer, which the panel, as the
+  // owner, never makes.
+  drive_policy_unenforceable: "invalid-request",
 }
 
 /**
@@ -322,6 +325,8 @@ const readFailures: Record<ConversationErrorCode, ReadFailure> = {
   // A note's refusals; no read is ever answered with them.
   idempotency_conflict: "unavailable",
   message_quota_exceeded: "unavailable",
+  // A Drive turn's refusal; no read is ever answered with it.
+  drive_policy_unenforceable: "unavailable",
   model_unavailable: "unavailable",
   approval_mode_unavailable: "unavailable",
   approval_mode_not_applied: "unavailable",

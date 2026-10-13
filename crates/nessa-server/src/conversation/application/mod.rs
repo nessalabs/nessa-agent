@@ -138,6 +138,7 @@ pub use catalogue_watch::{
 mod artifacts;
 mod catalogue_read;
 mod command_environment;
+mod drive_tools;
 mod environment;
 mod error;
 mod error_code;
@@ -247,6 +248,7 @@ pub use share_grants::{
     ShareConversation, ShareGrant, ShareGrantChange, ShareGrantTransition, ShareGrants,
     MAX_DRIVE_GRANTS_PER_CONVERSATION, MAX_SHARE_GRANTS_PER_CONVERSATION,
 };
+pub use drive_tools::DriveTools;
 pub use tool_policy::{ToolDecision, ToolInitiator, ToolPolicyEvaluator, ToolPolicyUnavailable};
 
 #[cfg(test)]

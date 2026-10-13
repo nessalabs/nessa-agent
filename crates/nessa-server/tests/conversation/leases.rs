@@ -5229,3 +5229,229 @@ async fn k3_artifacts_move_only_on_this_gateways_own_worker() {
     assert!(host.fetching.asks.lock().unwrap().is_empty());
     go.send(()).unwrap();
 }
+
+/// A grant journal in which every Drive grant held the one policy it
+/// carries, at every revision.
+struct EveryRevisionHeld(crate::conversation::domain::ToolPolicy);
+
+impl super::ShareGrants for EveryRevisionHeld {
+    fn held_grant<'a>(
+        &'a self,
+        _: &'a ConversationId,
+        _: &'a str,
+    ) -> super::ConversationFuture<'a, Option<super::HeldGrant>> {
+        Box::pin(async { Err(ConversationError::Unavailable) })
+    }
+    fn change(&self, _: super::ShareGrantChange) -> super::ConversationFuture<'_, bool> {
+        Box::pin(async { Err(ConversationError::Unavailable) })
+    }
+    fn grants<'a>(
+        &'a self,
+        _: &'a ConversationId,
+    ) -> super::ConversationFuture<'a, Vec<super::ShareGrant>> {
+        Box::pin(async { Err(ConversationError::Unavailable) })
+    }
+    fn policy_at<'a>(
+        &'a self,
+        _: &'a ConversationId,
+        _: &'a str,
+        _: u64,
+    ) -> super::ConversationFuture<'a, Option<crate::conversation::domain::ToolPolicy>> {
+        let policy = self.0.clone();
+        Box::pin(async move { Ok(Some(policy)) })
+    }
+}
+
+impl Harness {
+    /// Check Drive turns' tools against `policy`, held by every grant.
+    fn checking_drive_tools(&self, policy: crate::conversation::domain::ToolPolicy) {
+        self.service.bind_drive_tools(super::DriveTools {
+            grants: Arc::new(EveryRevisionHeld(policy)),
+            evaluator: Arc::new(
+                crate::conversation::infrastructure::CedarToolPolicyEvaluator::new().unwrap(),
+            ),
+        });
+    }
+
+    /// Send turn `execution` as Drive grant `grant` at `revision`; `true`
+    /// when admitted, `false` when refused `DrivePolicyUnenforceable`.
+    async fn send_as_driver(&self, execution: &str, grant: &str, revision: u64) -> bool {
+        use nessa_sdk::domain::agent_execution::executions::{GrantInitiator, Initiation};
+        let sent = self
+            .service
+            .submit_as(
+                self.id.clone(),
+                caller(execution),
+                execution.into(),
+                SubmittedMessage {
+                    text: "hello".into(),
+                    images: Vec::new(),
+                    files: Vec::new(),
+                },
+                SubmissionMode::Queue,
+                super::service::Writer::Person(Initiation::grant(
+                    GrantInitiator::new(grant, revision).unwrap(),
+                )),
+            )
+            .await;
+        match sent {
+            Ok(_) => true,
+            Err(super::service::SubmitFailure::NotAsked(
+                ConversationError::DrivePolicyUnenforceable,
+            )) => false,
+            Err(_) => panic!("admitted, or refused as unenforceable"),
+        }
+    }
+
+    /// Turn `execution`, started by Drive grant `grant` at `revision`,
+    /// running until the answer is sent.
+    async fn running_drive_turn(
+        &self,
+        execution: &str,
+        grant: &str,
+        revision: u64,
+    ) -> oneshot::Sender<()> {
+        let (go, gate) = oneshot::channel();
+        *self.provider.execution_gate.lock().unwrap() = Some(gate);
+        assert!(self.send_as_driver(execution, grant, revision).await);
+        self.provider.execution_started.notified().await;
+        go
+    }
+}
+
+/// Row J28: a Drive grant's turn runs the gateway's own `run`,
+/// `artifacts_publish` and `artifacts_fetch` only where the grant's policy at
+/// the turn's revision allows them. Refused, each answers why, records
+/// nothing and asks nothing of the host. The owner's turn is not checked.
+#[tokio::test]
+async fn j28_the_gateways_own_tools_are_checked_against_a_drive_grants_policy() {
+    use crate::conversation::domain::{ToolPolicy, ToolPreset};
+    let root = tempfile::tempdir().unwrap();
+    let host = CommandHost::new();
+    let harness = with_command_host(root.path(), host.clone(), Some(devbox_policy()));
+    harness.checking_drive_tools(ToolPolicy::Preset(ToolPreset::ReadOnlyTools));
+    harness.create().await;
+    let go = harness.running_drive_turn("driven", "phone", 3).await;
+    let refused = harness
+        .run(command("devbox", &["echo", "hi"], "call-1"))
+        .await;
+    assert!(
+        matches!(
+            &refused,
+            Err(CommandCallError::NotAllowed(reason))
+                if reason == r#"Drive grant "phone" at revision 3 does not allow "run" (rules: none allows it)"#
+        ),
+        "{refused:?}"
+    );
+    let (_caller, stop) = tokio::sync::watch::channel(false);
+    assert_eq!(
+        harness
+            .service
+            .publish_artifact(
+                &harness.id,
+                super::PublishCall {
+                    environment: "devbox".into(),
+                    path: "report.pdf".into(),
+                    media_type: None,
+                    call: "call-2".into(),
+                },
+                stop.clone(),
+            )
+            .await,
+        super::PublishAnswer::Refused(super::PublishCallRefusal::NotAllowed)
+    );
+    assert_eq!(
+        harness
+            .service
+            .fetch_artifact(
+                &harness.id,
+                super::FetchCall {
+                    environment: "devbox".into(),
+                    digest: "ab".repeat(32),
+                    media_type: "image/png".into(),
+                    size: 20,
+                    destination: "a.png".into(),
+                    call: "call-3".into(),
+                },
+                stop,
+            )
+            .await,
+        super::FetchAnswer::Refused(super::FetchCallRefusal::NotAllowed)
+    );
+    assert!(harness.saved_commands().is_empty());
+    go.send(()).unwrap();
+}
+
+/// Row J28: where its policy allows `run`, a Drive grant's turn runs a
+/// command exactly as the owner's would, on any environment the gateway
+/// grants commands on.
+#[tokio::test]
+async fn j28_a_drive_grant_allowed_run_runs_a_command_as_the_owner_would() {
+    use crate::conversation::domain::{ToolPolicy, ToolPreset};
+    let root = tempfile::tempdir().unwrap();
+    let host = CommandHost::new();
+    let harness = with_command_host(root.path(), host.clone(), Some(devbox_policy()));
+    harness.checking_drive_tools(ToolPolicy::Preset(ToolPreset::All));
+    harness.create().await;
+    let go = harness.running_drive_turn("driven", "phone", 3).await;
+    host.finish
+        .send_replace(Some(CommandExit::Exited { code: 0 }));
+    let answer = harness
+        .run(command("devbox", &["echo", "hi"], "call-1"))
+        .await
+        .unwrap();
+    assert!(
+        matches!(answer, CommandAnswer::Ran { recorded: true, .. }),
+        "{answer:?}"
+    );
+    go.send(()).unwrap();
+}
+
+/// A grant journal that names no policy at any revision.
+struct NoEntry;
+
+impl super::ShareGrants for NoEntry {
+    fn held_grant<'a>(
+        &'a self,
+        _: &'a ConversationId,
+        _: &'a str,
+    ) -> super::ConversationFuture<'a, Option<super::HeldGrant>> {
+        Box::pin(async { Err(ConversationError::Unavailable) })
+    }
+    fn change(&self, _: super::ShareGrantChange) -> super::ConversationFuture<'_, bool> {
+        Box::pin(async { Err(ConversationError::Unavailable) })
+    }
+    fn grants<'a>(
+        &'a self,
+        _: &'a ConversationId,
+    ) -> super::ConversationFuture<'a, Vec<super::ShareGrant>> {
+        Box::pin(async { Err(ConversationError::Unavailable) })
+    }
+    fn policy_at<'a>(
+        &'a self,
+        _: &'a ConversationId,
+        _: &'a str,
+        _: u64,
+    ) -> super::ConversationFuture<'a, Option<crate::conversation::domain::ToolPolicy>> {
+        Box::pin(async { Ok(None) })
+    }
+}
+
+/// Row J26: a Drive turn is refused `DrivePolicyUnenforceable`, and nothing
+/// reaches the agent, on a gateway that binds nothing to check its tools,
+/// and where the grant journal names no policy at its revision.
+#[tokio::test]
+async fn j26_a_drive_turn_nothing_can_check_is_refused_and_reaches_no_agent() {
+    let root = tempfile::tempdir().unwrap();
+    let harness = with_command_host(root.path(), CommandHost::new(), Some(devbox_policy()));
+    harness.create().await;
+    assert!(!harness.send_as_driver("unbound", "phone", 3).await);
+    harness.service.bind_drive_tools(super::DriveTools {
+        grants: Arc::new(NoEntry),
+        evaluator: Arc::new(
+            crate::conversation::infrastructure::CedarToolPolicyEvaluator::new().unwrap(),
+        ),
+    });
+    assert!(!harness.send_as_driver("no-entry", "phone", 3).await);
+    assert!(harness.provider.executions.lock().unwrap().is_empty());
+}

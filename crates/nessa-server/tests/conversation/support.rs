@@ -896,6 +896,10 @@ pub(crate) struct ProviderFactory {
     pub(crate) execution_observation_failure: Mutex<Option<ObservationFailure>>,
     pub(crate) request_permission: AtomicUsize,
     pub(crate) permission_gate: Mutex<Option<Receiver<()>>>,
+    /// Every permission answer the agent was given, in order.
+    pub(crate) permission_answers: Mutex<Vec<PermissionAnswer>>,
+    /// Whether the agent's own hooks may answer a review first.
+    pub(crate) native_hooks: AtomicBool,
     /// Gate after domain consumption rather than before it.
     pub(crate) consume_before_answer_gate: AtomicBool,
     /// Return the controller's actual confirmed selection for successful corpus fixtures.
@@ -1520,6 +1524,7 @@ impl ProviderSessionBackend for Backend {
         ProviderOperationCapabilities {
             image_input: self.factory.image_input.load(Ordering::SeqCst),
             negotiated: !self.factory.answer_unknown.load(Ordering::SeqCst),
+            native_hooks_allowed: self.factory.native_hooks.load(Ordering::SeqCst),
             ..ProviderOperationCapabilities::default()
         }
     }
@@ -1688,6 +1693,11 @@ impl ProviderSessionBackend for Backend {
         answer: PermissionAnswer,
     ) -> ProviderOperationFuture<'_, PermissionResolution> {
         Box::pin(async move {
+            self.factory
+                .permission_answers
+                .lock()
+                .unwrap()
+                .push(answer.clone());
             if self.factory.answer_succeeds.load(Ordering::SeqCst) {
                 return self
                     .controller
@@ -1867,6 +1877,14 @@ impl crate::conversation::application::ShareGrants for EveryConversationGranted 
         _: &'a ConversationId,
     ) -> ConversationFuture<'a, Vec<crate::conversation::application::ShareGrant>> {
         Box::pin(async { Err(ConversationError::Unavailable) })
+    }
+    fn policy_at<'a>(
+        &'a self,
+        _: &'a ConversationId,
+        _: &'a str,
+        _: u64,
+    ) -> ConversationFuture<'a, Option<crate::conversation::domain::ToolPolicy>> {
+        Box::pin(async { Ok(None) })
     }
 }
 

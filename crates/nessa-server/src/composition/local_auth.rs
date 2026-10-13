@@ -38,10 +38,13 @@ use crate::{
     browser_session::adapters::PersistentSessions,
     conversation::{
         application::{
-            ConversationRepository, ConversationService, McpAppAudit, ReceiverAuthority,
-            ShareGrants, WatchCatalogue, WatchRecords,
+            ConversationRepository, ConversationService, DriveTools, McpAppAudit,
+            ReceiverAuthority, ShareGrants, WatchCatalogue, WatchRecords,
         },
-        infrastructure::{LocalReceiverAuthority, NessaCatalogueReadSource, NessaRecordReadSource},
+        infrastructure::{
+            CedarToolPolicyEvaluator, LocalReceiverAuthority, NessaCatalogueReadSource,
+            NessaRecordReadSource,
+        },
     },
     core::RunError,
     env::Environment,
@@ -1203,6 +1206,14 @@ async fn conversations(
     };
     let service = service.map_err(|error| RunError::Agent(error.to_string()))?;
     service.bind_commands(storage.clone());
+    // A Drive grant's turn runs only where its tools are checked: against
+    // the grant journal's policy, by the Cedar evaluator (slice J4 of #707).
+    let evaluator = CedarToolPolicyEvaluator::new()
+        .map_err(|_| RunError::Agent("the tool policy bundle does not validate".into()))?;
+    service.bind_drive_tools(DriveTools {
+        grants: metadata.clone(),
+        evaluator: Arc::new(evaluator),
+    });
     if let Some(tools) = &environment_tools {
         tools.attach(service.clone());
     }

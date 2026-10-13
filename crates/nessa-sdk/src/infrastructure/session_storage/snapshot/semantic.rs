@@ -636,6 +636,16 @@ mod tests {
                 "tools": "NotChecked"
             })
         );
+        let checked = saved(&record(Initiation::checked_grant(
+            GrantInitiator::new("grant-1", 4).unwrap(),
+        )));
+        assert_eq!(
+            checked["changes"][0]["InputAccepted"]["metadata"]["initiation"],
+            serde_json::json!({
+                "initiator": {"Grant": {"grant": "grant-1", "policy_revision": 4}},
+                "tools": "Checked"
+            })
+        );
         let grant = |grant: serde_json::Value| {
             serde_json::json!({
                 "initiator": {"Grant": {"grant": grant, "policy_revision": 4}},
@@ -650,7 +660,9 @@ mod tests {
                 "x".repeat(GrantInitiator::MAX_GRANT_BYTES + 1).into(),
             )),
             Some(serde_json::json!({"initiator": "Guest", "tools": "NotChecked"})),
+            // Only a grant's turn is checked.
             Some(serde_json::json!({"initiator": "Owner", "tools": "Checked"})),
+            Some(serde_json::json!({"initiator": "Owner", "tools": "Unchecked"})),
             Some(serde_json::json!({"initiator": "Owner"})),
             Some(serde_json::json!({"initiator": "Owner", "tools": "NotChecked", "by": 1})),
             // A grant's role is the host's record of the grant, never a copy
