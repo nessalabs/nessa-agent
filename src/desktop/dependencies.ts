@@ -188,7 +188,7 @@ export function createDesktopDependencies(
     sharing: source
       ? sharingGateway({ connected: () => source.connected() })
       : samples
-        ? inMemorySharing()
+        ? inMemorySharing({ now })
         : options.sharing,
     now,
     newId,

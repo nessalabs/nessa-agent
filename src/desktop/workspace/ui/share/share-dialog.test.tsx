@@ -17,6 +17,9 @@ import { fakeSource, keptFilter, roomyGrid, settle } from "../../testing"
 import { driveNotes } from "./share-copy"
 import { ShareDialogHost } from "./share-dialog"
 
+/** A fixed clock, so a grant's time is the same on every run. */
+const testNow = () => 1_700_000_000_000
+
 let root: Root
 let host: HTMLDivElement
 
@@ -129,7 +132,7 @@ const methods = (sharing: ReturnType<typeof inMemorySharing>) =>
 
 describe("the share dialog", () => {
   it("draws nothing until opened, and goes when closed", async () => {
-    const store = await render(inMemorySharing())
+    const store = await render(inMemorySharing({ now: testNow }))
     expect(dialog()).toBeNull()
     await open(store)
     expect(dialog()?.getAttribute("data-share-state")).toBe("read")
@@ -185,6 +188,7 @@ describe("the share dialog", () => {
   it("says a refusal in words, never its code", async () => {
     const store = await render(
       inMemorySharing({
+        now: testNow,
         refuse: (method) => (method === "share" ? "not-paired" : undefined),
       }),
     )
@@ -199,7 +203,10 @@ describe("the share dialog", () => {
   it("says a failed read with Try Again, which reads again", async () => {
     let refuse = true
     const store = await render(
-      inMemorySharing({ refuse: () => (refuse ? "unanswered" : undefined) }),
+      inMemorySharing({
+        now: testNow,
+        refuse: () => (refuse ? "unanswered" : undefined),
+      }),
     )
     await open(store)
     expect(find("[data-share-read-failure]").textContent).toContain(
@@ -212,7 +219,7 @@ describe("the share dialog", () => {
   })
 
   it("asks Drive for a tool policy and hosts, and says what a policy cannot stop", async () => {
-    const sharing = inMemorySharing()
+    const sharing = inMemorySharing({ now: testNow })
     const share = sharing.share
     const sent: unknown[] = []
     sharing.share = async (sessionId, request, requestId) => {
@@ -252,7 +259,10 @@ describe("the share dialog", () => {
 
   it("holds the host list to the room the patterns leave", async () => {
     const limits = { patterns: 16, hosts: 3, hostBytes: 8, entries: 4 }
-    const memory = inMemorySharing({ commandHosts: ["a", "b", "c", "much-too-long"] })
+    const memory = inMemorySharing({
+      now: testNow,
+      commandHosts: ["a", "b", "c", "much-too-long"],
+    })
     const sharing: SharingSource = {
       ...memory,
       choices: async () => ({ ...(await memory.choices()), limits }),
@@ -280,7 +290,7 @@ describe("the share dialog", () => {
   })
 
   it("keeps, and shows, a held host the gateway does not offer now", async () => {
-    const sharing = inMemorySharing()
+    const sharing = inMemorySharing({ now: testNow })
     const store = await render(sharing)
     await sharing.share(
       "a",
@@ -323,7 +333,7 @@ describe("the share dialog", () => {
   })
 
   it("starts from nothing for a device without a grant, never another's", async () => {
-    const sharing = inMemorySharing()
+    const sharing = inMemorySharing({ now: testNow })
     const store = await render(sharing)
     await sharing.share(
       "a",
@@ -348,7 +358,7 @@ describe("the share dialog", () => {
   })
 
   it("starts a new draft for a new opening", async () => {
-    const store = await render(inMemorySharing())
+    const store = await render(inMemorySharing({ now: testNow }))
     await open(store)
     await choose("[data-share-targets]", "-phone")
     expect(submit().disabled).toBe(false)
@@ -357,7 +367,7 @@ describe("the share dialog", () => {
   })
 
   it("holds the form while a change is on its way, and starts again after a change made elsewhere", async () => {
-    const sharing = inMemorySharing()
+    const sharing = inMemorySharing({ now: testNow })
     const share = sharing.share
     let release: () => void = () => {}
     sharing.share = (sessionId, request, requestId) =>
@@ -407,7 +417,7 @@ describe("the share dialog", () => {
   ] as const)(
     "holds the list and the form during the read after %s, and once that read fails, until Try Again",
     async (_, seeded, act_) => {
-      const sharing = inMemorySharing()
+      const sharing = inMemorySharing({ now: testNow })
       if (seeded)
         await sharing.share(
           "a",
@@ -477,7 +487,7 @@ describe("the share dialog", () => {
   )
 
   it("says why it waits while another conversation's change is on its way", async () => {
-    const sharing = inMemorySharing()
+    const sharing = inMemorySharing({ now: testNow })
     const share = sharing.share
     let release: () => void = () => {}
     sharing.share = (sessionId, request, requestId) =>
@@ -510,7 +520,7 @@ describe("the share dialog", () => {
   })
 
   it("says why it waits while its own conversation's earlier change is on its way", async () => {
-    const sharing = inMemorySharing()
+    const sharing = inMemorySharing({ now: testNow })
     const share = sharing.share
     let release: () => void = () => {}
     sharing.share = (sessionId, request, requestId) =>
@@ -541,7 +551,7 @@ describe("the share dialog", () => {
   })
 
   it("stops asking about a Revoke once a read lists the grant changed, and asks again about what it holds", async () => {
-    const sharing = inMemorySharing()
+    const sharing = inMemorySharing({ now: testNow })
     const store = await render(sharing)
     await sharing.share(
       "a",
@@ -579,7 +589,7 @@ describe("the share dialog", () => {
   })
 
   it("stops asking about a Revoke when this window's own change to that device begins", async () => {
-    const sharing = inMemorySharing()
+    const sharing = inMemorySharing({ now: testNow })
     const store = await render(sharing)
     await sharing.share(
       "a",
@@ -607,7 +617,7 @@ describe("the share dialog", () => {
   })
 
   it("says a change refused because another window changed the grant, and starts again from what it holds", async () => {
-    const sharing = inMemorySharing()
+    const sharing = inMemorySharing({ now: testNow })
     const store = await render(sharing)
     await sharing.share(
       "a",
@@ -659,6 +669,7 @@ describe("the share dialog", () => {
 
   it("keeps the grants and Revoke when the linked devices cannot be read", async () => {
     const sharing = inMemorySharing({
+      now: testNow,
       refuse: (method) => (method === "choices" ? "busy" : undefined),
     })
     const store = await render(sharing)

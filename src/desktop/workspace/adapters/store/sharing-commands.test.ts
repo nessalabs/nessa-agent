@@ -27,6 +27,9 @@ import {
   type WorkspaceCommand,
 } from "./commands"
 
+/** A fixed clock, so a grant's time is the same on every run. */
+const testNow = () => 1_700_000_000_000
+
 function storeWith(sharing: SharingSource | undefined) {
   let next = 0
   return makeDesktopStore({
@@ -148,7 +151,7 @@ describe("sharing from the store", () => {
   })
 
   it("D10: Share sends the draft as the store holds it when dispatched, and nothing else", async () => {
-    const sharing = inMemorySharing()
+    const sharing = inMemorySharing({ now: testNow })
     const share = sharing.share
     const sent: ShareRequest[] = []
     sharing.share = (sessionId, request, requestId) => {
@@ -181,7 +184,7 @@ describe("sharing from the store", () => {
   })
 
   it("D5: a refused change is said, and the grants are read again all the same", async () => {
-    const sharing = inMemorySharing()
+    const sharing = inMemorySharing({ now: testNow })
     const store = storeWith(sharing)
     await store.dispatch(openShare({ sessionId: "a" }))
     await store.dispatch(
@@ -206,7 +209,7 @@ describe("sharing from the store", () => {
   })
 
   it("D5, D10: a change to a grant another window moved is refused as changed, and nothing is changed", async () => {
-    const sharing = inMemorySharing()
+    const sharing = inMemorySharing({ now: testNow })
     const store = storeWith(sharing)
     await sharing.share(
       "a",
@@ -240,7 +243,7 @@ describe("sharing from the store", () => {
   })
 
   it("D11: a Revoke names the revision listed when it was asked, and is refused once another window moved it", async () => {
-    const sharing = inMemorySharing()
+    const sharing = inMemorySharing({ now: testNow })
     const store = storeWith(sharing)
     await sharing.share(
       "a",
@@ -271,7 +274,7 @@ describe("sharing from the store", () => {
   })
 
   it("D10: a first grant names revision 0, and is refused once another window granted the device first", async () => {
-    const sharing = inMemorySharing()
+    const sharing = inMemorySharing({ now: testNow })
     const store = storeWith(sharing)
     await store.dispatch(openShare({ sessionId: "a" }))
     expect(store.getState().workspace.share?.grants).toEqual([])
@@ -307,6 +310,7 @@ describe("sharing from the store", () => {
   it("D4: a failed read says why, and Try Again reads it", async () => {
     let refuse = true
     const sharing = inMemorySharing({
+      now: testNow,
       refuse: (method) => (refuse && method === "grants" ? "busy" : undefined),
     })
     const store = storeWith(sharing)
@@ -325,6 +329,7 @@ describe("sharing from the store", () => {
 
   it("D4: the devices and hosts failing leaves the grants, and a revoke of one", async () => {
     const sharing = inMemorySharing({
+      now: testNow,
       refuse: (method) => (method === "choices" ? "unanswered" : undefined),
     })
     const store = storeWith(sharing)
