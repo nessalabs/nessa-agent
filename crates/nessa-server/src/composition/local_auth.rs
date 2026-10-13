@@ -19,13 +19,14 @@ use crate::{
     attachments::infrastructure::ModelImageNormalizer,
     conversation::{
         application::{
-            ConversationAgents, ConversationDependencies, ConversationLimits, Environments,
-            McpAppPorts,
+            ConversationAgents, ConversationDependencies, ConversationLimits, DriveTools,
+            Environments, McpAppPorts,
         },
         infrastructure::{
-            DurableConversationCreationAudit, DurableConversationDeletionAudit,
-            DurableConversationFileLinkAudit, DurableConversationModeAudit, DurableDriveToolAudit,
-            DurableMcpAppAudit, LocalConversationStore,
+            CedarToolPolicyEvaluator, DurableConversationCreationAudit,
+            DurableConversationDeletionAudit, DurableConversationFileLinkAudit,
+            DurableConversationModeAudit, DurableDriveToolAudit, DurableMcpAppAudit,
+            LocalConversationStore,
         },
     },
 };
@@ -38,13 +39,10 @@ use crate::{
     browser_session::adapters::PersistentSessions,
     conversation::{
         application::{
-            ConversationRepository, ConversationService, DriveTools, McpAppAudit,
-            ReceiverAuthority, ShareGrants, WatchCatalogue, WatchRecords,
+            ConversationRepository, ConversationService, McpAppAudit, ReceiverAuthority,
+            ShareGrants, WatchCatalogue, WatchRecords,
         },
-        infrastructure::{
-            CedarToolPolicyEvaluator, LocalReceiverAuthority, NessaCatalogueReadSource,
-            NessaRecordReadSource,
-        },
+        infrastructure::{LocalReceiverAuthority, NessaCatalogueReadSource, NessaRecordReadSource},
     },
     core::RunError,
     env::Environment,
