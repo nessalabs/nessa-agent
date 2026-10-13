@@ -260,6 +260,15 @@ export function useFileAttachments(
     setRefused({ destination, refusal })
   }
   /**
+   * A closed tab in the current owner has nobody left to tell, so its notice
+   * goes to that owner's active tab. A retired owner must not notify the
+   * replacement provider's tab with the same local conversation ID.
+   */
+  function refuseClosedConversation(destination: AttachmentDestination) {
+    if (!destinationIsCurrent(destination)) return
+    refuse({ reason: "conversation-closed" }, currentDestination(activeId.current))
+  }
+  /**
    * Put down a refusal this conversation has now answered, leaving another
    * tab's alone. The answers are: files actually attached, a file taken off the
    * draft, and the draft going to the gateway. Each of them is the person
@@ -314,8 +323,8 @@ export function useFileAttachments(
     // The draft these were for is gone — closed during a fetch that can take
     // three quarters of a minute, or during the read that follows it. There is
     // nothing to attach them to, and saying so on the conversation that no
-    // longer exists would be saying it to nobody, so it is said where the
-    // person is looking.
+    // longer exists would be saying it to nobody, so a notice stays in the
+    // captured owner and goes to its active tab.
     //
     // It is said at all because the alternative is the silence this module
     // refuses everywhere else: a person who chose five files and got none has
@@ -325,7 +334,7 @@ export function useFileAttachments(
     // it: every route into a draft passes here, including the ones that never
     // read a byte.
     if (!target) {
-      refuse({ reason: "conversation-closed" }, currentDestination(activeId.current))
+      refuseClosedConversation(destination)
       return
     }
     // Three states, and only one of them refuses. `imageInput` is the
@@ -535,7 +544,7 @@ export function useFileAttachments(
     // the read still reaches `attach`, and the bytes for that one are spent and
     // thrown away. Both end in the same sentence.
     if (!stillOpen(destination)) {
-      refuse({ reason: "conversation-closed" }, currentDestination(activeId.current))
+      refuseClosedConversation(destination)
       return
     }
     // The platform's own answer first, the extension table only as the

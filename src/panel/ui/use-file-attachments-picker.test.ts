@@ -573,6 +573,120 @@ it("says the same thing when the draft goes while its images are being read", as
   expect(draftFiles()).toHaveLength(0)
 })
 
+it("does not route a closed picker owner's preflight refusal into a replacement provider", async () => {
+  const storeA = store
+  const conversationId = chat.active.id
+  const selection = deferred<unknown[]>()
+  chooseAttachmentFiles.mockReturnValue(selection.promise)
+
+  await act(async () => hook.chooseFiles())
+  expect(chooseAttachmentFiles).toHaveBeenCalledOnce()
+
+  const storeB = makeStore(
+    createDependencies({
+      conversation: scenarioEffects("echo") as unknown as ConversationEffects,
+    }),
+  )
+  await act(async () => storeB.dispatch(openConversation()))
+  expect(storeB.getState().conversation.activeId).toBe(conversationId)
+  const resourcesB = { ...resources }
+  store = storeB
+  selectedResources = resourcesB
+  await act(async () => {
+    root.render(
+      React.createElement(
+        React.StrictMode,
+        null,
+        React.createElement(Provider, {
+          store: storeB,
+          children: React.createElement(Surface),
+        }),
+      ),
+    )
+  })
+  expect(hook.captureDestination().store).toBe(storeB)
+  await act(async () => storeA.dispatch(closeConversation(conversationId)))
+
+  await act(async () => {
+    selection.resolve([
+      {
+        path: "/late.pdf",
+        name: "late.pdf",
+        size: 1,
+        mimeType: "application/pdf",
+        ticket: "late-pdf",
+      },
+    ])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
+
+  expect(hook.refusal).toBeNull()
+  expect(readAttachmentBytes).not.toHaveBeenCalled()
+  expect(
+    storeB
+      .getState()
+      .conversation.conversations.find((item) => item.id === conversationId)?.draft,
+  ).toHaveLength(0)
+})
+
+it("does not route a closed read owner's refusal into a replacement provider", async () => {
+  const storeA = store
+  const conversationId = chat.active.id
+  const imageRead = deferred<ArrayBuffer>()
+  chooseAttachmentFiles.mockResolvedValue([
+    {
+      path: "/late.png",
+      name: "late.png",
+      size: 1,
+      mimeType: "image/png",
+      ticket: "late-image",
+    },
+  ])
+  readAttachmentBytes.mockReturnValue(imageRead.promise)
+
+  await act(async () => hook.chooseFiles())
+  await act(async () => {
+    await vi.waitFor(() => expect(readAttachmentBytes).toHaveBeenCalledWith("late-image"))
+  })
+
+  const storeB = makeStore(
+    createDependencies({
+      conversation: scenarioEffects("echo") as unknown as ConversationEffects,
+    }),
+  )
+  await act(async () => storeB.dispatch(openConversation()))
+  expect(storeB.getState().conversation.activeId).toBe(conversationId)
+  const resourcesB = { ...resources }
+  store = storeB
+  selectedResources = resourcesB
+  await act(async () => {
+    root.render(
+      React.createElement(
+        React.StrictMode,
+        null,
+        React.createElement(Provider, {
+          store: storeB,
+          children: React.createElement(Surface),
+        }),
+      ),
+    )
+  })
+  expect(hook.captureDestination().store).toBe(storeB)
+  await act(async () => storeA.dispatch(closeConversation(conversationId)))
+
+  await act(async () => {
+    imageRead.resolve(new ArrayBuffer(4))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
+
+  expect(hook.refusal).toBeNull()
+  expect(
+    storeB
+      .getState()
+      .conversation.conversations.find((item) => item.id === conversationId)?.draft,
+  ).toHaveLength(0)
+})
+
 it("refuses a file linked by path for a conversation that runs on an SSH host, and keeps taking images", async () => {
   await act(async () => {
     chat.setSelection(chat.active.id, {
