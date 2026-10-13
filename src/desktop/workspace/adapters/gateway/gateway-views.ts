@@ -266,8 +266,7 @@ function writtenBy(app: ConversationMessageApp | undefined): { app?: MessageApp 
  * gateway holds it. A note somebody left is a message of its own right after
  * the turn it followed, or the input still waiting it followed; one left
  * before any turn, or after a turn the bounded view left out, is first
- * (`placeNotes`). An input waiting that the view lists apart from its turns
- * is drawn in queue order: ahead of a listed turn that waits behind it.
+ * (`placeNotes`).
  */
 export function transcriptFrom(
   view: ConversationView,
@@ -281,8 +280,8 @@ export function transcriptFrom(
   )
   const listed = new Set(view.messages.map((turn) => turn.executionId))
   const published = placePublished(view.artifacts, listed)
-  // The inputs still waiting that the view lists apart from its turns, drawn
-  // in the order they wait.
+  // The inputs still waiting that the view lists apart from its turns: drawn
+  // after every turn, as the panel draws them.
   const unlisted = view.pending.filter((waiting) => !listed.has(waiting.executionId))
   const notes = placeNotes(
     view.notes,
@@ -305,30 +304,7 @@ export function transcriptFrom(
       parts: published.before.map(publishedPart),
     })
   let activity: Transcript["activity"] = null
-  // Each unlisted input waiting, with the notes that followed it. One that
-  // waits ahead of a listed one is drawn before it, so the queue reads in
-  // its own order.
-  const queuePlace = new Map(view.pending.map((waiting, at) => [waiting.executionId, at]))
-  let drawnWaiting = 0
-  const drawWaitingBefore = (end: number) => {
-    for (; drawnWaiting < end; drawnWaiting++) {
-      const waiting = view.pending[drawnWaiting]
-      if (!waiting || listed.has(waiting.executionId)) continue
-      const input = inputId(waiting.executionId)
-      messages.push({
-        id: input,
-        role: "user",
-        at: seen(input),
-        parts: [{ kind: "text", text: waiting.text }],
-        // Waiting, it is labelled as it will be once it is a turn (D-H).
-        ...writtenBy(waiting.app),
-      })
-      pushNotes(notes.byWaiting.get(waiting.executionId) ?? [])
-    }
-  }
   for (const turn of view.messages) {
-    const queuedAt = queuePlace.get(turn.executionId)
-    if (queuedAt !== undefined) drawWaitingBefore(queuedAt)
     const input = inputId(turn.executionId)
     messages.push({
       id: input,
@@ -385,7 +361,18 @@ export function transcriptFrom(
       at: seen(publishedAfterId),
       parts: published.after.map(publishedPart),
     })
-  drawWaitingBefore(view.pending.length)
+  for (const waiting of unlisted) {
+    const input = inputId(waiting.executionId)
+    messages.push({
+      id: input,
+      role: "user",
+      at: seen(input),
+      parts: [{ kind: "text", text: waiting.text }],
+      // Waiting, it is labelled as it will be once it is a turn (D-H).
+      ...writtenBy(waiting.app),
+    })
+    pushNotes(notes.byWaiting.get(waiting.executionId) ?? [])
+  }
   const latestInputId = unlisted.at(-1)?.executionId ?? view.messages.at(-1)?.executionId
   const latestTurn = view.messages.at(-1)
   // What runs is the tool and its exact input, which the gateway offers a

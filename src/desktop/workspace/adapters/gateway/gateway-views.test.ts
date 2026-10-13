@@ -403,7 +403,7 @@ describe("a conversation view as a transcript", () => {
     ])
   })
 
-  it("draws an input waiting that the view lists apart from its turns in queue order, its note right after it", () => {
+  it("draws an input waiting that the view lists apart from its turns after every turn, its note right after it, as the panel does", () => {
     const queued = (executionId: string, text: string) => ({
       executionId,
       text,
@@ -411,8 +411,9 @@ describe("a conversation view as a transcript", () => {
       files: [],
       mode: "queued" as const,
     })
-    // A bounded view can list a waiting input without its turn; it waits
-    // ahead of the listed one, so it is drawn ahead of it.
+    // A bounded view can list a waiting input without its turn. Which order
+    // waiting inputs are drawn in is the panel's and the desktop's one shared
+    // answer: the listed turns first, then the rest (`waiting-notes.test.tsx`).
     const transcript = transcriptFrom(
       view("c", {
         truncated: true,
@@ -430,9 +431,9 @@ describe("a conversation view as a transcript", () => {
     expect(transcript.messages.map((message) => message.id)).toEqual([
       inputId("e1"),
       replyId("e1"),
+      inputId("q1"),
       inputId("p0"),
       noteId("after-p0"),
-      inputId("q1"),
     ])
     // The latest input is still the last one the view lists apart, as before.
     expect(transcript.latestInputId).toBe("p0")

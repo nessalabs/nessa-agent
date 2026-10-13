@@ -239,9 +239,7 @@ export function Transcript({
                   onOpenPaste={onOpenPaste}
                 />
                 <TranscriptNotes
-                  notes={
-                    (turn.executionId && notes.byWaiting.get(turn.executionId)) || []
-                  }
+                  notes={notes.byWaiting.get(turn.executionId ?? "") ?? []}
                 />
               </React.Fragment>
             ))}
