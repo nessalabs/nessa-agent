@@ -271,6 +271,59 @@ describe("the in-memory source", () => {
     ])
   })
 
+  it("records an answer to a question without the answerer's own words, and a refusal when it is not waiting", async () => {
+    const clock = manualSchedule()
+    const seed = sampleWorkspace(clock.schedule.now())
+    const held = seed.transcripts.get("split-panes")
+    if (!held) throw new Error("split-panes has no transcript")
+    seed.transcripts.set("split-panes", {
+      ...held,
+      questions: [
+        {
+          executionId: "e1",
+          questionId: "q1",
+          message: "Where should this land?",
+          questions: [
+            {
+              key: "where",
+              prompt: "Pick a place",
+              multiSelect: false,
+              freeText: true,
+              required: false,
+              options: [{ value: "here", label: "Here" }],
+            },
+          ],
+        },
+      ],
+    })
+    const source = inMemorySource(clock.schedule, seed)
+    await source.answerQuestion(
+      "split-panes",
+      "e1",
+      "q1",
+      [{ key: "where", values: ["here"], ownWords: "secret words" }],
+      "person",
+    )
+    expect((await source.transcript("split-panes")).questions).toEqual([])
+    const taken = source.audit().at(-1)
+    expect(taken).toMatchObject({
+      action: "answer-question",
+      executionId: "e1",
+      questionId: "q1",
+      initiator: "person",
+      outcome: "taken",
+    })
+    expect(JSON.stringify(taken)).not.toContain("secret words")
+    await expect(
+      source.answerQuestion("split-panes", "e1", "q1", null, "person"),
+    ).rejects.toMatchObject({ reason: "not-waiting" })
+    expect(source.audit().at(-1)).toMatchObject({
+      action: "decline-question",
+      questionId: "q1",
+      outcome: { refused: "not-waiting" },
+    })
+  })
+
   it("refuses an answer to an approval that is not waiting, and records it all the same", async () => {
     const { source } = started()
     await expect(

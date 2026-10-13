@@ -33,6 +33,8 @@ export {
   type MessagePart,
 } from "./content"
 
+export { questionAnswerReady, questionChoices, type QuestionField } from "./questions"
+
 export {
   type FileAttachment,
   type ImageReference,

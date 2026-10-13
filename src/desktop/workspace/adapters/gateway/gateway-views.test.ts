@@ -852,6 +852,12 @@ it("shows auth recovery without duplicating its diagnostic and preserves unrelat
     { kind: "text", text: "Chart the sales" },
     { kind: "text", text: "Nessa declined a tool review." },
   ])
+  expect(
+    transcript.messages.every(
+      (message) => message.role === "note" || message.terminal === undefined,
+    ),
+  ).toBe(true)
+  expect(JSON.stringify(transcript)).not.toContain("OAuth session expired")
 })
 
 it("recovery follows the latest mapped input across pending and dispatched turns", () => {
@@ -895,6 +901,203 @@ function recovery(transcript: ReturnType<typeof transcriptFrom>) {
     [],
   )
 }
+
+describe("a turn the gateway says ended", () => {
+  it("keeps a failure with no reply on the input, status and diagnostic apart", () => {
+    const transcript = transcriptFrom(
+      view("c", {
+        messages: [turn({ status: "failed", error: "Provider connection lost" })],
+      }),
+      1,
+      at,
+      GATEWAY_NOW_MS,
+    )
+    expect(transcript.messages).toHaveLength(1)
+    expect(transcript.messages[0]).toMatchObject({
+      role: "user",
+      terminal: { status: "failed", error: "Provider connection lost" },
+    })
+    expect(messageText(transcript.messages[0]!)).toBe("Chart the sales")
+  })
+
+  it("keeps a cancellation on the reply and leaves the partial text as it arrived", () => {
+    const transcript = transcriptFrom(
+      view("c", {
+        messages: [
+          turn({
+            status: "cancelled",
+            error: "Stopped",
+            parts: [textPart("Halfway", 0)],
+          }),
+        ],
+      }),
+      1,
+      at,
+      GATEWAY_NOW_MS,
+    )
+    expect(transcript.messages[0]).toMatchObject({ role: "user" })
+    expect(transcript.messages[0]).not.toHaveProperty("terminal")
+    expect(transcript.messages[1]).toMatchObject({
+      role: "agent",
+      terminal: { status: "cancelled", error: "Stopped" },
+      parts: [{ kind: "text", text: "Halfway" }],
+    })
+  })
+
+  it("omits a blank diagnostic and leaves a finished or still-running turn unmarked", () => {
+    const unresolved = transcriptFrom(
+      view("c", { messages: [turn({ status: "unresolved", error: "   " })] }),
+      1,
+      at,
+      GATEWAY_NOW_MS,
+    )
+    expect(unresolved.messages[0]).toMatchObject({
+      terminal: { status: "unresolved" },
+    })
+    expect(unresolved.messages[0]).not.toHaveProperty("terminal.error")
+    for (const status of ["queued", "running", "completed", "injected"] as const) {
+      const transcript = transcriptFrom(
+        view("c", { messages: [turn({ status, error: "should not show" })] }),
+        1,
+        at,
+        GATEWAY_NOW_MS,
+      )
+      expect(
+        transcript.messages.every(
+          (message) => message.role === "note" || message.terminal === undefined,
+        ),
+      ).toBe(true)
+    }
+  })
+
+  it("shows an OpenCode failure the gateway already reported", () => {
+    const transcript = transcriptFrom(
+      view("c", {
+        runtime: {
+          model: "x",
+          provider: "x",
+          workspace: "/",
+          agent: "opencode",
+          modelName: "x",
+          contextWindowTokens: 1,
+          reasoning: false,
+        },
+        messages: [turn({ status: "failed", error: "Provider connection lost" })],
+      }),
+      1,
+      at,
+      GATEWAY_NOW_MS,
+    )
+    expect(transcript.agent).toBe("opencode")
+    expect(transcript.messages[0]).toMatchObject({
+      terminal: { status: "failed", error: "Provider connection lost" },
+    })
+  })
+})
+
+describe("questions and a withheld interaction", () => {
+  const field = {
+    key: "where",
+    prompt: "Pick a place",
+    multiSelect: false,
+    freeText: false,
+    required: true,
+    options: [{ value: "here", label: "Here", description: "This machine" }],
+  }
+
+  it("keeps a question that names an ask, and the gateway's notice in its own words", () => {
+    const transcript = transcriptFrom(
+      view("c", {
+        messages: [turn({ status: "running" })],
+        questions: [
+          {
+            executionId: "e1",
+            questionId: "q1",
+            message: "Where should this land?",
+            questions: [field],
+          },
+        ],
+        interactionViewError: "A review was left out of this view.",
+      }),
+      1,
+      at,
+      GATEWAY_NOW_MS,
+    )
+    expect(transcript.questions).toEqual([
+      {
+        executionId: "e1",
+        questionId: "q1",
+        message: "Where should this land?",
+        questions: [
+          {
+            key: "where",
+            prompt: "Pick a place",
+            multiSelect: false,
+            freeText: false,
+            required: true,
+            options: [{ value: "here", label: "Here", description: "This machine" }],
+          },
+        ],
+      },
+    ])
+    expect(transcript.interactionNotice).toBe("A review was left out of this view.")
+  })
+
+  it("skips a question, field, or option that names nothing, and a blank notice", () => {
+    const transcript = transcriptFrom(
+      view("c", {
+        messages: [turn({ status: "running" })],
+        questions: [
+          { executionId: "", questionId: "q0", message: "Missing an execution", questions: [field] },
+          { executionId: "e1", questionId: "q1", message: "   ", questions: [field] },
+          {
+            executionId: "e1",
+            questionId: "q2",
+            message: "No usable field",
+            questions: [{ ...field, key: "" }, { ...field, prompt: "  " }, { ...field, options: [] }],
+          },
+          {
+            executionId: "e1",
+            questionId: "q3",
+            message: "Where should this land?",
+            questions: [
+              {
+                ...field,
+                options: [
+                  { value: "", label: "Nowhere" },
+                  { value: "here", label: "   " },
+                  { value: "there", label: "There" },
+                ],
+              },
+            ],
+          },
+        ],
+        interactionViewError: "  ",
+      }),
+      1,
+      at,
+      GATEWAY_NOW_MS,
+    )
+    expect(transcript.questions).toEqual([
+      {
+        executionId: "e1",
+        questionId: "q3",
+        message: "Where should this land?",
+        questions: [
+          {
+            key: "where",
+            prompt: "Pick a place",
+            multiSelect: false,
+            freeText: false,
+            required: true,
+            options: [{ value: "there", label: "There" }],
+          },
+        ],
+      },
+    ])
+    expect(transcript.interactionNotice).toBeUndefined()
+  })
+})
 
 describe("a conversation view's lease", () => {
   it("is carried as where the agent runs, and is absent until one is recorded", () => {

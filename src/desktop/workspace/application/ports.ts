@@ -32,7 +32,7 @@
 import type { StageMismatch, WorkspaceFailureReason } from "../model/failure"
 import type { ModelRef, WorkspaceIndex, SessionSummary } from "../model/workspace-index"
 import type { PaneRoom } from "../../split-panes/model/pane-sizing"
-import type { Transcript } from "../model/transcript"
+import type { QuestionChoice, Transcript } from "../model/transcript"
 import type { AgentsFilter } from "../model/overview/filter"
 import type {
   ShareGrant,
@@ -152,6 +152,20 @@ export interface WorkspaceSource {
     approvalId: string,
     initiator: Initiator,
     optionId: string,
+  ): Promise<void>
+  /**
+   * Answers a question the session's agent is waiting on, or declines it
+   * (`choices` null). Resolves once the source has taken the answer. The
+   * question leaves the conversation when a later read no longer lists it.
+   * The gateway's source records nothing itself: the gateway records the
+   * answer as this window's authenticated caller.
+   */
+  answerQuestion(
+    sessionId: string,
+    executionId: string,
+    questionId: string,
+    choices: readonly QuestionChoice[] | null,
+    initiator: Initiator,
   ): Promise<void>
   /**
    * Pins or unpins a session. Resolves once the session's changed summary has

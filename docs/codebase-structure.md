@@ -257,7 +257,11 @@ against a private scripted gateway.
   share one header bar (`pane-header-frame.tsx`);
   `ui/overview/` the Agents overview, with its rules in `model/overview/`),
   with `testing.ts` the fake source, the store, and the animation frames its
-  tests share. The window has its own store (`src/desktop/store.ts`) and composition
+  tests share. A failed, cancelled, or unresolved turn keeps the gateway's
+  status and diagnostic on the message. Questions the view lists, and the
+  gateway's `interactionViewError`, are on the transcript; answering a
+  question checks it is on screen, then that the view still lists it, then
+  sends `answerQuestion`, and the next frame drops it. The window has its own store (`src/desktop/store.ts`) and composition
   (`src/desktop/dependencies.ts`). Where its workspace comes from is the
   window's too: the host's gateway, a browser's, a seeded run, or the sample, by
   `src/desktop/model/workspace-backend.ts`, with the desktop app's connection
@@ -946,7 +950,9 @@ and stable execution-scoped identity. The gateway upserts selection with its lat
 local write evidence before the agent-stream adapter renders it; it is not a
 permission decision, provider message, tool failure, or execution status.
 `ui/transcript.tsx` renders a turn's terminal status once at row level,
-independently of whether that turn contains text.
+independently of whether that turn contains text. The desktop transcript
+keeps that status and the gateway's diagnostic as separate marks
+(`workspace/model/transcript.ts`).
 
 ### Packaged gateway lifecycle
 

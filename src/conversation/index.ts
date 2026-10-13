@@ -20,7 +20,7 @@
  * application/saved-tabs restores remote references under fresh local names from
  * the existing allocator, fencing retired callbacks (restored-lifetimes tests).
  */
-export { AGENT_HUES } from "./model"
+export { AGENT_HUES, questionAnswerReady, questionChoices } from "./model"
 export { ConversationNotification } from "./ui/conversation-notification"
 export { ConversationQueue } from "./ui/conversation-queue"
 export { ConversationList } from "./ui/conversation-list"

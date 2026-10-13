@@ -18,7 +18,7 @@ import {
   type Side,
   type Zone,
 } from "../../../split-panes/model/pane-layout"
-import { messageText, type Message } from "../../model/transcript"
+import { messageText, type Message, type QuestionChoice } from "../../model/transcript"
 import {
   failureReason,
   failureStages,
@@ -584,6 +584,75 @@ export function approve({
   return answer(sessionId, approvalId, ({ workspace }) =>
     workspace.approve(sessionId, approvalId, scope, initiator, optionId),
   )
+}
+
+/**
+ * What became of an answer to a question the agent asked. `sent` once the
+ * source has taken it. `not-asked` when this window is not showing that
+ * question. `answering` when this ask is already on its way. `refused` when
+ * the source declined it, `unknown` when it is not known to have been taken.
+ * The question leaves when a later read omits it.
+ */
+export type QuestionOutcome =
+  | { readonly status: "sent" }
+  | { readonly status: "not-asked" }
+  | { readonly status: "answering" }
+  | { readonly status: "refused"; readonly reason: WorkspaceFailureReason }
+  | { readonly status: "unknown"; readonly reason: WorkspaceFailureReason }
+
+/**
+ * Asks already on their way. The overview can draw a question while the pane
+ * beneath it still holds the same card, so the second send has to see the
+ * first. Cleared when that send settles, taken or refused.
+ */
+const questionsInFlight = new Set<string>()
+
+/**
+ * Answers a question the session's agent is waiting on, or declines it
+ * (`choices` null). Only a question on screen is answered. The card keeps
+ * its own busy state; this does not record one on the workspace.
+ */
+export function answerQuestion({
+  sessionId,
+  executionId,
+  questionId,
+  choices,
+  initiator,
+}: {
+  sessionId: string
+  executionId: string
+  questionId: string
+  choices: readonly QuestionChoice[] | null
+  initiator: Initiator
+}): WorkspaceCommand<Promise<QuestionOutcome>> {
+  return async (_dispatch, getState, { workspace }) => {
+    const state = getState().workspace
+    const asked = entry(state.transcripts, sessionId)?.questions?.some(
+      (question) =>
+        question.executionId === executionId && question.questionId === questionId,
+    )
+    if (!onScreen(state, sessionId) || !asked) return { status: "not-asked" }
+    const flight = JSON.stringify([sessionId, executionId, questionId])
+    if (questionsInFlight.has(flight)) return { status: "answering" }
+    questionsInFlight.add(flight)
+    try {
+      await workspace.answerQuestion(
+        sessionId,
+        executionId,
+        questionId,
+        choices,
+        initiator,
+      )
+      return { status: "sent" }
+    } catch (error) {
+      const reason = failureReason(error)
+      return reason === "unavailable"
+        ? { status: "unknown", reason }
+        : { status: "refused", reason }
+    } finally {
+      questionsInFlight.delete(flight)
+    }
+  }
 }
 
 /** Refuses what the session's agent is waiting to run. */

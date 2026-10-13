@@ -13,6 +13,7 @@ import { ProviderSignIn } from "./provider-sign-in"
 import { ApprovalCard } from "./approval-card"
 import { LiveRow } from "./live-row"
 import { Message } from "./message"
+import { QuestionCard } from "./question-card"
 import { type Message as MessageValue } from "../../model/transcript"
 import { TranscriptHeading } from "./transcript-heading"
 import "./transcript.css"
@@ -170,7 +171,19 @@ export const Transcript = memo(function Transcript({
         (provider === "claude" || provider === "codex") ? (
           <ProviderSignIn key={provider} provider={provider} />
         ) : null}
+        {transcript?.interactionNotice ? (
+          <p className="workspace-transcript-notice" role="status" data-interaction-notice>
+            {transcript.interactionNotice}
+          </p>
+        ) : null}
         {transcript?.activity ? <LiveRow activity={transcript.activity} /> : null}
+        {(transcript?.questions ?? []).map((question) => (
+          <QuestionCard
+            key={JSON.stringify([question.executionId, question.questionId])}
+            sessionId={sessionId}
+            question={question}
+          />
+        ))}
         {transcript?.approval && model ? (
           <ApprovalCard
             sessionId={sessionId}

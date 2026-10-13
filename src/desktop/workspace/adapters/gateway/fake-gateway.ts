@@ -47,6 +47,7 @@ type Method =
   | "create"
   | "send"
   | "answer"
+  | "answerQuestion"
   | "archive"
 
 type AnswerArgs = Parameters<ConversationApi["answer"]>
@@ -394,6 +395,22 @@ export function fakeGateway(
         const behaviour = answerOverrides.shift()
         return behaviour ? behaviour(normal, args) : Promise.resolve().then(normal)
       },
+      answerQuestion: (...args) =>
+        answer("answerQuestion", args, () => {
+          const conversationId = args[0]
+          const executionId = args[1]
+          const questionId = args[2]
+          const current = views.get(conversationId)
+          if (current)
+            views.set(conversationId, {
+              ...current,
+              questions: current.questions.filter(
+                (question) =>
+                  question.executionId !== executionId || question.questionId !== questionId,
+              ),
+            })
+          return { requestId: "answer-question", applied: true }
+        }) as never,
       archive: (...args) =>
         answer("archive", args, () => {
           rows.delete(args[0])

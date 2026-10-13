@@ -68,9 +68,20 @@ export interface AuditEntry {
   readonly sessionId: string
   /** `let-go`: a message sent while an approval waited moved the turn on without it. */
   readonly action:
-    "allow-once" | "allow-always" | "deny" | "pin" | "unpin" | "archive" | "let-go"
+    | "allow-once"
+    | "allow-always"
+    | "deny"
+    | "pin"
+    | "unpin"
+    | "archive"
+    | "let-go"
+    | "answer-question"
+    | "decline-question"
   /** The approval answered, or let go. */
   readonly approvalId?: string
+  /** The question answered or declined, and the execution it belongs to. */
+  readonly questionId?: string
+  readonly executionId?: string
   /** The message that let an approval go, for a `let-go`. */
   readonly messageId?: string
   readonly initiator: Initiator
@@ -139,7 +150,10 @@ export function inMemorySource(
   }
   /** Runs a consequential call; `work` answers with the revision it produced. */
   const audited = (
-    asked: Pick<AuditEntry, "sessionId" | "action" | "approvalId" | "initiator">,
+    asked: Pick<
+      AuditEntry,
+      "sessionId" | "action" | "approvalId" | "questionId" | "executionId" | "initiator"
+    >,
     work: () => number,
   ): Promise<void> => {
     let entry: AuditEntry | undefined
@@ -406,6 +420,17 @@ export function inMemorySource(
     return transcript
   }
 
+  const waitingQuestion = (sessionId: string, executionId: string, questionId: string) => {
+    known(sessionId)
+    const transcript = transcriptOf(sessionId)
+    const asked = transcript.questions?.some(
+      (question) =>
+        question.executionId === executionId && question.questionId === questionId,
+    )
+    if (!asked) throw new WorkspaceSourceError("not-waiting")
+    return transcript
+  }
+
   /** An option the review does not offer, or of another choice, is not supported. */
   const offered = (transcript: Transcript, choice: ApprovalChoice, optionId: string) => {
     const option = transcript.approval?.options.find((each) => each.id === optionId)
@@ -488,6 +513,27 @@ export function inMemorySource(
               messages: [...current.messages, agentMessage(sessionId, reply.parts)],
             })
             settle(sessionId, reply.preview)
+          })
+          return known(sessionId).revision
+        },
+      ),
+    answerQuestion: (sessionId, executionId, questionId, choices, initiator) =>
+      audited(
+        {
+          sessionId,
+          action: choices === null ? "decline-question" : "answer-question",
+          executionId,
+          questionId,
+          initiator,
+        },
+        () => {
+          const transcript = waitingQuestion(sessionId, executionId, questionId)
+          putTranscript({
+            ...transcript,
+            questions: (transcript.questions ?? []).filter(
+              (question) =>
+                question.executionId !== executionId || question.questionId !== questionId,
+            ),
           })
           return known(sessionId).revision
         },

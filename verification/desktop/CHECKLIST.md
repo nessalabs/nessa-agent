@@ -1559,6 +1559,31 @@ WebKit and is dev-only in run-all.
 - [ ] **A conversation with no turn, only a file published while none ran,
   shows that file and not the empty welcome.** _Check:_ `--only empty`.
 
+## Turn outcomes
+
+`turn-outcomes.mjs` loads `fixtures/turn-outcomes/`, a dev-server page that
+mounts the desktop window over a fake gateway and the panel's transcript of
+the same view. One turn failed before it replied, one was cancelled after a
+partial reply, one was left unresolved with no diagnostic, and one is still
+running and asking three questions. The view also carries the gateway's
+notice that a review was left out. The script runs in Chromium and WebKit
+and is dev-only in run-all.
+
+- [ ] **A failed, cancelled, or unresolved turn stays visible, with the
+  gateway's status and diagnostic apart from a message that was not sent.**
+  _Check:_ `turn-outcomes.mjs --only terminals`. The desktop shows Failed
+  with "Provider connection lost", Cancelled with "Stopped", and Unresolved
+  with no diagnostic. "Check the deploy.", "Halfway", and "Wait." stay.
+  Nothing says "Not sent" for those turns.
+- [ ] **The gateway's withheld-review notice is shown in its own words, and
+  the questions it listed are on both surfaces.** _Check:_ `--only asked`.
+  The notice is "A review was left out of this view." Both surfaces show
+  "Where should this land?", "When should it ship?", and "Who should hear?".
+- [ ] **Answering or skipping a question, or a later frame that no longer
+  lists one, drops it on both surfaces.** _Check:_ `--only cleared`. Choosing
+  Staging and Answer drops the first question. Skip drops the second. A frame
+  that no longer lists the third drops it on the desktop and the panel.
+
 ## Transcript notes
 
 `transcript-notes.mjs` loads `fixtures/transcript-notes/`, a dev-server page

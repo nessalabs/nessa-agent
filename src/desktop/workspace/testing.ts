@@ -205,6 +205,31 @@ export function fakeSource(index: WorkspaceIndex = testIndex()): FakeSource {
       answer("deny", [sessionId, approvalId, initiator, optionId], () =>
         answered(sessionId, approvalId),
       ),
+    answerQuestion: (sessionId, executionId, questionId, choices, initiator) =>
+      answer(
+        "answerQuestion",
+        [sessionId, executionId, questionId, choices, initiator],
+        () => {
+          if (archived.has(sessionId) || !summaries.has(sessionId))
+            throw new WorkspaceSourceError("unknown-session")
+          const transcript = transcripts.get(sessionId)
+          const asked = transcript?.questions?.some(
+            (question) =>
+              question.executionId === executionId && question.questionId === questionId,
+          )
+          if (!transcript || !asked) throw new WorkspaceSourceError("not-waiting")
+          const next = {
+            ...transcript,
+            questions: (transcript.questions ?? []).filter(
+              (question) =>
+                question.executionId !== executionId || question.questionId !== questionId,
+            ),
+            revision: transcript.revision + 1,
+          }
+          transcripts.set(sessionId, next)
+          emit({ kind: "transcript", transcript: next })
+        },
+      ),
     // Like any source: the change reaches subscribers before the call resolves.
     setPinned: (sessionId, pinned, initiator) =>
       answer("setPinned", [sessionId, pinned, initiator], () => {
