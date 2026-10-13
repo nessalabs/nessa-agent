@@ -71,16 +71,21 @@ export function useFileAttachments(
   resources: AttachmentResources,
 ) {
   const store = useStore() as AppStore
-  const currentScope = React.useRef({ store, resources })
+  const currentScope = React.useRef({ store, resources, attachFiles: chat.attachFiles })
   React.useLayoutEffect(() => {
-    currentScope.current = { store, resources }
-  }, [store, resources])
+    currentScope.current = { store, resources, attachFiles: chat.attachFiles }
+  }, [chat.attachFiles, resources, store])
   const activeId = React.useRef(chat.active.id)
   React.useLayoutEffect(() => {
     activeId.current = chat.active.id
   }, [chat.active.id])
-  const currentDestination = (conversationId = activeId.current): AttachmentDestination =>
-    Object.freeze({ store, conversationId, resources, attachFiles: chat.attachFiles })
+  const currentDestination = React.useCallback(
+    (conversationId = activeId.current): AttachmentDestination => {
+      const scope = currentScope.current
+      return Object.freeze({ ...scope, conversationId })
+    },
+    [],
+  )
   const destinationIsCurrent = (destination: AttachmentDestination) =>
     destination.store === currentScope.current.store &&
     destination.resources === currentScope.current.resources
@@ -144,11 +149,12 @@ export function useFileAttachments(
     placementId: string
   } | null>(null)
   React.useEffect(() => {
+    const operations = operationsRef.current
     mounted.current = true
     return () => {
       mounted.current = false
-      for (const operation of operationsRef.current) operation.controller?.abort()
-      operationsRef.current.clear()
+      for (const operation of operations) operation.controller?.abort()
+      operations.clear()
     }
   }, [])
   /**
@@ -159,9 +165,12 @@ export function useFileAttachments(
    * A batch nobody recorded has no destination. The active conversation is
    * not evidence of where a delayed host event began.
    */
-  const destinationOf = (batch: string) =>
-    [...operationsRef.current].find((operation) => operation.pickerRequestId === batch)
-      ?.destination ?? dropDestinations.current.get(batch)
+  const destinationOf = React.useCallback(
+    (batch: string) =>
+      [...operationsRef.current].find((operation) => operation.pickerRequestId === batch)
+        ?.destination ?? dropDestinations.current.get(batch),
+    [],
+  )
   React.useEffect(() => {
     let live = true
     // The gesture's own moment, for both gestures. Everything after it can be
@@ -203,7 +212,7 @@ export function useFileAttachments(
       void batch.then((stop) => stop())
       void subscription.then((stop) => stop())
     }
-  }, [store, resources])
+  }, [currentDestination, destinationOf, resources, store])
   React.useEffect(() => {
     if (
       viewed &&
