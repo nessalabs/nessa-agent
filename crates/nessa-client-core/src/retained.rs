@@ -14,6 +14,9 @@
 //! Arrows are calls, in order, on one connection. The pinned status that
 //! admits a read is the caller's: this module never decides a reader is
 //! revoked, it reports `Refused` and the caller asks.
+//! `device` composes the same enrollment worker with purge-before-end; `owner`
+//! stores one immutable original recovery separately from its settlement/purge
+//! outcomes. Failed recovery has no settlement slot in that private sum type.
 //!
 //! A read has a budget on the injected monotonic clock. Every physical read
 //! and write waits no longer than it, and no conversation starts after it;
@@ -76,6 +79,8 @@ use std::time::{Duration, Instant};
 
 mod active;
 mod device;
+mod owner;
+pub use owner::RetainedOwnerStatus;
 mod relay;
 mod saved;
 pub use active::RetainedDeviceReader;

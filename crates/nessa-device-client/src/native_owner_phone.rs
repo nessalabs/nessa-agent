@@ -75,7 +75,7 @@ pub enum NativeOwnerPreparationFailureKind {
 /// Original typed payload, with no private bytes or readiness meaning.
 #[derive(Debug, uniffi::Object)]
 pub struct NativeOwnerPreparationFailure {
-    value: OwnerPhonePreparationError,
+    pub(crate) value: OwnerPhonePreparationError,
 }
 #[uniffi::export]
 impl NativeOwnerPreparationFailure {

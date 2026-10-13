@@ -7,9 +7,7 @@ use nessa_auth::{
         OsEntropy, RngCore,
     },
     application::{
-        pairing::{
-            ClientPendingStore, OwnerPhoneOriginalStore, OwnerPhoneReservation, PrivateStateError,
-        },
+        pairing::{OwnerPhoneReservation, PrivateStateError},
         ports::Clock as WallClock,
     },
     domain::{
@@ -19,8 +17,9 @@ use nessa_auth::{
 };
 use nessa_client_core::{
     pairing::{
-        prepare_owner_phone, restore_owner_phone, NativeClientError, NativeRetryOutcome,
-        OwnerPhonePreparation, OwnerPhonePreparationError,
+        current_owner_phone, issued_owner_phone, prepare_owner_phone, restore_expected_owner_phone,
+        restore_owner_phone, NativeClientError, NativeRetryOutcome, OwnerPhonePreparation,
+        OwnerPhonePreparationError, OwnerPhoneRecoveryFailure, OwnerPhoneState,
     },
     product::{
         LocalProductConnector, ProductConnector, ProductFailure, ProductLimits, ProductSession,
@@ -28,8 +27,8 @@ use nessa_client_core::{
     },
     retained::{
         ReadFailure, ReadReport, ReadStop, RetainedCache, RetainedCataloguePage,
-        RetainedDeviceReader, RetainedEnrollmentClient, RetainedEnrollmentStatus, RetainedPurge,
-        RetainedTranscript, HANDSHAKE,
+        RetainedDeviceReader, RetainedEnrollmentClient, RetainedEnrollmentStatus,
+        RetainedOwnerStatus, RetainedPurge, RetainedTranscript, HANDSHAKE,
     },
 };
 use nessa_protocol::{
@@ -50,7 +49,7 @@ use uuid::Uuid;
 
 /// Session admission/configuration failure, independent of a completed status's
 /// purge effect. Enrollment payloads preserve their original typed meaning.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SessionFailure {
     /// Another physical session operation is admitted.
     Busy,
@@ -72,6 +71,15 @@ pub enum SessionFailure {
     Stopped,
     /// Original protected product opening or physical drain failure.
     Product(ProductFailure),
+    /// Complete original recovery/settlement facts when owner product selection refused.
+    Owner(Arc<SessionStatus>),
+    /// Complete original observation plus later actual issued-selection refusal.
+    OwnerSelection {
+        /// Earlier independently completed status facts.
+        status: Arc<SessionStatus>,
+        /// Actual selected issued-record refusal.
+        error: NativeClientError,
+    },
 }
 impl Display for SessionFailure {
     fn fmt(&self, output: &mut Formatter<'_>) -> FormatResult {
@@ -142,7 +150,7 @@ impl Display for SessionPreparationFailure {
 impl Error for SessionPreparationFailure {}
 
 /// Immutable physical cleanup fact, independent of its retained typed outcome.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionCloseObservation {
     outcome: Result<(), SessionFailure>,
     released: bool,
@@ -201,18 +209,59 @@ impl SessionRead {
         &self.withdrawn
     }
 }
+/// The original worker result, retaining remote observations and later local refusal.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SessionStatus {
+    /// Current read-only enrollment scope, with its original typed payloads.
+    ReadOnly(Result<RetainedEnrollmentStatus, NativeClientError>),
+    /// Original owner scope; failure never falls through to manual enrollment.
+    Owner(Result<RetainedOwnerStatus, OwnerPhoneRecoveryFailure>),
+}
+impl SessionStatus {
+    fn settled_status(&self) -> Option<&NativePairingStatus> {
+        match self {
+            Self::ReadOnly(value) => value.as_ref().ok()?.enrollment().as_ref().ok(),
+            Self::Owner(value) => value.as_ref().ok()?.status_if_settled(),
+        }
+    }
+    fn receipt(&self) -> Option<&NativePairingStatus> {
+        match self {
+            Self::ReadOnly(value) => value.as_ref().ok()?.enrollment().as_ref().ok(),
+            Self::Owner(value) => Some(value.as_ref().ok()?.recovery().ok()?.status()),
+        }
+    }
+    /// Whether this physical operation captured a completed aggregate.
+    pub fn completion_captured(&self) -> bool {
+        match self {
+            Self::ReadOnly(value) => value.is_ok(),
+            Self::Owner(value) => value.is_ok(),
+        }
+    }
+    /// Original remote observation, independent of a subsequent local refusal.
+    pub fn observation(&self) -> Option<&NativePairingStatus> {
+        self.receipt()
+    }
+    /// This physical operation's actual purge; absence is not durable history.
+    pub fn purge(&self) -> Option<&Result<RetainedPurge, ReadFailure>> {
+        match self {
+            Self::ReadOnly(value) => value.as_ref().ok()?.purge(),
+            Self::Owner(value) => value.as_ref().ok()?.purge(),
+        }
+    }
+}
+
 /// One admitted refresh's compound evidence. A status's outer error means no
 /// completion was captured, not proof of no purge; durable lookup is separate.
 #[derive(Debug)]
 pub struct SessionRefresh {
-    initial: Result<RetainedEnrollmentStatus, NativeClientError>,
+    initial: SessionStatus,
     selection_failure: Option<NativeClientError>,
     read: Option<SessionRead>,
-    recheck: Option<Result<RetainedEnrollmentStatus, NativeClientError>>,
+    recheck: Option<SessionStatus>,
 }
 impl SessionRefresh {
     /// Initial pinned status and its original operation purge.
-    pub fn initial(&self) -> &Result<RetainedEnrollmentStatus, NativeClientError> {
+    pub fn initial(&self) -> &SessionStatus {
         &self.initial
     }
     /// A contradictory or unreadable current binding refused product selection.
@@ -224,7 +273,7 @@ impl SessionRefresh {
         self.read.as_ref()
     }
     /// Fresh refusal recheck and its own purge; generic network failures do not recheck.
-    pub fn recheck(&self) -> Option<&Result<RetainedEnrollmentStatus, NativeClientError>> {
+    pub fn recheck(&self) -> Option<&SessionStatus> {
         self.recheck.as_ref()
     }
 }
@@ -294,8 +343,8 @@ impl Default for ProductDependencies {
         }
     }
 }
-trait NativePrivateState: ClientPendingStore + OwnerPhoneOriginalStore {}
-impl<T: ClientPendingStore + OwnerPhoneOriginalStore> NativePrivateState for T {}
+trait NativePrivateState: OwnerPhoneState {}
+impl<T: OwnerPhoneState> NativePrivateState for T {}
 
 struct Driver {
     runtime: Runtime,
@@ -396,16 +445,49 @@ impl Driver {
     fn remember(&mut self, status: &NativePairingStatus) {
         self.received = status.consent().cloned();
     }
-    fn status(&mut self) -> Result<RetainedEnrollmentStatus, NativeClientError> {
-        self.synchronize_received()?;
-        let stream = self.connector.connect(self.address)?;
-        let status = self
-            .runtime
-            .block_on(self.enrollment.status(stream, self.received.clone()))?;
-        if let Ok(value) = status.enrollment() {
-            self.remember(value);
+    fn status(&mut self) -> SessionStatus {
+        // Actual same-owner state decides the path; errors never become read-only fallback.
+        let expected = match current_owner_phone(self.state.as_ref()) {
+            Ok(Some(value)) => Some(Arc::new(value)),
+            Ok(None) => None,
+            Err(error) => {
+                return SessionStatus::Owner(Err(OwnerPhoneRecoveryFailure::Preparation(error)))
+            }
+        };
+        if let Some(expected) = expected {
+            let value = (|| {
+                self.synchronize_received()
+                    .map_err(OwnerPhoneRecoveryFailure::Native)?;
+                let stream = self
+                    .connector
+                    .connect(expected.original().endpoint())
+                    .map_err(OwnerPhoneRecoveryFailure::Native)?;
+                self.runtime
+                    .block_on(self.enrollment.status_owner_phone(
+                        stream,
+                        expected,
+                        self.received.clone(),
+                    ))
+                    .map_err(OwnerPhoneRecoveryFailure::Native)
+            })();
+            let status = SessionStatus::Owner(value);
+            if let Some(value) = status.observation() {
+                self.remember(value);
+            }
+            status
+        } else {
+            let value = (|| {
+                self.synchronize_received()?;
+                let stream = self.connector.connect(self.address)?;
+                self.runtime
+                    .block_on(self.enrollment.status(stream, self.received.clone()))
+            })();
+            let status = SessionStatus::ReadOnly(value);
+            if let Some(value) = status.observation() {
+                self.remember(value);
+            }
+            status
         }
-        Ok(status)
     }
     fn refresh(&mut self, stop: &Arc<ReadStop>) -> SessionRefresh {
         let initial = self.status();
@@ -415,16 +497,30 @@ impl Driver {
             read: None,
             recheck: None,
         };
-        let status = match &outcome.initial {
-            Ok(status) => match status.enrollment() {
-                Ok(status) => status,
-                Err(_) => return outcome,
-            },
-            Err(_) => return outcome,
+        let Some(status) = outcome.initial.settled_status() else {
+            return outcome;
         };
+        if !matches!(status, NativePairingStatus::Active { .. }) {
+            return outcome;
+        }
         // Load the current immutable issued record after status may have saved
         // or removed it. A pending/terminal status starts no product read.
-        let reader = match RetainedDeviceReader::from_current(status, self.state.as_ref()) {
+        let (selection, address) = match &outcome.initial {
+            SessionStatus::ReadOnly(_) => (
+                RetainedDeviceReader::from_current(status, self.state.as_ref()),
+                self.address,
+            ),
+            SessionStatus::Owner(Ok(owner)) => {
+                let recovered = owner
+                    .recovery()
+                    .expect("settled owner has a successful recovery");
+                let selection = issued_owner_phone(self.state.as_ref(), recovered)
+                    .and_then(|issued| RetainedDeviceReader::from_issued(status, issued));
+                (selection, recovered.preparation().original().endpoint())
+            }
+            SessionStatus::Owner(Err(_)) => unreachable!("settled owner has captured completion"),
+        };
+        let reader = match selection {
             Ok(Some(reader)) => reader,
             Ok(None) => return outcome,
             Err(error) => {
@@ -432,7 +528,6 @@ impl Driver {
                 return outcome;
             }
         };
-        let address = self.address;
         let mut withdrawn = Vec::new();
         let result = self.cache().and_then(|cache| {
             cache.read(
@@ -550,8 +645,13 @@ impl NativeSession {
             product,
         } = dependencies;
         let enrollment = Arc::new(
-            RetainedEnrollmentClient::new(state.clone(), path.clone(), wall.clone(), clock.clone())
-                .map_err(SessionFailure::Cache)?,
+            RetainedEnrollmentClient::owner_phone(
+                state.clone(),
+                path.clone(),
+                wall.clone(),
+                clock.clone(),
+            )
+            .map_err(SessionFailure::Cache)?,
         );
         let gate = Gate {
             closed: false,
@@ -622,6 +722,39 @@ impl NativeSession {
         restore_owner_phone(operation.driver().state.as_ref(), reservation)
             .map_err(SessionPreparationFailure::Preparation)
     }
+    /// Recover the original over its pinned native channel without local adoption.
+    /// Parent admission and the retained worker own physical completion independently
+    /// of the observer; outer faults leave effects unconfirmed, not absent.
+    pub fn recover_owner_original(
+        &self,
+        expected: Arc<OwnerPhonePreparation>,
+    ) -> Result<Result<RetainedOwnerStatus, OwnerPhoneRecoveryFailure>, SessionFailure> {
+        let mut operation = self.enter(None)?;
+        let driver = operation.driver();
+        let result = (|| {
+            restore_expected_owner_phone(driver.state.as_ref(), &expected)
+                .map_err(OwnerPhoneRecoveryFailure::Preparation)?;
+            let stream = driver
+                .connector
+                .connect(expected.original().endpoint())
+                .map_err(OwnerPhoneRecoveryFailure::Native)?;
+            driver
+                .runtime
+                .block_on(driver.enrollment.recover_owner_phone(
+                    stream,
+                    expected,
+                    driver.received.clone(),
+                ))
+                .map_err(OwnerPhoneRecoveryFailure::Native)
+        })();
+        if let Ok(value) = &result {
+            if let Ok(recovered) = value.recovery() {
+                driver.remember(recovered.status());
+            }
+        }
+        Ok(result)
+    }
+
     /// Use the existing physical enrollment worker; no replacement key on failure.
     pub fn enroll(&self, code: ManualCode) -> Result<NativePairingStatus, SessionFailure> {
         let mut operation = self.enter(None)?;
@@ -672,9 +805,7 @@ impl NativeSession {
         Ok(outcome)
     }
     /// Fresh pinned status retains per-operation purge and outer worker failure.
-    pub fn status(
-        &self,
-    ) -> Result<Result<RetainedEnrollmentStatus, NativeClientError>, SessionFailure> {
+    pub fn status(&self) -> Result<SessionStatus, SessionFailure> {
         self.enter(None)
             .map(|mut operation| operation.driver().status())
     }
@@ -709,27 +840,77 @@ impl NativeSession {
             let _ = previous.close();
         }
         let driver = operation.driver();
-        let pending = driver
-            .state
-            .load_pending()
-            .map_err(SessionFailure::PrivateState)?;
-        let issued = driver
-            .state
-            .load_credential()
-            .map_err(SessionFailure::PrivateState)?;
-        let issued = match (pending, issued) {
-            (Some(_), Some(_)) => {
-                return Err(SessionFailure::PrivateState(PrivateStateError::Conflict))
+        let owner = current_owner_phone(driver.state.as_ref());
+        let mut owner_status = None;
+        let product_address = match owner {
+            Ok(None) => driver.address,
+            Ok(Some(expected)) => {
+                // Product opening needs an actual issued selector before its fresh
+                // recovery; initial adoption belongs to the explicit status flow.
+                if driver
+                    .state
+                    .load_credential()
+                    .map_err(SessionFailure::PrivateState)?
+                    .is_none()
+                {
+                    return Err(SessionFailure::NoCredential);
+                }
+                let address = expected.original().endpoint();
+                let status = driver.status();
+                if !matches!(
+                    status.settled_status(),
+                    Some(NativePairingStatus::Active { .. })
+                ) {
+                    return Err(SessionFailure::Owner(Arc::new(status)));
+                }
+                owner_status = Some(status);
+                address
             }
-            (_, None) => return Err(SessionFailure::NoCredential),
-            (None, Some(issued)) => issued,
+            Err(OwnerPhonePreparationError::Private(error)) => {
+                // No remote observation exists at this preflight boundary; keep
+                // the existing original physical private-state failure family.
+                return Err(SessionFailure::PrivateState(error));
+            }
+            Err(error) => {
+                return Err(SessionFailure::Owner(Arc::new(SessionStatus::Owner(Err(
+                    OwnerPhoneRecoveryFailure::Preparation(error),
+                )))))
+            }
+        };
+        let issued = if let Some(SessionStatus::Owner(Ok(owner))) = &owner_status {
+            let recovered = owner
+                .recovery()
+                .expect("successful owner status has recovery");
+            issued_owner_phone(driver.state.as_ref(), recovered).map_err(|error| {
+                // Preserve the completed owner facts together with this later selection refusal.
+                SessionFailure::OwnerSelection {
+                    status: Arc::new(owner_status.as_ref().unwrap().clone()),
+                    error,
+                }
+            })?
+        } else {
+            let pending = driver
+                .state
+                .load_pending()
+                .map_err(SessionFailure::PrivateState)?;
+            let issued = driver
+                .state
+                .load_credential()
+                .map_err(SessionFailure::PrivateState)?;
+            match (pending, issued) {
+                (Some(_), Some(_)) => {
+                    return Err(SessionFailure::PrivateState(PrivateStateError::Conflict))
+                }
+                (_, None) => return Err(SessionFailure::NoCredential),
+                (None, Some(issued)) => issued,
+            }
         };
         let credential = issued.credential().as_str().to_owned();
         let (key, pin, _) = issued.into_enrollment().into_parts();
         let identity = NativeIdentity::restore(key)
             .map_err(|error| SessionFailure::Enrollment(NativeClientError::Crypto(error)))?;
         let child = ProductSession::prepare(
-            driver.address,
+            product_address,
             Arc::new(identity),
             pin,
             credential,
@@ -898,3 +1079,10 @@ pub(crate) mod product_tests;
 #[cfg(test)]
 #[path = "../tests/session/owner_original.rs"]
 mod owner_original_tests;
+
+#[cfg(test)]
+#[path = "../tests/session/owner_recovery.rs"]
+mod owner_recovery_tests;
+
+#[cfg(test)]
+use nessa_auth::application::pairing::{ClientPendingStore, OwnerPhoneOriginalStore};

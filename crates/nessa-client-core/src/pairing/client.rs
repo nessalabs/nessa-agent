@@ -102,7 +102,7 @@ impl NativeRetryOutcome {
 /// credential identifies the device's key binding; it is not read authority.
 pub struct NativeEnrollmentClient {
     pending: Arc<dyn ClientPendingStore>,
-    clock: Arc<dyn Clock>,
+    pub(super) clock: Arc<dyn Clock>,
     capacity: Arc<Semaphore>,
     drained: Arc<Notify>,
     wake: Mutex<WakeEndpoints>,
@@ -337,7 +337,7 @@ impl NativeEnrollmentClient {
         })
         .await
     }
-    async fn dispatch_owned<T: Send + 'static>(
+    pub(super) async fn dispatch_owned<T: Send + 'static>(
         &self,
         endpoints: Vec<Arc<WakeEndpoint>>,
         work: impl FnOnce(&dyn ClientPendingStore) -> Result<T, NativeClientError> + Send + 'static,
@@ -405,7 +405,7 @@ impl NativeEnrollmentClient {
         }
     }
 }
-fn client_endpoint(stream: &TcpStream) -> Result<Arc<WakeEndpoint>, NativeClientError> {
+pub(super) fn client_endpoint(stream: &TcpStream) -> Result<Arc<WakeEndpoint>, NativeClientError> {
     let target = stream
         .peer_addr()
         .map_err(|error| NativeClientError::Io(error.kind()))?;
@@ -511,13 +511,13 @@ fn complete_enrollment<R: RngCore + CryptoRng>(
     Ok(status)
 }
 
-fn physical_error(error: DeadlineError) -> NativeClientError {
+pub(super) fn physical_error(error: DeadlineError) -> NativeClientError {
     match error {
         DeadlineError::Io(kind) => NativeClientError::Io(kind),
         DeadlineError::Phase => NativeClientError::Phase,
     }
 }
-fn send<S: Read + Write>(
+pub(super) fn send<S: Read + Write>(
     channel: &mut EnrollmentChannel<S>,
     request: NativePairingRequest,
 ) -> Result<(), NativeClientError> {
@@ -525,7 +525,7 @@ fn send<S: Read + Write>(
     // `DeadlineStream` retries elapsed waits itself, so every error here is final.
     channel.send_envelope(&bytes).map_err(frame_error)
 }
-fn receive<S: Read + Write>(
+pub(super) fn receive<S: Read + Write>(
     channel: &mut EnrollmentChannel<S>,
 ) -> Result<NativePairingReply, NativeClientError> {
     let bytes = channel.receive_envelope().map_err(frame_error)?;
