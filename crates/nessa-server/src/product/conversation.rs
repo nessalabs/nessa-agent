@@ -30,7 +30,8 @@ use nessa_protocol::product::generated::{
 };
 use nessa_protocol::product::generated::{
     ConversationMessageDelivery, ConversationMessageParams, ConversationMessageReceipt,
-    ConversationMessageState, ConversationMessageStatusParams, ConversationMessageStatusResult,
+    ConversationMessageRetiredReason, ConversationMessageState, ConversationMessageStatusParams,
+    ConversationMessageStatusResult,
 };
 use nessa_protocol::product::passive_read::decimal_u64;
 use nessa_protocol::product_contract::generated::ConversationErrorCode;
@@ -46,7 +47,7 @@ use nessa_sdk::application::agent_execution::{
         MutationOutcome, MutationReceipt, MutationStage,
     },
     permissions::PermissionSelectionState,
-    sessions::{NoteDelivery, NoteState},
+    sessions::{NoteDelivery, NoteRetirementReason, NoteState},
 };
 use nessa_sdk::domain::agent_execution::executions::Initiation;
 use serde_json::{json, Value};
@@ -290,7 +291,7 @@ pub(super) async fn dispatch(
             }
             "conversation.message" => {
                 let params = params!(ConversationMessageParams);
-                let note = service
+                let (note, state) = service
                     .leave_note(
                         conversation_id(&params.conversation_id)?,
                         caller(params.request_id.clone()),
@@ -298,6 +299,7 @@ pub(super) async fn dispatch(
                         params.text,
                         match params.delivery {
                             ConversationMessageDelivery::RecordOnly => NoteDelivery::RecordOnly,
+                            ConversationMessageDelivery::NextTurn => NoteDelivery::NextTurn,
                         },
                     )
                     .await?;
@@ -307,13 +309,15 @@ pub(super) async fn dispatch(
                         request_id: params.request_id,
                         message_id: note.id.as_str().to_owned(),
                         accepted_at_ms: note.accepted_at_ms,
-                        delivery_state: note_state(note.state()),
+                        delivery_state: note_state(&state),
+                        execution_id: assigned_turn(&state),
+                        retired_reason: retired_reason(&state),
                     },
                 ))
             }
             "conversation.messageStatus" => {
                 let params = params!(ConversationMessageStatusParams);
-                let note = service
+                let found = service
                     .note_status(
                         conversation_id(&params.conversation_id)?,
                         caller(params.request_id.clone()),
@@ -322,11 +326,13 @@ pub(super) async fn dispatch(
                 Ok(success(
                     &frame.id,
                     &ConversationMessageStatusResult {
-                        found: note.is_some(),
+                        found: found.is_some(),
                         request_id: params.request_id,
-                        message_id: note.as_ref().map(|note| note.id.as_str().to_owned()),
-                        accepted_at_ms: note.as_ref().map(|note| note.accepted_at_ms),
-                        delivery_state: note.as_ref().map(|note| note_state(note.state())),
+                        message_id: found.as_ref().map(|(note, _)| note.id.as_str().to_owned()),
+                        accepted_at_ms: found.as_ref().map(|(note, _)| note.accepted_at_ms),
+                        delivery_state: found.as_ref().map(|(_, state)| note_state(state)),
+                        execution_id: found.as_ref().and_then(|(_, state)| assigned_turn(state)),
+                        retired_reason: found.as_ref().and_then(|(_, state)| retired_reason(state)),
                     },
                 ))
             }
@@ -654,9 +660,31 @@ fn submitted_message_from_receipt(
     })
 }
 /// Where a note stands, as the wire names it.
-fn note_state(state: NoteState) -> ConversationMessageState {
+pub(super) fn note_state(state: &NoteState) -> ConversationMessageState {
     match state {
         NoteState::Recorded => ConversationMessageState::Recorded,
+        NoteState::Pending => ConversationMessageState::Pending,
+        NoteState::Assigned(_) => ConversationMessageState::Assigned,
+        NoteState::Retired(_) => ConversationMessageState::Retired,
+    }
+}
+/// The turn that took an assigned note.
+pub(super) fn assigned_turn(state: &NoteState) -> Option<String> {
+    match state {
+        NoteState::Assigned(turn) => Some(turn.as_str().to_owned()),
+        _ => None,
+    }
+}
+/// Why a retired note was retired, as the wire names it.
+pub(super) fn retired_reason(state: &NoteState) -> Option<ConversationMessageRetiredReason> {
+    match state {
+        NoteState::Retired(retirement) => Some(match retirement.reason {
+            NoteRetirementReason::Expired => ConversationMessageRetiredReason::Expired,
+            NoteRetirementReason::PermissionLost => {
+                ConversationMessageRetiredReason::PermissionLost
+            }
+        }),
+        _ => None,
     }
 }
 

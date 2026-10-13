@@ -68,7 +68,7 @@ export const css = {
   paneBody: ".workspace-pane-body", // class: a pane's conversation and composer, below its header
   composer: "[data-pane-key] textarea",
   transcript: ".workspace-transcript", // class
-  message: ".workspace-message[data-role]", // class: one message in a transcript; data-role is user or agent
+  message: ".workspace-message[data-role]", // class: one message in a transcript; data-role is user, agent or note
   dock: ".workspace-dock", // class: a conversation's composer, at its pane's foot — and a new session's home's, docked there in a small pane
   conversationDock: ".workspace-conversation .workspace-dock", // class: a conversation's composer, never a home's
   paneHome: ".workspace-pane-home", // class: a new session's home in a pane
@@ -840,4 +840,26 @@ export const publishedFiles = {
     "noise.png",
     ...Array.from({ length: 10 }, (_, index) => `tile-${index}.png`),
   ],
+}
+
+/**
+ * The transcript-notes fixture (`fixtures/transcript-notes/`): the desktop
+ * window and the panel's transcript of one conversation, each note a row of
+ * its own (`src/conversation/ui/transcript-note.tsx`).
+ */
+export const transcriptNotes = {
+  page: "verification/desktop/fixtures/transcript-notes/index.html",
+  title: "Nessa: transcript notes",
+  /** The desktop window's half of the page, and the panel's. */
+  desktop: "#root",
+  panel: "#panel",
+  /** Every note's row, and one by its id. */
+  anyNote: "[data-note]",
+  note: (id) => `[data-note="${id}"]`,
+  /** Who left it, where it stands, and what it says, inside a row. */
+  label: "[data-note-label]",
+  status: "[data-note-status]",
+  text: "[data-note-text]",
+  /** What a turn says on each surface: the desktop's bubbles and replies, the panel's bubbles. */
+  said: ".workspace-bubble, .workspace-message-body, [data-slot='chat-bubble']",
 }

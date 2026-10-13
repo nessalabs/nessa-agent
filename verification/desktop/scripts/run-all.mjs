@@ -57,6 +57,7 @@ const functional = [
   "message-sync",
   "command-order",
   "published-files",
+  "transcript-notes",
 ]
 
 const options = cli({

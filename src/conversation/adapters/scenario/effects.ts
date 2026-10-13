@@ -202,6 +202,7 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
           // The gateway derives titles; a scenario has no rule to derive one by.
           title: null,
           artifacts: [],
+          notes: [],
           revision: "0",
           messages: [],
           pending: [],

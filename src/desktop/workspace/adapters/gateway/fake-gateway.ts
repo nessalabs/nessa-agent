@@ -94,6 +94,26 @@ export function row(
   }
 }
 
+/**
+ * A note somebody left in a conversation, as a view lists it: a note the
+ * owner left from the desktop, only to be read, unless changed. A view
+ * carries it in `notes` (`view(id, { notes: [note("n1")] })`).
+ */
+export function note(
+  messageId: string,
+  change: Partial<ConversationView["notes"][number]> = {},
+): ConversationView["notes"][number] {
+  return {
+    messageId,
+    text: `Note ${messageId}`,
+    acceptedAtMs: 1_500,
+    delivery: "record_only",
+    deliveryState: "recorded",
+    author: { kind: "owner", surface: "desktop" },
+    ...change,
+  }
+}
+
 /** The gateway's time each fake view is stamped with, unless changed. */
 export const GATEWAY_NOW_MS = 1_700_000_000_000
 
@@ -111,6 +131,7 @@ export function view(
     permissions: [],
     tools: [],
     artifacts: [],
+    notes: [],
     capabilities: {
       queue: true,
       steer: true,
