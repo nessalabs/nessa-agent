@@ -65,6 +65,7 @@ copied_enum!(
         ResetRequired,
         Protocol,
         Cache,
+        CacheUncertain,
         CacheDamaged,
         Quota,
         Stopped

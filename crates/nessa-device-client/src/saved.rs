@@ -27,6 +27,8 @@ pub enum NativeViewError {
     DamagedHandle,
     /// Native cache could not be opened or read.
     Cache,
+    /// A prior cache commit remains unconfirmed; reload durable evidence.
+    CacheUncertain,
     /// Saved schema/data needs explicit recovery.
     CacheDamaged,
     /// Cache selected another scope or history.
@@ -48,6 +50,7 @@ impl Display for NativeViewError {
 impl Error for NativeViewError {}
 fn cache_error(error: ReadFailure) -> NativeViewError {
     match error {
+        ReadFailure::CacheUncertain => NativeViewError::CacheUncertain,
         ReadFailure::CacheDamaged => NativeViewError::CacheDamaged,
         ReadFailure::ResetRequired => NativeViewError::ResetRequired,
         ReadFailure::Quota => NativeViewError::Quota,

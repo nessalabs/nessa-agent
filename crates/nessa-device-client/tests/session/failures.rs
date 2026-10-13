@@ -70,3 +70,12 @@ fn session_failure_keeps_its_exact_original_payload() {
     assert_eq!(cache.kind(), NativeSessionFailureKind::Cache);
     assert_eq!(cache.cache(), Some(NativeReadFailure::ResetRequired));
 }
+
+#[test]
+fn uncertain_cache_commit_survives_foreign_failure_translation() {
+    let failure = NativeSessionFailure {
+        value: SessionFailure::Cache(ReadFailure::CacheUncertain),
+    };
+    assert_eq!(failure.cache(), Some(NativeReadFailure::CacheUncertain));
+    assert_ne!(failure.cache(), Some(NativeReadFailure::Cache));
+}
