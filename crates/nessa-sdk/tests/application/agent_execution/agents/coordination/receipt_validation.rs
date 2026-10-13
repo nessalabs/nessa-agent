@@ -89,7 +89,12 @@ async fn received_permission_receipt_finishes_validation_after_close() {
                 .unwrap();
             let request = input();
             let execution = request.execution_id.clone();
-            agent.inner.manager.begin(request, actor()).await.unwrap();
+            agent
+                .inner
+                .manager
+                .begin(request, Submitter::owner(actor()))
+                .await
+                .unwrap();
             agent.inner.manager.begin_dispatch(&execution);
             let decision =
                 PermissionDecision::new(PermissionEffect::Allow, PermissionScope::request());

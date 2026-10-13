@@ -9,7 +9,7 @@ use crate::application::agent_execution::sessions::{
     QueueHistoryRecord, SessionSnapshot,
 };
 use crate::domain::agent_execution::{
-    executions::{ExecutionId, QueueOrderChange},
+    executions::{ExecutionId, GrantInitiator, QueueOrderChange},
     leases::LeaseId,
     permissions::PermissionOption,
     prompts::{AppModelContext as DomainAppModelContext, LinkedFile, McpAppSource, UserMessage},
@@ -75,6 +75,9 @@ pub(super) enum Shape {
     AppModelContext,
     Provider,
     Actor,
+    Initiation,
+    Initiator,
+    Grant,
     Event,
     Update,
     Scheduling,
@@ -126,7 +129,12 @@ impl Shape {
         match self {
             Self::Text(limit) => limit,
             Self::StorageDiagnostic => ERROR_BYTES,
-            Self::Acknowledgement | Self::StorageError | Self::Error => KEY_BYTES,
+            Self::Acknowledgement
+            | Self::StorageError
+            | Self::Error
+            | Self::Initiation
+            | Self::Initiator
+            | Self::Grant => KEY_BYTES,
             Self::GroupCheckpoint | Self::SaveIdentity | Self::FixedBytes(_) | Self::Number => 0,
             _ => LARGE_STRING,
         }
@@ -196,6 +204,13 @@ impl Shape {
             (Provider, "name" | "model_id") => Text(256),
             (Provider, "context") => Text(4096),
             (Actor, _) => Text(256),
+            (Metadata, "initiation") => Initiation,
+            (Initiation, "initiator") => Initiator,
+            (Initiation, "tools") => Text(KEY_BYTES),
+            (Initiator, "Grant") => Grant,
+            (Grant, "grant") => Text(GrantInitiator::MAX_GRANT_BYTES),
+            (Grant, "role") => Text(KEY_BYTES),
+            (Grant, "policy_revision") => Number,
             (_, "projection") => FinalizedComponents,
             (FinalizedComponent, "Operation") => Error,
             (FinalizedComponent, "PermissionDeliveryAndAudit") => Generic,
@@ -313,6 +328,9 @@ impl Shape {
             ProviderError => matches!(key, "code" | "diagnostic"),
             AuthenticationError => key == "diagnostic",
             FailedAcknowledgement => matches!(key, "audit" | "storage"),
+            Initiation => matches!(key, "initiator" | "tools"),
+            Initiator => key == "Grant",
+            Grant => matches!(key, "grant" | "role" | "policy_revision"),
             StorageError => matches!(
                 key,
                 "Io" | "Corrupt" | "ChangesRequired" | "Unresolved" | "ShutdownFailures"

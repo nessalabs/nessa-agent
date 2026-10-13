@@ -2,8 +2,8 @@
 //! the conversations and the catalogue revisions a grant change moves.
 //!
 //! [`granted`] is the one statement of "this receiver holds a grant on this
-//! conversation", of any role. `held_role` reads the role from the same row
-//! for one conversation, and
+//! conversation", of any role. `held_grant` reads the role and policy
+//! revision from the same row for one conversation, and
 //! the catalogue page and resolve ask it for a paired device's rows
 //! (`store.rs`), so a device's list and its reads cannot disagree about what
 //! it may see.
@@ -15,8 +15,9 @@ use super::{
     cells, failed, next_revision, read, stored_time, time, unreadable, LocalConversationStore,
 };
 use crate::conversation::application::{
-    ConversationError, ConversationFuture, ShareGrant, ShareGrantChange, ShareGrantTransition,
-    ShareGrants, MAX_DRIVE_GRANTS_PER_CONVERSATION, MAX_SHARE_GRANTS_PER_CONVERSATION,
+    ConversationError, ConversationFuture, HeldGrant, ShareGrant, ShareGrantChange,
+    ShareGrantTransition, ShareGrants, MAX_DRIVE_GRANTS_PER_CONVERSATION,
+    MAX_SHARE_GRANTS_PER_CONVERSATION,
 };
 use crate::conversation::domain::{ShareAccess, ShareRole, ToolPolicy, ToolPreset, ToolRules};
 use nessa_auth::domain::{CredentialId, MAX_IDENTIFIER_BYTES};
@@ -27,7 +28,8 @@ use serde_json::{json, Map, Value};
 /// SQL naming the one grant row the receiver bound to parameter `receiver`
 /// holds on the conversation whose id is `conversation`, as `g`. Both are
 /// names this adapter writes, never a caller's text. [`granted`] asks whether
-/// it exists and `held_role` reads its role, so the two cannot disagree.
+/// it exists and `held_grant` reads its role and revision, so the two cannot
+/// disagree.
 fn grant_row(conversation: &str, receiver: &str) -> String {
     format!(
         "share_grants AS g
@@ -150,27 +152,34 @@ fn count(transaction: &Transaction<'_>, sql: &str, id: &str) -> Result<i64, Conv
 }
 
 impl ShareGrants for LocalConversationStore {
-    fn held_role<'a>(
+    fn held_grant<'a>(
         &'a self,
         id: &'a ConversationId,
         receiver_id: &'a str,
-    ) -> ConversationFuture<'a, Option<ShareRole>> {
+    ) -> ConversationFuture<'a, Option<HeldGrant>> {
         let (id, receiver_id) = (id.to_string(), receiver_id.to_owned());
         self.run(move |connection| {
-            let role = connection
+            let held = connection
                 .query_row(
                     &format!(
-                        "SELECT (SELECT g.role FROM {}) FROM conversations AS c WHERE c.id = ?1",
+                        "SELECT g.role, g.policy_revision FROM conversations AS c, {} AND c.id = ?1",
                         grant_row("c.id", "?2")
                     ),
                     params![id, receiver_id],
-                    |row| row.get::<_, Option<String>>(0),
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
                 )
                 .optional()
-                .map_err(failed)?
-                .flatten();
-            role.map(|name| role_named(&name).ok_or_else(|| unreadable("share_grants", &id)))
-                .transpose()
+                .map_err(failed)?;
+            held.map(|(name, revision)| {
+                role_named(&name)
+                    .zip(sequence(revision))
+                    .map(|(role, policy_revision)| HeldGrant {
+                        role,
+                        policy_revision,
+                    })
+                    .ok_or_else(|| unreadable("share_grants", &id))
+            })
+            .transpose()
         })
     }
 

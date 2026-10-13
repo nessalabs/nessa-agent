@@ -1,6 +1,7 @@
 use super::{
     cancellation::Cancellation as InvocationCancellation,
     errors::{decode_result, Outcome, SavedError, StorageFailure},
+    initiation::Initiation,
     permissions::{self, Actor, Cancellation, Choice, Input},
     settlement::Settlement,
     tools::{corrupt, Tool},
@@ -184,6 +185,8 @@ pub(super) struct Metadata {
     pub(super) estimated_input_tokens: u64,
     pub(super) reserved_output_tokens: u32,
     pub(super) actor: Actor,
+    /// Who started the turn and whether its tools were checked.
+    pub(super) initiation: Initiation,
     pub(super) acknowledgement: Acknowledgement,
     pub(super) provider_report: Option<Settlement>,
     pub(super) local_cancellation: Option<InvocationCancellation>,
@@ -396,6 +399,7 @@ impl From<&InvocationRecord> for Metadata {
             estimated_input_tokens: value.request.estimated_input_tokens,
             reserved_output_tokens: value.request.reserved_output_tokens,
             actor: (&value.actor).into(),
+            initiation: (&value.initiation).into(),
             acknowledgement: (&value.acknowledgement).into(),
             provider_report: value.provider_report.clone().map(Into::into),
             local_cancellation: value.local_cancellation.as_ref().map(Into::into),
@@ -583,6 +587,7 @@ impl Metadata {
                 reserved_output_tokens: self.reserved_output_tokens,
             },
             actor: self.actor.decode()?,
+            initiation: self.initiation.decode()?,
             acknowledgement: self.acknowledgement.try_into()?,
             events: Vec::new(),
             scheduling: Vec::new(),

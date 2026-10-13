@@ -333,7 +333,7 @@ mod tests {
             sessions::{InvocationRecord, SubmissionAcknowledgement},
         },
         domain::agent_execution::{
-            executions::{MessageChunk, MessageId},
+            executions::{GrantInitiator, GrantRole, Initiation, MessageChunk, MessageId},
             permissions::{
                 ReviewDecline, ReviewDeclineId, ReviewDeclineObservation, ReviewDeclineReason,
                 ReviewDeclineStage,
@@ -373,6 +373,7 @@ mod tests {
                 reserved_output_tokens: 8,
             },
             actor: ActionContext::new("user", "phone", "send").unwrap(),
+            initiation: Initiation::owner(),
             acknowledgement: SubmissionAcknowledgement::Pending,
             events: Vec::new(),
             scheduling: Vec::new(),
@@ -544,6 +545,7 @@ mod tests {
                 reserved_output_tokens: 8,
             },
             actor: ActionContext::new("user", "phone", "send").unwrap(),
+            initiation: Initiation::owner(),
             acknowledgement: SubmissionAcknowledgement::Pending,
             events: Vec::new(),
             scheduling: Vec::new(),
@@ -585,6 +587,121 @@ mod tests {
     }
 
     #[test]
+    fn semantic_admission_restores_who_started_the_turn() {
+        let record = |initiation| InvocationRecord {
+            target_event_offset: None,
+            submission: SubmissionMode::Queued,
+            request: ExecutionRequest {
+                execution_id: ExecutionId::new("one").unwrap(),
+                user_message: UserMessage::text_only(PromptText::new("hello").unwrap()),
+                estimated_input_tokens: 7,
+                reserved_output_tokens: 8,
+            },
+            actor: ActionContext::new("user", "phone", "send").unwrap(),
+            initiation,
+            acknowledgement: SubmissionAcknowledgement::Pending,
+            events: Vec::new(),
+            scheduling: Vec::new(),
+            cancellation: None,
+            provider_report: None,
+            local_cancellation: None,
+            local_outcome: None,
+            result: None,
+        };
+        let saved = |record: &InvocationRecord| {
+            let bytes =
+                encode_one(&SessionChange::InputAccepted(Box::new(record.clone()))).unwrap();
+            assert!(matches!(
+                decode_one(&bytes, &ProviderContext::Absent).unwrap(),
+                SessionChange::InputAccepted(next) if *next == *record
+            ));
+            serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()
+        };
+        let owner = saved(&record(Initiation::owner()));
+        assert_eq!(
+            owner["changes"][0]["InputAccepted"]["metadata"]["initiation"],
+            serde_json::json!({"initiator": "Owner", "tools": "NotChecked"})
+        );
+        for (role, name) in [
+            (GrantRole::Read, "Read"),
+            (GrantRole::Comment, "Comment"),
+            (GrantRole::Drive, "Drive"),
+        ] {
+            let grant = saved(&record(Initiation::grant(
+                GrantInitiator::new("grant-1", role, 4).unwrap(),
+            )));
+            assert_eq!(
+                grant["changes"][0]["InputAccepted"]["metadata"]["initiation"],
+                serde_json::json!({
+                    "initiator": {
+                        "Grant": {"grant": "grant-1", "role": name, "policy_revision": 4}
+                    },
+                    "tools": "NotChecked"
+                })
+            );
+        }
+
+        let grant = |grant: serde_json::Value| {
+            serde_json::json!({
+                "initiator": {"Grant": {"grant": grant, "role": "Drive", "policy_revision": 4}},
+                "tools": "NotChecked"
+            })
+        };
+        let invalid = [
+            // The domain refuses blank grant text.
+            Some(grant(" ".into())),
+            // The preflight refuses grant text over its bound before it is built.
+            Some(grant(
+                "x".repeat(GrantInitiator::MAX_GRANT_BYTES + 1).into(),
+            )),
+            Some(serde_json::json!({"initiator": "Guest", "tools": "NotChecked"})),
+            Some(serde_json::json!({"initiator": "Owner", "tools": "Checked"})),
+            Some(serde_json::json!({"initiator": "Owner"})),
+            Some(serde_json::json!({"initiator": "Owner", "tools": "NotChecked", "by": 1})),
+            Some(serde_json::json!({
+                "initiator": {"Grant": {"grant": "g", "role": "Owner", "policy_revision": 4}},
+                "tools": "NotChecked"
+            })),
+            Some(serde_json::json!({
+                "initiator": {"Grant": {"grant": "g", "role": "Read", "policy_revision": -1}},
+                "tools": "NotChecked"
+            })),
+            Some(serde_json::json!({
+                "initiator": {
+                    "Grant": {"grant": "g", "role": "Read", "policy_revision": 1, "more": 1}
+                },
+                "tools": "NotChecked"
+            })),
+            // A record without the field is not of this shape.
+            None,
+        ];
+        for replacement in invalid {
+            let mut changed = owner.clone();
+            let metadata = changed["changes"][0]["InputAccepted"]["metadata"]
+                .as_object_mut()
+                .unwrap();
+            match &replacement {
+                Some(value) => {
+                    metadata.insert("initiation".into(), value.clone());
+                }
+                None => {
+                    metadata.remove("initiation");
+                }
+            }
+            assert!(
+                matches!(
+                    decode_one(
+                        &serde_json::to_vec(&changed).unwrap(),
+                        &ProviderContext::Absent
+                    ),
+                    Err(StorageError::Corrupt(_))
+                ),
+                "{replacement:?}"
+            );
+        }
+    }
+
+    #[test]
     fn semantic_admission_restores_who_wrote_it_and_what_apps_gave_with_it() {
         let app = |tool_id: &str| {
             McpAppSource::new(
@@ -620,6 +737,7 @@ mod tests {
                 reserved_output_tokens: 8,
             },
             actor: ActionContext::new("user", "phone", "send").unwrap(),
+            initiation: Initiation::owner(),
             acknowledgement: SubmissionAcknowledgement::Pending,
             events: Vec::new(),
             scheduling: Vec::new(),
@@ -900,7 +1018,7 @@ mod tests {
         );
         let bytes = encode_one(&opened_change()).unwrap();
         let saved: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        for found in [0, StorageError::SCHEMA_VERSION + 1] {
+        for found in [0, 1, 2, StorageError::SCHEMA_VERSION + 1] {
             let mut other = saved.clone();
             other["schemaVersion"] = serde_json::json!(found);
             other["notInThisShape"] = serde_json::json!(true);

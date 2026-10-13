@@ -30,7 +30,11 @@ async fn cleaned_control_generation_fences_permissions_through_gated_restoration
         *backend.execution_gate.lock().unwrap() = Some(active_gate);
         let active = tokio::spawn({
             let agent = agent.clone();
-            async move { agent.invoke(input("active"), actor()).await }
+            async move {
+                agent
+                    .invoke(input("active"), Submitter::owner(actor()))
+                    .await
+            }
         });
         backend.executing.notified().await;
         backend.preparing.notified().await; // Consume initial preparation notification.
@@ -54,7 +58,10 @@ async fn cleaned_control_generation_fences_permissions_through_gated_restoration
         // Steering after cleanup queues for preparation instead of targeting the retired context.
         let (release_prepare, prepare_gate) = oneshot::channel();
         *backend.prepare_gate.lock().unwrap() = Some(prepare_gate);
-        let following = agent.steer(input("following"), actor()).await.unwrap();
+        let following = agent
+            .steer(input("following"), Submitter::owner(actor()))
+            .await
+            .unwrap();
         let SteeringDelivery::Queued(following) = following else {
             panic!("cleaned context cannot receive native steering");
         };
@@ -153,7 +160,11 @@ async fn restoration_cannot_erase_confirmed_cleanup_audit_failure() {
             *backend.execution_gate.lock().unwrap() = Some(active_gate);
             let active = tokio::spawn({
                 let agent = agent.clone();
-                async move { agent.invoke(input("active"), actor()).await }
+                async move {
+                    agent
+                        .invoke(input("active"), Submitter::owner(actor()))
+                        .await
+                }
             });
             backend.executing.notified().await;
             *backend.control_attachment.lock().unwrap() =
@@ -194,20 +205,27 @@ async fn restoration_cannot_erase_confirmed_cleanup_audit_failure() {
                 Err(AgentError::Closed)
             ));
             assert!(matches!(
-                agent.enqueue(input("blocked-queue"), actor()).await,
+                agent
+                    .enqueue(input("blocked-queue"), Submitter::owner(actor()))
+                    .await,
                 Err(AgentError::AuditFailure)
             ));
             assert!(matches!(
-                agent.steer(input("blocked-steering"), actor()).await,
+                agent
+                    .steer(input("blocked-steering"), Submitter::owner(actor()))
+                    .await,
                 Err(AgentError::AuditFailure)
             ));
             let (_release_prepare, prepare_gate) = oneshot::channel();
             *backend.prepare_gate.lock().unwrap() = Some(prepare_gate);
             for id in ["next-one", "next-two"] {
                 assert_eq!(
-                    timeout(Duration::from_secs(2), agent.invoke(input(id), actor()))
-                        .await
-                        .expect("audit failure must return before gated provider preparation"),
+                    timeout(
+                        Duration::from_secs(2),
+                        agent.invoke(input(id), Submitter::owner(actor()))
+                    )
+                    .await
+                    .expect("audit failure must return before gated provider preparation"),
                     Err(AgentError::AuditFailure)
                 );
                 assert!(

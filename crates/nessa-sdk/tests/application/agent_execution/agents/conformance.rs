@@ -28,9 +28,21 @@ impl Mode {
     ) -> JoinHandle<Result<ExecutionOutcome, AgentError>> {
         tokio::spawn(async move {
             match self {
-                Self::Direct => agent.invoke(input, actor()).await,
-                Self::Queued => agent.enqueue(input, actor()).await?.wait().await,
-                Self::Boundary => agent.enqueue_steering(input, actor()).await?.wait().await,
+                Self::Direct => agent.invoke(input, Submitter::owner(actor())).await,
+                Self::Queued => {
+                    agent
+                        .enqueue(input, Submitter::owner(actor()))
+                        .await?
+                        .wait()
+                        .await
+                }
+                Self::Boundary => {
+                    agent
+                        .enqueue_steering(input, Submitter::owner(actor()))
+                        .await?
+                        .wait()
+                        .await
+                }
             }
         })
     }
@@ -377,7 +389,9 @@ async fn invocation_modes_keep_owned_work_and_real_settlement_after_waiter_loss_
         caller.abort();
         assert!(caller.await.unwrap_err().is_cancelled());
         assert_eq!(
-            agent.invoke(request("overlap"), actor()).await,
+            agent
+                .invoke(request("overlap"), Submitter::owner(actor()))
+                .await,
             Err(AgentError::Busy)
         );
         bounded(agent.close(actor())).await.unwrap();
@@ -411,7 +425,7 @@ async fn invocation_modes_keep_owned_work_and_real_settlement_after_waiter_loss_
         }
         reattach_after_explicit_close(&agent).await;
         assert_eq!(
-            bounded(agent.invoke(request("resumed"), actor())).await,
+            bounded(agent.invoke(request("resumed"), Submitter::owner(actor()))).await,
             Ok(ExecutionOutcome::Completed)
         );
         bounded(agent.close(actor())).await.unwrap();
@@ -454,7 +468,7 @@ async fn invocation_modes_follow_explicit_resource_status_independently_of_error
             // backend confirms owned cleanup and audit before recovery is authorized.
             recover_after_automatic_stop(&agent).await;
             assert_eq!(
-                bounded(agent.invoke(request("recovered"), actor())).await,
+                bounded(agent.invoke(request("recovered"), Submitter::owner(actor()))).await,
                 Ok(ExecutionOutcome::Completed)
             );
             bounded(agent.close(actor())).await.unwrap();
@@ -473,7 +487,11 @@ async fn native_stop_keeps_target_settlement_and_never_replays_interrupted_deliv
     *backend.steering_gate.lock().unwrap() = Some(gate);
     let steering = tokio::spawn({
         let agent = agent.clone();
-        async move { agent.steer(request("correction"), actor()).await }
+        async move {
+            agent
+                .steer(request("correction"), Submitter::owner(actor()))
+                .await
+        }
     });
     bounded(backend.steering_admitted.notified()).await;
     bounded(agent.close(actor())).await.unwrap();
@@ -519,7 +537,9 @@ async fn native_stop_keeps_target_settlement_and_never_replays_interrupted_deliv
     assert_eq!(stop.actor, Some(actor()));
     assert_eq!(stop.target, Some(ExecutionId::new("target").unwrap()));
     assert!(matches!(
-        agent.steer(request("correction"), actor()).await,
+        agent
+            .steer(request("correction"), Submitter::owner(actor()))
+            .await,
         Err(AgentError::Closed)
     ));
     assert_eq!(backend.steering.lock().unwrap().len(), 1);
@@ -573,7 +593,7 @@ async fn invocation_modes_retain_provider_settlement_when_its_save_panics() {
             bounded(agent.close(actor())).await.unwrap();
             reattach_after_explicit_close(&agent).await;
             assert_eq!(
-                bounded(agent.invoke(request("recovered"), actor())).await,
+                bounded(agent.invoke(request("recovered"), Submitter::owner(actor()))).await,
                 Ok(ExecutionOutcome::Completed)
             );
             bounded(agent.close(actor())).await.unwrap();

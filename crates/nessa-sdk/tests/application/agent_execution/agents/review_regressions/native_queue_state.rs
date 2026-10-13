@@ -39,12 +39,19 @@ async fn native_error_queue_policy_uses_provider_state_and_preserves_saved_recei
                 *backend.execution_gate.lock().unwrap() = Some(gate);
                 let running = tokio::spawn({
                     let agent = agent.clone();
-                    async move { agent.invoke(input("target"), actor()).await }
+                    async move {
+                        agent
+                            .invoke(input("target"), Submitter::owner(actor()))
+                            .await
+                    }
                 });
                 timeout(Duration::from_secs(2), backend.executing.notified())
                     .await
                     .unwrap();
-                let queued = agent.enqueue(input("waiting"), actor()).await.unwrap();
+                let queued = agent
+                    .enqueue(input("waiting"), Submitter::owner(actor()))
+                    .await
+                    .unwrap();
                 *backend.control_error.lock().unwrap() = Some(diagnostic.clone());
                 *backend.control_attachment.lock().unwrap() = provider_state.clone();
                 if cleanup_unconfirmed {
@@ -59,7 +66,7 @@ async fn native_error_queue_policy_uses_provider_state_and_preserves_saved_recei
                 }
                 let steering_error = timeout(
                     Duration::from_secs(2),
-                    agent.steer(input("correction"), actor()),
+                    agent.steer(input("correction"), Submitter::owner(actor())),
                 )
                 .await
                 .unwrap()
@@ -111,7 +118,10 @@ async fn native_error_queue_policy_uses_provider_state_and_preserves_saved_recei
                     assert_eq!(backend.executions.load(Ordering::SeqCst), 2);
                 }
                 assert_eq!(
-                    agent.steer(input("correction"), actor()).await.err(),
+                    agent
+                        .steer(input("correction"), Submitter::owner(actor()))
+                        .await
+                        .err(),
                     Some(steering_error.clone())
                 );
                 let saved = storage.snapshot();
@@ -169,10 +179,16 @@ async fn native_error_queue_policy_uses_provider_state_and_preserves_saved_recei
                 let (restored, restored_backend) =
                     probe_with_manager(false, restored_storage.manager().await).await;
                 assert_eq!(
-                    restored.steer(input("correction"), actor()).await.err(),
+                    restored
+                        .steer(input("correction"), Submitter::owner(actor()))
+                        .await
+                        .err(),
                     Some(steering_error)
                 );
-                let restored_queue = restored.enqueue(input("waiting"), actor()).await.unwrap();
+                let restored_queue = restored
+                    .enqueue(input("waiting"), Submitter::owner(actor()))
+                    .await
+                    .unwrap();
                 assert_eq!(
                     restored_queue.wait().await,
                     if stops_waiting {
@@ -213,12 +229,19 @@ async fn failed_cleanup_audit_settles_waiting_receipts_from_every_provider_opera
             *backend.execution_gate.lock().unwrap() = Some(gate);
             let running = tokio::spawn({
                 let agent = agent.clone();
-                async move { agent.invoke(input("active"), actor()).await }
+                async move {
+                    agent
+                        .invoke(input("active"), Submitter::owner(actor()))
+                        .await
+                }
             });
             timeout(Duration::from_secs(2), backend.executing.notified())
                 .await
                 .unwrap();
-            let queued = agent.enqueue(input("waiting"), actor()).await.unwrap();
+            let queued = agent
+                .enqueue(input("waiting"), Submitter::owner(actor()))
+                .await
+                .unwrap();
             let state = ProviderSessionState::CleanupReported(CleanupReport::new(
                 ResourceCleanup::Confirmed(CloseOutcome { forced: false }),
                 if audit_failed {
@@ -293,7 +316,7 @@ async fn failed_cleanup_audit_settles_waiting_receipts_from_every_provider_opera
             let expected_history = record.scheduling.clone();
             assert_eq!(
                 agent
-                    .enqueue(input("waiting"), actor())
+                    .enqueue(input("waiting"), Submitter::owner(actor()))
                     .await
                     .unwrap()
                     .wait()
@@ -306,7 +329,7 @@ async fn failed_cleanup_audit_settles_waiting_receipts_from_every_provider_opera
                 probe_with_manager(false, restored_storage.manager().await).await;
             assert_eq!(
                 restored
-                    .enqueue(input("waiting"), actor())
+                    .enqueue(input("waiting"), Submitter::owner(actor()))
                     .await
                     .unwrap()
                     .wait()

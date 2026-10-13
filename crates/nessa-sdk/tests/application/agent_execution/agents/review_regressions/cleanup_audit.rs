@@ -19,11 +19,15 @@ async fn confirmed_cleanup_audit_failure_survives_repeated_explicit_close() {
         for _ in 0..3 {
             assert_eq!(agent.close(actor()).await, Err(AgentError::AuditFailure));
             assert_eq!(
-                agent.invoke(input("blocked"), actor()).await,
+                agent
+                    .invoke(input("blocked"), Submitter::owner(actor()))
+                    .await,
                 Err(AgentError::Closed)
             );
             assert!(matches!(
-                agent.enqueue(input("queued"), actor()).await,
+                agent
+                    .enqueue(input("queued"), Submitter::owner(actor()))
+                    .await,
                 Err(AgentError::Closed)
             ));
             assert_eq!(backend.executions.load(Ordering::SeqCst), 0);

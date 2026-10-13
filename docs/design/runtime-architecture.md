@@ -1286,7 +1286,7 @@ this surface in the browser
 ```mermaid
 sequenceDiagram
     participant T as Transcript card (panel or desktop)
-    participant C as HeldFilesProvider (queue, 2 at a time; object URL per file shown)
+    participant C as HeldFilesProvider (queue, 2 at a time, object URL per file shown)
     participant R as heldFileReader (conversation vertical)
     participant A as attachments.fetch (@nessa/client)
     participant P as Product socket
@@ -1302,7 +1302,7 @@ sequenceDiagram
     A->>A: size and SHA-256 of the whole
     A-->>R: Blob, or NessaHeldFileError
     R-->>C: Blob, or HeldFileReadError(not-held, deleted, damaged, unavailable)
-    C-->>T: object URL, or the reason; revoked when nothing shows it
+    C-->>T: object URL, or the reason, revoked when nothing shows it
     Note over C: unavailable: asked again after a growing wait, or on Retry
     T->>C: Save
     C-->>T: the bytes shown, the read going, or a queued read
@@ -1317,7 +1317,7 @@ sequenceDiagram
         end
         T->>H: save_file_finish{token}
         H->>H: sync, rename over the chosen path
-        Note over T,H: any failure: save_file_abort removes the temporary file; idle 60 s: let go
+        Note over T,H: any failure: save_file_abort removes the temporary file, idle 60 s: let go
     end
 ```
 
@@ -1380,7 +1380,7 @@ sequenceDiagram
         C-->>A: held | alreadyHeld {digest, size, name}
     else not staged
         E->>L: NotPublished{lease, request, reason}
-        L->>C: the reason; Q lets the call go
+        L->>C: the reason, Q lets the call go
         C-->>A: refused {code, message}
     end
 ```
@@ -1465,8 +1465,8 @@ sequenceDiagram
     C->>L: LeaseHold::fetch, not yet polled (here: fetch_unavailable)
     C->>Q: take(lease, call, size) (duplicate_request, budget_exceeded)
     C->>S: FetchAsked{lease, call, file, destination, the turn's person} while the lease is the latest and Live (no_turn), with fewer than 4 under way (busy)
-    Note over C,S: not saved: audit_unavailable, its size given back, the environment never asked; FetchEnded{auditUnavailable} kept beside it
-    C->>H: its first byte, for the turn's person (not_held, source_unavailable); each range under a server.fetch_reads permit
+    Note over C,S: not saved: audit_unavailable, its size given back, the environment never asked, FetchEnded{auditUnavailable} kept beside it
+    C->>H: its first byte, for the turn's person (not_held, source_unavailable), each range under a server.fetch_reads permit
     L->>E: Fetch{lease, request, destination, digest, mediaType, size} (no bytes)
     E->>E: in flight, size, digest? destination inside the workspace, its directory there, nothing at it?
     alt exactly this file already there
@@ -1476,17 +1476,17 @@ sequenceDiagram
         E->>E: ledger: fetched(refused)
         E->>L: FetchRefused{reason}
     else free
-        E->>E: an empty private part, named by the host's number; ledger: fetch_accepted
+        E->>E: an empty private part, named by the host's number, ledger: fetch_accepted
         E->>L: FetchAccepted{path of the part}
         loop each range of at most 32 KiB
             L->>H: read_held(person, file, offset): held now? (not_held stops it)
             L->>E: sftp WRITE to the part, on an artifact channel
         end
-        Note over L,E: a channel that fails is reopened; the write goes on from the part's length (FSTAT) or what was acknowledged, whichever is less
+        Note over L,E: a channel that fails is reopened, the write goes on from the part's length (FSTAT) or what was acknowledged, whichever is less
         Note over L,E: given up before Delivered (or a FetchAccepted nobody waits for): Undelivered, the part let go, ledger fetch_unanswered
         L->>E: Delivered{request}
         E->>E: the part as it is on disk: size and SHA-256 (mismatch)
-        E->>E: mode 0666 less the umask; link that very file at the destination resolved again, never over anything (occupied), held to it by inode; part let go
+        E->>E: mode 0666 less the umask, link that very file at the destination resolved again, never over anything (occupied), held to it by inode, part let go
         E->>E: ledger: fetched(outcome)
         E->>L: Fetched{placed{path} | refused{reason}}
     end

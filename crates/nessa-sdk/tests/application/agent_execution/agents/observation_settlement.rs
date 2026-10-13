@@ -160,13 +160,15 @@ async fn assert_settlement_after_invalid_observation(
     let executing = async {
         if queued {
             agent
-                .enqueue(request("duplicate"), actor())
+                .enqueue(request("duplicate"), Submitter::owner(actor()))
                 .await
                 .unwrap()
                 .wait()
                 .await
         } else {
-            agent.invoke(request("duplicate"), actor()).await
+            agent
+                .invoke(request("duplicate"), Submitter::owner(actor()))
+                .await
         }
     };
     let result = tokio::time::timeout(Duration::from_secs(2), executing)
@@ -436,9 +438,12 @@ async fn assert_cleanup_close(
         .wait()
         .await
         .unwrap();
-    let result = tokio::time::timeout(Duration::from_secs(2), agent.invoke(request(name), actor()))
-        .await
-        .unwrap_or_else(|_| panic!("{name} did not settle"));
+    let result = tokio::time::timeout(
+        Duration::from_secs(2),
+        agent.invoke(request(name), Submitter::owner(actor())),
+    )
+    .await
+    .unwrap_or_else(|_| panic!("{name} did not settle"));
     assert_eq!(result, expected_result);
     assert_eq!(backend.closes.lock().unwrap().as_slice(), [expected_close]);
     let snapshot = storage.snapshot();

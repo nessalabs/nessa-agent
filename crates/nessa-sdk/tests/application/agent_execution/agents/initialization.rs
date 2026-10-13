@@ -671,7 +671,7 @@ async fn restoration_unit_left_unfinished_is_completed_by_the_next_prepare() {
         .await
         .unwrap();
     let queued = agent
-        .enqueue(request("queued-across-restart"), actor())
+        .enqueue(request("queued-across-restart"), Submitter::owner(actor()))
         .await
         .unwrap();
     drop(queued);
@@ -870,7 +870,7 @@ async fn queued_work_admitted_before_attachment_binds_to_the_published_provider(
     let provider = TestProvider::new();
     let agent = prepared(provider.clone(), &storage, Arc::new(AcceptingAudit)).await;
     let queued = agent
-        .enqueue(request("queued-before-attach"), actor())
+        .enqueue(request("queued-before-attach"), Submitter::owner(actor()))
         .await
         .unwrap();
     assert!(provider.calls.opens.lock().unwrap().is_empty());
@@ -918,7 +918,7 @@ async fn startup_authentication_queue_settlement_retains_primary_cause_without_p
         };
         let agent = prepared(Arc::new(AuthenticationRefusingStartup), &storage, audit).await;
         let queued = agent
-            .enqueue(request("startup-auth"), actor())
+            .enqueue(request("startup-auth"), Submitter::owner(actor()))
             .await
             .unwrap();
         let authority = agent
@@ -952,7 +952,7 @@ async fn startup_authentication_queue_settlement_retains_primary_cause_without_p
         .unwrap();
         assert_eq!(
             restored
-                .enqueue(request("startup-auth"), actor())
+                .enqueue(request("startup-auth"), Submitter::owner(actor()))
                 .await
                 .unwrap()
                 .wait()
@@ -972,11 +972,11 @@ async fn initial_open_failure_settles_every_owned_queue_receipt() {
     )
     .await;
     let first = agent
-        .enqueue(request("first-before-failure"), actor())
+        .enqueue(request("first-before-failure"), Submitter::owner(actor()))
         .await
         .unwrap();
     let second = agent
-        .enqueue(request("second-before-failure"), actor())
+        .enqueue(request("second-before-failure"), Submitter::owner(actor()))
         .await
         .unwrap();
     let authorization = agent
@@ -1001,10 +1001,16 @@ async fn initial_open_failure_settles_every_owned_queue_receipt() {
     );
     for result in [
         agent
-            .enqueue(request("after-failed-attachment"), actor())
+            .enqueue(
+                request("after-failed-attachment"),
+                Submitter::owner(actor()),
+            )
             .await,
         agent
-            .enqueue_steering(request("steering-after-failed-attachment"), actor())
+            .enqueue_steering(
+                request("steering-after-failed-attachment"),
+                Submitter::owner(actor()),
+            )
             .await,
     ] {
         assert!(matches!(
@@ -1035,7 +1041,7 @@ async fn initial_open_failure_settles_every_owned_queue_receipt() {
     .await
     .unwrap();
     let retry = restored
-        .enqueue(request("first-before-failure"), actor())
+        .enqueue(request("first-before-failure"), Submitter::owner(actor()))
         .await
         .unwrap();
     assert_eq!(retry.wait().await, Err(AgentError::Closed));
@@ -1051,11 +1057,11 @@ async fn initial_open_failure_settles_all_receipts_despite_audit_and_storage_fai
     )
     .await;
     let first = agent
-        .enqueue(request("failed-evidence-first"), actor())
+        .enqueue(request("failed-evidence-first"), Submitter::owner(actor()))
         .await
         .unwrap();
     let second = agent
-        .enqueue(request("failed-evidence-second"), actor())
+        .enqueue(request("failed-evidence-second"), Submitter::owner(actor()))
         .await
         .unwrap();
     storage.fail_scheduling("failed-evidence-first", InvocationStage::Settled);
@@ -1105,7 +1111,7 @@ async fn failed_attachment_refuses_new_work_while_cleanup_is_still_running() {
 
     assert!(matches!(
         agent
-            .enqueue(request("during-failed-cleanup"), actor())
+            .enqueue(request("during-failed-cleanup"), Submitter::owner(actor()))
             .await,
         Err(AgentError::AttachmentUnavailable(AttachmentPhase::Failed(
             _
@@ -1113,7 +1119,10 @@ async fn failed_attachment_refuses_new_work_while_cleanup_is_still_running() {
     ));
     assert!(matches!(
         agent
-            .enqueue_steering(request("steering-during-failed-cleanup"), actor())
+            .enqueue_steering(
+                request("steering-during-failed-cleanup"),
+                Submitter::owner(actor())
+            )
             .await,
         Err(AgentError::AttachmentUnavailable(AttachmentPhase::Failed(
             _
@@ -1140,12 +1149,18 @@ async fn provider_publication_preserves_queue_changes_made_while_open_waits() {
     let attachment = agent.start_attachment(authorization).unwrap();
     provider.entered.notified().await;
 
-    let first = agent.enqueue(request("open-first"), actor()).await.unwrap();
-    let removed = agent
-        .enqueue(request("open-removed"), actor())
+    let first = agent
+        .enqueue(request("open-first"), Submitter::owner(actor()))
         .await
         .unwrap();
-    let last = agent.enqueue(request("open-last"), actor()).await.unwrap();
+    let removed = agent
+        .enqueue(request("open-removed"), Submitter::owner(actor()))
+        .await
+        .unwrap();
+    let last = agent
+        .enqueue(request("open-last"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     assert_eq!(
         agent
             .remove_queued(request("open-removed").execution_id, actor())
@@ -1218,15 +1233,15 @@ async fn records_restore_queue_changes_published_during_gated_open() {
     let attachment = agent.start_attachment(authorization).unwrap();
     provider.entered.notified().await;
     let first = agent
-        .enqueue(request("journal-first"), actor())
+        .enqueue(request("journal-first"), Submitter::owner(actor()))
         .await
         .unwrap();
     let removed = agent
-        .enqueue(request("journal-removed"), actor())
+        .enqueue(request("journal-removed"), Submitter::owner(actor()))
         .await
         .unwrap();
     let last = agent
-        .enqueue(request("journal-last"), actor())
+        .enqueue(request("journal-last"), Submitter::owner(actor()))
         .await
         .unwrap();
     assert_eq!(
@@ -1282,7 +1297,7 @@ async fn records_restore_queue_changes_published_during_gated_open() {
         .iter()
         .any(|record| matches!(&record.mutation, QueueMutation::Reordered(_))));
     let retry = restored
-        .enqueue(request("journal-first"), actor())
+        .enqueue(request("journal-first"), Submitter::owner(actor()))
         .await
         .unwrap();
     assert_eq!(retry.wait().await, Ok(ExecutionOutcome::Completed));
@@ -1339,7 +1354,10 @@ async fn child_process_recovers_original_receipt_without_dispatching_again() {
         }
         Ok(())
     });
-    let lost_reply = agent.enqueue(input, actor()).await.unwrap();
+    let lost_reply = agent
+        .enqueue(input, Submitter::owner(actor()))
+        .await
+        .unwrap();
     eprintln!("original admission acknowledged at {:?}", started.elapsed());
     drop(lost_reply);
     // Observe the original supervised invocation without submitting again. The
@@ -1430,7 +1448,7 @@ async fn child_record_receipt_probe() {
     .unwrap();
     assert_eq!(
         agent
-            .enqueue(request("original"), actor())
+            .enqueue(request("original"), Submitter::owner(actor()))
             .await
             .unwrap()
             .wait()
@@ -1440,7 +1458,10 @@ async fn child_record_receipt_probe() {
     assert_eq!(provider.calls.executions.load(Ordering::SeqCst), 0);
     let mut changed = request("original");
     changed.user_message = UserMessage::text_only(PromptText::new("changed bytes").unwrap());
-    assert!(agent.enqueue(changed, actor()).await.is_err());
+    assert!(agent
+        .enqueue(changed, Submitter::owner(actor()))
+        .await
+        .is_err());
     assert_eq!(provider.calls.executions.load(Ordering::SeqCst), 0);
     agent.close(close_action()).await.unwrap();
     drop(agent);
@@ -1572,11 +1593,13 @@ async fn published_context_is_not_dispatchable_before_audit_acknowledgement() {
     let status = agent.attachment_status();
     assert_eq!(status.phase(), AttachmentPhase::Starting);
     assert_eq!(
-        agent.invoke(request("direct-before-audit"), actor()).await,
+        agent
+            .invoke(request("direct-before-audit"), Submitter::owner(actor()))
+            .await,
         Err(AgentError::AttachmentUnavailable(AttachmentPhase::Starting))
     );
     let queued = agent
-        .enqueue(request("queued-before-audit"), actor())
+        .enqueue(request("queued-before-audit"), Submitter::owner(actor()))
         .await
         .unwrap();
     assert_eq!(provider.calls.executions.load(Ordering::SeqCst), 0);
@@ -1859,7 +1882,7 @@ async fn automatic_stop_waits_for_and_retains_rejected_starting_close_audit() {
     let attachment = agent.start_attachment(authorization).unwrap();
     audit.starting_entered.notified().await;
     let admission = agent
-        .enqueue(request("automatic-close-audit"), actor())
+        .enqueue(request("automatic-close-audit"), Submitter::owner(actor()))
         .await
         .unwrap();
     audit.closed_entered.notified().await;
@@ -2174,7 +2197,7 @@ async fn queue_audit_panics_preserve_owned_receipt_and_prevent_dispatch() {
             .unwrap();
 
         let admission = agent
-            .enqueue(request("queue-audit-panic"), actor())
+            .enqueue(request("queue-audit-panic"), Submitter::owner(actor()))
             .await
             .unwrap();
         let original_evidence = admission.evidence().clone();
@@ -2190,7 +2213,7 @@ async fn queue_audit_panics_preserve_owned_receipt_and_prevent_dispatch() {
             .await
             .unwrap();
         let retry = restored
-            .enqueue(request("queue-audit-panic"), actor())
+            .enqueue(request("queue-audit-panic"), Submitter::owner(actor()))
             .await
             .unwrap();
         assert_eq!(retry.evidence(), &original_evidence);

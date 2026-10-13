@@ -33,7 +33,9 @@ use nessa_sdk::application::agent_execution::sessions::{
     MessageCommitClock, MessageCommitSleep, SessionSnapshot, SessionStorage,
     SubmissionAcknowledgement,
 };
-use nessa_sdk::domain::agent_execution::executions::{ExecutionId, ExecutionOutcome, MessageChunk};
+use nessa_sdk::domain::agent_execution::executions::{
+    ExecutionId, ExecutionOutcome, Initiation, MessageChunk,
+};
 use nessa_sdk::domain::agent_execution::prompts::{PromptText, UserMessage};
 use nessa_sdk::domain::agent_execution::sessions::{
     ExecutionSessionId, ProviderContext, SessionId,
@@ -306,6 +308,7 @@ fn review_snapshot(events: Vec<ExecutionEvent>) -> SessionSnapshot {
                 reserved_output_tokens: 10,
             },
             actor: ActionContext::new("person", "panel", "send").unwrap(),
+            initiation: Initiation::owner(),
             acknowledgement: SubmissionAcknowledgement::Acknowledged,
             events,
             scheduling: vec![],

@@ -198,7 +198,7 @@ sequenceDiagram
     P->>S: Read <=16 candidates / <=2 MiB decoded
     S-->>P: Immutable frames through captured tail
     P->>P: FrameValidator advances terminal evidence
-    P->>C: Return progress; release exclusive owner
+    P->>C: Return progress, release exclusive owner
     P-->>P: Preparing, or Ready(committed H)
     Note over C: No worker or semantic body retained
 ```

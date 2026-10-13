@@ -10,7 +10,9 @@ use nessa_sdk::application::agent_execution::{
 };
 use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use nessa_sdk::domain::agent_execution::{
-    executions::{ExecutionId, ExecutionOutcome, InvocationKind, SchedulingCause, SubmissionMode},
+    executions::{
+        ExecutionId, ExecutionOutcome, Initiation, InvocationKind, SchedulingCause, SubmissionMode,
+    },
     prompts::{PromptText, UserMessage},
     sessions::{ExecutionSessionId, ProviderContext},
 };
@@ -57,6 +59,7 @@ fn invocation(
             reserved_output_tokens: 1,
         },
         actor: ActionContext::new("person", "panel", "turn-1").unwrap(),
+        initiation: Initiation::owner(),
         acknowledgement: SubmissionAcknowledgement::Acknowledged,
         events: Vec::new(),
         scheduling: vec![InvocationSchedulingEvent {

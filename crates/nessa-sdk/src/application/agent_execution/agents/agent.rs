@@ -19,6 +19,7 @@ use crate::application::agent_execution::executions::{
     limits::MAX_RETAINED_OUTPUT_EVENTS, AttachmentAuditCause, AttachmentAuditRecord,
     AttachmentAuditStage, EffortChangeOutcome, EffortLevelChange, EffortLevelChangeRecord,
     ExecutionAudit, ExecutionAuditRecord, ExecutionEvent, ExecutionRequest, ExecutionUpdate,
+    Submitter,
 };
 use crate::application::agent_execution::hooks::{
     HookRegistration, InvocationContext, InvocationHook, InvocationHooks,
@@ -571,7 +572,7 @@ impl Agent {
     /// ```
     /// use std::{error::Error, sync::Arc};
     /// use nessa_sdk::{Agent, application::agent_execution::{
-    ///     agents::{AgentError, AttachmentRequest}, executions::{ExecutionAudit, ExecutionRequest}, permissions::ActionContext,
+    ///     agents::{AgentError, AttachmentRequest}, executions::{ExecutionAudit, ExecutionRequest, Submitter}, permissions::ActionContext,
     ///     providers::{AgentProvider, CloseOutcome}, sessions::{SessionManager, SessionStorage},
     /// }, domain::agent_execution::{executions::{ExecutionId, ExecutionOutcome}, prompts::{PromptText, UserMessage}}};
     /// # async fn chat(provider: Arc<dyn AgentProvider>, storage: Arc<dyn SessionStorage>, audit: Arc<dyn ExecutionAudit>, actor: ActionContext)
@@ -588,7 +589,7 @@ impl Agent {
     /// agent.start_attachment(authorization)?.wait().await?;
     /// let mut updates = agent.subscribe();
     /// let outcome = async {
-    ///     let receipt = agent.enqueue(input, actor.clone()).await?;
+    ///     let receipt = agent.enqueue(input, Submitter::owner(actor.clone())).await?;
     ///     let waiting = receipt.wait();
     ///     tokio::pin!(waiting);
     ///     loop {
@@ -936,8 +937,9 @@ impl Agent {
     /// The host must verify the supplied caller attribution before invoking.
     /// Overlap returns Busy; use [`Self::enqueue`] to accept follow-up work.
     /// `input` supplies the unique execution identity, prompt, and token budgets;
-    /// `actor` is host-verified attribution. Validation, hook, provider, or storage
-    /// failures return AgentError. On its first poll, successful admission transfers
+    /// `submitter` is host-verified attribution and how the turn was started.
+    /// Validation, hook, provider, or storage failures return AgentError. On its
+    /// first poll, successful admission transfers
     /// work to the SDK. Dropping the waiting future
     /// then leaves admission, execution, and persistence running. A never-polled
     /// future has no effects. Keep the Tokio runtime alive until work or close
@@ -950,7 +952,7 @@ impl Agent {
     pub fn invoke(
         &self,
         input: ExecutionRequest,
-        actor: ActionContext,
+        submitter: Submitter,
     ) -> AgentFuture<'_, ExecutionOutcome> {
         Box::pin(async move {
             validate_configured_input(&self.inner.capabilities, &input)?;
@@ -971,7 +973,9 @@ impl Agent {
                     // The task, not its waiter, owns the slot and the attachment.
                     let _invocation = invocation;
                     let _work = work;
-                    agent.supervise_invocation(input, actor, None, &_work).await
+                    agent
+                        .supervise_invocation(input, submitter, None, &_work)
+                        .await
                 }),
             )
             .await
@@ -985,7 +989,7 @@ impl Agent {
     pub(super) async fn supervise_invocation(
         &self,
         input: ExecutionRequest,
-        actor: ActionContext,
+        submitter: Submitter,
         saved_index: Option<usize>,
         work: &WorkPermit,
     ) -> Result<ExecutionOutcome, AgentError> {
@@ -1001,7 +1005,7 @@ impl Agent {
             .ok()
             .map(|attached| attached.events);
         let _observations = self.inner.manager.observe_invocation(&id);
-        let mut execution = Box::pin(self.execute_invocation(input, actor, saved_index, work));
+        let mut execution = Box::pin(self.execute_invocation(input, submitter, saved_index, work));
         let outcome = poll_fn(|context| {
             match catch_unwind(AssertUnwindSafe(|| execution.as_mut().poll(context))) {
                 Ok(Poll::Pending) => Poll::Pending,
@@ -1181,7 +1185,7 @@ impl Agent {
     pub(super) async fn execute_invocation(
         &self,
         input: ExecutionRequest,
-        actor: ActionContext,
+        submitter: Submitter,
         saved_index: Option<usize>,
         work: &WorkPermit,
     ) -> Result<ExecutionOutcome, AgentError> {
@@ -1191,7 +1195,7 @@ impl Agent {
         // check that a concurrent close can invalidate.
         let index = match saved_index {
             Some(index) => index,
-            None => self.inner.manager.begin(input.clone(), actor).await?,
+            None => self.inner.manager.begin(input.clone(), submitter).await?,
         };
         let attached = match self.inner.lifecycle.attached_provider(work) {
             Ok(attached) => attached,

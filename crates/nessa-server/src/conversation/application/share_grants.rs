@@ -147,20 +147,32 @@ pub enum DriveRefusal {
 /// caller's check, as for [`admit_read`]. A role is read from the grant at
 /// each command, so a role lowered or revoked refuses the next command, and
 /// one already admitted finishes (row J13).
+///
+/// The grant as it admitted the command, which a turn the command starts is
+/// saved with (row J15); `None` for the owner, who needs none.
 pub async fn admit_drive(
     grants: &dyn ShareGrants,
     reader: &Reader,
     id: &ConversationId,
-) -> Result<(), DriveRefusal> {
+) -> Result<Option<HeldGrant>, DriveRefusal> {
     match reader {
-        Reader::Owner => Ok(()),
-        Reader::PairedDevice { receiver_id } => match grants.held_role(id, receiver_id).await {
-            Ok(Some(role)) if role.at_least(ShareRole::Drive) => Ok(()),
+        Reader::Owner => Ok(None),
+        Reader::PairedDevice { receiver_id } => match grants.held_grant(id, receiver_id).await {
+            Ok(Some(held)) if held.role.at_least(ShareRole::Drive) => Ok(Some(held)),
             Ok(Some(_)) => Err(DriveRefusal::BelowDrive),
             Ok(None) => Err(DriveRefusal::NotGranted),
             Err(_) => Err(DriveRefusal::Unverifiable),
         },
     }
+}
+
+/// The role a party holds on one conversation, and the revision of the
+/// grant that set it, read together.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HeldGrant {
+    pub role: ShareRole,
+    /// As [`ShareGrant::policy_revision`].
+    pub policy_revision: u64,
 }
 
 /// One grant as the owner sees it in `conversation.shares`.
@@ -171,7 +183,7 @@ pub struct ShareGrant {
     pub credential_id: CredentialId,
     pub access: ShareAccess,
     /// The journal sequence of the change that last set the role or the
-    /// policy. A later slice stamps it on the turns a Drive grant starts.
+    /// policy, which every turn a Drive grant starts is saved with.
     pub policy_revision: u64,
     pub granted_at_ms: u64,
 }
@@ -224,13 +236,27 @@ pub struct ShareGrantChange {
 /// tables: this is the owner's side only, and a follower's choice of what to
 /// keep never reaches it.
 pub trait ShareGrants: Send + Sync {
+    /// The grant `receiver_id` holds on `id`, or `None` when it holds none
+    /// there.
+    fn held_grant<'a>(
+        &'a self,
+        id: &'a ConversationId,
+        receiver_id: &'a str,
+    ) -> ConversationFuture<'a, Option<HeldGrant>>;
     /// The role `receiver_id` holds on `id`, or `None` when it holds no
     /// grant there.
     fn held_role<'a>(
         &'a self,
         id: &'a ConversationId,
         receiver_id: &'a str,
-    ) -> ConversationFuture<'a, Option<ShareRole>>;
+    ) -> ConversationFuture<'a, Option<ShareRole>> {
+        Box::pin(async move {
+            Ok(self
+                .held_grant(id, receiver_id)
+                .await?
+                .map(|held| held.role))
+        })
+    }
     /// Whether `receiver_id` holds a grant on `id`, of any role.
     fn is_granted<'a>(
         &'a self,

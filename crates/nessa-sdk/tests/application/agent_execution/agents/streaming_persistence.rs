@@ -171,7 +171,11 @@ impl StreamingTest {
     }
     async fn start(&self) -> tokio::task::JoinHandle<Result<ExecutionOutcome, AgentError>> {
         let agent = self.agent.clone();
-        let running = tokio::spawn(async move { agent.invoke(request("batch"), actor()).await });
+        let running = tokio::spawn(async move {
+            agent
+                .invoke(request("batch"), Submitter::owner(actor()))
+                .await
+        });
         self.wait_for_dispatch().await;
         running
     }
@@ -239,7 +243,11 @@ async fn text_is_live_until_the_cadence_and_terminal_persists_the_sequence() {
 #[tokio::test]
 async fn terminal_save_failure_stops_provider_and_retains_failed_queue_receipt() {
     let test = StreamingTest::new().await;
-    let receipt = test.agent.enqueue(request("batch"), actor()).await.unwrap();
+    let receipt = test
+        .agent
+        .enqueue(request("batch"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     test.text("retained despite failed save").await;
     test.storage.fail_next();
     let _terminal = test.send(ExecutionUpdate::Finished(ExecutionOutcome::Cancelled));
@@ -247,7 +255,7 @@ async fn terminal_save_failure_stops_provider_and_retains_failed_queue_receipt()
     assert!(result.is_err());
     assert_eq!(
         test.agent
-            .enqueue(request("batch"), actor())
+            .enqueue(request("batch"), Submitter::owner(actor()))
             .await
             .unwrap()
             .wait()

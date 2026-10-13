@@ -397,11 +397,15 @@ async fn uncertain_cleanup_blocks_admission_until_explicit_close_succeeds() {
         Err(AgentError::CleanupUncertain)
     );
     assert!(matches!(
-        agent.enqueue(input("blocked"), close_action()).await,
+        agent
+            .enqueue(input("blocked"), Submitter::owner(close_action()))
+            .await,
         Err(AgentError::Closed)
     ));
     assert_eq!(
-        agent.invoke(input("blocked-direct"), close_action()).await,
+        agent
+            .invoke(input("blocked-direct"), Submitter::owner(close_action()))
+            .await,
         Err(AgentError::Closed)
     );
     assert_eq!(backend.executions.load(Ordering::SeqCst), 0);
@@ -410,7 +414,7 @@ async fn uncertain_cleanup_blocks_admission_until_explicit_close_succeeds() {
     reattach_after_explicit_close(&agent).await;
     assert_eq!(
         agent
-            .enqueue(input("safe"), close_action())
+            .enqueue(input("safe"), Submitter::owner(close_action()))
             .await
             .unwrap()
             .wait()
@@ -423,7 +427,7 @@ async fn uncertain_cleanup_blocks_admission_until_explicit_close_succeeds() {
 async fn contradictory_terminal_observation_cannot_become_a_successful_receipt() {
     let (agent, _, storage) = probe(true).await;
     let result = agent
-        .enqueue(input("contradiction"), close_action())
+        .enqueue(input("contradiction"), Submitter::owner(close_action()))
         .await
         .unwrap()
         .wait()
@@ -441,12 +445,12 @@ async fn steering_during_preparation_enters_the_boundary_queue() {
     let (release, wait) = oneshot::channel();
     *backend.prepare_gate.lock().unwrap() = Some(wait);
     let first = agent
-        .enqueue(input("preparing"), close_action())
+        .enqueue(input("preparing"), Submitter::owner(close_action()))
         .await
         .unwrap();
     backend.preparing.notified().await;
     let correction = agent
-        .steer(input("correction"), close_action())
+        .steer(input("correction"), Submitter::owner(close_action()))
         .await
         .unwrap();
     release.send(()).unwrap();
@@ -466,7 +470,7 @@ async fn restored_running_record_recovers_its_already_saved_result() {
         .await
         .unwrap();
     agent
-        .enqueue(input("saved"), close_action())
+        .enqueue(input("saved"), Submitter::owner(close_action()))
         .await
         .unwrap()
         .wait()
@@ -492,7 +496,7 @@ async fn restored_running_record_recovers_its_already_saved_result() {
         .unwrap();
     assert_eq!(
         restored
-            .enqueue(input("saved"), close_action())
+            .enqueue(input("saved"), Submitter::owner(close_action()))
             .await
             .unwrap()
             .wait()
@@ -530,13 +534,13 @@ async fn steering_after_provider_settlement_does_not_inject_during_after_hooks()
         release: Mutex::new(released),
     }));
     let first = agent
-        .enqueue(input("settled"), close_action())
+        .enqueue(input("settled"), Submitter::owner(close_action()))
         .await
         .unwrap();
     waiting.await.unwrap();
     let delivery = tokio::time::timeout(
         Duration::from_secs(2),
-        agent.steer(input("later"), close_action()),
+        agent.steer(input("later"), Submitter::owner(close_action())),
     )
     .await;
     release.send(()).unwrap();
@@ -554,16 +558,16 @@ async fn stopped_queue_retains_each_input_identity_and_the_triggering_failure() 
     let (release, wait) = oneshot::channel();
     *backend.prepare_gate.lock().unwrap() = Some(wait);
     let first = agent
-        .enqueue(input("failed"), close_action())
+        .enqueue(input("failed"), Submitter::owner(close_action()))
         .await
         .unwrap();
     backend.preparing.notified().await;
     let second = agent
-        .enqueue(input("pending-a"), close_action())
+        .enqueue(input("pending-a"), Submitter::owner(close_action()))
         .await
         .unwrap();
     let third = agent
-        .enqueue(input("pending-b"), close_action())
+        .enqueue(input("pending-b"), Submitter::owner(close_action()))
         .await
         .unwrap();
     release.send(()).unwrap();
@@ -633,6 +637,7 @@ async fn restored_scheduling_from_a_custom_store_is_validated_before_provider_op
             submission: SubmissionMode::Queued,
             request: request("corrupt"),
             actor: actor(),
+            initiation: Initiation::owner(),
             acknowledgement: SubmissionAcknowledgement::Pending,
             events: Vec::new(),
             scheduling: history,
@@ -661,22 +666,26 @@ async fn execution_cleanup_uncertainty_blocks_all_admission_including_wrapped_er
         *backend.execution_attachment.lock().unwrap() = ProviderSessionState::CleanupRequired;
         *backend.execution_error.lock().unwrap() = Some(error.clone());
         assert_eq!(
-            agent.invoke(input("uncertain"), actor()).await,
+            agent
+                .invoke(input("uncertain"), Submitter::owner(actor()))
+                .await,
             Err(AgentError::ExecutionObservation {
                 error: Box::new(AgentError::CleanupUncertain),
                 execution_result: Some(Box::new(Err(error))),
             })
         );
         assert_eq!(
-            agent.invoke(input("next"), actor()).await,
+            agent.invoke(input("next"), Submitter::owner(actor())).await,
             Err(AgentError::Closed)
         );
         assert!(matches!(
-            agent.enqueue(input("queued"), actor()).await,
+            agent
+                .enqueue(input("queued"), Submitter::owner(actor()))
+                .await,
             Err(AgentError::Closed)
         ));
         assert!(matches!(
-            agent.steer(input("steer"), actor()).await,
+            agent.steer(input("steer"), Submitter::owner(actor())).await,
             Err(AgentError::Closed)
         ));
         assert_eq!(backend.executions.load(Ordering::SeqCst), 1);
@@ -687,7 +696,10 @@ async fn execution_cleanup_uncertainty_blocks_all_admission_including_wrapped_er
         *backend.execution_attachment.lock().unwrap() = ProviderSessionState::Usable;
         backend.execution_rejected.store(false, Ordering::SeqCst);
         reattach_after_explicit_close(&agent).await;
-        agent.invoke(input("recovered"), actor()).await.unwrap();
+        agent
+            .invoke(input("recovered"), Submitter::owner(actor()))
+            .await
+            .unwrap();
     }
 }
 
@@ -696,7 +708,9 @@ async fn duplicate_terminal_never_replaces_the_first_observation_or_reports_succ
     for contradictory in [true, false] {
         let (agent, backend, storage) = probe(contradictory).await;
         backend.duplicate_terminal.store(true, Ordering::SeqCst);
-        let result = agent.invoke(input("duplicates"), actor()).await;
+        let result = agent
+            .invoke(input("duplicates"), Submitter::owner(actor()))
+            .await;
         assert!(
             matches!(&result, Err(AgentError::ExecutionObservation { error, .. })
             if matches!(error.as_ref(), AgentError::Protocol(message) if message == "duplicate terminal observation"))
@@ -736,11 +750,19 @@ async fn failure_cleanup_closes_admission_before_awaiting_provider_shutdown() {
     storage.0.lock().unwrap().fail_observation = Some("failing-save".into());
     let task = tokio::spawn({
         let agent = agent.clone();
-        async move { agent.invoke(input("failing-save"), actor()).await }
+        async move {
+            agent
+                .invoke(input("failing-save"), Submitter::owner(actor()))
+                .await
+        }
     });
     backend.closing.notified().await;
-    let steering = agent.steer(input("during-cleanup"), actor()).await;
-    let queued = agent.enqueue(input("queued-cleanup"), actor()).await;
+    let steering = agent
+        .steer(input("during-cleanup"), Submitter::owner(actor()))
+        .await;
+    let queued = agent
+        .enqueue(input("queued-cleanup"), Submitter::owner(actor()))
+        .await;
     release.send(()).unwrap();
     settle.send(()).unwrap();
     assert!(matches!(steering, Err(AgentError::Closed)));
@@ -752,14 +774,20 @@ async fn failure_cleanup_closes_admission_before_awaiting_provider_shutdown() {
     assert_eq!(backend.steers.load(Ordering::SeqCst), 0);
     assert_eq!(storage.snapshot().invocations.len(), 1);
     recover_after_automatic_stop(&agent).await;
-    agent.invoke(input("after-cleanup"), actor()).await.unwrap();
+    agent
+        .invoke(input("after-cleanup"), Submitter::owner(actor()))
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
 async fn custom_storage_rejects_terminal_corruption_before_open_and_preserves_known_failures() {
     for duplicate in [false, true] {
         let (agent, _, storage) = probe(false).await;
-        agent.invoke(input("saved"), actor()).await.unwrap();
+        agent
+            .invoke(input("saved"), Submitter::owner(actor()))
+            .await
+            .unwrap();
         drop(agent);
         {
             let mut state = storage.0.lock().unwrap();
@@ -786,7 +814,10 @@ async fn custom_storage_rejects_terminal_corruption_before_open_and_preserves_kn
         ));
     }
     let (agent, _, storage) = probe(true).await;
-    assert!(agent.invoke(input("known-failure"), actor()).await.is_err());
+    assert!(agent
+        .invoke(input("known-failure"), Submitter::owner(actor()))
+        .await
+        .is_err());
     drop(agent);
     let (_, backend, _) = probe(false).await;
     let (_, receiver) = mpsc::unbounded_channel();
@@ -804,7 +835,10 @@ async fn custom_storage_rejects_terminal_corruption_before_open_and_preserves_kn
 #[tokio::test]
 async fn custom_storage_cannot_restore_a_cancellation_without_its_original_request() {
     let (agent, _, storage) = probe(false).await;
-    agent.invoke(input("saved-review"), actor()).await.unwrap();
+    agent
+        .invoke(input("saved-review"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     drop(agent);
     {
         let mut state = storage.0.lock().unwrap();
@@ -1277,7 +1311,9 @@ async fn terminal_observation_rejects_later_provider_output() {
     for update in updates {
         let (agent, backend, storage) = probe(false).await;
         *backend.late_output.lock().unwrap() = Some(update);
-        let result = agent.invoke(input("late-output"), actor()).await;
+        let result = agent
+            .invoke(input("late-output"), Submitter::owner(actor()))
+            .await;
         assert!(
             matches!(&result, Err(AgentError::ExecutionObservation { error, .. }) if matches!(error.as_ref(), AgentError::Protocol(_)))
         );
@@ -1294,7 +1330,11 @@ async fn confirmed_cleanup_removes_steering_target_before_delayed_execution_sett
     storage.0.lock().unwrap().fail_observation = Some("delayed-settlement".into());
     let invocation = tokio::spawn({
         let agent = agent.clone();
-        async move { agent.invoke(input("delayed-settlement"), actor()).await }
+        async move {
+            agent
+                .invoke(input("delayed-settlement"), Submitter::owner(actor()))
+                .await
+        }
     });
     // On this single-thread runtime, the close future returns synchronously after
     // notifying. The invocation then clears its target and awaits the held result
@@ -1302,7 +1342,7 @@ async fn confirmed_cleanup_removes_steering_target_before_delayed_execution_sett
     backend.closing.notified().await;
     assert!(!invocation.is_finished());
     let steering = agent
-        .steer(input("after-confirmed-cleanup"), actor())
+        .steer(input("after-confirmed-cleanup"), Submitter::owner(actor()))
         .await
         .unwrap();
     assert_eq!(backend.steers.load(Ordering::SeqCst), 0);
@@ -1330,7 +1370,9 @@ async fn wrapped_errors_with_confirmed_cleanup_do_not_latch_admission_closed() {
             }));
         *backend.execution_error.lock().unwrap() = Some(error.clone());
         assert_eq!(
-            agent.invoke(input("known-error"), actor()).await,
+            agent
+                .invoke(input("known-error"), Submitter::owner(actor()))
+                .await,
             Err(expected_terminal_error(error))
         );
         *backend.execution_error.lock().unwrap() = None;
@@ -1338,7 +1380,9 @@ async fn wrapped_errors_with_confirmed_cleanup_do_not_latch_admission_closed() {
         backend.execution_rejected.store(false, Ordering::SeqCst);
         recover_after_automatic_stop(&agent).await;
         assert_eq!(
-            agent.invoke(input("next-safe-input"), actor()).await,
+            agent
+                .invoke(input("next-safe-input"), Submitter::owner(actor()))
+                .await,
             Ok(ExecutionOutcome::Completed)
         );
     }
@@ -1351,7 +1395,11 @@ async fn steering_admission_overtaken_by_close_never_calls_the_closed_provider()
     *backend.execution_gate.lock().unwrap() = Some(gate);
     let invocation = tokio::spawn({
         let agent = agent.clone();
-        async move { agent.invoke(input("active-before-close"), actor()).await }
+        async move {
+            agent
+                .invoke(input("active-before-close"), Submitter::owner(actor()))
+                .await
+        }
     });
     backend.preparing.notified().await;
     let (saving, saved) = oneshot::channel();
@@ -1359,7 +1407,11 @@ async fn steering_admission_overtaken_by_close_never_calls_the_closed_provider()
     storage.0.lock().unwrap().pause_save = Some((saving, released));
     let steering = tokio::spawn({
         let agent = agent.clone();
-        async move { agent.steer(input("admitted-during-close"), actor()).await }
+        async move {
+            agent
+                .steer(input("admitted-during-close"), Submitter::owner(actor()))
+                .await
+        }
     });
     saved.await.unwrap();
     let close = tokio::spawn({
@@ -1383,7 +1435,11 @@ async fn steering_target_settled_during_admission_falls_back_to_boundary_queue()
     *backend.execution_gate.lock().unwrap() = Some(gate);
     let invocation = tokio::spawn({
         let agent = agent.clone();
-        async move { agent.invoke(input("settles-during-save"), actor()).await }
+        async move {
+            agent
+                .invoke(input("settles-during-save"), Submitter::owner(actor()))
+                .await
+        }
     });
     backend.preparing.notified().await;
     let (saving, saved) = oneshot::channel();
@@ -1391,7 +1447,11 @@ async fn steering_target_settled_during_admission_falls_back_to_boundary_queue()
     storage.0.lock().unwrap().pause_save = Some((saving, released));
     let steering = tokio::spawn({
         let agent = agent.clone();
-        async move { agent.steer(input("saved-after-settlement"), actor()).await }
+        async move {
+            agent
+                .steer(input("saved-after-settlement"), Submitter::owner(actor()))
+                .await
+        }
     });
     saved.await.unwrap();
     settle.send(()).unwrap();
@@ -1423,10 +1483,17 @@ async fn completed_close_actor_is_not_reused_for_later_runtime_failure_cancellat
     *backend.execution_attachment.lock().unwrap() = ProviderSessionState::CleanupRequired;
     let invocation = tokio::spawn({
         let agent = agent.clone();
-        async move { agent.invoke(input("runtime-failure"), actor()).await }
+        async move {
+            agent
+                .invoke(input("runtime-failure"), Submitter::owner(actor()))
+                .await
+        }
     });
     backend.preparing.notified().await;
-    let queued = agent.enqueue(input("waiting"), actor()).await.unwrap();
+    let queued = agent
+        .enqueue(input("waiting"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     let (saving, saved) = oneshot::channel();
     let (release, released) = oneshot::channel();
     storage.0.lock().unwrap().pause_save = Some((saving, released));
@@ -1434,7 +1501,10 @@ async fn completed_close_actor_is_not_reused_for_later_runtime_failure_cancellat
         let agent = agent.clone();
         async move {
             agent
-                .steer(input("overtaken-by-runtime-failure"), actor())
+                .steer(
+                    input("overtaken-by-runtime-failure"),
+                    Submitter::owner(actor()),
+                )
                 .await
         }
     });
@@ -1542,7 +1612,10 @@ enum ProviderControl {
 
 async fn invoke_control(agent: &Agent, operation: ProviderControl) -> Result<(), AgentError> {
     match operation {
-        ProviderControl::Steer => agent.steer(input("control"), actor()).await.map(|_| ()),
+        ProviderControl::Steer => agent
+            .steer(input("control"), Submitter::owner(actor()))
+            .await
+            .map(|_| ()),
         ProviderControl::Answer => agent
             .answer_permission(PermissionAnswer {
                 attribution: attribution(),
@@ -1582,7 +1655,11 @@ async fn provider_controls_latch_every_uncertain_cleanup_wrapper_until_explicit_
             *backend.execution_gate.lock().unwrap() = Some(wait);
             let active = tokio::spawn({
                 let agent = agent.clone();
-                async move { agent.invoke(input("active"), actor()).await }
+                async move {
+                    agent
+                        .invoke(input("active"), Submitter::owner(actor()))
+                        .await
+                }
             });
             backend.executing.notified().await;
             *backend.control_error.lock().unwrap() = Some(error.clone());
@@ -1605,15 +1682,21 @@ async fn provider_controls_latch_every_uncertain_cleanup_wrapper_until_explicit_
             release.send(()).unwrap();
             assert_eq!(active.await.unwrap(), Ok(ExecutionOutcome::Completed));
             assert_eq!(
-                agent.invoke(input("blocked-direct"), actor()).await,
+                agent
+                    .invoke(input("blocked-direct"), Submitter::owner(actor()))
+                    .await,
                 Err(AgentError::Closed)
             );
             assert!(matches!(
-                agent.enqueue(input("blocked-queue"), actor()).await,
+                agent
+                    .enqueue(input("blocked-queue"), Submitter::owner(actor()))
+                    .await,
                 Err(AgentError::Closed)
             ));
             assert!(matches!(
-                agent.steer(input("blocked-steer"), actor()).await,
+                agent
+                    .steer(input("blocked-steer"), Submitter::owner(actor()))
+                    .await,
                 Err(AgentError::Closed)
             ));
             assert_eq!(backend.executions.load(Ordering::SeqCst), 1);
@@ -1627,7 +1710,9 @@ async fn provider_controls_latch_every_uncertain_cleanup_wrapper_until_explicit_
                 Err(AgentError::CleanupUncertain)
             );
             assert_eq!(
-                agent.invoke(input("still-blocked"), actor()).await,
+                agent
+                    .invoke(input("still-blocked"), Submitter::owner(actor()))
+                    .await,
                 Err(AgentError::Closed)
             );
             backend.fail_close.store(false, Ordering::SeqCst);
@@ -1636,7 +1721,9 @@ async fn provider_controls_latch_every_uncertain_cleanup_wrapper_until_explicit_
             *backend.control_attachment.lock().unwrap() = ProviderSessionState::Usable;
             reattach_after_explicit_close(&agent).await;
             assert_eq!(
-                agent.invoke(input("recovered"), actor()).await,
+                agent
+                    .invoke(input("recovered"), Submitter::owner(actor()))
+                    .await,
                 Ok(ExecutionOutcome::Completed)
             );
         }
@@ -1660,7 +1747,11 @@ async fn provider_controls_with_confirmed_cleanup_do_not_latch_admission() {
             *backend.execution_gate.lock().unwrap() = Some(wait);
             let active = tokio::spawn({
                 let agent = agent.clone();
-                async move { agent.invoke(input("active"), actor()).await }
+                async move {
+                    agent
+                        .invoke(input("active"), Submitter::owner(actor()))
+                        .await
+                }
             });
             backend.executing.notified().await;
             *backend.control_error.lock().unwrap() = Some(error.clone());
@@ -1675,7 +1766,9 @@ async fn provider_controls_with_confirmed_cleanup_do_not_latch_admission() {
             *backend.control_attachment.lock().unwrap() = ProviderSessionState::Usable;
             recover_after_automatic_stop(&agent).await;
             assert_eq!(
-                agent.invoke(input("available"), actor()).await,
+                agent
+                    .invoke(input("available"), Submitter::owner(actor()))
+                    .await,
                 Ok(ExecutionOutcome::Completed)
             );
             assert_eq!(backend.executions.load(Ordering::SeqCst), 2);
@@ -1721,15 +1814,21 @@ async fn permission_control_waiter_loss_does_not_lose_cleanup_uncertainty() {
             backend.control_finished.notified().await;
             if uncertain {
                 assert_eq!(
-                    agent.invoke(input("blocked"), actor()).await,
+                    agent
+                        .invoke(input("blocked"), Submitter::owner(actor()))
+                        .await,
                     Err(AgentError::Closed)
                 );
                 assert!(matches!(
-                    agent.enqueue(input("blocked-queue"), actor()).await,
+                    agent
+                        .enqueue(input("blocked-queue"), Submitter::owner(actor()))
+                        .await,
                     Err(AgentError::Closed)
                 ));
                 assert!(matches!(
-                    agent.steer(input("blocked-steer"), actor()).await,
+                    agent
+                        .steer(input("blocked-steer"), Submitter::owner(actor()))
+                        .await,
                     Err(AgentError::Closed)
                 ));
                 assert_eq!(backend.executions.load(Ordering::SeqCst), 0);
@@ -1739,7 +1838,9 @@ async fn permission_control_waiter_loss_does_not_lose_cleanup_uncertainty() {
                 recover_after_automatic_stop(&agent).await;
             }
             assert_eq!(
-                agent.invoke(input("available"), actor()).await,
+                agent
+                    .invoke(input("available"), Submitter::owner(actor()))
+                    .await,
                 Ok(ExecutionOutcome::Completed)
             );
         }
@@ -1756,22 +1857,29 @@ async fn submit_with_identity(
         ..input("template")
     };
     Ok(match mode {
-        0 => agent.invoke(request, close_action()).await.unwrap(),
+        0 => agent
+            .invoke(request, Submitter::owner(close_action()))
+            .await
+            .unwrap(),
         1 => agent
-            .enqueue(request, close_action())
+            .enqueue(request, Submitter::owner(close_action()))
             .await
             .unwrap()
             .wait()
             .await
             .unwrap(),
         2 => agent
-            .enqueue_steering(request, close_action())
+            .enqueue_steering(request, Submitter::owner(close_action()))
             .await
             .unwrap()
             .wait()
             .await
             .unwrap(),
-        _ => match agent.steer(request, close_action()).await.unwrap() {
+        _ => match agent
+            .steer(request, Submitter::owner(close_action()))
+            .await
+            .unwrap()
+        {
             SteeringDelivery::Queued(receipt) => receipt.wait().await.unwrap(),
             SteeringDelivery::Injected { .. } => panic!("idle steering must queue"),
         },
@@ -1818,7 +1926,11 @@ async fn queued_observations_are_rejected_before_persistence_or_publication() {
         *backend.execution_gate.lock().unwrap() = Some(gate);
         let first = {
             let agent = agent.clone();
-            tokio::spawn(async move { agent.invoke(input("active"), actor()).await })
+            tokio::spawn(async move {
+                agent
+                    .invoke(input("active"), Submitter::owner(actor()))
+                    .await
+            })
         };
         backend.executing.notified().await;
         // Wait until the legitimate event was persisted and published.
@@ -1832,7 +1944,10 @@ async fn queued_observations_are_rejected_before_persistence_or_publication() {
                 .as_str(),
             "active"
         );
-        let queued = agent.enqueue(input("undispatched"), actor()).await.unwrap();
+        let queued = agent
+            .enqueue(input("undispatched"), Submitter::owner(actor()))
+            .await
+            .unwrap();
         backend
             .sender
             .lock()
@@ -1879,7 +1994,11 @@ async fn late_observations_keep_their_dispatched_owner_after_caller_loss() {
     *backend.execution_gate.lock().unwrap() = Some(gate);
     let abandoned = {
         let agent = agent.clone();
-        tokio::spawn(async move { agent.invoke(input("abandoned"), actor()).await })
+        tokio::spawn(async move {
+            agent
+                .invoke(input("abandoned"), Submitter::owner(actor()))
+                .await
+        })
     };
     backend.executing.notified().await;
     abandoned.abort();
@@ -1904,10 +2023,15 @@ async fn late_observations_keep_their_dispatched_owner_after_caller_loss() {
         .unwrap();
     backend.suppress_terminal.store(false, Ordering::SeqCst);
     assert_eq!(
-        agent.invoke(input("overlap"), actor()).await,
+        agent
+            .invoke(input("overlap"), Submitter::owner(actor()))
+            .await,
         Err(AgentError::Busy)
     );
-    let next = agent.enqueue(input("next"), actor()).await.unwrap();
+    let next = agent
+        .enqueue(input("next"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     release.send(()).unwrap();
     next.wait().await.unwrap();
     let saved = storage.snapshot();
@@ -1931,7 +2055,9 @@ async fn admission_rejection_does_not_authorize_late_provider_output() {
     *backend.execution_error.lock().unwrap() =
         Some(AgentError::InvalidInput("not admitted".into()));
     assert!(matches!(
-        agent.invoke(input("rejected"), actor()).await,
+        agent
+            .invoke(input("rejected"), Submitter::owner(actor()))
+            .await,
         Err(AgentError::InvalidInput(_))
     ));
     backend
@@ -1947,14 +2073,20 @@ async fn admission_rejection_does_not_authorize_late_provider_output() {
     *backend.execution_attachment.lock().unwrap() = ProviderSessionState::Usable;
     backend.execution_rejected.store(false, Ordering::SeqCst);
     backend.suppress_terminal.store(false, Ordering::SeqCst);
-    assert!(agent.invoke(input("later"), actor()).await.is_err());
+    assert!(agent
+        .invoke(input("later"), Submitter::owner(actor()))
+        .await
+        .is_err());
     assert!(storage.snapshot().invocations[0].events.is_empty());
 }
 
 #[tokio::test]
 async fn custom_storage_cannot_restore_observations_before_queue_dispatch() {
     let (agent, _, storage) = probe(false).await;
-    agent.invoke(input("saved"), actor()).await.unwrap();
+    agent
+        .invoke(input("saved"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     agent.close(actor()).await.unwrap();
     drop(agent);
     {
@@ -1986,7 +2118,7 @@ async fn dispatch_and_buffered_observation_cannot_deadlock_behind_an_admission_s
     let (agent, backend, storage) = probe(false).await;
     let (prepare_release, prepare_wait) = oneshot::channel();
     *backend.prepare_gate.lock().unwrap() = Some(prepare_wait);
-    let mut first = agent.invoke(input("preparing-dispatch"), actor());
+    let mut first = agent.invoke(input("preparing-dispatch"), Submitter::owner(actor()));
     tokio::select! {
         biased;
         result = &mut first => panic!("preparation unexpectedly settled: {result:?}"),
@@ -1995,7 +2127,11 @@ async fn dispatch_and_buffered_observation_cannot_deadlock_behind_an_admission_s
     let (saving, save_release) = storage.pause_next_save();
     let queued = tokio::spawn({
         let agent = agent.clone();
-        async move { agent.enqueue(input("queued-behind-save"), actor()).await }
+        async move {
+            agent
+                .enqueue(input("queued-behind-save"), Submitter::owner(actor()))
+                .await
+        }
     });
     saving.await.unwrap();
     assert_eq!(backend.executions.load(Ordering::SeqCst), 0);
@@ -2042,7 +2178,10 @@ async fn caller_loss_after_rejection_cannot_leave_observation_authority_behind_a
         Some(AgentError::InvalidInput("not admitted".into()));
     let (execution_release, execution_wait) = oneshot::channel();
     *backend.execution_gate.lock().unwrap() = Some(execution_wait);
-    let mut first = agent.invoke(input("rejected-before-caller-loss"), actor());
+    let mut first = agent.invoke(
+        input("rejected-before-caller-loss"),
+        Submitter::owner(actor()),
+    );
     tokio::select! {
         biased;
         result = &mut first => panic!("execution unexpectedly settled: {result:?}"),
@@ -2051,7 +2190,11 @@ async fn caller_loss_after_rejection_cannot_leave_observation_authority_behind_a
     let (saving, save_release) = storage.pause_next_save();
     let queued = tokio::spawn({
         let agent = agent.clone();
-        async move { agent.enqueue(input("after-rejection"), actor()).await }
+        async move {
+            agent
+                .enqueue(input("after-rejection"), Submitter::owner(actor()))
+                .await
+        }
     });
     saving.await.unwrap();
     execution_release.send(()).unwrap();
@@ -2165,7 +2308,11 @@ async fn failure_and_explicit_close_share_cleanup_while_native_steering_is_waiti
         *backend.execution_gate.lock().unwrap() = Some(execution_wait);
         let invocation = tokio::spawn({
             let agent = agent.clone();
-            async move { agent.invoke(input("active"), actor()).await }
+            async move {
+                agent
+                    .invoke(input("active"), Submitter::owner(actor()))
+                    .await
+            }
         });
         backend.executing.notified().await;
         assert!(matches!(
@@ -2176,7 +2323,11 @@ async fn failure_and_explicit_close_share_cleanup_while_native_steering_is_waiti
         *backend.control_gate.lock().unwrap() = Some(control_wait);
         let steering = tokio::spawn({
             let agent = agent.clone();
-            async move { agent.steer(input("in-flight-steering"), actor()).await }
+            async move {
+                agent
+                    .steer(input("in-flight-steering"), Submitter::owner(actor()))
+                    .await
+            }
         });
         backend.control_entered.notified().await;
         let (close_release, close_wait) = oneshot::channel();
@@ -2255,7 +2406,10 @@ async fn failure_and_explicit_close_share_cleanup_while_native_steering_is_waiti
         assert_eq!(backend.executions.load(Ordering::SeqCst), 1);
         drop(control_release);
         reattach_after_explicit_close(&agent).await;
-        agent.invoke(input("restored"), actor()).await.unwrap();
+        agent
+            .invoke(input("restored"), Submitter::owner(actor()))
+            .await
+            .unwrap();
         agent.close(actor()).await.unwrap();
         assert_eq!(
             backend.closes.load(Ordering::SeqCst),
@@ -2300,7 +2454,7 @@ async fn concurrent_close_waiters_share_cleanup_even_when_the_first_waiter_is_dr
     );
     reattach_after_explicit_close(&agent).await;
     agent
-        .invoke(input("new-close-generation"), actor())
+        .invoke(input("new-close-generation"), Submitter::owner(actor()))
         .await
         .unwrap();
     agent.close(close_action()).await.unwrap();
@@ -2329,7 +2483,11 @@ async fn message_chunks_are_bounded_before_snapshot_copy_and_publication() {
             *backend.execution_gate.lock().unwrap() = Some(gate);
             let invocation = {
                 let agent = agent.clone();
-                tokio::spawn(async move { agent.invoke(input("chunk"), actor()).await })
+                tokio::spawn(async move {
+                    agent
+                        .invoke(input("chunk"), Submitter::owner(actor()))
+                        .await
+                })
             };
             backend.executing.notified().await;
             let mut text = String::with_capacity(capacity);
@@ -2440,7 +2598,9 @@ async fn explicit_recovery_ignores_historical_operation_error_when_cleanup_succe
         Err(AgentError::StalePermission)
     );
     assert_eq!(
-        agent.invoke(input("blocked"), actor()).await,
+        agent
+            .invoke(input("blocked"), Submitter::owner(actor()))
+            .await,
         Err(AgentError::Closed)
     );
     *backend.cleanup_report.lock().unwrap() = Some(
@@ -2454,7 +2614,9 @@ async fn explicit_recovery_ignores_historical_operation_error_when_cleanup_succe
     );
     reattach_after_explicit_close(&agent).await;
     assert_eq!(
-        agent.invoke(input("recovered"), actor()).await,
+        agent
+            .invoke(input("recovered"), Submitter::owner(actor()))
+            .await,
         Ok(ExecutionOutcome::Completed)
     );
     agent.close(actor()).await.unwrap();
@@ -2467,7 +2629,11 @@ async fn confirmed_control_cleanup_retires_native_target_before_execution_settle
     *backend.execution_gate.lock().unwrap() = Some(gate);
     let invocation = tokio::spawn({
         let agent = agent.clone();
-        async move { agent.invoke(input("active"), actor()).await }
+        async move {
+            agent
+                .invoke(input("active"), Submitter::owner(actor()))
+                .await
+        }
     });
     backend.executing.notified().await;
     *backend.control_attachment.lock().unwrap() =
@@ -2478,7 +2644,10 @@ async fn confirmed_control_cleanup_retires_native_target_before_execution_settle
         invoke_control(&agent, ProviderControl::Answer).await,
         Err(AgentError::StalePermission)
     );
-    let delivery = agent.steer(input("following"), actor()).await.unwrap();
+    let delivery = agent
+        .steer(input("following"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     let steers = backend.steers.load(Ordering::SeqCst);
     release.send(()).unwrap();
     assert_eq!(invocation.await.unwrap(), Ok(ExecutionOutcome::Completed));

@@ -3254,6 +3254,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "shepherd",
+ "socket2",
  "subtle",
  "tar",
  "tempfile",

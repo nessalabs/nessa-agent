@@ -9,7 +9,7 @@ use crate::{
         agents::AgentError, executions::ExecutionEvent, permissions::ActionContext,
     },
     domain::agent_execution::{
-        executions::{ExecutionId, ExecutionOutcome, QueueMutation},
+        executions::{ExecutionId, ExecutionOutcome, Initiation, Initiator, QueueMutation},
         leases::{CommandTerms, EnvironmentRef, LeaseTerms, LeaseWork, PeerEnvironment},
         prompts::{AppModelContext, MessageSender},
     },
@@ -28,6 +28,13 @@ fn actor(value: &ActionContext) -> usize {
         .len()
         .saturating_add(value.surface_id().len())
         .saturating_add(value.request_id().len())
+}
+/// The grant's identity text; an owner holds no text of its own.
+fn initiation(value: &Initiation) -> usize {
+    match value.initiator() {
+        Initiator::Owner => 0,
+        Initiator::Grant(grant) => grant.grant().len(),
+    }
 }
 pub(super) fn stop(value: &InvocationCancellationEvent) -> usize {
     value.actor.as_ref().map_or(0, actor)
@@ -287,6 +294,7 @@ pub(super) fn invocation(record: &InvocationRecord) -> usize {
         .saturating_add(scheduling)
         .saturating_add(record.request.execution_id.as_str().len())
         .saturating_add(actor(&record.actor))
+        .saturating_add(initiation(&record.initiation))
         .saturating_add(record.cancellation.as_ref().map_or(0, stop))
         .saturating_add(record.local_cancellation.as_ref().map_or(0, stop))
         .saturating_add(acknowledgment)
